@@ -191,3 +191,6 @@ jest-output.txt
 /mcp-servers/browser/bin/
 /mcp-servers/browser/outputs/
 /mcp-servers/browser/*-evidence-*/
+/workspaces
+/mcp-servers
+.tmp-sandbox-harness/sandbox.html

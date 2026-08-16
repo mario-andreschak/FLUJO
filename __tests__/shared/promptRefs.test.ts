@@ -14,6 +14,8 @@ import {
   encodePromptRefPill,
   promptRefLabel,
   extractResourceRefNames,
+  encodeDynamicReference,
+  parseDynamicReference,
 } from '@/utils/shared/promptRefs';
 import { findBindings } from '@/utils/shared/mcpBinding';
 
@@ -36,6 +38,40 @@ describe('findPromptRefs', () => {
   it('returns an empty array when there are no references', () => {
     expect(findPromptRefs('just prose and ${var:x} and ${global:} and ${global:missing')).toEqual([]);
   });
+
+  it('finds dynamic @ references without matching email/npm/global substrings', () => {
+    const text = 'Use @conversation.name, @flows[flow%201].updated and @file[C%3A%5Cwork%5Ca.txt].name';
+    expect(findPromptRefs(text).filter((ref) => ref.kind === 'mention').map((ref) => ref.fullMatch)).toEqual([
+      '@conversation.name',
+      '@flows[flow%201].updated',
+      '@file[C%3A%5Cwork%5Ca.txt].name',
+    ]);
+    expect(findPromptRefs('email@example.com @modelcontextprotocol/sdk ${global:@model}'))
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'mention' })]));
+  });
+});
+
+describe('dynamic @ references', () => {
+  it('parses default ids and explicit metadata fields', () => {
+    expect(parseDynamicReference('@flows')).toEqual({
+      kind: 'flows',
+      target: undefined,
+      field: 'id',
+      fullMatch: '@flows',
+    });
+    expect(parseDynamicReference('@conversation[chat%201].created')).toEqual({
+      kind: 'conversation',
+      target: 'chat 1',
+      field: 'created',
+      fullMatch: '@conversation[chat%201].created',
+    });
+  });
+
+  it('encodes selected ids and filesystem paths as one stable token', () => {
+    const encoded = encodeDynamicReference('file', 'C:\\work folder\\a].txt', 'name');
+    expect(encoded).toBe('@file[C%3A%5Cwork%20folder%5Ca%5D.txt].name');
+    expect(parseDynamicReference(encoded)?.target).toBe('C:\\work folder\\a].txt');
+  });
 });
 
 describe('compiler invariant: rendering-only refs stay INVISIBLE to findBindings', () => {
@@ -56,6 +92,11 @@ describe('parsePromptRefPill', () => {
       server: 'docs',
       name: 'file:///a',
     });
+    expect(parsePromptRefPill('@model[model-1].name')).toEqual({
+      kind: 'mention',
+      server: '',
+      name: '@model[model-1].name',
+    });
   });
 
   it('returns null for non-references (run vars, empty names, malformed refs, plain text)', () => {
@@ -72,6 +113,7 @@ describe('encodePromptRefPill / round-trip', () => {
     expect(encodePromptRefPill('runres', '', 'foo')).toBe('${res:foo}');
     expect(encodePromptRefPill('tool', 'files', 'read')).toBe('${tool:files__read}');
     expect(encodePromptRefPill('global', '', 'API_HOST')).toBe('${global:API_HOST}');
+    expect(encodePromptRefPill('mention', '', '@date')).toBe('@date');
   });
 
   it('round-trips rendering-only references exactly (so saved templates never mutate)', () => {
@@ -90,6 +132,7 @@ describe('promptRefLabel', () => {
     expect(promptRefLabel({ kind: 'global', server: '', name: 'API_HOST' })).toBe('global:API_HOST');
     expect(promptRefLabel({ kind: 'tool', server: 'files', name: 'read' })).toBe('tool:files__read');
     expect(promptRefLabel({ kind: 'resource', server: 'd', name: 'x' })).toBe('resource:d__x');
+    expect(promptRefLabel({ kind: 'mention', server: '', name: '@flows[flow%201].name' })).toBe('flows:flow 1.name');
   });
 });
 

@@ -50,6 +50,7 @@ jest.mock('@/utils/storage/backend', () => ({
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   reconcileConversationLog: jest.fn(async () => {}),
   recoverMessagesFromLog: jest.fn(async () => {}),
+  appendRawForState: jest.fn(async () => {}),
 }));
 // Pre-run validation always passes; the tests exercise the loop guard, not
 // flow validation.

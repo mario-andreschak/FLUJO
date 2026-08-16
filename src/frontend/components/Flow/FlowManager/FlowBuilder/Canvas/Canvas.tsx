@@ -62,25 +62,26 @@ import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
+import { flowClipboardStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
 
 // Clipboard for copy/paste of nodes. localStorage backs cross-flow paste (and
 // survives reloads); the in-tab variable is the fast path within a session.
-const FLOW_CLIPBOARD_KEY = 'flujo:flowClipboard';
 interface FlowClipboard {
   nodes: FlowNode[];
   edges: any[];
 }
-let flowClipboardMemory: FlowClipboard | null = null;
+const flowClipboardMemory = new Map<string, FlowClipboard>();
 
 // The single write path for the flow clipboard — every copy source must use
 // this so the in-memory and localStorage payloads never diverge.
 function writeFlowClipboard(payload: FlowClipboard) {
-  flowClipboardMemory = payload;
+  flowClipboardMemory.set(getSelectedWorkspace(), payload);
   try {
-    localStorage.setItem(FLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+    localStorage.setItem(flowClipboardStorageKey(), JSON.stringify(payload));
   } catch (err) {
     log.warn('Could not persist flow clipboard to localStorage', err);
   }
@@ -965,10 +966,10 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // Paste clipboard contents as new, independent nodes/edges (regenerated ids,
   // offset position), emitted as 'add' changes to the parent store.
   const handlePaste = useCallback(() => {
-    let payload = flowClipboardMemory;
+    let payload = flowClipboardMemory.get(getSelectedWorkspace());
     if (!payload) {
       try {
-        const raw = localStorage.getItem(FLOW_CLIPBOARD_KEY);
+        const raw = localStorage.getItem(flowClipboardStorageKey());
         if (raw) payload = JSON.parse(raw) as FlowClipboard;
       } catch (err) {
         log.warn('Could not read flow clipboard from localStorage', err);
@@ -1060,9 +1061,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   // Whether there is anything to paste (re-checked each time the menu opens).
   const canPaste = useMemo(() => {
-    if (flowClipboardMemory) return true;
+    if (flowClipboardMemory.has(getSelectedWorkspace())) return true;
     try {
-      return !!localStorage.getItem(FLOW_CLIPBOARD_KEY);
+      return !!localStorage.getItem(flowClipboardStorageKey());
     } catch {
       return false;
     }

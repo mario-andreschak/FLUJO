@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
     Box, Typography, List, ListItem, ListItemButton, ListItemText, Button, Paper, CircularProgress, Alert,
     Accordion, AccordionSummary, AccordionDetails, // Import Accordion components
-    IconButton, Tooltip
+    IconButton, Tooltip, Menu, MenuItem, ListItemIcon, Chip, alpha
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'; // Import icon for Accordion
 import CloseIcon from '@mui/icons-material/Close';
@@ -12,12 +12,15 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
-import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
+import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
-import { SharedState, DebugStep, ModelInputSnapshot } from '@/backend/execution/flow/types'; // Import backend types
+import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
 import { Flow } from '@/shared/types/flow'; // Import shared Flow type
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { flowService } from '@/frontend/services/flow'; // Import flow service
@@ -33,9 +36,16 @@ import {
   DEBUGGER_ROOT_FRAME_KEY,
   type DebuggerFrame,
 } from '@/utils/shared/debuggerFrames';
+import {
+  ANY_TOOL_BREAKPOINT,
+  nodeBreakpoints,
+  toolBreakpointNames,
+  toolNodeBreakpointIds,
+  TOOL_NODE_BREAKPOINT_PREFIX,
+} from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
-import DebuggerConversation from './DebuggerConversation';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { debugBoundaryEdgeIds } from '@/utils/shared/debugBoundaryGraph';
 
 // Import Canvas components if needed (or create simplified versions)
 // import { CanvasControls } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/components/CanvasControls';
@@ -51,8 +61,11 @@ interface DebuggerCanvasProps {
   onContinue: () => void; // Callback for Continue button
   onCancel: () => void; // Callback for Cancel button
   isLoading: boolean; // To disable buttons during API calls
-  breakpoints?: string[]; // Node IDs with active breakpoints
+  breakpoints?: string[]; // Node IDs with active breakpoints (+ `tool:` entries)
   onToggleBreakpoint?: (nodeId: string) => void; // Toggle a breakpoint on node click
+  /** Replace the whole breakpoint set — used by the canvas context menu for
+   *  bulk actions (clear all, arm/disarm the tool-call breakpoint). */
+  onSetBreakpoints?: (breakpoints: string[]) => void;
   onClose?: () => void; // Callback to dismiss/hide the debugger panel
   /** Whether the debugger is currently shown in the large (modal) layout. */
   isExpanded?: boolean;
@@ -64,6 +77,9 @@ interface DebuggerCanvasProps {
   liveActivity?: LiveActivity;
   /** Ordered, deduplicated events from the owning SSE subscription. */
   executionEvents?: readonly ExecutionEvent[];
+  /** Keeps the regular chat's model-input view aligned with the trace row the
+   *  user is inspecting in the debugger. */
+  onStepSelectionChange?: (index: number) => void;
 }
 
 // Define node types for React Flow display. Every builder node type must be
@@ -91,6 +107,18 @@ const edgeTypes = {
 const RESOURCE_HIGHLIGHT = '#009688';
 const EMPTY_EXECUTION_EVENTS: readonly ExecutionEvent[] = [];
 
+function escapeCssAttribute(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function formatToolArguments(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value || '{}'), null, 2);
+  } catch {
+    return value;
+  }
+}
+
 type FlowCacheEntry =
   | { status: 'loading' }
   | { status: 'ready'; flow: Flow }
@@ -98,21 +126,17 @@ type FlowCacheEntry =
   | { status: 'error'; message: string };
 
 // --- Debugger layout (issue #162) ---------------------------------------------
-// The debugger is split into three top-level sections — Conversation,
-// Execution Tracker + Canvas, and Detail — each of which can be hidden,
-// reordered (moved left/right), and (for the side sections) resized. The chosen
-// visibility / order / widths persist in localStorage so the layout survives
-// reloads, consistent with how the docked panel width is handled in Chat/index.
-type SectionKey = 'conversation' | 'tracker' | 'detail';
-const SECTION_KEYS: SectionKey[] = ['conversation', 'tracker', 'detail'];
-const CONV_WIDTH_DEFAULT = 480;
+// The model-facing conversation now lives in the regular chat transcript. The
+// debugger itself keeps the two execution-focused sections: tracker + canvas,
+// and detail. Both can be hidden/reordered and the detail width is persisted.
+type SectionKey = 'tracker' | 'detail';
+const SECTION_KEYS: SectionKey[] = ['tracker', 'detail'];
 const DETAIL_WIDTH_DEFAULT = 320;
 const SECTION_MIN_WIDTH = 240;
 const SECTION_MAX_WIDTH = 1100;
 
 const LS_ORDER = 'flujo-debugger-section-order';
 const LS_VISIBLE = 'flujo-debugger-section-visible';
-const LS_CONV_WIDTH = 'flujo-debugger-conv-width';
 const LS_DETAIL_WIDTH = 'flujo-debugger-detail-width';
 
 function readOrder(): SectionKey[] {
@@ -130,7 +154,7 @@ function readOrder(): SectionKey[] {
 }
 
 function readVisible(): Record<SectionKey, boolean> {
-  const base: Record<SectionKey, boolean> = { conversation: true, tracker: true, detail: true };
+  const base: Record<SectionKey, boolean> = { tracker: true, detail: true };
   if (typeof window === 'undefined') return base;
   try {
     const raw = JSON.parse(window.localStorage.getItem(LS_VISIBLE) || 'null');
@@ -206,22 +230,22 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   debugState,
   conversationId,
   onStep,
-  onStepOver,
   onContinue,
   onCancel,
   isLoading,
   breakpoints,
   onToggleBreakpoint,
+  onSetBreakpoints,
   onClose,
   isExpanded,
   onToggleExpand,
   liveActivity,
   executionEvents = EMPTY_EXECUTION_EVENTS,
+  onStepSelectionChange,
 }) => {
   const theme = useTheme();
   const { t, tp, formatDate: formatLocalizedDate } = useI18n();
   const sectionTitles: Record<SectionKey, string> = {
-    conversation: t('chat.debug.section.conversation'),
     tracker: t('chat.debug.section.tracker'),
     detail: t('chat.debug.section.detail'),
   };
@@ -233,7 +257,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // --- Section layout state (issue #162) ---
   const [order, setOrder] = useState<SectionKey[]>(() => readOrder());
   const [visible, setVisible] = useState<Record<SectionKey, boolean>>(() => readVisible());
-  const [convWidth, setConvWidth] = useState<number>(() => readWidth(LS_CONV_WIDTH, CONV_WIDTH_DEFAULT));
   const [detailWidth, setDetailWidth] = useState<number>(() => readWidth(LS_DETAIL_WIDTH, DETAIL_WIDTH_DEFAULT));
 
   const frameState = useMemo(
@@ -260,10 +283,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   }, [visible]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(LS_CONV_WIDTH, String(Math.round(convWidth)));
-  }, [convWidth]);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     window.localStorage.setItem(LS_DETAIL_WIDTH, String(Math.round(detailWidth)));
   }, [detailWidth]);
 
@@ -282,6 +301,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     }
     // Depend only on the trace itself, not the index state variable
   }, [debugState.executionTrace]);
+
+  useEffect(() => {
+    onStepSelectionChange?.(currentStepIndex);
+  }, [currentStepIndex, onStepSelectionChange]);
 
   // Follow the most recent qualified event frame. A manual history selection is
   // preserved until another event arrives, at which point live-follow resumes.
@@ -422,23 +445,83 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
 
-  // Per-model-call wire snapshots for the selected step (issue #167, Phase 2 of
-  // #162). Prefer the plural `modelInputs` array; fall back to the singular
-  // `modelInput` for older traces / non-plural producers so nothing regresses.
-  const modelInputs: ModelInputSnapshot[] | undefined = useMemo(() => {
-    if (currentStepData?.modelInputs && currentStepData.modelInputs.length > 0) {
-      return currentStepData.modelInputs;
+  const debugBoundary = debugState.debugBoundary;
+  const boundaryColor = debugBoundary?.phase === 'before'
+    ? theme.palette.warning.main
+    : theme.palette.success.main;
+  const boundaryOperationLabel = (operation: NonNullable<typeof debugBoundary>['operation']) =>
+    t(`chat.debug.boundary.operation.${operation}` as Parameters<typeof t>[0]);
+  const boundaryPhaseLabel = (
+    phase: 'before' | 'after',
+    operation: NonNullable<typeof debugBoundary>['operation'],
+  ) => t(`chat.debug.boundary.${phase}` as Parameters<typeof t>[0], {
+    operation: boundaryOperationLabel(operation),
+  });
+  const boundaryTitle = debugBoundary
+    ? debugBoundary.previousOperation
+      ? t('chat.debug.boundary.transition', {
+          from: boundaryPhaseLabel('after', debugBoundary.previousOperation),
+          to: boundaryPhaseLabel('before', debugBoundary.operation),
+        })
+      : debugBoundary.nextOperation
+        ? t('chat.debug.boundary.transition', {
+            from: boundaryPhaseLabel('after', debugBoundary.operation),
+            to: boundaryPhaseLabel('before', debugBoundary.nextOperation),
+          })
+        : boundaryPhaseLabel(debugBoundary.phase, debugBoundary.operation)
+    : '';
+
+  // Resolve the boundary to real graph edges. Graph transitions carry the
+  // authored edge id directly; MCP tool calls carry the advertising MCP node
+  // ids through the persisted tool-name map. Synthetic tools have no graph edge.
+  const boundaryEdgeIds = useMemo(
+    () => debugBoundaryEdgeIds(debugBoundary, edges),
+    [debugBoundary, edges],
+  );
+  const boundaryEdges = useMemo(
+    () => edges.filter(edge => boundaryEdgeIds.has(edge.id)),
+    [edges, boundaryEdgeIds],
+  );
+
+  const displayEdges = useMemo(() => edges.map(edge => {
+    if (!debugBoundary || !boundaryEdgeIds.has(edge.id)) return edge;
+    return {
+      ...edge,
+      data: {
+        ...(edge.data ?? {}),
+        debuggerActivity: {
+          phase: debugBoundary.phase,
+          operation: debugBoundary.operation,
+        },
+      },
+    };
+  }), [edges, debugBoundary, boundaryEdgeIds]);
+
+  // React Flow exposes the authored handle id in the DOM. Build scoped selectors
+  // for the exact two endpoints instead of lighting every connector on a node.
+  const boundaryHandleSelectors = useMemo(() => {
+    const selectors: Record<string, Record<string, unknown>> = {};
+    for (const edge of boundaryEdges) {
+      const endpoints = [
+        { nodeId: edge.source, handleId: edge.sourceHandle },
+        { nodeId: edge.target, handleId: edge.targetHandle },
+      ];
+      for (const endpoint of endpoints) {
+        if (!endpoint.handleId) continue;
+        const nodeId = escapeCssAttribute(endpoint.nodeId);
+        const handleId = escapeCssAttribute(endpoint.handleId);
+        selectors[`& .react-flow__node[data-id="${nodeId}"] [data-handleid="${handleId}"]`] = {
+          backgroundColor: boundaryColor,
+          borderColor: theme.palette.background.paper,
+          boxShadow: `0 0 0 4px ${alpha(boundaryColor, 0.24)}, 0 0 14px ${boundaryColor}`,
+          transform: 'scale(1.28)',
+          transition: 'transform 140ms ease, box-shadow 140ms ease',
+          zIndex: 20,
+        };
+      }
     }
-    return currentStepData?.modelInput ? [currentStepData.modelInput] : undefined;
-  }, [currentStepData]);
-
-  // Which model call within the selected step is shown. Reset to the first call
-  // whenever the step changes so paging never points past a shorter step.
-  const [callIndex, setCallIndex] = useState<number>(0);
-  useEffect(() => { setCallIndex(0); }, [currentStepIndex]);
-
-  const safeCallIndex = modelInputs ? Math.min(callIndex, modelInputs.length - 1) : 0;
-  const selectedModelInput: ModelInputSnapshot | undefined = modelInputs?.[safeCallIndex];
+    return selectors;
+  }, [boundaryEdges, boundaryColor, theme.palette.background.paper]);
 
   // Decay repaint (Tier 3 live highlighting): while any live-activity entry is
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
@@ -491,6 +574,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return null;
   }, [canvasFrame, liveActivity, now]);
 
+  const breakpointKeyForNode = useCallback((node: Node): string | null => {
+    // Child runs currently stream into the parent debugger but execute in their
+    // own SharedState. Do not pretend a parent breakpoint can stop them.
+    if (canvasFrame.key !== DEBUGGER_ROOT_FRAME_KEY) return null;
+    const nodeType = typeof node.data?.type === 'string' ? node.data.type : node.type;
+    // MCP nodes are passive attachments. Translate the canvas affordance into
+    // "break on any runtime tool supplied by this attachment".
+    if (nodeType === 'mcp') return `${TOOL_NODE_BREAKPOINT_PREFIX}${node.id}`;
+    // Resource/trigger nodes are data/event wiring, not executable visits.
+    if (nodeType === 'resource' || nodeType === 'trigger') return null;
+    return node.id;
+  }, [canvasFrame.key]);
+
   // Derived nodes for display: highlight the inspected step's node (warning),
   // live activity (primary/teal, fading by age), and breakpoint nodes (error).
   // Precedence: debug step > live activity > breakpoint. Computed, not
@@ -499,22 +595,40 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     const highlightId = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY ? currentStepData?.nodeId : undefined;
     return nodes.map((node: Node) => {
       const isCurrent = node.id === highlightId;
-      const isBreakpoint = breakpoints?.includes(node.id);
-      const live = isCurrent ? null : liveActivityFor(node);
+      const isBoundaryNode = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY && !!debugBoundary && (
+        node.id === debugBoundary.nodeId || node.id === debugBoundary.targetNodeId
+      );
+      const breakpointKey = breakpointKeyForNode(node);
+      const isBreakpoint = !!breakpointKey && !!breakpoints?.includes(breakpointKey);
+      const live = isCurrent || isBoundaryNode ? null : liveActivityFor(node);
       const liveOpacity = live ? Math.max(0.25, 1 - (now - live.ts) / LIVE_HIGHLIGHT_TTL_MS) : 0;
       const liveColor = live?.kind === 'active' ? theme.palette.primary.main : RESOURCE_HIGHLIGHT;
       return {
         ...node,
+        // A breakpoint used to be a thin dashed border that disappeared under
+        // the current-node/live highlights and was easy to miss entirely. It is
+        // now a class on the node wrapper: the canvas styles it with a solid
+        // red ring, a halo and a red dot marker (like a gutter breakpoint in an
+        // IDE), so it stays visible WHILE the node is executing/highlighted.
+        className: [
+          node.className,
+          isBreakpoint ? 'flujo-breakpoint' : null,
+          isBoundaryNode ? `flujo-debug-boundary flujo-debug-${debugBoundary?.phase}` : null,
+        ]
+          .filter(Boolean)
+          .join(' ') || undefined,
         style: {
           ...node.style,
-          border: isCurrent
+          border: isBoundaryNode
+            ? `3px solid ${boundaryColor}`
+            : isCurrent
             ? `2px solid ${theme.palette.warning.main}`
             : live
               ? `2px solid ${liveColor}`
-              : isBreakpoint
-                ? `2px dashed ${theme.palette.error.main}`
-                : (node.style?.border as string | undefined),
-          boxShadow: isCurrent
+              : (node.style?.border as string | undefined),
+          boxShadow: isBoundaryNode
+            ? `0 0 0 5px ${alpha(boundaryColor, 0.18)}, 0 0 16px ${boundaryColor}`
+            : isCurrent
             ? `0 0 10px ${theme.palette.warning.light}`
             : live
               ? `0 0 ${live.kind === 'resource-write' ? 14 : 10}px ${liveColor}${Math.round(liveOpacity * 255).toString(16).padStart(2, '0')}`
@@ -522,7 +636,59 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         },
       };
     });
-  }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now]);
+  }, [nodes, canvasFrame.key, currentStepData, debugBoundary, boundaryColor, breakpoints, theme, liveActivityFor, now, breakpointKeyForNode]);
+
+  // --- Breakpoint context menu ---------------------------------------------
+  // Right-clicking a node (or the empty canvas) opens the breakpoint menu:
+  // discoverable, and it also carries the bulk actions that have nowhere else
+  // to live (clear all, break on every tool call).
+  const [bpMenu, setBpMenu] = useState<{
+    x: number;
+    y: number;
+    breakpointKey?: string;
+    nodeLabel?: string;
+    unavailableReason?: string;
+  } | null>(null);
+  const closeBpMenu = useCallback(() => setBpMenu(null), []);
+  const activeBreakpoints = breakpoints ?? [];
+  const toolBreakOn = activeBreakpoints.includes(ANY_TOOL_BREAKPOINT);
+
+  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
+    event.preventDefault();
+    const label = typeof node.data?.label === 'string' ? node.data.label : node.id;
+    const breakpointKey = breakpointKeyForNode(node);
+    setBpMenu({
+      x: event.clientX,
+      y: event.clientY,
+      ...(breakpointKey ? { breakpointKey } : {}),
+      nodeLabel: label,
+      ...(!breakpointKey
+        ? { unavailableReason: canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY
+            ? t('chat.debug.breakpointPassiveNode')
+            : t('chat.debug.breakpointChildRun') }
+        : {}),
+    });
+  }, [breakpointKeyForNode, canvasFrame.key, t]);
+
+  const handlePaneContextMenu = useCallback((event: React.MouseEvent | MouseEvent) => {
+    event.preventDefault();
+    setBpMenu({ x: (event as React.MouseEvent).clientX, y: (event as React.MouseEvent).clientY });
+  }, []);
+
+  const toggleToolBreakpoint = useCallback(() => {
+    if (!onSetBreakpoints) return;
+    onSetBreakpoints(
+      toolBreakOn
+        ? activeBreakpoints.filter(b => b !== ANY_TOOL_BREAKPOINT)
+        : [...activeBreakpoints, ANY_TOOL_BREAKPOINT],
+    );
+    closeBpMenu();
+  }, [onSetBreakpoints, toolBreakOn, activeBreakpoints, closeBpMenu]);
+
+  const clearAllBreakpoints = useCallback(() => {
+    onSetBreakpoints?.([]);
+    closeBpMenu();
+  }, [onSetBreakpoints, closeBpMenu]);
 
   const selectedFramePath = useMemo(
     () => debuggerFramePath(frameState, selectedFrame.key),
@@ -559,18 +725,17 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // Resize a fixed-width side section by dragging. `sign` is +1 when dragging
   // right should grow the target (target is on the left of the divider) and -1
   // when it should shrink it (target is on the right of the divider).
-  const startResize = useCallback((target: 'conversation' | 'detail', sign: 1 | -1, e: React.PointerEvent) => {
+  const startResize = useCallback((sign: 1 | -1, e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = target === 'conversation' ? convWidth : detailWidth;
-    const set = target === 'conversation' ? setConvWidth : setDetailWidth;
+    const startWidth = detailWidth;
     const previousUserSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
     const onMove = (ev: PointerEvent) => {
       const width = Math.min(Math.max(startWidth + sign * (ev.clientX - startX), SECTION_MIN_WIDTH), SECTION_MAX_WIDTH);
-      set(width);
+      setDetailWidth(width);
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -580,7 +745,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [convWidth, detailWidth]);
+  }, [detailWidth]);
 
   // Per-section header with title + move-left / move-right controls.
   const sectionHeader = (key: SectionKey) => {
@@ -615,61 +780,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
 
   // --- Section bodies ---
 
-  const conversationBody = (
-    <Box sx={{ flexGrow: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {currentStepData ? (
-        selectedModelInput && modelInputs ? (
-          <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Per-model-call pager (issue #167): only shown when the node made
-                more than one captured model call this step. */}
-            {modelInputs.length > 1 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-                <Tooltip title={t('chat.debug.previousModelCall')}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => setCallIndex((i) => Math.max(0, Math.min(i, modelInputs.length - 1) - 1))}
-                      disabled={safeCallIndex <= 0}
-                      aria-label={t('chat.debug.previousModelCall')}
-                    >
-                      <ChevronLeftIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Typography variant="caption" color="textSecondary">
-                  {t('chat.debug.modelCall', { current: safeCallIndex + 1, total: modelInputs.length })}
-                </Typography>
-                <Tooltip title={t('chat.debug.nextModelCall')}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => setCallIndex((i) => Math.min(modelInputs.length - 1, Math.min(i, modelInputs.length - 1) + 1))}
-                      disabled={safeCallIndex >= modelInputs.length - 1}
-                      aria-label={t('chat.debug.nextModelCall')}
-                    >
-                      <ChevronRightIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              </Box>
-            )}
-            <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <DebuggerConversation modelInput={selectedModelInput} conversationId={conversationId} />
-            </Box>
-          </Box>
-        ) : (
-          <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-            {t('chat.debug.noModelCall')}
-          </Typography>
-        )
-      ) : (
-        <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-          {t('chat.debug.selectStep')}
-        </Typography>
-      )}
-    </Box>
-  );
-
   const trackerBody = (
     <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
       <TracePanel>
@@ -685,6 +795,26 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               </ListItemButton>
             </ListItem>
           ))}
+          {debugBoundary && (
+            <ListItem disablePadding data-testid="debug-boundary-row">
+              <ListItemButton
+                selected
+                disableRipple
+                sx={{
+                  cursor: 'default',
+                  borderLeft: `3px solid ${boundaryColor}`,
+                  bgcolor: alpha(boundaryColor, 0.1),
+                }}
+              >
+                <ListItemText
+                  primary={`B${debugBoundary.index}: ${boundaryTitle}`}
+                  secondary={debugBoundary.targetNodeId
+                    ? `${debugBoundary.nodeId ?? '?'} → ${debugBoundary.targetNodeId}`
+                    : debugBoundary.nodeId}
+                />
+              </ListItemButton>
+            </ListItem>
+          )}
           {isLoading && ( // Show loading indicator at the end if stepping
                <ListItem>
                   <CircularProgress size={20} sx={{ margin: 'auto' }}/>
@@ -750,7 +880,42 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               {childFlowNotice}
             </Alert>
           )}
-          <Box sx={{ flexGrow: 1, minHeight: 0, position: 'relative' }}>
+          <Box
+            sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              position: 'relative',
+              // Breakpoint styling lives here (not in inline node styles) so it
+              // can add a marker pseudo-element and survive the current-node /
+              // live-activity borders.
+              '& .react-flow__node.flujo-breakpoint': {
+                outline: `3px solid ${theme.palette.error.main}`,
+                outlineOffset: '2px',
+                borderRadius: '8px',
+                boxShadow: `0 0 0 7px ${alpha(theme.palette.error.main, 0.16)}, 0 0 14px ${alpha(theme.palette.error.main, 0.5)}`,
+              },
+              '& .react-flow__node.flujo-breakpoint::before': {
+                content: '""',
+                position: 'absolute',
+                top: '-11px',
+                left: '-11px',
+                width: '16px',
+                height: '16px',
+                borderRadius: '50%',
+                backgroundColor: theme.palette.error.main,
+                border: `2px solid ${theme.palette.background.paper}`,
+                boxShadow: `0 0 8px ${theme.palette.error.main}`,
+                zIndex: 12,
+                pointerEvents: 'none',
+              },
+              ...boundaryHandleSelectors,
+            }}
+            onContextMenu={(e) => {
+              // Right-click anywhere on the canvas surface (including gaps that
+              // ReactFlow's own pane handler misses) opens the menu.
+              if (!(e.target as HTMLElement).closest('.react-flow__node')) handlePaneContextMenu(e);
+            }}
+          >
             {flowLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                 <CircularProgress />
@@ -761,7 +926,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <ReactFlowProvider>
                 <ReactFlow
                   nodes={displayNodes}
-                  edges={edges}
+                  edges={displayEdges}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   nodeTypes={nodeTypes}
@@ -777,13 +942,54 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                   zoomOnDoubleClick={false}
                   onNodeClick={(e, node) => {
                     e.preventDefault();
-                    if (onToggleBreakpoint) onToggleBreakpoint(node.id);
+                    const breakpointKey = breakpointKeyForNode(node);
+                    if (onToggleBreakpoint && breakpointKey) onToggleBreakpoint(breakpointKey);
                   }}
+                  onNodeContextMenu={handleNodeContextMenu}
+                  onPaneContextMenu={handlePaneContextMenu}
                   onEdgeClick={(e) => e.preventDefault()}
                   onPaneClick={() => {}}
                 />
               </ReactFlowProvider>
             )}
+            <Menu
+              open={!!bpMenu}
+              onClose={closeBpMenu}
+              anchorReference="anchorPosition"
+              anchorPosition={bpMenu ? { top: bpMenu.y, left: bpMenu.x } : undefined}
+            >
+              {bpMenu?.nodeLabel && (
+                <MenuItem
+                  onClick={() => { if (bpMenu.breakpointKey) onToggleBreakpoint?.(bpMenu.breakpointKey); closeBpMenu(); }}
+                  disabled={!onToggleBreakpoint || !bpMenu.breakpointKey}
+                >
+                  <ListItemIcon>
+                    {bpMenu.breakpointKey && activeBreakpoints.includes(bpMenu.breakpointKey) ? <RemoveCircleOutlineIcon fontSize="small" color="error" /> : <FiberManualRecordIcon fontSize="small" color={bpMenu.breakpointKey ? 'error' : 'disabled'} />}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={bpMenu.breakpointKey && activeBreakpoints.includes(bpMenu.breakpointKey)
+                      ? t('chat.debug.menu.removeBreakpoint')
+                      : t('chat.debug.menu.addBreakpoint')}
+                    secondary={bpMenu.unavailableReason || bpMenu.nodeLabel}
+                  />
+                </MenuItem>
+              )}
+              <MenuItem onClick={toggleToolBreakpoint} disabled={!onSetBreakpoints}>
+                <ListItemIcon>
+                  <BuildOutlinedIcon fontSize="small" color={toolBreakOn ? 'error' : 'inherit'} />
+                </ListItemIcon>
+                <ListItemText
+                  primary={toolBreakOn ? t('chat.debug.menu.toolBreakpointOff') : t('chat.debug.menu.toolBreakpointOn')}
+                  secondary={t('chat.debug.menu.toolBreakpointHelp')}
+                />
+              </MenuItem>
+              <MenuItem onClick={clearAllBreakpoints} disabled={!onSetBreakpoints || activeBreakpoints.length === 0}>
+                <ListItemIcon>
+                  <DeleteSweepOutlinedIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary={t('chat.debug.menu.clearAll')} />
+              </MenuItem>
+            </Menu>
           </Box>
         </Box>
       </FlowDisplayPanel>
@@ -792,6 +998,85 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
 
   const detailBody = (
     <Box sx={{ flexGrow: 1, overflowY: 'auto', minHeight: 0, p: 2 }}>
+      {debugBoundary && (
+        <Box data-testid="debug-boundary-detail" sx={{ mb: currentStepData ? 2 : 0 }}>
+          <Alert
+            severity={debugBoundary.phase === 'before' ? 'warning' : 'success'}
+            variant="outlined"
+            sx={{ alignItems: 'flex-start' }}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                <Chip
+                  size="small"
+                  color={debugBoundary.phase === 'before' ? 'warning' : 'success'}
+                  label={debugBoundary.phase.toUpperCase()}
+                />
+                <Typography variant="subtitle2">{boundaryTitle}</Typography>
+              </Box>
+              {debugBoundary.edgeId && (
+                <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
+                  {t('chat.debug.boundary.edge')}: {debugBoundary.edgeId}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                {debugBoundary.targetNodeId
+                  ? `${debugBoundary.nodeId ?? '?'} → ${debugBoundary.targetNodeId}`
+                  : debugBoundary.nodeId ?? t('chat.debug.boundary.noNode')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {t('chat.debug.boundary.conversationCount', {
+                  count: debugBoundary.stateSnapshot.messageCount,
+                })}
+              </Typography>
+            </Box>
+          </Alert>
+
+          {!!debugBoundary.toolCalls?.length && (
+            <Accordion defaultExpanded sx={{ mt: 1, boxShadow: 'none', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+                <Typography variant="caption">{t('chat.debug.boundary.parameters')}</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ p: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {debugBoundary.toolCalls.map(call => (
+                  <Box key={call.id} sx={{ minWidth: 0 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, wordBreak: 'break-all' }}>
+                      {call.function.name}
+                    </Typography>
+                    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '180px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                      {formatToolArguments(call.function.arguments)}
+                    </pre>
+                  </Box>
+                ))}
+              </AccordionDetails>
+            </Accordion>
+          )}
+
+          {debugBoundary.modelInput && (
+            <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+                <Typography variant="caption">{t('chat.debug.boundary.modelInput')}</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ p: 0 }}>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '260px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                  {JSON.stringify(debugBoundary.modelInput, null, 2)}
+                </pre>
+              </AccordionDetails>
+            </Accordion>
+          )}
+
+          <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+              <Typography variant="caption">{t('chat.debug.boundary.state')}</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '220px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                {JSON.stringify(debugBoundary.stateSnapshot, null, 2)}
+              </pre>
+            </AccordionDetails>
+          </Accordion>
+        </Box>
+      )}
       {currentStepData ? (
         <Box>
           <Typography variant="body2"><b>{t('chat.debug.node')}</b> {currentStepData.nodeName} ({currentStepData.nodeId})</Typography>
@@ -799,8 +1084,8 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Typography variant="body2"><b>{t('chat.debug.timestamp')}</b> {formatLocalizedDate(new Date(currentStepData.timestamp), { dateStyle: 'medium', timeStyle: 'medium' })}</Typography>
           <Typography variant="body2"><b>{t('chat.debug.actionTaken')}</b> {currentStepData.actionTaken}</Typography>
 
-          {/* Model Input moved to the Conversation section (issue #162). The raw
-              JSON accordions below remain as the power-user fallback. */}
+          {/* Model Input is rendered in the regular chat's model-input view. The
+              raw JSON accordions below remain as the power-user fallback. */}
 
           {/* Accordion for Prep Result */}
           <Accordion sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
@@ -865,9 +1150,9 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             </AccordionDetails>
           </Accordion>
         </Box>
-      ) : (
+      ) : !debugBoundary ? (
         <Typography variant="body2" color="textSecondary">{t('chat.debug.selectStep')}</Typography>
-      )}
+      ) : null}
 
       {/* Run data (Tier 3): the run-scoped resources captured so far —
           auto-captured tool results, captureResource outputs, links.
@@ -887,16 +1172,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   );
 
   const sectionBodies: Record<SectionKey, React.ReactNode> = {
-    conversation: conversationBody,
     tracker: trackerBody,
     detail: detailBody,
   };
 
-  // Render one section column: fixed width for conversation/detail, flexible
-  // (fill remaining) for the tracker.
+  // The detail inspector is fixed-width; the tracker fills the remainder.
   const renderSection = (key: SectionKey) => {
-    const isFixed = key !== 'tracker';
-    const width = key === 'conversation' ? convWidth : key === 'detail' ? detailWidth : undefined;
+    const isFixed = key === 'detail';
+    const width = isFixed ? detailWidth : undefined;
     return (
       <Box
         key={key}
@@ -916,22 +1199,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     );
   };
 
-  // A resizer between two adjacent visible sections. The fixed-width neighbour
-  // is the one that gets resized; if the left neighbour is fixed it grows with
-  // rightward drag (sign +1), otherwise the right (fixed) neighbour shrinks
-  // with rightward drag (sign -1).
+  // A resizer between the flexible tracker and fixed detail inspector.
   const renderResizer = (left: SectionKey, right: SectionKey) => {
-    const target: 'conversation' | 'detail' | null =
-      left !== 'tracker' ? (left as 'conversation' | 'detail')
-      : right !== 'tracker' ? (right as 'conversation' | 'detail')
-      : null;
-    if (!target) return null; // two flexible neighbours never happens (only one tracker)
     const sign: 1 | -1 = left !== 'tracker' ? 1 : -1;
     return (
       <SectionResizer
         key={`resizer-${left}-${right}`}
-        onPointerDown={(e) => startResize(target, sign, e)}
-        aria-label={t('chat.debug.resizeSection', { section: sectionTitles[target] })}
+        onPointerDown={(e) => startResize(sign, e)}
+        aria-label={t('chat.debug.resizeSection', { section: sectionTitles.detail })}
       />
     );
   };
@@ -943,21 +1218,52 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Typography variant="h6">{t('chat.debug.title')}</Typography>
           <Typography variant="caption" color="textSecondary" display="block">
             {t('chat.debug.breakpointHelp')}
-            {breakpoints && breakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', breakpoints.length)}` : ''}
+            {activeBreakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', activeBreakpoints.length)}` : ''}
           </Typography>
+          {/* Legend + the breakpoints that have no node to sit on (tool
+              breakpoints), so an armed tool break is never invisible. */}
+          {activeBreakpoints.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+              {nodeBreakpoints(activeBreakpoints).length > 0 && (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<FiberManualRecordIcon />}
+                  label={tp('chat.debug.nodeBreakpoints', nodeBreakpoints(activeBreakpoints).length)}
+                />
+              )}
+              {toolBreakpointNames(activeBreakpoints).map(name => (
+                <Chip
+                  key={name}
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<BuildOutlinedIcon />}
+                  label={name === '*' ? t('chat.debug.anyToolBreakpoint') : name}
+                  onDelete={onSetBreakpoints
+                    ? () => onSetBreakpoints(activeBreakpoints.filter(b => b !== `tool:${name}`))
+                    : undefined}
+                />
+              ))}
+              {toolNodeBreakpointIds(activeBreakpoints).map(nodeId => (
+                <Chip
+                  key={`tool-node:${nodeId}`}
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<BuildOutlinedIcon />}
+                  label={t('chat.debug.toolNodeBreakpoint', { id: nodeId.slice(0, 8) })}
+                  onDelete={onSetBreakpoints
+                    ? () => onSetBreakpoints(activeBreakpoints.filter(b => b !== `${TOOL_NODE_BREAKPOINT_PREFIX}${nodeId}`))
+                    : undefined}
+                />
+              ))}
+            </Box>
+          )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           {/* Section visibility toggles */}
-          <Tooltip title={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}>
-            <IconButton
-              size="small"
-              onClick={() => toggleSection('conversation')}
-              color={visible.conversation ? 'primary' : 'default'}
-              aria-label={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}
-            >
-              <ForumOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
           <Tooltip title={visible.tracker ? t('chat.debug.hideSection', { section: sectionTitles.tracker }) : t('chat.debug.showSection', { section: sectionTitles.tracker })}>
             <IconButton
               size="small"
@@ -1014,15 +1320,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             <Button variant="outlined" size="small" onClick={handlePreviousStep} disabled={isLoading || currentStepIndex <= 0}>
                 {t('chat.debug.previous')}
             </Button>
-            <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || currentStepIndex === -1}>
+            <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || (currentStepIndex === -1 && !debugBoundary)}>
                 {/* Adjust button text based on whether we are at the end of the current trace */}
                 {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? t('chat.debug.nextTrace') : t('chat.debug.stepNext')}
             </Button>
-            {onStepOver && (
-              <Button variant="outlined" size="small" onClick={onStepOver} disabled={isLoading}>
-                {t('chat.debug.stepOver')}
-              </Button>
-            )}
             <Button variant="contained" color="secondary" size="small" onClick={onContinue} disabled={isLoading}>
                 {t('chat.debug.continue')}
             </Button>

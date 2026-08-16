@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     Dialog,
-    DialogTitle,
     DialogContent,
     DialogActions,
     Button,
     Box,
-    IconButton,
     Divider,
     Typography,
     Tabs,
@@ -16,8 +14,8 @@ import {
     useMediaQuery,
     useTheme
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
@@ -41,6 +39,10 @@ import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; //
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import PromptIOControls from './ProcessNodePropertiesModal/PromptIOControls';
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
+import PersonaAbilities, {
+  normalizePersonaAbilities,
+  type PersonaAbilityId,
+} from './ProcessNodePropertiesModal/PersonaAbilities';
 import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
@@ -50,11 +52,11 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
-// Issue #300: the 5 top-level sections. The modal renders all of them stacked
+// Issue #300: the top-level sections. The modal renders all of them stacked
 // in a single scroll container; the tab bar both scrolls a section into view
 // (on click) and reflects the section currently in view (via IntersectionObserver).
-type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'advanced';
-const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'advanced'];
+type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'persona' | 'advanced';
+const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'persona', 'advanced'];
 
 const TASK_TOOLS_WIDTH_STORAGE_KEY = 'flujo.processNode.taskToolsPaneWidth';
 const DEFAULT_TASK_TOOLS_WIDTH = 340;
@@ -116,6 +118,7 @@ export const ProcessNodePropertiesModal = ({
     model: t('flows.process.model'),
     io: t('flows.process.io'),
     task: t('flows.process.task'),
+    persona: t('flows.process.persona'),
     advanced: t('flows.process.advanced'),
   };
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
@@ -132,6 +135,7 @@ export const ProcessNodePropertiesModal = ({
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   // Issue #259: opt in to the synthetic `todo` tool for this node.
   const [enableTodoTool, setEnableTodoTool] = useState(false);
+  const [personaAbilities, setPersonaAbilities] = useState<PersonaAbilityId[]>([]);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
   // into scope + key for editing and recombined via buildKvRef on save.
   const [captureVariable, setCaptureVariable] = useState('');
@@ -146,7 +150,7 @@ export const ProcessNodePropertiesModal = ({
   const [isResizingTaskPanes, setIsResizingTaskPanes] = useState(false);
   const visibleSections = authoringMode === 'advanced'
     ? SECTIONS
-    : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section));
+    : SECTIONS.filter((section) => ['basic', 'model', 'task', 'persona'].includes(section));
 
   // Refs for each section, used both for tab-click scroll-into-view and for the
   // IntersectionObserver that keeps the tab bar in sync while the user scrolls.
@@ -155,6 +159,7 @@ export const ProcessNodePropertiesModal = ({
   const modelRef = useRef<HTMLDivElement>(null);
   const ioRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<HTMLDivElement>(null);
+  const personaRef = useRef<HTMLDivElement>(null);
   const advancedRef = useRef<HTMLDivElement>(null);
   const taskSplitContainerRef = useRef<HTMLDivElement>(null);
   const taskToolsWidthRef = useRef(taskToolsWidth);
@@ -164,6 +169,7 @@ export const ProcessNodePropertiesModal = ({
     model: modelRef,
     io: ioRef,
     task: taskRef,
+    persona: personaRef,
     advanced: advancedRef,
   };
   // While a programmatic (tab-click) smooth scroll is in flight, ignore the
@@ -382,6 +388,7 @@ export const ProcessNodePropertiesModal = ({
       setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
       setOutputMode(node.data.properties?.outputMode || 'full-conversation');
       setEnableTodoTool(node.data.properties?.enableTodoTool || false);
+      setPersonaAbilities(normalizePersonaAbilities(node.data.properties?.personaTools));
 
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
       setCaptureVariable(node.data.properties?.captureVariable || '');
@@ -393,11 +400,15 @@ export const ProcessNodePropertiesModal = ({
     }
 
     // Reset both navigation levels whenever the modal target or open state changes.
-    // Guided edit sessions with an authored task open directly on Task; new and
-    // advanced sessions start on Basic.
+    // Issue #320: editing an existing step opens directly on Task, creating a new
+    // one starts on Basic. Guided sessions keep the softer heuristic from the
+    // guided-authoring work: a guided edit only jumps to Task once the step has an
+    // authored task prompt, otherwise the author is sent to Basic first.
     const initialSection: SectionKey = mode === 'create'
       ? 'basic'
-      : getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate);
+      : authoringMode === 'guided'
+        ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
+        : 'task';
     setActiveSection(initialSection);
     setActiveTab('server');
     isProgrammaticScroll.current = true;
@@ -580,6 +591,11 @@ export const ProcessNodePropertiesModal = ({
         if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
       }
 
+      // Persona abilities are available in both Guided and Advanced authoring.
+      // An explicit empty list means “Off”; missing is reserved for legacy
+      // Flows so Persona creation can apply safe defaults exactly once.
+      properties.personaTools = [...personaAbilities];
+
       onSave(node.id, { ...nodeData, properties });
       onClose();
     }
@@ -715,16 +731,11 @@ export const ProcessNodePropertiesModal = ({
         }
       }}
     >
-      <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-            {t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
+        onClose={onClose}
+        titleProps={{ sx: { minWidth: 0, overflowWrap: 'anywhere' } }}
+      />
 
       <Divider />
 
@@ -743,7 +754,7 @@ export const ProcessNodePropertiesModal = ({
           </Tabs>
         </Box>
 
-        {/* Single scroll surface: all five sections stacked, with per-page
+        {/* Single scroll surface: all sections stacked, with per-page
             scroll-snap so scrolling moves whole sections (issue #300). */}
         <Box
           ref={scrollContainerRef}
@@ -900,6 +911,12 @@ export const ProcessNodePropertiesModal = ({
                 />
               </Box>
             </Box>
+          </Box>
+
+          {/* Persona */}
+          <Box ref={personaRef} data-section="persona" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.persona')}</Typography>
+            <PersonaAbilities value={personaAbilities} onChange={setPersonaAbilities} />
           </Box>
 
           {/* Advanced */}

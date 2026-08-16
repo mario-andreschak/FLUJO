@@ -60,10 +60,28 @@ export function isCatchUpDue(
   }
 }
 
+/**
+ * Exact first occurrence after the persisted baseline, or null when none is
+ * currently due. The scheduler uses this timestamp as a durable Persona
+ * delivery identity; wall-clock startup time would change across retries.
+ */
+export function catchUpOccurrence(
+  config: ScheduleTriggerConfig,
+  lastScheduledFireAt: string,
+): Date | null {
+  const job = new Cron(config.cron, { timezone: config.timezone, paused: true });
+  try {
+    const due = job.nextRun(new Date(lastScheduledFireAt));
+    return due !== null && due.getTime() <= Date.now() ? due : null;
+  } finally {
+    job.stop();
+  }
+}
+
 /** Arm the cron job. Throws on an invalid pattern/timezone. */
 export function armSchedule(
   config: ScheduleTriggerConfig,
-  onFire: () => void
+  onFire: (occurrence: Date) => void | Promise<void>
 ): ArmedTrigger {
   const job = new Cron(
     config.cron,
@@ -72,7 +90,7 @@ export function armSchedule(
       // Don't keep the Node process alive just for schedules.
       unref: true,
     },
-    onFire
+    (job) => onFire(job.currentRun() ?? new Date())
   );
   return {
     dispose: () => job.stop(),

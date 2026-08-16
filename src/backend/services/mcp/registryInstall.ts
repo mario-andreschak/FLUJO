@@ -25,6 +25,7 @@ import {
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  isAutoInstallable,
   ResolvedInstallPlan,
   getInstallOptions,
   buildConfigFromOption,
@@ -107,6 +108,26 @@ export async function searchRegistry(
   return ranked.map((sc) => toSearchHit(sc.candidate.server, sc));
 }
 
+/**
+ * Read-only capability discovery for callers that want ranked recommendations
+ * without coupling research to installation. Unlike searchRegistry, this fans a
+ * natural-language request into Registry-friendly name terms before ranking.
+ */
+export async function findBestRegistryServers(
+  query: string,
+  limit = DEFAULT_SEARCH_LIMIT,
+): Promise<RegistrySearchHit[]> {
+  if (!query || typeof query !== 'string') return [];
+  const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
+  const byName = new Map<string, RegistryServerResult>();
+  for (const result of pages.flat()) {
+    if (!byName.has(result.server.name)) byName.set(result.server.name, result);
+  }
+  const ranked = await enrichAndRank(query, [...byName.values()].map(toCandidate));
+  return ranked.slice(0, Math.min(Math.max(limit, 1), 30))
+    .map((candidate) => toSearchHit(candidate.candidate.server, candidate));
+}
+
 /** Raw registry list fetch (no ranking), shared by search + resolve paths. */
 async function fetchRegistryResults(query: string, limit: number): Promise<RegistryServerResult[]> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
@@ -119,7 +140,9 @@ async function fetchRegistryResults(query: string, limit: number): Promise<Regis
 }
 
 function toSearchHit(server: RegistryServer, scored?: ScoredCandidate): RegistrySearchHit {
-  const options = getInstallOptions(server);
+  // Launch-and-connect entries (#392) are describable but not headlessly
+  // installable, so they must not make a hit look installable.
+  const options = getInstallOptions(server).filter(isAutoInstallable);
   const best = options[0];
   return {
     name: server.name,
@@ -237,6 +260,7 @@ export interface InstallOptions {
 
 function optionTransport(option: InstallOption): 'stdio' | 'sse' | 'streamable' {
   if (option.kind === 'package') return 'stdio';
+  if (option.kind === 'manual-launch') return option.transport;
   return option.remote.type === 'sse' ? 'sse' : 'streamable';
 }
 
@@ -269,6 +293,7 @@ function plansMatch(left: ResolvedInstallPlan, right: ResolvedInstallPlan): bool
     command: value.command,
     args: value.args,
     serverUrl: value.serverUrl,
+    steps: value.steps,
     requiredEnvNames: value.requiredEnvNames,
     verificationStatus: value.verificationStatus,
   });
@@ -305,7 +330,8 @@ function applyArgTemplates(
 }
 
 /**
- * Resolve a registry entry by its exact name (falls back to best search hit).
+ * Resolve a registry entry by its exact name. Never substitute a fuzzy hit:
+ * callers use this result to approve and execute a specific install plan.
  * Returns the full result (not just `.server`) so the caller can read the
  * `_meta … status` verification field.
  */
@@ -316,8 +342,7 @@ export async function resolveRegistryEntry(registryName: string): Promise<Regist
   url.searchParams.set('search', registryName);
   const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
   const results: RegistryServerResult[] = Array.isArray(data?.servers) ? data.servers : [];
-  const exact = results.find((r) => r.server?.name === registryName);
-  return exact ?? results[0] ?? null;
+  return results.find((r) => r.server?.name === registryName) ?? null;
 }
 
 /**
@@ -345,10 +370,19 @@ export async function installRegistryServer(
     return { installed: false, error: `No registry entry found for "${registryName}"` };
   }
 
-  const installOptions = getInstallOptions(server);
+  const allOptions = getInstallOptions(server);
+  // #392: a launch-and-connect package is a process the USER starts; FLUJO does
+  // not own that lifecycle yet, so the headless installer never picks one.
+  const installOptions = allOptions.filter(isAutoInstallable);
   const option = chooseInstallOption(installOptions, options?.preferredTransport);
   if (!option) {
-    return { installed: false, error: `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)` };
+    const manualOnly = installOptions.length === 0 && allOptions.length > 0;
+    return {
+      installed: false,
+      error: manualOnly
+        ? `"${server.name}" must be started manually (it runs locally but speaks HTTP); add it from the MCP server dialog instead`
+        : `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)`,
+    };
   }
 
   // Resolve-only / consent preview: exact command + args + required env NAMES,
@@ -406,6 +440,16 @@ export async function installRegistryServer(
   }
 
   const builtConfig = buildConfigFromOption(server, option);
+  // #392 guard: a `launch` spec means "a local process must be running behind
+  // this URL". Headless install cannot start it (Phase 2), so fail loudly here
+  // instead of persisting a config that would never connect.
+  if ('launch' in builtConfig && builtConfig.launch) {
+    return {
+      installed: false,
+      plan,
+      error: `"${server.name}" needs a locally launched process behind its HTTP endpoint, which FLUJO does not start yet. Add it from the MCP server dialog and start the process yourself.`,
+    };
+  }
   const builtHeaders = 'headers' in builtConfig
     ? (builtConfig.headers as Record<string, MCPHeaderValue> | undefined)
     : undefined;
@@ -415,7 +459,7 @@ export async function installRegistryServer(
   const registryConfig = {
     ...builtConfig,
     ...(requestedServerName ? { name: requestedServerName } : {}),
-    ...(option.kind === 'remote' && requestedServerName
+    ...(requestedServerName
       ? { rootPath: `mcp-servers/${requestedServerName}` }
       : {}),
     ...(option.kind === 'remote' ? { headers: policyHeaders ?? {} } : {}),
@@ -605,7 +649,7 @@ export async function installBestForCapability(
       break;
     }
     // Don't spend an attempt on entries FLUJO can't run at all.
-    if (getInstallOptions(sc.candidate.server).length === 0) {
+    if (getInstallOptions(sc.candidate.server).filter(isAutoInstallable).length === 0) {
       attempts.push({ name, score: sc.score, reason: 'no supported install method' });
       continue;
     }

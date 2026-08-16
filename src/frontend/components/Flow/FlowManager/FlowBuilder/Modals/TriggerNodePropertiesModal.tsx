@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -20,14 +19,13 @@ import {
   Alert,
   CircularProgress,
   Snackbar,
-  IconButton,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import LanguageIcon from '@mui/icons-material/Language';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import AltRouteIcon from '@mui/icons-material/AltRoute';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import {
@@ -239,14 +237,7 @@ const TriggerNodePropertiesModal = ({
           },
         }}
       >
-        <DialogTitle component="div">
-          <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Typography variant="h6">{t('flows.trigger.title')}</Typography>
-            <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-              <CloseIcon />
-            </IconButton>
-          </Box>
-        </DialogTitle>
+        <DialogHeaderActions title={t('flows.trigger.title')} onClose={onClose} />
 
         <Divider />
 

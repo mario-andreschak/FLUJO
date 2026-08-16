@@ -33,6 +33,13 @@ export type EnvVarValue = string | {
 export type MCPHeaderValue = EnvVarValue;
 
 /**
+ * Parameters fixed by the user before an MCP tool is advertised to a model.
+ * The outer key is the server tool name and the inner key is a top-level input
+ * parameter. Values may be literals, `${global:NAME}`, or dynamic `@` refs.
+ */
+export type MCPToolParameterPresets = Record<string, Record<string, unknown>>;
+
+/**
  * How an MCP server was installed (#193). A machine-readable, discriminated
  * record of each server's install-origin, so downstream features (notably the
  * by-reference package export, #192) can serialize *installation instructions*
@@ -59,7 +66,6 @@ export type MCPServerSource =
  */
 export type MCPHostPathAccessConfig = {
   environmentRootVariables: string[];
-  protectedPaths: boolean;
   snapshots: boolean;
 };
 
@@ -79,7 +85,6 @@ export type MCPServerIcon = {
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
-  autoApprove: string[];
   rootPath: string;
   env: Record<string, EnvVarValue>
   _buildCommand: string;
@@ -96,8 +101,6 @@ export type MCPManagerConfig = {
   icons?: MCPServerIcon[];
   /** Name-independent host-path security metadata supplied by an installer. */
   hostPathAccess?: MCPHostPathAccessConfig;
-  /** Package-level protected-path policy; legacy Settings remains a read fallback. */
-  protectedPathsEnabled?: boolean;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
@@ -163,6 +166,8 @@ export type MCPManagerConfig = {
    * (DEFAULT_TOOL_CALL_CONCURRENCY). Config-only for now (no dedicated UI).
    */
   maxConcurrency?: number;
+  /** Server-wide tool argument defaults. A node may override individual keys. */
+  toolParameterPresets?: MCPToolParameterPresets;
 }
 
 export type MCPElicitationPolicy = {
@@ -185,12 +190,35 @@ export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
   transport: 'stdio';
 };
 
+/**
+ * Launch-and-connect (#392): the process FLUJO would start before connecting to
+ * `serverUrl`. Deliberately ORTHOGONAL to `transport` — the discriminant keeps
+ * answering "how do we talk to it", while `launch` answers "who starts it".
+ * Modelling this as a fifth union member would force a review of ~67 transport
+ * discriminant checks across 15+ files; as an optional field every existing
+ * check keeps its exact meaning and code that ignores `launch` behaves as today.
+ *
+ * NOTE (Phase 1): FLUJO does NOT spawn this process yet. The spec is persisted
+ * and displayed read-only so the user can start it themselves; owning the
+ * process lifecycle (readiness polling, teardown, orphan reaping) is Phase 2.
+ */
+export type MCPLaunchSpec = {
+  command: string;
+  args?: string[];
+  env?: Record<string, EnvVarValue>;
+  cwd?: string;
+  /** How long to poll serverUrl before declaring failure (Phase 2). Default 30_000. */
+  readyTimeoutMs?: number;
+};
+
 export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   transport: 'sse';
   serverUrl: string;
   // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
   // Values may be secret (masked/encrypted) or bound to a global variable (#84).
   headers?: Record<string, MCPHeaderValue>;
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
@@ -208,7 +236,14 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthClientInformation?: OAuthClientInformation;
   oauthTokens?: OAuthTokens;
   oauthCodeVerifier?: string;
+  /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
+  oauthState?: string;
+  /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
+  oauthStateWorkspace?: string;
+  oauthStateCreatedAt?: number;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPWebSocketConfig = MCPManagerConfig & {

@@ -1,6 +1,6 @@
 {
   "name": "@mario.andreschak/mcp-flujo",
-  "version": "3.42.1",
+  "version": "3.45.0",
   "description": "FLUJO's standalone application MCP server",
   "type": "module",
   "main": "dist/index.js",

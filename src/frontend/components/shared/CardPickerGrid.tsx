@@ -1,9 +1,20 @@
 "use client";
 
-import React, { useState } from 'react';
-import { Box, Grid, Typography, CircularProgress, TextField, InputAdornment } from '@mui/material';
+import React, { useCallback, useRef, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Grid,
+  InputAdornment,
+  TextField,
+  Typography,
+} from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CollapsibleCardSection from './CollapsibleCardSection';
+import StickySearchBar from './StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -26,6 +37,20 @@ export interface CardPickerItem {
    * and this is ignored.
    */
   searchText?: string;
+  /** Human-readable item name used by assistive technology. */
+  label?: string;
+  /** Selection state rendered by the shared single/multi selection contract. */
+  selected?: boolean;
+  /** Disabled items remain visible but cannot be selected. */
+  disabled?: boolean;
+  /** Marks an unresolved persisted reference without hiding it from the user. */
+  missing?: boolean;
+  /** Called for pointer and Enter/Space activation. */
+  onSelect?: (key: string | number) => void;
+  /** Optional repair action shown for a missing item. */
+  onRepair?: () => void;
+  repairLabel?: React.ReactNode;
+  missingLabel?: React.ReactNode;
 }
 
 export interface CardPickerGridProps {
@@ -47,6 +72,10 @@ export interface CardPickerGridProps {
    * provided. Optional so callers can pass `groups` instead.
    */
   items?: CardPickerItem[];
+  /** Adds radio-like or checkbox-like semantics and keyboard navigation. */
+  selectionMode?: 'single' | 'multiple';
+  /** Accessible name for the selection collection. */
+  ariaLabel?: string;
 
   // ── #92 follow-up: optional search + grouping (all additive/opt-in) ─────────
   /** Render a search box above the grid. */
@@ -66,6 +95,16 @@ export interface CardPickerGridProps {
   collapsedKeys?: Set<string>;
   /** Controlled collapse toggler; when omitted the grid manages its own. */
   onToggleGroup?: (key: string) => void;
+
+  // -- #372: auto-focus + sticky search (opt-in, default on when searchable) --
+  /** Auto-focus the search field on mount / when this flips false -> true. Defaults to {@link searchable}. */
+  autoFocusSearch?: boolean;
+  /** Delay (ms) before auto-focusing; dialogs pass ~120 so the MUI focus trap settles first. */
+  autoFocusDelayMs?: number;
+  /** Keep the search field pinned to the top of its scroll context while the list scrolls underneath. Defaults to {@link searchable}. */
+  stickySearch?: boolean;
+  /** Additional ref to the search `<input>`, merged with the internal auto-focus ref. */
+  searchInputRef?: React.Ref<HTMLInputElement>;
 }
 
 const DEFAULT_COLUMNS: CardPickerColumns = { xs: 12, sm: 6, md: 4 };
@@ -89,6 +128,8 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
   skeletonCount = 4,
   columns = DEFAULT_COLUMNS,
   items,
+  selectionMode,
+  ariaLabel,
   searchable = false,
   searchPlaceholder,
   searchTerm,
@@ -96,12 +137,33 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
   groups,
   collapsedKeys,
   onToggleGroup,
+  autoFocusSearch,
+  autoFocusDelayMs = 0,
+  stickySearch,
+  searchInputRef,
 }) => {
   const { t } = useI18n();
   const resolvedEmptyMessage = emptyMessage ?? t('cardPicker.empty');
   const resolvedLoadingMessage = loadingMessage ?? t('common.loading');
   const resolvedSearchPlaceholder = searchPlaceholder ?? t('common.search');
   const cols = { ...DEFAULT_COLUMNS, ...columns };
+  const gridRootRef = useRef<HTMLDivElement | null>(null);
+
+  // #372: default both auto-focus and sticky on when the grid is searchable.
+  const effectiveAutoFocus = autoFocusSearch ?? searchable;
+  const effectiveSticky = stickySearch ?? searchable;
+  const autoFocusRef = useAutoFocusSearch({ enabled: effectiveAutoFocus, delayMs: autoFocusDelayMs });
+  const setSearchInputRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      autoFocusRef.current = node;
+      if (typeof searchInputRef === 'function') {
+        searchInputRef(node);
+      } else if (searchInputRef) {
+        (searchInputRef as React.MutableRefObject<HTMLInputElement | null>).current = node;
+      }
+    },
+    [autoFocusRef, searchInputRef],
+  );
 
   // Search state: controlled when `searchTerm` is passed, otherwise internal.
   const [internalSearch, setInternalSearch] = useState('');
@@ -128,17 +190,92 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
     });
   };
 
+  const focusRelativeItem = (current: HTMLElement, direction: -1 | 1 | 'first' | 'last') => {
+    const candidates = Array.from(
+      gridRootRef.current?.querySelectorAll<HTMLElement>(
+        '[data-card-picker-selectable="true"]:not([aria-disabled="true"])',
+      ) ?? [],
+    );
+    if (candidates.length === 0) return;
+    const currentIndex = candidates.indexOf(current);
+    const nextIndex = direction === 'first'
+      ? 0
+      : direction === 'last'
+        ? candidates.length - 1
+        : (Math.max(0, currentIndex) + direction + candidates.length) % candidates.length;
+    candidates[nextIndex]?.focus();
+  };
+
   const renderCells = (cells: CardPickerItem[]) => (
     <Grid container spacing={2} alignItems="stretch">
       {cells.map((item) => (
         <Grid item xs={cols.xs} sm={cols.sm} md={cols.md} lg={cols.lg} key={item.key} sx={{ display: 'flex' }}>
-          <Box sx={{ width: '100%' }}>{item.content}</Box>
+          <Box
+            data-card-picker-item="true"
+            data-card-picker-selectable={Boolean(item.onSelect)}
+            role={selectionMode === 'multiple' ? 'checkbox' : selectionMode === 'single' ? 'radio' : item.onSelect ? 'button' : undefined}
+            aria-checked={selectionMode ? Boolean(item.selected) : undefined}
+            aria-pressed={!selectionMode && item.onSelect ? Boolean(item.selected) : undefined}
+            aria-disabled={item.disabled || undefined}
+            aria-label={item.label}
+            tabIndex={item.onSelect && !item.disabled ? 0 : undefined}
+            onClick={item.onSelect && !item.disabled ? () => item.onSelect?.(item.key) : undefined}
+            onKeyDown={item.onSelect && !item.disabled ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                item.onSelect?.(item.key);
+                return;
+              }
+              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                focusRelativeItem(event.currentTarget, 1);
+              } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                focusRelativeItem(event.currentTarget, -1);
+              } else if (event.key === 'Home') {
+                event.preventDefault();
+                focusRelativeItem(event.currentTarget, 'first');
+              } else if (event.key === 'End') {
+                event.preventDefault();
+                focusRelativeItem(event.currentTarget, 'last');
+              }
+            } : undefined}
+            sx={{
+              width: '100%',
+              minWidth: 0,
+              outlineOffset: 3,
+              opacity: item.disabled ? 0.58 : 1,
+              cursor: item.onSelect && !item.disabled ? 'pointer' : undefined,
+            }}
+          >
+            {item.content}
+            {item.missing && (
+              <Alert
+                severity="warning"
+                sx={{ mt: 1 }}
+                action={item.onRepair ? (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      item.onRepair?.();
+                    }}
+                  >
+                    {item.repairLabel ?? 'Repair'}
+                  </Button>
+                ) : undefined}
+              >
+                {item.missingLabel ?? 'This referenced item is no longer available.'}
+              </Alert>
+            )}
+          </Box>
         </Grid>
       ))}
     </Grid>
   );
 
-  const searchBox = searchable ? (
+  const searchField = searchable ? (
     <TextField
       placeholder={resolvedSearchPlaceholder}
       variant="outlined"
@@ -146,7 +283,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       fullWidth
       value={effectiveTerm}
       onChange={(e) => handleSearch(e.target.value)}
-      sx={{ mb: 2 }}
+      inputRef={setSearchInputRef}
       InputProps={{
         startAdornment: (
           <InputAdornment position="start">
@@ -154,11 +291,24 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
           </InputAdornment>
         ),
       }}
+      inputProps={{ 'aria-label': resolvedSearchPlaceholder }}
     />
   ) : null;
 
+  // #372: sticky wrapper carries the `mb: 2` spacing the plain TextField used to own.
+  const searchBox = searchable ? (
+    <StickySearchBar mode="container" disableSticky={!effectiveSticky} sx={{ mb: 2 }}>
+      {searchField}
+    </StickySearchBar>
+  ) : null;
+
   const withSearch = (body: React.ReactNode) => (
-    <Box>
+    <Box
+      ref={gridRootRef}
+      role={selectionMode === 'single' ? 'radiogroup' : selectionMode === 'multiple' ? 'group' : undefined}
+      aria-label={ariaLabel}
+      aria-multiselectable={selectionMode === 'multiple' ? true : undefined}
+    >
       {searchBox}
       {body}
     </Box>

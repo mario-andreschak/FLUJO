@@ -1,9 +1,18 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
-import { parseRequestParameters, _logRequestDetails, ChatCompletionRequest } from './requestParser'; // Import ChatCompletionRequest
+import {
+  InvalidPersonaChatMetadataError,
+  parseRequestParameters,
+  _logRequestDetails,
+  ChatCompletionRequest,
+} from './requestParser'; // Import ChatCompletionRequest
 import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -111,7 +120,86 @@ async function handleRequest(request: NextRequest) {
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
     const parsedData = await parseRequestParameters(request);
     // Destructure all flags, including flujodebug
-    const { flujo, conversation_id, requireApproval, flujodebug, ...completionData } = parsedData;
+    const {
+      flujo,
+      conversation_id,
+      requireApproval,
+      flujodebug,
+      personaTarget,
+      ...completionData
+    } = parsedData;
+
+    // Persona ids select a durable living actor. They follow the same selected
+    // exposure policy as the rest of FLUJO's UI/control surface.
+    if (personaTarget) {
+      const notLocal = assertLocalRequest(request);
+      if (notLocal) return notLocal;
+    }
+    if (conversation_id) {
+      const existingState = await loadConversationState(conversation_id);
+      if (isPersonaOwnedConversationState(existingState)) {
+        const notLocal = assertLocalRequest(request);
+        if (notLocal) return notLocal;
+      }
+      if (existingState?.personaArchived) {
+        return NextResponse.json({
+          error: {
+            message: 'An anonymized Persona archive is read-only and cannot be resumed or retargeted.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_archived',
+            param: 'metadata.conversationId',
+          },
+        }, { status: 409, headers: corsHeaders });
+      }
+      if (existingState?.personaAttribution || existingState?.personaTargetId) {
+        const requiredPersonaId = existingState.personaAttribution?.personaId
+          ?? existingState.personaTargetId;
+        if (
+          !personaTarget
+          || personaTarget.personaId !== requiredPersonaId
+        ) {
+          return NextResponse.json({
+            error: {
+              message: 'Persona-owned conversations require matching Persona routing metadata.',
+              type: 'invalid_request_error',
+              code: 'persona_conversation_requires_target',
+              param: 'metadata.personaId',
+            },
+          }, { status: 409, headers: corsHeaders });
+        }
+        if (
+          existingState.personaBehaviorSlotKey
+          && (personaTarget.behaviorSlotKey ?? 'primary') !== existingState.personaBehaviorSlotKey
+        ) {
+          return NextResponse.json({
+            error: {
+              message: 'This conversation is already using a different Persona role or Behavior.',
+              type: 'invalid_request_error',
+              code: 'persona_conversation_behavior_locked',
+              param: 'metadata.behaviorSlotKey',
+            },
+          }, { status: 409, headers: corsHeaders });
+        }
+      } else if (isPersonaOwnedConversationState(existingState)) {
+        return NextResponse.json({
+          error: {
+            message: 'Persona conversation ownership metadata is incomplete and cannot be resumed.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_attribution_incomplete',
+            param: 'metadata.conversationId',
+          },
+        }, { status: 409, headers: corsHeaders });
+      } else if (existingState && personaTarget) {
+        return NextResponse.json({
+          error: {
+            message: 'An existing Flow conversation cannot be converted to a Persona conversation.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_target_locked',
+            param: 'metadata.personaId',
+          },
+        }, { status: 409, headers: corsHeaders });
+      }
+    }
 
     // Truncated payload dump for VERBOSE only. Built lazily (thunk): the map
     // walks every message (and multipart image parts), which is O(history) per
@@ -158,7 +246,8 @@ async function handleRequest(request: NextRequest) {
       flujo,
       conversation_id,
       requireApproval,
-      flujodebug // Log the new flag
+      flujodebug,
+      personaTargeted: Boolean(personaTarget),
     });
 
     // Pass all flags to processChatCompletion
@@ -169,7 +258,8 @@ async function handleRequest(request: NextRequest) {
       flujodebug, // Pass the new flag
       conversation_id,
       false, // continueDebug: only the debug "Continue" control sets this
-      true // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
+      true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
+      personaTarget,
     );
 
     const duration = Date.now() - startTime;
@@ -193,6 +283,7 @@ async function handleRequest(request: NextRequest) {
   } catch (error) {
     const duration = Date.now() - startTime;
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
+    const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;
     log.error('Error handling request', {
       requestId,
       error: error instanceof Error ? {
@@ -208,13 +299,17 @@ async function handleRequest(request: NextRequest) {
       {
         error: {
           message: error instanceof Error ? error.message : 'Failed to process chat completion',
-          type: unsupportedTool ? 'invalid_request_error' : 'internal_error',
-          code: unsupportedTool ? error.code : 'internal_error',
+          type: unsupportedTool || invalidPersonaMetadata ? 'invalid_request_error' : 'internal_error',
+          code: unsupportedTool
+            ? error.code
+            : invalidPersonaMetadata
+              ? error.code
+              : 'internal_error',
           param: null
         }
       },
       { 
-        status: unsupportedTool ? 400 : 500,
+        status: unsupportedTool || invalidPersonaMetadata ? 400 : 500,
         headers: corsHeaders
       }
     );
@@ -222,7 +317,7 @@ async function handleRequest(request: NextRequest) {
 }
 
 // Handle OPTIONS requests for CORS preflight
-export async function OPTIONS(request: NextRequest) {
+async function OPTIONS_handler(request: NextRequest) {
   const requestId = `options-${Date.now()}`;
   log.info('OPTIONS request received (CORS preflight)', {
     requestId,
@@ -241,7 +336,7 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 // Handle GET requests
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -266,7 +361,7 @@ export async function GET(request: NextRequest) {
 }
 
 // Handle POST requests
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -290,3 +385,7 @@ export async function POST(request: NextRequest) {
   
   return response;
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const OPTIONS = withWorkspaceRoute(OPTIONS_handler);

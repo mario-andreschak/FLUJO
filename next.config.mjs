@@ -5,15 +5,31 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   /* config options here */
+  experimental: {
+    // This project needs a custom webpack hook for native modules/WASM, which
+    // makes Next opt out of its build worker by default. Keeping the whole
+    // production compilation in the CLI process pushes large builds past
+    // Node's normal heap limit. Re-enable the worker and Webpack's lower-memory
+    // graph representation instead of requiring users/CI to raise NODE_OPTIONS.
+    webpackBuildWorker: true,
+    webpackMemoryOptimizations: true,
+  },
   // Pin the workspace root to this project. Without this, a stray
   // package-lock.json in a parent dir (e.g. the user's home folder) makes
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  // Runtime workspace data can contain Windows junctions such as the legacy
+  // Content.IE5 cache link. It is never a deployable application dependency,
+  // so keep it out of Next's output traces.
+  outputFileTracingExcludes: {
+    '*': [WORKSPACES_TRACE_IGNORE],
+  },
   // CORS for `/api/*` is defense-in-depth secondary to the fail-closed origin
   // guard in `src/middleware.ts` (#142). We do NOT advertise a wildcard
   // `Access-Control-Allow-Origin: *` for the blanket `/api` surface: even if the
@@ -59,6 +75,15 @@ const nextConfig = {
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {
+    // Failed/partial production compiles can leave multi-gigabyte filesystem
+    // caches (the workspace route fan-out once produced a 2.8 GB server cache).
+    // Loading that cache alone can exhaust Node's normal heap on the next build.
+    // Production builds favor deterministic bounded memory over incremental
+    // speed; development keeps Next's cache for fast HMR.
+    if (!dev) {
+      config.cache = false;
+    }
+
     // Only apply these settings in development mode
     if (dev && !isServer) {
       // Increase chunk loading timeout to 60 seconds (60000ms)

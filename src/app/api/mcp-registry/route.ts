@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -54,7 +55,7 @@ function setCached(key: string, body: unknown): void {
  *   cursor — pagination cursor from a previous response's metadata.nextCursor
  *   limit  — page size (clamped to 1..100, default 30)
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -125,3 +126,5 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

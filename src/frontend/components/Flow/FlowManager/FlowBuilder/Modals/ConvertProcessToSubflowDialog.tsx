@@ -10,7 +10,6 @@ import {
   DialogActions,
   DialogContent,
   DialogContentText,
-  DialogTitle,
   Divider,
   List,
   ListItem,
@@ -25,6 +24,7 @@ import {
   type ProcessToSubflowDraft,
 } from '../utils/convertProcessToSubflow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface ConvertProcessToSubflowDialogProps {
   open: boolean;
@@ -88,7 +88,10 @@ export default function ConvertProcessToSubflowDialog({
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle>{draft ? t('flows.convert.previewTitle') : t('flows.convert.title')}</DialogTitle>
+      <DialogHeaderActions
+        title={draft ? t('flows.convert.previewTitle') : t('flows.convert.title')}
+        onClose={saving ? () => {} : onClose}
+      />
       <DialogContent>
         {!draft ? (
           <>

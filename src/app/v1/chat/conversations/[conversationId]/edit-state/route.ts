@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -6,6 +7,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/edit-state/route');
@@ -23,7 +25,7 @@ interface EditStateBody {
  * message's content or change which node runs next, then continue/step. Only
  * permitted while the conversation is paused for debugging.
  */
-export async function PATCH(
+async function PATCH_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -50,6 +52,14 @@ export async function PATCH(
 
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const personaNotLocal = assertLocalRequest(request);
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
     }
 
     // Guard: edits are only safe while paused for debugging.
@@ -95,3 +105,5 @@ export async function PATCH(
     return NextResponse.json({ error: 'Internal server error editing state' }, { status: 500 });
   }
 }
+
+export const PATCH = withWorkspaceRoute(PATCH_handler);

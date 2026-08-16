@@ -9,8 +9,42 @@ import {
   markDanglingToolEffectsUnknown,
   reconcileInterruptedRecovery,
 } from './recoveryCheckpoint';
+import { coalesceLoad, noteRead, noteWrite } from './conversationStateCache';
+import { validateCompactionState } from './compaction/state';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
+
+/**
+ * Read canonical conversation state without adopting it into the runtime cache,
+ * replaying logs, reconciling recovery, repairing tool calls, or persisting.
+ * Live state is returned as a readonly view; callers must snapshot the fields
+ * they inspect because an active run may continue updating it.
+ */
+export async function loadConversationStateReadOnly(
+  conversationId: string,
+): Promise<Readonly<SharedState> | undefined> {
+  try {
+    assertSafeCollectionId(conversationId);
+  } catch {
+    log.warn('Rejected unsafe conversationId on read-only load', { conversationId });
+    return undefined;
+  }
+
+  const live = FlowExecutor.conversationStates.get(conversationId);
+  if (live) {
+    log.debug('Read state from memory without cache mutation', { conversationId });
+    return live;
+  }
+
+  const storageKey = `conversations/${conversationId}` as StorageKey;
+  try {
+    const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    return state || undefined;
+  } catch (error) {
+    log.warn('Error reading conversation state without recovery', { conversationId, error });
+    return undefined;
+  }
+}
 
 /**
  * Load a conversation's SharedState, preferring the in-memory map and falling
@@ -22,6 +56,11 @@ const log = createLogger('backend/execution/flow/loadConversationState');
  * (respond, debug/step, debug/continue, breakpoints, edit-state) each repeated.
  * NOTE: the cancel route deliberately keeps its own load (it treats a storage
  * read error as a hard 500 rather than "not found"), so it does not use this.
+ *
+ * Issue #413: the durable half is COALESCED per conversation id. Once the bounded
+ * cache may evict a completed conversation, several control routes can miss at
+ * the same instant; without coalescing each would independently replay the log
+ * and re-persist the same dangling-tool repair.
  */
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
   // Path-traversal guard (issue #126): the conversationId becomes a filesystem
@@ -35,16 +74,45 @@ export async function loadConversationState(conversationId: string): Promise<Sha
   }
   if (FlowExecutor.conversationStates.has(conversationId)) {
     log.debug('Loaded state from memory', { conversationId });
+    noteRead(conversationId, true);
     return FlowExecutor.conversationStates.get(conversationId);
   }
+  noteRead(conversationId, false);
+  return coalesceLoad(conversationId, () => loadFromDurableStorage(conversationId));
+}
+
+/**
+ * The durable half of the load: snapshot -> conversation-log replay ->
+ * interrupted-recovery reconciliation -> dangling-tool repair -> cache adoption.
+ * Extracted so `coalesceLoad` can guarantee exactly one execution per id.
+ */
+async function loadFromDurableStorage(conversationId: string): Promise<SharedState | undefined> {
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
     const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
     if (state) {
       log.debug('Loaded state from storage', { conversationId });
+      // Persona snapshots deliberately omit their runtime capability. A read or
+      // legacy control route may inspect that durable projection, but it must
+      // never replay logs, classify interruption, repair tools, or persist a
+      // replacement snapshot without first reacquiring the owning Activity.
+      // The Persona dispatcher installs authority before runFlow performs these
+      // recovery steps.
+      if (state.personaAttribution && !state.executionAuthority) {
+        FlowExecutor.conversationStates.set(conversationId, state);
+        noteWrite(conversationId, state);
+        return state;
+      }
       // Per-step durability lives in the append-only log; the snapshot is only
       // written at run boundaries. Fold in anything the snapshot missed.
       await recoverMessagesFromLog(state);
+      // Wire artifacts are derived metadata. Stale or cross-conversation records
+      // are ignored; they are never used to repair or replace canonical messages.
+      state.compactionState = validateCompactionState(
+        state.compactionState,
+        conversationId,
+        state.messages,
+      );
       // Issue #355: a persisted running record owned by a prior process did not
       // reach a terminal boundary. Reclassify it before any resume/control route
       // can accidentally treat it as live. Legacy states without owner metadata
@@ -72,6 +140,7 @@ export async function loadConversationState(conversationId: string): Promise<Sha
         log.warn('Failed to repair dangling tool calls on load; continuing', { conversationId, repairError });
       }
       FlowExecutor.conversationStates.set(conversationId, state);
+      noteWrite(conversationId, state);
       return state;
     }
   } catch (error) {

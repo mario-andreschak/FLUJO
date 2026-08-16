@@ -37,6 +37,10 @@ export interface MappedUsage {
   completionTokens: number;
   /** Subset of `promptTokens` that was cheaply re-read from the prompt cache. */
   cacheReadTokens: number;
+  /** Subset of `promptTokens` written to Anthropic's prompt cache. */
+  cacheWriteTokens: number;
+  /** Full input plus output, matching the OpenAI-shaped adapter contract. */
+  totalTokens: number;
 }
 
 /**
@@ -62,5 +66,11 @@ export function mapSdkUsage(
     ? resultUsage.output_tokens ?? 0
     : fallback?.totalOutputTokens ?? 0;
 
-  return { promptTokens, completionTokens, cacheReadTokens: cacheRead };
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheCreation,
+  };
 }

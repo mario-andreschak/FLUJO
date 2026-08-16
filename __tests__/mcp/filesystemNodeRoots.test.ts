@@ -7,7 +7,7 @@
  * never go through the `roots/list` protocol handler — so before the fix a root
  * added on an MCP node was silently ignored and every path read as "outside the
  * configured filesystem roots." This locks in that the node overlay is honored,
- * including relative entries (resolved against the FLUJO data dir).
+ * including relative entries (resolved against the selected workspace data dir).
  */
 import { promises as fsp } from 'fs';
 import os from 'os';
@@ -34,6 +34,16 @@ jest.mock('@/utils/paths', () => ({
       .__flujoFilesystemNodeDataDir ?? process.cwd()
   )),
 }));
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    getWorkspaceDataDir: () => (
+      (globalThis as typeof globalThis & { __flujoFilesystemNodeWorkspaceDir?: string })
+        .__flujoFilesystemNodeWorkspaceDir ?? actual.getWorkspaceDataDir()
+    ),
+  };
+});
 
 import { filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
 import { setNodeRoots, _resetNodeRootsForTests } from '@/backend/services/mcp/roots';
@@ -45,11 +55,15 @@ function text(r: CallToolResult): string {
 describe('filesystem confinement honors node-level roots', () => {
   let dataDir: string;
   let workspace: string;
+  let workspaceDataDir: string;
 
   beforeEach(async () => {
     dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-datadir-'));
     (globalThis as typeof globalThis & { __flujoFilesystemNodeDataDir?: string })
       .__flujoFilesystemNodeDataDir = dataDir;
+    workspaceDataDir = path.join(dataDir, 'workspaces', 'default-workspace');
+    (globalThis as typeof globalThis & { __flujoFilesystemNodeWorkspaceDir?: string })
+      .__flujoFilesystemNodeWorkspaceDir = workspaceDataDir;
     workspace = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-ws-'));
     _resetNodeRootsForTests();
     delete process.env.FLUJO_FS_ROOTS;
@@ -58,6 +72,8 @@ describe('filesystem confinement honors node-level roots', () => {
     _resetNodeRootsForTests();
     delete (globalThis as typeof globalThis & { __flujoFilesystemNodeDataDir?: string })
       .__flujoFilesystemNodeDataDir;
+    delete (globalThis as typeof globalThis & { __flujoFilesystemNodeWorkspaceDir?: string })
+      .__flujoFilesystemNodeWorkspaceDir;
     await fsp.rm(dataDir, { recursive: true, force: true });
     await fsp.rm(workspace, { recursive: true, force: true });
   });
@@ -77,20 +93,20 @@ describe('filesystem confinement honors node-level roots', () => {
     expect(text(blocked)).toMatch(/outside/i);
   });
 
-  it('resolves a RELATIVE node root against the FLUJO data dir', async () => {
-    // A relative node root like "proj" must map to <dataDir>/proj.
-    await fsp.mkdir(path.join(dataDir, 'proj'), { recursive: true });
+  it('resolves a RELATIVE node root against the selected workspace data dir', async () => {
+    // A relative node root like "proj" maps inside the selected workspace.
+    await fsp.mkdir(path.join(workspaceDataDir, 'proj'), { recursive: true });
     setNodeRoots('filesystem', 'node-1', ['proj']);
 
     const inside = await filesystemCallTool('write_file', {
-      path: path.join(dataDir, 'proj', 'ok.txt'),
+      path: path.join(workspaceDataDir, 'proj', 'ok.txt'),
       content: 'x',
     });
     expect(inside.isError).toBeUndefined();
 
-    // A sibling under the data dir but outside "proj" stays blocked.
+    // A sibling in the workspace but outside "proj" stays blocked.
     const sibling = await filesystemCallTool('write_file', {
-      path: path.join(dataDir, 'elsewhere.txt'),
+      path: path.join(workspaceDataDir, 'elsewhere.txt'),
       content: 'x',
     });
     expect(sibling.isError).toBe(true);

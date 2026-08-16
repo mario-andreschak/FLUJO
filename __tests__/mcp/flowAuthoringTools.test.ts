@@ -46,6 +46,7 @@ import {
   isAuthoringTool,
   authoringToolDefinitions,
   authoringCallTool,
+  MAX_AUTHORING_TOOL_DESCRIPTION_CHARS,
 } from '@/backend/services/mcp/flowAuthoringTools';
 import { FLOWSPEC_DOC } from '@/utils/shared/flowSpecDoc';
 import { SIMPLE_FLOW_SPEC_SCHEMA } from '@/utils/shared/simpleFlowSpec';
@@ -115,6 +116,33 @@ describe('tool definitions', () => {
     expect(create.description!.length).toBeLessThan(400);
     expect(create.inputSchema).toEqual(expect.objectContaining({ required: ['spec'] }));
     expect(JSON.stringify(create.inputSchema)).toContain(JSON.stringify(SIMPLE_FLOW_SPEC_SCHEMA.required));
+  });
+
+  // #338/A2c: a 30B-class model reads all descriptions before it can pick
+  // one. Long-form rules belong in get_flow_authoring_guide or the per-argument
+  // schema descriptions, not in the always-resent tool block.
+  it('keeps every authoring tool description within the wire budget', () => {
+    const oversized = authoringToolDefinitions()
+      .map((tool) => ({ name: tool.name, length: (tool.description ?? '').length }))
+      .filter((entry) => entry.length > MAX_AUTHORING_TOOL_DESCRIPTION_CHARS);
+    expect(oversized).toEqual([]);
+    for (const tool of authoringToolDefinitions()) {
+      expect((tool.description ?? '').length).toBeGreaterThan(0);
+    }
+  });
+
+  // Compacting the descriptions must not drop the install safety posture: the
+  // third-party-code warning stays on the wire, the mechanics move into the
+  // argument schema.
+  it('keeps the third-party-code warning on both install tools', () => {
+    const defs = authoringToolDefinitions();
+    const install = defs.find((t) => t.name === 'install_mcp_server')!;
+    const best = defs.find((t) => t.name === 'install_best_mcp_server')!;
+    expect(install.description).toContain('DOWNLOADS AND RUNS third-party code');
+    expect(install.description).toContain('consent-gated');
+    expect(best.description).toContain('DOWNLOADS AND MAY RUN third-party code');
+    expect(JSON.stringify(install.inputSchema)).toContain('server.json');
+    expect(JSON.stringify(install.inputSchema)).toContain('GitHub URL');
   });
 });
 

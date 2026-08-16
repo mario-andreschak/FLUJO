@@ -100,6 +100,15 @@ function describeSubflow(node: FlowNode, flowsById: Map<string, Flow>): string[]
   }
   if (props.outputMode === 'final-only') lines.push('Only the child’s final output is shown in the parent; intermediate child steps are hidden.');
   if (props.saveConversation === false) lines.push('Child runs are ephemeral and do not create separate saved conversations.');
+  if (props.sessionScope === 'per-run') {
+    lines.push('Within one parent run, repeat visits continue the same saved child conversation (experimental setting required).');
+  } else if (props.sessionScope === 'per-key') {
+    lines.push(
+      props.sessionKey
+        ? `Child conversations resume by the configured session key “${oneLine(props.sessionKey)}” (experimental setting required).`
+        : 'The calling Process may pass a sessionKey; reusing it sends a follow-up to the same finished child conversation (experimental setting required).',
+    );
+  }
   else lines.push('Child runs are saved as linked conversations unless runtime mode overrides persistence.');
   if (text(props.captureVariable)) lines.push(`The joined result is captured in run variable \`${text(props.captureVariable)}\`.`);
   if (text(props.captureResource)) lines.push(`The joined result is captured as run resource \`${text(props.captureResource)}\`.`);

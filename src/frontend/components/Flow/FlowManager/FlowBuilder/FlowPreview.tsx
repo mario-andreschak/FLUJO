@@ -17,8 +17,8 @@ import { computeAutoLayout } from './Canvas/utils/autoLayout';
 
 interface FlowPreviewProps {
   flow: Flow;
-  /** Recompute the same top-to-bottom layout used by Expert mode's Auto-align. */
-  autoLayout?: boolean;
+  /** Discard stored coordinates and apply Expert mode's full top-to-bottom re-layout. */
+  relayoutTopToBottom?: boolean;
   /** Reframe the graph whenever its streamed definition changes. */
   fitViewOnChange?: boolean;
 }
@@ -36,7 +36,7 @@ interface FlowPreviewProps {
  */
 const FlowPreviewInner: React.FC<FlowPreviewProps> = ({
   flow,
-  autoLayout = false,
+  relayoutTopToBottom = false,
   fitViewOnChange = false,
 }) => {
   const theme = useTheme();
@@ -53,10 +53,10 @@ const FlowPreviewInner: React.FC<FlowPreviewProps> = ({
   );
 
   const nodes = useMemo(
-    () => autoLayout
+    () => relayoutTopToBottom
       ? computeAutoLayout((flow.nodes || []) as FlowNode[], edges)
       : (flow.nodes || []) as FlowNode[],
-    [autoLayout, edges, flow.nodes],
+    [relayoutTopToBottom, edges, flow.nodes],
   );
 
   useEffect(() => {

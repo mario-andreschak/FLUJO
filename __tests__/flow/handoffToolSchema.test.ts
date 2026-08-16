@@ -24,6 +24,7 @@ jest.mock('@/backend/execution/flow/buildHandoffDescription', () => ({
 }));
 
 import { ProcessNode, SignalNode, SubflowNode } from '@/backend/execution/flow/nodes';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type { SharedState } from '@/backend/execution/flow/types';
 
 const getFlowMock = flowService.getFlow as jest.Mock;
@@ -66,6 +67,10 @@ beforeEach(() => {
   getFlowMock.mockReset();
 });
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
   it('requires a non-empty body for a Signal target', async () => {
     const signal = new SignalNode();
@@ -85,6 +90,54 @@ describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
 });
 
 describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
+  it('exposes a caller-chosen sessionKey for an enabled per-key Subflow and lists reusable keys', async () => {
+    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(true);
+    const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [{
+        id: 'sub-keyed',
+        type: 'subflow',
+        data: { properties: { sessionScope: 'per-key', sessionKey: '{{scene_id}}', saveConversation: true } },
+      }],
+    });
+    const sharedState = {
+      flowId: 'flow-1',
+      subflowSessions: {
+        'run::sub-keyed::writer-main': {
+          version: 1,
+          conversationId: 'child-1',
+          nodeId: 'sub-keyed',
+          sessionKey: 'writer-main',
+          visits: 1,
+          lastUsedAt: 10,
+          status: 'idle',
+        },
+      },
+    } as unknown as SharedState;
+
+    const tools = await (proc as any).generateHandoffTools(sharedState);
+
+    expect(tools[0].inputSchema.properties.sessionKey).toMatchObject({
+      type: 'string',
+      maxLength: 128,
+    });
+    expect(tools[0].inputSchema.required).not.toContain('sessionKey');
+    expect(tools[0].description).toContain('follow-up');
+    expect(tools[0].description).toContain('writer-main');
+  });
+
+  it('does not expose sessionKey while the experiment is disabled', async () => {
+    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(false);
+    const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
+    getFlowMock.mockResolvedValue({
+      nodes: [{ id: 'sub-keyed', type: 'subflow', data: { properties: { sessionScope: 'per-key' } } }],
+    });
+
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+
+    expect(tools[0].inputSchema.properties.sessionKey).toBeUndefined();
+  });
+
   it('exposes a `task` on every Subflow handoff without an opt-in flag', async () => {
     const proc = makeProcessNode([
       { edgeId: 'e-legacy', nodeId: 'sub-legacy' },

@@ -18,7 +18,8 @@ export interface McpAssistantCandidate {
   description: string;
   score: number;
   recommended: boolean;
-  plan: ResolvedInstallPlan;
+  /** Registry candidates currently support stdio and hosted HTTP transports. */
+  plan: ResolvedInstallPlan & { transport: 'stdio' | 'streamable' | 'sse' };
   config: Partial<MCPServerConfig>;
   authMode: McpAssistantAuthMode;
   authHelp?: string;

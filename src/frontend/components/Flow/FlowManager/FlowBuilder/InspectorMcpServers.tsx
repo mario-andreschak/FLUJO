@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   ButtonBase,
@@ -19,6 +19,11 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import type { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import {
+  BIG_TUTORIAL_EVENT,
+  emitBigTutorialEvent,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 
 export interface InspectorMcpConnection {
   nodeId: string;
@@ -49,6 +54,7 @@ interface InspectorMcpServersProps {
   onConnect: (processNodeId: string, serverName: string) => void | Promise<void>;
   onRemove?: (processNodeId: string, mcpNodeId: string) => void;
   loadServers: () => Promise<InspectorMcpServerOption[]>;
+  dataTour?: string;
 }
 
 const cardStatus = (status?: string): React.ComponentProps<typeof ServerCard>['status'] => {
@@ -77,6 +83,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   onConnect,
   onRemove,
   loadServers,
+  dataTour,
 }) => {
   const { t } = useI18n();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -94,7 +101,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   );
   const serverPicker = useCardPicker<InspectorMcpServerOption>('mcp', connectableServers);
 
-  const openPicker = async () => {
+  const openPicker = useCallback(async () => {
     setPickerOpen(true);
     setIsLoading(true);
     setLoadError(null);
@@ -105,16 +112,28 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [loadServers, t]);
+
+  const setServerSearchTerm = serverPicker.setSearchTerm;
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'filter-app-picker') return;
+      setServerSearchTerm(event.detail.query);
+      void openPicker();
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, [openPicker, setServerSearchTerm]);
 
   const pickServer = async (serverName: string) => {
     setPickerOpen(false);
     await onConnect(processNodeId, serverName);
+    emitBigTutorialEvent({ type: 'app-connected', serverName });
   };
 
   const toServerCell = (server: InspectorMcpServerOption): CardPickerItem => ({
     key: server.name,
-    content: beginnerMode ? (
+    content: <Box data-tutorial-server-name={server.name}>{beginnerMode ? (
       <ButtonBase
         onClick={() => { void pickServer(server.name); }}
         sx={(theme) => ({
@@ -153,7 +172,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
         pickerMode
         onClick={() => { void pickServer(server.name); }}
       />
-    ),
+    )}</Box>,
   });
   const pickerItems = serverPicker.items.map(toServerCell);
   const pickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
@@ -171,6 +190,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
 
   return (
     <Box
+      data-tour={dataTour}
       sx={(theme) => ({
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: 2.5,
@@ -183,6 +203,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
         </Typography>
         <Tooltip title={addLabel}>
           <IconButton
+            data-tour={dataTour ? 'flow-add-app' : undefined}
             size="small"
             aria-label={addLabel}
             onClick={() => { void openPicker(); }}

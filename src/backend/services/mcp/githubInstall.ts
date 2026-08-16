@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
@@ -22,7 +22,6 @@ export interface GithubInstallInput {
   secretEnvNames?: string[];
   argTemplates?: McpArgTemplate[];
   disabled?: boolean;
-  autoApprove?: string[];
   folder?: string;
 }
 
@@ -109,6 +108,12 @@ function repoSlug(repositoryUrl: string, ref?: string): string {
     .digest('hex')
     .slice(0, 10);
   return `${readable}-${digest}`;
+}
+
+/** Deterministic workspace-owned checkout path used by preview and execution. */
+export function githubInstallRepositoryPath(repositoryUrl: string, ref?: string): string {
+  const parsed = parseGithubRepositoryReference(repositoryUrl, ref);
+  return path.join(getWorkspaceDataDir(), 'mcp-servers', repoSlug(parsed.repositoryUrl, parsed.ref));
 }
 
 function redact(message: string, secretValues: string[]): string {
@@ -331,7 +336,7 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
   const secretValues = [...secretNames]
     .map((name) => input.env[name])
     .filter((value): value is string => Boolean(value));
-  const cloneRoot = path.join(getDataDir(), 'mcp-servers');
+  const cloneRoot = path.join(getWorkspaceDataDir(), 'mcp-servers');
   const repoPath = path.join(cloneRoot, repoSlug(parsed.repositoryUrl, parsed.ref));
 
   try {
@@ -386,7 +391,6 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
       rootPath: workingDirectory,
       env: persistedEnv,
       disabled: input.disabled ?? false,
-      autoApprove: input.autoApprove ?? [],
       folder: input.folder,
       source,
       _installCommand: installCommand,

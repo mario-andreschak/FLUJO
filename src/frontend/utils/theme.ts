@@ -1,6 +1,6 @@
 "use client";
 
-import { useTheme } from '@/frontend/contexts/ThemeContext';
+import { useOptionalTheme } from '@/frontend/contexts/ThemeContext';
 import { createLogger } from '@/utils/logger';
 import { legacyThemeColors, themeColors } from './paletteTokens';
 
@@ -30,7 +30,7 @@ export function getCssVar(variableName: string): string {
  * @returns Object with theme utility functions
  */
 export function useThemeUtils() {
-  const { isDarkMode, visualStyle } = useTheme();
+  const { isDarkMode, visualStyle } = useOptionalTheme();
   
   log.debug(`useThemeUtils called with isDarkMode: ${isDarkMode}`);
   

@@ -22,27 +22,35 @@ import {
 } from '@mui/material';
 import {
   AccountTreeRounded,
+  AutoStoriesRounded,
   BoltRounded,
   Brightness4Rounded,
   Brightness7Rounded,
   ChatBubbleRounded,
   CloseRounded,
   HubRounded,
+  GroupsRounded,
+  BubbleChartRounded,
   InsightsRounded,
   Inventory2Rounded,
   MemoryRounded,
   MenuBookRounded,
   MenuRounded,
+  PeopleAltRounded,
   SettingsRounded,
+  WavesRounded,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
-import { ElementType, Fragment, useEffect, useState } from 'react';
+import { ElementType, Fragment, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
+import WorkspaceTabs from '@/frontend/components/Navigation/WorkspaceTabs';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
+import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
@@ -85,9 +93,32 @@ const navItems: NavItem[] = [
         type: 'link',
         label: 'nav.automations',
         path: '/automation/triggers',
-        aliases: ['/executions', '/automation/waves', '/waves'],
+        aliases: ['/executions'],
         tour: 'nav-executions',
         icon: BoltRounded,
+      },
+      {
+        type: 'link',
+        label: 'nav.meetings',
+        path: '/meetings',
+        tour: 'nav-meetings',
+        icon: GroupsRounded,
+      },
+      {
+        type: 'link',
+        label: 'nav.personas',
+        path: '/personas',
+        tour: 'nav-personas',
+        icon: PeopleAltRounded,
+        experimental: true,
+      },
+      {
+        type: 'link',
+        label: 'nav.roles',
+        path: '/roles',
+        tour: 'nav-roles',
+        icon: AutoStoriesRounded,
+        experimental: true,        
       },
       {
         type: 'link',
@@ -95,6 +126,7 @@ const navItems: NavItem[] = [
         path: '/packages',
         tour: 'nav-packages',
         icon: Inventory2Rounded,
+        experimental: true,        
       },
       {
         type: 'link',
@@ -102,7 +134,25 @@ const navItems: NavItem[] = [
         path: '/statistics',
         tour: 'nav-statistics',
         icon: InsightsRounded,
+        experimental: true,        
       },
+      {
+        type: 'link',
+        label: 'nav.chainChat',
+        path: '/chain-chat',
+        tour: 'nav-chain-chat',
+        icon: BubbleChartRounded,
+        experimental: true,
+      },
+      {
+        type: 'link',
+        label: 'waves.title',
+        path: '/automation/waves',
+        aliases: ['/waves'],
+        tour: 'nav-waves',
+        icon: WavesRounded,
+        experimental: true,
+      },      
       { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
       { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
     ],
@@ -308,6 +358,44 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
   );
 }
 
+/**
+ * #398: while a conversation is open, surface its canonical magic link
+ * (`/chat?conversation=<id>`) directly in the navbar so it can be copied or
+ * shared without hunting for the row in chat history. The URL is the single
+ * source of truth (`Chat` keeps it in sync with the selected conversation), and
+ * link building/encoding/clipboard handling stays inside the shared
+ * `CopyLinkButton`.
+ *
+ * `useSearchParams()` opts its component into client-side rendering, so it is
+ * isolated in this small child behind a `<Suspense>` boundary instead of
+ * dragging the whole AppBar with it.
+ */
+function CurrentChatLinkButton() {
+  const { t } = useI18n();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const conversationId = (searchParams?.get('conversation') ?? '').trim();
+
+  // Only on the chat route, and only when a conversation is actually selected:
+  // plain `/chat` or an empty parameter must not expose a stale link.
+  if (pathname !== '/chat' || !conversationId) return null;
+
+  return (
+    <CopyLinkButton
+      target={{ kind: 'conversation', id: conversationId }}
+      label={t('nav.copyChatLink')}
+      size="medium"
+      sx={{
+        color: 'inherit',
+        border: 1,
+        borderColor: 'divider',
+        '& .MuiSvgIcon-root': { fontSize: 20 },
+      }}
+    />
+  );
+}
+
 export default function Navigation() {
   const { toggleTheme, isDarkMode } = useTheme();
   const { t } = useI18n();
@@ -366,7 +454,18 @@ export default function Navigation() {
     handleNavClick(href)(event);
   };
 
+  /**
+   * Programmatic sibling of `handleNavClick` for controls that are not links
+   * (the quick-actions menu, #396). Route changes keep flowing through the same
+   * navigation-guard contract, so a page with unsaved work can still defer or
+   * refuse them.
+   */
+  const navigateTo = (href: string) => {
+    if (!interceptNavigation(() => router.push(href))) router.push(href);
+  };
+
   return (
+    <>
     <AppBar position="sticky" color="default" elevation={0} data-app-navigation>
       <Toolbar
         data-app-navigation-toolbar
@@ -466,6 +565,16 @@ export default function Navigation() {
         {isCompact && <Box sx={{ flex: 1 }} />}
 
         <Stack direction="row" spacing={0.7} alignItems="center">
+          {/* The workspace menu owns namespace selection and management. It is
+              always visible so a single-workspace install can create another. */}
+          {!isCompact && <WorkspaceTabs />}
+
+          {/* Rendered in this shared action cluster so it is present in both the
+              desktop and the compact/mobile navbar. */}
+          <Suspense fallback={null}>
+            <CurrentChatLinkButton />
+          </Suspense>
+
           <AskFlujoButton />
 
           {!isCompact && (
@@ -571,6 +680,8 @@ export default function Navigation() {
         }}
         PaperProps={{
           sx: {
+            display: 'flex',
+            flexDirection: 'column',
             width: { xs: 'min(88vw, 340px)', sm: 340 },
             p: 1,
             borderRight: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
@@ -623,7 +734,10 @@ export default function Navigation() {
           </Stack>
         </Box>
 
-        <List disablePadding>
+        {/* Compact navigation gets the same workspace management menu. */}
+        <WorkspaceTabs variant="drawer" onSwitch={() => setDrawerOpen(false)} />
+
+        <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <NavigationEntries
             items={visibleNavItems}
             pathname={pathname}
@@ -631,7 +745,37 @@ export default function Navigation() {
             onNavigate={handleDrawerNavClick}
           />
         </List>
+
+        {/* #396: the compact layout has no viewport corner to own, so the same
+            quick action is pinned to the bottom of the navigation Drawer. */}
+        <Box sx={{ mt: 'auto', px: 1, pt: 1.4, pb: 0.6 }}>
+          <QuickActionsMenu
+            variant="drawer"
+            pathname={pathname}
+            onNavigate={navigateTo}
+            onAction={() => setDrawerOpen(false)}
+          />
+        </Box>
       </Drawer>
     </AppBar>
+
+    {/* #396: bottom-left quick actions. Rendered as a sibling of the sticky
+        AppBar so it is anchored to the viewport corner rather than to the top
+        bar, and only in the desktop layout — below 1280px the equivalent
+        control lives at the bottom of the navigation Drawer. */}
+    {!isCompact && (
+      <Box
+        data-app-quick-actions-dock
+        sx={{
+          position: 'fixed',
+          bottom: 24,
+          left: 24,
+          zIndex: theme.zIndex.drawer - 1,
+        }}
+      >
+        <QuickActionsMenu pathname={pathname} onNavigate={navigateTo} />
+      </Box>
+    )}
+    </>
   );
 }

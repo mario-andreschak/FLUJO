@@ -1,9 +1,12 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { loadRunRecords } from '@/backend/services/scheduler/runHistory';
 import { json } from '../../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/runs/route');
 
@@ -11,7 +14,7 @@ const log = createLogger('app/api/planned-executions/[id]/runs/route');
  * GET /api/planned-executions/{id}/runs
  * The execution's run history (ring buffer of the newest 100, oldest first).
  */
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -25,9 +28,21 @@ export async function GET(
       return json({ error: `No planned execution with id "${id}"` }, 404);
     }
     const runs = await loadRunRecords(id);
+    if (
+      isPersonaControlledPlannedExecution(execution)
+      || runs.some(run => (
+        isPersonaControlledPlannedExecution(run)
+        || Boolean(run.activityId || run.behaviorRevisionId)
+      ))
+    ) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
     return json({ runs }, 200);
   } catch (error) {
     log.error('Error handling GET request', error);
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

@@ -9,6 +9,24 @@ jest.mock('@/frontend/components/mcp/MCPServerManager/ServerCard', () => ({
   ),
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
+jest.mock('@/frontend/contexts/ThemeContext', () => ({
+  useTheme: () => ({ toggleTheme: jest.fn(), isDarkMode: false, visualStyle: 'modern', livingWorldEnabled: false, themeHydrated: true, setVisualStyle: jest.fn(), setLivingWorldEnabled: jest.fn(), setThemePreset: jest.fn() }),
+  useOptionalTheme: () => ({ isDarkMode: false, visualStyle: 'modern' }),
+}));
+
 const processNode: any = {
   id: 'process-1',
   type: 'process',
@@ -36,8 +54,6 @@ const baseProps = {
   onFlowDescriptionChange: jest.fn(),
   authoringMode: 'guided' as const,
   onAuthoringModeChange: jest.fn(),
-  permissionRuleCount: 0,
-  onOpenPermissionRules: jest.fn(),
 };
 
 describe('FlowBuilder InspectorPanel', () => {
@@ -50,7 +66,10 @@ describe('FlowBuilder InspectorPanel', () => {
 
     expect(screen.getByRole('tab', { name: 'Node' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByDisplayValue('Find reliable sources')).toBeInTheDocument();
-    expect(screen.getByText('model-1')).toBeInTheDocument();
+    // The connected model is shown once, by the dedicated model binding, so the
+    // generic summary must not repeat it as a "Model" row.
+    expect(screen.queryByText('Model')).not.toBeInTheDocument();
+    expect(screen.queryByText('model-1')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('What this step does')).not.toBeInTheDocument();
 
     const name = screen.getByLabelText('Node name');
@@ -76,6 +95,49 @@ describe('FlowBuilder InspectorPanel', () => {
         properties: expect.objectContaining({ promptTemplate: 'Use the fresh prompt' }),
       }),
     }));
+  });
+
+  it('places Full settings above the connected AI section and shows the model only once', () => {
+    const models: any[] = [{
+      id: 'model-1',
+      name: 'bound-model',
+      displayName: 'Bound Model',
+      provider: 'openai',
+      ApiKey: 'encrypted',
+    }];
+    const boundNode: any = {
+      ...processNode,
+      data: {
+        ...processNode.data,
+        properties: { ...processNode.data.properties, boundModel: 'model-1' },
+      },
+    };
+
+    render(<InspectorPanel {...baseProps} selectedNode={boundNode} models={models} />);
+
+    const fullSettings = screen.getByRole('button', { name: /Full settings/i });
+    const connectedAi = screen.getByText('Connected AI');
+    expect(fullSettings.compareDocumentPosition(connectedAi) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    expect(screen.getAllByText('Bound Model')).toHaveLength(1);
+    expect(screen.queryByText('Model')).not.toBeInTheDocument();
+  });
+
+  it('never renders a generic model summary row for legacy model properties', () => {
+    (['modelId', 'model'] as const).forEach((property) => {
+      const legacyNode: any = {
+        ...processNode,
+        data: {
+          ...processNode.data,
+          properties: { promptTemplate: 'Find reliable sources', [property]: 'legacy-model' },
+        },
+      };
+
+      const { unmount } = render(<InspectorPanel {...baseProps} selectedNode={legacyNode} />);
+      expect(screen.queryByText('Model')).not.toBeInTheDocument();
+      expect(screen.queryByText('legacy-model')).not.toBeInTheDocument();
+      unmount();
+    });
   });
 
   it('lists connected MCP servers and removes them from the process node', () => {
@@ -307,7 +369,8 @@ describe('FlowBuilder InspectorPanel', () => {
 
     unmount();
     render(<InspectorPanel {...baseProps} selectedNode={processNode} models={models} />);
-    expect(screen.getByText('(Connected) AI')).toBeInTheDocument();
+    expect(screen.getByText('Connected AI')).toBeInTheDocument();
+    expect(screen.queryByText('(Connected) AI')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Choose AI' }));
     expect(screen.getByRole('dialog', { name: 'Choose the connected AI' })).toBeInTheDocument();
     expect(screen.getByText('A helpful model')).toBeInTheDocument();

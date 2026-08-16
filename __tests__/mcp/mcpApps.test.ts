@@ -9,6 +9,7 @@ import {
   buildAppCsp,
   buildAppSrcDoc,
   extractAppHtml,
+  canonicalizeLoopbackCspOrigin,
   isLoopbackCspOrigin,
   isValidCspSourceToken,
 } from '@/shared/utils/mcpApps';
@@ -198,6 +199,17 @@ describe('isLoopbackCspOrigin', () => {
     expect(isLoopbackCspOrigin('http://[::1]:4300')).toBe(true);
   });
 
+  it('accepts the CSP port wildcard as an explicit port', () => {
+    expect(isLoopbackCspOrigin('http://127.0.0.1:*')).toBe(true);
+    expect(isLoopbackCspOrigin('ws://localhost:*')).toBe(true);
+    expect(isLoopbackCspOrigin('http://[::1]:*')).toBe(true);
+    // Only a bare `*` is a port; nothing else wildcards.
+    expect(isLoopbackCspOrigin('http://127.0.0.1:**')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:*0')).toBe(false);
+    expect(isLoopbackCspOrigin('http://*.127.0.0.1:4300')).toBe(false);
+    expect(isLoopbackCspOrigin('http://*:4300')).toBe(false);
+  });
+
   it('honors the per-directive scheme restriction', () => {
     expect(isLoopbackCspOrigin('ws://127.0.0.1:59503', ['http'])).toBe(false);
     expect(isLoopbackCspOrigin('http://127.0.0.1:59503', ['http'])).toBe(true);
@@ -217,6 +229,34 @@ describe('isLoopbackCspOrigin', () => {
     expect(isLoopbackCspOrigin('http://user:pass@127.0.0.1:4300')).toBe(false);
     expect(isLoopbackCspOrigin(undefined)).toBe(false);
     expect(isLoopbackCspOrigin(42 as unknown as string)).toBe(false);
+  });
+});
+
+describe('canonicalizeLoopbackCspOrigin', () => {
+  it('collapses an explicit port to the port wildcard', () => {
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:59503')).toBe('http://127.0.0.1:*');
+    expect(canonicalizeLoopbackCspOrigin('ws://127.0.0.1:59503')).toBe('ws://127.0.0.1:*');
+    expect(canonicalizeLoopbackCspOrigin('http://localhost:4300')).toBe('http://localhost:*');
+    expect(canonicalizeLoopbackCspOrigin('http://[::1]:4300')).toBe('http://[::1]:*');
+  });
+
+  it('normalizes scheme and host case and is idempotent', () => {
+    expect(canonicalizeLoopbackCspOrigin('HTTP://LOCALHOST:4300')).toBe('http://localhost:*');
+    const once = canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300');
+    expect(canonicalizeLoopbackCspOrigin(once)).toBe(once);
+  });
+
+  it('honors the per-directive scheme restriction', () => {
+    expect(canonicalizeLoopbackCspOrigin('ws://127.0.0.1:4300', ['http'])).toBeUndefined();
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300', ['http'])).toBe('http://127.0.0.1:*');
+  });
+
+  it('returns undefined for anything the validator rejects', () => {
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1')).toBeUndefined();
+    expect(canonicalizeLoopbackCspOrigin('https://127.0.0.1:4300')).toBeUndefined();
+    expect(canonicalizeLoopbackCspOrigin('http://insecure.example.com:80')).toBeUndefined();
+    expect(canonicalizeLoopbackCspOrigin('http://127.0.0.1:4300; frame-src *')).toBeUndefined();
+    expect(canonicalizeLoopbackCspOrigin(undefined)).toBeUndefined();
   });
 });
 

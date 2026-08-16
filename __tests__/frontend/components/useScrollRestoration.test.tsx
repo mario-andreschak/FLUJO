@@ -9,7 +9,7 @@
  */
 import React, { useRef } from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { readUiPreference } from '@/frontend/hooks/useUiPreference';
+import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 
 const SCROLL_HEIGHT = 1000;
@@ -108,7 +108,7 @@ describe('useScrollRestoration (#185)', () => {
       scroller.dispatchEvent(new Event('scroll'));
     });
     await waitFor(() => {
-      expect(readUiPreference<number>('flujo-ui:scroll:test', 0)).toBe(250);
+      expect(readWorkspaceUiPreference<number>('flujo-ui:scroll:test', 0)).toBe(250);
     });
     expect(screen.getByTestId('show')).toHaveTextContent('true');
   });

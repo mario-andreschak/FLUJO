@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Registry base-URL settings (issue #197).
  *
@@ -15,7 +16,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/registry/settings/route');
 
-export async function GET() {
+async function GET_handler(_request: Request) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   try {
@@ -26,7 +27,7 @@ export async function GET() {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -50,3 +51,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Failed to save registry settings' }, { status: 500 });
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);

@@ -11,6 +11,10 @@ import type {
   VisualCompactionDiagnostic,
   VisualCompactionEstimates,
 } from '@/shared/types/visualArchive';
+import {
+  commitFlowDurableMutation,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 
 const RECENT_MESSAGE_FLOOR = 6;
 const MIN_CANDIDATE_CHARS = 12_000;
@@ -229,7 +233,6 @@ export function resolveVisionInputCapability(
   override?: VisionInputCapability,
 ): VisionInputCapability {
   if (override) return override;
-  if (model.adapter === 'claude-cli' || model.adapter === 'codex-cli') return 'unsupported';
   if (model.visionInputCapability) return model.visionInputCapability;
   if (!Array.isArray(model.inputModalities) || model.inputModalities.length === 0) return 'unknown';
   return model.inputModalities.some((value) => /^(?:image|vision)$/i.test(value))
@@ -314,7 +317,7 @@ export function estimateVisualPageTokens(
 ): number {
   if (provider === 'gemini') return 258;
   if (provider === 'anthropic') return Math.ceil((page.width * page.height) / 750);
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'requesty') {
+  if (provider === 'openai' || provider === 'azure' || provider === 'openrouter' || provider === 'requesty') {
     return 85 + 170 * Math.ceil(page.width / 512) * Math.ceil(page.height / 512);
   }
   return Math.ceil((page.width * page.height) / 600);
@@ -366,6 +369,7 @@ export async function compactMessagesVisually(input: {
   conversationId?: string;
   nodeId?: string;
   config: EffectiveVisualCompaction;
+  durableContext?: FlowDurableMutationContext;
 }): Promise<VisualCompactionResult> {
   const startedAt = Date.now();
   const capability = resolveVisionInputCapability(input.model, input.config.visionCapabilityOverride);
@@ -387,9 +391,6 @@ export async function compactMessagesVisually(input: {
   });
   if (!input.config.enabled) return finish({ fallbackReason: 'disabled' });
   if (!input.conversationId) return finish({ fallbackReason: 'missing-conversation' });
-  if (input.model.adapter === 'claude-cli' || input.model.adapter === 'codex-cli') {
-    return finish({ fallbackReason: 'self-orchestrating-adapter' });
-  }
   if (capability !== 'supported') {
     return finish({ fallbackReason: capability === 'unknown' ? 'vision-unknown' : 'vision-unsupported' });
   }
@@ -434,28 +435,33 @@ export async function compactMessagesVisually(input: {
       fallbackReason: 'evaluation-only',
     });
   }
-  const source = await writeRunResource({
-    conversationId: input.conversationId,
-    mimeType: 'application/vnd.flujo.visual-archive+json',
-    kind: 'text',
-    data: { text: sourceJson },
-    producedBy: { source: 'visual-archive', nodeId: input.nodeId },
-    archive: { archiveId, role: 'source', pageCount: pages.length, route: 'image', sourceSha256: sha256 },
-  });
-  if ('skipped' in source) return finish({ candidate: selected.candidate, estimates, fallbackReason: 'stash-failed' });
-  const pageMetadata: VisualArchivePageMetadata[] = [];
-  for (const page of pages) {
-    const stored = await writeRunResource({
-      conversationId: input.conversationId,
-      mimeType: 'image/png',
-      kind: 'image',
-      data: { base64: page.base64 },
+  const archive = await commitFlowDurableMutation(input.durableContext ?? {}, async () => {
+    const source = await writeRunResource({
+      conversationId: input.conversationId!,
+      mimeType: 'application/vnd.flujo.visual-archive+json',
+      kind: 'text',
+      data: { text: sourceJson },
       producedBy: { source: 'visual-archive', nodeId: input.nodeId },
-      archive: { archiveId, role: 'page', pageIndex: page.metadata.index, pageCount: pages.length, route: 'image', sourceSha256: sha256 },
+      archive: { archiveId, role: 'source', pageCount: pages.length, route: 'image', sourceSha256: sha256 },
     });
-    if ('skipped' in stored) return finish({ candidate: selected.candidate, estimates, fallbackReason: 'stash-failed' });
-    pageMetadata.push({ ...page.metadata, resourceUri: stored.uri });
-  }
+    if ('skipped' in source) return null;
+    const pageMetadata: VisualArchivePageMetadata[] = [];
+    for (const page of pages) {
+      const stored = await writeRunResource({
+        conversationId: input.conversationId!,
+        mimeType: 'image/png',
+        kind: 'image',
+        data: { base64: page.base64 },
+        producedBy: { source: 'visual-archive', nodeId: input.nodeId },
+        archive: { archiveId, role: 'page', pageIndex: page.metadata.index, pageCount: pages.length, route: 'image', sourceSha256: sha256 },
+      });
+      if ('skipped' in stored) return null;
+      pageMetadata.push({ ...page.metadata, resourceUri: stored.uri });
+    }
+    return { source, pageMetadata };
+  });
+  if (!archive) return finish({ candidate: selected.candidate, estimates, fallbackReason: 'stash-failed' });
+  const { source, pageMetadata } = archive;
   const manifest = manifestText(selected.candidate, source.uri, sha256);
   const content: OpenAI.ChatCompletionContentPart[] = [
     { type: 'text', text: manifest },

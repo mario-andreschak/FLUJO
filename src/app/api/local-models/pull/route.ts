@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
@@ -25,7 +26,7 @@ const MODEL_RE = /^[a-zA-Z0-9._:\/-]{1,200}$/;
  * launch before encryption is configured. Registering the pulled model as a FLUJO
  * model (POST /api/model) is what carries the unlock requirement.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   let model: string;
   try {
     const body = (await request.json()) as { model?: unknown };
@@ -72,3 +73,5 @@ export async function POST(request: NextRequest) {
     { signal: request.signal }
   );
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

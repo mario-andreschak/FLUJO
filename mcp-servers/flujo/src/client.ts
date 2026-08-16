@@ -17,13 +17,17 @@ const AUTHORING_TOOLS = new Set([
   'get_flow_authoring_guide',
   'validate_flow_spec',
   'draft_flow',
+  'draft_generated_flow',
   'create_flow',
   'suggest_tools_for_flow_step',
   'apply_tools_to_flow_step',
   'check_flow_plausibility',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
+  'read_persona_composition',
+  'update_persona_composition',
 ]);
 const FLOW_TOOLS = new Set([
   'propose_ui_action',
@@ -44,9 +48,7 @@ const SERVER_TOOLS = new Set([
   'call_mcp_tool',
   'restart_mcp_server',
   'set_mcp_server_enabled',
-  'browser_capture_page',
-  'browser_capture_element_metrics',
-  'browser_capture_region',
+  'system_screenshot',
 ]);
 const AUTOMATION_TOOLS = new Set([
   'list_models',
@@ -55,6 +57,7 @@ const AUTOMATION_TOOLS = new Set([
   'update_planned_execution',
   'create_planned_execution',
   'delete_planned_execution',
+  'create_ticket_for_human',
 ]);
 const STATE_TOOLS = new Set([
   'list_conversations',
@@ -66,6 +69,13 @@ const STATE_TOOLS = new Set([
 export function flujoBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.FLUJO_BASE_URL?.trim();
   return (configured || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+}
+
+export function flujoWorkspace(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.FLUJO_WORKSPACE?.trim();
+  return configured && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(configured)
+    ? configured
+    : 'default-workspace';
 }
 
 export function toolRoute(name: string): string {
@@ -92,6 +102,7 @@ async function requestJson<T>(
       signal: controller.signal,
       headers: {
         accept: 'application/json',
+        'x-flujo-workspace': flujoWorkspace(),
         ...(init.body ? { 'content-type': 'application/json' } : {}),
         ...init.headers,
       },

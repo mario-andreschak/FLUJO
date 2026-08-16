@@ -10,6 +10,7 @@
  * Module-level singleton on globalThis, mirroring toolApprovalRegistry (survives
  * Next.js dev hot-reloads and the route/worker module split).
  */
+import { workspaceCacheKey } from '@/utils/workspace';
 
 const globalForRegistry = globalThis as unknown as {
   __flujoToolCancels?: Map<string, Map<string, AbortController>>;
@@ -24,10 +25,11 @@ const registry: Map<string, Map<string, AbortController>> =
  */
 export function registerToolCall(scope: string, toolCallId: string): AbortController {
   const controller = new AbortController();
-  let perScope = registry.get(scope);
+  const key = workspaceCacheKey(scope);
+  let perScope = registry.get(key);
   if (!perScope) {
     perScope = new Map();
-    registry.set(scope, perScope);
+    registry.set(key, perScope);
   }
   perScope.set(toolCallId, controller);
   return controller;
@@ -35,10 +37,11 @@ export function registerToolCall(scope: string, toolCallId: string): AbortContro
 
 /** Drop a finished call's controller. */
 export function releaseToolCall(scope: string, toolCallId: string): void {
-  const perScope = registry.get(scope);
+  const key = workspaceCacheKey(scope);
+  const perScope = registry.get(key);
   if (!perScope) return;
   perScope.delete(toolCallId);
-  if (perScope.size === 0) registry.delete(scope);
+  if (perScope.size === 0) registry.delete(key);
 }
 
 /**
@@ -47,7 +50,7 @@ export function releaseToolCall(scope: string, toolCallId: string): void {
  * no-op rather than an error.
  */
 export function cancelToolCall(scope: string, toolCallId: string): boolean {
-  const controller = registry.get(scope)?.get(toolCallId);
+  const controller = registry.get(workspaceCacheKey(scope))?.get(toolCallId);
   if (!controller) return false;
   releaseToolCall(scope, toolCallId);
   controller.abort(new Error('Tool call cancelled by user.'));
@@ -60,15 +63,16 @@ export function cancelToolCall(scope: string, toolCallId: string): boolean {
  * only preventing the next one.
  */
 export function cancelAllToolCalls(scope: string): number {
-  const perScope = registry.get(scope);
+  const key = workspaceCacheKey(scope);
+  const perScope = registry.get(key);
   if (!perScope) return 0;
   const controllers = Array.from(perScope.values());
-  registry.delete(scope);
+  registry.delete(key);
   for (const controller of controllers) controller.abort(new Error('Run cancelled by user.'));
   return controllers.length;
 }
 
 /** The tool-call ids currently in flight for a scope (diagnostics/tests). */
 export function listInFlightToolCalls(scope: string): string[] {
-  return Array.from(registry.get(scope)?.keys() ?? []);
+  return Array.from(registry.get(workspaceCacheKey(scope))?.keys() ?? []);
 }

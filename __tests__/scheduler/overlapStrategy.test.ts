@@ -392,3 +392,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
   });
 });
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));

@@ -1,4 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  WORKSPACE_STORAGE_KEY,
+  workspaceLocalStorageKey,
+} from '@/frontend/utils/workspaceSelection';
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -6,7 +10,16 @@ const mockLoadFlows = jest.fn();
 const mockCreateNewFlow = jest.fn();
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  // `isEditing` is now derived from the URL (#374), so push/replace must
+  // actually move `window.location` for the component to observe the
+  // change on its next render — mirroring what next/navigation's real
+  // client-side router does.
+  useRouter: () => ({
+    push: (url: string) => { window.history.pushState({}, '', url); mockPush(url); },
+    replace: (url: string) => { window.history.replaceState({}, '', url); mockReplace(url); },
+    back: jest.fn(() => window.history.back()),
+  }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 jest.mock('@/frontend/services/flow', () => ({
@@ -133,12 +146,37 @@ describe('easy agent creation deep link', () => {
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
     expect(mockCreateNewFlow).toHaveBeenCalledWith('Untitled agent');
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
     expect(screen.getByTestId('ai-generator')).toHaveTextContent('false');
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/flows'));
+    // The editor is now a real history entry (#374): entering it pushes
+    // `?flow=<id>&mode=edit` rather than a bare replace to `/flows`.
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit'));
   });
 
-  it('offers a third creation path that starts directly in Expert view', async () => {
+  it('opens a dashboard draft in Simple view using the canonical editor route', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start simple' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'guided');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
+    });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit');
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready. Give it a name, add a task, then try it.',
+    );
+  });
+
+  it('opens a dashboard draft in Expert view using the canonical editor route', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'team-b');
     window.history.replaceState({}, '', '/flows');
     render(<FlowsPage />);
 
@@ -147,7 +185,19 @@ describe('easy agent creation deep link', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start expert' }));
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('advanced'));
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'advanced');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('advanced'));
+    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBeNull();
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
+    });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit');
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready in Expert view. Add and connect the nodes you need.',
+    );
   });
 
   it('opens an AI-generated draft in the simple builder even when it has expert features', async () => {

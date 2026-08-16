@@ -118,7 +118,6 @@ describe('static Authorization header OAuth-scope cleanup', () => {
     },
     oauthScopes: ['read'],
     disabled: false,
-    autoApprove: [],
     rootPath: '',
     env: {},
     ...overrides,

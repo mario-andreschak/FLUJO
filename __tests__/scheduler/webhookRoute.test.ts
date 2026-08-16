@@ -10,6 +10,7 @@ import type { PlannedExecution } from '@/shared/types/plannedExecution';
 import { POST } from '@/app/api/webhooks/[id]/route';
 
 const fireMock = jest.fn();
+const admitPersonaFireMock = jest.fn();
 const getMock = jest.fn();
 const isPausedMock = jest.fn();
 const exclusiveGateForMock = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('@/backend/services/scheduler', () => ({
     get: (...args: unknown[]) => getMock(...args),
     isPaused: (...args: unknown[]) => isPausedMock(...args),
     fire: (...args: unknown[]) => fireMock(...args),
+    admitPersonaFire: (...args: unknown[]) => admitPersonaFireMock(...args),
     exclusiveGateFor: (...args: unknown[]) => exclusiveGateForMock(...args),
   }),
 }));
@@ -57,6 +59,15 @@ const call = (
 
 beforeEach(() => {
   fireMock.mockReset().mockResolvedValue({ status: 'completed' });
+  admitPersonaFireMock.mockReset().mockImplementation(async (
+    _execution: unknown,
+    _payload: unknown,
+    runId: string,
+  ) => ({
+    runId,
+    dispatchId: 'dispatch_webhook',
+    completion: Promise.resolve({ status: 'completed' }),
+  }));
   isPausedMock.mockReset().mockResolvedValue(false);
   getMock.mockReset().mockResolvedValue(execution());
   exclusiveGateForMock.mockReset().mockReturnValue(null);
@@ -142,5 +153,93 @@ describe('webhook route', () => {
     });
     expect(response.status).toBe(202);
     expect(fireMock.mock.calls[0][1].context.body).toBe('hello world');
+  });
+
+  it('derives stable opaque Persona delivery and run ids from a trusted retry header', async () => {
+    getMock.mockResolvedValue(execution({ personaId: 'persona_webhook' }));
+    const request = {
+      headers: {
+        'x-flujo-token': 'secret-token',
+        'content-type': 'application/json',
+        'idempotency-key': 'provider-delivery-415',
+      },
+      body: JSON.stringify({ event: 'push', deliveryId: 'untrusted-body-value' }),
+    };
+    const first = await call(request);
+    const second = await call(request);
+    const firstBody = await first.json();
+    const secondBody = await second.json();
+
+    expect(firstBody.runId).toBe(secondBody.runId);
+    expect(firstBody.runId).toMatch(/^delivery-[a-f0-9]{48}$/);
+    const firstPayload = admitPersonaFireMock.mock.calls[0][1];
+    const secondPayload = admitPersonaFireMock.mock.calls[1][1];
+    expect(firstPayload.deliveryId).toBe(secondPayload.deliveryId);
+    expect(firstPayload.deliveryId).toMatch(/^webhook-[a-f0-9]{64}$/);
+    expect(firstPayload.deliveryId).not.toContain('provider-delivery-415');
+    expect(firstPayload.deliveryId).not.toBe('untrusted-body-value');
+    expect(firstPayload.context).not.toHaveProperty('receivedAt');
+    expect(secondPayload).toEqual(firstPayload);
+    expect(admitPersonaFireMock.mock.calls[0][2]).toBe(firstBody.runId);
+    expect(admitPersonaFireMock.mock.calls[1][2]).toBe(firstBody.runId);
+    expect(fireMock).not.toHaveBeenCalled();
+  });
+
+  it('requires a stable delivery header and returns non-202 when durable admission fails', async () => {
+    getMock.mockResolvedValue(execution({ personaId: 'persona_webhook' }));
+    const missing = await call({ headers: { 'x-flujo-token': 'secret-token' } });
+    expect(missing.status).toBe(428);
+    expect(admitPersonaFireMock).not.toHaveBeenCalled();
+
+    admitPersonaFireMock.mockRejectedValueOnce(new Error('disk unavailable'));
+    const failed = await call({
+      headers: {
+        'x-flujo-token': 'secret-token',
+        'idempotency-key': 'provider-delivery-failed',
+      },
+    });
+    expect(failed.status).toBe(503);
+  });
+
+  it('responds 202 after admission without awaiting terminal continuation/history', async () => {
+    getMock.mockResolvedValue(execution({ personaId: 'persona_webhook' }));
+    const neverSettles = new Promise(() => undefined);
+    admitPersonaFireMock.mockImplementationOnce(async (
+      _execution: unknown,
+      _payload: unknown,
+      runId: string,
+    ) => ({ runId, dispatchId: 'dispatch_pending', completion: neverSettles }));
+
+    const response = await call({
+      headers: {
+        'x-flujo-token': 'secret-token',
+        'x-flujo-delivery-id': 'provider-delivery-pending',
+      },
+    });
+    expect(response.status).toBe(202);
+    expect((await response.json()).accepted).toBe(true);
+  });
+
+  it('validates delivery headers only for Persona targets and preserves legacy randomness', async () => {
+    const oversized = 'x'.repeat(513);
+    getMock.mockResolvedValueOnce(execution({ personaId: 'persona_webhook' }));
+    expect((await call({
+      headers: { 'x-flujo-token': 'secret-token', 'idempotency-key': oversized },
+    })).status).toBe(400);
+    expect(fireMock).not.toHaveBeenCalled();
+
+    getMock.mockResolvedValue(execution());
+    const legacyRequest = {
+      headers: { 'x-flujo-token': 'secret-token', 'idempotency-key': oversized },
+    };
+    const first = await call(legacyRequest);
+    const second = await call(legacyRequest);
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const firstBody = await first.json();
+    const secondBody = await second.json();
+    expect(firstBody.runId).not.toBe(secondBody.runId);
+    expect(fireMock.mock.calls[0][1]).not.toHaveProperty('deliveryId');
+    expect(fireMock.mock.calls[0][1].context.receivedAt).toBeTruthy();
   });
 });

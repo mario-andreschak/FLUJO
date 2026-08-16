@@ -1,8 +1,11 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/run/route');
 
@@ -17,7 +20,7 @@ const log = createLogger('app/api/planned-executions/[id]/run/route');
  * idle, and it does not itself claim the lock. This keeps "Run now" a
  * predictable hard override that can never hang behind an exclusive queue.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -26,7 +29,13 @@ export async function POST(
 
   try {
     const { id } = await params;
-    const result = await getSchedulerService().runNow(id);
+    const scheduler = getSchedulerService();
+    const execution = await scheduler.get(id);
+    if (isPersonaControlledPlannedExecution(execution)) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    const result = await scheduler.runNow(id);
     if (result.error || !result.record) {
       return json({ error: result.error ?? 'Failed to run' }, 404);
     }
@@ -36,3 +45,5 @@ export async function POST(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

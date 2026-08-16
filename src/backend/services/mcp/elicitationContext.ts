@@ -13,6 +13,7 @@
  * Survives Next.js dev hot-reloads via globalThis (same pattern as the
  * ExecutionEventBus and toolApprovalRegistry).
  */
+import { workspaceCacheKey } from '@/utils/workspace';
 
 export interface ElicitationRunContext {
   conversationId: string;
@@ -32,17 +33,17 @@ export function setElicitationContext(
   serverName: string,
   ctx: ElicitationRunContext
 ): void {
-  contexts.set(serverName, ctx);
+  contexts.set(workspaceCacheKey(serverName), ctx);
 }
 
 /** Remove the run context for a server. Called in the runFlow.ts finalize block. */
 export function clearElicitationContext(serverName: string): void {
-  contexts.delete(serverName);
+  contexts.delete(workspaceCacheKey(serverName));
 }
 
 /** Retrieve the active run context for a server (undefined if not in a run). */
 export function getElicitationContext(
   serverName: string
 ): ElicitationRunContext | undefined {
-  return contexts.get(serverName);
+  return contexts.get(workspaceCacheKey(serverName));
 }

@@ -12,6 +12,8 @@ import type {
   SubflowInvocationLane,
   SubflowInvocationLaneStatus,
 } from './types';
+import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -158,10 +160,29 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
   if (!parentId || parent.ephemeral || parent.isCancelled) return;
   if (parent.status !== 'error' || parent.currentNodeId !== invocation.parentNodeId) return;
   if (parent.activeSubflowInvocationByNode?.[invocation.parentNodeId] !== invocation.id) return;
+  const source: FlowInvocationSource = parent.source ?? (parent.parentRunId ? 'subflow' : 'chat');
+  if (source === 'meeting') {
+    log.warn('Refusing to resume a meeting participant outside MeetingEngine', {
+      parentConversationId: parentId,
+      invocationId: invocation.id,
+    });
+    return;
+  }
+  if (isPersonaOwnedConversationState(parent)) {
+    log.warn('Refusing to resume a Persona-owned parent outside its dispatcher', {
+      parentConversationId: parentId,
+      invocationId: invocation.id,
+      ...(parent.personaAttribution
+        ? { personaId: parent.personaAttribution.personaId }
+        : { archived: true }),
+    });
+    return;
+  }
 
   const leases = resumeLeases();
-  if (leases.has(invocation.id)) return;
-  leases.add(invocation.id);
+  const leaseKey = workspaceCacheKey(invocation.id);
+  if (leases.has(leaseKey)) return;
+  leases.add(leaseKey);
   invocation.status = 'ready';
   invocation.resumeRequestedAt = Date.now();
   invocation.updatedAt = Date.now();
@@ -169,7 +190,6 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
 
   try {
     const { runFlow } = await import('./runFlow');
-    const source: FlowInvocationSource = parent.source ?? (parent.parentRunId ? 'subflow' : 'chat');
     log.info('Resuming parent after recovered subflow join became ready', {
       parentConversationId: parentId,
       invocationId: invocation.id,
@@ -197,7 +217,7 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
       error,
     });
   } finally {
-    leases.delete(invocation.id);
+    leases.delete(leaseKey);
   }
 }
 
@@ -232,14 +252,14 @@ export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promis
  * syncLaneFromPersistedChild if the process stops in between. */
 export function queueSubflowRunOutcome(result: SubflowRunOutcome): void {
   if (result.status !== 'completed' && result.status !== 'capped' && result.status !== 'error') return;
-  queueMicrotask(() => {
+  queueMicrotask(bindToCurrentWorkspace(() => {
     void reportSubflowRunOutcome(result).catch((error) => {
       log.error('Could not propagate subflow terminal outcome to its parent', {
         conversationId: result.conversationId,
         error,
       });
     });
-  });
+  }));
 }
 
 function isFailedState(state: SharedState): boolean {
@@ -338,6 +358,16 @@ function deepestFailedStates(states: SharedState[], rootId: string): SharedState
   return failed.filter((state) => !hasFailedDescendant(state.conversationId!));
 }
 
+function belongsToMeetingFamily(
+  state: SharedState | undefined,
+  byId: Map<string, SharedState>,
+): boolean {
+  if (!state) return false;
+  if (state.source === 'meeting') return true;
+  const rootId = state.rootConversationId ?? state.conversationId;
+  return Boolean(rootId && byId.get(rootId)?.source === 'meeting');
+}
+
 export async function getSubflowRecoveryOptions(conversationId: string): Promise<SubflowRecoveryOptions> {
   const states = await allConversationStates();
   const byId = new Map(states.flatMap((state) =>
@@ -356,17 +386,19 @@ export async function getSubflowRecoveryOptions(conversationId: string): Promise
   const rootId = current?.rootConversationId ?? current?.conversationId ?? conversationId;
   const deepest = deepestFailedStates(states, rootId);
   const hasFailedDescendant = deepest.some((state) => state.conversationId !== conversationId);
+  const meetingOwned = belongsToMeetingFamily(current, byId);
+  const personaOwned = isPersonaOwnedConversationState(current);
   return {
     conversationId,
     ...(parentId ? { parentConversationId: parentId } : {}),
     ...(laneRef?.invocationId ? { invocationId: laneRef.invocationId } : {}),
     ...(laneRef?.laneId ? { laneId: laneRef.laneId } : {}),
-    hasRecoverableFamily: !!active || !!ownedInvocation || hasFailedDescendant,
+    hasRecoverableFamily: !meetingOwned && !personaOwned && (!!active || !!ownedInvocation || hasFailedDescendant),
     incompleteSiblingCount,
     deepestFailedCount: deepest.length,
-    canRetryBranch: !!current && current.status !== 'running',
-    canRetrySiblings: !!active && incompleteSiblingCount > 0 && active.parent.status !== 'running',
-    canRetryDeepest: deepest.length > 0,
+    canRetryBranch: !meetingOwned && !personaOwned && !!current && current.status !== 'running',
+    canRetrySiblings: !meetingOwned && !personaOwned && !!active && incompleteSiblingCount > 0 && active.parent.status !== 'running',
+    canRetryDeepest: !meetingOwned && !personaOwned && deepest.length > 0,
   };
 }
 
@@ -381,6 +413,12 @@ async function runRecoveryConversation(state: SharedState): Promise<SubflowRunOu
     // on the stale error snapshot returned by the family scan.
     const current = await loadConversationState(state.conversationId) ?? state;
     if (current.status === 'running') throw new Error('Conversation is already running.');
+    if (current.source === 'meeting') {
+      throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
+    }
+    if (isPersonaOwnedConversationState(current)) {
+      throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
+    }
     if (current.recovery?.manualActionRequired) {
       throw new Error(current.recovery.sideEffectWarning || 'Manual review is required before this conversation can be retried.');
     }
@@ -410,6 +448,15 @@ export async function retrySubflowRecoveryScope(
   const states = await allConversationStates();
   const current = states.find((state) => state.conversationId === conversationId);
   if (!current) throw new Error('Conversation not found.');
+  const byId = new Map(states.flatMap((state) =>
+    state.conversationId ? [[state.conversationId, state] as const] : [],
+  ));
+  if (belongsToMeetingFamily(current, byId)) {
+    throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
+  }
+  if (isPersonaOwnedConversationState(current)) {
+    throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
+  }
 
   let targets: SharedState[] = [];
   if (scope === 'branch') {
@@ -417,9 +464,7 @@ export async function retrySubflowRecoveryScope(
   } else if (scope === 'siblings') {
     const active = activeInvocationForChild(
       current,
-      new Map(states.flatMap((state) =>
-        state.conversationId ? [[state.conversationId, state] as const] : [],
-      )),
+      byId,
     );
     if (!active || active.parent.status === 'running') {
       throw new Error('No recoverable sibling invocation was found.');

@@ -88,16 +88,37 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 let closing = false;
-async function shutdown(): Promise<void> {
+/**
+ * Idempotent shutdown (issue #413).
+ *
+ * Every way this process can be told to stop must land here, because the ONLY
+ * thing that kills a live session's descendant tree is `shutdownBashSessions()`.
+ * The critical addition is stdin EOF: the MCP stdio convention is that the host
+ * closes stdin to request shutdown, and a host that then exits (or is killed)
+ * never sends a signal at all. Without an EOF path this server — and every
+ * background command and PTY it had spawned — survived its own host.
+ */
+async function shutdown(reason: string): Promise<void> {
   if (closing) return;
   closing = true;
-  shutdownBashSessions();
+  process.stderr.write(`@mario.andreschak/mcp-bash shutting down (${reason})\n`);
+  // Stop accepting new work BEFORE tearing anything down, so a request that
+  // arrives mid-shutdown cannot start a process nothing will ever kill.
   configureRootsProvider(undefined);
+  shutdownBashSessions();
   await server.close().catch(() => undefined);
 }
-process.once('SIGINT', () => void shutdown());
-process.once('SIGTERM', () => void shutdown());
-process.once('SIGHUP', () => void shutdown());
+process.once('SIGINT', () => void shutdown('SIGINT'));
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGHUP', () => void shutdown('SIGHUP'));
+// stdio EOF: the host closed our input, so no further request can arrive.
+process.stdin.once('end', () => void shutdown('stdin end'));
+process.stdin.once('close', () => void shutdown('stdin close'));
+// Transport close covers the SDK-side teardown (host closed the session). This
+// must hook the SERVER's callback, not the transport's: Protocol.connect()
+// installs its own transport.onclose, so assigning that directly would be
+// silently overwritten by server.connect() below.
+server.onclose = () => void shutdown('transport close');
 
 server.connect(transport).catch((error) => {
   shutdownBashSessions();

@@ -23,7 +23,7 @@ import {
   listCollectionItems,
   assertSafeCollectionId,
 } from '@/utils/storage/backend';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/services/flow/flowVersions');
@@ -121,7 +121,7 @@ export async function getFlowVersion(flowId: string, versionId: string): Promise
 export async function wipeFlowVersions(flowId: string): Promise<void> {
   try {
     assertSafeCollectionId(flowId);
-    await fs.rm(path.join(getDataDir(), 'db', 'flow-versions', flowId), { recursive: true, force: true });
+    await fs.rm(path.join(getWorkspaceDataDir(), 'db', 'flow-versions', flowId), { recursive: true, force: true });
   } catch (error) {
     log.warn(`Could not remove version history of flow ${flowId}`, error);
   }

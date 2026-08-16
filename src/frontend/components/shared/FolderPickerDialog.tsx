@@ -10,7 +10,6 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   IconButton,
   List,
   ListItemButton,
@@ -20,6 +19,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import DialogHeaderActions from './DialogHeaderActions';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
@@ -114,7 +114,7 @@ const FolderPickerDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{title ?? t('folderPicker.title')}</DialogTitle>
+      <DialogHeaderActions title={title ?? t('folderPicker.title')} onClose={onClose} />
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Tooltip title={t('folderPicker.up')}>

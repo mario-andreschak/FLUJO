@@ -6,8 +6,10 @@ jest.mock('@/backend/services/mcp/assistedInstall', () => ({
 
 const installRegistryServerMock = jest.fn();
 const installBestForCapabilityMock = jest.fn();
+const findBestRegistryServersMock = jest.fn();
 jest.mock('@/backend/services/mcp/registryInstall', () => ({
   searchRegistry: jest.fn(),
+  findBestRegistryServers: (...args: unknown[]) => findBestRegistryServersMock(...args),
   installRegistryServer: (...args: unknown[]) => installRegistryServerMock(...args),
   installBestForCapability: (...args: unknown[]) => installBestForCapabilityMock(...args),
 }));
@@ -91,9 +93,43 @@ beforeEach(() => {
     if (options?.resolveOnly) return { installed: false, plan };
     return { installed: true, serverName: 'paypal', tools: [{ name: 'create_invoice' }], plan };
   });
+  findBestRegistryServersMock.mockResolvedValue([{ name: 'com.paypal/mcp', installable: true, requiredEnv: [] }]);
 });
 
 describe('install_best_mcp_server assisted mode', () => {
+  it('keeps find_best_mcp_server strictly read-only', async () => {
+    const result = await authoringCallTool('find_best_mcp_server', {
+      capability: 'connect my PayPal account',
+    });
+    const body = payload(result);
+    expect(result.isError).toBeUndefined();
+    expect(body).toEqual(expect.objectContaining({
+      installed: false,
+      researchMode: 'ai-assisted',
+      recommendedId: 'com.paypal/mcp::stdio',
+    }));
+    expect(researchMcpServersMock).toHaveBeenCalledTimes(1);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(installBestForCapabilityMock).not.toHaveBeenCalled();
+    expect(appendInstallAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('uses read-only deterministic ranking when no research model is configured', async () => {
+    loadModelsMock.mockResolvedValue([]);
+    const body = payload(await authoringCallTool('find_best_mcp_server', {
+      capability: 'search transcripts',
+      limit: 3,
+    }));
+    expect(body).toEqual(expect.objectContaining({
+      installed: false,
+      researchMode: 'registry-fallback',
+      candidates: [{ name: 'com.paypal/mcp', installable: true, requiredEnv: [] }],
+    }));
+    expect(findBestRegistryServersMock).toHaveBeenCalledWith('search transcripts', 3);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(installBestForCapabilityMock).not.toHaveBeenCalled();
+  });
+
   it('uses the wizard research, filters credentials per exact plan, and audits before execution', async () => {
     const result = await authoringCallTool('install_best_mcp_server', {
       capability: 'connect my PayPal account',

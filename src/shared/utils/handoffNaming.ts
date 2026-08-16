@@ -19,6 +19,17 @@
 /** The invariant prefix all handoff tools share; do not change (see above). */
 export const HANDOFF_TOOL_PREFIX = 'handoff_to_';
 
+/**
+ * The invariant prefix for TOOL-INVOCATION subflow calls (issue #385, Part B
+ * of #359). Distinct from `handoff_to_` on purpose: a `call_subflow_*` call
+ * does NOT transition the graph — it runs the target Subflow's lanes INLINE
+ * and returns a structured JSON result to the calling model, so it must never
+ * be caught by `name.startsWith('handoff_to_')` (ProcessNode.processHandoffToolCalls,
+ * ModelHandler's LOCAL_GROUP classifier, the Claude-subscription adapter's
+ * `isHandoffName`, etc.) — those all treat a match as "end this turn and route".
+ */
+export const SUBFLOW_TOOL_PREFIX = 'call_subflow_';
+
 // OpenAI/Anthropic tool names must match /^[A-Za-z0-9_-]+$/ and stay <= 64 chars.
 // The prefix eats 11 chars, so cap the slug so the worst case (+ a collision
 // suffix) still fits comfortably.
@@ -60,22 +71,41 @@ export interface HandoffTargetRef {
  * assigned in input order so the result is deterministic. Duplicate ids collapse
  * to a single entry (the Map keys by id), so callers may pass repeated ids.
  */
-export function buildHandoffToolNameMap(targets: HandoffTargetRef[]): Map<string, string> {
+function buildToolNameMap(targets: HandoffTargetRef[], prefix: string): Map<string, string> {
   const used = new Set<string>();
   const byId = new Map<string, string>();
 
   for (const target of targets) {
     if (byId.has(target.id)) continue; // already assigned; keep the first
     const slug = slugifyHandoffTarget(target.label, target.type);
-    let name = `${HANDOFF_TOOL_PREFIX}${slug}`;
+    let name = `${prefix}${slug}`;
     if (used.has(name)) {
       let i = 2;
-      while (used.has(`${HANDOFF_TOOL_PREFIX}${slug}_${i}`)) i++;
-      name = `${HANDOFF_TOOL_PREFIX}${slug}_${i}`;
+      while (used.has(`${prefix}${slug}_${i}`)) i++;
+      name = `${prefix}${slug}_${i}`;
     }
     used.add(name);
     byId.set(target.id, name);
   }
 
   return byId;
+}
+
+export function buildHandoffToolNameMap(targets: HandoffTargetRef[]): Map<string, string> {
+  return buildToolNameMap(targets, HANDOFF_TOOL_PREFIX);
+}
+
+/**
+ * Same collision-free slugging as `buildHandoffToolNameMap`, but under the
+ * `call_subflow_` namespace (issue #385). Used for Subflow targets whose
+ * `invocationMode` is `'tool'`: the model calls the tool directly and gets a
+ * structured JSON result back instead of triggering a graph transition.
+ */
+export function buildSubflowToolNameMap(targets: HandoffTargetRef[]): Map<string, string> {
+  return buildToolNameMap(targets, SUBFLOW_TOOL_PREFIX);
+}
+
+/** True for a `call_subflow_*` tool-invocation name (never a handoff). */
+export function isSubflowToolName(name: string): boolean {
+  return name.startsWith(SUBFLOW_TOOL_PREFIX);
 }

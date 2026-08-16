@@ -442,7 +442,7 @@ function toolDefinitions(allowInstall: boolean): OpenAI.ChatCompletionFunctionTo
     {
       type: 'function',
       function: {
-        name: 'search_mcp_marketplace',
+        name: 'find_mcp_server',
         description: 'Search the public MCP registry by a short server-name term when no connected capability fits.',
         parameters: {
           type: 'object',
@@ -833,7 +833,7 @@ async function executeAction(
     };
   }
 
-  if (name === 'search_mcp_marketplace') {
+  if (name === 'find_mcp_server') {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     const results = await searchRegistry(query);
     emit({ type: 'marketplace-results', query, count: Array.isArray(results) ? results.length : 0 });

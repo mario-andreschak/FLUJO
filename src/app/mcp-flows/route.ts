@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — Flows-as-tools endpoint (#38, Item D / #17).
  *
@@ -31,7 +32,7 @@ import { createLogger } from '@/utils/logger';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-flows/route');
-const SERVER_VERSION = '3.42.1';
+const SERVER_VERSION = '3.45.0';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -49,6 +50,11 @@ function jsonError(status: number, message: string): Response {
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
+    // MCP Tasks (#404) is deliberately NOT advertised: this endpoint has no
+    // caller identity at all, so a durable task could only be addressed by
+    // task id — an authorization hole across stateless requests. Long-running
+    // flow runs therefore stay synchronous here until a caller-bound ownership
+    // mechanism exists. See docs/features/mcp-tasks.md ("Server-side status").
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -93,14 +99,18 @@ async function handle(request: Request): Promise<Response> {
   }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POST_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function GET_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function DELETE_handler(request: Request): Promise<Response> {
   return handle(request);
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

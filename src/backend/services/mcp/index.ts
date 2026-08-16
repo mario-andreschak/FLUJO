@@ -6,7 +6,12 @@ import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
 import { createLogger } from "@/utils/logger";
-import { getDataDir } from "@/utils/paths";
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+} from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
@@ -32,6 +37,7 @@ declare global {
   var __mcp_connecting: Set<string> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
   var __mcp_starting_up: boolean | undefined;
+  var __mcp_starting_up_by_workspace: Map<string, boolean> | undefined;
   // The CURRENT transport per server name. onclose/onerror handlers close over the
   // transport they were registered on and fire for ANY instance — including a zombie
   // process exiting minutes after it was replaced, and closes FLUJO itself initiated.
@@ -73,6 +79,47 @@ if (typeof global.__mcp_tool_schema_hash === "undefined") {
   global.__mcp_tool_schema_hash = new Map<string, string>();
 }
 
+// Per-workspace copies of the server-name-keyed registries above (#406). Only
+// NON-default workspaces get an entry here: the default workspace keeps using
+// the original objects, so every pre-existing consumer (including tests that
+// manipulate global.__mcp_clients directly) is completely unaffected.
+declare global {
+  var __mcp_workspace_registries:
+    | Map<string, Map<string, unknown>>
+    | undefined;
+}
+
+/**
+ * Return the registry `name` for the currently selected workspace.
+ *
+ * `base` is the pre-workspace object and is returned as-is for the default
+ * workspace. For any other workspace an empty registry of the same kind (Map or
+ * Set) is created on first use and then reused for the life of the process,
+ * shared across MCPService instances exactly like the globals are.
+ */
+function scopedRegistry<T extends Map<unknown, unknown> | Set<unknown>>(
+  name: string,
+  base: T,
+): T {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) return base;
+  const all = (global.__mcp_workspace_registries ??= new Map<
+    string,
+    Map<string, unknown>
+  >());
+  let perWorkspace = all.get(workspace);
+  if (!perWorkspace) {
+    perWorkspace = new Map<string, unknown>();
+    all.set(workspace, perWorkspace);
+  }
+  let registry = perWorkspace.get(name);
+  if (!registry) {
+    registry = base instanceof Set ? new Set() : new Map();
+    perWorkspace.set(name, registry);
+  }
+  return registry as T;
+}
+
 // Import from backend modules
 import {
   MCPServerConfig,
@@ -85,6 +132,22 @@ import {
 } from "@/shared/types/mcp";
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
+import {
+  beginConnect,
+  beginTeardown,
+  getLifecycleDiagnostics,
+  markConnectFailed,
+  markConnected,
+} from "./lifecycleCoordinator";
+import {
+  acquireLease,
+  enforceWarmCapacity,
+  getPoolDiagnostics,
+  pinServer,
+  sweepIdleServers,
+  unpinServer,
+  type AcquireResult,
+} from "./mcpLeasePool";
 import {
   listServerTools as listTools,
   callTool as callToolFunction,
@@ -147,6 +210,12 @@ import {
 import { setNodeRoots as setNodeRootsOverlay } from "./roots";
 import { ToolCallSource, ToolListAudience } from "./appsProtocol";
 import {
+  createdTicketIdFromMcpResult,
+  injectTrustedFlujoToolContext,
+  trustedFlujoTicketConversationId,
+  type TrustedMcpToolInvocationContext,
+} from "./trustedToolContext";
+import {
   cancelExternalAuthorization,
   clearExternalAuthorizationState,
   confirmExternalAuthorization,
@@ -156,6 +225,7 @@ import {
   registerExternalAuthorizationClient,
   serverSupportsExternalAuthorization,
 } from "./externalAuthorization";
+import { revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -206,6 +276,7 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
     config.oauthClientInformation ||
     config.oauthTokens ||
     config.oauthCodeVerifier ||
+    config.oauthState ||
     config.authorizationUrl
   );
 }
@@ -217,26 +288,59 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
  * while maintaining compatibility with the MCP SDK.
  */
 export class MCPService {
-  private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  // --- Workspace-scoped registries (#406) -----------------------------------
+  // Every registry below is keyed by SERVER NAME, and a server name is only
+  // unique WITHIN a workspace: "github" in workspace A and "github" in workspace
+  // B are two different servers with two different clone directories, configs
+  // and processes. Sharing one registry would mean connecting one implicitly
+  // "connects" the other, and stopping one would tear down the other's client.
+  //
+  // `scopedRegistry` therefore returns a per-workspace registry — EXCEPT for the
+  // default workspace, which keeps using the exact same object as before. That
+  // preserves the cross-module-instance sharing the global maps exist for, and
+  // keeps every existing caller (and test that pokes global.__mcp_clients
+  // directly) behaving byte-for-byte as it did before workspaces existed.
+  private stderrLogsBase: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  private get stderrLogs(): Map<string, string[]> {
+    return scopedRegistry("stderrLogs", this.stderrLogsBase);
+  }
   // Last connection failure per server. Unlike stderrLogs (which is reset at the start of
   // every connection attempt to capture a fresh run), this persists until the server next
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
-  private lastConnectionError: Map<string, string> = new Map();
+  private lastConnectionErrorBase: Map<string, string> = new Map();
+  private get lastConnectionError(): Map<string, string> {
+    return scopedRegistry("lastConnectionError", this.lastConnectionErrorBase);
+  }
   // De-dupes concurrent connectServer() calls for the same server (see connectServer below).
-  private inFlightConnects: Map<string, Promise<MCPServiceResponse>> =
+  private inFlightConnectsBase: Map<string, Promise<MCPServiceResponse>> =
     new Map();
-  private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
-  private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
+  private get inFlightConnects(): Map<string, Promise<MCPServiceResponse>> {
+    return scopedRegistry("inFlightConnects", this.inFlightConnectsBase);
+  }
+  private connectionRetryTimersBase: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
+  private get connectionRetryTimers(): Map<string, NodeJS.Timeout> {
+    return scopedRegistry("connectionRetryTimers", this.connectionRetryTimersBase);
+  }
+  private connectionRetryAttemptsBase: Map<string, number> = new Map(); // Track retry attempts for each server
+  private get connectionRetryAttempts(): Map<string, number> {
+    return scopedRegistry("connectionRetryAttempts", this.connectionRetryAttemptsBase);
+  }
 
   // Per-server resource list version counter (incremented on notifications/resources/list_changed).
   // Exposed via getResourceListVersion() so the server-status API can include it in its
   // response, and the frontend can detect a stale resource listing and auto-refresh.
-  private resourceListVersion: Map<string, number> = new Map();
+  private resourceListVersionBase: Map<string, number> = new Map();
+  private get resourceListVersion(): Map<string, number> {
+    return scopedRegistry("resourceListVersion", this.resourceListVersionBase);
+  }
   // Per-server set of URIs that have received a notifications/resources/updated notification
   // (sent by servers that support resources/subscribe, registered via subscribeToResource).
   // ResourceHandler checks this before re-reading a bound resource node.
-  private pendingResourceUpdates: Map<string, Set<string>> = new Map();
+  private pendingResourceUpdatesBase: Map<string, Set<string>> = new Map();
+  private get pendingResourceUpdates(): Map<string, Set<string>> {
+    return scopedRegistry("pendingResourceUpdates", this.pendingResourceUpdatesBase);
+  }
 
   /**
    * Remove the exact stale marker written by the old auth-inference path once a static
@@ -288,31 +392,31 @@ export class MCPService {
   // closed clients ("This operation was aborted") after another instance rebuilt a
   // connection.
   private get clients(): Map<string, Client> {
-    return global.__mcp_clients!;
+    return scopedRegistry("clients", global.__mcp_clients!);
   }
 
   // Servers with an in-flight connection attempt. Global-backed (see __mcp_connecting)
   // so the set is shared across module instances / hot reloads.
   private get connectingServers(): Set<string> {
-    return global.__mcp_connecting!;
+    return scopedRegistry("connectingServers", global.__mcp_connecting!);
   }
 
   // The currently-registered transport per server. Global-backed (see
   // __mcp_active_transports) so a deregistration in one module instance is visible to
   // the onclose/onerror handlers that were registered by another.
   private get activeTransports(): Map<string, Transport> {
-    return global.__mcp_active_transports!;
+    return scopedRegistry("activeTransports", global.__mcp_active_transports!);
   }
 
   // Issue #255: per-server client-(re)registration generation. Global-backed for
   // the same cross-module-instance reason as __mcp_clients.
   private get clientGenerations(): Map<string, number> {
-    return global.__mcp_client_generation!;
+    return scopedRegistry("clientGenerations", global.__mcp_client_generation!);
   }
 
   // Issue #255: current advertised input-schema hash per (server\0tool).
   private get toolSchemaHashes(): Map<string, string> {
-    return global.__mcp_tool_schema_hash!;
+    return scopedRegistry("toolSchemaHashes", global.__mcp_tool_schema_hash!);
   }
 
   // Cap per-server stderr retention: a chatty or crash-looping server would otherwise
@@ -341,6 +445,7 @@ export class MCPService {
     this.clients.delete(serverName);
     this.activeTransports.delete(serverName);
     clearExternalAuthorizationState(serverName);
+    revokeMcpAppRuntimeBrokerForServer(serverName);
   }
 
   // -------------------------------------------------------------------------
@@ -445,7 +550,7 @@ export class MCPService {
       `Scheduling connection retry for server ${serverName} in ${delay}ms (attempt ${currentAttempts + 1}/${maxAttempts})`,
     );
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(bindToCurrentWorkspace(async () => {
       log.info(
         `Attempting to reconnect server ${serverName} (attempt ${currentAttempts + 1}/${maxAttempts})`,
       );
@@ -525,7 +630,7 @@ export class MCPService {
         // Schedule another retry if we haven't reached max attempts
         this.scheduleConnectionRetry(serverName, currentConfig);
       }
-    }, delay);
+    }), delay);
 
     this.connectionRetryTimers.set(serverName, timer);
   }
@@ -534,14 +639,24 @@ export class MCPService {
    * Check if the backend is currently starting up
    */
   isStartingUp(): boolean {
-    return global.__mcp_starting_up === true;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__mcp_starting_up === true
+      : global.__mcp_starting_up_by_workspace?.get(workspace) === true;
   }
 
   /**
    * Set the backend startup state
    */
   private setStartingUp(value: boolean): void {
-    global.__mcp_starting_up = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      global.__mcp_starting_up = value;
+    } else {
+      const states = global.__mcp_starting_up_by_workspace ??=
+        new Map<string, boolean>();
+      states.set(workspace, value);
+    }
     log.info(
       `Backend startup state set to: ${value ? "starting" : "complete"}`,
     );
@@ -563,12 +678,12 @@ export class MCPService {
    * call's toolNameMap entry.
    */
   setToolSchemaHash(serverName: string, toolName: string, hash: string): void {
-    this.toolSchemaHashes.set(`${serverName} ${toolName}`, hash);
+    this.toolSchemaHashes.set(`${serverName}\0${toolName}`, hash);
   }
 
   /** Issue #255: current advertised input-schema hash for (server, tool), if known. */
   getToolSchemaHash(serverName: string, toolName: string): string | undefined {
-    return this.toolSchemaHashes.get(`${serverName} ${toolName}`);
+    return this.toolSchemaHashes.get(`${serverName}\0${toolName}`);
   }
 
   /**
@@ -696,19 +811,64 @@ export class MCPService {
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
 
-    const inFlight = this.inFlightConnects.get(serverName);
-    if (inFlight) {
-      log.debug(
-        `connectServer: reusing in-flight connection attempt for ${serverName}`,
-      );
-      return inFlight;
-    }
-
-    const attempt = this.connectServerInternal(configOrName).finally(() => {
-      this.inFlightConnects.delete(serverName);
+    // Issue #413: de-duplication and teardown ordering now live in the
+    // process-wide lifecycle coordinator rather than in this instance's map.
+    // `inFlightConnects` was INSTANCE-local, so two Next.js module instances each
+    // believed they were the only connector and forked two child trees for one
+    // config. beginConnect also awaits any pending teardown first, so a
+    // replacement connection can never be built while its predecessor's child is
+    // still exiting.
+    return beginConnect(serverName, async () => {
+      // Keep the legacy instance-local map populated: existing tests and
+      // status/diagnostic call sites still read it.
+      const attempt = this.connectServerInternal(configOrName).finally(() => {
+        this.inFlightConnects.delete(serverName);
+      });
+      this.inFlightConnects.set(serverName, attempt);
+      const result = await attempt;
+      if (result.success) {
+        markConnected(serverName, this.configFingerprint(configOrName));
+      } else {
+        // A transport that is still registered while no client landed means the
+        // failure happened DURING the handshake (post-spawn), which is the case
+        // that leaks a half-initialized child if teardown is skipped.
+        const handshakeFailure =
+          this.activeTransports.has(serverName) && !this.clients.has(serverName);
+        markConnectFailed(
+          serverName,
+          result.error ?? "unknown connection failure",
+          handshakeFailure,
+        );
+      }
+      return result;
     });
-    this.inFlightConnects.set(serverName, attempt);
-    return attempt;
+  }
+
+  /**
+   * Cheap identity fingerprint of the configuration a runtime was built from.
+   *
+   * Used only to detect that a runtime belongs to a superseded configuration
+   * generation, so it never needs to be stable across processes or reversible.
+   * Never includes resolved secrets: only the shape that decides WHAT is spawned.
+   */
+  private configFingerprint(configOrName: MCPServerConfig | string): string | undefined {
+    if (typeof configOrName === "string") return undefined;
+    const config = configOrName as MCPServerConfig & {
+      command?: string;
+      args?: string[];
+      url?: string;
+      websocketUrl?: string;
+      rootPath?: string;
+    };
+    return [
+      config.transport,
+      config.command ?? "",
+      (config.args ?? []).join(" "),
+      config.url ?? "",
+      config.websocketUrl ?? "",
+      config.rootPath ?? "",
+      config.disabled ? "disabled" : "enabled",
+    ].join("\0");
   }
 
   private async connectServerInternal(
@@ -779,25 +939,6 @@ export class MCPService {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
 
-      if (
-        config.transport === "stdio" &&
-        config.hostPathAccess?.protectedPaths === true
-      ) {
-        const childEnv: Record<string, string> = {
-          ...(config.env as Record<string, string> | undefined),
-        };
-        // The persisted security contract follows the record across renames; no
-        // server display name grants this behavior.
-        const { isProtectedPathsEnabled } =
-          await import("./internal/protectedPaths");
-        childEnv.FLUJO_PROTECTED_PATHS_ENABLED = (await isProtectedPathsEnabled(
-          config.protectedPathsEnabled,
-        ))
-          ? "1"
-          : "0";
-        config = { ...config, env: childEnv };
-      }
-
       // Resolve + decrypt any custom headers (#84) BEFORE anything reads them. The SAME
       // resolved config must drive both shouldRecreateClient() and createTransport(), so the
       // httpConfigKey they compute agrees (a bound-global header would otherwise force a
@@ -863,8 +1004,8 @@ export class MCPService {
       // existing servers keep working either way).
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
       const transport = useBeta
-        ? createBetaTransport(config)
-        : createTransport(config);
+        ? createBetaTransport(config, { enableRuntimeBroker: true })
+        : createTransport(config, { enableRuntimeBroker: true });
       if (config.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,
@@ -882,8 +1023,8 @@ export class MCPService {
         registerResourceNotificationHandlers(
           client,
           config.name,
-          (name) => this.onResourceListChanged(name),
-          (name, uri) => this.onResourceUpdated(name, uri),
+          bindToCurrentWorkspace((name: string) => this.onResourceListChanged(name)),
+          bindToCurrentWorkspace((name: string, uri: string) => this.onResourceUpdated(name, uri)),
         );
       } else {
         // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
@@ -897,16 +1038,16 @@ export class MCPService {
           }
         ).setNotificationHandler?.bind(client);
         if (betaSetNotification) {
-          betaSetNotification("notifications/resources/list_changed", () => {
+          betaSetNotification("notifications/resources/list_changed", bindToCurrentWorkspace(() => {
             this.onResourceListChanged(config.name);
-          });
+          }));
           betaSetNotification(
             "notifications/resources/updated",
-            (notification: unknown) => {
+            bindToCurrentWorkspace((notification: unknown) => {
               const uri = (notification as { params?: { uri?: string } })
                 ?.params?.uri;
               if (uri) this.onResourceUpdated(config.name, uri);
-            },
+            }),
           );
         }
       }
@@ -921,13 +1062,13 @@ export class MCPService {
       ).stderr;
       if (stdioStderr && typeof stdioStderr.on === "function") {
         const serverName = config.name;
-        stdioStderr.on("data", (data: Buffer) => {
+        stdioStderr.on("data", bindToCurrentWorkspace((data: Buffer) => {
           const stderrMessage = data.toString();
           log.warn(`stderr: [${serverName}]: ${stderrMessage}`);
 
           // Store stderr logs (capped, see appendStderrLog)
           this.appendStderrLog(serverName, stderrMessage);
-        });
+        }));
       }
 
       // Register FLUJO's transport event handlers BEFORE client.connect(): the SDK's
@@ -937,7 +1078,7 @@ export class MCPService {
       // transport had closed: pending requests were never rejected with "Connection
       // closed", client.transport stayed attached, and later calls surfaced as the
       // cryptic AbortError "This operation was aborted" from the aborted fetch signal.
-      transport.onclose = () => {
+      transport.onclose = bindToCurrentWorkspace(() => {
         // Only act if THIS transport is still the registered one for the server.
         // Two cases must be ignored: (a) a zombie process from a replaced connection
         // finally exiting — its late close event used to delete the CURRENT healthy
@@ -978,9 +1119,9 @@ export class MCPService {
               error,
             );
           });
-      };
+      });
 
-      transport.onerror = (error) => {
+      transport.onerror = bindToCurrentWorkspace((error: Error) => {
         // The Streamable HTTP transport keeps a long-lived SSE stream open for server->client
         // notifications; servers/proxies recycle that idle stream (e.g. Cloudflare in front of
         // Asana), which surfaces here as "SSE stream disconnected: TypeError: terminated". The
@@ -1090,7 +1231,7 @@ export class MCPService {
               error,
             );
           });
-      };
+      });
 
       // Handshake. Both handlers above are inert until the transport is registered as
       // the CURRENT one below (their stale guard sees activeTransports unset), so a
@@ -1147,6 +1288,11 @@ export class MCPService {
       );
       return { success: true };
     } catch (error) {
+      // A child may have registered its sidecar before the MCP handshake
+      // failed. Never leave that browser route pointing at a dead/reused port.
+      if (config.transport === 'stdio') {
+        revokeMcpAppRuntimeBrokerForServer(config.name);
+      }
       log.error(
         `connectServer: Failed to connect to server ${config.name}:`,
         error,
@@ -1560,8 +1706,14 @@ export class MCPService {
       // Get the server config to pass to safelyCloseClient
       const config = await this.getServerConfig(serverName);
 
-      // Close the client following the MCP shutdown sequence
-      await safelyCloseClient(client, serverName, config || undefined);
+      // Issue #413: run the close through the ONE idempotent, awaitable teardown
+      // so overlapping shouts of "close it" (transport error + disable + shutdown
+      // arriving together) fold onto a single close instead of racing each other
+      // into a double-close that orphans grandchildren.
+      await beginTeardown(serverName, "disconnect", async () => {
+        const closed = await safelyCloseClient(client, serverName, config || undefined);
+        return { forced: closed.forced };
+      });
 
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true };
@@ -1575,6 +1727,108 @@ export class MCPService {
         error: `Failed to disconnect server: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
+  }
+
+  /**
+   * Tear down EVERY live MCP connection, awaiting each child's exit (issue #413).
+   *
+   * FLUJO had no process-wide MCP shutdown at all: the only teardown was
+   * per-server and user-initiated, so on SIGTERM/SIGINT (or a container stop) the
+   * whole fleet of stdio servers — and everything they had spawned — was left to
+   * the OS, which reparents rather than kills. Repeated start/stop cycles
+   * therefore accumulated server trees until the machine was rebooted.
+   *
+   * Idempotent: each per-server teardown folds onto its coordinator promise, so
+   * calling this from several signal handlers at once is safe. Never rejects — a
+   * shutdown path must not be derailed by one uncooperative server.
+   */
+  async disconnectAll(reason: string): Promise<{ closed: string[]; failed: string[] }> {
+    const closed: string[] = [];
+    const failed: string[] = [];
+    // Snapshot the names first: closing mutates the shared registry.
+    const serverNames = Array.from(new Set(Array.from(this.clients.keys())));
+    log.info(`disconnectAll: tearing down ${serverNames.length} MCP server(s) (${reason})`);
+
+    for (const serverName of serverNames) {
+      // Retry timers must die first, or a pending retry fires mid-shutdown and
+      // re-forks the very server we just closed.
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+      try {
+        const result = await this.disconnectServer(serverName);
+        if (result.success) closed.push(serverName);
+        else failed.push(serverName);
+      } catch (error) {
+        log.warn(
+          `disconnectAll: teardown of ${serverName} threw: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        failed.push(serverName);
+      }
+    }
+
+    // Any record still holding a retry timer (a server that was cold but
+    // scheduled to retry) must be silenced too, or the process cannot exit.
+    for (const [serverName] of Array.from(this.connectionRetryTimers)) {
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+    }
+
+    log.info(
+      `disconnectAll: closed=${closed.length} failed=${failed.length} (${reason})`,
+    );
+    return { closed, failed };
+  }
+
+  /**
+   * Bounded lifecycle/pool diagnostics (issue #413).
+   *
+   * Counters, states and sizes only: never stderr, command lines or provider
+   * payloads, so the report is safe to log and cheap to keep.
+   */
+  getLifecycleReport(): {
+    runtimes: ReturnType<typeof getLifecycleDiagnostics>;
+    pool: ReturnType<typeof getPoolDiagnostics>;
+    liveClients: number;
+  } {
+    return {
+      runtimes: getLifecycleDiagnostics(),
+      pool: getPoolDiagnostics(),
+      liveClients: this.clients.size,
+    };
+  }
+
+  /**
+   * Close warm servers nothing is using, honouring leases and pins.
+   *
+   * Exposed so a caller (an idle sweep cron, a suspend hook) can reclaim memory
+   * without knowing about the pool module. Never warms a cold server.
+   */
+  async sweepIdleMcpServers(): Promise<string[]> {
+    const closed = await sweepIdleServers(this);
+    const evicted = await enforceWarmCapacity(this);
+    return [...closed, ...evicted];
+  }
+
+  /**
+   * Acquire a lease on a server, connecting it lazily if it is cold.
+   *
+   * Consumers should prefer this over `connectServer` + `getClient`: while the
+   * lease is held the idle sweep and LRU eviction cannot close the server, and
+   * `lease.isStale()` reports a config-generation replacement so a caller can
+   * never keep using a client that is being torn down.
+   */
+  acquireServerLease(serverName: string): Promise<AcquireResult> {
+    return acquireLease(this, serverName);
+  }
+
+  /** Pin a server against idle/LRU closure (subscriptions, MCP App sessions, tasks). */
+  pinServer(serverName: string, pin: string): void {
+    pinServer(serverName, pin);
+  }
+
+  /** Release a named pin. */
+  unpinServer(serverName: string, pin: string): void {
+    unpinServer(serverName, pin);
   }
 
   /**
@@ -1743,6 +1997,7 @@ export class MCPService {
     signal?: AbortSignal,
     source: ToolCallSource = "host",
     ownerScope?: string,
+    trustedContext?: TrustedMcpToolInvocationContext,
   ): Promise<MCPServiceResponse> {
     log.debug(
       `callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`,
@@ -1770,75 +2025,121 @@ export class MCPService {
     // statusCode 404, none of which mean the connection is dead. A dead-but-present client
     // (e.g. expired HTTP session) is healed by the listServerTools reconnect that the flow
     // path runs before calling tools.
-    if (!client) {
+    // Issue #413: hold a LEASE for the duration of the call. An in-flight tool
+    // call is demand, so while it runs neither the idle sweep nor LRU eviction may
+    // close the server underneath it. Acquiring also connects a cold server on
+    // demand, which is what makes lazy pooling transparent here.
+    const acquired = await this.acquireServerLease(serverName);
+    const lease = acquired.lease;
+    if (lease) {
+      client = lease.client;
+    } else if (!client) {
       log.warn(
-        `callTool: No client for ${serverName}; forcing reconnect before calling ${toolName}`,
+        `callTool: Lease acquisition for ${serverName} failed: ${acquired.error}`,
       );
-      const reconnect = await this.forceReconnect(serverName);
-      if (reconnect.success) {
-        client = this.clients.get(serverName);
-      } else {
-        log.warn(
-          `callTool: Reconnect for ${serverName} failed: ${reconnect.error}`,
-        );
-      }
     }
 
-    // Fail closed before invoking a side-effecting tool. This gate is shared by
-    // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
-    // execution can never discover account setup by opening UI after the fact.
-    if (client && serverSupportsExternalAuthorization(client)) {
-      try {
-        const authorization = await getExternalAuthorizationStatus(
-          client,
-          serverName,
-          { force: true },
-        );
-        if (authorization.blockingAuthorization) {
-          const requiredAuthorization = authorization.blockingAuthorization;
-          const error =
-            requiredAuthorization.message ||
-            `${requiredAuthorization.label} authorization is required. Open the MCP page to authenticate before running this flow.`;
-          log.warn(`callTool: blocked ${serverName}/${toolName}: ${error}`);
+    // Everything below runs while the lease is held, and the lease is released in
+    // ONE `finally` covering every exit path (including the authorization gate's
+    // early returns). An early return that skipped the release would leave a
+    // phantom lease pinning the server warm for the process lifetime.
+    try {
+      // Fail closed before invoking a side-effecting tool. This gate is shared by
+      // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
+      // execution can never discover account setup by opening UI after the fact.
+      if (client && serverSupportsExternalAuthorization(client)) {
+        try {
+          const authorization = await getExternalAuthorizationStatus(
+            client,
+            serverName,
+            { force: true },
+          );
+          if (authorization.blockingAuthorization) {
+            const requiredAuthorization = authorization.blockingAuthorization;
+            const error =
+              requiredAuthorization.message ||
+              `${requiredAuthorization.label} authorization is required. Open the MCP page to authenticate before running this flow.`;
+            log.warn(`callTool: blocked ${serverName}/${toolName}: ${error}`);
+            return {
+              success: false,
+              error,
+              errorType: "stdio-oauth-required",
+              statusCode: 428,
+              requiresAuthentication: true,
+            };
+          }
+        } catch (authorizationError) {
+          const detail =
+            authorizationError instanceof Error
+              ? authorizationError.message
+              : String(authorizationError);
+          log.warn(
+            `callTool: mcp-stdio-oauth readiness check failed for ${serverName}: ${detail}`,
+          );
           return {
             success: false,
-            error,
-            errorType: "stdio-oauth-required",
-            statusCode: 428,
-            requiresAuthentication: true,
+            error: `Could not verify account readiness for '${serverName}': ${detail}`,
+            errorType: "stdio-oauth-status",
+            statusCode: 503,
           };
         }
-      } catch (authorizationError) {
-        const detail =
-          authorizationError instanceof Error
-            ? authorizationError.message
-            : String(authorizationError);
-        log.warn(
-          `callTool: mcp-stdio-oauth readiness check failed for ${serverName}: ${detail}`,
-        );
-        return {
-          success: false,
-          error: `Could not verify account readiness for '${serverName}': ${detail}`,
-          errorType: "stdio-oauth-status",
-          statusCode: 503,
-        };
       }
-    }
 
-    const result = await callToolFunction(
-      client,
-      serverName,
-      toolName,
-      args,
-      timeout,
-      onProgress,
-      signal,
-      source,
-      callerNodeId,
-      ownerScope,
-    );
-    log.info(`callTool: Called tool ${toolName} on ${serverName}`);
-    return result;
+      const trustedToolConfig = source === "model"
+        && toolName === "create_ticket_for_human"
+        && trustedContext?.conversationId
+        ? await this.getServerConfig(serverName)
+        : null;
+      const trustedTicketConversationId = trustedFlujoTicketConversationId(
+        trustedToolConfig,
+        toolName,
+        source,
+        trustedContext,
+      );
+      const effectiveArgs = trustedTicketConversationId
+        ? injectTrustedFlujoToolContext(
+            trustedToolConfig,
+            toolName,
+            args,
+            source,
+            trustedContext,
+          )
+        : args;
+      const result = await callToolFunction(
+        client,
+        serverName,
+        toolName,
+        effectiveArgs,
+        timeout,
+        onProgress,
+        signal,
+        source,
+        callerNodeId,
+        ownerScope,
+      );
+      if (result.success && trustedTicketConversationId) {
+        const ticketId = createdTicketIdFromMcpResult(result.data);
+        if (ticketId) {
+          try {
+            const { ticketService } = await import('@/backend/services/ticket');
+            await ticketService.stampPersonaAttributionFromTrustedConversation(
+              ticketId,
+              trustedTicketConversationId,
+            );
+          } catch (error) {
+            // The ticket already exists; keep the tool result truthful while
+            // surfacing a storage failure for operators instead of trusting an
+            // unverified payload at the HTTP boundary.
+            log.error(`callTool: Failed to stamp trusted ticket attribution for ${ticketId}`, error);
+          }
+        }
+      }
+      log.info(`callTool: Called tool ${toolName} on ${serverName}`);
+      return result;
+    } finally {
+      // Idempotent release: safe even when acquisition failed and this is undefined.
+      lease?.release();
+    }
   }
 
   /**
@@ -2153,30 +2454,41 @@ export class MCPService {
    * Update an MCP server configuration
    */
   /**
-   * Eagerly create the root dir of a remote (streamable/SSE/websocket) server (issue 52).
-   * Remote servers default to mcp-servers/<name> like stdio servers, but nothing else
-   * ever creates that folder for them (no clone/install step). Only safe, scoped paths
-   * are created: filesystem roots are skipped, and relative paths resolve against the
-   * data dir (where mcp-servers/ lives). Best-effort — failures are logged, never thrown.
+   * Eagerly create managed roots that have no clone/install step: remote servers
+   * (issue 52) and Registry stdio packages executed by npx/uvx/etc. Registry package
+   * processes launch from a separate private runtime cwd, but roots/list and file
+   * pickers still need their mcp-servers/<name> directory to exist.
+   * Best-effort — failures are logged, never thrown.
    */
-  private async ensureRemoteServerRootDir(
+  private async ensureManagedServerRootDir(
     config: MCPServerConfig,
   ): Promise<void> {
     try {
-      if (!["streamable", "sse", "websocket"].includes(config.transport))
-        return;
       const rootPath = (config.rootPath || "").trim();
       if (!rootPath) return;
-      const resolved = path.resolve(getDataDir(), rootPath);
+      const isRemote = ["streamable", "sse", "websocket"].includes(config.transport);
+      const isRegistryPackage =
+        config.transport === "stdio"
+        && (config.source?.type === "registry" || config.source?.type === "marketplace");
+      if (!isRemote && !isRegistryPackage) return;
+
+      const resolved = path.resolve(getWorkspaceDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
+      if (isRegistryPackage) {
+        // Registry stdio roots are FLUJO-managed. Refuse an unexpected absolute or
+        // traversing value even if a malformed config reaches this boundary.
+        const managedRoot = path.join(getWorkspaceDataDir(), "mcp-servers");
+        const relative = path.relative(managedRoot, resolved);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return;
+      }
       await fs.mkdir(resolved, { recursive: true });
       log.debug(
-        `ensureRemoteServerRootDir: ensured ${resolved} for ${config.name}`,
+        `ensureManagedServerRootDir: ensured ${resolved} for ${config.name}`,
       );
     } catch (error) {
       log.warn(
-        `ensureRemoteServerRootDir: could not create root dir for ${config.name}:`,
+        `ensureManagedServerRootDir: could not create root dir for ${config.name}:`,
         error,
       );
     }
@@ -2235,7 +2547,6 @@ export class MCPService {
         args: [],
         env: {},
         disabled: false,
-        autoApprove: [],
         _buildCommand: "",
         _installCommand: "",
         rootPath: "",
@@ -2315,11 +2626,9 @@ export class MCPService {
       return saveResult;
     }
 
-    // Remote servers spawn no process, but their root dir (default mcp-servers/<name>,
-    // issue 52) is where folder pickers, per-node roots and future file work point.
-    // Eagerly create it so the server always has a folder to work in. Best-effort:
-    // a failure here must never block the config update.
-    await this.ensureRemoteServerRootDir(updatedConfig);
+    // Remote and Registry package servers have no clone step, so create their
+    // managed root explicitly. A failure here must never block the config update.
+    await this.ensureManagedServerRootDir(updatedConfig);
 
     if (isRename) {
       // Flow nodes persist MCP bindings by server name (`properties.boundServer`).
@@ -2746,7 +3055,17 @@ export class MCPService {
   }
 
   /**
-   * Start all enabled servers
+   * Start all enabled servers.
+   *
+   * Issue #413: with `FLUJO_MCP_LAZY_START` the sweep only DISCOVERS
+   * configuration (so the MCP page and every tool/resource manifest consumer
+   * still sees every enabled server) and warms nothing. Servers are then
+   * connected on first use through `acquireServerLease`, which is the point of
+   * the lazy pool: a dozen configured-but-unused servers cost nothing.
+   *
+   * The flag defaults OFF because eager startup may only be retired once every
+   * consumer acquires a lease before use — the migration gate in the plan. Servers
+   * marked always-on are warmed and pinned in either mode.
    */
   async startEnabledServers(): Promise<void> {
     log.info("Starting all enabled servers");
@@ -2766,9 +3085,28 @@ export class MCPService {
       }
 
       // Find all enabled servers
-      const enabledServers = configs.filter((config) => !config.disabled);
-      log.info(`Found ${enabledServers.length} enabled servers to start`);
-      log.debug(`${enabledServers}`);
+      const allEnabledServers = configs.filter((config) => !config.disabled);
+      const lazyStart = /^(1|true|yes)$/i.test(
+        process.env.FLUJO_MCP_LAZY_START ?? "",
+      );
+      // An always-on server is pinned: it is exempt from idle/LRU closure and is
+      // warmed even in lazy mode (long-lived subscriptions/triggers need it live).
+      const alwaysOn = allEnabledServers.filter(
+        (config) => (config as { alwaysOn?: boolean }).alwaysOn === true,
+      );
+      for (const config of alwaysOn) {
+        pinServer(config.name, "always-on");
+      }
+      const enabledServers = lazyStart ? alwaysOn : allEnabledServers;
+      if (lazyStart) {
+        log.info(
+          `Lazy MCP start: ${allEnabledServers.length} enabled server(s) discovered, ` +
+            `warming only ${alwaysOn.length} always-on server(s)`,
+        );
+      } else {
+        log.info(`Found ${enabledServers.length} enabled servers to start`);
+        log.debug(`${enabledServers}`);
+      }
 
       // Mark every enabled server as "connecting" up front so the MCP page shows a
       // spinner for all of them while the sweep runs. connectServer() clears each

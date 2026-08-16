@@ -13,6 +13,7 @@ import {
 describe('getProviderFromBaseUrl', () => {
   it.each([
     ['https://api.openai.com/v1', 'openai'],
+    ['https://my-resource.openai.azure.com', 'azure'],
     ['https://openrouter.ai/api/v1', 'openrouter'],
     ['https://router.requesty.ai/v1', 'requesty'],
     ['https://api.x.ai/v1', 'xai'],

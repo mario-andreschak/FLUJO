@@ -33,11 +33,16 @@
  * mcpService back, and this file must not be pulled into index.ts's module-init.
  */
 import { createLogger } from '@/utils/logger';
+import { AsyncLocalStorage } from 'async_hooks';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
 import type { ToolCallSource, ToolListAudience } from './appsProtocol';
 import type { ToolCallProgress } from './tools';
 import type { SharedState } from '@/backend/execution/flow/types';
+import {
+  systemScreenshotToolDefinition,
+  systemScreenshotHandler,
+} from './systemScreenshot';
 import type { Flow } from '@/shared/types/flow';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { flowService } from '@/backend/services/flow';
@@ -50,6 +55,7 @@ import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
 import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
   flushConversationLog,
   readConversationLog,
@@ -58,6 +64,8 @@ import {
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { kvGet, kvSet } from '@/backend/services/kvStore';
+import { ticketService } from '@/backend/services/ticket';
+import { CreateTicketInputSchema } from '@/backend/services/ticket/schema';
 import {
   listConversationSummaries,
   type ConversationSummary,
@@ -86,6 +94,11 @@ import {
   authoringCallTool,
   isAuthoringTool,
 } from './flowAuthoringTools';
+import {
+  callPersonaCompositionTool,
+  isPersonaCompositionTool,
+  personaCompositionToolDefinitions,
+} from './personaCompositionTools';
 
 const log = createLogger('backend/services/mcp/internalTools');
 
@@ -97,8 +110,14 @@ const log = createLogger('backend/services/mcp/internalTools');
  */
 declare global {
   var __flujo_internal_flow_depth: number | undefined;
+  var __flujo_internal_flow_depth_als: AsyncLocalStorage<number> | undefined;
 }
 const MAX_EXECUTE_FLOW_DEPTH = 4;
+
+function internalFlowDepthStore(): AsyncLocalStorage<number> {
+  return global.__flujo_internal_flow_depth_als ??
+    (global.__flujo_internal_flow_depth_als = new AsyncLocalStorage<number>());
+}
 
 
 /** read_conversation bounds (same rationale as the terminal output cap). */
@@ -187,8 +206,26 @@ export function internalToolDefinitions(): Tool[] {
   return [
     // FlowSpec authoring + marketplace acquisition, shared verbatim with the
     // external /mcp-flows endpoint (list_flow_building_blocks, validate_flow_spec,
-    // create_flow, search_mcp_marketplace, install_mcp_server).
+    // create_flow and the four MCP discovery/install tools).
     ...authoringToolDefinitions(),
+    ...personaCompositionToolDefinitions(),
+    {
+      name: 'create_ticket_for_human',
+      description: 'Create a dashboard ticket for the human operator. Use a concise plain-text message and optional comma-separated labels. Pass conversation_id or flow_id when known so the human can navigate back to the related work.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          message: { type: 'string', description: 'Plain-text message for the human, maximum 4000 characters.' },
+          labels: { type: 'string', description: 'Optional comma-separated label pills, maximum 12 labels.' },
+          title: { type: 'string', description: 'Optional short headline, maximum 120 characters.' },
+          conversation_id: { type: 'string', description: 'Optional related conversation id.' },
+          message_id: { type: 'string', description: 'Optional related assistant message id.' },
+          flow_id: { type: 'string', description: 'Optional related flow id.' },
+        },
+        required: ['message'],
+      },
+    },
     {
       name: 'propose_ui_action',
       description:
@@ -440,62 +477,7 @@ export function internalToolDefinitions(): Tool[] {
         required: ['server', 'enabled'],
       },
     },
-    {
-      name: 'browser_capture_page',
-      description:
-        'Capture a deterministic screenshot of a page or element with viewport control, animations disabled, fonts ready waiting, and optional file:// access. Returns PNG as a run-resource image artifact.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          url: { type: 'string', description: 'HTTP/HTTPS/file:// URL or localhost (file:// and localhost require allowLocal=true + env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE).' },
-          html: { type: 'string', description: 'Inline HTML to render instead of loading a URL.' },
-          filePath: { type: 'string', description: 'Local file path converted to file:// (requires allowLocal=true + env var).' },
-          width: { type: 'integer', minimum: 320, maximum: 1920, description: 'Viewport width in CSS pixels (default 1920).' },
-          height: { type: 'integer', minimum: 240, maximum: 1080, description: 'Viewport height in CSS pixels (default 1080).' },
-          deviceScaleFactor: { type: 'number', minimum: 1, maximum: 3, description: 'Device scale factor (default 1).' },
-          fullPage: { type: 'boolean', description: 'Capture full page height scrolled, not just viewport (default false).' },
-          clipSelector: { type: 'string', description: 'CSS selector to capture only that element with no browser chrome.' },
-          waitFor: { type: 'string', description: 'CSS selector or JS predicate (e.g. \".ready\" or \"() => document.fonts.ready\") to wait for before capture.' },
-          colorScheme: { type: 'string', enum: ['light', 'dark'], description: 'CSS prefers-color-scheme (default light).' },
-          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (requires env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE=1; default false).' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'browser_capture_element_metrics',
-      description:
-        'Query element metrics: bounding boxes, computed styles, overflow/clipping flags and safe-area indicators. Useful for verifying layout without taking a full screenshot.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          selectors: { type: 'array', items: { type: 'string' }, description: 'One or more CSS selectors to query.' },
-          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (default false).' },
-        },
-        required: ['selectors'],
-      },
-    },
-    {
-      name: 'browser_capture_region',
-      description:
-        'Capture a specific rectangular region of a page by pixel coordinates. Cheaper than full-page capture when you know the exact region to capture.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          url: { type: 'string', description: 'HTTP/HTTPS/file:// URL or localhost (file:// and localhost require allowLocal=true + env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE).' },
-          filePath: { type: 'string', description: 'Local file path converted to file:// (requires allowLocal=true + env var).' },
-          x: { type: 'integer', minimum: 0, description: 'Left edge in CSS pixels.' },
-          y: { type: 'integer', minimum: 0, description: 'Top edge in CSS pixels.' },
-          width: { type: 'integer', minimum: 1, description: 'Region width in CSS pixels.' },
-          height: { type: 'integer', minimum: 1, description: 'Region height in CSS pixels.' },
-          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (default false).' },
-        },
-        required: ['width', 'height'],
-      },
-    },
+    ...(systemScreenshotToolDefinition() ? [systemScreenshotToolDefinition()!] : []),
     {
       name: 'list_models',
       description:
@@ -660,7 +642,12 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
   }
 
-  const depth = global.__flujo_internal_flow_depth ?? 0;
+  const store = internalFlowDepthStore();
+  const inheritedDepth = store.getStore();
+  // The numeric global remains a compatibility-only test override. Runtime
+  // recursion lives in AsyncLocalStorage, so concurrent calls cannot consume
+  // one another's budget (within or across workspaces).
+  const depth = inheritedDepth ?? global.__flujo_internal_flow_depth ?? 0;
   if (depth >= MAX_EXECUTE_FLOW_DEPTH) {
     return textResult(
       { error: `execute_flow nesting limit (${MAX_EXECUTE_FLOW_DEPTH}) reached — refusing to start "${flow.name}" to prevent runaway recursion.` },
@@ -668,8 +655,8 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     );
   }
 
-  global.__flujo_internal_flow_depth = depth + 1;
-  try {
+  return store.run(depth + 1, async () => {
+    try {
     const result = await runFlow({
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
@@ -684,10 +671,13 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     if (result.status === 'error') {
       return textResult({ error: result.error?.message ?? 'Unknown error during flow execution.' }, true);
     }
-    return textResult(result.outputText ?? '');
-  } finally {
-    global.__flujo_internal_flow_depth = depth;
-  }
+      return textResult(result.outputText ?? '');
+    } finally {
+      // Preserve the old observable reset used by the test suite without using
+      // this mutable value to track live runtime depth.
+      if (inheritedDepth === undefined) global.__flujo_internal_flow_depth = 0;
+    }
+  });
 }
 
 async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult> {
@@ -1148,88 +1138,6 @@ async function setMcpServerEnabled(
   return textResult({ server, enabled });
 }
 
-async function browserCapturePage(
-  args: Record<string, unknown>,
-): Promise<CallToolResult> {
-  // browser_capture_page: delegates to browser MCP server for page capture
-  // with viewport control, animations disabled, fonts-ready waiting.
-  const url = typeof args?.url === 'string' ? args.url : undefined;
-  const html = typeof args?.html === 'string' ? args.html : undefined;
-  const filePath = typeof args?.filePath === 'string' ? args.filePath : undefined;
-  const width = typeof args?.width === 'number' ? Math.floor(args.width) : 1920;
-  const height = typeof args?.height === 'number' ? Math.floor(args.height) : 1080;
-  const deviceScaleFactor = typeof args?.deviceScaleFactor === 'number' ? args.deviceScaleFactor : 1;
-  const fullPage = args?.fullPage === true;
-  const clipSelector = typeof args?.clipSelector === 'string' ? args.clipSelector : undefined;
-  const waitFor = typeof args?.waitFor === 'string' ? args.waitFor : undefined;
-  const colorScheme = (args?.colorScheme === 'light' || args?.colorScheme === 'dark') ? args.colorScheme : 'light';
-  const allowLocal = args?.allowLocal === true;
-
-  if (!url && !html && !filePath) {
-    return textResult({ error: 'Provide one of: url, html, or filePath.' }, true);
-  }
-
-  // Validate viewport bounds
-  if (width < 320 || width > 1920 || height < 240 || height > 1080) {
-    return textResult({ error: `Viewport out of range: width must be 320-1920 and height 240-1080.` }, true);
-  }
-
-  // Future: implement using direct Patchright or delegate to browser MCP server.
-  // For now, return a placeholder that tools can be tested against.
-  return textResult({
-    error: 'browser_capture_page is not yet fully implemented. Implementation pending.',
-    note: 'This tool will capture pages with viewport control via the browser MCP server.',
-  }, true);
-}
-
-async function browserCaptureElementMetrics(
-  args: Record<string, unknown>,
-): Promise<CallToolResult> {
-  // browser_capture_element_metrics: query element dimensions, styles, overflow flags.
-  const rawSelectors = args?.selectors;
-  if (!Array.isArray(rawSelectors) || rawSelectors.length === 0) {
-    return textResult({ error: 'Provide "selectors" array with one or more CSS selectors.' }, true);
-  }
-  const selectors = rawSelectors.map(s => String(s)).filter(s => s.length > 0);
-  if (selectors.length === 0) {
-    return textResult({ error: 'At least one non-empty selector is required.' }, true);
-  }
-
-  const allowLocal = args?.allowLocal === true;
-
-  // Future: implement using direct Patchright or delegate to browser MCP server.
-  return textResult({
-    error: 'browser_capture_element_metrics is not yet fully implemented. Implementation pending.',
-    note: 'This tool will query element metrics (bounding boxes, computed styles, overflow flags) via the browser MCP server.',
-  }, true);
-}
-
-async function browserCaptureRegion(
-  args: Record<string, unknown>,
-): Promise<CallToolResult> {
-  // browser_capture_region: capture a clipped rectangular region of a page.
-  const url = typeof args?.url === 'string' ? args.url : undefined;
-  const filePath = typeof args?.filePath === 'string' ? args.filePath : undefined;
-  const x = typeof args?.x === 'number' ? Math.max(0, Math.floor(args.x)) : 0;
-  const y = typeof args?.y === 'number' ? Math.max(0, Math.floor(args.y)) : 0;
-  const width = typeof args?.width === 'number' ? Math.floor(args.width) : undefined;
-  const height = typeof args?.height === 'number' ? Math.floor(args.height) : undefined;
-  const allowLocal = args?.allowLocal === true;
-
-  if (!url && !filePath) {
-    return textResult({ error: 'Provide one of: url or filePath.' }, true);
-  }
-  if (!width || !height || width < 1 || height < 1) {
-    return textResult({ error: 'Provide width and height, both at least 1 pixel.' }, true);
-  }
-
-  // Future: implement using direct Patchright or delegate to browser MCP server.
-  return textResult({
-    error: 'browser_capture_region is not yet fully implemented. Implementation pending.',
-    note: 'This tool will capture page regions via the browser MCP server.',
-  }, true);
-}
-
 async function listFlows(args: Record<string, unknown>): Promise<CallToolResult> {
   // Lightweight enumeration: reuses flowService.loadFlows() and returns the same
   // reduced per-flow metadata shape as list_flow_building_blocks' `flows` array
@@ -1362,6 +1270,7 @@ async function listPlannedExecutions(args: Record<string, unknown>): Promise<Cal
   const flowId = resolvedFlow?.id ?? flowRef;
   let entries = await getSchedulerService().list();
   entries = entries.filter((entry) =>
+    !entry.execution.personaId &&
     (!parsed.query || matchesPlannedExecutionSearch(entry, parsed.query)) &&
     (!states || states.some((state) => matchesPlannedExecutionStatus(entry, state as PlannedExecutionFilter))) &&
     (!triggerTypes || triggerTypes.includes(entry.execution.trigger.type)) &&
@@ -1401,6 +1310,10 @@ async function runPlannedExecution(args: Record<string, unknown>): Promise<CallT
   const id = String(args?.id ?? '').trim();
   if (!id) {
     return textResult({ error: 'Provide "id": a planned execution id (see list_planned_executions).' }, true);
+  }
+  const target = await resolvePlannedExecution(id);
+  if (target?.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
   const { record, error } = await getSchedulerService().runNow(id);
   if (error || !record) {
@@ -1497,6 +1410,9 @@ async function updatePlannedExecution(args: Record<string, unknown>): Promise<Ca
   const target = await resolvePlannedExecution(ref);
   if (!target) {
     return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
+  }
+  if (target.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
 
   const patch: Partial<Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>> = {};
@@ -1600,6 +1516,9 @@ async function deletePlannedExecution(args: Record<string, unknown>): Promise<Ca
   if (!target) {
     return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
   }
+  if (target.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
+  }
   const result = await getSchedulerService().delete(target.id);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to delete "${target.name}".` }, true);
@@ -1636,15 +1555,19 @@ async function listConversations(args: Record<string, unknown>): Promise<CallToo
   const resolvedFlow = flowRef ? await resolveFlow(flowRef) : undefined;
   const flowId = resolvedFlow?.id ?? flowRef;
 
-  const stored = await listConversationSummaries();
+  const stored = (await listConversationSummaries()).filter((summary) => (
+    !summary.personaOwned
+    && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
+  ));
   const summaries = stored.map((summary): ConversationSummary => {
     // Match the main conversations API: in-memory state wins while a run is in
     // flight, and a stored 'running' record with no event channel is interrupted.
     const live = FlowExecutor.conversationStates.get(summary.id);
     let status = live?.status ?? summary.status;
     if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) status = 'error';
+    const { personaOwned: _personaOwned, ...safeSummary } = summary;
     return {
-      ...summary,
+      ...safeSummary,
       title: live?.title ?? summary.title,
       flowId: live?.flowId ?? summary.flowId,
       ...(status ? { status } : {}),
@@ -1744,11 +1667,14 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
     return textResult({ error: 'Provide "conversation": a conversation id (see list_conversations).' }, true);
   }
 
-  await flushConversationLog(id);
   const state = await loadConversationState(id);
   if (!state) {
     return textResult({ error: `No conversation with id "${id}". Use list_conversations to see the stored conversations.` }, true);
   }
+  if (isPersonaOwnedConversationState(state)) {
+    return textResult({ error: 'Persona conversations require the trusted local control plane.' }, true);
+  }
+  await flushConversationLog(id);
 
   const events = await readConversationLog(id);
   const projected = events ? projectMessages(events) : [];
@@ -1823,6 +1749,25 @@ async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult>
   return textResult({ scope, name, saved: true, size: res.size });
 }
 
+async function createTicketForHumanTool(args: Record<string, unknown>, source: ToolCallSource): Promise<CallToolResult> {
+  const input = {
+    message: args.message,
+    labels: args.labels,
+    title: args.title,
+    conversationId: args.conversation_id,
+    messageId: args.message_id,
+    flowId: args.flow_id,
+    nodeId: args.node_id,
+    source: source === 'host' ? 'host' : 'agent',
+  };
+  const parsed = CreateTicketInputSchema.safeParse(input);
+  if (!parsed.success) return textResult({ error: 'A non-empty ticket message and valid optional context are required.' }, true);
+  const result = await ticketService.createTicket(parsed.data);
+  return result.success && result.ticket
+    ? textResult({ created: true, id: result.ticket.id, labels: result.ticket.labels })
+    : textResult({ error: result.error ?? 'Unable to create ticket.' }, true);
+}
+
 function proposeUiAction(args: Record<string, unknown>): CallToolResult {
   const type = args.type === 'highlight' || args.type === 'set_value' ? args.type : null;
   const rawTarget = args.target && typeof args.target === 'object'
@@ -1870,9 +1815,14 @@ export async function internalCallTool(
     if (isAuthoringTool(toolName)) {
       return await authoringCallTool(toolName, args);
     }
+    if (isPersonaCompositionTool(toolName)) {
+      return await callPersonaCompositionTool(toolName, args);
+    }
     switch (toolName) {
       case 'propose_ui_action':
         return proposeUiAction(args);
+      case 'create_ticket_for_human':
+        return await createTicketForHumanTool(args, source);
       case 'list_flows':
         return await listFlows(args);
       case 'discover_capabilities':
@@ -1903,12 +1853,8 @@ export async function internalCallTool(
         return await restartMcpServer(service, args);
       case 'set_mcp_server_enabled':
         return await setMcpServerEnabled(service, args);
-      case 'browser_capture_page':
-        return await browserCapturePage(args);
-      case 'browser_capture_element_metrics':
-        return await browserCaptureElementMetrics(args);
-      case 'browser_capture_region':
-        return await browserCaptureRegion(args);
+      case 'system_screenshot':
+        return await systemScreenshotHandler(args);
       case 'list_models':
         return await listModels(args);
       case 'list_planned_executions':

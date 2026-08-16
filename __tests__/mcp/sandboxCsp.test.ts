@@ -12,6 +12,7 @@ import {
   deriveSandboxPublicUrl,
   getConfiguredSandboxHostOrigins,
   getSandboxPublicUrl,
+  hasValidSandboxAppUrlTemplate,
   SANDBOX_HOST_ORIGINS_ENV,
   SANDBOX_PUBLIC_URL_ENV,
 } from '@/backend/mcpApps/sandboxServer';
@@ -111,7 +112,7 @@ describe('buildSandboxCsp', () => {
   });
 });
 
-describe('loopback CSP origins (localhost exposure mode)', () => {
+describe('loopback CSP origins (self-hosted exposure modes)', () => {
   const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
 
   afterEach(() => {
@@ -126,14 +127,53 @@ describe('loopback CSP origins (localhost exposure mode)', () => {
     baseUriDomains: ['http://127.0.0.1:59503'],
   };
 
-  it('admits explicit-port loopback http/ws origins into both policies', () => {
-    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
-    for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
-      expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:59503 ws:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:59503/);
+  it.each(['localhost', 'network'])(
+    'admits loopback http/ws origins into both policies in %s mode',
+    (mode) => {
+      process.env.FLUJO_EXPOSURE_MODE = mode;
+      for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
+        expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:\* ws:\/\/127\.0\.0\.1:\*/);
+        expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:\*/);
+        expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:\*/);
+        expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:\*/);
+      }
+    },
+  );
+
+  // Regression: an app whose gateway lives on loopback (a local IDE/workbench)
+  // must still be frameable after the operator switches on LAN access.
+  it('keeps a loopback gateway frameable in network mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    const gateway = 'http://127.0.0.1:65459';
+    const appCsp = { frameDomains: [gateway], connectDomains: [gateway, 'ws://127.0.0.1:65459'] };
+    expect(buildSandboxCsp(appCsp)).toContain('frame-src http://127.0.0.1:*');
+    expect(buildSandboxProxyCsp('http://192.168.1.20:4200', appCsp))
+      .toContain("frame-src 'self' http://127.0.0.1:*");
+  });
+
+  // Regression: local App servers bind an EPHEMERAL port (`listen(0)`), so the
+  // port declared in `_meta.ui.csp` is stale after the server restarts. The host
+  // commits the CSP once as a response header and never re-issues it, so a pinned
+  // port made the app load once and then fail with the granted and framed ports
+  // exactly one restart apart. The wildcard keeps the committed policy valid.
+  it('survives an ephemeral-port restart of the app server', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    const committed = buildSandboxCsp({ frameDomains: ['http://127.0.0.1:56186'] });
+    expect(committed).toContain('frame-src http://127.0.0.1:*');
+    // The port the app frames after its next restart is NOT the granted one.
+    expect(committed).not.toContain('56186');
+    for (const restartedPort of [56315, 56379, 53184]) {
+      expect(committed).toContain('frame-src http://127.0.0.1:*');
+      expect(`http://127.0.0.1:${restartedPort}`).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     }
+  });
+
+  it('collapses several ports on one loopback host into a single source', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    const csp = buildSandboxCsp({
+      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://127.0.0.1:4302'],
+    });
+    expect(csp).toContain('frame-src http://127.0.0.1:*;');
   });
 
   it('accepts localhost and [::1] loopback spellings', () => {
@@ -141,8 +181,16 @@ describe('loopback CSP origins (localhost exposure mode)', () => {
     const csp = buildSandboxCsp({
       connectDomains: ['ws://localhost:4300', 'http://[::1]:4300'],
     });
-    expect(csp).toContain('ws://localhost:4300');
-    expect(csp).toContain('http://[::1]:4300');
+    expect(csp).toContain('ws://localhost:*');
+    expect(csp).toContain('http://[::1]:*');
+  });
+
+  it('accepts an already-wildcarded loopback port but never a portless host', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:*'] }))
+      .toContain('frame-src http://127.0.0.1:*');
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1'] }))
+      .toContain("frame-src 'none'");
   });
 
   it('keeps ws: out of non-connect directives and requires an explicit port', () => {
@@ -163,16 +211,18 @@ describe('loopback CSP origins (localhost exposure mode)', () => {
     expect(csp).toContain("connect-src 'none'");
   });
 
-  it('drops loopback http/ws origins outside the localhost exposure mode', () => {
-    for (const mode of ['network', 'public']) {
-      process.env.FLUJO_EXPOSURE_MODE = mode;
-      const csp = buildSandboxCsp(loopbackCsp);
-      expect(csp).toContain("connect-src 'none'");
-      expect(csp).toContain("frame-src 'none'");
-      expect(csp).not.toContain('127.0.0.1:59503');
-      const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', loopbackCsp);
-      expect(proxyCsp).not.toContain('127.0.0.1:59503');
-    }
+  it('drops loopback http/ws origins in the public exposure mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    const csp = buildSandboxCsp(loopbackCsp);
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    // Neither the declared port nor the widened wildcard may leak.
+    expect(csp).not.toContain('127.0.0.1');
+    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', loopbackCsp);
+    expect(proxyCsp).not.toContain('127.0.0.1');
+    // A port wildcard is not a way around the public-mode denial either.
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:*'] }))
+      .toContain("frame-src 'none'");
   });
 });
 
@@ -253,7 +303,51 @@ describe('buildSandboxProxyCsp', () => {
   });
 });
 
+describe('allow-all escape hatch and loopback CSP grants', () => {
+  const originalAllowAll = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
+  const originalExposureSource = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+
+  afterEach(() => {
+    if (originalAllowAll === undefined) delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    else process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = originalAllowAll;
+    if (originalExposure === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
+    if (originalExposureSource === undefined) delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    else process.env.FLUJO_EXPOSURE_MODE_SOURCE = originalExposureSource;
+  });
+
+  it("drops a literal '*' while the escape hatch is off", () => {
+    delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    expect(buildSandboxCsp({ frameDomains: ['*'] } as any)).toContain("frame-src 'none'");
+    expect(buildSandboxProxyCsp([], { frameDomains: ['*'] } as any)).toContain("frame-src 'self';");
+  });
+
+  it("honors a literal '*' when network.allowAllMcpAppContent is enabled", () => {
+    process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = 'true';
+    expect(buildSandboxCsp({ frameDomains: ['*'] } as any)).toContain('frame-src *');
+    expect(buildSandboxCsp({ connectDomains: ['*'] } as any)).toContain('connect-src *');
+    expect(buildSandboxProxyCsp([], { frameDomains: ['*'] } as any)).toContain("frame-src 'self' *");
+  });
+
+  it('keeps loopback frame grants in non-public modes and strips them in public', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    // Exact ports collapse to the canonical port wildcard; the already-
+    // canonical form must round-trip unchanged (frontend mirror sends it).
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:45283'] } as any))
+      .toContain('frame-src http://127.0.0.1:*');
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:*'] } as any))
+      .toContain('frame-src http://127.0.0.1:*');
+
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:45283'] } as any))
+      .toContain("frame-src 'none'");
+  });
+});
+
 describe('hosted sandbox endpoint configuration', () => {
+  const originKey = `app${'c'.repeat(60)}`;
   const originalPublicUrl = process.env[SANDBOX_PUBLIC_URL_ENV];
   const originalHostOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV];
   const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
@@ -271,20 +365,50 @@ describe('hosted sandbox endpoint configuration', () => {
   });
 
   it('normalizes a separately hosted public URL and rejects credentialed URLs', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
     expect(getSandboxPublicUrl()).toBe('https://apps.example.test/sandbox.html');
+    expect(hasValidSandboxAppUrlTemplate()).toBe(false);
 
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://user:secret@apps.example.test/';
     expect(getSandboxPublicUrl()).toBeUndefined();
   });
 
-  it('derives the HTTPS sandbox origin from the one Public setting', () => {
+  it('derives keyed localhost, automatic HTTP LAN, or wildcard-hosted URLs', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env.FLUJO_EXPOSURE_MODE = 'public';
-    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBe(
-      'https://flujo.example.test:4201/sandbox.html',
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
+    // A configured public URL without {app} is a single shared hosted origin;
+    // the verified key travels in the authenticated URL like the LAN fallback.
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `https://apps.example.test/sandbox.html?originKey=${originKey}`,
+    );
+
+    delete process.env[SANDBOX_PUBLIC_URL_ENV];
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey))
+      .toBeUndefined();
+
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    delete process.env[SANDBOX_PUBLIC_URL_ENV];
+    expect(deriveSandboxPublicUrl('http://192.168.1.20:4200', 4201, originKey)).toBe(
+      `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}`,
+    );
+    expect(deriveSandboxPublicUrl('http://localhost:4200', 4201, originKey)).toBe(
+      `http://${originKey}.localhost:4201/sandbox.html`,
+    );
+    expect(deriveSandboxPublicUrl('https://192.168.1.20:4200', 4201, originKey))
+      .toBeUndefined();
+
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://{app}.sandbox.example.test';
+    expect(hasValidSandboxAppUrlTemplate()).toBe(true);
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `https://${originKey}.sandbox.example.test/sandbox.html`,
     );
 
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `http://${originKey}.localhost:4201/sandbox.html`,
+    );
     expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBeUndefined();
   });
 
@@ -307,5 +431,16 @@ describe('hosted sandbox endpoint configuration', () => {
 
     expect(getSandboxPublicUrl()).toBeUndefined();
     expect(getConfiguredSandboxHostOrigins()).toEqual([]);
+  });
+
+  it('honors a wildcard template when Settings enables Local Network access', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    process.env.FLUJO_EXPOSURE_MODE_SOURCE = 'settings';
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://{app}.lan-sandbox.example.test';
+
+    expect(hasValidSandboxAppUrlTemplate()).toBe(true);
+    expect(deriveSandboxPublicUrl('http://192.168.1.20:4200', 4201, originKey)).toBe(
+      `https://${originKey}.lan-sandbox.example.test/sandbox.html`,
+    );
   });
 });

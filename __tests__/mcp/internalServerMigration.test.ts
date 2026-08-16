@@ -43,7 +43,7 @@ describe('shipped MCP package migration (#347)', () => {
       expect(servers[descriptor.defaultName]).toMatchObject({
         transport: 'stdio',
         command: 'node',
-        disabled: descriptor.defaultName === 'browser',
+        disabled: false,
         exposeAsMcpServer: true,
         enableMcpApps: descriptor.enableMcpApps ?? false,
         roots: [],
@@ -61,6 +61,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(storage.get(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3)).toBe(true);
     expect(storage.get(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4)).toBe(true);
     expect(storage.get(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5)).toBe(true);
+    expect(storage.get(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6)).toBe(true);
   });
 
   it('preserves a user-owned same-name config and transfers all legacy override fields only to new records', async () => {
@@ -124,7 +125,7 @@ describe('shipped MCP package migration (#347)', () => {
       disabled: true,
       roots: ['/workspace'],
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
-      hostPathAccess: { snapshots: true, protectedPaths: true },
+      hostPathAccess: { snapshots: true },
     });
     expect(shell).not.toHaveProperty('internalPackage');
     expect(shell).not.toHaveProperty('packageCapabilities');
@@ -143,7 +144,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(servers.flujo).toEqual({ transport: 'streamable', url: 'https://custom.test' });
     expect(servers.browser).toMatchObject({
       command: 'node',
-      disabled: true,
+      disabled: false,
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
     });
     expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);
@@ -180,6 +181,69 @@ describe('shipped MCP package migration (#347)', () => {
       args: ['custom-entry.js'],
       rootPath: 'C:/custom/shell-root',
     });
+  });
+
+  it('repairs the former browser package id after V4/V5 were already marked complete', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      browser: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['.\\dist\\index.js'],
+        cwd: process.cwd(),
+        rootPath: './mcp-servers/browser',
+        env: { FLUJO_DATA_DIR: { value: '.\\userdata', metadata: { isSecret: false } } },
+        source: { type: 'marketplace', id: '@flujo-ai/mcp-browser' },
+        disabled: false,
+        favorite: true,
+        status: 'connected',
+        tools: [],
+        path: 'mcp-servers\\browser\\dist\\index.js',
+        error: 'Cannot find module duplicated/path',
+        stderrOutput: 'Cannot find module duplicated/path',
+      },
+    });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
+
+    await migrateShippedMcpServers();
+
+    const browser = (storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).browser;
+    expect(browser).toMatchObject({
+      command: 'node',
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
+      disabled: false,
+      favorite: true,
+      enableMcpApps: true,
+    });
+    expect(path.isAbsolute((browser.args as string[])[0])).toBe(true);
+    expect(path.isAbsolute(browser.rootPath as string)).toBe(true);
+    expect(path.isAbsolute(((browser.env as Record<string, { value: string }>).FLUJO_DATA_DIR).value)).toBe(true);
+    expect(browser).not.toHaveProperty('error');
+    expect(browser).not.toHaveProperty('path');
+    expect(browser).not.toHaveProperty('status');
+    expect(browser).not.toHaveProperty('stderrOutput');
+    expect(browser).not.toHaveProperty('tools');
+    expect(storage.get(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6)).toBe(true);
+  });
+
+  it('does not claim a user-owned browser config during the V6 repair', async () => {
+    const custom = {
+      transport: 'stdio',
+      command: 'custom-browser',
+      args: ['serve.js'],
+      source: { type: 'manual', id: 'custom' },
+    };
+    storage.set(StorageKey.MCP_SERVERS, { browser: custom });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
+
+    await migrateShippedMcpServers();
+
+    expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>).browser).toEqual(custom);
   });
 
   it('coalesces concurrent callers and becomes a no-op after durable markers', async () => {

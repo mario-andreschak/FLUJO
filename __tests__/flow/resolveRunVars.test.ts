@@ -7,12 +7,23 @@
  * run vars, config secrets, and tool pills never interfere.
  */
 import {
+  resolveDataTemplate,
   resolveRunVars,
   hasRunVarRef,
   referencedRunVars,
   isValidRunVarName,
 } from '@/utils/shared/resolveRunVars';
 import { findBindings } from '@/utils/shared/mcpBinding';
+
+describe('resolveDataTemplate — lane-scoped placeholders', () => {
+  it('resolves {{scene_id}} and nested values without changing unknown placeholders', () => {
+    expect(resolveDataTemplate('{{scene_id}}/{{scene.name}}', {
+      scene_id: 'scene-2',
+      scene: { name: 'Finale' },
+    })).toBe('scene-2/Finale');
+    expect(resolveDataTemplate('{{missing}}', {})).toBe('{{missing}}');
+  });
+});
 
 describe('resolveRunVars — substitution', () => {
   it('replaces a single ${var:NAME} with its value', () => {

@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
+import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
 
@@ -36,6 +37,12 @@ export interface GlobalEvent {
   event: ExecutionEvent;
 }
 
+interface WorkspaceFirehose {
+  emitter: EventEmitter;
+  seq: number;
+  buffer: GlobalEvent[];
+}
+
 /**
  * In-memory pub/sub for execution events, keyed by conversationId.
  *
@@ -59,16 +66,23 @@ class ExecutionEventBus {
   // ~6-per-origin connection cap under heavy subflow fan-out. Purely additive:
   // the per-conversation channels are untouched, so chat streaming is
   // unaffected. Never garbage-collected: it spans the process lifetime.
-  private globalEmitter = (() => {
-    const e = new EventEmitter();
-    e.setMaxListeners(0); // arbitrarily many firehose subscribers
-    return e;
-  })();
-  private globalSeq = 0;
-  private globalBuffer: GlobalEvent[] = [];
+  private firehoses = new Map<string, WorkspaceFirehose>();
+
+  private getFirehose(): WorkspaceFirehose {
+    const workspace = getCurrentWorkspace();
+    let firehose = this.firehoses.get(workspace);
+    if (!firehose) {
+      const emitter = new EventEmitter();
+      emitter.setMaxListeners(0);
+      firehose = { emitter, seq: 0, buffer: [] };
+      this.firehoses.set(workspace, firehose);
+    }
+    return firehose;
+  }
 
   private getChannel(conversationId: string): ConversationChannel {
-    let channel = this.channels.get(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    let channel = this.channels.get(key);
     if (!channel) {
       const emitter = new EventEmitter();
       emitter.setMaxListeners(0); // allow arbitrarily many SSE subscribers
@@ -76,16 +90,17 @@ class ExecutionEventBus {
       // high-water mark (allocateSeq()+1), so a recreated channel never resets
       // the sequence a subscriber sees.
       channel = { emitter, seq: 0, buffer: [] };
-      this.channels.set(conversationId, channel);
+      this.channels.set(key, channel);
     }
     return channel;
   }
 
   private cancelCleanup(conversationId: string): void {
-    const timer = this.cleanupTimers.get(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    const timer = this.cleanupTimers.get(key);
     if (timer) {
       clearTimeout(timer);
-      this.cleanupTimers.delete(conversationId);
+      this.cleanupTimers.delete(key);
     }
   }
 
@@ -96,17 +111,18 @@ class ExecutionEventBus {
    *  0, and a reconnect past the evicted buffer replays from the JSONL log. */
   private scheduleCleanup(conversationId: string, seqAtDone: number): void {
     this.cancelCleanup(conversationId);
+    const key = workspaceCacheKey(conversationId);
     const timer = setTimeout(() => {
-      this.cleanupTimers.delete(conversationId);
-      const channel = this.channels.get(conversationId);
+      this.cleanupTimers.delete(key);
+      const channel = this.channels.get(key);
       if (!channel) return;
       if (channel.seq !== seqAtDone) return; // a new run emitted since; keep
       if (channel.emitter.listenerCount('event') > 0) return; // active SSE subscriber
-      this.channels.delete(conversationId);
+      this.channels.delete(key);
     }, CHANNEL_TTL_AFTER_DONE_MS);
     // Never keep the process alive just for channel GC.
     if (typeof timer.unref === 'function') timer.unref();
-    this.cleanupTimers.set(conversationId, timer);
+    this.cleanupTimers.set(key, timer);
   }
 
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
@@ -153,25 +169,25 @@ class ExecutionEventBus {
 
   /** An emit function bound to a conversation, suitable to hand to the engine. */
   emitterFor(conversationId: string): EmitFn {
-    return (raw) => {
+    return bindToCurrentWorkspace((raw: RawExecutionEvent) => {
       try {
         this.emit(conversationId, raw);
       } catch (err) {
         log.warn(`Failed to emit execution event for ${conversationId}`, { err });
       }
-    };
+    });
   }
 
   /** Buffered events with seq >= fromSeq, for replay on (re)connect. */
   getBufferedSince(conversationId: string, fromSeq: number): ExecutionEvent[] {
-    const channel = this.channels.get(conversationId);
+    const channel = this.channels.get(workspaceCacheKey(conversationId));
     if (!channel) return [];
     return channel.buffer.filter((e) => e.seq >= fromSeq);
   }
 
   /** The next seq the channel will assign (i.e. current high-water mark). */
   currentSeq(conversationId: string): number {
-    return this.channels.get(conversationId)?.seq ?? 0;
+    return this.channels.get(workspaceCacheKey(conversationId))?.seq ?? 0;
   }
 
   /** Subscribe to live events. Returns an unsubscribe function. */
@@ -188,29 +204,31 @@ class ExecutionEventBus {
   /** Publish an event onto the global channel, assigning a monotonic globalSeq
    *  and retaining it in the global ring buffer for replay. */
   private publishGlobal(event: ExecutionEvent): void {
-    const wrapped: GlobalEvent = { globalSeq: this.globalSeq++, event };
-    this.globalBuffer.push(wrapped);
-    if (this.globalBuffer.length > GLOBAL_RING_BUFFER_SIZE) this.globalBuffer.shift();
-    this.globalEmitter.emit('event', wrapped);
+    const firehose = this.getFirehose();
+    const wrapped: GlobalEvent = { globalSeq: firehose.seq++, event };
+    firehose.buffer.push(wrapped);
+    if (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE) firehose.buffer.shift();
+    firehose.emitter.emit('event', wrapped);
   }
 
   /** Subscribe to the firehose (all conversations). Returns an unsubscribe fn. */
   subscribeGlobal(listener: (e: GlobalEvent) => void): () => void {
-    this.globalEmitter.on('event', listener);
+    const firehose = this.getFirehose();
+    firehose.emitter.on('event', listener);
     return () => {
-      this.globalEmitter.off('event', listener);
+      firehose.emitter.off('event', listener);
     };
   }
 
   /** Buffered firehose entries with globalSeq >= fromSeq, for replay on
    *  (re)connect. */
   getGlobalBufferedSince(fromSeq: number): GlobalEvent[] {
-    return this.globalBuffer.filter((e) => e.globalSeq >= fromSeq);
+    return this.getFirehose().buffer.filter((e) => e.globalSeq >= fromSeq);
   }
 
   /** The next globalSeq the firehose will assign (current high-water mark). */
   currentGlobalSeq(): number {
-    return this.globalSeq;
+    return this.getFirehose().seq;
   }
 }
 

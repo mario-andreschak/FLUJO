@@ -59,10 +59,12 @@ jest.mock('@/backend/services/mcp', () => ({
 
 const schedulerCreateMock = jest.fn();
 const schedulerUpdateMock = jest.fn();
+const schedulerGetMock = jest.fn();
 jest.mock('@/backend/services/scheduler', () => ({
   getSchedulerService: () => ({
     create: (...a: unknown[]) => schedulerCreateMock(...a),
     update: (...a: unknown[]) => schedulerUpdateMock(...a),
+    get: (...a: unknown[]) => schedulerGetMock(...a),
   }),
 }));
 
@@ -141,6 +143,7 @@ beforeEach(() => {
   deleteServerConfigMock.mockResolvedValue({ success: true });
   schedulerCreateMock.mockResolvedValue({ execution: { id: 'x' } });
   schedulerUpdateMock.mockResolvedValue({ execution: { id: 'x' } });
+  schedulerGetMock.mockResolvedValue(null);
 });
 
 describe('installPackage — happy path', () => {
@@ -209,6 +212,99 @@ describe('installPackage — happy path', () => {
   });
 });
 
+describe('installPackage — Persona control-plane boundary', () => {
+  it('rejects Persona target fields before installing any entity', async () => {
+    const targeted = manifest();
+    targeted.plannedExecutions[0] = {
+      ...targeted.plannedExecutions[0],
+      personaId: 'persona_support',
+      behaviorSlotKey: 'primary',
+    } as typeof targeted.plannedExecutions[number];
+    fetchPackageManifestMock.mockResolvedValue(targeted);
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/Persona-targeted/i);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['archive marker', { personaArchived: true }],
+    ['retirement marker', { personaRetired: true }],
+  ])('rejects a Persona %s from an untrusted manifest', async (_label, markers) => {
+    const targeted = manifest();
+    targeted.plannedExecutions[0] = {
+      ...targeted.plannedExecutions[0],
+      ...markers,
+    } as typeof targeted.plannedExecutions[number];
+    fetchPackageManifestMock.mockResolvedValue(targeted);
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/Persona-targeted/i);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deterministic-id collision with an existing Persona plan all-or-none', async () => {
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaId: 'persona_support',
+      behaviorSlotKey: 'primary',
+    });
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/protected workspace execution/i);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(addModelMock).not.toHaveBeenCalled();
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deterministic-id collision with anonymized Persona evidence', async () => {
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaArchived: true,
+      personaRetired: true,
+    });
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/protected workspace execution/i);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('installPackage — GitHub servers', () => {
   const githubManifest = () => ({
     schemaVersion: 1,
@@ -231,7 +327,6 @@ describe('installPackage — GitHub servers', () => {
         envDeclarations: [
           { name: 'API_TOKEN', isSecret: true, secretRef: 'TOKEN' },
         ],
-        autoApprove: ['search'],
       },
     ],
     models: [],
@@ -270,7 +365,6 @@ describe('installPackage — GitHub servers', () => {
       secretEnvNames: ['API_TOKEN'],
       argTemplates: undefined,
       disabled: undefined,
-      autoApprove: ['search'],
       folder: 'github-pkg',
     });
   });

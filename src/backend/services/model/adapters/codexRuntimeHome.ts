@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const AUTH_FILE = 'auth.json';
 const CONFIG_FILE = 'config.toml';
@@ -40,10 +40,23 @@ function inheritedEnvironment(): Record<string, string> {
 export async function prepareCodexRuntimeEnvironment(
   useUserLogin: boolean,
 ): Promise<CodexRuntimeEnvironment> {
-  const home = path.join(getDataDir(), 'db', 'codex-runtime');
+  // Per workspace (#406): the Codex runtime home holds auth.json + config.toml,
+  // which are workspace-owned credentials/settings, not installation-wide ones.
+  const home = path.join(getWorkspaceDataDir(), 'db', 'codex-runtime');
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   const workingDirectory = path.join(home, 'workspace');
-  await fs.mkdir(workingDirectory, { recursive: true, mode: 0o700 });
+  const appData = path.join(home, 'AppData', 'Roaming');
+  const localAppData = path.join(home, 'AppData', 'Local');
+  const configHome = path.join(home, '.config');
+  const cache = path.join(home, '.cache');
+  const data = path.join(home, '.local', 'share');
+  const state = path.join(home, '.local', 'state');
+  const runtime = path.join(home, '.runtime');
+  const temp = path.join(home, 'tmp');
+  await Promise.all(
+    [workingDirectory, appData, localAppData, configHome, cache, data, state, runtime, temp]
+      .map(directory => fs.mkdir(directory, { recursive: true, mode: 0o700 })),
+  );
 
   await fs.writeFile(
     path.join(home, CONFIG_FILE),
@@ -69,12 +82,31 @@ export async function prepareCodexRuntimeEnvironment(
     }
   }
 
+  const env: Record<string, string> = {
+    ...inheritedEnvironment(),
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: configHome,
+    XDG_CACHE_HOME: cache,
+    XDG_DATA_HOME: data,
+    XDG_STATE_HOME: state,
+    XDG_RUNTIME_DIR: runtime,
+    TMPDIR: temp,
+    TMP: temp,
+    TEMP: temp,
+    CODEX_HOME: home,
+  };
+  if (process.platform === 'win32') {
+    const parsed = path.parse(home);
+    env.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
+    env.HOMEPATH = home.slice(parsed.root.length - 1);
+  }
+
   return {
     home,
     workingDirectory,
-    env: {
-      ...inheritedEnvironment(),
-      CODEX_HOME: home,
-    },
+    env,
   };
 }

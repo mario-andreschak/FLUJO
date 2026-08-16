@@ -7,14 +7,21 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
   toolCancellationReason,
 } from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import {
+  DEFAULT_RUN_RESOURCE_SETTINGS,
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  type RunResourceSettings,
+} from '@/shared/types/runResources';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
 import {
   extractMediaParts,
@@ -31,7 +38,9 @@ import {
   recordSession,
   invalidateSession,
 } from './claudeSessionStore';
+import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import {
   classifyStatisticsError,
   createStatisticsEvent,
@@ -84,6 +93,24 @@ const CLAUDE_BUILTIN_TOOLS = [
 // Keep tool names under Anthropic's 128-char limit with room for the
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
+
+// Claude Code otherwise persists MCP results after roughly 10k tokens (~50 KB)
+// and gives the model a private runtime path that FLUJO's read_resource cannot
+// resolve. FLUJO owns this boundary via boundToolResult. Raise the SDK valve to
+// at least FLUJO's configured BYTE limit: content below the FLUJO limit remains
+// inline, while content at/above it is replaced by FLUJO with a registered URI.
+// A byte can tokenize to at most one byte-level token, so using the byte count
+// as a token count is deliberately conservative. If the FLUJO byte dimension is
+// disabled, effectively disable the SDK valve too; the configured line bound
+// (if any) remains authoritative.
+const MIN_CLAUDE_MCP_OUTPUT_TOKENS = 64 * 1024;
+const DISABLED_CLAUDE_MCP_OUTPUT_TOKENS = 2_147_483_647;
+
+function claudeMcpOutputTokens(settings: RunResourceSettings | undefined): number {
+  const maxBytes = settings?.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return DISABLED_CLAUDE_MCP_OUTPUT_TOKENS;
+  return Math.max(MIN_CLAUDE_MCP_OUTPUT_TOKENS, Math.ceil(maxBytes));
+}
 
 // Compatibility export for callers that use the Claude-specific historical name.
 export const isMalformedClaudeToolCallProse = isMalformedToolCallProse;
@@ -282,17 +309,23 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     tools,
     toolNameMap,
     localToolExecutors,
+    shouldEndAgenticTurn,
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
     consumeSteeringMessages,
     onModelDelta,
+    onToolProgress,
     signal,
+    beforeToolDispatch,
+    authorizePersonaCoreMcp,
     conversationId,
     runId,
     nodeId,
     runResourceMarkers,
     sessionResume,
+    onSdkRequest,
+    onSdkRequestResult,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -307,6 +340,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
+    const runtime = await prepareClaudeRuntimeEnvironment();
+    let runResourceSettings: RunResourceSettings | undefined;
+    if (conversationId) {
+      try {
+        runResourceSettings = await getRunResourceSettings();
+      } catch (error) {
+        log.warn('Could not load run-resource settings before Claude tool setup; using defaults', error);
+        runResourceSettings = DEFAULT_RUN_RESOURCE_SETTINGS;
+      }
+    }
 
     // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
     // prefix-stable system block (unchanged turn to turn for a given node); its
@@ -377,6 +420,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       serverName: string;
       toolName: string;
       advertisedUri?: string;
+      presetArgs?: Record<string, unknown>;
+      context?: import('@/backend/execution/flow/types').ToolReferenceContext;
     }>();
     // Spawn-with-brief (issue #156): a routing model may call handoff tools
     // SEVERAL times — in one turn (parallel tool_use blocks) or one per turn,
@@ -393,6 +438,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // model turn. Spawnable targets instead end when the model stops calling.
     let endSpawning = false;
     const abortController = new AbortController();
+    let endedByCaller = false;
+    const endedToolResult = (): CallToolResult => ({
+      content: [{ type: 'text', text: 'This agentic turn has ended; no further tools may run.' }],
+      isError: true,
+    });
     // Chain the caller's cancellation signal (Stop button) onto the controller
     // that owns the whole agentic loop — this is the largest otherwise
     // un-interruptible window (the SDK can run tools/turns for a long time).
@@ -496,6 +546,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
@@ -538,6 +589,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // hand its JSON result back to the SDK. Keep the exact name — these
           // names are already OpenAI-safe and the caller keys executors by them.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
             const toolStartedAt = Date.now();
@@ -576,28 +628,48 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           timeout,
           nodeId: callerNodeId,
           uiResourceUri,
+          presetArgs,
+          context,
         } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         mcpToolUiByReadableName.set(readableName, {
           serverName: server,
           toolName: originalTool,
           advertisedUri: uiResourceUri,
+          presetArgs,
+          context,
         });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+          if (shouldEndAgenticTurn?.()) return endedToolResult();
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
           const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
+          const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
+          await beforeToolDispatch?.();
+          await authorizePersonaCoreMcp?.(server, callerNodeId);
           const result = await mcpService.callTool(
             server,
             originalTool,
-            args ?? {},
+            effectiveArgs,
             timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
-            undefined,
+            onToolProgress
+              ? (progress) => onToolProgress({
+                  toolCallId: callId,
+                  name: readableName,
+                  progress: progress.progress,
+                  total: progress.total,
+                  message: progress.message,
+                })
+              : undefined,
             callerNodeId,
             abortController.signal,
             'model',
+            // Issue #413: same canonical run owner key as the ModelHandler and
+            // Codex paths, so run-owned Bash sessions are releasable here too.
+            ownerScopeForRun({ runId, conversationId }),
+            conversationId ? { conversationId } : undefined,
           );
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
@@ -616,15 +688,27 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           let resultContent: string;
           if (result.success) {
             callResult = result.data as CallToolResult;
-            // Match the OpenAI path's tool-result encoding (JSON of the result data).
-            resultContent = JSON.stringify(result.data);
+            // Media is split out BEFORE anything is measured or stringified.
+            // The Agent SDK accepts native image/audio blocks inside a
+            // tool_result, so this path is one of the few that can give the
+            // model real vision — but base64 counted against a byte budget
+            // destroyed exactly that: a ~37 KB image already exceeds the 50 KB
+            // default once JSON-stringified, so the bound replaced the whole
+            // content array (picture included) with a text marker. Bounding is
+            // a guard against TEXT flooding the context; media has its own
+            // size story and must be exempt from it.
+            const { mediaItems, textResult } = splitToolResultMedia(callResult);
+            // Match the OpenAI path's tool-result encoding (JSON of the result
+            // data), minus the media payloads — this string is also what gets
+            // recorded into the transcript, which should never carry base64.
+            resultContent = JSON.stringify(textResult);
             // Tool-boundary bound (#251): this path bypasses ModelHandler's
             // processToolCalls, so without bounding here the guarantee would
             // silently not apply on Claude-subscription runs. Spill oversized
             // results to a run resource and show a head+tail preview instead.
             if (conversationId) {
               try {
-                const settings = await getRunResourceSettings();
+                const settings = runResourceSettings ?? await getRunResourceSettings();
                 const bounded = await boundToolResult({
                   conversationId,
                   toolCallId: callId,
@@ -638,8 +722,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   resultContent = bounded.content;
                   // callResult is what the SDK feeds the MODEL, so it must be
                   // bounded too (not just the recorded transcript) or the model
-                  // still sees the full result on this path.
-                  callResult = { content: [{ type: 'text', text: bounded.content }] };
+                  // still sees the full result on this path. Media blocks are
+                  // re-attached verbatim: the text was too big, the picture was
+                  // never the problem.
+                  callResult = {
+                    ...callResult,
+                    content: [...mediaItems, { type: 'text', text: bounded.content }],
+                  };
                 }
               } catch (err) {
                 log.warn('boundToolResult failed on subscription path; keeping full result', err);
@@ -678,10 +767,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       ? { [SDK_SERVER_NAME]: createSdkMcpServer({ name: SDK_SERVER_NAME, version: '1.0.0', tools: sdkTools }) }
       : undefined;
 
-    // Replace the subprocess env wholesale (per SDK contract): inherit ours, add
-    // the OAuth token, and drop ANTHROPIC_API_KEY so it can't take precedence.
-    const childEnv: Record<string, string | undefined> = { ...process.env };
+    // Replace the subprocess env wholesale (per SDK contract): start with the
+    // workspace-isolated Claude runtime, add the OAuth token, and drop
+    // ANTHROPIC_API_KEY so it can't take precedence.
+    const childEnv: Record<string, string | undefined> = { ...runtime.env };
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
+    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
     delete childEnv.ANTHROPIC_API_KEY;
 
     const hasImages = typeof userContent !== 'string';
@@ -696,19 +787,22 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // Drive the SDK via its streaming-input channel with a single user message.
     // The generator yields once then completes, signaling end-of-input so the
     // SDK processes the turn (and runs the agentic tool loop) to completion.
+    const sdkPromptMessage: SDKUserMessage = {
+      type: 'user',
+      parent_tool_use_id: null,
+      message: { role: 'user', content: userContent },
+    };
     async function* promptStream(): AsyncGenerator<SDKUserMessage> {
-      yield {
-        type: 'user',
-        parent_tool_use_id: null,
-        message: { role: 'user', content: userContent },
-      };
+      yield sdkPromptMessage;
     }
 
-    const response = query({
-      prompt: promptStream(),
-      options: {
+    const queryOptions: Parameters<typeof query>[0]['options'] = {
         model: model.name,
         env: childEnv,
+        cwd: runtime.workingDirectory,
+        // SDK isolation mode: never load ~/.claude, project .claude settings,
+        // CLAUDE.md, hooks, plugins, or MCP servers from the host filesystem.
+        settingSources: [],
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
         includePartialMessages: true,
@@ -743,6 +837,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
           const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
           const args = (input ?? {}) as Record<string, unknown>;
+          if (shouldEndAgenticTurn?.()) {
+            return {
+              behavior: 'deny',
+              message: 'This agentic turn has ended; no further tools may run.',
+            };
+          }
           // Handoffs are materialized once at the routing boundary below. Every
           // executable tool, however, becomes visible before approval/execution.
           if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
@@ -760,7 +860,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Human-in-the-loop: when an approval gate is wired, block until the
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
-            const { approved, feedback } = await requestToolApproval({
+            const linkedTool = mcpToolUiByReadableName.get(readableName);
+            const approved = await requestToolApproval({
               id: opts.toolUseID,
               name: readableName,
               args,
@@ -768,18 +869,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
             }
-            // Issue #247: carry the optional rejection reason back to the model
-            // so it can adjust; otherwise keep the original fixed rejection text.
-            const rejectionText = feedback
-              ? `User rejected this tool call: ${feedback}`
-              : 'Tool call rejected by the user.';
+            const rejectionText = 'tool denied';
             const queued = queuedToolCalls.get(readableName);
             if (queued) {
               const index = queued.findIndex(entry => entry.id === opts.toolUseID);
               if (index >= 0) queued.splice(index, 1);
               if (queued.length === 0) queuedToolCalls.delete(readableName);
             }
-            const linkedTool = mcpToolUiByReadableName.get(readableName);
             const uiLink = linkedTool
               ? await resolveInvokedToolUiLink(
                   linkedTool.serverName,
@@ -809,8 +905,32 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
           return { behavior: 'allow', updatedInput: input };
         },
-      },
-    });
+    };
+
+    let dispatchId: string | undefined;
+    try {
+      dispatchId = await onSdkRequest?.({
+        adapter: 'claude-cli',
+        operation: 'query',
+        request: { prompt: sdkPromptMessage, options: queryOptions },
+      });
+    } catch (archiveError) {
+      log.warn('Could not archive Claude Agent SDK request', archiveError);
+    }
+
+    let response: ReturnType<typeof query>;
+    try {
+      response = query({ prompt: promptStream(), options: queryOptions });
+    } catch (error) {
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
+        } catch (archiveError) {
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
+      throw error;
+    }
 
     // Streaming input is the Agent SDK's native mid-session steering seam. The
     // original implementation completed promptStream after its first yield and
@@ -926,6 +1046,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // Terminal controls such as meeting silence flip this predicate from a
+        // local tool executor. Stop before forwarding steering, recording prose,
+        // or allowing the SDK to begin another model/tool turn.
+        if (shouldEndAgenticTurn?.()) {
+          endedByCaller = true;
+          abortController.abort();
+          break;
+        }
         // This also runs for partial stream events, so a correction does not
         // wait for a long agentic SDK call to finish before reaching Claude.
         await forwardSteeringMessages();
@@ -1087,6 +1215,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     };
 
+    let dispatchOutcome: 'completed' | 'error' | 'cancelled' = 'completed';
     try {
       if (signal) {
         // Race the loop against cancellation. If the signal fires first we throw
@@ -1117,7 +1246,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
-      if (handoffCalls.length === 0) {
+      if (handoffCalls.length === 0 && !endedByCaller) {
+        dispatchOutcome = signal?.aborted ? 'cancelled' : 'error';
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
@@ -1126,6 +1256,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
+        } catch (archiveError) {
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
     }
 
     const finalText = resultText || accumulatedText;
@@ -1133,7 +1270,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // the last turn's context size + the summed output of all turns. cacheRead
     // is the prefix re-read cheaply from the prompt cache — kept out of the
     // "fresh" headline so a warmed-cache conversation stops reporting millions.
-    const { promptTokens, completionTokens, cacheReadTokens } = mapSdkUsage(usage, {
+    const {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    } = mapSdkUsage(usage, {
       lastTurnUsage,
       totalOutputTokens,
     });
@@ -1162,7 +1305,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
-    } else if (!streamedText) {
+    } else if (!streamedText && !endedByCaller) {
       recordMessage({ role: 'assistant', content: finalText || '' });
     }
 
@@ -1184,7 +1327,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           leadingSystemMessageCount,
         ),
       );
-      if (handoffCalls.length > 0 || !capturedSessionId) {
+      if (endedByCaller || handoffCalls.length > 0 || !capturedSessionId) {
         invalidateSession(sessionTracking.key);
       } else {
         recordSession(sessionTracking.key, {
@@ -1207,8 +1350,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         watermark: messages.length + transcript.length,
         promptTokens,
         cacheReadTokens,
+        cacheWriteTokens,
         completionTokens,
         endedByHandoff: handoffCalls.length > 0,
+        endedByCaller,
       });
     }
 
@@ -1233,11 +1378,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       usage: {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
-        // Surface the cheap cache RE-READ subset via OpenAI's own usage detail
-        // field so downstream (ModelHandler → usage totals → UI) can present a
-        // "fresh (+cached)" split instead of one inflated number (#87).
-        ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+        total_tokens: totalTokens,
+        // Surface both cache subsets through the OpenAI-shaped neutral boundary
+        // so Chat Completions, Codex, and the Agent SDK drive one token meter.
+        prompt_tokens_details: {
+          cached_tokens: cacheReadTokens,
+          cache_write_tokens: cacheWriteTokens,
+        },
       },
     };
 

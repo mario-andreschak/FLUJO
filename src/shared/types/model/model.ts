@@ -9,10 +9,12 @@ import {
 /**
  * System default upper bound on agentic turns for self-orchestrating adapters
  * (e.g. the Claude subscription / Agent SDK path). Used when neither the Process
- * node nor the bound model specifies a Max Turns value. Chosen higher than the
- * old hard-coded cap of 30 so existing flows never get a tighter limit.
+ * node nor the bound model specifies a Max Turns value. Raised to 255 (issue
+ * #399) so unattended agentic runs get a generous budget; it stays well above
+ * the old hard-coded cap of 30 so existing flows never get a tighter limit.
+ * Explicit per-node/per-model overrides always win over this fallback.
  */
-export const DEFAULT_AGENTIC_MAX_TURNS = 50;
+export const DEFAULT_AGENTIC_MAX_TURNS = 255;
 
 /**
  * Normalize a candidate max-output-tokens value to a positive integer, or
@@ -35,6 +37,8 @@ export interface Model {
     description?: string;
     ApiKey: string;
     baseUrl?: string;
+    /** Azure OpenAI data-plane API version (for example `2024-10-21`). */
+    azureApiVersion?: string;
     provider?: ModelProvider;
     /**
      * Which completion adapter/SDK drives this model. Optional for backward
@@ -82,7 +86,7 @@ export interface Model {
     /**
      * Upper bound on agentic turns for self-orchestrating adapters (e.g. the
      * Claude subscription / Agent SDK path). A Process node can override this
-     * per-node. Unset = the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
+     * per-node. Unset = the system default (DEFAULT_AGENTIC_MAX_TURNS = 255).
      */
     maxTurns?: number;
     /**

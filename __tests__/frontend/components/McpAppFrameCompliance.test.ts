@@ -29,6 +29,8 @@ import {
   getVerifiedPostHandshakeDisplayMode,
   jsonUtf8ByteLength,
   MAX_MCP_APP_CONTEXT_BYTES,
+  mcpAppDeliveryIdentity,
+  mcpAppSandboxCacheKey,
   normalizeStableAppMessage,
   sanitizeGrantedCsp,
   sanitizeGrantedPermissions,
@@ -46,6 +48,22 @@ Object.assign(globalThis, { TextDecoder, TextEncoder });
 
 const URI = 'ui://example/app';
 const MIME = 'text/html;profile=mcp-app';
+
+describe('MCP App delivery identity', () => {
+  it('treats linked-tool changes as a new View delivery', () => {
+    expect(mcpAppDeliveryIdentity('tool-a', undefined, undefined, undefined, undefined, undefined))
+      .not.toBe(mcpAppDeliveryIdentity('tool-b', undefined, undefined, undefined, undefined, undefined));
+    expect(mcpAppDeliveryIdentity('tool-a', 7, undefined, undefined, undefined, undefined))
+      .toBe(mcpAppDeliveryIdentity('tool-a', 7, 'ignored when versioned', undefined, undefined, undefined));
+  });
+
+  it('encodes sandbox cache identities without delimiter collisions', () => {
+    expect(mcpAppSandboxCacheKey('workspace', 'a::b', 'c'))
+      .not.toBe(mcpAppSandboxCacheKey('workspace', 'a', 'b::c'));
+    expect(mcpAppSandboxCacheKey('workspace-a', 'server', URI))
+      .not.toBe(mcpAppSandboxCacheKey('workspace-b', 'server', URI));
+  });
+});
 
 describe('MCP App resource validation', () => {
   it('selects only the exact requested URI with the stable MIME type', () => {
@@ -75,6 +93,9 @@ describe('MCP App resource validation', () => {
         frameDomains: [],
         baseUriDomains: [],
       },
+      // The pre-sanitization declaration is kept so the grant can be
+      // re-derived when discovery reports the server-side allow-all hatch.
+      rawCsp: { connectDomains: ['https://api.example.com'] },
       permissions: { clipboardWrite: {} },
     });
   });
@@ -102,17 +123,22 @@ describe('MCP App resource validation', () => {
 });
 
 describe('loopback CSP grant mirror', () => {
-  it('gates the loopback allowance on a plain-HTTP loopback FLUJO origin', () => {
+  it('gates the loopback allowance on a plain-HTTP FLUJO origin', () => {
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(true);
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'localhost' })).toBe(true);
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '[::1]' })).toBe(true);
+    // A `network`-mode install is reached by its LAN name/address while its MCP
+    // App servers still bind loopback, so the grant must survive that spelling.
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '192.168.1.20' })).toBe(true);
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'flujo.local' })).toBe(true);
+    // Public/hosted deployments are HTTPS and keep the secure-origin-only grant.
     expect(allowLoopbackCspGrant({ protocol: 'https:', hostname: 'localhost' })).toBe(false);
-    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'flujo.example.test' })).toBe(false);
+    expect(allowLoopbackCspGrant({ protocol: 'https:', hostname: 'flujo.example.test' })).toBe(false);
     // jsdom serves the suite from http://localhost, so the browser default applies.
     expect(allowLoopbackCspGrant()).toBe(true);
   });
 
-  it('grants explicit-port loopback http/ws origins only when allowed', () => {
+  it('grants loopback http/ws origins as port wildcards only when allowed', () => {
     const requested = {
       connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503', 'http://insecure.example.com'],
       resourceDomains: ['http://127.0.0.1:59503'],
@@ -120,11 +146,13 @@ describe('loopback CSP grant mirror', () => {
       baseUriDomains: ['http://127.0.0.1'],
     };
 
+    // The port is collapsed to `:*` so the grant survives the app server's next
+    // ephemeral-port restart, matching the sandbox server's normalizeCspOrigin.
     expect(sanitizeGrantedCsp(requested, true)).toEqual({
-      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
-      resourceDomains: ['http://127.0.0.1:59503'],
+      connectDomains: ['http://127.0.0.1:*', 'ws://127.0.0.1:*'],
+      resourceDomains: ['http://127.0.0.1:*'],
       // ws: never widens frame-src; portless loopback is rejected.
-      frameDomains: ['http://127.0.0.1:59503'],
+      frameDomains: ['http://127.0.0.1:*'],
       baseUriDomains: [],
     });
 
@@ -132,6 +160,17 @@ describe('loopback CSP grant mirror', () => {
       connectDomains: [],
       resourceDomains: [],
       frameDomains: [],
+      baseUriDomains: [],
+    });
+  });
+
+  it('dedupes several ports on one loopback host into a single granted source', () => {
+    expect(sanitizeGrantedCsp({
+      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://localhost:4302'],
+    }, true)).toEqual({
+      connectDomains: [],
+      resourceDomains: [],
+      frameDomains: ['http://127.0.0.1:*', 'http://localhost:*'],
       baseUriDomains: [],
     });
   });
@@ -290,23 +329,61 @@ describe('MCP App host policy helpers', () => {
     expect(canFullscreenCanvas([], modes)).toBe(false);
   });
 
-  it('validates deployment sandbox URLs and permits port fallback only on HTTP', () => {
+  it('accepts server-derived isolated origins and scoped LAN fallback URLs', () => {
+    const originKey = `app${'a'.repeat(60)}`;
     expect(buildSandboxUrl(
-      { url: 'https://apps.example.test/sandbox.html', token: 'secret' },
+      {
+        url: `https://${originKey}.apps.example.test/sandbox.html`,
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toBe('https://apps.example.test/sandbox.html?token=secret');
+    )).toBe(`https://${originKey}.apps.example.test/sandbox.html?token=secret`);
     expect(buildSandboxUrl(
-      { port: 4201, token: 'secret' },
+      {
+        url: `http://${originKey}.localhost:4201/sandbox.html`,
+        port: 4201,
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'http://localhost:3000', protocol: 'http:' },
-    )).toBe('http://localhost:4201/sandbox.html?token=secret');
+    )).toBe(`http://${originKey}.localhost:4201/sandbox.html?token=secret`);
+
     expect(() => buildSandboxUrl(
-      { port: 4201, token: 'secret' },
-      { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toThrow(/sandbox port 4201/);
+      { port: 4201, token: 'secret', originKey, shared: false },
+      { origin: 'http://localhost:3000', protocol: 'http:' },
+    )).toThrow(/isolated app URL/);
+    expect(buildSandboxUrl(
+      {
+        url: `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}`,
+        token: 'secret',
+        originKey,
+        shared: true,
+      },
+      { origin: 'http://192.168.1.20:4200', protocol: 'http:' },
+    )).toBe(
+      `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}&token=secret`,
+    );
     expect(() => buildSandboxUrl(
-      { url: 'https://flujo.example.test/sandbox.html', token: 'secret' },
+      {
+        url: 'http://192.168.1.20:4201/sandbox.html?originKey=another-app',
+        token: 'secret',
+        originKey,
+        shared: true,
+      },
+      { origin: 'http://192.168.1.20:4200', protocol: 'http:' },
+    )).toThrow(/verified app origin key/);
+    expect(() => buildSandboxUrl(
+      {
+        url: 'https://unrelated.apps.example.test/sandbox.html',
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toThrow(/distinct origin/);
+    )).toThrow(/verified app origin key/);
   });
 
   it('clamps finite inline View size requests', () => {

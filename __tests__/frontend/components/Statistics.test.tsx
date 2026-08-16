@@ -47,6 +47,20 @@ function summary(overrides: Partial<StatisticsSummary> = {}): StatisticsSummary 
     providerDuration: duration,
     stepDuration: duration,
     toolDuration: duration,
+    subflowCalls: 1,
+    subflowFailures: 0,
+    subflowIncomplete: 0,
+    runsIncomplete: 0,
+    subflowDuration: duration,
+    subflowWaitDuration: duration,
+    cache: { requests: 2, hits: 1, misses: 1, writes: 0, unknown: 1, hitRate: 0.5 },
+    toolPayload: {
+      request: { count: 1, totalBytes: 512, averageBytes: 512, p50Bytes: 512, p95Bytes: 512 },
+      response: { count: 1, totalBytes: 2_048, averageBytes: 2_048, p50Bytes: 2_048, p95Bytes: 2_048 },
+    },
+    errorClasses: { provider: 1 },
+    contentCategories: { json: 2 },
+    phases: { provider: duration },
     ...overrides,
   };
 }
@@ -75,6 +89,8 @@ function fixture(): StatisticsAggregateResponse {
       credentials: [credential],
       nodes: [],
       tools: [],
+      subflows: [],
+      revisions: [],
     },
   };
 }
@@ -99,7 +115,11 @@ describe('Statistics dashboard', () => {
 
     const summaryRegion = await screen.findByLabelText('Statistics summary');
     expect(within(summaryRegion).getByText('Logical runs')).toBeInTheDocument();
-    expect(within(summaryRegion).getByText('50%')).toBeInTheDocument();
+    const successRateCard = within(summaryRegion).getByLabelText('Success rate');
+    const cacheHitRateCard = within(summaryRegion).getByLabelText('Cache hit rate');
+    expect(successRateCard).not.toBe(cacheHitRateCard);
+    expect(within(successRateCard).getByText('50%')).toBeInTheDocument();
+    expect(within(cacheHitRateCard).getByText('50%')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Providers & Keys' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Flows' }));
@@ -128,6 +148,7 @@ describe('Statistics dashboard', () => {
       providerAttempts: 0,
       nodeVisits: 0,
       toolCalls: 0,
+      subflowCalls: 0,
     });
     empty.daily = [];
     empty.rankings = {
@@ -138,13 +159,16 @@ describe('Statistics dashboard', () => {
       credentials: [],
       nodes: [],
       tools: [],
+      subflows: [],
+      revisions: [],
     };
     mockFetch.mockResolvedValue(successfulResponse(empty));
 
     render(<Statistics />);
 
-    expect(await screen.findByText('No telemetry for this selection')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'No telemetry for this selection' })).toBeInTheDocument();
     expect(screen.getByText(/Reliable collection begins after experimental statistics are enabled/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Statistics summary')).not.toBeInTheDocument();
   });
 
   it('shows retryable API errors', async () => {

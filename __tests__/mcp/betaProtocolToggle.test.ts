@@ -45,7 +45,6 @@ const stdio = (command = "node"): MCPServerConfig =>
     args: ["server.js"],
     env: {},
     disabled: false,
-    autoApprove: [],
     rootPath: "",
     _buildCommand: "",
     _installCommand: "",

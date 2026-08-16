@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -16,7 +17,7 @@ type RouteContext = { params: Promise<{ name: string }> };
  * Always responds 200 (even when the server is in an error state) so the client can
  * distinguish "server is down" from "the status request itself failed".
  */
-export async function GET(_request: NextRequest, { params }: RouteContext) {
+async function GET_handler(_request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -35,3 +36,5 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
     return json(formatErrorResponse(error), 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

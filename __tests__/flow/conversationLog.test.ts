@@ -162,6 +162,46 @@ describe('conversation log store', () => {
     expect(await hasConversationLog('conv-store-raw-eph')).toBe(false);
   });
 
+  it('does not append authoritative transcript events after a Persona commit fence is lost', async () => {
+    const convId = 'conv-store-stale-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const leaseLost = new Error('Persona lease is no longer current');
+    const commitWhileCurrent = jest.fn(async () => {
+      throw leaseLost;
+    });
+    state.executionAuthority = {
+      assertCurrent: jest.fn(async () => undefined),
+      signal: new AbortController().signal,
+      commitWhileCurrent,
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('late-model-response', 'assistant') },
+    ])).rejects.toBe(leaseLost);
+    expect(commitWhileCurrent).toHaveBeenCalledTimes(1);
+    expect(await readConversationLog(convId)).toBeUndefined();
+  });
+
+  it('fails closed when Persona attribution is loaded without its runtime capability', async () => {
+    const convId = 'conv-store-unfenced-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('unfenced-response', 'assistant') },
+    ])).rejects.toThrow('requires current execution authority');
+    expect(await readConversationLog(convId)).toBeUndefined();
+  });
+
   it('tolerates a truncated tail line (crash mid-append)', async () => {
     const convId = 'conv-store-truncated';
     const state = makeState(convId);
@@ -588,6 +628,25 @@ describe('repairDanglingToolCalls (issue #256)', () => {
 
     expect(synthesized).toHaveLength(1);
     expect(synthesized[0].content).toBe('Tool execution cancelled by user before it finished.');
+  });
+
+  it('does not repair tool calls intentionally parked by debugger or approval state', () => {
+    const debugState = makeState('conv-repair-debug-pause');
+    debugState.messages = [asstToolCall('a1', ['call_1'])];
+    debugState.status = 'paused_debug';
+    debugState.debugPendingAction = { action: 'TOOL_CALL', phase: 'after-model' };
+
+    expect(repairDanglingToolCalls(debugState)).toEqual([]);
+    expect(debugState.messages).toHaveLength(1);
+
+    const approvalState = makeState('conv-repair-approval-pause');
+    const pending = asstToolCall('a2', ['call_2']).tool_calls!;
+    approvalState.messages = [asstToolCall('a2', ['call_2'])];
+    approvalState.status = 'awaiting_tool_approval';
+    approvalState.pendingToolCalls = pending;
+
+    expect(repairDanglingToolCalls(approvalState)).toEqual([]);
+    expect(approvalState.messages).toHaveLength(1);
   });
 
   it('folds synthesized results into the projection via appendRawForState', async () => {

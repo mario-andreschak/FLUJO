@@ -23,6 +23,16 @@ import {
   PACKAGE_SCHEMA_VERSION,
   SEMVER_REGEX,
 } from './constants';
+import {
+  PersonaPresentationSchema,
+  RoleBehaviorSlotSchema,
+  RoleDefinitionSchema,
+  RoleVersionSchema,
+} from '../enduringAgent/schemas';
+import {
+  PERSONA_AUTONOMY_LEVELS,
+  PERSONA_INTERRUPTION_POLICIES,
+} from '../enduringAgent/enduringAgent';
 import { collectSecretPlaceholdersDeep } from './secrets';
 
 /** Deep-scan a value for any string beginning with the `encrypted:` prefix. */
@@ -162,7 +172,6 @@ export const packagedMcpServerSchema = z
     name: z.string().min(1),
     transport: z.enum(['stdio', 'sse', 'streamable', 'websocket']),
     disabled: z.boolean().optional(),
-    autoApprove: z.array(z.string()).optional(),
     folder: z.string().optional(),
     installOrigin: mcpInstallOriginSchema,
     envDeclarations: z.array(envDeclarationSchema),
@@ -190,6 +199,24 @@ export const packagedFlowSchema = z.object({
     .optional(),
 });
 
+export const packagedBehaviorTemplateSchema = RoleBehaviorSlotSchema.extend({
+  id: z.string().min(1).max(256),
+}).strict();
+
+export const packagedRoleTemplateSchema = z.object({
+  definition: RoleDefinitionSchema,
+  versions: z.array(RoleVersionSchema).min(1).max(1_000),
+}).strict();
+
+export const packagedPersonaTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  roleVersionId: z.string().min(1),
+  mission: z.string().trim().max(20_000).optional(),
+  presentation: PersonaPresentationSchema.optional(),
+  autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS),
+  interruptionPolicy: z.enum(PERSONA_INTERRUPTION_POLICIES),
+}).strict();
+
 export const packagedPlannedExecutionSchema = z
   .object({
     id: z.string().min(1),
@@ -200,7 +227,27 @@ export const packagedPlannedExecutionSchema = z
     prompt: z.string(),
     trigger: z.any(),
   })
-  .catchall(z.unknown());
+  .catchall(z.unknown())
+  .superRefine((execution, ctx) => {
+    // Persona identities and Behavior bindings are workspace-local trusted
+    // control-plane targets. A portable package may describe only a legacy
+    // Flow execution; accepting either field would let registry content target
+    // an existing Persona when installed into an unrelated workspace.
+    for (const field of [
+      'personaId',
+      'behaviorSlotKey',
+      'personaRetired',
+      'personaArchived',
+    ] as const) {
+      if (Object.prototype.hasOwnProperty.call(execution, field)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${field} is not supported in packaged planned executions`,
+        });
+      }
+    }
+  });
 
 export const flujoPackageSchema = z
   .object({
@@ -219,6 +266,9 @@ export const flujoPackageSchema = z
     mcpServers: z.array(packagedMcpServerSchema),
     flows: z.array(packagedFlowSchema),
     plannedExecutions: z.array(packagedPlannedExecutionSchema),
+    roleTemplates: z.array(packagedRoleTemplateSchema).max(1_000).optional(),
+    behaviorTemplates: z.array(packagedBehaviorTemplateSchema).max(10_000).optional(),
+    personaTemplates: z.array(packagedPersonaTemplateSchema).max(1_000).optional(),
   })
   .superRefine((pkg, ctx) => {
     // Backstop: no encrypted ciphertext may ride along anywhere.
@@ -245,6 +295,51 @@ export const flujoPackageSchema = z
         ctx.addIssue({
           code: 'custom',
           message: `secret "${name}" is referenced but not declared in secrets[]`,
+        });
+      }
+    }
+
+    // Role/Behavior templates are immutable configuration. Their references
+    // must remain package-local so importing never silently targets an unrelated
+    // workspace Role with a coincidentally matching id.
+    const roleDefinitionIds = new Set<string>();
+    const roleVersionIds = new Set<string>();
+    const roleCoordinates = new Set<string>();
+    for (const [templateIndex, template] of (pkg.roleTemplates ?? []).entries()) {
+      if (roleDefinitionIds.has(template.definition.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['roleTemplates', templateIndex, 'definition', 'id'],
+          message: `duplicate Role definition id "${template.definition.id}"`,
+        });
+      }
+      roleDefinitionIds.add(template.definition.id);
+      for (const [versionIndex, version] of template.versions.entries()) {
+        if (version.roleDefinitionId !== template.definition.id) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['roleTemplates', templateIndex, 'versions', versionIndex, 'roleDefinitionId'],
+            message: 'Role version must belong to its enclosing Role definition',
+          });
+        }
+        const coordinate = `${version.roleDefinitionId}:${version.version}`;
+        if (roleVersionIds.has(version.id) || roleCoordinates.has(coordinate)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['roleTemplates', templateIndex, 'versions', versionIndex],
+            message: `duplicate immutable Role version "${version.id}" or version coordinate "${coordinate}"`,
+          });
+        }
+        roleVersionIds.add(version.id);
+        roleCoordinates.add(coordinate);
+      }
+    }
+    for (const [personaIndex, persona] of (pkg.personaTemplates ?? []).entries()) {
+      if (!roleVersionIds.has(persona.roleVersionId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['personaTemplates', personaIndex, 'roleVersionId'],
+          message: `Persona template references unknown packaged Role version "${persona.roleVersionId}"`,
         });
       }
     }

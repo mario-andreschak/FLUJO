@@ -4,7 +4,7 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, remapLegacyDefaultWorkspaceReference } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -16,7 +16,10 @@ const REMOTE_TRANSPORTS = new Set(['streamable', 'sse', 'websocket']);
 // Where GitHub/reference server clones live (mirrors /api/git's REPOS_BASE_DIR).
 // Used to decide whether an un-sourced server's rootPath is a git clone whose
 // origin can be read to reconstruct a `github` install-origin (#193 backfill).
-const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
+// Per-call, not a module constant: mcp-servers/ lives inside the SELECTED
+// workspace (#406), so the same server name can exist independently in two
+// workspaces and a captured constant would cross-wire them.
+const reposBaseDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 // Per-process memo of read-time git-remote lookups (keyed by absolute repo path),
 // so the backfill spawns `git remote get-url origin` at most once per clone even
@@ -27,12 +30,15 @@ const gitRemoteCache = new Map<string, string | null>();
 /** Resolve a (possibly relative) server rootPath to an absolute path under the data dir. */
 function resolveRootPath(rootPath: unknown): string | null {
   if (typeof rootPath !== 'string' || rootPath.trim() === '') return null;
-  return path.isAbsolute(rootPath) ? rootPath : path.resolve(getDataDir(), rootPath);
+  // Absolute roots are explicit operator choices and stay exactly as configured
+  // (they may deliberately point outside FLUJO); relative roots are
+  // workspace-relative.
+  return path.isAbsolute(rootPath) ? rootPath : path.resolve(getWorkspaceDataDir(), rootPath);
 }
 
 /** Is this absolute path inside the mcp-servers clone directory? */
 function isInsideReposDir(absPath: string): boolean {
-  const rel = path.relative(REPOS_BASE_DIR, absPath);
+  const rel = path.relative(reposBaseDir(), absPath);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
@@ -96,6 +102,52 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
       // Determine the transport type
       const transport = serverConfig.transport || 'stdio';
 
+      // Layout-v2 compatibility: old GitHub installs persisted absolute paths
+      // into the legacy managed MCP root. Normalize them in memory after the
+      // clone has moved; never rewrite an explicit path that still exists.
+      const remapMcpPath = (value: unknown): unknown =>
+        typeof value === 'string'
+          ? remapLegacyDefaultWorkspaceReference(value, 'mcp-servers')
+          : value;
+      const remapMcpEnv = (record: unknown): unknown => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+        return Object.fromEntries(Object.entries(record).map(([key, value]) => {
+          if (typeof value === 'string') return [key, remapMcpPath(value)];
+          if (value && typeof value === 'object' && typeof value.value === 'string') {
+            return [key, { ...value, value: remapMcpPath(value.value) }];
+          }
+          return [key, value];
+        }));
+      };
+      serverConfig = {
+        ...serverConfig,
+        rootPath: remapMcpPath(serverConfig.rootPath),
+        cwd: remapMcpPath(serverConfig.cwd),
+        command: remapMcpPath(serverConfig.command),
+        args: Array.isArray(serverConfig.args)
+          ? serverConfig.args.map(remapMcpPath)
+          : serverConfig.args,
+        roots: Array.isArray(serverConfig.roots)
+          ? serverConfig.roots.map(remapMcpPath)
+          : serverConfig.roots,
+        env: remapMcpEnv(serverConfig.env),
+        ...(Object.prototype.hasOwnProperty.call(serverConfig, 'launch')
+          ? {
+              launch: serverConfig.launch && typeof serverConfig.launch === 'object'
+                ? {
+                    ...serverConfig.launch,
+                    command: remapMcpPath(serverConfig.launch.command),
+                    cwd: remapMcpPath(serverConfig.launch.cwd),
+                    args: Array.isArray(serverConfig.launch.args)
+                      ? serverConfig.launch.args.map(remapMcpPath)
+                      : serverConfig.launch.args,
+                    env: remapMcpEnv(serverConfig.launch.env),
+                  }
+                : serverConfig.launch,
+            }
+          : {}),
+      };
+
       // Read-time normalization (issue 52): remote servers saved with a too-wide
       // rootPath default ('/'/drive root) are re-pointed at their per-server folder,
       // matching the stdio convention. Idempotent, not persisted back to storage;
@@ -104,12 +156,28 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         log.info(`Normalizing filesystem-root rootPath "${serverConfig.rootPath}" of remote server ${name} to mcp-servers/${name}`);
         serverConfig = { ...serverConfig, rootPath: `mcp-servers/${name}` };
       }
+
+      // Registry package configs historically used ".", which now means the
+      // complete selected workspace and made every npx/uvx server share one root.
+      // Migrate only sourced package configs so an operator's explicit local "."
+      // remains untouched. Like the remote normalization above, this is in-memory
+      // and becomes durable the next time the config is saved.
+      const sourceType = serverConfig.source?.type;
+      if (
+        transport === 'stdio'
+        && typeof serverConfig.rootPath === 'string'
+        && serverConfig.rootPath.trim() === '.'
+        && (sourceType === 'registry' || sourceType === 'marketplace')
+        && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)
+      ) {
+        log.info(`Normalizing shared Registry rootPath "." of ${name} to mcp-servers/${name}`);
+        serverConfig = { ...serverConfig, rootPath: `mcp-servers/${name}` };
+      }
       
       // Default values for any missing properties
       const defaults = {
         name,
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         env: {},
         _buildCommand: '',
@@ -217,20 +285,47 @@ export async function loadServerRoots(serverName: string): Promise<string[]> {
 }
 
 /**
+ * Keys `loadServerConfigs()` materialises as an empty placeholder when the
+ * stored record does not have them. Writing those placeholders back would make
+ * every load → save cycle grow the stored JSON with phantom keys, so an empty
+ * value is persisted as "absent" — exactly how it was read (#392). Load re-adds
+ * the same empty default, so this is lossless.
+ */
+const EMPTY_IS_ABSENT_KEYS = [
+  '_buildCommand',
+  '_installCommand',
+  'oauthClientId',
+  'oauthClientSecret'
+] as const;
+
+/**
+ * Storage form of one config: no `name` (it is the record key), no `undefined`
+ * values, and no empty load-time placeholders. Keeps save(load(x)) === x, which
+ * matters for additive optional fields such as `launch` (#392) and for diffing
+ * `db/mcp_servers.json`.
+ */
+function toStoredConfig(config: MCPServerConfig): Record<string, unknown> {
+  // Remove the name property since it is represented by the storage key.
+  // Every server, including shipped package installs, uses this same path.
+  const { name: _, ...configWithoutName } = config;
+  const stored: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(configWithoutName)) {
+    if (value === undefined) continue;
+    if (value === '' && (EMPTY_IS_ABSENT_KEYS as readonly string[]).includes(key)) continue;
+    stored[key] = value;
+  }
+  return stored;
+}
+
+/**
  * Save MCP server configurations to storage
  */
 export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise<MCPServiceResponse> {
   log.debug('Entering saveConfig method');
   try {
     const mcpServers = Object.fromEntries(
-      Array.from(configs.entries()).map(([name, config]) => {
-        // Remove the name property since it is represented by the storage key.
-        // Every server, including shipped package installs, uses this same path.
-        const { name: _, ...configWithoutName } = config;
-
-        // Return the entry with the server name as the key
-        return [name, configWithoutName];
-      })
+      // Return each entry with the server name as the key
+      Array.from(configs.entries()).map(([name, config]) => [name, toStoredConfig(config)])
     );
 
     await saveItem(StorageKey.MCP_SERVERS, mcpServers);

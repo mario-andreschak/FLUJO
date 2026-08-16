@@ -24,6 +24,25 @@ const clamp = (value: number, min: number, max: number): number => (
   Math.min(Math.max(value, min), Math.max(min, max))
 );
 
+const ZERO_OFFSET = { x: 0, y: 0 };
+
+/**
+ * #371: clamp a dragged panel so the WHOLE panel stays inside the viewport
+ * whenever it fits. Keeping only a sliver on screen (the previous behaviour)
+ * pushed the resize handles past the viewport edge, which left the app stuck:
+ * it could no longer be resized and barely be moved.
+ */
+export function clampFloatingPosition(
+  position: { x: number; y: number },
+  size: { width: number; height: number },
+  bounds: { width: number; height: number },
+): { x: number; y: number } {
+  return {
+    x: clamp(position.x, 0, Math.max(0, bounds.width - size.width)),
+    y: clamp(position.y, 0, Math.max(0, bounds.height - size.height)),
+  };
+}
+
 export function resizeFloatingRect(
   start: FloatingRect,
   direction: ResizeDirection,
@@ -74,6 +93,68 @@ export function constrainFloatingRect(
     width,
     height,
   };
+}
+
+/**
+ * #371: a `position: fixed` box only resolves against the viewport while NO
+ * ancestor establishes a containing block. `transform`, `filter`,
+ * `backdrop-filter`, `will-change` and `contain: paint` all do - and MUI's
+ * glass Dialog paper (plus several chat surfaces) use `backdrop-filter`.
+ * Pointer events are always reported in viewport coordinates, so a panel that
+ * stores viewport geometry and writes it straight back into `left`/`top` jumps
+ * by the containing block's origin, which feels like "the drag restarts in the
+ * middle of the screen".
+ *
+ * Measuring `boundingClientRect - computedStyle.left/top` yields that origin
+ * without guessing which ancestor is responsible. It is `{0,0}` in the normal
+ * case, so the correction is a no-op when the panel already anchors to the
+ * viewport.
+ */
+export function fixedOriginOffset(element: HTMLElement | null | undefined): { x: number; y: number } {
+  if (!element || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+    return ZERO_OFFSET;
+  }
+  const style = window.getComputedStyle(element);
+  if (style.position !== 'fixed') return ZERO_OFFSET;
+  const left = Number.parseFloat(style.left);
+  const top = Number.parseFloat(style.top);
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return ZERO_OFFSET;
+  const rect = element.getBoundingClientRect();
+  const x = Math.round(rect.left - left);
+  const y = Math.round(rect.top - top);
+  // Sub-pixel noise from zoom/DPR must not resurrect a spurious offset.
+  return { x: Math.abs(x) < 1 ? 0 : x, y: Math.abs(y) < 1 ? 0 : y };
+}
+
+/**
+ * Keeps the containing-block origin of a floating panel up to date while it is
+ * active, so viewport geometry can be rendered as correct `left`/`top` values.
+ */
+export function useFixedOriginOffset(
+  ref: React.RefObject<HTMLElement | null>,
+  active: boolean,
+): { x: number; y: number } {
+  const [offset, setOffset] = useState<{ x: number; y: number }>(ZERO_OFFSET);
+
+  useEffect(() => {
+    if (!active || typeof window === 'undefined') {
+      setOffset((current) => (current.x === 0 && current.y === 0 ? current : ZERO_OFFSET));
+      return undefined;
+    }
+    const measure = () => {
+      const next = fixedOriginOffset(ref.current);
+      setOffset((current) => (current.x === next.x && current.y === next.y ? current : next));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [active, ref]);
+
+  return offset;
 }
 
 const cursorForDirection = (direction: ResizeDirection): React.CSSProperties['cursor'] => {

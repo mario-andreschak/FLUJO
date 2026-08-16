@@ -31,6 +31,9 @@ export const SPOTLIGHT_SERVERS: (string | SpotlightSource)[] = [
   // Web search + page fetch (offers both a local npm package and a remote endpoint)
   'https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search',
   'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-abap-adt/versions',
+  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-audio-studio/versions',
+  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-vscode/versions',
+  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-cad-studio/versions',
   {
     url: 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.microsoft%2Fplaywright-mcp/versions',
     // Playwright MCP defaults to Chromium, which needs a separate browser

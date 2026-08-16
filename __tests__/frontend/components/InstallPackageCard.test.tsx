@@ -1,4 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
+jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
+  __esModule: true,
+  default: () => null,
+}));
 
 const searchRegistryMock = jest.fn();
 const installFromRegistryMock = jest.fn();
@@ -117,7 +128,7 @@ describe('InstallPackageCard', () => {
     render(<InstallPackageCard />);
     fireEvent.click(await screen.findByText('Example package'));
 
-    expect(await screen.findByRole('heading', { name: 'Review and install' })).toBeInTheDocument();
+    expect(await screen.findByText(/repository-provided commands on your machine/i)).toBeInTheDocument();
     expect(
       screen.getByText(/repository-provided commands on your machine/i),
     ).toBeInTheDocument();
@@ -293,6 +304,7 @@ describe('InstallPackageCard', () => {
     fireEvent.change(screen.getByLabelText('API_TOKEN'), {
       target: { value: 'secret-token' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
     fireEvent.click(screen.getByRole('button', { name: 'Install package' }));
 
     await waitFor(() =>

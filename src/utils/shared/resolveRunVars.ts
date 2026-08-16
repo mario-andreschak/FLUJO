@@ -25,6 +25,10 @@
 
 /** The `${var:NAME}` pattern. NAME is everything up to the first `}`. */
 export const RUN_VAR_SCAN = /\$\{var:([^}]+)\}/g;
+/** Lightweight data-template form used by lane-scoped values such as session
+ * keys. Kept beside the established run-variable resolver so nodes do not grow
+ * private template engines. */
+export const DATA_TEMPLATE_SCAN = /\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}/g;
 
 /**
  * Replace every `${var:NAME}` in `text` with `vars[NAME]`. An UNKNOWN name
@@ -48,6 +52,27 @@ export function resolveRunVars(text: string, vars: Record<string, string> | unde
     // can catch a typo or a step that captures too late.
     console.warn(`[resolveRunVars] unknown variable "${name}"; substituting empty string`);
     return '';
+  });
+}
+
+/** Resolve `{{name}}` from lane/run data. Unknown placeholders deliberately
+ * remain visible so consumers can reject the unresolved value instead of
+ * accidentally sharing an empty-key session. */
+export function resolveDataTemplate(
+  text: string,
+  values: Record<string, unknown> | undefined | null,
+): string {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  DATA_TEMPLATE_SCAN.lastIndex = 0;
+  if (!DATA_TEMPLATE_SCAN.test(text)) return text;
+  DATA_TEMPLATE_SCAN.lastIndex = 0;
+  const map = values ?? {};
+  return text.replace(DATA_TEMPLATE_SCAN, (full, rawName: string) => {
+    const value = rawName.split('.').reduce<unknown>((current, segment) => {
+      if (!current || typeof current !== 'object') return undefined;
+      return (current as Record<string, unknown>)[segment];
+    }, map);
+    return value === undefined || value === null ? full : String(value);
   });
 }
 

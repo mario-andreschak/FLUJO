@@ -7,6 +7,11 @@ import {
   readRunResource,
 } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { getCurrentWorkspace } from '@/utils/workspace';
+import {
+  commitFlowDurableMutation,
+  type FlowDurableMutationContext,
+} from './executionAuthority';
 
 const INLINE_PREVIEW_CHARS = 1200;
 
@@ -17,7 +22,8 @@ function previewPayload(value: string, label: string, fullSize: number): string 
 
 function payloadHref(entry: RunResourceEntry): string {
   return `/v1/chat/conversations/${encodeURIComponent(entry.conversationId)}`
-    + `/resources/${encodeURIComponent(entry.id)}/content`;
+    + `/resources/${encodeURIComponent(entry.id)}/content`
+    + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`;
 }
 
 function payloadRef(entry: RunResourceEntry): LazyToolPayloadRef {
@@ -153,6 +159,7 @@ export async function hydrateLazyToolPayloads(
   messages: unknown[],
   canonicalMessages: FlujoChatMessage[],
   targetConversationId: string,
+  durableContext: FlowDurableMutationContext = {},
 ): Promise<unknown[]> {
   const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]));
 
@@ -194,15 +201,16 @@ export async function hydrateLazyToolPayloads(
         } else {
           const full = await readExactPayload(ref, message.tool_call_id, 'result');
           const settings = await getRunResourceSettings();
-          const bounded = await boundToolResult({
-            conversationId: targetConversationId,
-            toolCallId: message.tool_call_id,
-            server: full.entry.producedBy.server ?? 'unknown',
-            toolName: full.entry.producedBy.toolName ?? 'unknown',
-            nodeId: full.entry.producedBy.nodeId,
-            content: full.text,
-            settings,
-          });
+          const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
+              conversationId: targetConversationId,
+              toolCallId: message.tool_call_id,
+              server: full.entry.producedBy.server ?? 'unknown',
+              toolName: full.entry.producedBy.toolName ?? 'unknown',
+              nodeId: full.entry.producedBy.nodeId,
+              content: full.text,
+              settings,
+            }),
+          );
           content = bounded.content;
         }
       }

@@ -8,19 +8,26 @@ import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
 import { buildTodoTool, TODO_TOOL_NAME, formatTodoBlock } from '../handlers/todoTool';
-import { isWhollyDenied } from '../permissionEngine';
+import {
+  appendMeetingParticipantProtocol,
+  buildMeetingTools,
+  isMeetingToolName,
+  isSilentMeetingControlRequest,
+} from '../handlers/meetingTools';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
-import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
+import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
 import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
-import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
+import { buildSubflowTool } from '../handlers/subflowToolInvocation';
+import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
+import { buildPersonaTools } from '../handlers/personaTools';
+import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
-import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
-import { PermissionRule } from '@/shared/types/permissions';
 import {
   SharedState,
   ProcessNodeParams,
@@ -28,6 +35,7 @@ import {
   ProcessNodeExecResult,
   ToolDefinition,
   HandoffToolInfo,
+  SubflowNodeProperties,
   STAY_ON_NODE_ACTION, // Keep for reference, but won't be returned directly by post
   TOOL_CALL_ACTION,    // Import new actions
   FINAL_RESPONSE_ACTION,
@@ -37,10 +45,11 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
-import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
-import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
+import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
@@ -138,18 +147,13 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Human-readable, collision-free tool names (issue #38, Item A): the raw
-    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
-    // name -> node-id mapping so routing still works.
-    const nameMap = buildHandoffToolNameMap(targets);
-    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
-    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
-
     // Load the containing flow once so descriptions can read each target's
     // user-authored description and full properties (and recurse into subflows).
+    // Loaded BEFORE the handoff/tool name maps are built (issue #385) so a
+    // Subflow target's `invocationMode` can be read while partitioning targets.
     let flowNodesById: Map<string, FlowNode> | null = null;
     try {
-      const flow = await flowService.getFlow(sharedState.flowId);
+      const flow = sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId);
       if (flow) {
         flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));
       }
@@ -157,8 +161,95 @@ export class ProcessNode extends BaseNode {
       log.warn('Could not load flow for handoff descriptions; using basic descriptions', { err });
     }
 
+    // Callable-subflow TOOL invocation (issue #385, deferred Part B of #359):
+    // a Subflow target authored with `invocationMode: 'tool'` is advertised as
+    // a distinct `call_subflow_<slug>` tool instead of a `handoff_to_<slug>`
+    // transition tool — gated behind the experimental `subflowToolInvocation`
+    // setting (default OFF) so an unconfigured install always keeps today's
+    // handoff-only behaviour regardless of what a saved flow authored.
+    const hasSubflowTargets = targets.some((t) => t.type === 'subflow');
+    const subflowToolInvocationEnabled = hasSubflowTargets
+      ? await ModelHandler.isSubflowToolInvocationEnabled()
+      : false;
+    const subflowDetachedInvocationEnabled = hasSubflowTargets
+      ? await ModelHandler.isSubflowDetachedInvocationEnabled()
+      : false;
+    const hasKeyedSessionTarget = targets.some((target) => {
+      if (target.type !== 'subflow') return false;
+      const props = flowNodesById?.get(target.id)?.data?.properties as SubflowNodeProperties | undefined;
+      return props?.sessionScope === 'per-key' && props.saveConversation !== false;
+    });
+    const subflowSessionsEnabled = hasKeyedSessionTarget
+      ? await ModelHandler.isSubflowSessionsEnabled()
+      : false;
+    const subflowToolTargetIds = new Set(
+      subflowToolInvocationEnabled
+        ? targets
+            .filter((t) => {
+              if (t.type !== 'subflow') return false;
+              const targetProps = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
+              return targetProps?.invocationMode === 'tool';
+            })
+            .map((t) => t.id)
+        : [],
+    );
+
+    const subflowDetachedTargetIds = new Set(
+      subflowDetachedInvocationEnabled
+        ? targets.filter((t) => {
+            const props = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
+            return t.type === 'subflow' && props?.invocationMode === 'detached';
+          }).map((t) => t.id)
+        : [],
+    );
+
+    // Human-readable, collision-free tool names (issue #38, Item A): the raw
+    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
+    // name -> node-id mapping so routing still works. Tool-mode subflow targets
+    // get their OWN name map (`call_subflow_*` namespace) and never consume a
+    // `handoff_to_*` slug.
+    const nameMap = buildHandoffToolNameMap(targets.filter((t) => !subflowToolTargetIds.has(t.id) && !subflowDetachedTargetIds.has(t.id)));
+    const subflowNameMap = buildSubflowToolNameMap(targets.filter((t) => subflowToolTargetIds.has(t.id)));
+    const detachedNameMap = new Map(targets.filter((t) => subflowDetachedTargetIds.has(t.id)).map((t) => [t.id, `${SUBFLOW_DETACHED_TOOL_PREFIX}${t.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || t.id}`]));
+    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
+    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
+    sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
+    sharedState.subflowDetachedToolNameMap = sharedState.subflowDetachedToolNameMap || {};
+
     const handoffTools: ToolDefinition[] = [];
     for (const target of targets) {
+      const flowNodeForTarget = flowNodesById?.get(target.id);
+
+      if (subflowDetachedTargetIds.has(target.id)) {
+        const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowDetachedToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget) : `Start ${target.label} as a detached subflow`;
+        const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
+        continue;
+      }
+
+      if (subflowToolTargetIds.has(target.id)) {
+        // Tool-mode Subflow (issue #385): emit `call_subflow_<slug>` instead of
+        // a handoff tool. Dispatch happens in ModelHandler (both the
+        // request/response `processToolCalls` branch and the
+        // self-orchestrating `localToolExecutors` map) via
+        // subflowToolInvocation.executeSubflowToolCall — never through
+        // processHandoffToolCalls (that dispatch is `handoff_to_*`-only).
+        const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget
+          ? await buildHandoffDescription(flowNodeForTarget)
+          : `Run ${target.label} as a callable subflow tool`;
+        const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
+        handoffTools.push(
+          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
+        );
+        log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
+        continue;
+      }
+
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
       sharedState.handoffNameMap[toolName] = target.id;
       sharedState.handoffTargetTypes[target.id] = target.type;
@@ -179,7 +270,7 @@ export class ProcessNode extends BaseNode {
       // isolated message (promptTemplate for a subflow, isolatedPrompt for a
       // process node) is used as the default (see SubflowNode.prep /
       // ProcessNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
+      const targetProps = flowNode?.data?.properties as (SubflowNodeProperties & { isolatedPrompt?: string }) | undefined;
       // Every Subflow is a queue-backed sub-agent. The routing model may call the
       // same handoff tool any number of times in ONE turn; each call contributes
       // one job for this node's single child flow. `concurrencyLimit` on the
@@ -207,6 +298,11 @@ export class ProcessNode extends BaseNode {
         acceptsCallerSpawn &&
         targetProps?.inputMode === 'isolated' &&
         !(authoredIsolatedMessage?.trim());
+      const acceptsCallerSessionKey =
+        subflowSessionsEnabled &&
+        target.type === 'subflow' &&
+        targetProps?.sessionScope === 'per-key' &&
+        targetProps?.saveConversation !== false;
 
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
@@ -246,6 +342,25 @@ export class ProcessNode extends BaseNode {
           descExtras.push('Optionally pass a "prompt" argument to instruct the target node; omit it to use its default prompt.');
         }
       }
+      if (acceptsCallerSessionKey) {
+        paramProps.sessionKey = {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          description: 'Stable child-conversation handle. It overrides the authored key template for this job. Equal keys reuse and serialise access to one child chat; different keys may run concurrently.'
+        };
+        const knownKeys = Object.values(sharedState.subflowSessions ?? {})
+          .filter((session) => session.nodeId === target.id && !!session.sessionKey)
+          .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+          .slice(0, 20)
+          .map((session) => session.sessionKey as string);
+        descExtras.push(
+          'PERSISTENT CHILD CHAT: optionally pass a stable "sessionKey". It overrides the authored key template for this job. Reusing a key appends "task" as a serialised follow-up to the same finished child conversation; different keys can run concurrently. If neither caller nor template resolves a key, the job uses a fresh one-off child.',
+        );
+        if (knownKeys.length > 0) {
+          descExtras.push(`Existing resumable session keys for this sub-agent: ${knownKeys.map((key) => JSON.stringify(key)).join(', ')}.`);
+        }
+      }
       const hasParams = Object.keys(paramProps).length > 0;
 
       handoffTools.push({
@@ -261,11 +376,21 @@ export class ProcessNode extends BaseNode {
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
     }
 
+    if (subflowDetachedTargetIds.size > 0) {
+      handoffTools.push(
+        { name: 'subflow_task_get', description: 'Get the status and terminal result of a detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+        { name: 'subflow_task_cancel', description: 'Cancel a working detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+      );
+    }
+
     log.info('Generated handoff tools', {
       toolsCount: handoffTools.length
     });
 
-    return handoffTools;
+    return [
+      ...handoffTools,
+      ...buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry),
+    ];
   }
 
   async prep(sharedState: SharedState, node_params?: ProcessNodeParams): Promise<ProcessNodePrepResult> {
@@ -278,6 +403,7 @@ export class ProcessNode extends BaseNode {
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
+    const currentAppId = node_params?.properties?.mcpNodes?.[0]?.properties?.boundServer;
 
     log.debug('Extracted properties', {
       nodeId,
@@ -298,6 +424,11 @@ export class ProcessNode extends BaseNode {
       throw new Error("Process node requires a bound model");
     }
 
+    // Immutable Persona behavior snapshots own the Flow permission boundary.
+    if (sharedState.flowSnapshot?.permissionRules) {
+      sharedState.permissionRules = sharedState.flowSnapshot.permissionRules;
+    }
+
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
@@ -306,6 +437,9 @@ export class ProcessNode extends BaseNode {
       excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
+      // A Persona execution is pinned to this immutable snapshot. Never fall
+      // back to the mutable Flow record while one is present.
+      ...(sharedState.flowSnapshot ? { flowSnapshot: sharedState.flowSnapshot } : {}),
       // Tier 3: announce each resource pill the renderer resolves as a live
       // resource:read event, attributed to this node. The renderer itself
       // stays state-agnostic — it just calls back.
@@ -319,8 +453,21 @@ export class ProcessNode extends BaseNode {
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
     // scratchpad AFTER rendering. Tier 3 then injects `${res:NAME}` resources.
+    const personaContext = sharedState.personaInstructionContext;
+    const appliesPersonaContext = Boolean(
+      personaContext
+      && sharedState.personaAttribution
+      && personaContext.personaId === sharedState.personaAttribution.personaId
+      && personaContext.activityId === sharedState.personaAttribution.activityId
+      && personaContext.behaviorRevisionId === sharedState.personaAttribution.behaviorRevisionId
+      && personaContext.rootFlowId === flowId,
+    );
+    const trustedPrompt = appliesPersonaContext
+      ? personaContext!.instruction + '\n\n' + renderedPrompt
+      : renderedPrompt;
+
     let completePrompt = await resolveRunResourceRefs(
-      resolveRunVars(renderedPrompt, sharedState.variables),
+      resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
       { nodeId }
@@ -329,7 +476,13 @@ export class ProcessNode extends BaseNode {
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = await resolveNonSecretGlobalVars(completePrompt) as string;
+    completePrompt = await resolvePromptDynamicReferences(completePrompt, {
+      conversationId: sharedState.conversationId,
+      flowId,
+      nodeId,
+      modelId: boundModel,
+      appId: currentAppId,
+    }) as string;
 
     // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
     // and resources. Scope needs the flow's folder, fetched once (lazily) and
@@ -340,7 +493,12 @@ export class ProcessNode extends BaseNode {
       if (kvCtx) return kvCtx;
       let folder: string | undefined;
       try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
-      kvCtx = { flowId, folder };
+      kvCtx = {
+        flowId,
+        folder,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
+      };
       return kvCtx;
     };
     if (completePrompt.includes('${kv:')) {
@@ -358,6 +516,15 @@ export class ProcessNode extends BaseNode {
         emit: sharedState.emit,
       });
       completePrompt += resourceBlock;
+    }
+
+    // Meeting participants receive a fixed protocol before the prompt is frozen
+    // below. Live roster/round data stays in user inbox messages, so this system
+    // prefix remains byte-identical between turns and across meeting rounds.
+    // Child Subflows do not inherit meetingParticipant, keeping these coordinator
+    // controls confined to the root participant flow.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      completePrompt = appendMeetingParticipantProtocol(completePrompt);
     }
 
     log.debug('Prompt rendered successfully', {
@@ -382,47 +549,6 @@ export class ProcessNode extends BaseNode {
     // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
     sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
 
-    // Issue #246: Build merged permission rules from flow-level rules + autoApprove
-    // desugaring. Stored in SharedState so ModelHandler can evaluate them per-call.
-    // Done once per node visit (prep re-runs on tool loop iterations, which is fine
-    // since the rules are idempotent).
-    {
-      let flowLevelRules: PermissionRule[] = [];
-      try {
-        const flowForPermissions = await flowService.getFlow(flowId);
-        flowLevelRules = flowForPermissions?.permissionRules ?? [];
-      } catch (err) {
-        log.warn('Could not load flow for permission rules', { err });
-      }
-
-      // Desugar autoApprove from each bound MCP server's config:
-      // autoApprove: ['tool1', 'tool2'] → [{action:'tool1',resource:'*',effect:'allow'}, ...]
-      const autoApproveRules: PermissionRule[] = [];
-      if (mcpNodes.length > 0) {
-        try {
-          const allConfigs = await loadServerConfigs();
-          if (Array.isArray(allConfigs)) {
-            for (const mcpNode of mcpNodes) {
-              const serverName = mcpNode.properties.boundServer;
-              if (!serverName) continue;
-              const serverConfig = allConfigs.find(c => c.name === serverName);
-              if (serverConfig?.autoApprove?.length) {
-                for (const toolName of serverConfig.autoApprove) {
-                  autoApproveRules.push({ action: toolName, resource: '*', effect: 'allow' });
-                }
-              }
-            }
-          }
-        } catch (err) {
-          log.warn('Could not load MCP server configs for autoApprove desugaring', { err });
-        }
-      }
-
-      // Merge: autoApprove first (lower priority), flow-level rules after (higher priority).
-      // Flow-level deny rules beat any autoApprove allows (last-match-wins semantics).
-      sharedState.permissionRules = [...autoApproveRules, ...flowLevelRules];
-    }
-
     if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
       // Use tools already processed by MCPNode
       log.info('Using MCP tools from shared state', {
@@ -435,12 +561,7 @@ export class ProcessNode extends BaseNode {
           mcpNodesCount: mcpNodes.length
         });
 
-        // Phase 2 (issue #246): build merged permission rules before fetching tools
-        // so wholly-denied tools are dropped from the advertised list.
-        const mcpResult = await ToolHandler.processMCPNodes({
-          mcpNodes,
-          permissionRules: sharedState.permissionRules,
-        });
+        const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
 
         if (!mcpResult.success) {
           log.error('Failed to process MCP nodes', { error: mcpResult.error });
@@ -451,11 +572,37 @@ export class ProcessNode extends BaseNode {
       }
     }
 
-    // Generate handoff tools for each connected non-MCP node
+    // Generate handoff tools for each connected non-MCP node (also emits
+    // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
+    // targets — issue #385 — and populates sharedState.subflowToolNameMap).
     const handoffTools = await this.generateHandoffTools(sharedState);
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
+
+    // Persona-native abilities are authored into the immutable Process snapshot.
+    // Definitions stay in canonical order and are denied before advertisement;
+    // ModelHandler remains the fenced execution boundary.
+    const personaTools = sharedState.personaAttribution
+      && sharedState.executionAuthority?.commitPersonaMutation
+      ? buildPersonaTools(node_params?.properties?.personaTools, {
+          maintenanceMemoryProposal: Boolean(
+            sharedState.executionAuthority.proposePersonaMemoryMaintenance,
+          ),
+        }).filter(
+          (tool) => !(sharedState.permissionRules ?? []).some((rule) => (
+            rule.effect === 'deny'
+            && (rule.action === '*' || rule.action === tool.name)
+            && (rule.resource === '*' || rule.resource === undefined)
+          )),
+        )
+      : [];
+    const existingToolNames = new Set(availableTools.map((tool) => tool.name));
+    const collision = personaTools.find((tool) => existingToolNames.has(tool.name));
+    if (collision) {
+      throw new Error(`Persona tool name collides with another advertised tool: ${collision.name}`);
+    }
+    availableTools = [...availableTools, ...personaTools];
 
     // Tier 3 (issue #161): when a PRODUCE-role run-artifact resource node is
     // wired to this step, offer an explicit `write_resource` tool so the model
@@ -475,24 +622,35 @@ export class ProcessNode extends BaseNode {
     // offered iff enabled, so flows that don't use it keep a byte-identical tool
     // set (preserving the #89 prefix-cache) and unattended flows can leave it
     // off entirely.
-    // A flow-level `deny` rule for action `question` (isWhollyDenied) removes it
-    // even when the node opted in — satisfies AC#3 (disable for unattended /
-    // headless), mirroring how MCP tools are dropped in ToolHandler.
-    const questionDenied = isWhollyDenied(sharedState.permissionRules ?? [], QUESTION_TOOL_NAME);
-    if (node_params?.properties?.allowQuestion === true && !questionDenied &&
-        !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
+    const questionDeniedBySnapshot = (sharedState.permissionRules ?? []).some(
+      rule => rule.effect === 'deny'
+        && rule.action === 'question'
+        && (rule.resource === '*' || rule.resource === undefined),
+    );
+    if (node_params?.properties?.allowQuestion === true
+        && !questionDeniedBySnapshot
+        && !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
       availableTools = [...availableTools, buildQuestionTool()];
     }
 
     // Todo tool (issue #259): offer the synthetic `todo` tool only when this
     // Process node opts in (`enableTodoTool`). Like the question tool, it is
     // offered iff enabled (not sticky-armed), so flows that don't use it keep a
-    // byte-identical tool set (preserving the #89 prefix-cache). A flow-level
-    // `deny` rule for action `todo` removes it even when the node opted in.
-    const todoDenied = isWhollyDenied(sharedState.permissionRules ?? [], TODO_TOOL_NAME);
-    if (node_params?.properties?.enableTodoTool === true && !todoDenied &&
+    // byte-identical tool set (preserving the #89 prefix-cache).
+    if (node_params?.properties?.enableTodoTool === true &&
         !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
       availableTools = [...availableTools, buildTodoTool()];
+    }
+
+    // Meeting tools are coordinator-owned capabilities. Replace any colliding
+    // advertised names with our fixed definitions, both to keep the block
+    // deterministic and to ensure a server tool can never impersonate a meeting
+    // control. Ordinary conversations retain their exact existing tool set.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      availableTools = [
+        ...availableTools.filter((tool) => !isMeetingToolName(tool.name)),
+        ...buildMeetingTools(),
+      ];
     }
 
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
@@ -501,6 +659,13 @@ export class ProcessNode extends BaseNode {
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
+        tool.context = {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: tool.server,
+        };
         // Issue #255: carry the advertise-time identity (client generation +
         // schema hash) so a stale dispatch after a reconnect is rejected.
         sharedState.toolNameMap[tool.name] = {
@@ -512,6 +677,8 @@ export class ProcessNode extends BaseNode {
           schemaHash: tool.schemaHash,
           annotations: tool.annotations,
           uiResourceUri: tool.uiResourceUri,
+          presetArgs: tool.presetArgs,
+          context: tool.context,
         };
       }
     }
@@ -528,6 +695,7 @@ export class ProcessNode extends BaseNode {
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
     runId: sharedState.logicalRunId,
+    archiveModelTurns: !sharedState.ephemeral,
     codexSession: sharedState.codexSessions?.[nodeId],
     onCodexSessionChange: (session) => {
       if (session) {
@@ -538,9 +706,13 @@ export class ProcessNode extends BaseNode {
       }
     },
     requireToolApproval: sharedState.requireApproval ?? false,
+    onApprovalRequired: sharedState.onApprovalRequired,
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
+    permissionRules: structuredClone(sharedState.permissionRules ?? []),
+    executionAuthority: sharedState.executionAuthority,
+    personaAttribution: sharedState.personaAttribution,
   };
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
@@ -597,21 +769,9 @@ export class ProcessNode extends BaseNode {
         systemPromptContent.substring(0, 100) + '...' : systemPromptContent
     });
 
-    // Assemble the node's threaded history (lossless — this is written back to
-    // SharedState.messages). Stripping handoff plumbing for the MODEL happens at
-    // the provider boundary (ModelHandler.generateCompletion → stripHandoffPlumbing),
-    // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
-    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
-
-    // Shape what the MODEL sees — both wire-only, prepResult.messages stays the
-    // full history so post() writes it back intact and the tool loop can
-    // re-enter without losing the prior conversation:
-    //  1. collapseNodeOutputs: drop the settled tool exchanges of every node
-    //     whose outputMode is 'latest-message' (their final responses survive).
-    //  2. scopeMessagesForInput: narrow to this node's inputMode
-    //     (latest-message / isolated).
-    // When neither applies, wireMessages stays unset and the model sees
-    // prepResult.messages verbatim.
+    // Begin the shared immutable materialization pipeline. Runtime-only reads,
+    // resource events, and tool setup remain outside it; the same pure fold /
+    // scope / finalization stages are also used by the read-only preview route.
     const inputMode = node_params?.properties?.inputMode ?? 'full-history';
     // Caller handoff input (issue #96): the single-shot, node-id-scoped `prompt`
     // an upstream routing model passed via the handoff tool — the same value
@@ -643,21 +803,27 @@ export class ProcessNode extends BaseNode {
       }
     }
 
-    let wireBase = prepResult.messages;
+    let collapsedNodeIds = new Set<string>();
     if (!preserveFullHistoryForClaudeResume) {
       try {
-        const flow = await flowService.getFlow(flowId);
-        const collapsedNodeIds = new Set(
+        const flow = sharedState.flowSnapshot ?? await flowService.getFlow(flowId);
+        collapsedNodeIds = new Set(
           (flow?.nodes ?? [])
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
             .map((n) => n.id)
         );
-        wireBase = collapseNodeOutputs(wireBase, collapsedNodeIds);
       } catch (err) {
         // Collapsing is a context-token optimization — never block the run on it.
         log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
       }
     }
+    const materializationBase = prepareModelInputMaterialization({
+      canonicalMessages: sharedState.messages,
+      systemMessage,
+      collapsedNodeIds,
+    });
+    prepResult.messages = materializationBase.threaded;
+    let wireBase = materializationBase.folded;
 
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
@@ -665,7 +831,7 @@ export class ProcessNode extends BaseNode {
     if (wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
-      && message.content.includes('${')
+      && (message.content.includes('${') || message.content.includes('@'))
     )) {
       wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
@@ -685,27 +851,30 @@ export class ProcessNode extends BaseNode {
           sharedState.emit,
           { nodeId },
         );
+        content = await resolvePromptDynamicReferences(content, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
         return content === message.content
           ? message
           : { ...message, content } as FlujoChatMessage;
       }));
     }
 
+    let resolvedIsolatedPrompt: string | undefined;
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
-      // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
-      // like the system prompt) so an isolated step can pull captured state.
-      // Tier 3: `${res:NAME}` likewise.
-      // Isolated mode: when this node opted into `allowCallerPrompt` (issue #96,
-      // default ON) and the routing model passed a `prompt` via the handoff tool,
-      // that caller-supplied message OVERRIDES the authored `isolatedPrompt`
-      // (which stays the default/fallback) — mirroring the isolated subflow path.
+      // Runtime reference reads stay outside the immutable materializer. Their
+      // resolved value is supplied as plain data to the shared scoping stage.
       const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
       const callerPrompt = allowCallerPrompt ? handoffForThisNode?.prompt?.trim() : undefined;
       if (callerPrompt) {
         log.info('Using caller-supplied prompt for isolated process node', { nodeId });
       }
       const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
-      let resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      resolvedIsolatedPrompt = isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -714,32 +883,30 @@ export class ProcessNode extends BaseNode {
           )
         : isolatedPrompt;
       if (typeof resolvedIsolatedPrompt === 'string') {
-        resolvedIsolatedPrompt = await resolveNonSecretGlobalVars(resolvedIsolatedPrompt) as string;
+        resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
       }
-      // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
       if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
       }
-      prepResult.wireMessages = scopeMessagesForInput(
-        wireBase,
-        inputMode,
-        resolvedIsolatedPrompt,
-      );
     }
 
-    // MCP Apps: `ui/update-model-context` is future-turn context, not a chat
-    // message. Add the latest per-app snapshots to the wire view only, directly
-    // before the current user input, so they neither appear in nor mutate the
-    // persisted transcript. This also keeps overwrite semantics: exactly one
-    // synthetic message is generated from the current map on every prep.
-    const contextBase = prepResult.wireMessages ?? wireBase;
-    const withAppContext = withMcpAppModelContext(
-      contextBase,
-      sharedState.mcpAppContexts,
-    );
-    if (withAppContext !== contextBase) {
-      prepResult.wireMessages = withAppContext;
-    }
+    let materialized = finalizeModelInputMaterialization({
+      ...materializationBase,
+      folded: wireBase,
+      systemContent: completePrompt,
+      inputMode,
+      isolatedPrompt: resolvedIsolatedPrompt,
+      mcpAppContexts: sharedState.mcpAppContexts,
+    });
+    prepResult.wireMessages = materialized.wireChanged
+      ? materialized.scoped
+      : undefined;
 
     // Issue #168 / #239: expose the synthetic `read_resource` tool so the model
     // can dereference a `flujo://run/...` marker (left by an oversized captured
@@ -795,8 +962,13 @@ export class ProcessNode extends BaseNode {
     // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
     // which would otherwise drop the tool and rewrite the block.
     const armed = new Set(sharedState.armedSyntheticTools ?? []);
-    if (shouldArmReadResource) armed.add(READ_RESOURCE_TOOL_NAME);
-    if (hasNativeResources) armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+    if (shouldArmReadResource) {
+      armed.add(READ_RESOURCE_TOOL_NAME);
+      // Any step that can mint a run resource must also be able to enumerate
+      // the concrete URI afterwards. This is front-loaded alongside
+      // read_resource so the provider tool block remains byte-stable.
+      armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+    }
 
     // prepResult.availableTools is the same array reference, so these are picked
     // up by execCore's toolNameMap build and the model call.
@@ -804,7 +976,7 @@ export class ProcessNode extends BaseNode {
         !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)) {
       availableTools.push(buildReadResourceTool());
     }
-    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) && mcpNodes.length > 0 &&
+    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) &&
         !availableTools.some((t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME)) {
       // Rebuilt from configuration only (no re-probe), so the bytes match the
       // definition emitted on the turn that armed it.
@@ -816,28 +988,33 @@ export class ProcessNode extends BaseNode {
       sharedState.armedSyntheticTools = Array.from(armed).sort();
     }
 
-    // Todo tool (issue #259): re-inject the current run-scoped task list into the
-    // model's view each turn, so intent survives a compacting history. Appended
-    // as a WIRE-ONLY user message (prepResult.messages / persisted transcript is
-    // untouched, like the isolated/scoped wire views) rather than into the FROZEN
-    // system prompt (#249) — mutating that prefix every time a status flips would
-    // bust the provider prefix cache. Only emitted once the list is non-empty, so
-    // a todo-enabled node with no tasks yet keeps a byte-identical wire view.
+    // Todo state is plain data supplied to the shared immutable finalizer.
+    // The canonical transcript remains untouched.
+    const additionalWireMessages: FlujoChatMessage[] = [];
     if (node_params?.properties?.enableTodoTool === true && (sharedState.todos?.length ?? 0) > 0) {
       const todoBlock = formatTodoBlock(sharedState.todos);
       if (todoBlock) {
-        const base = prepResult.wireMessages ?? wireBase;
-        prepResult.wireMessages = [
-          ...base,
-          {
-            id: uuidv4(),
-            role: 'user',
-            content: todoBlock,
-            timestamp: Date.now(),
-          } as FlujoChatMessage,
-        ];
+        additionalWireMessages.push({
+          id: uuidv4(),
+          role: 'user',
+          content: todoBlock,
+          timestamp: Date.now(),
+        } as FlujoChatMessage);
       }
     }
+    if (additionalWireMessages.length > 0) {
+      materialized = finalizeModelInputMaterialization({
+        ...materializationBase,
+        folded: wireBase,
+        systemContent: completePrompt,
+        inputMode,
+        isolatedPrompt: resolvedIsolatedPrompt,
+        mcpAppContexts: sharedState.mcpAppContexts,
+        additionalWireMessages,
+      });
+      prepResult.wireMessages = materialized.scoped;
+    }
+    prepResult.modelInputForArchive = materialized.snapshot;
 
     log.info('Assembled node context', {
       systemMessageCount: 1,
@@ -855,13 +1032,7 @@ export class ProcessNode extends BaseNode {
     // conversation content ONLY (never credentials).
     if (sharedState.debugMode || FEATURES.ENABLE_EXECUTION_TRACKER) {
       try {
-        prepResult.modelInput = deriveModelInputView({
-          threaded: prepResult.messages,
-          foldedView: wireBase,
-          scopedView: prepResult.wireMessages ?? wireBase,
-          systemContent: completePrompt,
-          inputMode,
-        });
+        prepResult.modelInput = materialized.snapshot;
         // Issue #167 (Phase 2 of #162): expose the per-model-call wire snapshots
         // this visit produced as an ordered array the debugger can page through,
         // keeping `modelInput` as the first/representative entry for backward
@@ -945,6 +1116,8 @@ export class ProcessNode extends BaseNode {
             schemaHash: t.schemaHash,
             annotations: t.annotations,
             uiResourceUri: t.uiResourceUri,
+            presetArgs: t.presetArgs,
+            context: t.context,
           };
         }
       }
@@ -966,8 +1139,11 @@ export class ProcessNode extends BaseNode {
       let modelResult;
       let usedToolFreeFallback = false;
       try {
-        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined) =>
-          ModelHandler.callModel({
+        const callModelWithTools = async (
+          attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        ) => {
+          await prepResult.executionAuthority?.assertCurrent();
+          const result = await ModelHandler.callModel({
             modelId: prepResult.boundModel,
             prompt: prepResult.currentPrompt,
             messages: prepResult.messages,
@@ -979,7 +1155,7 @@ export class ProcessNode extends BaseNode {
             iteration: 1, // Iteration is no longer handled by ModelHandler, but keep for now
             maxIterations: 1, // Vestigial: the agentic-turn cap is now resolved from maxTurns (see below)
             // Per-node override of the agentic-turn cap. ModelHandler merges this with
-            // the bound model's maxTurns setting and the system default (50), replacing
+            // the bound model's maxTurns setting and the system default (255), replacing
             // the former hard-coded 30 that aborted long Claude-subscription runs (#48).
             maxTurns: node_params?.properties?.maxTurns,
             // Per-node override of the per-completion output-token cap (#189).
@@ -991,7 +1167,11 @@ export class ProcessNode extends BaseNode {
             compactionMode: node_params?.properties?.compactionMode,
             compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
             onFinalWire: prepResult.modelInput
-              ? (finalWire, visualCompaction) => {
+              ? (finalWire, visualCompaction, finalModelInput) => {
+                  if (finalModelInput) {
+                    prepResult.modelInput = finalModelInput;
+                    prepResult.modelInputForArchive = finalModelInput;
+                  }
                   const captured = finalWire.map((message, index) => ({
                     ...message,
                     id: `final-wire-${prepResult.nodeId}-${index}`,
@@ -1014,6 +1194,8 @@ export class ProcessNode extends BaseNode {
                   prepResult.modelInputs = [prepResult.modelInput!];
                 }
               : undefined,
+            archiveModelTurns: prepResult.archiveModelTurns,
+            modelInputForArchive: prepResult.modelInputForArchive,
             nodeName, // Pass the node name to be included in the response header
             nodeId: prepResult.nodeId, // Pass the node ID
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
@@ -1022,9 +1204,21 @@ export class ProcessNode extends BaseNode {
             codexSession: prepResult.codexSession,
             onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
+            onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+            beforeToolDispatch: prepResult.executionAuthority?.assertCurrent,
+            beforeModelDispatch: prepResult.executionAuthority?.assertCurrent,
+            executionAuthority: prepResult.executionAuthority,
+            personaAttribution: prepResult.personaAttribution,
+            signal: prepResult.executionAuthority?.signal,
           });
+          // Provider abort is cooperative. A response can arrive after the
+          // Persona heartbeat/fence was lost, so reject it before any message,
+          // event, node, or conversation projection observes the stale result.
+          await prepResult.executionAuthority?.assertCurrent();
+          return result;
+        };
 
         // Provider catalogues can tell us before the request that a model lacks
         // tool support. Strip only handoff-only plumbing when routing remains
@@ -1160,20 +1354,23 @@ export class ProcessNode extends BaseNode {
 
       return execResult;
     } catch (error) {
-    // For critical tool errors or model errors, we want to rethrow them
-    // to abort the flow execution
-    if (error && typeof error === 'object' &&
-        ('isCriticalToolError' in error || 'isModelError' in error)) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // If this error raced a higher-level lease loss, authority failure wins and
+      // escapes instead of being converted into a persistable Process-node error.
+      await prepResult.executionAuthority?.assertCurrent();
+      // For critical tool errors or model errors, we want to rethrow them
+      // to abort the flow execution
+      if (error && typeof error === 'object' &&
+          ('isCriticalToolError' in error || 'isModelError' in error)) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
 
-      log.error('Critical error detected - propagating to abort flow:', {
-        error: errorMessage,
-        isModelError: 'isModelError' in error,
-        isCriticalToolError: 'isCriticalToolError' in error
-      });
+        log.error('Critical error detected - propagating to abort flow:', {
+          error: errorMessage,
+          isModelError: 'isModelError' in error,
+          isCriticalToolError: 'isCriticalToolError' in error
+        });
 
-      // Rethrow the error to stop execution and propagate to the frontend
-      throw error;
+        // Rethrow the error to stop execution and propagate to the frontend
+        throw error;
       }
 
       // For other errors, create an error result
@@ -1438,13 +1635,19 @@ export class ProcessNode extends BaseNode {
       try {
         let folder: string | undefined;
         try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, execResult.content ?? '', { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, execResult.content ?? '', {
+          flowId: sharedState.flowId,
+          folder,
+          executionAuthority: sharedState.executionAuthority,
+          personaAttribution: sharedState.personaAttribution,
+        });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {
           log.info('Captured node output into persistent kv', { captureKv, nodeId: node_params?.id });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureKv failed; continuing run', error);
       }
     }
@@ -1458,9 +1661,15 @@ export class ProcessNode extends BaseNode {
     // buildNodeContext drops any stale system messages), so nothing is lost by
     // excluding it here. (execution-core v2 Phase 3, plan §11.2.4)
     if (execResult.messages && execResult.messages.length > 0) {
-      sharedState.messages = execResult.messages.filter(m => m.role !== 'system');
+      // Absence from a model-facing/result projection is never deletion. Upsert
+      // returned canonical messages and preserve every existing canonical id.
+      const canonicalMessages = [...sharedState.messages];
+      for (const message of execResult.messages) {
+        if (message.role !== 'system') upsertMessageById(canonicalMessages, message);
+      }
+      sharedState.messages = canonicalMessages;
 
-      log.info('Updated messages in sharedState (system prompt excluded)', {
+      log.info('Updated canonical messages in sharedState (system prompt excluded)', {
         messagesCount: sharedState.messages.length
       });
     }
@@ -1483,9 +1692,30 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Process tool calls to check for handoff requests FIRST
-    const handoffRequested = this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
-    if (handoffRequested && sharedState.handoffRequested) {
+    // Silence is terminal for this participant's current meeting round. If the
+    // model emitted it in the same provider response as a handoff, route the
+    // batch through the normal local-tool dispatcher first; runFlow will accept
+    // the silence and end the turn without entering the handoff target.
+    const silentMeetingControlRequested = Boolean(
+      sharedState.meetingParticipant
+      && sharedState.meetingTurn
+      && execResult.toolCalls?.some((call) =>
+        isSilentMeetingControlRequest(call.name, call.args)),
+    );
+
+    // Process tool calls to check for handoff requests FIRST, except when the
+    // same response explicitly ended this meeting turn silently.
+    const handoffRequested = silentMeetingControlRequested
+      ? false
+      : this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
+    const nonHandoffToolCalls = execResult.toolCalls?.filter(
+      tc => tc.name !== 'handoff' && !tc.name.startsWith('handoff_to_'),
+    );
+    const mustProcessMaintenanceProposal = Boolean(
+      sharedState.executionAuthority?.proposePersonaMemoryMaintenance
+      && nonHandoffToolCalls?.some((call) => call.name === 'remember'),
+    );
+    if (handoffRequested && sharedState.handoffRequested && !mustProcessMaintenanceProposal) {
       const edgeId = sharedState.handoffRequested.edgeId;
       log.info(`Handoff requested via tool call, returning edge ID: ${edgeId}`);
       // The service layer will clear sharedState.handoffRequested after transition
@@ -1493,7 +1723,6 @@ export class ProcessNode extends BaseNode {
     }
 
     // If no handoff, check for other tool calls (excluding handoff tools already processed)
-    const nonHandoffToolCalls = execResult.toolCalls?.filter(tc => !tc.name.startsWith('handoff_to_'));
     if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
       log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION');
       return TOOL_CALL_ACTION; // Return tool call action

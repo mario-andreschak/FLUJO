@@ -16,16 +16,25 @@
 // Async return values are configured in beforeEach; a bare undefined return is
 // harmless for the void-returning collaborators (they are awaited).
 const verifyStorageMock = jest.fn();
+const migrateWorkspaceLayoutMock = jest.fn();
 const migrateInternalMcpServersMock = jest.fn();
 const startEnabledServersMock = jest.fn();
 const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
 const isUserEncryptionEnabledMock = jest.fn();
-const ensureVendoredFlowGeneratorMock = jest.fn();
+const ensureDefaultFlujoAgentMock = jest.fn();
+const listPersonasMock = jest.fn();
+const reconcilePersonaRoleBehaviorsMock = jest.fn();
+const inspectPersonaRuntimeMock = jest.fn();
+const startPersonaFlowDispatcherMock = jest.fn();
+const reconcilePersonaSchedulerProjectionsMock = jest.fn();
 
 jest.mock('@/utils/storage/backend', () => ({
   verifyStorage: (...a: unknown[]) => verifyStorageMock(...a),
+}));
+jest.mock('@/backend/services/workspace/migration', () => ({
+  migrateWorkspaceLayout: (...a: unknown[]) => migrateWorkspaceLayoutMock(...a),
 }));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
@@ -37,23 +46,38 @@ jest.mock('@/backend/services/spotlight', () => ({
   refreshSpotlightServers: (...a: unknown[]) => refreshSpotlightMock(...a),
 }));
 jest.mock('@/backend/services/scheduler', () => ({
-  getSchedulerService: () => ({ start: (...a: unknown[]) => schedulerStartMock(...a) }),
+  getSchedulerService: () => ({
+    start: (...a: unknown[]) => schedulerStartMock(...a),
+    reconcilePersonaSchedulerProjections: (...a: unknown[]) =>
+      reconcilePersonaSchedulerProjectionsMock(...a),
+  }),
 }));
 jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: (...a: unknown[]) => isEncryptionLockedMock(...a),
   isUserEncryptionEnabled: (...a: unknown[]) => isUserEncryptionEnabledMock(...a),
 }));
-jest.mock('@/backend/services/flow/systemFlows', () => ({
-  ensureVendoredFlowGenerator: (...a: unknown[]) => ensureVendoredFlowGeneratorMock(...a),
+jest.mock('@/backend/services/flow/defaultAgent', () => ({
+  ensureDefaultFlujoAgent: (...a: unknown[]) => ensureDefaultFlujoAgentMock(...a),
+}));
+jest.mock('@/backend/services/enduringAgents', () => ({
+  listPersonas: (...a: unknown[]) => listPersonasMock(...a),
+  reconcilePersonaRoleBehaviors: (...a: unknown[]) => reconcilePersonaRoleBehaviorsMock(...a),
+  inspectAndReconcilePersonaRuntime: (...a: unknown[]) => inspectPersonaRuntimeMock(...a),
+  startPersonaFlowDispatcher: (...a: unknown[]) => startPersonaFlowDispatcherMock(...a),
 }));
 
-import { ensureBackendInitialized, onUnlocked } from '@/backend/init';
+import {
+  ensureAllWorkspacesInitialized,
+  ensureBackendInitialized,
+  onUnlocked,
+} from '@/backend/init';
+import { ensureWorkspaceDirs } from '@/utils/workspace';
 
 function clearGlobals(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_init_promise = undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_secret_services_promise = undefined;
+  (global as any).__flujo_workspace_init_promises = undefined;
+  (global as any).__flujo_workspace_secret_promises = undefined;
 }
 
 describe('backend init startup gating (#78)', () => {
@@ -61,7 +85,13 @@ describe('backend init startup gating (#78)', () => {
     jest.clearAllMocks();
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
-    ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
+    migrateWorkspaceLayoutMock.mockResolvedValue(undefined);
+    ensureDefaultFlujoAgentMock.mockResolvedValue(undefined);
+    listPersonasMock.mockResolvedValue([{ id: 'persona_startup' }]);
+    reconcilePersonaRoleBehaviorsMock.mockResolvedValue(undefined);
+    inspectPersonaRuntimeMock.mockResolvedValue(undefined);
+    startPersonaFlowDispatcherMock.mockResolvedValue(undefined);
+    reconcilePersonaSchedulerProjectionsMock.mockResolvedValue(undefined);
     migrateInternalMcpServersMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
     refreshSpotlightMock.mockResolvedValue(undefined);
@@ -73,8 +103,12 @@ describe('backend init startup gating (#78)', () => {
   it('DEFAULT mode: verifies storage, then starts MCP servers, then arms the scheduler at boot', async () => {
     await ensureBackendInitialized();
 
+    expect(migrateWorkspaceLayoutMock).toHaveBeenCalledTimes(1);
     expect(verifyStorageMock).toHaveBeenCalledTimes(1);
-    expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
+    expect(migrateWorkspaceLayoutMock.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyStorageMock.mock.invocationCallOrder[0]
+    );
+    expect(ensureDefaultFlujoAgentMock).toHaveBeenCalledTimes(1);
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
@@ -86,6 +120,25 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(
       schedulerStartMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it('does not run downstream startup when workspace migration fails, then retries cleanly', async () => {
+    migrateWorkspaceLayoutMock
+      .mockRejectedValueOnce(new Error('workspace migration failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(ensureBackendInitialized()).rejects.toThrow('workspace migration failed');
+
+    expect(verifyStorageMock).not.toHaveBeenCalled();
+    expect(ensureDefaultFlujoAgentMock).not.toHaveBeenCalled();
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+
+    await ensureBackendInitialized();
+
+    expect(migrateWorkspaceLayoutMock).toHaveBeenCalledTimes(2);
+    expect(verifyStorageMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not start the sweep until a failed migration succeeds on retry', async () => {
@@ -114,7 +167,7 @@ describe('backend init startup gating (#78)', () => {
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
-  it('onUnlocked (USER mode) starts both exactly once; a second call is a no-op', async () => {
+  it('onUnlocked starts services once and re-kicks durable Persona work on later unlocks', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
     isUserEncryptionEnabledMock.mockResolvedValue(true);
 
@@ -127,13 +180,22 @@ describe('backend init startup gating (#78)', () => {
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
     // MCP before scheduler here too.
     expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(
+      inspectPersonaRuntimeMock.mock.invocationCallOrder[0]
+    );
+    expect(inspectPersonaRuntimeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startPersonaFlowDispatcherMock.mock.invocationCallOrder[0]
+    );
+    expect(startPersonaFlowDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
       schedulerStartMock.mock.invocationCallOrder[0]
     );
 
-    // Idempotent: repeated unlocks must not double-start.
+    // MCP/scheduler startup stays once-only, while the idempotent dispatcher +
+    // scheduler projection kick runs again to resume work admitted while locked.
     await onUnlocked();
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+    expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(2);
+    expect(reconcilePersonaSchedulerProjectionsMock).toHaveBeenCalledWith(false);
   });
 
   it('onUnlocked in DEFAULT mode is a no-op (boot already started everything)', async () => {
@@ -141,6 +203,7 @@ describe('backend init startup gating (#78)', () => {
     await onUnlocked();
 
     expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
@@ -155,6 +218,18 @@ describe('backend init startup gating (#78)', () => {
     // e.g. the /api/init route calling in later — must not double-start.
     await ensureBackendInitialized();
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('initializes every discovered workspace so inactive automations are armed', async () => {
+    await ensureWorkspaceDirs('research');
+
+    await ensureAllWorkspacesInitialized();
+
+    expect(verifyStorageMock).toHaveBeenCalledTimes(2);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(2);
+    expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(2);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(2);
   });
 });

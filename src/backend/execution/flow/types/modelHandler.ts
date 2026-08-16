@@ -5,12 +5,15 @@ import {
   ToolCallInfo,
   MCPNodeReference,
   CodexSessionMetadata,
+  ToolReferenceContext,
+  type FlowExecutionAuthority,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
-import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { PersonaAttribution } from '@/shared/types/enduringAgent';
+import type { ModelInputSnapshot } from '../types';
 
 // Input for model call
 export interface ModelCallInput {
@@ -30,7 +33,7 @@ export interface ModelCallInput {
   /**
    * Optional per-node override of the agentic-turn cap for self-orchestrating
    * adapters (Claude subscription). When set (> 0) it wins; otherwise callModel
-   * resolves the bound model's `maxTurns`, then DEFAULT_AGENTIC_MAX_TURNS (50).
+   * resolves the bound model's `maxTurns`, then DEFAULT_AGENTIC_MAX_TURNS (255).
    * This is the authoritative cap that replaced the former hard-coded 30.
    */
   maxTurns?: number;
@@ -47,7 +50,12 @@ export interface ModelCallInput {
   onFinalWire?: (
     messages: OpenAI.ChatCompletionMessageParam[],
     diagnostic?: VisualCompactionDiagnostic,
+    modelInput?: ModelInputSnapshot,
   ) => void;
+  /** Persist actual provider dispatches for ordinary, durable Chat conversations. */
+  archiveModelTurns?: boolean;
+  /** Structural fold/scope/handoff provenance paired with the final dispatch. */
+  modelInputForArchive?: ModelInputSnapshot;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**
@@ -56,7 +64,7 @@ export interface ModelCallInput {
    * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
    * `timeout` is the source MCP node's per-call timeout in seconds.
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
@@ -66,6 +74,8 @@ export interface ModelCallInput {
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
+  /** Headless approval behavior for self-orchestrating adapters. */
+  onApprovalRequired?: 'auto' | 'fail' | 'pause';
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */
@@ -74,6 +84,14 @@ export interface ModelCallInput {
    *  localToolExecutor so a self-orchestrating adapter degrades it to a
    *  tool-error instead of blocking for an answer that will never come. */
   unattended?: boolean;
+  /** Abort signal for provider and adapter work. */
+  signal?: AbortSignal;
+  /** Runtime-only fencing authority. It is never copied into provider input. */
+  executionAuthority?: FlowExecutionAuthority;
+  personaAttribution?: PersonaAttribution;
+  /** Final authority checks immediately before external side effects. */
+  beforeModelDispatch?: () => Promise<void>;
+  beforeToolDispatch?: () => Promise<void>;
 }
 
 // Result of model call
@@ -112,7 +130,7 @@ export interface ToolCallProcessingInput {
    * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme. `timeout` is the
    * source MCP node's per-call timeout in seconds (-1 = none; unset = default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /**
    * Live-event emitter for the run. When present, each MCP call is bracketed by
    * tool:call / tool:result events and server progress notifications become
@@ -152,24 +170,14 @@ export interface ToolCallProcessingInput {
    *  via executeMCPResourceTool / executeNativeReadResource. */
   mcpNodes?: MCPNodeReference[];
   /**
-   * Flow-level + autoApprove permission rules (issue #246). When provided, each
-   * tool call is evaluated against these rules BEFORE dispatch:
-   *   'deny'  → synthetic "Permission denied" tool result (no MCP call).
-   *   'allow' → execute immediately, bypassing the requireApproval gate.
-   *   'ask'   → existing approval-gate behaviour.
-   */
-  permissionRules?: PermissionRule[];
-  /**
-   * User "always" saved rules for this conversation (issue #246). Evaluated
-   * after permissionRules but cannot override a flow-level deny.
-   */
-  savedPermissionRules?: SavedPermissionRule[];
-  /**
    * Unattended run (issue #218/#258). When true, the synthetic `question` tool
    * degrades to a clear tool-error instead of blocking the turn for a user
    * answer that will never come.
    */
   unattended?: boolean;
+  executionAuthority?: FlowExecutionAuthority;
+  personaAttribution?: PersonaAttribution;
+  beforeToolDispatch?: () => Promise<void>;
 }
 
 // Tool call processing result

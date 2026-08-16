@@ -29,6 +29,7 @@ import type {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import type {
   Transport,
   TransportSendOptions,
@@ -36,18 +37,21 @@ import type {
 import { mcpService } from '@/frontend/services/mcp';
 import {
   MAX_UI_RESOURCE_BYTES,
+  canonicalizeLoopbackCspOrigin,
   extractUiResourceUri,
-  isLoopbackCspOrigin,
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
-import { deriveOriginKey } from '@/shared/utils/mcpAppOrigin';
+import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
 import {
+  clampFloatingPosition,
   constrainFloatingRect,
   FloatingResizeHandles,
   PointerDragShield,
   resizeFloatingRect,
+  useFixedOriginOffset,
   usePointerDrag,
   type ResizeDirection,
 } from './floatingPanel';
@@ -71,6 +75,12 @@ const MAX_APP_DIMENSION_PX = 6_000;
 export interface McpAppFrameProps {
   /** Conversation that owns app-created server state, when hosted from chat. */
   conversationId?: string;
+  /**
+   * Stable host-local identity for a standalone app instance. This preserves
+   * server-backed state across the intentional inline -> pip View handoff; it
+   * is an ownership namespace, not authorization or a chat attachment.
+   */
+  ownerScopeId?: string;
   /** Server that owns the `ui://` resource. */
   serverName: string;
   /** The `ui://…` resource URI to read and render. */
@@ -304,20 +314,31 @@ function createStablePostMessageTransport(
   return wrapper;
 }
 
-/** CSP + permission + domain block a UI resource declares under `_meta.ui`. */
+/** CSP + permission policy a UI resource declares under `_meta.ui`. */
 interface AppResource {
   html: string;
   csp?: McpUiResourceCsp;
+  /**
+   * The resource's declared CSP before sanitization. Kept so the grant can be
+   * re-derived once sandbox discovery reports the server-side allow-all escape
+   * hatch (a literal '*' is otherwise dropped by the strict mirror).
+   */
+  rawCsp?: McpUiResourceCsp;
   permissions?: McpUiResourcePermissions;
-  domain?: string;  // Optional origin domain for per-app sandbox isolation
+  // `_meta.ui.prefersBorder: false` means the app paints its own frame (a
+  // workbench, a browser window). Drawing FLUJO's decorative border on top of
+  // one is what makes those apps look like a debug harness.
+  prefersBorder?: boolean;
 }
 
 interface SandboxEndpointResponse {
   port?: number;
   token?: string;
   url?: string;
-  originKey?: string;  // Echo of the requested originKey (when provided)
-  shared?: boolean;    // Whether this is a fallback to the shared origin (Mode C)
+  originKey?: string;
+  shared?: boolean;
+  /** Server reports the `network.allowAllMcpAppContent` escape hatch. */
+  allowAll?: boolean;
 }
 
 interface BrowserLocation {
@@ -330,45 +351,41 @@ export function buildSandboxUrl(
   data: SandboxEndpointResponse,
   host: BrowserLocation,
 ): string {
+  if (typeof data.shared !== 'boolean') {
+    throw new Error('Sandbox endpoint discovery did not describe its origin mode');
+  }
+  if (!isValidMcpAppDomain(data.originKey)) {
+    throw new Error('Sandbox endpoint discovery returned an invalid origin key');
+  }
   if (typeof data.token !== 'string' || data.token.length === 0) {
     throw new Error('Sandbox endpoint discovery returned invalid credentials');
   }
 
+  if (typeof data.url !== 'string') {
+    throw new Error('Sandbox endpoint discovery did not return an isolated app URL');
+  }
   let sandboxUrl: URL;
-  if (data.url !== undefined) {
-    if (typeof data.url !== 'string') {
-      throw new Error('Sandbox endpoint discovery returned an invalid public URL');
+  try {
+    sandboxUrl = new URL(data.url);
+  } catch {
+    throw new Error('Sandbox endpoint discovery returned an invalid public URL');
+  }
+  if (
+    (sandboxUrl.protocol !== 'http:' && sandboxUrl.protocol !== 'https:')
+    || sandboxUrl.username
+    || sandboxUrl.password
+  ) {
+    throw new Error('Sandbox public URL must be an absolute HTTP(S) URL without credentials');
+  }
+  if (host.protocol === 'https:' && sandboxUrl.protocol !== 'https:') {
+    throw new Error('HTTPS FLUJO deployments require an HTTPS MCP Apps sandbox URL');
+  }
+  if (data.shared) {
+    if (sandboxUrl.searchParams.get('originKey') !== data.originKey) {
+      throw new Error('Shared sandbox URL is not bound to the verified app origin key');
     }
-    try {
-      sandboxUrl = new URL(data.url);
-    } catch {
-      throw new Error('Sandbox endpoint discovery returned an invalid public URL');
-    }
-    if (
-      (sandboxUrl.protocol !== 'http:' && sandboxUrl.protocol !== 'https:')
-      || sandboxUrl.username
-      || sandboxUrl.password
-    ) {
-      throw new Error('Sandbox public URL must be an absolute HTTP(S) URL without credentials');
-    }
-    if (host.protocol === 'https:' && sandboxUrl.protocol !== 'https:') {
-      throw new Error('HTTPS FLUJO deployments require an HTTPS MCP Apps sandbox URL');
-    }
-  } else {
-    if (host.protocol !== 'http:') {
-      throw new Error(
-        'MCP Apps on HTTPS require Public or Local Network access and an HTTPS proxy for sandbox port 4201',
-      );
-    }
-    if (
-      !Number.isInteger(data.port)
-      || (data.port as number) < 1
-      || (data.port as number) > 65_535
-    ) {
-      throw new Error('Sandbox endpoint discovery returned an invalid port');
-    }
-    sandboxUrl = new URL('/sandbox.html', host.origin);
-    sandboxUrl.port = String(data.port);
+  } else if (!sandboxUrl.hostname.split('.').includes(data.originKey)) {
+    throw new Error('Sandbox URL is not bound to the verified app origin key');
   }
 
   if (sandboxUrl.origin === host.origin) {
@@ -378,19 +395,48 @@ export function buildSandboxUrl(
   return sandboxUrl.href;
 }
 
-/** Per-originKey cache of the authenticated sandbox endpoint. */
+/** Per-workspace verified-resource cache of the authenticated sandbox endpoint. */
 const sandboxEndpointCache = new Map<string, Promise<SandboxEndpointResponse>>();
 
-async function resolveSandboxBaseUrl(originKey?: string): Promise<string> {
-  const cacheKey = originKey || '';
+/** Unambiguous tuple encoding for identities containing URI punctuation. */
+export function mcpAppSandboxCacheKey(
+  workspace: string,
+  serverName: string,
+  uri: string,
+  conversationId?: string,
+): string {
+  return JSON.stringify([workspace, serverName, uri, conversationId ?? null]);
+}
+
+async function resolveSandboxBaseUrl(
+  serverName: string,
+  uri: string,
+  conversationId?: string,
+): Promise<{ href: string; allowAll: boolean }> {
+  const workspace = getSelectedWorkspace();
+  const cacheKey = mcpAppSandboxCacheKey(workspace, serverName, uri, conversationId);
   if (!sandboxEndpointCache.has(cacheKey)) {
     const params = new URLSearchParams();
-    if (originKey) params.set('originKey', originKey);
-    const url = `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`;
+    params.set('serverName', serverName);
+    params.set('uri', uri);
+    if (conversationId) params.set('conversationId', conversationId);
+    const url = withWorkspaceUrl(
+      `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`,
+      workspace,
+    );
     const promise = fetch(url)
       .then(async (response) => {
         if (!response.ok) {
-          throw new Error(`Sandbox endpoint discovery failed (${response.status})`);
+          let detail = '';
+          try {
+            const payload = await response.json() as { error?: unknown };
+            if (typeof payload.error === 'string' && payload.error.trim()) {
+              detail = `: ${payload.error.trim()}`;
+            }
+          } catch {
+            // Preserve the status-only fallback for non-JSON proxy errors.
+          }
+          throw new Error(`Sandbox endpoint discovery failed (${response.status})${detail}`);
         }
         return await response.json() as SandboxEndpointResponse;
       })
@@ -402,14 +448,10 @@ async function resolveSandboxBaseUrl(originKey?: string): Promise<string> {
     sandboxEndpointCache.set(cacheKey, promise);
   }
   const response = await sandboxEndpointCache.get(cacheKey)!;
-  const sandboxUrl = buildSandboxUrl(response, window.location);
-  
-  // Validate that the returned originKey matches if one was requested.
-  if (originKey && response.originKey && response.originKey !== originKey) {
-    throw new Error(`Sandbox endpoint returned mismatched originKey`);
-  }
-  
-  return sandboxUrl;
+  return {
+    href: buildSandboxUrl(response, window.location),
+    allowAll: response.allowAll === true,
+  };
 }
 
 function decodeBase64Utf8(blob: string): string {
@@ -421,6 +463,7 @@ function sanitizeCspOrigins(
   values: string[] | undefined,
   schemes: Array<'https' | 'wss'>,
   allowLoopback = false,
+  allowStar = false,
 ): string[] {
   const isSecureOrigin = (value: string): boolean => {
     const match = /^(https|wss):\/\/(\*\.)?([^/:?#]+)(?::(\d{1,5}))?$/i.exec(value);
@@ -441,14 +484,27 @@ function sanitizeCspOrigins(
   const seen = new Set<string>();
   for (const value of values ?? []) {
     if (value.length === 0 || value.length > 2_048 || /[^\x21-\x7e]/.test(value)) continue;
+    // Escape hatch mirror: the sandbox enforcer honors a literal '*' only when
+    // the server-side allow-all setting is on; the discovery response reports
+    // that state, so this stays faithful to the applied policy.
+    if (value === '*') {
+      if (allowStar) return ['*'];
+      continue;
+    }
     // ws: may widen only connect-style directives, mirroring wss:.
-    const loopbackOk = allowLoopback
-      && isLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http']);
-    if (!loopbackOk && !isSecureOrigin(value)) continue;
-    const dedupeKey = value.toLowerCase();
+    // Loopback grants collapse to their port-wildcard form so a local App
+    // server's ephemeral-port restart cannot invalidate the committed policy;
+    // this must stay byte-identical to the sandbox server's normalizeCspOrigin,
+    // otherwise ui/initialize advertises a grant the enforcer does not apply.
+    const loopback = allowLoopback
+      ? canonicalizeLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http'])
+      : undefined;
+    if (!loopback && !isSecureOrigin(value)) continue;
+    const normalized = loopback ?? value;
+    const dedupeKey = normalized.toLowerCase();
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    sanitized.push(value);
+    sanitized.push(normalized);
     if (sanitized.length >= 64) break;
   }
   return sanitized;
@@ -457,20 +513,25 @@ function sanitizeCspOrigins(
 /**
  * Mirror of the sandbox server's loopback allowance gate
  * (allowLoopbackCspOrigins in backend/mcpApps/sandboxServer.ts, which admits
- * loopback HTTP/WS CSP origins only in the `localhost` exposure mode). The
+ * loopback HTTP/WS CSP origins in every exposure mode except `public`). The
  * browser cannot read the server's exposure setting directly, so the closest
- * faithful signal is used: FLUJO itself being browsed from a plain-HTTP
- * loopback origin, which only exists in that mode. HTTPS/hosted deployments
- * therefore keep the strict secure-origin-only grant here too, and any
- * divergence still fails closed at the sandbox server's enforcer.
+ * faithful signal is used: FLUJO itself being served over plain HTTP, which a
+ * public deployment never is.
+ *
+ * The hostname is deliberately NOT restricted to loopback spellings: a
+ * `network`-mode install is reached by its LAN name or address
+ * (`http://192.168.1.20:4200`) while its MCP App servers still bind loopback,
+ * and demanding a loopback FLUJO origin here stripped those grants before they
+ * could ever reach the sandbox's `?csp=` parameter. HTTPS/hosted deployments
+ * keep the strict secure-origin-only grant, and any divergence still fails
+ * closed at the sandbox server's enforcer.
  */
 export function allowLoopbackCspGrant(
   location: { protocol: string; hostname: string } | undefined
     = typeof window === 'undefined' ? undefined : window.location,
 ): boolean {
   if (!location) return false;
-  return location.protocol === 'http:'
-    && ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname.toLowerCase());
+  return location.protocol === 'http:';
 }
 
 /**
@@ -480,12 +541,13 @@ export function allowLoopbackCspGrant(
 export function sanitizeGrantedCsp(
   csp: McpUiResourceCsp,
   allowLoopback: boolean = allowLoopbackCspGrant(),
+  allowStar = false,
 ): McpUiResourceCsp {
   return {
-    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss'], allowLoopback),
-    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https'], allowLoopback),
-    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https'], allowLoopback),
-    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https'], allowLoopback),
+    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss'], allowLoopback, allowStar),
+    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https'], allowLoopback, allowStar),
+    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https'], allowLoopback, allowStar),
+    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https'], allowLoopback, allowStar),
   };
 }
 
@@ -545,10 +607,11 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
   return {
     html,
     csp: csp.success ? sanitizeGrantedCsp(csp.data) : undefined,
+    rawCsp: csp.success ? csp.data : undefined,
     permissions: permissions.success
       ? sanitizeGrantedPermissions(permissions.data)
       : undefined,
-    domain: typeof uiMeta?.domain === 'string' ? uiMeta.domain : undefined,
+    prefersBorder: typeof uiMeta?.prefersBorder === 'boolean' ? uiMeta.prefersBorder : undefined,
   };
 }
 
@@ -746,6 +809,25 @@ export function clampInlineSize(
   return result;
 }
 
+/**
+ * A Stable MCP App View receives one tool invocation context. Selecting a
+ * different linked tool is therefore a new delivery even when there are no
+ * arguments/results yet (as with a Quick Actions launch).
+ */
+export function mcpAppDeliveryIdentity(
+  toolName: string | undefined,
+  updateId: string | number | undefined,
+  args: string | undefined,
+  resultContent: string | undefined,
+  cancelledReason: string | undefined,
+  isError: boolean | undefined,
+): string {
+  const invocation = updateId === undefined
+    ? `${args ?? ''}\u0000${resultContent ?? ''}\u0000${cancelledReason ?? ''}\u0000${isError ?? ''}`
+    : `${typeof updateId}:${String(updateId)}`;
+  return `${toolName ?? ''}\u0000${invocation}`;
+}
+
 function measureHostDimensions(
   element: HTMLElement,
   docked: boolean,
@@ -797,6 +879,7 @@ export async function resolveHostToolInfo(
  */
 const McpAppFrame: React.FC<McpAppFrameProps> = ({
   conversationId,
+  ownerScopeId,
   serverName,
   uri,
   toolName,
@@ -823,20 +906,94 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   onUserOpen,
 }) => {
   const { t } = useI18n();
+  const { settings, settingsHydrated } = useStorage();
+  // Do not race an automatic mount against the persisted policy read. Test and
+  // lightweight hosts that predate settingsHydrated omit it and are considered
+  // ready; the real provider explicitly reports false while locked/loading.
+  const consentPolicyReady = settingsHydrated !== false;
+  const consentRequired = settings?.experimental?.requireMcpAppLaunchClick === true;
   const theme = useTheme();
   const frameInstanceId = useId();
   const ownerScope = useMemo(
     () => conversationId
       ? `conversation:${conversationId}`
-      : `app:${serverName}:${uri}:${frameInstanceId}`,
-    [conversationId, frameInstanceId, serverName, uri],
+      : ownerScopeId?.trim()
+        ? `app:${ownerScopeId.trim().slice(0, 500)}`
+        : `app:${serverName}:${uri}:${frameInstanceId}`,
+    [conversationId, frameInstanceId, ownerScopeId, serverName, uri],
   );
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+    consentPolicyReady && !consentRequired ? 'granted' : 'loading',
+  );
+  const [consentSaving, setConsentSaving] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  // #375: mirrors `error` without triggering re-renders, so async continuations
+  // (handshake handoff) can cheaply check "did this frame already fail?".
+  const errorRef = useRef<string | null>(null);
+  useEffect(() => { errorRef.current = error; }, [error]);
+  useEffect(() => {
+    if (!consentPolicyReady) {
+      setConsentStatus('loading');
+      return undefined;
+    }
+    if (!consentRequired) {
+      setConsentStatus('granted');
+      setConsentError(null);
+      return undefined;
+    }
+    let active = true;
+    setConsentStatus('loading');
+    const params = new URLSearchParams({ serverName, uri });
+    if (conversationId) params.set('conversationId', conversationId);
+    void fetch(`/api/mcp/app-consent?${params}`)
+      .then(async (response) => response.ok ? response.json() : Promise.reject(new Error('Consent lookup failed')))
+      .then((data: { status?: string }) => {
+        if (active && ['internal', 'granted', 'prompt', 'denied'].includes(data.status ?? '')) {
+          setConsentStatus(data.status as 'internal' | 'granted' | 'prompt' | 'denied');
+        }
+      })
+      .catch(() => { if (active) setConsentStatus('denied'); });
+    return () => { active = false; };
+  }, [consentPolicyReady, consentRequired, conversationId, serverName, uri]);
+  const decideConsent = useCallback(async (decision: 'allow-once' | 'allow-always' | 'deny-always') => {
+    setConsentSaving(true);
+    setConsentError(null);
+    try {
+      const response = await fetch('/api/mcp/app-consent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName, uri, conversationId, decision }),
+      });
+      if (!response.ok) throw new Error('Unable to save MCP App consent');
+      const data = await response.json() as { status?: 'granted' | 'denied' };
+      setConsentStatus(data.status === 'granted' ? 'granted' : 'denied');
+    } catch {
+      setConsentError(t('chat.app.consentSaveFailed'));
+    } finally {
+      setConsentSaving(false);
+    }
+  }, [conversationId, serverName, t, uri]);
+  const resetConsent = useCallback(async () => {
+    setConsentSaving(true);
+    setConsentError(null);
+    try {
+      const params = new URLSearchParams({ serverName, uri });
+      const response = await fetch(`/api/mcp/app-consent?${params}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Unable to reset MCP App consent');
+      setConsentStatus('prompt');
+    } catch {
+      setConsentError(t('chat.app.consentSaveFailed'));
+    } finally {
+      setConsentSaving(false);
+    }
+  }, [serverName, t, uri]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
+  // Apps that paint their own window chrome opt out of FLUJO's decorative frame.
+  const [chromeless, setChromeless] = useState(false);
   const previousDefaultExpandedRef = useRef(defaultExpanded);
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
@@ -865,9 +1022,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const appDisplayModesRef = useRef<McpUiDisplayMode[]>([]);
   const displayModeRef = useRef<McpUiDisplayMode>(effectiveDisplayMode);
   const hostDisplayModesRef = useRef(hostDisplayModes);
+  const toolNameRef = useRef(toolName);
+  const previousToolNameRef = useRef(toolName);
   const toolDeliveryChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastDeliveryRef = useRef<string | number | undefined>(undefined);
   const latestToolDeliveryRef = useRef({
+    toolName,
     args: toolArgs,
     resultContent: toolResultContent,
     cancelledReason: toolCancelledReason,
@@ -912,18 +1072,19 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     if (effectiveDisplayMode !== 'fullscreen' || !frameRootRef.current) return;
     if ((event.target as HTMLElement).closest('button,[role="button"]')) return;
     event.preventDefault();
+    // Pointer coordinates and getBoundingClientRect are both viewport based, so
+    // `floatingRect` stays in viewport space; the render step translates it into
+    // the containing block (#371).
     const rect = frameRootRef.current.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
     startPointerDrag(event, 'move', (move) => {
-      const maxX = Math.max(0, window.innerWidth - 120);
-      const maxY = Math.max(0, window.innerHeight - 56);
-      setFloatingRect({
-        x: Math.min(Math.max(rect.left + move.clientX - startX, 0), maxX),
-        y: Math.min(Math.max(rect.top + move.clientY - startY, 0), maxY),
-        width: rect.width,
-        height: rect.height,
-      });
+      const position = clampFloatingPosition(
+        { x: rect.left + move.clientX - startX, y: rect.top + move.clientY - startY },
+        { width: rect.width, height: rect.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      setFloatingRect({ ...position, width: rect.width, height: rect.height });
     });
   }, [effectiveDisplayMode, startPointerDrag]);
 
@@ -956,13 +1117,22 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       ));
     });
   }, [effectiveDisplayMode, startPointerDrag]);
+
+  // #371: the floating panel may live inside a `backdrop-filter` surface (MUI's
+  // glass Dialog paper), which becomes the containing block for `position:
+  // fixed`. Translate the stored viewport geometry into that space so the panel
+  // lands exactly where the pointer is.
+  const fixedOffset = useFixedOriginOffset(frameRootRef, displayMode === 'fullscreen' && !docked);
+
   latestToolDeliveryRef.current = {
+    toolName,
     args: toolArgs,
     resultContent: toolResultContent,
     cancelledReason: toolCancelledReason,
     isError: toolIsError,
     updateId: toolUpdateId,
   };
+  toolNameRef.current = toolName;
   // Always call the latest callback without remounting the bridge on prop change.
   const onAppMessageRef = useRef(onAppMessage);
   useEffect(() => { onAppMessageRef.current = onAppMessage; }, [onAppMessage]);
@@ -1049,7 +1219,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
    * View, so two live bridges never claim the same app instance.
    */
   const handoffToDock = useCallback(() => {
-    if (dockHandoffRef.current || !onRequestDockRef.current) return;
+    // #375: a frame that has already errored (unsupported display mode, access
+    // revoked, server config changed) must never be handed off to the canvas —
+    // it would only pop the dock open to show an error alert.
+    if (dockHandoffRef.current || !onRequestDockRef.current || errorRef.current) return;
     dockHandoffRef.current = true;
     void teardown()
       .then(() => {
@@ -1097,7 +1270,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // 1. Read the app HTML + CSP/permissions.
       const [read, toolInfo] = await Promise.all([
         mcpService.readResourceFromApp(serverName, uri),
-        resolveHostToolInfo(serverName, uri, toolName),
+        resolveHostToolInfo(serverName, uri, toolNameRef.current),
       ]);
       if (!isCurrentMount()) return;
       if (read?.httpStatus === 403) {
@@ -1105,35 +1278,48 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       }
       if (!read || read.success === false) throw new Error(read?.error || t('chat.app.readFailed'));
       const app = extractAppResource(read.data, uri);
+      setChromeless(app.prefersBorder === false);
 
-      // 2. Derive per-app origin key for sandbox isolation.
-      const originKey = deriveOriginKey({
-        domain: app.domain,
-        serverName,
-        uri,
-      });
-
-      // 3. Resolve the foreign sandbox origin.
-      const sandboxBase = await resolveSandboxBaseUrl(originKey);
+      // 2. Ask the backend to verify the same resource and derive its
+      // workspace-scoped browser origin. The View never selects its own origin.
+      const sandboxBase = await resolveSandboxBaseUrl(serverName, uri, conversationId);
       if (!isCurrentMount() || !containerRef.current) return;
+      // Re-derive the grant once discovery reports the server-side allow-all
+      // escape hatch: a declared literal '*' may then survive sanitization,
+      // matching exactly what the sandbox enforcer will apply.
+      if (sandboxBase.allowAll && app.rawCsp) {
+        app.csp = sanitizeGrantedCsp(app.rawCsp, allowLoopbackCspGrant(), true);
+      }
 
-      // 4. Create the OUTER (sandbox-proxy) iframe.
+      // 3. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
       iframe.title = t('chat.app.frameTitle', { uri });
+      // `allow-scripts allow-same-origin` is required and safe here: the proxy
+      // is served from a DIFFERENT origin (the sandbox listener), so it is only
+      // same-origin with that throwaway origin and never with FLUJO. Chrome logs
+      // a generic "can escape its sandboxing" notice for this combination — that
+      // is expected; the isolation boundary is the origin, not the sandbox flag.
+      // Removing allow-same-origin would break the relay (it needs DOM access to
+      // the inner View it writes) so do not "fix" the console notice here.
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
       if (allow) iframe.setAttribute('allow', allow);
+      // A self-framing app supplies its own background; forcing #fff on the
+      // iframe flashes white over a dark workbench or browser window until it
+      // paints, and the rounded corner cuts into its own chrome.
+      const surface = app.prefersBorder === false ? 'transparent' : '#fff';
       iframe.style.cssText = dockedRef.current || displayModeRef.current === 'fullscreen'
-        ? 'width:100%;height:100%;border:none;background:#fff;'
-        : 'width:100%;min-height:120px;height:200px;border:none;border-radius:4px;background:#fff;';
+        ? `width:100%;height:100%;border:none;background:${surface};`
+        : `width:100%;min-height:120px;height:200px;border:none;background:${surface};`
+          + (app.prefersBorder === false ? '' : 'border-radius:4px;');
       containerRef.current.appendChild(iframe);
       iframeRef.current = iframe;
 
-      // 5. Wait for the proxy to signal readiness, then point it at the sandbox.
+      // 4. Wait for the proxy to signal readiness, then point it at the sandbox.
       // Pin both WindowProxy and origin: a redirect (or a misconfigured public
       // endpoint) must not be able to impersonate FLUJO's trusted relay.
-      const sandboxUrl = new URL(sandboxBase);
+      const sandboxUrl = new URL(sandboxBase.href);
       if (app.csp) sandboxUrl.searchParams.set('csp', JSON.stringify(app.csp));
       const expectedSandboxOrigin = sandboxUrl.origin;
       const proxyReady = new Promise<void>((resolve, reject) => {
@@ -1174,7 +1360,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         ) return;
         setError(message);
         setLoading(false);
-        void teardown();
+        // #375: a revoked/errored docked frame must not linger in the canvas.
+        void teardown().finally(() => {
+          if (dockedRef.current) onRequestCloseRef.current?.();
+        });
       };
       const bridge = new AppBridge(
         makeClientShim(serverName, ownerScope, revokeAccess),
@@ -1382,16 +1571,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         onDockableRef.current?.(modes.includes('pip'));
         onAvailableDisplayModesRef.current?.([...modes]);
 
-        if (
-          autoDockRef.current
-          && modes.includes('pip')
-          && !dockedRef.current
-          && onRequestDockRef.current
-        ) {
-          setTimeout(handoffToDock, 0);
-        }
-
         initializedRef.current = true;
+        // #375: validate BEFORE scheduling any auto-dock handoff — an errored /
+        // unsupported frame must never reach the canvas just to show an alert.
         const verifiedDisplayMode = getVerifiedPostHandshakeDisplayMode(
           requestedDisplayMode,
           dockedRef.current,
@@ -1404,6 +1586,16 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           void teardown();
           return;
         }
+
+        if (
+          autoDockRef.current
+          && modes.includes('pip')
+          && !dockedRef.current
+          && onRequestDockRef.current
+        ) {
+          setTimeout(handoffToDock, 0);
+        }
+
         displayModeRef.current = verifiedDisplayMode;
         setDisplayMode(verifiedDisplayMode);
         if (verifiedDisplayMode !== initialDisplayMode) {
@@ -1433,8 +1625,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         }
 
         const delivery = latestToolDeliveryRef.current;
-        const deliveryKey = delivery.updateId
-          ?? `${delivery.args ?? ''}\u0000${delivery.resultContent ?? ''}\u0000${delivery.cancelledReason ?? ''}\u0000${delivery.isError ?? ''}`;
+        const deliveryKey = mcpAppDeliveryIdentity(
+          delivery.toolName,
+          delivery.updateId,
+          delivery.args,
+          delivery.resultContent,
+          delivery.cancelledReason,
+          delivery.isError,
+        );
         lastDeliveryRef.current = deliveryKey;
         if (
           delivery.args !== undefined
@@ -1473,7 +1671,6 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     serverName,
     teardown,
     theme.palette.mode,
-    toolName,
     uri,
     t,
   ]);
@@ -1487,11 +1684,11 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     }
     if (next) onUserOpen?.();
     setExpanded(next);
-    if (next) {
+    if (next && (consentStatus === 'internal' || consentStatus === 'granted')) {
       // Mount after the Collapse has rendered its container.
       setTimeout(() => { void mount(); }, 0);
     }
-  }, [expanded, mount, onUserOpen]);
+  }, [consentStatus, expanded, mount, onUserOpen]);
 
   // Existing transcript launchers normally hydrate collapsed. When a newly
   // completed live result is later marked eligible for auto-launch, react to the
@@ -1506,19 +1703,19 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   // and then stays mounted for the life of the tab — visibility is CSS-only,
   // so the live iframe/bridge is never reparented.
   useEffect(() => {
-    if (docked && !mountedRef.current) void mount();
-  }, [docked, mount]);
+    if (docked && (consentStatus === 'internal' || consentStatus === 'granted') && !mountedRef.current) void mount();
+  }, [consentStatus, docked, mount]);
 
   // An opted-in app should be visible without a second consent-like click.
   // Wait for the expanded container to exist, then mount exactly as the manual
   // toggle does. The docked path above remains independently auto-mounted.
   useEffect(() => {
-    if (!docked && defaultExpanded && expanded && !mountedRef.current) {
+    if (!docked && (consentStatus === 'internal' || consentStatus === 'granted') && expanded && !mountedRef.current) {
       const timer = window.setTimeout(() => { void mount(); }, 0);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [defaultExpanded, docked, expanded, mount]);
+  }, [consentStatus, defaultExpanded, docked, expanded, mount]);
 
   // The proxy iframe used to keep its original 200px inline height after the
   // host entered fullscreen, leaving a large blank panel around terminals and
@@ -1537,15 +1734,35 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     iframe.style.width = '100%';
     iframe.style.height = `${inlineHeightRef.current}px`;
     iframe.style.minHeight = '120px';
-    iframe.style.borderRadius = '4px';
-  }, [docked, effectiveDisplayMode]);
+    iframe.style.borderRadius = chromeless ? '0' : '4px';
+  }, [chromeless, docked, effectiveDisplayMode]);
+
+  // A linked-tool switch can happen while the initial handshake is still in
+  // flight. Restart that in-flight View as well as an initialized one; every
+  // (even older) restart callback reads toolNameRef so it mounts the latest
+  // requested tool context after the shared teardown settles.
+  useEffect(() => {
+    if (previousToolNameRef.current === toolName) return;
+    previousToolNameRef.current = toolName;
+    if (!mountedRef.current && !teardownPromiseRef.current) return;
+    void teardown().then(() => {
+      if (!componentAliveRef.current) return;
+      if (dockedRef.current || expanded) void mount();
+    });
+  }, [expanded, mount, teardown, toolName]);
 
   // Stable MCP Apps delivers at most one input/outcome pair to a View. A later
   // invocation for the same canvas identity therefore gets a fresh View, after
   // the prior one completes its bounded graceful teardown.
   useEffect(() => {
-    const deliveryKey = toolUpdateId
-      ?? `${toolArgs ?? ''}\u0000${toolResultContent ?? ''}\u0000${toolCancelledReason ?? ''}\u0000${toolIsError ?? ''}`;
+    const deliveryKey = mcpAppDeliveryIdentity(
+      toolName,
+      toolUpdateId,
+      toolArgs,
+      toolResultContent,
+      toolCancelledReason,
+      toolIsError,
+    );
     if (!initializedRef.current || !bridgeRef.current) return;
     if (deliveryKey === lastDeliveryRef.current) return;
     lastDeliveryRef.current = deliveryKey;
@@ -1560,6 +1777,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     toolArgs,
     toolCancelledReason,
     toolIsError,
+    toolName,
     toolResultContent,
     toolUpdateId,
   ]);
@@ -1645,7 +1863,25 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           flexDirection: 'column',
         }}
       >
-        {loading && (
+        {consentPolicyReady && consentRequired && consentStatus === 'loading' && <Typography variant="body2" sx={{ p: 2 }}>{t('chat.app.consentChecking')}</Typography>}
+        {consentStatus === 'prompt' && (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{serverName} — {uri}</Typography>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+            <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>
+          </Box>
+        )}
+        {consentStatus === 'denied' && (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('chat.app.consentBlocked')}</Typography>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+            <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void resetConsent(); }}>{t('chat.app.consentAskAgain')}</Button>
+          </Box>
+        )}
+        {consentError && <Alert severity="error" sx={{ m: 1 }}>{consentError}</Alert>}
+        {(consentStatus === 'internal' || consentStatus === 'granted') && loading && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
             <CircularProgress size={16} thickness={6} />
             <Typography variant="body2" color="text.secondary">{t('chat.app.loading')}</Typography>
@@ -1671,15 +1907,15 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       ref={frameRootRef}
       sx={{
         mt: 1,
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 1,
+        ...(chromeless
+          ? { border: 0, borderRadius: 0 }
+          : { border: '1px solid', borderColor: 'divider', borderRadius: 1 }),
         overflow: 'hidden',
         ...(displayMode === 'fullscreen'
           ? {
               position: 'fixed',
-              left: floatingRect?.x ?? 16,
-              top: floatingRect?.y ?? 16,
+              left: (floatingRect?.x ?? 16) - fixedOffset.x,
+              top: (floatingRect?.y ?? 16) - fixedOffset.y,
               width: floatingRect?.width ?? 'calc(100vw - 32px)',
               height: floatingRect?.height ?? 'calc(100vh - 32px)',
               minWidth: 'min(480px, 100vw)',
@@ -1769,8 +2005,25 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         </Button>
       </Box>
 
+      {expanded && consentStatus === 'prompt' && (
+        <Box sx={{ p: 1 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{uri}</Typography>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+          <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>
+        </Box>
+      )}
+      {expanded && consentStatus === 'denied' && (
+        <Box sx={{ p: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('chat.app.consentBlocked')}</Typography>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+          <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void resetConsent(); }}>{t('chat.app.consentAskAgain')}</Button>
+        </Box>
+      )}
+      {expanded && consentError && <Alert severity="error" sx={{ m: 1 }}>{consentError}</Alert>}
       <Collapse
-        in={expanded}
+        in={expanded && (consentStatus === 'internal' || consentStatus === 'granted')}
         onExited={() => { void teardown(); }}
         sx={displayMode === 'fullscreen' ? {
           flex: 1,

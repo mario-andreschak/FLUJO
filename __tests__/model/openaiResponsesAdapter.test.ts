@@ -75,7 +75,7 @@ const responseWithToolCall = (overrides: Record<string, unknown> = {}) => ({
     input_tokens: 1200,
     output_tokens: 40,
     total_tokens: 1240,
-    input_tokens_details: { cached_tokens: 1024 },
+    input_tokens_details: { cached_tokens: 1024, cache_write_tokens: 128 },
     output_tokens_details: { reasoning_tokens: 25 },
   },
   ...overrides,
@@ -154,6 +154,25 @@ describe('toResponsesInput', () => {
         ],
       },
     ]);
+  });
+
+  it('never relabels unsupported audio bytes as WAV', () => {
+    const input = toResponsesInput([{
+      role: 'user',
+      content: [{
+        type: 'audio_url',
+        audio_url: { url: 'data:audio/ogg;base64,T0dH' },
+      }] as never,
+    }]);
+
+    expect(input).toEqual([{
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: '[audio/ogg audio attachment omitted: OpenAI input_audio accepts only MP3 or WAV]',
+      }],
+    }]);
+    expect(JSON.stringify(input)).not.toContain('format\":\"wav');
   });
 
   it('inserts carried reasoning immediately before its anchoring tool call', () => {
@@ -242,7 +261,7 @@ describe('fromResponse', () => {
       prompt_tokens: 1200,
       completion_tokens: 40,
       total_tokens: 1240,
-      prompt_tokens_details: { cached_tokens: 1024 },
+      prompt_tokens_details: { cached_tokens: 1024, cache_write_tokens: 128 },
       completion_tokens_details: { reasoning_tokens: 25 },
     });
   });

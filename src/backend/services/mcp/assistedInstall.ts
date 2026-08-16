@@ -23,6 +23,7 @@ import type { MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 import {
   buildConfigFromOption,
   getInstallOptions,
+  isAutoInstallable,
   missingRequiredInputs,
   resolvedPlanFrom,
   sanitizeServerName,
@@ -312,6 +313,7 @@ async function discoverWeb(query: string): Promise<WebDiscovery> {
 
 function transportOf(option: InstallOption): 'stdio' | 'streamable' | 'sse' {
   if (option.kind === 'package') return 'stdio';
+  if (option.kind === 'manual-launch') return option.transport;
   return option.remote.type === 'sse' ? 'sse' : 'streamable';
 }
 
@@ -379,7 +381,9 @@ function scoreDraft(query: string, draft: CandidateDraft): number {
     relevance: lexicalRelevance(query, draft.server),
     verified: draft.verificationStatus === 'active' || quality?.status === 'active',
     awesomeMention: draft.awesomeMention,
-    transport: draft.option.kind,
+    // Drafts are filtered to auto-installable options, so 'manual-launch'
+    // cannot reach the scorer; score it as a package if it ever did.
+    transport: draft.option.kind === 'remote' ? 'remote' : 'package',
     weeklyDownloads: quality?.weeklyDownloads,
     authMode,
     requiredInputCount: assistantRequiredInputs(draft.option, authMode).length,
@@ -401,7 +405,10 @@ function chooseOptionDrafts(
   discoveries: WebDiscovery,
   verificationStatus: string,
 ): CandidateDraft[] {
-  const options = getInstallOptions(server);
+  // #392: launch-and-connect packages require the user to start the process
+  // themselves, which the assistant's approve-and-install flow cannot do.
+  // They are excluded here rather than silently mis-installed as remotes.
+  const options = getInstallOptions(server).filter(isAutoInstallable);
   const transports = Array.from(new Set(options.map(transportOf)));
   return options.map((option) => ({
     server,
@@ -644,6 +651,7 @@ function comparableInstallPlan(value: ResolvedInstallPlan | undefined) {
     command: value.command,
     args: value.args,
     serverUrl: value.serverUrl,
+    steps: value.steps,
     requiredEnvNames: value.requiredEnvNames,
     verificationStatus: value.verificationStatus,
   } : null;

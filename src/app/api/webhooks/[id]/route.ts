@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -34,7 +35,7 @@ function tokenMatches(provided: string, expected: string): boolean {
  * callers that need the flow's answer synchronously should use the
  * OpenAI-compatible endpoint (/v1/chat/completions) instead.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -93,7 +94,64 @@ export async function POST(
       }
     }
 
-    const runId = uuidv4();
+    // Persona mailbox retries need a stable delivery identity. Only trusted
+    // headers participate; fields inside the untrusted webhook body can never
+    // select a Persona or Activity. Legacy direct-Flow webhooks retain their
+    // historical random run id even when a caller sends this header.
+    const deliveryKey = execution.personaId
+      ? request.headers.get('idempotency-key')
+        ?? request.headers.get('x-flujo-delivery-id')
+        ?? undefined
+      : undefined;
+    if (execution.personaId && deliveryKey === undefined) {
+      return json({
+        error: 'Persona webhooks require Idempotency-Key or X-FLUJO-Delivery-Id',
+      }, 428);
+    }
+    if (
+      deliveryKey !== undefined
+      && (deliveryKey.length < 1 || deliveryKey.length > 512 || /[\u0000-\u001f\u007f]/.test(deliveryKey))
+    ) {
+      return json({ error: 'Invalid delivery identity header' }, 400);
+    }
+    const deliveryDigest = deliveryKey
+      ? createHash('sha256')
+        .update(`${execution.id}\0${execution.generationId ?? execution.createdAt}\0${deliveryKey}`)
+        .digest('hex')
+      : undefined;
+    const runId = execution.personaId && deliveryDigest
+      ? `delivery-${deliveryDigest.slice(0, 48)}`
+      : uuidv4();
+    const firePayload = {
+      kind: 'webhook' as const,
+      summary: 'Webhook',
+      context: {
+        body,
+        contentType: contentType || undefined,
+        // Mutable receipt time would turn a legitimate retry into changed
+        // work under the same durable delivery key.
+        ...(deliveryDigest ? {} : { receivedAt: new Date().toISOString() }),
+      },
+      ...(execution.personaId && deliveryDigest
+        ? { deliveryId: `webhook-${deliveryDigest}` }
+        : {}),
+    };
+
+    if (execution.personaId) {
+      try {
+        // 202 means the dispatcher envelope AND mailbox routing are durable.
+        // Terminal execution/history intentionally continue after the response.
+        const admitted = await scheduler.admitPersonaFire(execution, firePayload, runId);
+        void admitted.completion.catch((error) => {
+          log.error(`Persona webhook continuation failed for ${execution.id}:`, error);
+        });
+        return json({ accepted: true, runId: admitted.runId }, 202);
+      } catch (error) {
+        log.warn(`Persona webhook admission failed for ${execution.id}:`, error);
+        return json({ error: 'Webhook work could not be durably admitted' }, 503);
+      }
+    }
+
     // Overlap policy (issue #121): with overlapStrategy 'error', a fire that
     // arrives while a previous run is still in flight is rejected. Surface that
     // to the caller as 409 Conflict (best-effort: the in-flight check races the
@@ -111,11 +169,7 @@ export async function POST(
     // Fire-and-forget: the record lands in run history; fire() never throws.
     void scheduler.fire(
       execution,
-      {
-        kind: 'webhook',
-        summary: 'Webhook',
-        context: { body, contentType: contentType || undefined, receivedAt: new Date().toISOString() },
-      },
+      firePayload,
       runId
     );
     if (exclusiveGate === 'error') {
@@ -130,3 +184,5 @@ export async function POST(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

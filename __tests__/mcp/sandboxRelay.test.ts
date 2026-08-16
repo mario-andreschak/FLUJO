@@ -2,8 +2,6 @@ import vm from 'node:vm';
 import {
   buildSandboxCsp,
   buildSandboxProxyHtml,
-  getSandboxAuthToken,
-  isSandboxAuthTokenValid,
 } from '@/backend/mcpApps/sandboxServer';
 import { MCP_APP_IFRAME_SANDBOX } from '@/shared/utils/mcpApps';
 
@@ -99,15 +97,6 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
 }
 
 describe('MCP App sandbox proxy relay', () => {
-  it('uses a stable high-entropy per-process access token', () => {
-    const token = getSandboxAuthToken();
-    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(getSandboxAuthToken()).toBe(token);
-    expect(isSandboxAuthTokenValid(token)).toBe(true);
-    expect(isSandboxAuthTokenValid(`${token[0] === 'A' ? 'B' : 'A'}${token.slice(1)}`)).toBe(false);
-    expect(isSandboxAuthTokenValid(undefined)).toBe(false);
-  });
-
   it('consumes host resource-ready and blocks every other reserved sandbox message', () => {
     const resourceCsp = {
       connectDomains: ['https://api.example.com'],

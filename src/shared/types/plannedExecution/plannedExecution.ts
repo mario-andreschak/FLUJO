@@ -160,12 +160,37 @@ export type OverlapStrategy = 'skip' | 'queue' | 'parallel' | 'error';
 
 export interface PlannedExecution {
   id: string;
+  /**
+   * Immutable identity of this particular create lifecycle. Deleting and then
+   * recreating the same public `id` produces a new generation, so durable
+   * deliveries/history from the deleted lifecycle cannot deduplicate into it.
+   * Absent only on legacy persisted rows, where the scheduler derives one
+   * deterministically from `id` + `createdAt`.
+   */
+  generationId?: string;
   name: string;
   /** Optional user-assigned folder used to organize the execution browser. */
   folder?: string;
   enabled: boolean;
   /** The flow to run when the trigger fires. */
   flowId: string;
+  /**
+   * Optional trusted Persona target. When present the scheduler admits work to
+   * this Persona's durable mailbox and the claimed Behavior revision, not the
+   * mutable `flowId`, is authoritative for execution. Absence keeps the legacy
+   * direct-Flow path byte-compatible.
+   */
+  personaId?: string;
+  /** Server-managed marker that permanently disables a deleted Persona target. */
+  personaRetired?: true;
+  /**
+   * Nonidentifying tombstone left when the targeted Persona is anonymized.
+   * Such executions are permanently disabled and must never fall back to the
+   * legacy direct-Flow path.
+   */
+  personaArchived?: true;
+  /** Optional Role Behavior slot selected for a Persona-targeted execution. */
+  behaviorSlotKey?: string;
   /**
    * User prompt for the run. The trigger payload is appended as a fenced JSON
    * context block, so the prompt should describe what to DO with that context.
@@ -222,6 +247,21 @@ export interface PlannedExecution {
   updatedAt: string;
 }
 
+/**
+ * Server-managed or trusted-target markers that keep a planned execution in
+ * the Persona control plane. Own-property checks deliberately fail closed for
+ * malformed imported/persisted rows instead of reviving their legacy Flow id.
+ */
+export function isPersonaControlledPlannedExecution(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return [
+    'personaId',
+    'behaviorSlotKey',
+    'personaRetired',
+    'personaArchived',
+  ].some((field) => Object.prototype.hasOwnProperty.call(value, field));
+}
+
 /** Envelope persisted at db/planned_executions.json. */
 export interface PlannedExecutionsFile {
   version: 1;
@@ -238,6 +278,8 @@ export type RunRecordStatus = 'completed' | 'error' | 'skipped' | 'needs_approva
 /** One entry in an execution's run history (ring buffer, newest last). */
 export interface RunRecord {
   runId: string;
+  /** Planned-execution generation that owns this durable Persona run. */
+  executionGenerationId?: string;
   /** Conversation id of the run (ephemeral unless saveConversations). */
   conversationId: string;
   firedAt: string;
@@ -264,6 +306,12 @@ export interface RunRecord {
     /** All tool calls in the batch awaiting approval (id + name only). */
     pendingToolCalls?: Array<{ id: string; name: string }>;
   };
+  /** Safe attribution stamped only after the Persona Activity was claimed. */
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
+  /** The Persona attribution triple was removed by the deletion policy. */
+  personaArchived?: true;
 }
 
 /**
@@ -324,6 +372,11 @@ export interface TriggerFirePayload {
    * Undefined for organic fires (schedule/webhook/file/poll/manual/chat).
    */
   parentConversationId?: string;
+  /**
+   * Trusted delivery identity for idempotent mailbox admission. Webhook bodies
+   * cannot set this; adapters derive it from a delivery header or source event.
+   */
+  deliveryId?: string;
 }
 
 /** Live (non-persisted) status of an execution's armed trigger, for the UI. */

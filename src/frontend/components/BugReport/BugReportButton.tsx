@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -17,9 +17,11 @@ import {
   CircularProgress,
   Divider,
   Stack,
+  InputAdornment,
 } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import ClearIcon from '@mui/icons-material/Clear';
 import { createLogger } from '@/utils/logger';
 import { modelService } from '@/frontend/services/model';
 import { Model } from '@/shared/types/model';
@@ -122,12 +124,41 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
     }
   }, [selectedModelId, context, title, description]);
 
+  const canSubmit = description.trim().length > 0;
+
   const handleSubmit = useCallback(() => {
+    if (!description.trim()) return; // shortcut must not bypass validation
     const body = context ? `${description.trim()}\n\n${formatContextBlock(context)}` : description.trim();
     openGitHubNewIssue({ title: title.trim() || t('bugReport.defaultTitle'), body, labels });
   }, [title, description, context, labels, t]);
 
-  const handleClose = useCallback(() => setOpen(false), []);
+  const handleFieldKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        event.stopPropagation(); // keep the Dialog / parent modal out of it
+        handleSubmit();
+      }
+    },
+    [handleSubmit]
+  );
+
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const descriptionInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => titleInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    setTitle('');
+    setDescription('');
+    setLabels(['bug']);
+    setNotice(null);
+  }, []);
   const handleOpen = useCallback(() => setOpen(true), []);
 
   return (
@@ -144,7 +175,17 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
         </Button>
       )}
 
-      <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+      {/*
+       * This Dialog is sometimes mounted inside another modal (e.g. a
+       * DialogHeaderActions header nested in a config modal). MUI stacks
+       * same-level Modals by DOM order, which is normally enough, but Ask
+       * FLUJO's dock explicitly bumps its z-index above `theme.zIndex.modal`
+       * for the same nested-dialog scenario (see AskFlujoDock.tsx). Mirror
+       * that here so the bug-report dialog reliably layers above a parent
+       * modal regardless of mount order; this is a no-op for the standalone
+       * navigation-bar usage since there is no other modal to layer above.
+       */}
+      <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth sx={{ zIndex: (theme) => theme.zIndex.modal + 10 }}>
         <DialogTitle>{t('bugReport.title')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
@@ -155,22 +196,64 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
             {notice && <Alert severity={notice.severity}>{t(notice.message)}</Alert>}
 
             <TextField
+              autoFocus
               label={t('common.title')}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={handleFieldKeyDown}
               fullWidth
               placeholder={t('bugReport.titlePlaceholder')}
+              inputRef={titleInputRef}
+              InputProps={{
+                endAdornment: title ? (
+                  <InputAdornment position="end">
+                    <IconButton
+                      size="small"
+                      aria-label={t('bugReport.clearTitle')}
+                      onClick={() => {
+                        setTitle('');
+                        titleInputRef.current?.focus();
+                      }}
+                      edge="end"
+                    >
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              }}
             />
 
             <TextField
               label={t('common.description')}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              onKeyDown={handleFieldKeyDown}
               fullWidth
               multiline
               minRows={6}
               placeholder={t('bugReport.descriptionPlaceholder')}
+              inputRef={descriptionInputRef}
+              InputProps={{
+                endAdornment: description ? (
+                  <InputAdornment position="end" sx={{ alignSelf: 'flex-start', mt: 1 }}>
+                    <IconButton
+                      size="small"
+                      aria-label={t('bugReport.clearDescription')}
+                      onClick={() => {
+                        setDescription('');
+                        descriptionInputRef.current?.focus();
+                      }}
+                    >
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              }}
             />
+
+            <Typography variant="caption" color="text.secondary">
+              {t('bugReport.submitHint')}
+            </Typography>
 
             <Divider />
 
@@ -228,7 +311,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
         </DialogContent>
         <DialogActions>
           <Button onClick={handleClose}>{t('common.cancel')}</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={!description.trim()}>
+          <Button variant="contained" onClick={handleSubmit} disabled={!canSubmit}>
             {t('feedback.openGitHub')}
           </Button>
         </DialogActions>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
-import HeadersEditor from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/HeadersEditor';
+import HeadersEditor from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/HeadersEditor';
 
 jest.mock('@/frontend/contexts/StorageContext', () => ({
   useStorage: () => ({
@@ -35,7 +35,7 @@ describe('MCP config global bindings', () => {
     });
 
     expect(screen.getByText('Bound to global: GITHUB_TOKEN')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({
       GITHUB_TOKEN: {
@@ -49,7 +49,7 @@ describe('MCP config global bindings', () => {
     const onChange = jest.fn();
     render(<HeadersEditor headers={{}} onChange={onChange} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add Header' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add header' }));
     fireEvent.change(screen.getByLabelText('Header'), {
       target: { value: 'Authorization' },
     });

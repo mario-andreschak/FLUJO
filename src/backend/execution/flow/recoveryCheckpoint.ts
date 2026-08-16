@@ -15,6 +15,7 @@ import type {
 import type { SharedState } from './types';
 import { appendRawForState, flushConversationLog } from './conversationLog';
 import { persistConversationState } from './persistConversationState';
+import { parseRetryAfterMs } from './retryAfter';
 
 const RECOVERY_OWNER_ID = randomUUID();
 const UNKNOWN_TOOL_EFFECT_WARNING =
@@ -89,9 +90,12 @@ export function classifyRecoveryFailure(error: unknown): {
     retryable = status === undefined || status >= 500;
   }
 
+  // `retryAfter` reaches us as the raw provider value: delta-seconds or an
+  // HTTP-date, number or string. Use the shared strict parser (issue #400) so
+  // malformed, negative, or expired values never become a bogus deadline.
   const retryAfterMs =
     numberField(details.retryAfterMs) ??
-    (numberField(details.retryAfter) !== undefined ? numberField(details.retryAfter)! * 1000 : undefined);
+    parseRetryAfterMs(details.retryAfter);
   return {
     classification: retryable ? 'retryable_failure' : 'permanent_failure',
     failure: { category, message, code, status, retryable },

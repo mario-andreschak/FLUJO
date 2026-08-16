@@ -3,7 +3,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
-import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
+import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 
 /**
@@ -39,6 +39,28 @@ export interface ModelStreamDelta {
 }
 
 /**
+ * Live progress from an MCP tool executed inside a self-orchestrating adapter.
+ * These adapters own their tool loop, so the normal ModelHandler tool-call
+ * path cannot observe the MCP SDK's progress callback directly.
+ */
+export interface ModelToolProgress {
+  toolCallId: string;
+  name: string;
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
+export interface SdkRequestSnapshot {
+  /** Stable adapter id used by the inspector (openai, anthropic, gemini, ...). */
+  adapter: string;
+  /** SDK/CLI method being invoked, e.g. chat.completions.create. */
+  operation: string;
+  /** Exact request object after provider-native translation, without credentials. */
+  request: unknown;
+}
+
+/**
  * Everything an adapter needs to perform a single chat completion. The caller
  * (ModelHandler) is responsible for resolving/decrypting the API key and
  * stripping FLUJO-internal fields (timestamps) from the messages first.
@@ -57,6 +79,13 @@ export interface CompletionInput {
     result?: unknown;
     error?: unknown;
   }) => void;
+  /** Durable Chat model-turn capture at the final SDK request boundary. */
+  onSdkRequest?: (snapshot: SdkRequestSnapshot) => Promise<string | undefined>;
+  /** Completes the durable dispatch record created by onSdkRequest. */
+  onSdkRequestResult?: (observation: {
+    dispatchId: string;
+    outcome: 'completed' | 'error' | 'cancelled';
+  }) => Promise<void>;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -91,8 +120,8 @@ export interface CompletionInput {
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionFunctionTool[];
-  /** Sampling temperature. */
-  temperature: number;
+  /** Sampling temperature. Omitted when an invalid persisted value is ignored. */
+  temperature?: number;
   /**
    * Upper bound on tokens the provider may generate for this single completion.
    * Already resolved by the caller with precedence: explicit request
@@ -118,6 +147,8 @@ export interface CompletionInput {
     schemaHash?: string;
     annotations?: ToolAnnotations;
     uiResourceUri?: string;
+    presetArgs?: Record<string, unknown>;
+    context?: ToolReferenceContext;
   }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
@@ -129,6 +160,13 @@ export interface CompletionInput {
    * the caller. Without an executor such tools are silently dropped there.
    */
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+  /**
+   * Cooperative successful-stop predicate for adapters that own an internal
+   * model/tool loop. Once true, no further tools may be dispatched and the
+   * adapter exits at its next safe event boundary. Meeting silence uses this to
+   * terminate one participant turn without reporting a user cancellation.
+   */
+  shouldEndAgenticTurn?: () => boolean;
   /**
    * Upper bound on agentic turns for adapters that orchestrate their own tool
    * loop (Claude subscription). Ignored by the request/response adapters, where
@@ -145,7 +183,7 @@ export interface CompletionInput {
     id: string;
     name: string;
     args: Record<string, unknown>;
-  }) => Promise<{ approved: boolean; feedback?: string }>;
+  }) => Promise<boolean>;
   /**
    * Cancellation signal for the in-flight provider call. Wired by ModelHandler
    * to the conversation's isCancelled flag (own or ancestor), so pressing Stop
@@ -155,6 +193,14 @@ export interface CompletionInput {
    * onto the AbortController that owns its whole agentic loop.
    */
   signal?: AbortSignal;
+  /** Runtime-only lease/fence assertion immediately before a tool side effect. */
+  beforeToolDispatch?: () => Promise<void>;
+  /** Call-time authorization for Persona Core-injected MCP handles. */
+  authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
+  /** Runtime-only lease/generation assertion immediately after a long tool call. */
+  afterToolDispatch?: () => Promise<void>;
+  /** Hold the current execution fence across one durable resource mutation. */
+  commitDurableMutation?: <T>(task: () => Promise<T>) => Promise<T>;
   /**
    * Optional live sink for self-orchestrating adapters (Claude subscription)
    * that run their own agentic loop inside a single createCompletion call. It is
@@ -187,6 +233,11 @@ export interface CompletionInput {
    */
   onModelDelta?: (delta: ModelStreamDelta) => void;
   /**
+   * Live MCP progress sink for self-orchestrating adapters. Request/response
+   * adapters execute tools in ModelHandler and therefore do not use this hook.
+   */
+  onToolProgress?: (progress: ModelToolProgress) => void;
+  /**
    * Captured run resources for oversized PRIOR tool results/args, keyed by the
    * producing `tool_call_id` (issue #168). Self-orchestrating adapters (Claude
    * subscription) use this to replace inline `…[truncated]` with a head excerpt
@@ -204,6 +255,13 @@ export interface CompletionInput {
    * adapter also drops it permanently for a provider that rejects it.
    */
   promptCacheKey?: string;
+  /**
+   * Request-level OpenAI prompt-cache policy. Present only after the execution
+   * layer has added compatible explicit breakpoints to the message content.
+   * The OpenAI adapter negotiates this option independently from
+   * `prompt_cache_key` and retries without it if an endpoint rejects it.
+   */
+  promptCacheMode?: 'explicit';
 }
 
 /**
@@ -242,4 +300,56 @@ export interface CompletionAdapter {
    * delta sink is available and falls back to createCompletion otherwise.
    */
   createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
+}
+
+/**
+ * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
+ * failures are swallowed: observability must never make a model call fail.
+ */
+export async function observeSdkRequest<T>(
+  input: Pick<CompletionInput, 'onSdkRequest' | 'onSdkRequestResult' | 'signal'>,
+  snapshot: SdkRequestSnapshot,
+  task: () => Promise<T>,
+): Promise<T> {
+  let dispatchId: string | undefined;
+  let finalized = false;
+  try {
+    dispatchId = await input.onSdkRequest?.(snapshot);
+  } catch {
+    dispatchId = undefined;
+  }
+  const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
+    if (!dispatchId || finalized) return;
+    finalized = true;
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(() => undefined);
+  };
+  try {
+    const result = await task();
+    const iterable = result as unknown as AsyncIterable<unknown> | null | undefined;
+    if (iterable && typeof iterable[Symbol.asyncIterator] === 'function') {
+      const asyncIterable = iterable;
+      async function* observedIterator(): AsyncGenerator<unknown> {
+        try {
+          for await (const item of asyncIterable) yield item;
+        } catch (error) {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+          throw error;
+        } finally {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'completed');
+        }
+      }
+      return new Proxy(result as object, {
+        get(target, property) {
+          if (property === Symbol.asyncIterator) return observedIterator;
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as T;
+    }
+    await finalize('completed');
+    return result;
+  } catch (error) {
+    await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+    throw error;
+  }
 }

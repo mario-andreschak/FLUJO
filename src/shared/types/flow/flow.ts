@@ -1,5 +1,4 @@
 import { Node, Edge } from '@xyflow/react';
-import { PermissionRule } from '@/shared/types/permissions';
 
 export interface HistoryEntry {
   nodes: FlowNode[];
@@ -14,6 +13,12 @@ export interface FlowNode extends Node {
     properties?: Record<string, any>;
   };
   selected?: boolean;
+}
+
+export interface PermissionRule {
+  effect: 'allow' | 'deny';
+  action: string;
+  resource?: string;
 }
 
 export interface Flow {
@@ -48,13 +53,18 @@ export interface Flow {
    */
   updatedAt?: number;
   /**
-   * Flow-level permission rules for MCP tool calls (issue #246).
-   * Evaluated last-match-wins. A `deny` rule drops the tool from the
-   * advertised list and/or blocks execution; an `allow` rule bypasses the
-   * approval gate; an `ask` rule (default) keeps the existing approval prompt.
-   * These rules are merged with per-server `autoApprove` desugaring at run
-   * start in ProcessNode.prep().
+   * Server-authored ownership marker for a Persona-specific ordinary Flow copy.
+   * The source remains an independent shared Flow and is never mutated by copy edits.
    */
+  personaOwnership?: {
+    personaId: string;
+    sourceFlowId?: string;
+    /** Stable virtual collection shared by all generated Flows for one Persona. */
+    groupId?: string;
+    /** Provenance used for grouping and required/supplemental badges. */
+    kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
+  };
+  /** Immutable execution policy carried by authored Persona behavior snapshots. */
   permissionRules?: PermissionRule[];
   nodes: FlowNode[];
   edges: Edge[];

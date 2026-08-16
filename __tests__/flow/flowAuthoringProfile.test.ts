@@ -22,6 +22,8 @@ describe('flowUsesAdvancedFeatures', () => {
           subflowId: 'child',
           inputMode: 'full-history',
           outputMode: 'final-only',
+          resultPresentation: 'separate',
+          sessionScope: 'per-key',
         }),
         node('finish'),
       ] as never,
@@ -37,6 +39,13 @@ describe('flowUsesAdvancedFeatures', () => {
     } as never)).toBe(false);
   });
 
+  it('keeps visible Persona abilities available in Guided mode', () => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [node('process', { personaTools: ['recall', 'work_item_create'] })],
+      edges: [],
+    } as never)).toBe(false);
+  });
+
   it('keeps canonical Process/Subflow subagent connections in Guided mode', () => {
     expect(flowUsesAdvancedFeatures({
       nodes: [
@@ -46,6 +55,8 @@ describe('flowUsesAdvancedFeatures', () => {
             subflowId: 'helper-flow',
             inputMode: 'isolated',
             outputMode: 'final-only',
+            resultPresentation: 'separate',
+            sessionScope: 'per-key',
           }),
           id: 'helper-node',
         },
@@ -79,8 +90,18 @@ describe('flowUsesAdvancedFeatures', () => {
     ['process capture', { nodes: [node('process', { captureVariable: 'result' })], edges: [] }],
     ['subflow fanout', { nodes: [node('subflow', { allowCallerFanout: true })], edges: [] }],
     ['conditional edge', { nodes: [], edges: [{ data: { condition: { kind: 'always' } } }] }],
-    ['permissions', { nodes: [], edges: [], permissionRules: [] }],
   ])('detects %s as advanced', (_label, flow) => {
     expect(flowUsesAdvancedFeatures(flow as never)).toBe(true);
+  });
+
+  it.each([
+    ['joined result presentation', { resultPresentation: 'joined' }],
+    ['fresh-per-visit sessions', { sessionScope: 'per-visit' }],
+    ['one session per parent run', { sessionScope: 'per-run' }],
+  ])('keeps explicit %s in Advanced mode', (_label, properties) => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [node('subflow', properties)],
+      edges: [],
+    } as never)).toBe(true);
   });
 });

@@ -1,0 +1,69 @@
+{
+  "roleDefinition": {
+    "schemaVersion": 1,
+    "id": "role_legacy",
+    "name": "Legacy Role",
+    "createdAt": 10,
+    "updatedAt": 10
+  },
+  "roleVersion": {
+    "schemaVersion": 1,
+    "id": "role_version_legacy",
+    "roleDefinitionId": "role_legacy",
+    "version": 1,
+    "name": "Legacy Role v1",
+    "mission": "Keep the legacy prompt.",
+    "behaviorSlots": [{
+      "key": "primary",
+      "name": "Primary",
+      "flowTemplate": {
+        "id": "legacy_template_flow",
+        "name": "Legacy template",
+        "nodes": [],
+        "edges": []
+      }
+    }],
+    "createdAt": 10
+  },
+  "persona": {
+    "schemaVersion": 1,
+    "id": "persona_legacy",
+    "name": "Legacy Persona",
+    "roleVersionId": "role_version_legacy",
+    "lifecycleState": "idle",
+    "autonomyLevel": "locked",
+    "interruptionPolicy": "queue",
+    "coreMemoryItemIds": [],
+    "createdAt": 10,
+    "updatedAt": 10
+  },
+  "behaviorBinding": {
+    "schemaVersion": 1,
+    "id": "behavior_legacy",
+    "personaId": "persona_legacy",
+    "slotKey": "primary",
+    "activeRevisionId": "revision_legacy",
+    "createdAt": 10,
+    "updatedAt": 10
+  },
+  "behaviorRevision": {
+    "schemaVersion": 1,
+    "id": "revision_legacy",
+    "behaviorId": "behavior_legacy",
+    "personaId": "persona_legacy",
+    "slotKey": "primary",
+    "revision": 1,
+    "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "flowSnapshot": {
+      "id": "legacy_flow",
+      "name": "Legacy Flow",
+      "nodes": [],
+      "edges": []
+    },
+    "source": {
+      "kind": "import",
+      "sourceRef": "legacy"
+    },
+    "createdAt": 10
+  }
+}

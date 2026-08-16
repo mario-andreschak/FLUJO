@@ -1,4 +1,5 @@
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 /**
  * Mid-run steering inbox: user messages submitted while a run is ALREADY in
@@ -32,22 +33,23 @@ const inbox: Map<string, FlujoChatMessage[]> =
 
 /** Append a steering message to the tail of a conversation's inbox (FIFO). */
 export function enqueueSteeringMessage(conversationId: string, message: FlujoChatMessage): void {
-  const existing = inbox.get(conversationId);
+  const key = workspaceCacheKey(conversationId);
+  const existing = inbox.get(key);
   if (existing) {
     existing.push(message);
   } else {
-    inbox.set(conversationId, [message]);
+    inbox.set(key, [message]);
   }
 }
 
 /** How many messages are waiting. Cheap enough to call every loop iteration. */
 export function steeringCount(conversationId: string): number {
-  return inbox.get(conversationId)?.length ?? 0;
+  return inbox.get(workspaceCacheKey(conversationId))?.length ?? 0;
 }
 
 /** Non-destructive look at the waiting messages (empty array when none). */
 export function peekSteeringMessages(conversationId: string): readonly FlujoChatMessage[] {
-  return inbox.get(conversationId) ?? [];
+  return inbox.get(workspaceCacheKey(conversationId)) ?? [];
 }
 
 /**
@@ -56,9 +58,10 @@ export function peekSteeringMessages(conversationId: string): readonly FlujoChat
  * requeueSteeringMessages), because nothing else holds a reference.
  */
 export function takeSteeringMessages(conversationId: string): FlujoChatMessage[] {
-  const pending = inbox.get(conversationId);
+  const key = workspaceCacheKey(conversationId);
+  const pending = inbox.get(key);
   if (!pending || pending.length === 0) return [];
-  inbox.delete(conversationId);
+  inbox.delete(key);
   return pending;
 }
 
@@ -70,11 +73,12 @@ export function takeSteeringMessages(conversationId: string): FlujoChatMessage[]
  */
 export function requeueSteeringMessages(conversationId: string, messages: FlujoChatMessage[]): void {
   if (messages.length === 0) return;
-  const later = inbox.get(conversationId) ?? [];
-  inbox.set(conversationId, [...messages, ...later]);
+  const key = workspaceCacheKey(conversationId);
+  const later = inbox.get(key) ?? [];
+  inbox.set(key, [...messages, ...later]);
 }
 
 /** Drop a conversation's whole inbox (cancel / delete). */
 export function clearSteeringInbox(conversationId: string): void {
-  inbox.delete(conversationId);
+  inbox.delete(workspaceCacheKey(conversationId));
 }

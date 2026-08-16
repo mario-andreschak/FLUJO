@@ -1,10 +1,16 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import ProcessNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal';
 import useModelManagement from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement';
 import useServerConnection from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection';
 import useHandoffTools from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useHandoffTools';
-
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement', () => ({
   __esModule: true,
   default: jest.fn(),
@@ -51,14 +57,14 @@ const mockUseServerConnection = useServerConnection as jest.MockedFunction<typeo
 const mockUseHandoffTools = useHandoffTools as jest.MockedFunction<typeof useHandoffTools>;
 
 const longDescription = 'Summarizes a large body of text into a concise result while preserving the most important details.';
-const processNode = (id: string) => ({
+const processNode = (id: string, properties: Record<string, unknown> = {}) => ({
   id,
   type: 'process',
   position: { x: 0, y: 0 },
   data: {
     label: `Process ${id}`,
     type: 'process',
-    properties: { promptTemplate: '' },
+    properties: { promptTemplate: '', ...properties },
   },
 }) as any;
 
@@ -147,20 +153,20 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
     rerender(<ProcessNodePropertiesModal {...baseProps} node={processNode('two')} mode="create" />);
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Basic' })).toHaveAttribute('aria-selected', 'true'));
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
-    expect(screen.getByRole('tab', { name: 'Connected Nodes' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
+    expect(screen.getByRole('tab', { name: 'Connected nodes' })).toHaveAttribute('aria-selected', 'true');
     rerender(<ProcessNodePropertiesModal {...baseProps} node={processNode('three')} mode="edit" />);
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Task' })).toHaveAttribute('aria-selected', 'true'));
     expect(screen.getByRole('tab', { name: 'MCP' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('orders Task tabs as MCP, Connected Nodes, Resources and keeps the prompt editor mounted', () => {
+  it('orders Task tabs as MCP, Connected nodes, Resources and keeps the prompt editor mounted', () => {
     renderModal({ mode: 'edit' });
     const taskTabs = within(screen.getByRole('tablist', { name: 'Task tools' })).getAllByRole('tab');
-    expect(taskTabs.map((tab) => tab.textContent)).toEqual(['MCP', 'Connected Nodes', 'Resources']);
+    expect(taskTabs.map((tab) => tab.textContent)).toEqual(['MCP', 'Connected nodes', 'Resources']);
 
     const editor = screen.getByTestId('prompt-editor');
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
     fireEvent.click(screen.getByRole('tab', { name: 'Resources' }));
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
@@ -240,14 +246,14 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
 
     expect(screen.getByText('1 parameter · 1 required')).toBeInTheDocument();
     expect(screen.queryByText('Parameters:')).not.toBeInTheDocument();
-    const expand = screen.getByRole('button', { name: 'Expand summarize details' });
+    const expand = screen.getByRole('button', { name: 'Expand details for summarize' });
     expect(expand).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseOver(screen.getByText(longDescription));
     expect(await screen.findByRole('tooltip')).toHaveTextContent(longDescription);
 
     fireEvent.click(expand);
-    expect(screen.getByRole('button', { name: 'Collapse summarize details' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Collapse details for summarize' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Parameters:')).toBeInTheDocument();
     expect(screen.getByText(/topic/)).toBeInTheDocument();
   });
@@ -256,11 +262,95 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
     renderModal({ mode: 'edit' });
     const editor = screen.getByTestId('prompt-editor');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
     fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add summarize from server-one to prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add summarize from server-one to the prompt' }));
 
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
     expect(editor).toHaveTextContent('${tool:server-one__summarize}');
+  });
+});
+
+describe('ProcessNodePropertiesModal Persona abilities', () => {
+  it('places Persona abilities in their own section instead of Task', async () => {
+    renderModal();
+
+    const ability = await screen.findByRole('checkbox', { name: 'Use existing memories' });
+    expect(ability.closest('[data-section]')).toHaveAttribute('data-section', 'persona');
+    expect(screen.getByTestId('process-task-split-container').closest('[data-section]')).toHaveAttribute('data-section', 'task');
+    expect(screen.getByRole('tab', { name: 'Persona' })).toBeInTheDocument();
+  });
+
+  it('shows every native ability in plain language and saves the full preset', async () => {
+    const onSave = jest.fn();
+    renderModal({
+      node: processNode('persona-core', {
+        personaTools: ['recall', 'work_item_create'],
+      }),
+      onSave,
+    });
+
+    const friendlyAbilityLabels = [
+      'Use existing memories',
+      'Suggest things to remember',
+      'Suggest memory corrections',
+      'Keep important memories always available',
+      'Stop keeping a memory always available',
+      'Forget memories',
+      'Create ongoing tasks',
+      'Update ongoing tasks',
+      'Finish ongoing tasks',
+      'Keep checklist items for later',
+      'Suggest reusable improvements',
+    ];
+    for (const label of friendlyAbilityLabels) {
+      expect(await screen.findByRole('checkbox', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('checkbox', { name: 'Use existing memories' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Create ongoing tasks' })).toBeChecked();
+    expect(screen.queryByText('work_item_create')).not.toBeInTheDocument();
+    expect(screen.queryByText('recall')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'All abilities' }));
+    expect(screen.getByRole('checkbox', { name: 'Forget memories' })).toBeChecked();
+    expect(screen.getByText('Forgetting takes effect immediately.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(onSave).toHaveBeenCalledWith('persona-core', expect.objectContaining({
+      properties: expect.objectContaining({
+        personaTools: [
+          'remember',
+          'recall',
+          'correct',
+          'forget',
+          'pin',
+          'unpin',
+          'work_item_create',
+          'work_item_update',
+          'work_item_complete',
+          'work_item_promote_todo',
+          'suggest_improvement',
+        ],
+      }),
+    }));
+  });
+
+  it('keeps the friendly controls in Guided mode and saves an explicit Off choice', async () => {
+    const onSave = jest.fn();
+    renderModal({
+      authoringMode: 'guided',
+      node: processNode('guided-persona', { personaTools: ['remember', 'unpin'] }),
+      onSave,
+    });
+
+    expect(await screen.findByText('Persona abilities')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Persona' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Advanced' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Off' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const saved = onSave.mock.calls[0][1] as { properties: Record<string, unknown> };
+    expect(saved.properties).toHaveProperty('personaTools', []);
   });
 });

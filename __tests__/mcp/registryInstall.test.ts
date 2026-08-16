@@ -163,9 +163,22 @@ describe('installRegistryServer', () => {
         transport: 'stdio',
         command: 'npx',
         args: expect.arrayContaining(['-y', '@example/voice@1.0.0']),
+        rootPath: 'mcp-servers/voice',
         disabled: false,
       })
     );
+  });
+
+  it('keeps a requested package-server name and its managed root in sync', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      serverName: 'custom-voice',
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.name).toBe('custom-voice');
+    expect(config.rootPath).toBe('mcp-servers/custom-voice');
   });
 
   it('refuses to install when required env is missing, reporting needsEnv', async () => {
@@ -261,5 +274,15 @@ describe('installRegistryServer', () => {
     const failed = await installRegistryServer('x/y');
     expect(failed.installed).toBe(false);
     expect(failed.error).toContain('registry down');
+  });
+
+  it('never substitutes the first fuzzy result for a requested exact name', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('ai.example/similar')] });
+    const result = await installRegistryServer('ai.example/exact');
+    expect(result).toEqual(expect.objectContaining({
+      installed: false,
+      error: 'No registry entry found for "ai.example/exact"',
+    }));
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
   });
 });

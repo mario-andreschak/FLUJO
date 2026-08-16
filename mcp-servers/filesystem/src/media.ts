@@ -7,43 +7,104 @@
 
 /**
  * Magic byte signatures for common file formats.
- * Each signature is checked against the first N bytes of the file.
+ *
+ * `bytes` is matched at `offset` (default 0). `also` adds a SECOND required
+ * range, which is what container formats need: RIFF files are only WEBP/WAVE
+ * because of the form-type at offset 8, and matching just one of the two ranges
+ * is never conclusive.
+ *
+ * Deliberately conservative: a signature shorter than ~3 bytes, or one built
+ * from a common filler byte, false-positives on arbitrary binaries and makes an
+ * ordinary file unreadable as text (media results reject pattern/range reads).
+ * When in doubt the extension fallback below is the safer signal.
  */
-const MAGIC_BYTE_SIGNATURES = [
+interface MagicSignature {
+  bytes: number[];
+  mimeType: string;
+  ext: string;
+  offset?: number;
+  also?: { offset: number; bytes: number[] };
+}
+
+/** ASCII helper so signatures stay readable. */
+const ascii = (s: string): number[] => Array.from(s, (c) => c.charCodeAt(0));
+
+const MAGIC_BYTE_SIGNATURES: MagicSignature[] = [
   // Images
   { bytes: [0x89, 0x50, 0x4e, 0x47], mimeType: 'image/png', ext: 'png' },
   { bytes: [0xff, 0xd8, 0xff], mimeType: 'image/jpeg', ext: 'jpeg' },
   { bytes: [0x47, 0x49, 0x46, 0x38], mimeType: 'image/gif', ext: 'gif' },
-  { bytes: [0x52, 0x49, 0x46, 0x46], mimeType: 'image/webp', ext: 'webp', skip: 8, check: [0x57, 0x45, 0x42, 0x50] },
-  { bytes: [0xff, 0x0e, 0x01], mimeType: 'image/vnd.adobe.photoshop', ext: 'psd' },
-  { bytes: [0xff, 0x0a], mimeType: 'image/x-portable-bitmap', ext: 'pbm' },
-  { bytes: [0xff, 0x0b], mimeType: 'image/x-portable-graymap', ext: 'pgm' },
-  { bytes: [0xff, 0x0c], mimeType: 'image/x-portable-pixmap', ext: 'ppm' },
+  // RIFF....WEBP — both ranges are required.
+  {
+    bytes: ascii('RIFF'), mimeType: 'image/webp', ext: 'webp',
+    also: { offset: 8, bytes: ascii('WEBP') },
+  },
+  // '8BPS' — the real Photoshop signature.
+  { bytes: ascii('8BPS'), mimeType: 'image/vnd.adobe.photoshop', ext: 'psd' },
   { bytes: [0x49, 0x49, 0x2a, 0x00], mimeType: 'image/tiff', ext: 'tiff' },
   { bytes: [0x4d, 0x4d, 0x00, 0x2a], mimeType: 'image/tiff', ext: 'tiff' },
-  { bytes: [0x00, 0x00, 0x01, 0x00], mimeType: 'image/x-icon', ext: 'ico' },
+  { bytes: [0x42, 0x4d], mimeType: 'image/bmp', ext: 'bmp' },
 
   // Audio
+  { bytes: [0x49, 0x44, 0x33], mimeType: 'audio/mpeg', ext: 'mp3' }, // ID3v2
   { bytes: [0xff, 0xfb], mimeType: 'audio/mpeg', ext: 'mp3' },
   { bytes: [0xff, 0xfa], mimeType: 'audio/mpeg', ext: 'mp3' },
-  { bytes: [0x49, 0x44, 0x33], mimeType: 'audio/mpeg', ext: 'mp3' }, // ID3v2
   { bytes: [0x4f, 0x67, 0x67, 0x53], mimeType: 'audio/ogg', ext: 'ogg' },
   { bytes: [0xff, 0xf1], mimeType: 'audio/aac', ext: 'aac' },
   { bytes: [0xff, 0xf9], mimeType: 'audio/aac', ext: 'aac' },
-  { bytes: [0x52, 0x49, 0x46, 0x46], mimeType: 'audio/wav', ext: 'wav', skip: 8, check: [0x57, 0x41, 0x56, 0x45] },
-  { bytes: [0x66, 0x4c, 0x61, 0x43], mimeType: 'audio/flac', ext: 'flac' },
-  { bytes: [0x4d, 0x34, 0x41, 0x20], mimeType: 'audio/x-m4a', ext: 'm4a' },
+  // RIFF....WAVE — both ranges are required.
+  {
+    bytes: ascii('RIFF'), mimeType: 'audio/wav', ext: 'wav',
+    also: { offset: 8, bytes: ascii('WAVE') },
+  },
+  { bytes: ascii('fLaC'), mimeType: 'audio/flac', ext: 'flac' },
 
   // Video
-  { bytes: [0x1a, 0x45, 0xdf, 0xa3], mimeType: 'video/webm', ext: 'webm' },
-  { bytes: [0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70], mimeType: 'video/mp4', ext: 'mp4', offset: 4 },
-  { bytes: [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70], mimeType: 'video/mp4', ext: 'mp4', offset: 4 },
-  { bytes: [0x00, 0x00, 0x00, 0x20, 0x6d, 0x64, 0x61, 0x74], mimeType: 'video/quicktime', ext: 'mov' },
-  { bytes: [0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70], mimeType: 'video/3gpp', ext: '3gp', offset: 4 },
-  { bytes: [0x1a, 0x4c, 0xab, 0x81], mimeType: 'video/x-matroska', ext: 'mkv' },
   { bytes: [0x00, 0x00, 0x01, 0xba], mimeType: 'video/mpeg', ext: 'mpg' },
   { bytes: [0x00, 0x00, 0x01, 0xb3], mimeType: 'video/mpeg', ext: 'mpg' },
 ];
+
+/**
+ * ISO-BMFF (`....ftyp<brand>`) covers MP4, MOV, 3GP, M4A and HEIC with one
+ * layout: a 4-byte box size, the literal 'ftyp' at offset 4, then a 4-byte
+ * major brand at offset 8. The previous table hard-coded specific box SIZES
+ * into the signature and compared them at the 'ftyp' offset, so it could never
+ * match a real file; the brand is the part that actually identifies the format.
+ */
+function detectIsoBmff(buf: Buffer): { mimeType: string } | null {
+  if (buf.length < 12) return null;
+  if (buf.toString('latin1', 4, 8) !== 'ftyp') return null;
+  const brand = buf.toString('latin1', 8, 12);
+  if (brand.startsWith('qt')) return { mimeType: 'video/quicktime' };
+  if (brand.startsWith('3g')) return { mimeType: 'video/3gpp' };
+  if (brand === 'M4A ' || brand === 'M4B ') return { mimeType: 'audio/mp4' };
+  if (brand === 'M4V ') return { mimeType: 'video/x-m4v' };
+  if (brand === 'heic' || brand === 'heix' || brand === 'mif1') return { mimeType: 'image/heic' };
+  if (brand === 'avif') return { mimeType: 'image/avif' };
+  return { mimeType: 'video/mp4' };
+}
+
+/**
+ * EBML (0x1A45DFA3) is shared by WebM and Matroska; only the DocType string
+ * inside the header distinguishes them, so scan the first bytes for it rather
+ * than guessing (the old table had a fabricated second signature for .mkv).
+ */
+function detectEbml(buf: Buffer): { mimeType: string } | null {
+  if (buf.length < 4) return null;
+  if (buf[0] !== 0x1a || buf[1] !== 0x45 || buf[2] !== 0xdf || buf[3] !== 0xa3) return null;
+  const header = buf.toString('latin1', 0, Math.min(buf.length, 256));
+  if (header.includes('webm')) return { mimeType: 'video/webm' };
+  if (header.includes('matroska')) return { mimeType: 'video/x-matroska' };
+  return { mimeType: 'video/webm' };
+}
+
+function matchesAt(buf: Buffer, offset: number, bytes: number[]): boolean {
+  if (buf.length < offset + bytes.length) return false;
+  for (let i = 0; i < bytes.length; i++) {
+    if (buf[offset + i] !== bytes[i]) return false;
+  }
+  return true;
+}
 
 /**
  * Detect MIME type from file buffer via magic bytes.
@@ -52,29 +113,13 @@ const MAGIC_BYTE_SIGNATURES = [
 export function detectMediaTypeFromMagicBytes(
   buf: Buffer,
 ): { mimeType: string; mediaType: 'image' | 'audio' | 'video' | 'file' } | null {
-  for (const sig of MAGIC_BYTE_SIGNATURES) {
-    const offset = sig.offset ?? 0;
-    const checkBytes = sig.check ?? sig.bytes;
-    if (buf.length < offset + checkBytes.length) continue;
-    let match = true;
-    for (let i = 0; i < checkBytes.length; i++) {
-      if (buf[offset + i] !== checkBytes[i]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      const mediaType = sig.mimeType.startsWith('image/')
-        ? 'image'
-        : sig.mimeType.startsWith('audio/')
-          ? 'audio'
-          : sig.mimeType.startsWith('video/')
-            ? 'video'
-            : 'file';
-      return { mimeType: sig.mimeType, mediaType };
-    }
-  }
-  return null;
+  const container = detectIsoBmff(buf) ?? detectEbml(buf);
+  const mimeType = container?.mimeType ?? MAGIC_BYTE_SIGNATURES.find((sig) =>
+    matchesAt(buf, sig.offset ?? 0, sig.bytes)
+    && (!sig.also || matchesAt(buf, sig.also.offset, sig.also.bytes))
+  )?.mimeType;
+  if (!mimeType) return null;
+  return { mimeType, mediaType: mediaTypeFromMime(mimeType) };
 }
 
 /**
@@ -90,8 +135,12 @@ export function mimeTypeFromExtension(filePath: string): string | null {
     jpeg: 'image/jpeg',
     gif: 'image/gif',
     webp: 'image/webp',
-    svg: 'image/svg+xml',
+    // NOTE: `svg` is deliberately absent. An SVG is XML source, not opaque
+    // bytes — classifying it as media made it unreadable as text (media
+    // results reject pattern/range reads) while no model can render it anyway.
     bmp: 'image/bmp',
+    heic: 'image/heic',
+    avif: 'image/avif',
     tiff: 'image/tiff',
     ico: 'image/x-icon',
     psd: 'image/vnd.adobe.photoshop',
@@ -99,7 +148,9 @@ export function mimeTypeFromExtension(filePath: string): string | null {
     mp3: 'audio/mpeg',
     wav: 'audio/wav',
     ogg: 'audio/ogg',
-    m4a: 'audio/aac',
+    // `.m4a` is ISO-BMFF audio, not raw AAC — keep it consistent with what the
+    // magic-byte brand check reports for the same file.
+    m4a: 'audio/mp4',
     aac: 'audio/aac',
     flac: 'audio/flac',
     wma: 'audio/x-ms-wma',

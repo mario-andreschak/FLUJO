@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -5,6 +6,7 @@ import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createOAuthClientProvider } from '@/backend/services/mcp/oauth';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('api/oauth/initiate');
 
@@ -16,7 +18,7 @@ const log = createLogger('api/oauth/initiate');
  * discovery, dynamic client registration, PKCE) via MCPOAuthClientProvider, instead of hand-
  * rolling each step - so this stays correct as the SDK's auth implementation evolves.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -50,7 +52,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const redirectUri = `${request.nextUrl.origin}/api/oauth/callback`;
+    const redirectUrl = new URL('/api/oauth/callback', request.nextUrl.origin);
+    redirectUrl.searchParams.set('workspace', getCurrentWorkspace());
+    const redirectUri = redirectUrl.toString();
     // The provider mutates and persists `serverConfig` in place (see MCPOAuthClientProvider),
     // so client registration / discovery state / the authorization URL land in storage as
     // soon as auth() produces them - the route doesn't do any saving itself.
@@ -111,3 +115,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

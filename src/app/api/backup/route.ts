@@ -1,21 +1,46 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
+import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVersion';
+import { addFolderToZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
 
 const log = createLogger('app/api/backup/route');
 
-const MCP_SERVERS_DIR = path.join(getDataDir(), 'mcp-servers');
+// Workspaces (#406): a backup covers exactly ONE workspace — the selected one.
+// Aggregating every workspace into a single archive would make restore a
+// far more destructive operation than it is today, so that is deliberately out
+// of scope here. Resolved per call because the workspace is per-request.
+const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
-export async function POST(request: NextRequest) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPersonaConversationSnapshot(value: unknown): boolean {
+  return isRecord(value) && (
+    Object.prototype.hasOwnProperty.call(value, 'personaAttribution')
+    || Object.prototype.hasOwnProperty.call(value, 'personaTargetId')
+    || Object.prototype.hasOwnProperty.call(value, 'personaInstructionContext')
+    || value.personaArchived === true
+    || value.personaOwned === true
+  );
+}
+
+function historyContainsPersonaConversation(value: unknown): boolean {
+  return isPersonaConversationSnapshot(value)
+    || (Array.isArray(value) && value.some(isPersonaConversationSnapshot));
+}
+
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -32,15 +57,53 @@ export async function POST(request: NextRequest) {
       log.error(`Invalid selections [${requestId}]:`, selections);
       return NextResponse.json({ error: 'Invalid selections' }, { status: 400 });
     }
+
+    // Freeze the exact chat-history snapshot before constructing an archive.
+    // A second read after the authority check would leave a TOCTOU window in
+    // which newly Persona-attributed state could enter a non-strict backup.
+    let chatHistorySnapshot: unknown = null;
+    let conversationSnapshots: Record<string, unknown>[] = [];
+    if (selections.includes('chatHistory')) {
+      const [historySnapshot, loadedConversations] = await Promise.all([
+        loadItem<unknown>(StorageKey.CHAT_HISTORY, null),
+        listCollectionItems<unknown>('conversations'),
+      ]);
+      chatHistorySnapshot = historySnapshot;
+      for (const conversation of loadedConversations) {
+        if (!isRecord(conversation) || typeof conversation.conversationId !== 'string') {
+          log.warn(`Skipped conversation without an id [${requestId}]`);
+          continue;
+        }
+        try {
+          assertSafeCollectionId(conversation.conversationId);
+          conversationSnapshots.push(conversation);
+        } catch (error) {
+          log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
+        }
+      }
+      const includesPersonaConversation = historyContainsPersonaConversation(chatHistorySnapshot)
+        || conversationSnapshots.some(isPersonaConversationSnapshot);
+      if (includesPersonaConversation) {
+        const notStrictLoopback = assertLocalRequest(request, { strictLoopback: true });
+        if (notStrictLoopback) return notStrictLoopback;
+      }
+    }
     
     // Create a new zip file
     const zip = new JSZip();
     
     // Add metadata
+    // `version` stays '1.0' so older FLUJO builds can still read new archives;
+    // the workspace fields are additive metadata that a legacy reader ignores.
     zip.file('backup-info.json', JSON.stringify({
       version: '1.0',
       timestamp: new Date().toISOString(),
       selections,
+      // #406: which workspace this archive was taken from, and which on-disk
+      // layout it assumes. An archive WITHOUT these fields is a legacy,
+      // pre-workspace backup and restores into the selected workspace.
+      workspace: getCurrentWorkspace(),
+      workspaceLayoutVersion: WORKSPACE_LAYOUT_VERSION,
     }));
     
     // Add storage files
@@ -83,6 +146,8 @@ export async function POST(request: NextRequest) {
           // single storage file as before.
           const data = storageKey === StorageKey.FLOWS
             ? await flowService.loadFlows()
+            : storageKey === StorageKey.CHAT_HISTORY
+              ? chatHistorySnapshot
             : await loadItem<unknown>(storageKey, null);
           if (data === null || (storageKey === StorageKey.FLOWS && Array.isArray(data) && data.length === 0)) {
             log.warn(`No data stored for key [${requestId}]:`, storageKey);
@@ -105,22 +170,12 @@ export async function POST(request: NextRequest) {
     // collection snapshots independently so mixed archives preserve both.
     if (selections.includes('chatHistory')) {
       try {
-        const conversations = await listCollectionItems<Record<string, unknown>>('conversations');
-        for (const conversation of conversations) {
-          const conversationId = conversation.conversationId;
-          if (typeof conversationId !== 'string') {
-            log.warn(`Skipped conversation without an id [${requestId}]`);
-            continue;
-          }
-          try {
-            assertSafeCollectionId(conversationId);
-            zip.file(
-              `storage/conversations/${conversationId}.json`,
-              JSON.stringify(conversation, null, 2),
-            );
-          } catch (error) {
-            log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
-          }
+        for (const conversation of conversationSnapshots) {
+          const conversationId = conversation.conversationId as string;
+          zip.file(
+            `storage/conversations/${conversationId}.json`,
+            JSON.stringify(conversation, null, 2),
+          );
         }
       } catch (error) {
         log.error(`Error adding conversations to backup [${requestId}]:`, error);
@@ -131,7 +186,13 @@ export async function POST(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Adding MCP servers folder to backup [${requestId}]`);
-        await addFolderToZip(zip, MCP_SERVERS_DIR, 'mcp-servers');
+        await addFolderToZipLinkSafe(
+          zip,
+          mcpServersDir(),
+          'mcp-servers',
+          getWorkspaceDataDir(),
+          (entryPath, reason) => log.warn(`Skipped unsafe MCP backup entry ${entryPath}: ${reason}`),
+        );
         log.debug(`Added MCP servers folder to backup [${requestId}]`);
       } catch (error) {
         log.error(`Error adding MCP servers folder to backup [${requestId}]:`, error);
@@ -164,41 +225,5 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Helper function to recursively add a folder to a zip file
-async function addFolderToZip(zip: JSZip, folderPath: string, zipPath: string) {
-  const entries = await fs.readdir(folderPath, { withFileTypes: true });
-  
-  for (const entry of entries) {
-    const fullPath = path.join(folderPath, entry.name);
-    const zipEntryPath = path.join(zipPath, entry.name).replace(/\\/g, '/');
-    
-    if (entry.isDirectory()) {
-      // Skip node_modules and .git folders
-      if (entry.name === 'node_modules' || entry.name === '.git') {
-        continue;
-      }
-      
-      // Create folder in zip
-      zip.folder(zipEntryPath);
-      
-      // Recursively add contents
-      await addFolderToZip(zip, fullPath, zipEntryPath);
-    } else {
-      // Skip large files (> 10MB)
-      try {
-        const stats = await fs.stat(fullPath);
-        if (stats.size > 10 * 1024 * 1024) {
-          continue;
-        }
-        
-        // Add file to zip
-        const content = await fs.readFile(fullPath);
-        zip.file(zipEntryPath, content);
-      } catch (error) {
-        // Skip files that can't be read
-        continue;
-      }
-    }
-  }
-}
-
+// Workspaces (#406): the archive contains only the selected workspace's data.
+export const POST = withWorkspaceRoute(POST_handler);

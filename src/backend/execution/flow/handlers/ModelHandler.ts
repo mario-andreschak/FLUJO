@@ -11,10 +11,20 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
-import { toApiMessages } from '../buildNodeContext';
+import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
+import {
+  emergencyRefitMessages,
+  EMERGENCY_CONTEXT_REFIT_MARKER,
+} from './emergencyContextRefit';
+import {
+  cloneModelInputSnapshot,
+  markModelInputMessages,
+  recordContextCompaction,
+} from './modelInputCompaction';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import {
   filterUnsupportedMediaInputs,
   hydrateRunResourceMedia,
@@ -24,18 +34,41 @@ import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
-import { compactHistory, estimateTokens } from './summarizingCompaction';
+import {
+  compactHistory,
+  COMPACTION_SUMMARY_MARKER,
+  estimateTokens,
+  type CompactHistoryResult,
+} from './summarizingCompaction';
+import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
+import {
+  COMPACTION_ARTIFACT_SCHEMA_VERSION,
+  COMPACTION_POLICY_VERSION,
+  COMPACTION_PROJECTION_VERSION,
+  type CompactionProjectionIdentity,
+} from '../compaction/types';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
+import { normalizeModelTemperature } from '@/shared/types/model/provider';
+import {
+  CODEX_EMERGENCY_COMPACTION_MARKER,
+  refitCodexMessagesForInputLimit,
+} from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
+import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
 import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
 import { registerToolCall, releaseToolCall } from '../toolCancelRegistry';
 import { combineAbortSignals } from '../combineAbortSignals';
+import {
+  MAX_AUTOMATIC_MODEL_RETRIES,
+  planAutomaticRetry,
+  waitForRetryWindow,
+} from '../retryAfter';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { resolveInvokedToolUiLink } from '@/backend/mcpApps/toolUi';
 import {
@@ -45,13 +78,30 @@ import {
   getRunResourceLocalPath,
 } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
+import { mediaPartFromToolItem, splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
+import { isPersonaToolName, executePersonaTool } from './personaTools';
+import {
+  executeMeetingTool,
+  hasLiveMeetingTurn,
+  isLiveMeetingTurnSilent,
+  isMeetingToolName,
+  isSilentMeetingControlRequest,
+} from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
-import type { RunResourceSettings } from '@/shared/types/runResources';
-import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
+import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
+import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
+import {
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  DEFAULT_TOOL_RESULT_MAX_LINES,
+  type RunResourceSettings,
+} from '@/shared/types/runResources';
+import type { ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
@@ -60,15 +110,26 @@ import {
   parseDataUrl,
 } from '@/backend/services/model/adapters/messageUtils';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import {
+  archiveModelDispatch,
+  updateModelDispatchOutcome,
+} from '@/backend/execution/flow/modelTurnArchive';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  isFlowExecutionAuthorityError,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
 import { unloadModel } from '@/backend/services/ollama';
-import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 import {
   classifyStatisticsError,
@@ -76,6 +137,12 @@ import {
   credentialFingerprint,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import {
+  newStatisticsInvocationId,
+  statisticsAttemptId,
+  statisticsCacheOutcomeFromUsage,
+  statisticsPayloadMetadata,
+} from '@/backend/services/statistics/metadata';
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
@@ -113,6 +180,7 @@ async function persistModelMedia(
   parts: ModelMediaPart[],
   conversationId?: string,
   nodeId?: string,
+  durableContext: FlowDurableMutationContext = {},
 ): Promise<ModelMediaPart[]> {
   const deduped = parts.filter((part, index, all) => {
     const key = `${part.type}|${part.url ?? ''}|${part.data ?? ''}|${part.mimeType ?? ''}`;
@@ -135,28 +203,32 @@ async function persistModelMedia(
     if (!data) return { ...part, mimeType };
 
     try {
-      const written = await writeRunResource({
-        conversationId,
-        name: part.name,
-        mimeType,
-        kind: mediaResourceKind({ ...part, mimeType }),
-        data: { base64: data },
-        producedBy: { source: 'model-output', nodeId },
+      return await commitFlowDurableMutation(durableContext, async () => {
+        const written = await writeRunResource({
+          conversationId,
+          name: part.name,
+          mimeType,
+          kind: mediaResourceKind({ ...part, mimeType }),
+          data: { base64: data },
+          producedBy: { source: 'model-output', nodeId },
+        });
+        if ('skipped' in written) return { ...part, mimeType };
+        const localPath = await getRunResourceLocalPath(written.uri);
+        return {
+          type: mediaTypeFromMime(mimeType),
+          mimeType,
+          ...(part.name ? { name: part.name } : {}),
+          ...(part.transcript ? { transcript: part.transcript } : {}),
+          resourceUri: written.uri,
+          ...(localPath ? { localPath } : {}),
+          url:
+            `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
+            `/resources/${encodeURIComponent(written.id)}/content` +
+            `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
+        };
       });
-      if ('skipped' in written) return { ...part, mimeType };
-      const localPath = await getRunResourceLocalPath(written.uri);
-      return {
-        type: mediaTypeFromMime(mimeType),
-        mimeType,
-        ...(part.name ? { name: part.name } : {}),
-        ...(part.transcript ? { transcript: part.transcript } : {}),
-        resourceUri: written.uri,
-        ...(localPath ? { localPath } : {}),
-        url:
-          `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
-          `/resources/${encodeURIComponent(written.id)}/content`,
-      };
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       log.warn('Failed to persist direct model media; keeping it inline', {
         conversationId,
         nodeId,
@@ -353,6 +425,78 @@ export class ModelHandler {
   }
 
   /**
+   * Read the experimental `subflowToolInvocation` flag (issue #385, deferred
+   * Part B of #359) from the persisted Settings blob. Gates whether a Subflow
+   * node authored with `invocationMode: 'tool'` is advertised as a distinct
+   * `call_subflow_<slug>` tool (ProcessNode.generateHandoffTools) instead of
+   * the default `handoff_to_*` transition tool. Same best-effort pattern as
+   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
+   * disabled, so an unconfigured install keeps today's handoff-only behaviour.
+   */
+  static async isSubflowToolInvocationEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowToolInvocation);
+    } catch (err) {
+      log.warn('Failed to read subflowToolInvocation setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  static async isSubflowDetachedInvocationEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowDetachedInvocation);
+    } catch (err) {
+      log.warn('Failed to read subflowDetachedInvocation setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  /**
+   * Summarize a validated persisted child-session transcript using the same
+   * provider adapter as ordinary Process execution. Kept narrow so session
+   * policy does not inherit the global automatic-compaction threshold.
+   */
+  static async summarizeSessionHistory(
+    modelId: string,
+    messages: FlujoChatMessage[],
+    prompt: { system: string; user: string },
+    executionAuthority?: import('../types').FlowExecutionAuthority,
+  ): Promise<string> {
+    const callMessages: FlujoChatMessage[] = [
+      { id: uuidv4(), role: 'system', content: prompt.system, timestamp: Date.now() } as FlujoChatMessage,
+      ...messages,
+      { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
+    ];
+    const response = await ModelHandler.generateCompletion(modelId, '', callMessages, undefined, {
+      maxTokens: 4000,
+      beforeModelDispatch: executionAuthority?.assertCurrent,
+      durableContext: { executionAuthority },
+    });
+    await executionAuthority?.assertCurrent();
+    return response.success ? (response.value.content ?? '') : '';
+  }
+
+  /**
+   * Read the experimental `subflowSessions` flag (issue #391, gate for #363
+   * Phase 1) from the persisted Settings blob. Gates whether `runSubflowLanes()`
+   * honours a Subflow node's `sessionScope` and resumes a child conversation
+   * across repeat visits within one parent run. Same best-effort pattern as
+   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
+   * disabled, so an unconfigured install keeps today's per-visit behaviour.
+   */
+  static async isSubflowSessionsEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowSessions);
+    } catch (err) {
+      log.warn('Failed to read subflowSessions setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  /**
    * Read the experimental summarizing-compaction settings (issue #248) from the
    * persisted Settings blob. Best-effort: any failure reads as disabled, so the
    * completion path keeps its existing (wire-only) behaviour.
@@ -383,69 +527,67 @@ export class ModelHandler {
   }
 
   /**
-   * Summarizing compaction pre-flight (issue #248). When the experimental
-   * `compactionEnabled` setting is on and the persisted history is estimated to
-   * be about to overflow the model's context window, summarize the OLD part of
-   * the conversation into an anchored-summary head and persist it (the summary
-   * becomes the new conversation head; the pre-summary slice is captured as a
-   * recoverable run resource). Returns `{ summaryMessage, removedIds }` so the
-   * caller can also apply the same head-swap to THIS turn's wire, or `null` when
-   * compaction did not run (disabled, no context-window info, under threshold,
-   * nothing old enough, or the summary model call failed — all safe no-ops that
-   * fall through to the existing wire-only path).
-   *
-   * Strictly gated: OFF by default and a pure no-op when disabled, so existing
-   * behaviour is unchanged for every user who hasn't opted in. Best-effort: any
-   * failure is swallowed and treated as "did not compact".
+   * Build summarizing compaction strictly as a provider-facing projection.
+   * Canonical SharedState.messages and the append-only conversation log are
+   * never reconciled or replaced here. Artifact metadata is persisted beside
+   * the complete canonical snapshot and is reusable only under exact digest,
+   * scope, projection, policy, model, and schema identity.
    */
-  private static async maybeCompactPersistedHistory(
-    conversationId: string,
+  private static async maybeCompactWire(
+    source: FlujoChatMessage[],
+    conversationId: string | undefined,
     nodeId: string | undefined,
+    projectionView: CompactionProjectionIdentity['view'],
     model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
-  ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
+    durableContext: FlowDurableMutationContext = {},
+  ): Promise<CompactHistoryResult | null> {
     try {
-      // Self-orchestrating adapters manage their own session/wire; excluded.
-      if (isSelfOrchestratingAdapter(model.adapter)) return null;
+      if (!conversationId || source.length < 4) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
-      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-      const state = FlowExecutor.conversationStates.get(conversationId);
-      if (!state || !Array.isArray(state.messages) || state.messages.length < 4) return null;
-
-      // Estimate the current request size. Prefer the last provider-reported
-      // prompt-token figure (authoritative), else the char/4 heuristic.
       let lastPromptTokens: number | undefined;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        const u = (state.messages[i] as FlujoChatMessage).usage;
-        if (u && typeof u.promptTokens === 'number' && u.promptTokens > 0) {
-          lastPromptTokens = u.promptTokens;
+      for (let i = source.length - 1; i >= 0; i--) {
+        const usage = source[i].usage;
+        if (usage && typeof usage.promptTokens === 'number' && usage.promptTokens > 0) {
+          lastPromptTokens = usage.promptTokens;
           break;
         }
       }
-      const estimate = lastPromptTokens ?? estimateTokens(state.messages);
-
-      // The trigger threshold: explicit per-model override, else derived from the
-      // context window minus head-room for the reply + a safety buffer. Without
-      // any context-window info we cannot pre-flight safely — no-op.
-      const threshold =
-        eff.threshold ??
-        (model.contextWindow
-          ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
-          : undefined);
+      const estimate = lastPromptTokens ?? estimateTokens(source);
+      // Some CLI/provider catalogues do not publish a context window. The
+      // opt-in summarizer must still be useful for them, so use a conservative
+      // provider-neutral trigger instead of silently disabling compaction.
+      const threshold = eff.threshold ?? (model.contextWindow
+        ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
+        : 96_000);
       if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
 
-      log.info('Summarizing-compaction pre-flight triggered', {
+      const projection: CompactionProjectionIdentity = {
         conversationId,
         nodeId,
-        estimate,
-        threshold,
-        messages: state.messages.length,
-      });
+        view: projectionView,
+        handoffPolicy: 'strip-v1',
+        version: COMPACTION_PROJECTION_VERSION,
+      };
+      const sourceDigest = digestProjectedMessages(source);
+      const projectionDigest = digestProjectionIdentity(projection);
+
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      const reusableArtifact = state?.compactionState?.artifacts.find(artifact =>
+        artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
+        artifact.conversationId === conversationId &&
+        artifact.nodeId === nodeId &&
+        artifact.sourceDigest === sourceDigest &&
+        artifact.projectionDigest === projectionDigest &&
+        artifact.policyVersion === COMPACTION_POLICY_VERSION &&
+        artifact.modelId === model.id
+      );
 
       const summarize = async (
         msgs: FlujoChatMessage[],
@@ -456,55 +598,76 @@ export class ModelHandler {
           ...msgs,
           { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
         ];
-        // A bounded, tool-free completion. Reuses the same provider path but must
-        // NOT recurse into compaction (no conversationId keyed state to compact,
-        // and the summary history is a throwaway slice).
-        const res = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+        const response = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
           maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
+          beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
+          durableContext,
         });
-        return res.success ? (res.value.content ?? '') : '';
+        await assertFlowExecutionCurrent(durableContext);
+        return response.success ? (response.value.content ?? '') : '';
       };
 
-      const writeAnchor = async (text: string): Promise<string | undefined> => {
-        try {
-          const written = await writeRunResource({
-            conversationId,
-            name: 'compaction-anchor',
-            mimeType: 'application/json',
-            kind: 'text',
-            data: { text },
-            producedBy: { source: 'tool-result', nodeId },
-          });
-          return 'skipped' in written ? undefined : written.uri;
-        } catch {
-          return undefined;
-        }
+      const writeAnchor = async (
+        text: string,
+        metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
+      ): Promise<string | undefined> => {
+        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+          conversationId,
+          name: `compaction-artifact-${metadata.artifactId}`,
+          mimeType: 'application/json',
+          kind: 'text',
+          data: { text },
+          producedBy: {
+            source: 'compaction-artifact',
+            nodeId,
+            artifactId: metadata.artifactId,
+            sourceDigest: metadata.sourceDigest,
+            projectionDigest: metadata.projectionDigest,
+          },
+        }));
+        return 'skipped' in written ? undefined : written.uri;
       };
 
-      const before = [...state.messages];
-      const result = await compactHistory(
-        state.messages,
-        { keepTokens: eff.keepTokens, nodeId },
-        { summarize, writeAnchor },
-      );
+      const result = await compactHistory(source, {
+        keepTokens: eff.keepTokens,
+        nodeId,
+        conversationId,
+        projection,
+        sourceDigest,
+        projectionDigest,
+        policyVersion: COMPACTION_POLICY_VERSION,
+        modelId: model.id,
+        reusableArtifact,
+      }, { summarize, writeAnchor });
       if (!result) return null;
 
-      // Persist: swap the history head in SharedState and reconcile the log so the
-      // summary head + removals are durable and auditable, then snapshot.
-      state.messages = result.newMessages;
-      state.updatedAt = Date.now();
-      try {
-        const { reconcileConversationLog } = await import('@/backend/execution/flow/conversationLog');
-        await reconcileConversationLog(state, before);
-        const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
-        await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
-      } catch (persistError) {
-        log.warn('Compaction persisted-history reconcile/persist failed; continuing', { conversationId, persistError });
+      await assertFlowExecutionCurrent(durableContext);
+      if (digestProjectedMessages(source) !== sourceDigest) {
+        log.warn('Projected compaction source changed during generation; discarding artifact', { conversationId, nodeId });
+        return null;
       }
 
-      return { summaryMessage: result.summaryMessage, removedIds: result.removedIds };
+      if (state && result.artifact !== reusableArtifact) {
+        const previous = state.compactionState;
+        state.compactionState = {
+          schemaVersion: COMPACTION_ARTIFACT_SCHEMA_VERSION,
+          artifacts: [...(previous?.artifacts ?? []), result.artifact],
+        };
+        try {
+          const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
+          await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
+        } catch (persistError) {
+          state.compactionState = previous;
+          rethrowFlowExecutionAuthorityError(persistError);
+          log.warn('Compaction artifact metadata persist failed; using canonical wire', { conversationId, persistError });
+          return null;
+        }
+      }
+
+      return result;
     } catch (error) {
-      log.warn('Summarizing-compaction pre-flight failed; falling back to existing behaviour', { conversationId, error });
+      rethrowFlowExecutionAuthorityError(error);
+      log.warn('Summarizing-compaction pre-flight failed; using canonical wire', { conversationId, error });
       return null;
     }
   }
@@ -712,7 +875,7 @@ export class ModelHandler {
   /** Estimate the complete provider payload using the same conservative
    * character-based convention as summarizing compaction. */
   private static estimateOutgoingInputTokens(
-    messages: OpenAI.ChatCompletionMessageParam[],
+    messages: readonly OpenAI.ChatCompletionMessageParam[],
     tools?: OpenAI.ChatCompletionFunctionTool[]
   ): number {
     return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
@@ -745,7 +908,9 @@ export class ModelHandler {
       haystack.includes('maximum context') ||
       haystack.includes('reduce the length') ||
       haystack.includes('too many tokens') ||
-      haystack.includes('exceeds the context')
+      haystack.includes('exceeds the context') ||
+      haystack.includes('input_too_large') ||
+      haystack.includes('input exceeds the maximum length')
     );
   }
 
@@ -813,7 +978,8 @@ export class ModelHandler {
     conversationId: string,
     apiMessages: OpenAI.ChatCompletionMessageParam[],
     existing: Map<string, ToolResourceMarker> | undefined,
-    nodeId?: string
+    nodeId?: string,
+    durableContext: FlowDurableMutationContext = {},
   ): Promise<Map<string, ToolResourceMarker> | undefined> {
     let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
     for (const msg of apiMessages) {
@@ -821,14 +987,16 @@ export class ModelHandler {
       if (msg.content.length <= ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
       const callId = msg.tool_call_id;
       if (markers?.get(callId)?.result?.uri) continue; // already recoverable
+      const content = msg.content;
       try {
-        const written = await writeRunResource({
-          conversationId,
-          mimeType: 'text/plain',
-          kind: 'text',
-          data: { text: msg.content },
-          producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
-        });
+        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+            conversationId,
+            mimeType: 'text/plain',
+            kind: 'text',
+            data: { text: content },
+            producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
+          }),
+        );
         if ('skipped' in written) {
           log.warn(`Emergency capture of oversized tool result skipped (${written.skipped}); it will be lossily truncated`);
           continue;
@@ -838,6 +1006,7 @@ export class ModelHandler {
         slot.result = written;
         markers.set(callId, slot);
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.warn('Emergency capture of oversized tool result failed; it will be lossily truncated', error);
       }
     }
@@ -958,6 +1127,10 @@ export class ModelHandler {
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
+    const durableContext: FlowDurableMutationContext = {
+      executionAuthority: input.executionAuthority,
+      personaAttribution: input.personaAttribution,
+    };
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -1022,16 +1195,24 @@ export class ModelHandler {
 
     const requestToolApproval =
       requireToolApproval && emit && conversationId
-        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<{ approved: boolean; feedback?: string }> => {
+        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
+            if (input.onApprovalRequired === 'fail') {
+              // Self-orchestrating adapters own the tool loop, so waiting on
+              // the ordinary approval registry would deadlock an unattended
+              // meeting. Throwing aborts the participant turn without running
+              // the unresolved tool, matching runFlow's request/response path.
+              throw new Error(
+                `Headless run requires approval for tool "${call.name}" but no approver is available (approvalPolicy: fail).`,
+              );
+            }
+
             const toolCall: OpenAI.ChatCompletionMessageFunctionToolCall = {
               id: call.id,
               type: 'function',
               function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
             };
-            // Issue #247: surface the optional rejection feedback the /respond
-            // route may pass so the adapter can carry it back to the model.
-            return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
-              registerPendingApproval(conversationId, toolCall, (approved, feedback) => resolve({ approved, feedback }));
+            return new Promise<boolean>((resolve) => {
+              registerPendingApproval(conversationId, toolCall, resolve);
               emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
             });
           }
@@ -1045,17 +1226,43 @@ export class ModelHandler {
     // persisted copy dedupe in the UI. Emitting also keeps the frontend's
     // "no activity" timer reset while background tool calls are in flight.
     const liveMessageIds = new Set<string>();
+    let acceptLiveProjection = true;
+    let liveProjectionFailure: unknown;
+    let liveProjectionChain: Promise<void> = Promise.resolve();
+    const enqueueLiveProjection = (task: () => Promise<void>): void => {
+      liveProjectionChain = liveProjectionChain.then(async () => {
+        if (liveProjectionFailure) return;
+        try {
+          await task();
+        } catch (error) {
+          liveProjectionFailure = error;
+        }
+      });
+    };
+    const finishLiveProjection = async (): Promise<void> => {
+      // Close the callback gate before draining: an adapter that resolves and
+      // then invokes a late callback cannot append to a newer generation.
+      acceptLiveProjection = false;
+      await liveProjectionChain;
+      if (liveProjectionFailure) throw liveProjectionFailure;
+    };
+    const flushLiveProjection = async (): Promise<void> => {
+      await liveProjectionChain;
+      if (liveProjectionFailure) throw liveProjectionFailure;
+    };
     const onTranscriptMessage = emit
       ? (message: FlujoChatMessage) => {
-          // A native partial draft with this id is now durable and must survive
-          // a later failure in the same self-orchestrating run.
-          liveMessageIds.delete(message.id);
+          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
           const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
-          emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
-          // Also fold it into the live shared state and persist immediately, so a
-          // failure mid-loop (before the normal end-of-run save) doesn't discard
-          // tool calls/results that already executed (e.g. SAP objects, tickets).
-          if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+          enqueueLiveProjection(() => commitFlowDurableMutation(durableContext, async () => {
+            // A native partial draft with this id is now durable and must survive
+            // a later failure in the same self-orchestrating run.
+            liveMessageIds.delete(message.id);
+            emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
+            // Fold under the SAME authority as the event.  The bus append is
+            // independently fenced by conversationLog when it reaches disk.
+            if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+          }));
         }
       : undefined;
 
@@ -1063,6 +1270,7 @@ export class ModelHandler {
     // failed attempt can explicitly retract its transient UI drafts.
     const onModelDelta = emit
       ? (delta: ModelStreamDelta) => {
+          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
           liveMessageIds.add(delta.messageId);
           emit({
             type: 'model:delta',
@@ -1077,6 +1285,23 @@ export class ModelHandler {
                 ? delta.mediaPart
                 : undefined,
             toolCallDelta: delta.toolCallDelta,
+            node: nodeId ? { nodeId } : undefined,
+          });
+        }
+      : undefined;
+
+    // Claude/Codex own their tool loops inside createCompletion(), so their MCP
+    // progress callbacks cannot pass through processToolCalls below. Project
+    // them onto the same live event used by the ordinary tool loop.
+    const onToolProgress = emit
+      ? (progress: ModelToolProgress) => {
+          emit({
+            type: 'tool:progress',
+            toolCallId: progress.toolCallId,
+            name: progress.name,
+            progress: progress.progress,
+            total: progress.total,
+            message: progress.message,
             node: nodeId ? { nodeId } : undefined,
           });
         }
@@ -1103,8 +1328,11 @@ export class ModelHandler {
     // conversation's isCancelled flag (own or an ancestor's, for subflow
     // children); generateCompletion polls this and aborts the call mid-stream
     // instead of letting the current model turn run to completion.
-    const shouldAbort = conversationId
-      ? () => ModelHandler.isConversationCancelled(conversationId)
+    const shouldAbort = conversationId || input.signal
+      ? () => Boolean(
+          input.signal?.aborted
+          || (conversationId && ModelHandler.isConversationCancelled(conversationId))
+        )
       : undefined;
 
     // Run-resource tools (issue #161): self-orchestrating adapters (Claude
@@ -1118,14 +1346,46 @@ export class ModelHandler {
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
-    const localToolExecutors =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool)
+    const personaToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isPersonaToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasPersonaTool = personaToolCallNames.length > 0;
+    const meetingToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isMeetingToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasMeetingTool = meetingToolCallNames.length > 0;
+    const shouldEndAgenticTurn = conversationId && hasMeetingTool
+      ? () => isLiveMeetingTurnSilent(conversationId)
+      : undefined;
+    // Issue #385: `call_subflow_<slug>` tool names are per-target-node and
+    // dynamic (unlike the fixed-name synthetic tools above), so they can't be
+    // hard-coded keys in the object literal below — collect every advertised
+    // name and attach an executor per name after the literal is built.
+    const subflowToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isSubflowToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasSubflowTool = subflowToolCallNames.length > 0;
+    const behaviorToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isBehaviorToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasBehaviorTool = behaviorToolCallNames.length > 0;
+    const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
                 conversationId,
                 node: runResourceNode,
                 emit,
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'write_resource failed');
               return outcome.data;
@@ -1139,6 +1399,7 @@ export class ModelHandler {
                 node: runResourceNode,
                 emit,
                 mcpNodes: mcpNodes ?? [],
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
               return outcome.data;
@@ -1150,6 +1411,7 @@ export class ModelHandler {
                 node: runResourceNode,
                 emit,
                 mcpNodes: mcpNodes ?? [],
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'list_mcp_resources failed');
               return outcome.data;
@@ -1181,6 +1443,58 @@ export class ModelHandler {
           }
         : undefined;
 
+    // call_subflow_* (issue #385): one executor per ADVERTISED tool-mode
+    // Subflow name, dispatching to the same lane engine a parallel/spawn
+    // Subflow uses (`runSubflowLanes()`), inline inside this tool call. Never
+    // dispatched via processHandoffToolCalls — that only matches `handoff_to_*`.
+    if (localToolExecutors && hasSubflowTool) {
+      for (const toolName of subflowToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
+          if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          return outcome.data;
+        };
+      }
+    }
+
+    if (localToolExecutors && hasBehaviorTool) {
+      for (const toolName of behaviorToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeBehaviorToolCall(toolName, args, { conversationId, emit });
+          if (!outcome.success) throw new Error(outcome.error ?? 'call_behavior failed');
+          return outcome.data;
+        };
+      }
+    }
+
+    if (localToolExecutors && hasPersonaTool) {
+      for (const toolName of personaToolCallNames) {
+        if (!isPersonaToolName(toolName)) continue;
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executePersonaTool(toolName, args, {
+            conversationId,
+            executionAuthority: input.executionAuthority,
+            personaAttribution: input.personaAttribution,
+          });
+          if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
+          return outcome.data;
+        };
+      }
+    }
+
+    // Meeting controls use the same live-state executor as the outer
+    // request/response loop. Add only names actually advertised on this call;
+    // ordinary flows therefore expose neither definitions nor local handlers.
+    if (localToolExecutors && hasMeetingTool) {
+      for (const toolName of meetingToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeMeetingTool(toolName, args, { conversationId });
+          if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
+          return outcome.data;
+        };
+      }
+    }
+
     // Resource-aware truncation markers (issue #168): build a lookup of captured
     // run resources for oversized PRIOR tool results/args, keyed by the producing
     // tool_call_id, so the Claude-subscription adapter can emit a head excerpt +
@@ -1191,42 +1505,42 @@ export class ModelHandler {
       ? await ModelHandler.buildRunResourceMarkers(conversationId)
       : undefined;
 
-    // Summarizing-compaction pre-flight (issue #248). Only for FULL-HISTORY
-    // nodes (a scoped `wireMessages` view can't be reconciled against the
-    // persisted history) and only when the experimental `compactionEnabled`
-    // setting is on — a pure no-op otherwise, so existing behaviour is unchanged
-    // for everyone who hasn't opted in. When it runs, it persists an anchored
-    // summary head into SharedState; we apply the SAME head-swap (by id) to this
-    // turn's send view so the request the provider sees matches the compacted
-    // history.
-    let effectiveMessages = messages;
-    if (conversationId && !wireMessages) {
-      const compaction = await ModelHandler.maybeCompactPersistedHistory(
-        conversationId,
-        nodeId,
-        { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
-        effectiveMaxTokens,
-        { compactionMode, compactionKeepTokens },
+    // Summarization is applied after ProcessNode's node/output/input projection
+    // and handoff filtering. The result exists only on the provider wire; the
+    // canonical `messages` array remains the base for returned/persisted output.
+    const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
+    const compaction = await ModelHandler.maybeCompactWire(
+      projectedMessages,
+      conversationId,
+      nodeId,
+      wireMessages ? 'node-projected' : 'full-history',
+      { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
+      effectiveMaxTokens,
+      { compactionMode, compactionKeepTokens },
+      durableContext,
+    );
+    const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
+    const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
+    if (compaction) {
+      markModelInputMessages(
+        effectiveModelInput,
+        compaction.summarizedMessageIds,
+        'summarized',
+        'Replaced on the provider wire by the injected FLUJO conversation summary.',
       );
-      if (compaction) {
-        const removed = new Set(compaction.removedIds);
-        const firstRemovedIdx = effectiveMessages.findIndex((m) => removed.has(m.id));
-        const kept = effectiveMessages.filter((m) => !removed.has(m.id));
-        const insertAt = firstRemovedIdx < 0 ? 0 : Math.min(firstRemovedIdx, kept.length);
-        effectiveMessages = [
-          ...kept.slice(0, insertAt),
-          compaction.summaryMessage,
-          ...kept.slice(insertAt),
-        ];
-      }
+      recordContextCompaction(effectiveModelInput, {
+        kind: 'summary',
+        reason: 'Opt-in AI summarization ran before provider dispatch.',
+        before: compaction.artifact.sourceMessageCount,
+        after: 1,
+        unit: 'messages',
+        omittedMessages: compaction.artifact.sourceMessageCount,
+        injectedMarker: COMPACTION_SUMMARY_MARKER,
+      });
     }
 
-    // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
-    // scoped its input (latest-message / isolated); otherwise it sees the full
-    // (possibly compacted) `effectiveMessages`. `finalMessages` below is always
-    // built from `messages`, so the persisted/returned transcript keeps the
-    // complete history regardless.
-    const response = await this.generateCompletion(modelId, prompt, wireMessages ?? effectiveMessages, tools, {
+    // Call generateCompletion once with the materialized provider projection.
+    const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1234,6 +1548,7 @@ export class ModelHandler {
       onTranscriptMessage,
       consumeSteeringMessages,
       onModelDelta,
+      onToolProgress,
       shouldAbort,
       conversationId,
       runId,
@@ -1241,10 +1556,42 @@ export class ModelHandler {
       codexSession,
       onCodexSessionChange,
       localToolExecutors,
+      shouldEndAgenticTurn,
       runResourceMarkers,
       sessionResume,
       onFinalWire,
+      archiveModelTurns: input.archiveModelTurns,
+      canonicalMessages: messages,
+      modelInputForArchive: effectiveModelInput,
+      wireMessageIds: effectiveMessages.map(message => message.id),
+      nodeName,
+      beforeToolDispatch: input.beforeToolDispatch,
+      authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
+      beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
+      durableContext,
+      flushTranscriptProjection: flushLiveProjection,
+      // Issue #400: project the handler's bounded session-limit wait onto the
+      // existing recovery:retry execution event, so the chat shows a live
+      // countdown (and keeps Stop working) instead of a terminal error while
+      // the server waits. Non-terminal: no run:done is emitted here.
+      onRecoveryRetry: ({ attempt, retryAt, maxAttempts, failure }) => {
+        emit?.({
+          type: 'recovery:retry',
+          attempt,
+          retryAt,
+          maxAttempts,
+          failure,
+          node: nodeId ? { nodeId } : undefined,
+        });
+      },
     });
+
+    await finishLiveProjection();
+
+    // Provider abort is cooperative and SDK callbacks can resolve after a lease
+    // or meeting generation was replaced.  No returned media/message/resource
+    // projection may observe that stale result.
+    await assertFlowExecutionCurrent(durableContext);
 
     if (!response.success) {
       for (const messageId of liveMessageIds) {
@@ -1267,14 +1614,11 @@ export class ModelHandler {
     const rawResponseMedia = modelResponse.media?.length
       ? modelResponse.media
       : extractAssistantMedia(modelResponse.fullResponse?.choices?.[0]?.message);
-    const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId);
-    // Start from the (possibly compacted) send view, not the raw input: when
-    // summarizing compaction (issue #248) ran pre-flight, `effectiveMessages`
-    // carries the anchored summary head in place of the summarized older turns,
-    // so the transcript written back to SharedState by post() stays consistent
-    // with the compacted history that was persisted+logged. When compaction did
-    // NOT run, `effectiveMessages === messages`, so this is unchanged.
-    const finalMessages: FlujoChatMessage[] = [...effectiveMessages];
+    const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId, durableContext);
+    // Canonical writeback always starts from the complete threaded input. Wire
+    // summaries, resource substitutions, and omissions never enter the persisted
+    // conversation transcript.
+    const finalMessages: FlujoChatMessage[] = [...messages];
 
     // // Check if content already starts with a heading pattern like "## ... says:"
     // const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);
@@ -1325,7 +1669,7 @@ export class ModelHandler {
         const msg = transcript[idx];
         const isLast = idx === transcript.length - 1;
         const transcriptMedia = msg.media?.length
-          ? await persistModelMedia(msg.media, conversationId, nodeId)
+          ? await persistModelMedia(msg.media, conversationId, nodeId, durableContext)
           : undefined;
         finalMessages.push({
           ...msg,
@@ -1462,10 +1806,11 @@ export class ModelHandler {
         id: string;
         name: string;
         args: Record<string, unknown>;
-      }) => Promise<{ approved: boolean; feedback?: string }>;
+      }) => Promise<boolean>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       consumeSteeringMessages?: () => FlujoChatMessage[];
       onModelDelta?: (delta: ModelStreamDelta) => void;
+      onToolProgress?: (progress: ModelToolProgress) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
       /** Conversation + node identity, so self-orchestrating adapters can key a
@@ -1478,6 +1823,9 @@ export class ModelHandler {
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+      /** End a self-orchestrated provider loop successfully at its next safe
+       * boundary. Meeting silence uses this to make the current round terminal. */
+      shouldEndAgenticTurn?: () => boolean;
       /** Captured run resources for oversized prior tool results/args, keyed by
        * the producing tool_call_id; used by self-orchestrating adapters for
        * resource-aware truncation markers (issue #168). */
@@ -1487,6 +1835,32 @@ export class ModelHandler {
        * and node eligibility. */
       sessionResume?: boolean;
       onFinalWire?: ModelCallInput['onFinalWire'];
+      archiveModelTurns?: boolean;
+      canonicalMessages?: FlujoChatMessage[];
+      modelInputForArchive?: import('../types').ModelInputSnapshot;
+      /** Message identities aligned with `messages` before provider shaping. */
+      wireMessageIds?: Array<string | undefined>;
+      nodeName?: string;
+      /** Issue #400: called when a bounded session/rate limit is about to be
+       *  waited out and retried. callModel projects this onto the existing
+       *  `recovery:retry` execution event so the chat can show a countdown
+       *  while the run stays alive and cancellable. */
+      onRecoveryRetry?: (info: {
+        attempt: number;
+        retryAt: number;
+        maxAttempts: number;
+        failure: RecoveryFailureDetails;
+      }) => void;
+      /** Runtime-only Persona/activity fence assertion before tool side effects. */
+      beforeToolDispatch?: () => Promise<void>;
+      /** Call-time authorization for Persona Core-injected MCP handles. */
+      authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
+      /** Runtime-only fence assertion immediately before every provider attempt. */
+      beforeModelDispatch?: () => Promise<void>;
+      /** Authority context for resource/lineage writes performed in this call. */
+      durableContext?: FlowDurableMutationContext;
+      /** Drain authority-gated self-orchestrating transcript callbacks. */
+      flushTranscriptProjection?: () => Promise<void>;
     }
   ): Promise<Result<ModelCallResult>> {
     log.debug('Preparing provider completion', {
@@ -1508,6 +1882,15 @@ export class ModelHandler {
       }
     };
 
+    // Issue #400 (automatic session-limit retry). Replaying a provider call is
+    // only safe while the failed attempt produced NOTHING observable: any
+    // streamed delta, transcript message, or in-loop tool execution flips this
+    // flag and permanently disables replay for that attempt. `automaticRetriesUsed`
+    // is a single budget for the whole logical model call, so the context-overflow
+    // refit below can never multiply the number of waits.
+    let attemptProducedOutput = false;
+    let automaticRetriesUsed = 0;
+
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
@@ -1522,8 +1905,14 @@ export class ModelHandler {
         };
       }
 
-      // Extract model settings
-      const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
+      // Extract model settings. Malformed persisted values are omitted so NaN
+      // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
+      const temperature = normalizeModelTemperature(
+        model.temperature,
+        model.provider,
+        model.adapter,
+        model.name,
+      ) ?? (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
 
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
@@ -1557,7 +1946,10 @@ export class ModelHandler {
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
       const messagesWithMaterializedMedia = await Promise.all(messages.map(async (message) => {
         if (!message.media?.length) return message;
-        const media = await materializeRunResourceMediaPaths(message.media);
+        const media = await materializeRunResourceMediaPaths(
+          message.media,
+          <T>(task: () => Promise<T>) => commitFlowDurableMutation(opts?.durableContext ?? {}, task),
+        );
         return media === message.media ? message : { ...message, media };
       }));
       let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
@@ -1565,6 +1957,10 @@ export class ModelHandler {
         model.inputModalities,
       );
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
+      const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
+      let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
+        ? opts.wireMessageIds
+        : messagesWithMaterializedMedia.map(message => message.id)).slice();
 
       // Strip trailing assistant message(s) for providers that require the last
       // message to be user/tool role. This is a wire-only mutation — sharedState is
@@ -1575,6 +1971,7 @@ export class ModelHandler {
       if (requiresUserLastMessage(model)) {
         while (apiMessages.length > 0 && apiMessages[apiMessages.length - 1].role === 'assistant') {
           apiMessages = apiMessages.slice(0, -1);
+          apiSourceIds = apiSourceIds.slice(0, -1);
           log.debug('Stripped trailing assistant message for provider that requires user-last wire', {
             provider: model.provider,
             adapter: model.adapter,
@@ -1595,10 +1992,33 @@ export class ModelHandler {
         conversationId: opts?.conversationId,
         nodeId: opts?.nodeId,
         config: visualConfig,
+        durableContext: opts?.durableContext,
       });
       apiMessages = visual.messages;
       const visualDiagnostic = visual.diagnostic;
       if (visualDiagnostic.route === 'image') {
+        const candidate = visualDiagnostic.candidate!;
+        const archivedIds = apiSourceIds.slice(candidate.startIndex, candidate.endIndex);
+        markModelInputMessages(
+          modelInputForArchive,
+          archivedIds,
+          'visually-archived',
+          'Replaced on the provider wire by a visual archive manifest and PNG page(s).',
+        );
+        recordContextCompaction(modelInputForArchive, {
+          kind: 'visual-archive',
+          reason: 'Old bulky context was replaced by a resource-backed visual archive.',
+          before: candidate.messageCount,
+          after: 1,
+          unit: 'messages',
+          omittedMessages: candidate.messageCount,
+          injectedMarker: '[Visual context archive]',
+        });
+        apiSourceIds = [
+          ...apiSourceIds.slice(0, candidate.startIndex),
+          undefined,
+          ...apiSourceIds.slice(candidate.endIndex),
+        ];
         effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
@@ -1607,21 +2027,92 @@ export class ModelHandler {
       // then rides along on every subsequent request and dominates fresh (non-
       // cached) prompt tokens. compactForWire shrinks oversized OLD tool results
       // and old assistant prose while keeping the recent tail verbatim and never
-      // dropping a message (tool-pair integrity + prefix-cache stability). The
-      // self-orchestrating Claude path ('claude-cli') is skipped: it flattens the
-      // wire itself and has its own resource-aware truncation markers (issue #168).
+      // dropping a message (tool-pair integrity + prefix-cache stability). It
+      // runs for every adapter; self-orchestrating adapters flatten this safer
+      // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (!isSelfOrchestratingAdapter(model.adapter) && couldCompact(apiMessages, { keepRecentMessages })) {
-        apiMessages = compactForWire(apiMessages, {
+      if (couldCompact(apiMessages, { keepRecentMessages })) {
+        const beforeLosslessRefit = apiMessages;
+        const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
+          // Without an offered tool there is no usable read_resource path.
+          canUseTools: (effectiveTools?.length ?? 0) > 0,
         });
+        const changedIndexes = compactedMessages
+          .map((message, index) => JSON.stringify(message) === JSON.stringify(beforeLosslessRefit[index]) ? -1 : index)
+          .filter(index => index >= 0);
+        if (changedIndexes.length > 0) {
+          markModelInputMessages(
+            modelInputForArchive,
+            changedIndexes.map(index => apiSourceIds[index]),
+            'content-truncated',
+            'Old bulky content was shortened on the provider wire; any resource URI in the marker points to the exact source.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'content-truncation',
+            reason: 'Old bulky wire content was shortened before dispatch.',
+            before: beforeLosslessRefit.length,
+            after: compactedMessages.length,
+            unit: 'messages',
+            truncatedMessages: changedIndexes.length,
+            injectedMarker: '[truncated',
+          });
+        }
+        apiMessages = compactedMessages;
         // Truncation embeds a `flujo://run/...` URI when the full result was
         // captured (issue #168). ProcessNode.prep arms `read_resource` by
         // scanning the PRE-compaction wire, so a URI first surfaced HERE would be
         // undereferenceable. Arm it now if compaction introduced a run-resource
         // reference the offered tools don't yet cover.
         effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+      }
+
+      // Codex Exec has a hard aggregate stdin ceiling independent of a model's
+      // advertised token window. Enforce it on the final generic wire so the
+      // CLI never receives an oversized turn. This is an adapter-specific cap
+      // layered on the provider-neutral context policy below.
+      if (model.adapter === 'codex-cli') {
+        const codexRefit = refitCodexMessagesForInputLimit(apiMessages, {
+          resourceMarkers: opts?.runResourceMarkers,
+          keepRecentMessages,
+        });
+        if (codexRefit.compacted) {
+          const priorSourceIds = apiSourceIds;
+          markModelInputMessages(
+            modelInputForArchive,
+            codexRefit.omittedMessageIndexes.map(index => priorSourceIds[index]),
+            'emergency-stripped',
+            'Omitted from the Codex wire to stay below Codex Exec\'s hard input-character limit.',
+          );
+          markModelInputMessages(
+            modelInputForArchive,
+            codexRefit.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+            'content-truncated',
+            'Content was explicitly truncated to stay below Codex Exec\'s hard input-character limit.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'emergency-refit',
+            reason: 'Codex Exec hard character-limit preflight.',
+            before: codexRefit.originalCharacters,
+            after: codexRefit.finalCharacters,
+            unit: 'characters',
+            omittedMessages: codexRefit.omittedMessageIndexes.length,
+            truncatedMessages: codexRefit.truncatedMessageIndexes.length,
+            injectedMarker: CODEX_EMERGENCY_COMPACTION_MARKER,
+          });
+          apiMessages = codexRefit.messages;
+          apiSourceIds = codexRefit.sourceMessageIndexes.map(index => (
+            index === undefined ? undefined : priorSourceIds[index]
+          ));
+          effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+          log.warn('Refitted Codex input before the CLI hard character limit', {
+            modelId,
+            beforeCharacters: codexRefit.originalCharacters,
+            afterCharacters: codexRefit.finalCharacters,
+            omitted: codexRefit.omitted,
+          });
+        }
       }
 
       // Sanitize tool schemas for broad provider compatibility (handles string
@@ -1676,7 +2167,7 @@ export class ModelHandler {
       );
       if (inputBudget !== undefined) {
         let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
-        if (estimatedInputTokens > inputBudget && !isSelfOrchestratingAdapter(model.adapter)) {
+        if (estimatedInputTokens > inputBudget) {
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
             budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
@@ -1688,9 +2179,34 @@ export class ModelHandler {
           }
           const refittedMessages = compactForWire(apiMessages, {
             resourceMarkers: budgetMarkers,
+            // The refit ARMS read_resource itself (ensureReadResourceArmed just
+            // below), so a `flujo://run/...` marker minted here is always
+            // dereferenceable — even for a step that was offered no tools at
+            // all. Deriving this from the pre-arming tool list would suppress
+            // the URI and make the refit silently unrecoverable (#338).
+            canUseTools: true,
             compactRecentToolResults: true,
             toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
+          const refitChangedIndexes = refittedMessages
+            .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
+            .filter(index => index >= 0);
+          if (refitChangedIndexes.length > 0) {
+            markModelInputMessages(
+              modelInputForArchive,
+              refitChangedIndexes.map(index => apiSourceIds[index]),
+              'content-truncated',
+              'Oversized content was shortened to a resource-backed marker during context-budget preflight.',
+            );
+            recordContextCompaction(modelInputForArchive, {
+              kind: 'content-truncation',
+              reason: 'Resource-backed context-budget preflight.',
+              before: estimatedInputTokens,
+              unit: 'tokens',
+              truncatedMessages: refitChangedIndexes.length,
+              injectedMarker: '[truncated',
+            });
+          }
           const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
           estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
 
@@ -1703,25 +2219,116 @@ export class ModelHandler {
             apiMessages = refittedMessages;
             sanitizedTools = refittedTools;
           } else {
-            return {
-              success: false,
-              error: createModelError(
-                'context_budget_exceeded',
-                `Estimated input (${estimatedInputTokens} tokens) exceeds the safe budget (${inputBudget} tokens). Reduce the active context, tool schemas, or configure summarizing compaction.`,
+            const priorSourceIds = apiSourceIds;
+            let emergency = emergencyRefitMessages(refittedMessages, {
+              target: inputBudget,
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools),
+              keepRecentMessages,
+            });
+            let emergencyTools = refittedTools;
+
+            // A pathological tool-definition block can exceed the budget even
+            // after the message history is minimized. A text-only turn is still
+            // useful and recoverable; a terminal client error is not.
+            if (emergency.after > inputBudget && (emergencyTools?.length ?? 0) > 0) {
+              emergencyTools = undefined;
+              emergency = emergencyRefitMessages(refittedMessages, {
+                target: inputBudget,
+                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+                keepRecentMessages,
+              });
+            }
+
+            if (emergency.after <= inputBudget) {
+              markModelInputMessages(
+                modelInputForArchive,
+                emergency.omittedMessageIndexes.map(index => priorSourceIds[index]),
+                'emergency-stripped',
+                'Omitted from the provider wire by FLUJO\'s deterministic context-budget safety refit.',
+              );
+              markModelInputMessages(
+                modelInputForArchive,
+                emergency.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+                'content-truncated',
+                'Content was explicitly truncated by FLUJO\'s deterministic context-budget safety refit.',
+              );
+              recordContextCompaction(modelInputForArchive, {
+                kind: 'emergency-refit',
+                reason: emergencyTools
+                  ? 'Advertised model context-window preflight.'
+                  : 'Advertised model context-window preflight; oversized tool definitions were also withheld for this turn.',
+                before: estimatedInputTokens,
+                after: emergency.after,
+                unit: 'tokens',
+                omittedMessages: emergency.omittedMessageIndexes.length,
+                truncatedMessages: emergency.truncatedMessageIndexes.length,
+                injectedMarker: EMERGENCY_CONTEXT_REFIT_MARKER,
+              });
+              apiMessages = emergency.messages;
+              apiSourceIds = emergency.sourceMessageIndexes.map(index => (
+                index === undefined ? undefined : priorSourceIds[index]
+              ));
+              sanitizedTools = emergencyTools;
+              log.warn('Emergency-refitted outgoing request to its advertised input budget', {
                 modelId,
-                undefined,
-                { estimatedInputTokens, inputBudget, contextWindow: model.contextWindow }
-              )
-            };
+                beforeTokens: estimatedInputTokens,
+                afterTokens: emergency.after,
+                inputBudget,
+                omitted: emergency.omitted,
+                toolsWithheld: !emergencyTools && Boolean(refittedTools?.length),
+              });
+            } else {
+              return {
+                success: false,
+                error: createModelError(
+                  'context_budget_exceeded',
+                  `FLUJO could not produce a valid request inside the model's advertised ${inputBudget}-token input budget.`,
+                  modelId,
+                  undefined,
+                  { estimatedInputTokens: emergency.after, inputBudget, contextWindow: model.contextWindow }
+                )
+              };
+            }
           }
         }
       }
 
+      // Official OpenAI Chat Completions cache strategy. Process-node calls move
+      // their node-specific system instruction behind the wired conversation;
+      // GPT-5.6+ additionally retain explicit breakpoints on the latest reusable
+      // history boundaries.
+      // This happens after every other wire rewrite so the fingerprint,
+      // debugger snapshot, and provider all observe the exact same ordering.
+      const preCacheMessages = apiMessages;
+      const preCacheSourceIds = apiSourceIds;
+      const preparedPromptCache = prepareOpenAiPromptCacheWire(apiMessages, model, {
+        lateNodeInstruction: Boolean(opts?.nodeId),
+      });
+      apiMessages = preparedPromptCache.messages;
+      if (preparedPromptCache.lateSystem) {
+        apiSourceIds = [
+          ...preCacheSourceIds.filter((_id, index) => preCacheMessages[index].role !== 'system'),
+          ...preCacheSourceIds.filter((_id, index) => preCacheMessages[index].role === 'system'),
+        ];
+      }
+      const promptCacheMode = preparedPromptCache.explicit ? 'explicit' as const : undefined;
+      if (preparedPromptCache.lateSystem) {
+        log.debug('Prepared history-first OpenAI prompt-cache wire', {
+          model: model.name,
+          conversationId: opts?.conversationId,
+          nodeId: opts?.nodeId,
+          breakpointCount: preparedPromptCache.breakpointCount,
+          movedSystemMessages: preparedPromptCache.movedSystemMessages,
+          explicit: preparedPromptCache.explicit,
+        });
+      }
+
       // Capture the actual final generic provider wire after visual routing,
-      // lossless compaction, tool trimming, and proactive budget refit. Image
-      // data URLs are bounded by the ProcessNode observer before debugger storage.
+      // lossless compaction, tool trimming, proactive budget refit, and prompt-
+      // cache ordering. Image data URLs are bounded by the ProcessNode observer
+      // before debugger storage.
       try {
-        opts?.onFinalWire?.(apiMessages, visualDiagnostic);
+        opts?.onFinalWire?.(apiMessages, visualDiagnostic, modelInputForArchive);
       } catch (error) {
         log.warn('Final-wire observer failed; continuing request', { error });
       }
@@ -1752,6 +2359,10 @@ export class ModelHandler {
         : null;
       const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
       let providerAttemptOrdinal = 0;
+      // One LOGICAL provider call; every retry below reuses this invocation id
+      // and gets its own attempt id, so retries never look like separate calls.
+      const providerInvocationId = newStatisticsInvocationId();
+      let sdkDispatchOrdinal = 0;
       const usageFromProviderResult = (value: unknown) => {
         if (!value || typeof value !== 'object') return undefined;
         const raw = (value as { usage?: Record<string, unknown> }).usage;
@@ -1762,6 +2373,7 @@ export class ModelHandler {
         const promptDetails = raw.prompt_tokens_details as Record<string, unknown> | undefined;
         const inputDetails = raw.input_tokens_details as Record<string, unknown> | undefined;
         const cachedInputTokens = promptDetails?.cached_tokens ?? inputDetails?.cached_tokens;
+        const cacheWriteTokens = promptDetails?.cache_write_tokens ?? inputDetails?.cache_write_tokens;
         const numeric = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
           ? candidate
           : undefined;
@@ -1770,6 +2382,7 @@ export class ModelHandler {
           outputTokens: numeric(outputTokens),
           totalTokens: numeric(totalTokens),
           cachedInputTokens: numeric(cachedInputTokens),
+          cacheWriteTokens: numeric(cacheWriteTokens),
           contextWindow: model.contextWindow,
         };
         return Object.values(usage).some(item => item !== undefined) ? usage : undefined;
@@ -1783,6 +2396,9 @@ export class ModelHandler {
       }) => {
         if (!opts?.runId) return;
         try {
+          const attemptOrdinal = ++providerAttemptOrdinal;
+          const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
+            ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined);
           recordStatisticsEvent(createStatisticsEvent({
             type: 'model.attempt',
             runId: opts.runId,
@@ -1793,14 +2409,23 @@ export class ModelHandler {
               name: model.adapter || model.provider,
             },
             credentialId: opaqueCredentialId,
-            attempt: ++providerAttemptOrdinal,
+            attempt: attemptOrdinal,
+            invocationId: providerInvocationId,
+            attemptId: statisticsAttemptId(providerInvocationId, attemptOrdinal),
             outcome: observation.outcome,
             durationMs: observation.durationMs,
+            // Provider phase == the measured provider/network call for THIS
+            // attempt. Nothing is inferred when a boundary is unavailable.
+            phases: { provider: observation.durationMs },
             errorClass: observation.outcome === 'error'
               ? classifyStatisticsError(observation.error)
               : undefined,
-            usage: observation.usage ?? usageFromProviderResult(observation.result)
-              ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined),
+            // Cache semantics are only claimed for a completed call: a failed or
+            // cancelled attempt reports no cache outcome at all.
+            cacheOutcome: observation.outcome === 'completed'
+              ? statisticsCacheOutcomeFromUsage(attemptUsage)
+              : undefined,
+            usage: attemptUsage,
           }));
         } catch {
           // Metadata instrumentation is never allowed to affect a provider call.
@@ -1855,9 +2480,44 @@ export class ModelHandler {
         // a later SDK failure can compensate only its incomplete narration.
         const streamedAssistantProseIds = new Set<string>();
         const onTranscriptMessage = (message: FlujoChatMessage) => {
+          // Anything the adapter already materialized is observable output: this
+          // attempt is no longer safe to replay automatically (issue #400).
+          attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           opts?.onTranscriptMessage?.(message);
         };
+
+        // Same guard for streamed deltas and for virtual tools executed in-loop
+        // by self-orchestrating adapters: a side effect (or user-visible text)
+        // means the call must fail terminally instead of being replayed.
+        const onModelDelta = opts?.onModelDelta
+          ? (delta: ModelStreamDelta) => {
+              attemptProducedOutput = true;
+              opts.onModelDelta!(delta);
+            }
+          : undefined;
+        const onToolProgress = opts?.onToolProgress
+          ? (progress: ModelToolProgress) => {
+              // A live tool has started; retrying this provider attempt could
+              // duplicate a non-idempotent command even if no result arrived.
+              attemptProducedOutput = true;
+              opts.onToolProgress!(progress);
+            }
+          : undefined;
+        const localToolExecutors = opts?.localToolExecutors
+          ? Object.fromEntries(
+              Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
+                toolName,
+                async (args: Record<string, unknown>): Promise<unknown> => {
+                  await opts.beforeToolDispatch?.();
+                  attemptProducedOutput = true;
+                  const result = await executor(args);
+                  await assertFlowExecutionCurrent(opts.durableContext ?? {});
+                  return result;
+                },
+              ])
+            )
+          : undefined;
 
         try {
           // Fingerprint the cacheable prefix of THIS attempt (tool block + system
@@ -1886,6 +2546,12 @@ export class ModelHandler {
               const hydratedMessages = await hydrateRunResourceMedia(
                 attemptMessages,
                 opts?.nodeId,
+                {
+                  strictOpenAiAudioFormats:
+                    model.adapter === 'openai' || model.adapter === 'openai-responses',
+                  commitDurableMutation: <T>(task: () => Promise<T>) =>
+                    commitFlowDurableMutation(opts?.durableContext ?? {}, task),
+                },
               );
               const input = {
               model,
@@ -1900,6 +2566,53 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
+              onSdkRequest: opts?.archiveModelTurns && opts.conversationId && opts.nodeId
+                ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
+                    try {
+                      const entry = await archiveModelDispatch({
+                        conversationId: opts.conversationId!,
+                        runId: opts.runId,
+                        nodeId: opts.nodeId!,
+                        nodeName: opts.nodeName,
+                        modelId,
+                        modelName: model.displayName || model.name,
+                        adapter: snapshot.adapter,
+                        operation: snapshot.operation,
+                        attempt: ++sdkDispatchOrdinal,
+                        canonicalMessages: opts.canonicalMessages ?? messages,
+                        genericWire: hydratedMessages,
+                        sdkRequest: snapshot.request,
+                        modelInput: modelInputForArchive,
+                        visualCompaction: visualDiagnostic,
+                      });
+                      executionEventBus.emit(opts.conversationId!, {
+                        type: 'model:dispatch',
+                        turn: entry,
+                      });
+                      return entry.id;
+                    } catch (error) {
+                      log.warn('Could not archive model SDK dispatch; continuing request', { error });
+                      return undefined;
+                    }
+                  }
+                : undefined,
+              onSdkRequestResult: opts?.archiveModelTurns && opts.conversationId
+                ? async ({ dispatchId, outcome }: {
+                    dispatchId: string;
+                    outcome: 'completed' | 'error' | 'cancelled';
+                  }): Promise<void> => {
+                    try {
+                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome);
+                      executionEventBus.emit(opts.conversationId!, {
+                        type: 'model:dispatch-result',
+                        dispatchId,
+                        outcome,
+                      });
+                    } catch (error) {
+                      log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
+                    }
+                  }
+                : undefined,
               messages: hydratedMessages,
               tools: attemptTools,
               temperature,
@@ -1908,13 +2621,20 @@ export class ModelHandler {
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
               toolNameMap: opts?.toolNameMap,
-              localToolExecutors: opts?.localToolExecutors,
+              localToolExecutors,
+              shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
               consumeSteeringMessages: opts?.consumeSteeringMessages,
-              onModelDelta: opts?.onModelDelta,
+              onModelDelta,
+              onToolProgress,
               signal: abortController.signal,
+              beforeToolDispatch: opts?.beforeToolDispatch,
+              authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
+              afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
+              commitDurableMutation: <T>(task: () => Promise<T>) =>
+                commitFlowDurableMutation(opts?.durableContext ?? {}, task),
               conversationId: opts?.conversationId,
               runId: opts?.runId,
               nodeId: opts?.nodeId,
@@ -1922,11 +2642,21 @@ export class ModelHandler {
               onCodexSessionChange: opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: opts?.sessionResume,
-              // Derived from the tool-block hash, so every request sharing this
-              // prefix routes to the same prompt-cache shard (see
-              // derivePromptCacheKey). Adapters that don't support it ignore it.
-              promptCacheKey: derivePromptCacheKey(prefixFingerprint),
+              // Derived from the tool-block hash, or from the conversation for a
+              // no-tool history-first wire, so requests sharing the reusable
+              // prefix route to one prompt-cache shard (see derivePromptCacheKey).
+              // Adapters that don't support it ignore it.
+              promptCacheKey: derivePromptCacheKey(prefixFingerprint, {
+                conversationId: opts?.conversationId,
+                preferConversation: preparedPromptCache.lateSystem,
+              }),
+              promptCacheMode,
               };
+              // All provider-side preflight (model/key/settings/tool shaping,
+              // compaction, media hydration) is complete.  Check the current
+              // lease/generation at the final dispatch boundary for EVERY
+              // attempt, including bounded retries and summary calls.
+              await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
                 : adapter.createCompletion(input);
@@ -1938,12 +2668,14 @@ export class ModelHandler {
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
                   if (prev && prev !== model.name) {
+                    await opts?.beforeModelDispatch?.();
                     log.info(
                       `[ModelHandler] Auto-unloading Ollama model "${prev}" to free VRAM for "${model.name}" on ${ollamaRootForUnload}`
                     );
                     await unloadModel(ollamaRootForUnload, prev);
                   }
                   const res = await issueCompletion();
+                  await assertFlowExecutionCurrent(opts?.durableContext ?? {});
                   setLoadedModel(ollamaRootForUnload, model.name);
                   return res;
                 }
@@ -1971,6 +2703,7 @@ export class ModelHandler {
               promptTokens: rawUsage.prompt_tokens ?? 0,
               completionTokens: rawUsage.completion_tokens ?? 0,
               cachedTokens: rawUsage.prompt_tokens_details?.cached_tokens,
+              cacheWriteTokens: rawUsage.prompt_tokens_details?.cache_write_tokens,
               drift: prefixDrift,
               fingerprint: prefixFingerprint,
             });
@@ -2051,7 +2784,18 @@ export class ModelHandler {
             (typeof choice.message?.content === 'string' &&
               choice.message.content.trim().length > 0) ||
             (Array.isArray(choice.message?.content) && choice.message.content.length > 0);
-          if (choice.finish_reason === 'stop' && !hasToolCalls && !hasGeneratedMedia && !hasTextContent) {
+          // A self-orchestrating adapter can intentionally stop after executing
+          // a terminal local control (meeting silence). Its completion envelope
+          // is text-empty, but the returned transcript contains the valid
+          // assistant/tool exchange and must not be mistaken for provider loss.
+          const hasTranscriptActivity = Boolean(transcript?.length);
+          if (
+            choice.finish_reason === 'stop'
+            && !hasToolCalls
+            && !hasGeneratedMedia
+            && !hasTextContent
+            && !hasTranscriptActivity
+          ) {
             attemptError = { type: 'provider_response' };
             log.error('API reported finish_reason "stop" with an empty message, no media, and no tool calls.', { modelId });
             return {
@@ -2090,6 +2834,7 @@ export class ModelHandler {
           // the same attempt is not in this set and remains durable. User-driven
           // cancellation has its own partial-run semantics, so leave it intact.
           if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
+            await opts?.flushTranscriptProjection?.();
             await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
@@ -2106,6 +2851,7 @@ export class ModelHandler {
                 outputTokens: attemptUsage.completion_tokens,
                 totalTokens: attemptUsage.total_tokens,
                 cachedInputTokens: attemptUsage.prompt_tokens_details?.cached_tokens,
+                cacheWriteTokens: attemptUsage.prompt_tokens_details?.cache_write_tokens,
                 contextWindow: model.contextWindow,
               } : undefined,
             });
@@ -2113,7 +2859,99 @@ export class ModelHandler {
         }
       };
 
-      let result = await attempt(apiMessages, sanitizedTools);
+      /**
+       * Bounded, abort-aware session-limit retry around ONE provider call
+       * (issue #400).
+       *
+       * When the provider answers "you've hit your session limit" AND hands
+       * back a valid, small `Retry-After`, the chat turn should wait rather
+       * than fail: we emit `recovery:retry` (so the UI can count down while the
+       * run stays alive and cancellable), sleep on an abort-aware timer tied to
+       * the same AbortSignal the Stop button drives, then replay the SAME
+       * request. Exactly one timer and one provider attempt exist at a time.
+       *
+       * Deliberately conservative — replay is skipped when:
+       *  - the run was cancelled (Stop) before or during the wait;
+       *  - the attempt already produced observable output or ran a tool, so a
+       *    replay could duplicate a side effect;
+       *  - the adapter runs its own connection retries (codex-cli), which would
+       *    multiply attempts beyond the approved cap;
+       *  - the failure is not a session/rate limit, carries no usable
+       *    `Retry-After`, or asks for a wait beyond the configured maximum;
+       *  - the per-call retry budget is exhausted.
+       * In every one of those cases the original normalized provider error is
+       * returned unchanged, so runFlow's existing recovery classification,
+       * persistence, and terminal `run:done` handling stay exactly as they were.
+       */
+      const attemptWithLimitRetry = async (
+        attemptMessages: OpenAI.ChatCompletionMessageParam[],
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+      ): Promise<Result<ModelCallResult>> => {
+        for (;;) {
+          attemptProducedOutput = false;
+          const attemptResult = await attempt(attemptMessages, attemptTools);
+          if (attemptResult.success) return attemptResult;
+
+          if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
+          if (attemptProducedOutput) return attemptResult;
+          if (model.adapter === 'codex-cli') return attemptResult;
+          if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
+            log.warn('Automatic session-limit retries exhausted; returning the provider error', {
+              modelId,
+              retries: automaticRetriesUsed,
+            });
+            return attemptResult;
+          }
+
+          const plan = planAutomaticRetry(attemptResult.error);
+          if (!plan) return attemptResult;
+
+          automaticRetriesUsed += 1;
+          const nextAttempt = automaticRetriesUsed + 1;
+          log.warn('Provider reported a bounded session/rate limit; waiting before an automatic retry', {
+            modelId,
+            attempt: nextAttempt,
+            delayMs: plan.delayMs,
+            status: plan.status,
+            code: plan.code,
+          });
+
+          try {
+            opts?.onRecoveryRetry?.({
+              attempt: nextAttempt,
+              retryAt: plan.retryAt,
+              maxAttempts: MAX_AUTOMATIC_MODEL_RETRIES + 1,
+              failure: {
+                category: 'rate_limit',
+                message: attemptResult.error.message,
+                code: plan.code,
+                status: plan.status,
+                retryable: true,
+              },
+            });
+          } catch (error) {
+            log.warn('recovery:retry observer failed; continuing with the wait', { error });
+          }
+
+          const waited = await waitForRetryWindow(plan.delayMs, {
+            signal: abortController.signal,
+            shouldAbort: opts?.shouldAbort,
+          });
+          if (waited === 'aborted') {
+            // Stop during the wait: clear the timer (waitForRetryWindow already
+            // did), never call the provider again, and take the normal clean
+            // cancellation path.
+            abortController.abort();
+            log.info('Cancellation during a session-limit wait; skipping the retry.', { modelId });
+            return {
+              success: false,
+              error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+            };
+          }
+        }
+      };
+
+      let result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
 
       // Context-length overflow recovery. A single unexpectedly-large tool
       // result in the RECENT tail (a big search dump, a file read) can blow the
@@ -2125,43 +2963,125 @@ export class ModelHandler {
       // URI naming the full size, capturing any not-yet-captured result on the
       // fly so the model can still read the whole thing back via read_resource.
       // The cache is already moot (the request was rejected), so touching the
-      // recent tail costs nothing here. Skipped for the self-orchestrating
-      // claude-cli path (it manages its own wire + truncation markers).
+      // recent tail costs nothing here. If resource-backed shrinking is still
+      // insufficient, apply the same structurally-safe emergency refit used by
+      // proactive budgeting. This path is adapter-neutral.
       if (
         !result.success &&
-        !isSelfOrchestratingAdapter(model.adapter) &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
         const beforeChars = JSON.stringify(apiMessages).length;
         let refitMarkers = opts?.runResourceMarkers;
         if (opts?.conversationId) {
+          await assertFlowExecutionCurrent(opts.durableContext ?? {});
           refitMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
             opts.conversationId,
             apiMessages,
             refitMarkers,
-            opts?.nodeId
+            opts?.nodeId,
+            opts?.durableContext,
           );
         }
         const refitMessages = compactForWire(apiMessages, {
           resourceMarkers: refitMarkers,
+          // Same as the proactive refit above: read_resource is armed on the
+          // retry, so the URI marker must be emitted regardless of how many
+          // tools the original request carried (#338).
+          canUseTools: true,
           compactRecentToolResults: true,
           allowLossyTruncation: true,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
         });
-        const afterChars = JSON.stringify(refitMessages).length;
-        if (afterChars < beforeChars) {
-          const refitTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
-          log.warn('Context-length overflow; retrying once with oversized tool results shrunk to run-resource URIs', {
+        const reactiveChangedIndexes = refitMessages
+          .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
+          .filter(index => index >= 0);
+        if (reactiveChangedIndexes.length > 0) {
+          markModelInputMessages(
+            modelInputForArchive,
+            reactiveChangedIndexes.map(index => apiSourceIds[index]),
+            'content-truncated',
+            'Oversized content was shortened to a resource-backed marker after a provider context-length rejection.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'content-truncation',
+            reason: 'One automatic retry after provider context rejection.',
+            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+            unit: 'tokens',
+            truncatedMessages: reactiveChangedIndexes.length,
+            injectedMarker: '[truncated',
+          });
+        }
+        let retryMessages = refitMessages;
+        let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
+        const retryTarget = inputBudget ?? Math.max(
+          1_024,
+          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools) * 0.7),
+        );
+        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools);
+        const priorSourceIds = apiSourceIds;
+        let retrySourceIds = apiSourceIds;
+        if (retryEstimate > retryTarget) {
+          let emergency = emergencyRefitMessages(retryMessages, {
+            target: retryTarget,
+            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools),
+            keepRecentMessages,
+          });
+          if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
+            retryTools = undefined;
+            emergency = emergencyRefitMessages(retryMessages, {
+              target: retryTarget,
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+              keepRecentMessages,
+            });
+          }
+          if (emergency.after <= retryTarget) {
+            markModelInputMessages(
+              modelInputForArchive,
+              emergency.omittedMessageIndexes.map(index => priorSourceIds[index]),
+              'emergency-stripped',
+              'Omitted from the retry wire after the provider rejected the original request for context length.',
+            );
+            markModelInputMessages(
+              modelInputForArchive,
+              emergency.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+              'content-truncated',
+              'Content was explicitly truncated on the retry after a provider context-length rejection.',
+            );
+            recordContextCompaction(modelInputForArchive, {
+              kind: 'emergency-refit',
+              reason: 'One automatic retry after a provider context-length rejection.',
+              before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+              after: emergency.after,
+              unit: 'tokens',
+              omittedMessages: emergency.omittedMessageIndexes.length,
+              truncatedMessages: emergency.truncatedMessageIndexes.length,
+              injectedMarker: EMERGENCY_CONTEXT_REFIT_MARKER,
+            });
+            retryMessages = emergency.messages;
+            retrySourceIds = emergency.sourceMessageIndexes.map(index => (
+              index === undefined ? undefined : priorSourceIds[index]
+            ));
+            retryEstimate = emergency.after;
+          }
+        }
+        const afterChars = JSON.stringify(retryMessages).length;
+        if (afterChars < beforeChars && retryEstimate <= retryTarget) {
+          apiMessages = retryMessages;
+          apiSourceIds = retrySourceIds;
+          sanitizedTools = retryTools;
+          log.warn('Context-length overflow; retrying once with a compacted provider wire', {
             modelId,
             beforeChars,
             afterChars,
+            retryEstimate,
+            retryTarget,
           });
           try {
-            opts?.onFinalWire?.(refitMessages, visualDiagnostic);
+            opts?.onFinalWire?.(retryMessages, visualDiagnostic, modelInputForArchive);
           } catch (error) {
             log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
           }
-          result = await attempt(refitMessages, refitTools);
+          result = await attemptWithLimitRetry(retryMessages, retryTools);
         } else {
           log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });
         }
@@ -2183,6 +3103,10 @@ export class ModelHandler {
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
+    const durableContext: FlowDurableMutationContext = {
+      executionAuthority: input.executionAuthority,
+      personaAttribution: input.personaAttribution,
+    };
 
     log.debug('Processing tool-call batch', { count: toolCalls?.length ?? 0 });
 
@@ -2208,6 +3132,24 @@ export class ModelHandler {
       type ProcessedToolCall = { name: string; args: Record<string, unknown>; id: string; result: string };
       const results: Array<FlujoChatMessage | null> = new Array(toolCalls.length).fill(null);
       const processed: Array<ProcessedToolCall | null> = new Array(toolCalls.length).fill(null);
+      // A valid meeting_control(silent) is a terminal barrier inside this tool
+      // batch. Calls before it retain their authored order/semantics; calls
+      // after it are paired with synthetic results but never dispatched. This
+      // closes the same-response loophole where silence and a large explorer
+      // fan-out were emitted together.
+      let terminalSilentCallIndex = -1;
+      for (let index = 0; conversationId && hasLiveMeetingTurn(conversationId) && index < toolCalls.length; index++) {
+        const call = toolCalls[index];
+        try {
+          const args = JSON.parse(call.function.arguments || '{}');
+          if (isSilentMeetingControlRequest(call.function.name, args)) {
+            terminalSilentCallIndex = index;
+            break;
+          }
+        } catch {
+          // The ordinary dispatch path below returns the malformed-args error.
+        }
+      }
 
       // Per-server concurrency caps (MCPManagerConfig.maxConcurrency). Loaded once
       // up front; a server that declares none (or a non-positive value) uses the
@@ -2237,6 +3179,10 @@ export class ModelHandler {
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
+        if (isPersonaToolName(toolName)) return LOCAL_GROUP;
+        if (isMeetingToolName(toolName)) return LOCAL_GROUP;
+        if (isSubflowToolName(toolName)) return LOCAL_GROUP;
+        if (isBehaviorToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
@@ -2268,6 +3214,20 @@ export class ModelHandler {
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
         const toolStartedAt = Date.now();
+        // When the final authority check rejects, preserve that failure as a
+        // run-level stop. The broad per-tool catch below intentionally turns
+        // ordinary tool failures into transcript messages, but a stale Persona
+        // worker must never be allowed to hand that failure back to the model
+        // and continue executing.
+        let executionAuthorityFailure: unknown;
+        // Stable identity for this LOGICAL tool invocation, so a duplicate
+        // observation of the same call is deduplicated during aggregation.
+        const toolInvocationId = newStatisticsInvocationId();
+
+        // Keep the authority assertion outside the per-tool error-to-message
+        // conversion below. A stale Persona fence is a run-level stop, not a
+        // recoverable tool error the model may reason past.
+        await input.beforeToolDispatch?.();
 
         try {
           // Cancellation check BEFORE starting this call (issue #109/#252): once
@@ -2298,7 +3258,7 @@ export class ModelHandler {
             return;
           }
           // Parse the arguments
-          const args = JSON.parse(argsString);
+          let args = JSON.parse(argsString) as Record<string, unknown>;
           log.info("trying to call tool", name)
           // Check if it's a handoff tool
           if (name.startsWith('handoff_to_') || name === 'handoff') {
@@ -2345,16 +3305,20 @@ export class ModelHandler {
               node,
               emit,
               mcpNodes: mcpNodes ?? [],
+              ...durableContext,
             });
+            await assertFlowExecutionCurrent(durableContext);
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
-            emit?.({
-              type: 'tool:result',
-              toolCallId: id,
-              name,
-              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              isError: !outcome.success,
+            await commitFlowDurableMutation(durableContext, async () => {
+              emit?.({
+                type: 'tool:result',
+                toolCallId: id,
+                name,
+                result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+                isError: !outcome.success,
+              });
             });
             toolCallMessages.push({
               id: uuidv4(),
@@ -2373,16 +3337,25 @@ export class ModelHandler {
           // wired (ProcessNode.prep), so this branch is inert for other flows.
           if (isRunResourceToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
-            const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit, mcpNodes: mcpNodes ?? [] });
+            const outcome = await executeRunResourceTool(name, args, {
+              conversationId,
+              node,
+              emit,
+              mcpNodes: mcpNodes ?? [],
+              ...durableContext,
+            });
+            await assertFlowExecutionCurrent(durableContext);
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
-            emit?.({
-              type: 'tool:result',
-              toolCallId: id,
-              name,
-              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              isError: !outcome.success,
+            await commitFlowDurableMutation(durableContext, async () => {
+              emit?.({
+                type: 'tool:result',
+                toolCallId: id,
+                name,
+                result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+                isError: !outcome.success,
+              });
             });
             toolCallMessages.push({
               id: uuidv4(),
@@ -2458,6 +3431,137 @@ export class ModelHandler {
             return;
           }
 
+          // Issue #415 phase 4: authored, fenced Persona memory/WorkItem tools.
+          if (isPersonaToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executePersonaTool(name, args, {
+              conversationId,
+              executionAuthority: input.executionAuthority,
+              personaAttribution: input.personaAttribution,
+            });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // Coordinator-owned meeting controls. The executor verifies that the
+          // conversation is an active meeting participant and appends only a
+          // normalized action to this turn's live SharedState. The coordinator
+          // commits those actions after the participant turn settles.
+          if (isMeetingToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeMeetingTool(name, args, { conversationId });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          if (isBehaviorToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeBehaviorToolCall(name, args, {
+              conversationId,
+              toolCallId: id,
+              emit,
+            });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // call_subflow_* tool-invocation (issue #385, deferred Part B of #359):
+          // synthetic FLUJO tool that runs a tool-mode Subflow target's lanes
+          // INLINE (via runSubflowLanes(), the same bounded pool a parallel/spawn
+          // Subflow uses) and returns a structured JSON result — no graph
+          // transition. Only offered when a connected Subflow target authored
+          // `invocationMode: 'tool'` AND the experimental `subflowToolInvocation`
+          // setting is on (ProcessNode.generateHandoffTools), so this branch is
+          // inert for every existing flow.
+          if (isSubflowToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeSubflowToolCall(name, args, { conversationId, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          if (name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel') {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = name === 'subflow_task_get'
+              ? await executeTaskGet(String(args.taskId ?? ''))
+              : name === 'subflow_task_cancel'
+                ? await executeTaskCancel(String(args.taskId ?? ''))
+                : await executeDetachedSubflowStart(name, args, { conversationId, emit });
+            const resultContent = outcome.success ? JSON.stringify(outcome.data) : `Error: ${outcome.error}`;
+            emit?.({ type: 'tool:result', toolCallId: id, name, result: resultContent.slice(0, 500), isError: !outcome.success });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: resultContent, timestamp: Date.now() });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
           // Decode the model-facing name back to (server, tool). New names use the
           // mcp_<slug>_<hash> scheme (decoded via toolNameMap); legacy conversations
           // used _-_-_SERVER_-_-_TOOL (decoded by decodeToolName's fallback).
@@ -2502,48 +3606,10 @@ export class ModelHandler {
             return;
           }
 
-          // Phase 3 (issue #246): per-call permission gate.
-          // Evaluate configured + saved rules before dispatching to mcpService.
-          const permRules = input.permissionRules ?? [];
-          const savedRules = input.savedPermissionRules ?? [];
-          if (permRules.length > 0 || savedRules.length > 0) {
-            let callArgs: Record<string, unknown> = {};
-            try { callArgs = JSON.parse(argsString); } catch { /* best effort */ }
-            const resource = extractResource(callArgs);
-            const permEffect = evaluatePermission(permRules, savedRules, serverName, toolName, resource);
-            if (permEffect === 'deny') {
-              log.info('Permission denied by rule for tool invocation', { toolName, serverName });
-              const deniedContent = `Permission denied: the active ruleset does not allow calling ${toolName} on ${serverName} (resource: ${resource}).`;
-              emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
-              emit?.({
-                type: 'tool:result',
-                toolCallId: id,
-                name,
-                result: deniedContent,
-                isError: true,
-              });
-              const uiLink = await ModelHandler.resolveToolUiLink(
-                serverName,
-                toolName,
-                undefined,
-                decoded.uiResourceUri,
-                invocationArgsForUi,
-              );
-              toolCallMessages.push({
-                id: uuidv4(),
-                role: 'tool',
-                tool_call_id: id,
-                content: deniedContent,
-                timestamp: Date.now(),
-                ...(uiLink
-                  ? { ui: { ...uiLink, cancelledReason: deniedContent, isError: true } }
-                  : {}),
-              });
-              processedToolCalls.push({ name, args: callArgs, id, result: deniedContent });
-              return;
-            }
-            // 'allow' or 'ask' → fall through to normal dispatch.
-          }
+          // Fixed server/node arguments are resolved only at dispatch time and
+          // win over anything the model attempted to provide. They were removed
+          // from the advertised schema, so the model never sees or controls them.
+          args = await applyPresetArguments(args, decoded.presetArgs, decoded.context);
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
 
@@ -2573,34 +3639,37 @@ export class ModelHandler {
             argsString.length >= runResourceSettings.textThresholdChars
           ) {
             try {
-              const writtenArgs = await writeRunResource({
-                conversationId,
-                mimeType: 'application/json',
-                kind: 'text',
-                data: { text: argsString },
-                producedBy: {
-                  source: 'tool-args',
-                  payloadRole: 'tool-arguments',
-                  nodeId: node?.nodeId,
-                  server: serverName,
-                  toolName,
-                  toolCallId: id,
-                },
-              });
-              if (!('skipped' in writtenArgs)) {
-                emit?.({
-                  type: 'resource:write',
-                  node,
-                  server: 'flujo',
-                  uri: writtenArgs.uri,
-                  name: writtenArgs.name,
-                  mimeType: writtenArgs.mimeType,
-                  size: writtenArgs.size,
-                  source: 'tool-args',
-                  toolCallId: id,
+              await commitFlowDurableMutation(durableContext, async () => {
+                const writtenArgs = await writeRunResource({
+                  conversationId,
+                  mimeType: 'application/json',
+                  kind: 'text',
+                  data: { text: argsString },
+                  producedBy: {
+                    source: 'tool-args',
+                    payloadRole: 'tool-arguments',
+                    nodeId: node?.nodeId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                  },
                 });
-              }
+                if (!('skipped' in writtenArgs)) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: writtenArgs.uri,
+                    name: writtenArgs.name,
+                    mimeType: writtenArgs.mimeType,
+                    size: writtenArgs.size,
+                    source: 'tool-args',
+                    toolCallId: id,
+                  });
+                }
+              });
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('Tool-args capture failed; continuing with the call', {
                 errorClass: classifyStatisticsError(error),
               });
@@ -2620,28 +3689,63 @@ export class ModelHandler {
           // inbound signal from the caller; released in the finally below so
           // controllers never leak.
           const cancelScope = conversationId ?? runId;
+          // Issue #413: ONE canonical owner key per run for MCP-side resources
+          // (Bash sessions). `run:<runId>` is preferred because the run is the
+          // lifetime whose end must release them; a conversation outlives it.
+          const runOwnerScope = ownerScopeForRun({ runId, conversationId });
           const perCallController = cancelScope ? registerToolCall(cancelScope, id) : undefined;
           const callSignal = combineAbortSignals(signal, perCallController?.signal);
           let result: Awaited<ReturnType<typeof mcpService.callTool>>;
           try {
-            result = await mcpService.callTool(
-              serverName,
-              toolName,
-              args,
-              timeout,
-              (progress) => emit?.({
-                type: 'tool:progress',
-                toolCallId: id,
-                name,
-                progress: progress.progress,
-                total: progress.total,
-                message: progress.message
-              }),
-              decoded.nodeId,
-              callSignal,
-              'model',
-              conversationId ? `conversation:${conversationId}` : undefined,
-            );
+            // Approval, resource capture, or queueing above may have taken long
+            // enough for the lease to expire. Re-check at the final side-effect
+            // boundary, immediately before MCP dispatch.
+            try {
+              await input.beforeToolDispatch?.();
+              await input.executionAuthority?.authorizePersonaCoreMcp?.(
+                serverName,
+                decoded.nodeId,
+              );
+            } catch (error) {
+              executionAuthorityFailure = error;
+              throw error;
+            }
+            const onProgress = (progress: { progress: number; total?: number; message?: string }) => emit?.({
+              type: 'tool:progress',
+              toolCallId: id,
+              name,
+              progress: progress.progress,
+              total: progress.total,
+              message: progress.message,
+            });
+            result = conversationId
+              ? await mcpService.callTool(
+                  serverName,
+                  toolName,
+                  args,
+                  timeout,
+                  onProgress,
+                  decoded.nodeId,
+                  callSignal,
+                  'model',
+                  runOwnerScope,
+                  { conversationId },
+                )
+              : await mcpService.callTool(
+                  serverName,
+                  toolName,
+                  args,
+                  timeout,
+                  onProgress,
+                  decoded.nodeId,
+                  callSignal,
+                  'model',
+                  runOwnerScope,
+                );
+            // The MCP abort is cooperative.  A result may arrive after the
+            // Persona lease/meeting generation was replaced; reject it before
+            // statistics, resource capture, lineage, or result events observe it.
+            await assertFlowExecutionCurrent(durableContext);
           } finally {
             if (cancelScope) releaseToolCall(cancelScope, id);
           }
@@ -2655,38 +3759,70 @@ export class ModelHandler {
           // Capture never breaks the run: on any failure the original result
           // is kept untouched.
           let effectiveData = result.data;
+          // Media captured out of this tool result. Stubbing it in the tool
+          // message is only half the round-trip: these parts ride along on the
+          // tool message so toApiMessages can fold them into the next user turn
+          // as genuine image_url/input_audio INPUT parts. Without this a model
+          // can never perceive what its own tools produced.
+          let capturedMedia: ModelMediaPart[] = [];
           if (result.success && conversationId && runResourceSettings) {
             try {
               if (runResourceSettings.autoCaptureEnabled) {
-                const outcome = await captureToolResult({
-                  conversationId,
-                  server: serverName,
-                  toolName,
-                  toolCallId: id,
-                  nodeId: node?.nodeId,
-                  result: result.data as CallToolResult,
-                  settings: runResourceSettings,
+                const outcome = await commitFlowDurableMutation(durableContext, async () => {
+                  const captured = await captureToolResult({
+                    conversationId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                    nodeId: node?.nodeId,
+                    result: result.data as CallToolResult,
+                    settings: runResourceSettings,
+                  });
+                  for (const entry of captured.captured) {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: entry.uri,
+                      name: entry.name,
+                      mimeType: entry.mimeType,
+                      size: entry.size,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
+                  }
+                  return captured;
                 });
                 effectiveData = outcome.result;
-                for (const entry of outcome.captured) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: entry.uri,
-                    name: entry.name,
-                    mimeType: entry.mimeType,
-                    size: entry.size,
-                    source: 'tool-result',
-                    toolCallId: id,
-                  });
-                }
+                // Keep compatibility with old/mocked CaptureOutcome values while
+                // the new media field rolls through every call site.
+                capturedMedia = outcome.media ?? [];
               }
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('Run-resource auto-capture failed; keeping original tool result', {
                 errorClass: classifyStatisticsError(error),
               });
               effectiveData = result.data;
+              capturedMedia = [];
+            }
+          }
+
+          // Persistence is preferred, but media delivery must not depend on it.
+          // Ephemeral subflows have no conversation id, capture can be disabled,
+          // and stores can hit a cap. In every one of those cases split any
+          // remaining media out of the text projection and carry it inline on
+          // the tool message so toApiMessages still emits a genuine model-input
+          // part. Successful captures have already replaced media with stubs, so
+          // this is a no-op for the normal URI-backed path.
+          if (result.success && effectiveData && typeof effectiveData === 'object') {
+            const split = splitToolResultMedia(effectiveData as CallToolResult);
+            if (split.hasMedia) {
+              effectiveData = split.textResult;
+              const inlineMedia = split.mediaItems
+                .map(mediaPartFromToolItem)
+                .filter((part): part is ModelMediaPart => Boolean(part));
+              capturedMedia = [...capturedMedia, ...inlineMedia];
             }
           }
 
@@ -2705,8 +3841,8 @@ export class ModelHandler {
             && resultContent.length >= runResourceSettings.textThresholdChars
           ) {
             const resultBytes = Buffer.byteLength(resultContent, 'utf8');
-            const maxBytes = runResourceSettings.toolResultMaxBytes ?? 50 * 1024;
-            const maxLines = runResourceSettings.toolResultMaxLines ?? 2000;
+            const maxBytes = runResourceSettings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
+            const maxLines = runResourceSettings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
             const overBytes = maxBytes > 0 && resultBytes > maxBytes;
             let overLines = false;
             if (maxLines > 0) {
@@ -2718,33 +3854,36 @@ export class ModelHandler {
             }
             if (!overBytes && !overLines) {
               try {
-                const writtenResult = await writeRunResource({
-                  conversationId,
-                  mimeType: 'application/json',
-                  kind: 'text',
-                  data: { text: resultContent },
-                  producedBy: {
-                    source: 'tool-result',
-                    payloadRole: 'tool-message',
-                    nodeId: node?.nodeId,
-                    server: serverName,
-                    toolName,
-                    toolCallId: id,
-                  },
-                });
-                if (!('skipped' in writtenResult)) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: writtenResult.uri,
-                    mimeType: writtenResult.mimeType,
-                    size: writtenResult.size,
-                    source: 'tool-result',
-                    toolCallId: id,
+                await commitFlowDurableMutation(durableContext, async () => {
+                  const writtenResult = await writeRunResource({
+                    conversationId,
+                    mimeType: 'application/json',
+                    kind: 'text',
+                    data: { text: resultContent },
+                    producedBy: {
+                      source: 'tool-result',
+                      payloadRole: 'tool-message',
+                      nodeId: node?.nodeId,
+                      server: serverName,
+                      toolName,
+                      toolCallId: id,
+                    },
                   });
-                }
+                  if (!('skipped' in writtenResult)) {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: writtenResult.uri,
+                      mimeType: writtenResult.mimeType,
+                      size: writtenResult.size,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
+                  }
+                });
               } catch (error) {
+                rethrowFlowExecutionAuthorityError(error);
                 log.error('Tool-result display capture failed; keeping inline result', {
                   errorClass: classifyStatisticsError(error),
                 });
@@ -2760,31 +3899,35 @@ export class ModelHandler {
           // only the remaining text form is bounded. Never breaks the run.
           if (result.success && conversationId && runResourceSettings) {
             try {
-              const bounded = await boundToolResult({
-                conversationId,
-                toolCallId: id,
-                server: serverName,
-                toolName,
-                nodeId: node?.nodeId,
-                content: resultContent,
-                settings: runResourceSettings,
-              });
+              const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
+                  conversationId,
+                  toolCallId: id,
+                  server: serverName,
+                  toolName,
+                  nodeId: node?.nodeId,
+                  content: resultContent,
+                  settings: runResourceSettings,
+                }),
+              );
               if (bounded.spilled) {
                 resultContent = bounded.content;
                 if (bounded.uri) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: bounded.uri,
-                    mimeType: 'text/plain',
-                    size: bounded.bytes,
-                    source: 'tool-result',
-                    toolCallId: id,
+                  await commitFlowDurableMutation(durableContext, async () => {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: bounded.uri!,
+                      mimeType: 'text/plain',
+                      size: bounded.bytes,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
                   });
                 }
               }
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('boundToolResult failed; keeping full tool result', {
                 errorClass: classifyStatisticsError(error),
               });
@@ -2793,12 +3936,14 @@ export class ModelHandler {
 
           // The full result reaches the conversation as the tool message below;
           // the event carries a preview so the log stays light.
-          emit?.({
-            type: 'tool:result',
-            toolCallId: id,
-            name,
-            result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-            isError: !result.success
+          await commitFlowDurableMutation(durableContext, async () => {
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !result.success
+            });
           });
 
           // MCP Apps (#97): if the server linked this tool to a `ui://` UI
@@ -2829,6 +3974,7 @@ export class ModelHandler {
               tool_call_id: id,
               content: resultContent,
               timestamp: Date.now(), // Add timestamp
+              ...(capturedMedia.length ? { media: capturedMedia } : {}),
               ...(uiLink
                 ? {
                     ui: {
@@ -2848,6 +3994,7 @@ export class ModelHandler {
             result: resultContent
           });
         } catch (error) {
+          if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;
           const errorMessage = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
           emit?.({ type: 'tool:result', toolCallId: id, name, result: errorMessage, isError: true });
           const wasCancelled =
@@ -2904,7 +4051,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name)
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const
@@ -2915,8 +4062,13 @@ export class ModelHandler {
               node: node ? { id: node.nodeId, name: node.nodeName } : undefined,
               tool: { id: decodedForUi?.tool ?? name, name, kind },
               provider: decodedForUi ? { id: decodedForUi.server } : undefined,
+              invocationId: toolInvocationId,
               outcome: cancelled ? 'cancelled' : failed ? 'error' : 'completed',
               durationMs: Math.max(0, Date.now() - toolStartedAt),
+              phases: { tool: Math.max(0, Date.now() - toolStartedAt) },
+              // Metadata ONLY: byte/character counts and a normalized shape
+              // category. Arguments and results themselves are never recorded.
+              payload: statisticsPayloadMetadata(argsString, content),
               errorClass: failed ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : { type: 'tool' }) : undefined,
             }));
           }
@@ -2927,6 +4079,7 @@ export class ModelHandler {
       // and run the groups concurrently. Local synthetic tools share one group.
       const groups = new Map<string, number[]>();
       for (let i = 0; i < toolCalls.length; i++) {
+        if (terminalSilentCallIndex >= 0 && i > terminalSilentCallIndex) continue;
         const key = groupKeyForCall(toolCalls[i]);
         const bucket = groups.get(key);
         if (bucket) bucket.push(i);
@@ -2937,6 +4090,33 @@ export class ModelHandler {
           runWithConcurrency(indices, limitForGroup(key), executeOneToolCall)
         )
       );
+
+      if (terminalSilentCallIndex >= 0) {
+        const reason = 'Meeting turn ended silently before this tool call; it was not executed.';
+        for (let i = terminalSilentCallIndex + 1; i < toolCalls.length; i++) {
+          const call = toolCalls[i];
+          results[i] = {
+            id: uuidv4(),
+            role: 'tool',
+            tool_call_id: call.id,
+            content: `Error: ${reason}`,
+            timestamp: Date.now(),
+          };
+          processed[i] = {
+            name: call.function.name,
+            args: {},
+            id: call.id,
+            result: `Error: ${reason}`,
+          };
+          emit?.({
+            type: 'tool:result',
+            toolCallId: call.id,
+            name: call.function.name,
+            result: reason,
+            isError: true,
+          });
+        }
+      }
 
       // Defensive: any still-empty slot (a call that never ran) is answered with
       // a synthetic cancelled message so every tool_call id stays answered.

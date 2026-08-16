@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -10,7 +11,7 @@ const log = createLogger('app/api/mcp-registry/spotlight/route');
  * Never contacts the registry: the cache is written at FLUJO startup and by
  * POST below. `cache` is null when no refresh has completed yet.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -30,7 +31,7 @@ export async function GET() {
  * POST /api/mcp-registry/spotlight — manually refresh the curated list from
  * the registry (the UI's Refresh button) and return the updated cache.
  */
-export async function POST() {
+async function POST_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -44,4 +45,17 @@ export async function POST() {
       { status: 502 }
     );
   }
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+const POST_workspaceRoute = withWorkspaceRoute(POST_handler);
+export function POST(): ReturnType<typeof POST_workspaceRoute>;
+export function POST(request: Request): ReturnType<typeof POST_workspaceRoute>;
+export function POST(request: Request = new Request('http://localhost/')) {
+  return POST_workspaceRoute(request);
 }

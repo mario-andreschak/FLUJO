@@ -12,6 +12,10 @@ import { flowMessageRows } from './catalogs/flows';
 import { chatMessageRows } from './catalogs/chat';
 import { docsMessageRows } from './catalogs/docs';
 import { validationMessageRows } from './catalogs/validation';
+import { ticketsMessageRows } from './catalogs/tickets';
+import { meetingsMessageRows } from './catalogs/meetings';
+import { personasMessageRows } from './catalogs/personas';
+import { rolesMessageRows } from './catalogs/roles';
 import type { MessageRow } from './schema';
 
 /**
@@ -38,6 +42,7 @@ const messageRows = {
   'nav.automations': ['Automations', 'Automatizaciones', 'Automatisierungen', 'Automatisations', 'Automazioni', 'Automações', '自动化'],
   'nav.extensions': ['Extensions', 'Extensiones', 'Erweiterungen', 'Extensions', 'Estensioni', 'Extensões', '扩展'],
   'nav.activity': ['Activity', 'Actividad', 'Aktivität', 'Activité', 'Attività', 'Atividade', '活动'],
+  'nav.chainChat': ['Chain Chat', 'Chat en cadena', 'Ketten-Chat', 'Chat en chaîne', 'Chat a catena', 'Chat em cadeia', '对话链'],
   'nav.help': ['Help', 'Ayuda', 'Hilfe', 'Aide', 'Aiuto', 'Ajuda', '帮助'],
   'nav.settings': ['Settings', 'Configuración', 'Einstellungen', 'Paramètres', 'Impostazioni', 'Configurações', '设置'],
   'nav.tagline': ['Private AI, made simple', 'IA privada, sin complicaciones', 'Private KI, ganz einfach', 'L’IA privée, en toute simplicité', 'IA privata, resa semplice', 'IA privada, de forma simples', '私有 AI，简单易用'],
@@ -47,7 +52,39 @@ const messageRows = {
   'nav.openMenu': ['Open navigation menu', 'Abrir menú de navegación', 'Navigationsmenü öffnen', 'Ouvrir le menu de navigation', 'Apri il menu di navigazione', 'Abrir menu de navegação', '打开导航菜单'],
   'nav.closeMenu': ['Close navigation menu', 'Cerrar menú de navegación', 'Navigationsmenü schließen', 'Fermer le menu de navigation', 'Chiudi il menu di navigazione', 'Fechar menu de navegação', '关闭导航菜单'],
   'nav.homeAria': ['FLUJO home', 'Inicio de FLUJO', 'FLUJO-Startseite', 'Accueil FLUJO', 'Home di FLUJO', 'Início do FLUJO', 'FLUJO 首页'],
+  'nav.copyChatLink': ['Copy link to this chat', 'Copiar enlace a este chat', 'Link zu diesem Chat kopieren', 'Copier le lien de cette conversation', 'Copia il link a questa chat', 'Copiar link desta conversa', '复制此聊天的链接'],
+  'nav.workspaces': ['Workspaces', 'Espacios de trabajo', 'Arbeitsbereiche', 'Espaces de travail', 'Spazi di lavoro', 'Espaços de trabalho', '工作区'],
+  'nav.workspaceSelected': ['Current workspace: {workspace}', 'Espacio de trabajo actual: {workspace}', 'Aktueller Arbeitsbereich: {workspace}', 'Espace de travail actuel : {workspace}', 'Spazio di lavoro corrente: {workspace}', 'Espaço de trabalho atual: {workspace}', '当前工作区：{workspace}'],
+  'nav.workspaces.current': ['Current', 'Actual', 'Aktuell', 'Actuel', 'Corrente', 'Atual', '当前'],
+  'nav.workspaces.default': ['Default workspace', 'Espacio predeterminado', 'Standardarbeitsbereich', 'Espace par défaut', 'Spazio predefinito', 'Espaço padrão', '默认工作区'],
+  'nav.workspaces.create': ['Create workspace', 'Crear espacio', 'Arbeitsbereich erstellen', 'Créer un espace', 'Crea spazio', 'Criar espaço', '创建工作区'],
+  'nav.workspaces.rename': ['Rename {workspace}', 'Renombrar {workspace}', '{workspace} umbenennen', 'Renommer {workspace}', 'Rinomina {workspace}', 'Renomear {workspace}', '重命名 {workspace}'],
+  'nav.workspaces.delete': ['Delete {workspace}', 'Eliminar {workspace}', '{workspace} löschen', 'Supprimer {workspace}', 'Elimina {workspace}', 'Excluir {workspace}', '删除 {workspace}'],
+  'nav.workspaces.name': ['Workspace name', 'Nombre del espacio', 'Name des Arbeitsbereichs', 'Nom de l’espace', 'Nome dello spazio', 'Nome do espaço', '工作区名称'],
+  'nav.workspaces.nameHelp': ['Use 1–64 letters, numbers, hyphens, or underscores. Start with a letter or number.', 'Usa entre 1 y 64 letras, números, guiones o guiones bajos. Empieza con una letra o un número.', 'Verwende 1–64 Buchstaben, Zahlen, Bindestriche oder Unterstriche. Beginne mit einem Buchstaben oder einer Zahl.', 'Utilisez 1 à 64 lettres, chiffres, tirets ou traits de soulignement. Commencez par une lettre ou un chiffre.', 'Usa da 1 a 64 lettere, numeri, trattini o trattini bassi. Inizia con una lettera o un numero.', 'Use de 1 a 64 letras, números, hífens ou sublinhados. Comece com uma letra ou um número.', '使用 1–64 个字母、数字、连字符或下划线，并以字母或数字开头。'],
+  'nav.workspaces.nameExists': ['A workspace with that name already exists.', 'Ya existe un espacio con ese nombre.', 'Ein Arbeitsbereich mit diesem Namen existiert bereits.', 'Un espace portant ce nom existe déjà.', 'Esiste già uno spazio con questo nome.', 'Já existe um espaço com esse nome.', '已存在同名工作区。'],
+  'nav.workspaces.createTitle': ['Create workspace', 'Crear espacio de trabajo', 'Arbeitsbereich erstellen', 'Créer un espace de travail', 'Crea spazio di lavoro', 'Criar espaço de trabalho', '创建工作区'],
+  'nav.workspaces.renameTitle': ['Rename workspace', 'Renombrar espacio de trabajo', 'Arbeitsbereich umbenennen', 'Renommer l’espace de travail', 'Rinomina spazio di lavoro', 'Renomear espaço de trabalho', '重命名工作区'],
+  'nav.workspaces.deleteTitle': ['Delete workspace?', '¿Eliminar espacio de trabajo?', 'Arbeitsbereich löschen?', 'Supprimer l’espace de travail ?', 'Eliminare lo spazio di lavoro?', 'Excluir espaço de trabalho?', '删除工作区？'],
+  'nav.workspaces.deleteBody': ['This permanently deletes “{workspace}” and all of its flows, chats, files, and settings.', 'Esto elimina permanentemente «{workspace}» y todos sus flujos, chats, archivos y configuraciones.', 'Dadurch werden „{workspace}“ und alle zugehörigen Abläufe, Chats, Dateien und Einstellungen dauerhaft gelöscht.', 'Cette action supprime définitivement « {workspace} » ainsi que tous ses flux, discussions, fichiers et paramètres.', 'Questa azione elimina definitivamente “{workspace}” e tutti i relativi flussi, chat, file e impostazioni.', 'Isso exclui permanentemente “{workspace}” e todos os seus fluxos, chats, arquivos e configurações.', '这将永久删除“{workspace}”及其中的所有流程、聊天、文件和设置。'],
+  'nav.workspaces.createAction': ['Create', 'Crear', 'Erstellen', 'Créer', 'Crea', 'Criar', '创建'],
+  'nav.workspaces.renameAction': ['Rename', 'Renombrar', 'Umbenennen', 'Renommer', 'Rinomina', 'Renomear', '重命名'],
+  'nav.workspaces.deleteAction': ['Delete workspace', 'Eliminar espacio', 'Arbeitsbereich löschen', 'Supprimer l’espace', 'Elimina spazio', 'Excluir espaço', '删除工作区'],
   'nav.groupSections': ['{group} sections', 'Secciones de {group}', 'Bereiche von {group}', 'Sections de {group}', 'Sezioni di {group}', 'Seções de {group}', '{group}分区'],
+  'nav.quickActions': ['Quick actions', 'Acciones rápidas', 'Schnellaktionen', 'Actions rapides', 'Azioni rapide', 'Ações rápidas', '快捷操作'],
+  'nav.quickActions.newChat': ['New Chat', 'Nuevo chat', 'Neuer Chat', 'Nouvelle conversation', 'Nuova chat', 'Nova conversa', '新建对话'],
+  'nav.quickActions.mcpApp': ['MCP App', 'Aplicación MCP', 'MCP-App', 'Application MCP', 'App MCP', 'Aplicativo MCP', 'MCP 应用'],
+  'nav.quickActions.mcpAppSummary': ['Favorite servers that publish apps', 'Servidores favoritos que publican aplicaciones', 'Favorisierte Server, die Apps veröffentlichen', 'Serveurs favoris qui publient des applications', 'Server preferiti che pubblicano app', 'Servidores favoritos que publicam aplicativos', '发布应用的收藏服务器'],
+  'nav.quickActions.backAria': ['Back to quick actions', 'Volver a las acciones rápidas', 'Zurück zu den Schnellaktionen', 'Retour aux actions rapides', 'Torna alle azioni rapide', 'Voltar às ações rápidas', '返回快捷操作'],
+  'nav.quickActions.loading': ['Discovering MCP Apps…', 'Buscando aplicaciones MCP…', 'MCP-Apps werden gesucht…', 'Découverte des applications MCP…', 'Ricerca app MCP…', 'Descobrindo aplicativos MCP…', '正在发现 MCP 应用…'],
+  'nav.quickActions.refresh': ['Refresh apps', 'Actualizar aplicaciones', 'Apps aktualisieren', 'Actualiser les applications', 'Aggiorna app', 'Atualizar aplicativos', '刷新应用'],
+  'nav.quickActions.empty': ['No favorite MCP Apps yet', 'Aún no hay aplicaciones MCP favoritas', 'Noch keine favorisierten MCP-Apps', 'Aucune application MCP favorite', 'Nessuna app MCP preferita', 'Ainda não há aplicativos MCP favoritos', '暂无收藏的 MCP 应用'],
+  'nav.quickActions.emptyHelp': ['Favorite a server that has MCP Apps enabled and publishes at least one app.', 'Marca como favorito un servidor con aplicaciones MCP activadas que publique al menos una aplicación.', 'Favorisiere einen Server, der MCP-Apps aktiviert hat und mindestens eine App veröffentlicht.', 'Ajoutez aux favoris un serveur dont les applications MCP sont activées et qui publie au moins une application.', 'Aggiungi ai preferiti un server con le app MCP abilitate che pubblica almeno un’app.', 'Marque como favorito um servidor com Aplicativos MCP ativados que publique ao menos um aplicativo.', '请收藏一个已启用 MCP 应用并至少发布一个应用的服务器。'],
+  'nav.quickActions.serverUnavailable': ['{server} is unavailable', '{server} no está disponible', '{server} ist nicht verfügbar', '{server} est indisponible', '{server} non è disponibile', '{server} está indisponível', '{server} 不可用'],
+  'nav.quickActions.openApp': ['Open {app}', 'Abrir {app}', '{app} öffnen', 'Ouvrir {app}', 'Apri {app}', 'Abrir {app}', '打开 {app}'],
+  'nav.quickActions.linkedTools': ['Linked tools for {app}', 'Herramientas vinculadas de {app}', 'Verknüpfte Tools für {app}', 'Outils liés à {app}', 'Strumenti collegati per {app}', 'Ferramentas vinculadas de {app}', '{app} 的关联工具'],
+  'nav.quickActions.openTool': ['Start app for {tool}', 'Iniciar la aplicación para {tool}', 'App für {tool} starten', 'Démarrer l’application pour {tool}', 'Avvia l’app per {tool}', 'Iniciar aplicativo para {tool}', '为 {tool} 启动应用'],
+  'nav.quickActions.noTools': ['No linked tools', 'Sin herramientas vinculadas', 'Keine verknüpften Tools', 'Aucun outil lié', 'Nessuno strumento collegato', 'Sem ferramentas vinculadas', '无关联工具'],
   'nav.lightMode': ['Switch to light mode', 'Cambiar al modo claro', 'Zum hellen Modus wechseln', 'Passer au mode clair', 'Passa alla modalità chiara', 'Mudar para o modo claro', '切换到浅色模式'],
   'nav.darkMode': ['Switch to dark mode', 'Cambiar al modo oscuro', 'Zum dunklen Modus wechseln', 'Passer au mode sombre', 'Passa alla modalità scura', 'Mudar para o modo escuro', '切换到深色模式'],
   'language.menu': ['Change language', 'Cambiar idioma', 'Sprache ändern', 'Changer de langue', 'Cambia lingua', 'Alterar idioma', '更改语言'],
@@ -96,8 +133,10 @@ const messageRows = {
   'home.heading': ['Set up once. Then just use it.', 'Configúralo una vez. Después, solo úsalo.', 'Einmal einrichten. Danach einfach nutzen.', 'Configurez une fois. Puis utilisez-le.', 'Configuralo una volta. Poi usalo.', 'Configure uma vez. Depois, é só usar.', '设置一次，之后即可使用。'],
   'home.intro': ['Follow these three steps in order. FLUJO keeps technical details available without putting them in your way.', 'Sigue estos tres pasos en orden. FLUJO mantiene los detalles técnicos disponibles sin estorbarte.', 'Folge diesen drei Schritten. FLUJO hält technische Details bereit, ohne dich aufzuhalten.', 'Suivez ces trois étapes dans l’ordre. FLUJO garde les détails techniques accessibles sans vous encombrer.', 'Segui questi tre passaggi in ordine. FLUJO mantiene i dettagli tecnici disponibili senza intralciarti.', 'Siga estas três etapas em ordem. O FLUJO mantém os detalhes técnicos acessíveis sem atrapalhar.', '请按顺序完成这三个步骤。FLUJO 会保留技术细节，但不会让它们妨碍你。'],
   'home.openGuide': ['Open setup guide', 'Abrir guía de configuración', 'Einrichtungsassistent öffnen', 'Ouvrir le guide de configuration', 'Apri la guida alla configurazione', 'Abrir guia de configuração', '打开设置指南'],
-  'home.hideSetupSteps': ['Hide completed setup steps', 'Ocultar pasos de configuración completados', 'Abgeschlossene Einrichtungsschritte ausblenden', 'Masquer les étapes de configuration terminées', 'Nascondi i passaggi di configurazione completati', 'Ocultar etapas de configuração concluídas', '隐藏已完成的设置步骤'],
-  'home.showSetupSteps': ['Show setup steps', 'Mostrar pasos de configuración', 'Einrichtungsschritte anzeigen', 'Afficher les étapes de configuration', 'Mostra i passaggi di configurazione', 'Mostrar etapas de configuração', '显示设置步骤'],
+  'home.dismissCard.ai': ['Dismiss Connect your AI card', 'Descartar la tarjeta Conecta tu IA', 'Karte „Verbinde deine KI“ ausblenden', 'Masquer la carte Connectez votre IA', 'Chiudi la scheda Collega la tua IA', 'Dispensar o cartão Conecte sua IA', '关闭“连接你的 AI”卡片'],
+  'home.dismissCard.assistant': ['Dismiss Create an agent card', 'Descartar la tarjeta Crea un agente', 'Karte „Erstelle einen Agenten“ ausblenden', 'Masquer la carte Créez un agent', 'Chiudi la scheda Crea un agente', 'Dispensar o cartão Crie um agente', '关闭“创建智能体”卡片'],
+  'home.dismissCard.talk': ['Dismiss Talk to your agent card', 'Descartar la tarjeta Habla con tu agente', 'Karte „Sprich mit deinem Agenten“ ausblenden', 'Masquer la carte Parlez à votre agent', 'Chiudi la scheda Parla con il tuo agente', 'Dispensar o cartão Converse com seu agente', '关闭“与你的智能体对话”卡片'],
+  'home.dismissCard.connectedApps': ['Dismiss connected apps notice', 'Descartar el aviso de aplicaciones conectadas', 'Hinweis zu verbundenen Apps ausblenden', 'Masquer l’avis sur les applications connectées', 'Chiudi l’avviso sulle app collegate', 'Dispensar o aviso de aplicativos conectados', '关闭连接应用提示'],
   'home.gettingStarted': ['Getting started', 'Primeros pasos', 'Erste Schritte', 'Bien démarrer', 'Per iniziare', 'Primeiros passos', '开始使用'],
   'home.step': ['Step {number}', 'Paso {number}', 'Schritt {number}', 'Étape {number}', 'Passaggio {number}', 'Etapa {number}', '第 {number} 步'],
   'home.checking': ['Checking…', 'Comprobando…', 'Prüfung…', 'Vérification…', 'Verifica…', 'Verificando…', '正在检查…'],
@@ -137,7 +176,7 @@ const messageRows = {
   'feedback.yesAria': ['Yes, I am happy', 'Sí, estoy satisfecho', 'Ja, ich bin zufrieden', 'Oui, je suis satisfait', 'Sì, sono soddisfatto', 'Sim, estou satisfeito', '是的，我很满意'],
   'feedback.no': ['Not really', 'No mucho', 'Nicht wirklich', 'Pas vraiment', 'Non proprio', 'Não muito', '不太满意'],
   'feedback.noAria': ['No, I am not happy', 'No, no estoy satisfecho', 'Nein, ich bin nicht zufrieden', 'Non, je ne suis pas satisfait', 'No, non sono soddisfatto', 'Não, não estou satisfeito', '不，我不太满意'],
-  'feedback.placeholder': ['Share your feedback', 'Comparte tus comentarios', 'Teile dein Feedback', 'Partagez votre avis', 'Condividi il tuo feedback', 'Compartilhe seu feedback', '分享你的反馈'],
+  'feedback.placeholder': ['Share your feedback (optional)', 'Comparte tus comentarios (opcional)', 'Teile dein Feedback (optional)', 'Partagez votre avis (facultatif)', 'Condividi il tuo feedback (facoltativo)', 'Compartilhe seu feedback (opcional)', '分享你的反馈（可选）'],
   'feedback.inputAria': ['Feedback', 'Comentarios', 'Feedback', 'Avis', 'Feedback', 'Feedback', '反馈'],
   'feedback.send': ['Send', 'Enviar', 'Senden', 'Envoyer', 'Invia', 'Enviar', '发送'],
   'feedback.sending': ['Sending…', 'Enviando…', 'Wird gesendet…', 'Envoi…', 'Invio…', 'Enviando…', '正在发送…'],
@@ -159,6 +198,10 @@ const messageRows = {
   ...chatMessageRows,
   ...docsMessageRows,
   ...validationMessageRows,
+  ...ticketsMessageRows,
+  ...meetingsMessageRows,
+  ...personasMessageRows,
+  ...rolesMessageRows,
 } satisfies Record<string, MessageRow>;
 
 export type TranslationKey = keyof typeof messageRows;
@@ -172,6 +215,11 @@ export type PluralTranslationKey = {
 export const messageContexts: Partial<Record<TranslationKey, string>> = {
   'nav.openMenu': 'Open is a verb: reveal the navigation menu.',
   'nav.closeMenu': 'Close is a verb: dismiss the navigation menu.',
+  'nav.copyChatLink': 'Copies a shareable URL that reopens the chat conversation currently on screen.',
+  'nav.quickActions': 'Title of the bottom-left menu offering a couple of frequent actions.',
+  'nav.quickActions.mcpApp': 'Entry that drills into favorited MCP servers, their published apps and the tools linked to them.',
+  'nav.quickActions.linkedTools': 'Opens the child menu listing tools associated with one MCP App.',
+  'nav.quickActions.openTool': 'Starts or focuses the linked MCP App; it does not invoke the selected tool.',
   'home.openToCheck': 'Status/action inviting the user to open AI settings so FLUJO can check them.',
   'home.afterAi': 'A disabled step becomes available after AI setup is complete.',
   'home.updateReady.one': 'Exactly one source-control change; branch is a Git branch name and must not be translated.',

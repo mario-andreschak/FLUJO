@@ -7,6 +7,13 @@ import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { StorageKey, type Settings } from '@/shared/types/storage';
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  workspaceCacheKey,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/roots');
 
@@ -85,14 +92,18 @@ async function loadMcpRootsRestriction(): Promise<boolean> {
 // instance/hot-reload reason as __mcp_clients in ./index.ts.
 // ---------------------------------------------------------------------------
 declare global {
-  var __mcp_node_roots: Map<string, { serverName: string; roots: string[] }> | undefined;
+  var __mcp_node_roots: Map<string, { workspace?: string; serverName: string; roots: string[] }> | undefined;
 }
 if (typeof global.__mcp_node_roots === 'undefined') {
   global.__mcp_node_roots = new Map();
 }
 
-function nodeRootsRegistry(): Map<string, { serverName: string; roots: string[] }> {
+function nodeRootsRegistry(): Map<string, { workspace?: string; serverName: string; roots: string[] }> {
   return global.__mcp_node_roots!;
+}
+
+function nodeKey(nodeId: string): string {
+  return getCurrentWorkspace() === DEFAULT_WORKSPACE ? nodeId : workspaceCacheKey(nodeId);
 }
 
 /**
@@ -107,7 +118,8 @@ function nodeRootsRegistry(): Map<string, { serverName: string; roots: string[] 
  */
 export function setNodeRoots(serverName: string, nodeId: string, roots: string[] | undefined): string[] {
   const cleaned = (roots ?? []).filter((r) => typeof r === 'string' && r.trim().length > 0);
-  const previous = nodeRootsRegistry().get(nodeId);
+  const key = nodeKey(nodeId);
+  const previous = nodeRootsRegistry().get(key);
 
   const affected = new Set<string>([serverName]);
   if (previous) affected.add(previous.serverName);
@@ -115,11 +127,11 @@ export function setNodeRoots(serverName: string, nodeId: string, roots: string[]
   for (const name of affected) before.set(name, getNodeRoots(name));
 
   if (cleaned.length === 0) {
-    if (nodeRootsRegistry().delete(nodeId)) {
+    if (nodeRootsRegistry().delete(key)) {
       log.debug(`Cleared node roots for node ${nodeId}`);
     }
   } else {
-    nodeRootsRegistry().set(nodeId, { serverName, roots: cleaned });
+    nodeRootsRegistry().set(key, { workspace: getCurrentWorkspace(), serverName, roots: cleaned });
     log.debug(`Registered ${cleaned.length} node root(s) for node ${nodeId} on server ${serverName}`);
   }
 
@@ -137,8 +149,10 @@ export function setNodeRoots(serverName: string, nodeId: string, roots: string[]
 /** All node-contributed roots currently registered for a server (raw strings, de-duped). */
 export function getNodeRoots(serverName: string): string[] {
   const out: string[] = [];
+  const workspace = getCurrentWorkspace();
   for (const entry of nodeRootsRegistry().values()) {
-    if (entry.serverName !== serverName) continue;
+    const entryWorkspace = entry.workspace ?? DEFAULT_WORKSPACE;
+    if (entryWorkspace !== workspace || entry.serverName !== serverName) continue;
     for (const root of entry.roots) {
       if (!out.includes(root)) out.push(root);
     }
@@ -152,14 +166,18 @@ export function getNodeRoots(serverName: string): string[] {
  * per-node root enforcement (issue #266).
  */
 export function getNodeRootsForId(serverName: string, nodeId: string): string[] {
-  const entry = nodeRootsRegistry().get(nodeId);
-  if (!entry || entry.serverName !== serverName) return [];
+  const entry = nodeRootsRegistry().get(nodeKey(nodeId));
+  const entryWorkspace = entry?.workspace ?? DEFAULT_WORKSPACE;
+  if (!entry || entryWorkspace !== getCurrentWorkspace() || entry.serverName !== serverName) return [];
   return entry.roots;
 }
 
 /** Test hook: wipe all node-level roots registrations. */
 export function _resetNodeRootsForTests(): void {
-  nodeRootsRegistry().clear();
+  const workspace = getCurrentWorkspace();
+  for (const [key, entry] of nodeRootsRegistry()) {
+    if ((entry.workspace ?? DEFAULT_WORKSPACE) === workspace) nodeRootsRegistry().delete(key);
+  }
 }
 
 /**
@@ -176,7 +194,12 @@ export function normalizeRootUri(input: string): string | null {
     return null;
   }
   try {
-    return pathToFileURL(s).href;
+    // MCP config paths use the selected workspace as their relative-path base,
+    // matching process launch, config loading and confined shipped tools. Letting
+    // pathToFileURL resolve them implicitly would instead use process.cwd() (the
+    // FLUJO application directory in packaged/workspace installs).
+    const absolute = path.isAbsolute(s) ? s : path.resolve(getWorkspaceDataDir(), s);
+    return pathToFileURL(absolute).href;
   } catch (error) {
     log.warn(`Could not convert root "${s}" to a file URI:`, error);
     return null;
@@ -268,14 +291,14 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
  * reconnect.
  */
 export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
-  return async () => {
+  return bindToCurrentWorkspace(async () => {
     const restricted = await loadMcpRootsRestriction();
     const roots = restricted
       ? await resolveServerRoots(await freshestConfig(config))
       : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
-  };
+  });
 }
 
 /**

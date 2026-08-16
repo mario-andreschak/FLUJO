@@ -31,6 +31,8 @@ import {
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { v4 as uuidv4 } from 'uuid';
 import type { Flow } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types/model';
@@ -511,6 +513,10 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             </span>
           </Tooltip>
         )}
+        <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+          <AskFlujoButton />
+          <BugReportButton variant="icon" />
+        </Box>
       </DialogTitle>
       <DialogContent dividers sx={{ p: 0, overflowX: 'hidden' }}>
         <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>

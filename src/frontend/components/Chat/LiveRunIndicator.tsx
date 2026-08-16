@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import BugReportIcon from '@mui/icons-material/BugReport';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
@@ -36,10 +35,16 @@ interface LiveRunIndicatorProps {
   /** Open a lane's persisted sidebar conversation (rows are clickable only
    *  when the lane carries a laneConversationId). */
   onOpenLane?: (conversationId: string) => void;
-  /** Attach the debugger to this in-flight run: arms a one-shot breakpoint so
-   *  execution pauses before the next node and opens the debugger panel. Only
-   *  provided for a foreground (tracked) run — absent → no button. */
-  onAttachDebugger?: () => void;
+  /* NOTE: attaching the debugger used to live here as a "bug" floater button.
+   * It moved to the composer's single Debugger toggle, which owns BOTH arming
+   * the next run and attaching to a run already in flight — two controls for
+   * one concept was the confusing part. */
+  /** Issue #400: the server hit a bounded provider session/rate limit and is
+   *  WAITING before it replays the same call. Non-terminal — the run is still
+   *  alive, Stop still works, and no error banner is shown. The countdown is
+   *  derived from the absolute `retryAt` deadline, so it stays correct across
+   *  re-renders and tab throttling. */
+  retryWait?: { attempt: number; maxAttempts?: number; retryAt: number } | null;
   /** Docked, single-row treatment used above the phone composer. */
   compact?: boolean;
 }
@@ -86,6 +91,27 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
           </Typography>
         )}
       </Typography>
+      {lane.sessionKey && lane.sessionVisit !== undefined && (
+        <Tooltip title={t('chat.live.sessionVisit', { key: lane.sessionKey, visit: lane.sessionVisit })}>
+          <Chip
+            label={t('chat.live.sessionVisit', { key: lane.sessionKey, visit: lane.sessionVisit })}
+            size="small"
+            variant="outlined"
+            sx={{
+              flexShrink: 1,
+              minWidth: 0,
+              maxWidth: 220,
+              height: 20,
+              '& .MuiChip-label': {
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                px: 0.75,
+                fontSize: '0.68rem',
+              },
+            }}
+          />
+        </Tooltip>
+      )}
     </Box>
   );
 };
@@ -101,14 +127,10 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
  * only while the viewed conversation is running, so the interval's lifecycle
  * is simply this component's lifecycle.
  */
-const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger, compact = false }) => {
+const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, retryWait, compact = false }) => {
   const { locale, t, tp, formatNumber, formatList } = useI18n();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [mountedAt] = useState<number>(() => Date.now());
-  // Once armed, the pause fires at the next node and this component unmounts
-  // (the debugger panel takes over), so the transient "Attaching…" state clears
-  // itself. Guards against re-arming with repeated clicks in the meantime.
-  const [attaching, setAttaching] = useState(false);
   const [compactExpanded, setCompactExpanded] = useState(false);
 
   useEffect(() => {
@@ -118,7 +140,9 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-  const stuck = !awaitingApproval && !!liveStats && sinceLast >= 60;
+  // A deliberate session-limit wait is not a stall: suppress the "may be stuck"
+  // warning while the server is counting down to its own retry (issue #400).
+  const stuck = !awaitingApproval && !retryWait && !!liveStats && sinceLast >= 60;
   const messageStartedAt = liveStats?.startedAt ?? mountedAt;
   const messageSequence = Math.floor(
     Math.max(0, nowTick - messageStartedAt) / WORKING_MESSAGE_INTERVAL_MS,
@@ -126,6 +150,19 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   const workingMessage = locale === 'en'
     ? getWorkingMessage(messageSequence, messageStartedAt)
     : t(`chat.live.working.${messageSequence % 6}` as any);
+
+  // Issue #400: countdown to the server-owned retry deadline. This is display
+  // only — the frontend never re-issues the request when it reaches zero.
+  const retrySeconds = retryWait ? Math.max(0, Math.ceil((retryWait.retryAt - nowTick) / 1000)) : 0;
+  const retryMessage = retryWait
+    ? (retryWait.maxAttempts
+        ? t('chat.live.retryWaitAttempt', {
+            seconds: formatNumber(retrySeconds),
+            attempt: formatNumber(retryWait.attempt),
+            total: formatNumber(retryWait.maxAttempts),
+          })
+        : t('chat.live.retryWait', { seconds: formatNumber(retrySeconds) }))
+    : null;
 
   const laneRows = lanes ? laneList(lanes) : [];
   const summary = laneRows.length > 0 ? (() => {
@@ -178,8 +215,22 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           ) : (
             <CircularProgress size={18} color={stuck ? 'warning' : 'primary'} />
           )}
-          <Typography variant="body2" noWrap aria-live="polite" sx={{ flex: 1, minWidth: 0 }}>
-            {status}
+          {/* THE live region of this component (see the normal-mode twin
+            * below). It carries the only text a screen-reader user needs while
+            * a run is in flight: the active node, the approval wait, or the
+            * #400 session-limit countdown. aria-atomic keeps the sentence
+            * intact instead of announcing the changed seconds in isolation. */}
+          <Typography
+            variant="body2"
+            noWrap
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid={retryMessage ? 'retry-wait' : 'run-status'}
+            color={retryMessage ? 'warning.main' : undefined}
+            sx={{ flex: 1, minWidth: 0 }}
+          >
+            {retryMessage ?? status}
           </Typography>
           {!awaitingApproval && (
             <Typography variant="caption" color={stuck ? 'warning.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
@@ -198,21 +249,6 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
               </IconButton>
             </Tooltip>
           )}
-          {onAttachDebugger && !awaitingApproval && (
-            <Tooltip title={attaching ? t('chat.live.attaching') : t('chat.live.attach')}>
-              <span>
-                <IconButton
-                  size="small"
-                  color="primary"
-                  onClick={() => { setAttaching(true); onAttachDebugger(); }}
-                  disabled={attaching}
-                  aria-label={attaching ? t('chat.live.attaching') : t('chat.live.attach')}
-                >
-                  <BugReportIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
           <Button
             variant="outlined"
             color="secondary"
@@ -229,7 +265,13 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             data-testid="compact-working-message"
             variant="body2"
             color="text.primary"
-            aria-live="polite"
+            // Decorative flavor text that rotates every 10s. It used to be a
+            // second aria-live region, which (a) made the DOM ambiguous — the
+            // status region and this one were indistinguishable to any
+            // "[aria-live=polite]" query — and (b) spammed screen readers with
+            // jokes on top of the real status. The status region above is the
+            // single source of announcements.
+            aria-hidden="true"
             sx={{
               px: 1.5,
               pb: 0.75,
@@ -271,23 +313,22 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
         ) : (
           <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
         )}
-        <Typography variant="body2" color="textSecondary">
-          {awaitingApproval
+        {/* The component's single live region: run status, approval wait, or
+          * the #400 retry countdown. Queries for the announced text should
+          * target role="status" (or data-testid run-status / retry-wait), never
+          * "the first [aria-live] node". */}
+        <Typography
+          variant="body2"
+          color={retryMessage ? 'warning.main' : 'textSecondary'}
+          data-testid={retryMessage ? 'retry-wait' : 'run-status'}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {retryMessage ?? (awaitingApproval
             ? t('chat.live.waitingApproval')
-            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working')}
+            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working'))}
         </Typography>
-        {onAttachDebugger && !awaitingApproval && (
-          <Button
-            variant="outlined"
-            color="primary"
-            size="small"
-            startIcon={<BugReportIcon fontSize="small" />}
-            onClick={() => { setAttaching(true); onAttachDebugger(); }}
-            disabled={attaching}
-          >
-            {attaching ? t('chat.live.attaching') : t('chat.live.attach')}
-          </Button>
-        )}
         <Button
           variant="outlined"
           color="secondary"
@@ -300,6 +341,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       </Box>
       {!awaitingApproval && (
         <Typography
+          data-testid="working-message"
           variant="body2"
           color="text.primary"
           sx={{
@@ -314,7 +356,9 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             textAlign: 'center',
             overflowWrap: 'anywhere',
           }}
-          aria-live="polite"
+          // Decorative: rotating flavor text, deliberately NOT announced (the
+          // status region above owns announcements). See the compact twin.
+          aria-hidden="true"
         >
           {workingMessage}
         </Typography>

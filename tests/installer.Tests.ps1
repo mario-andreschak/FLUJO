@@ -8,6 +8,13 @@ BeforeAll {
 }
 
 Describe 'Windows installer prerequisite planning' {
+    It 'includes the ripgrep search accelerator in the managed prerequisite catalog' {
+        $ripgrep = Get-KnownInstallerPrerequisites | Where-Object Command -eq 'rg'
+        $ripgrep | Should -Not -BeNullOrEmpty
+        $ripgrep.WingetId | Should -Be 'BurntSushi.ripgrep.MSVC'
+        $ripgrep.DisplayName | Should -Be 'ripgrep'
+    }
+
     It 'marks installed prerequisites as preexisting and does not reinstall them' {
         $available = @('winget', 'git', 'node')
         $plan = Get-PrerequisitePlan -Prerequisites $script:CorePrerequisites -CommandResolver {

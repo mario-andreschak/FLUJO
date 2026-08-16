@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/packages/install (issue #198).
  *
@@ -17,7 +18,14 @@
  *
  * Body: { source: 'registry', packageId: string, version?: string,
  *         secrets?: Record<string,string>, modelMappings?: Record<string,string>,
+ *         renames?: { flows?: Record<string,string>,
+ *                     plannedExecutions?: Record<string,string> },
  *         consentGranted?: boolean }
+ *
+ * `renames` (issue #407) carries the wizard's bulk DISPLAY-NAME rename map —
+ * flow entries keyed by manifest-local flow id, planned-execution entries keyed
+ * by manifest execution name. It is validated here for shape/size and again in
+ * the installer for blanks, duplicates and host collisions.
  * Response: the install summary (created / updated / skipped / disabled / errors),
  * or `{ dryRun: true, preview }` when consentGranted is false.
  */
@@ -25,11 +33,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { installPackage } from '@/backend/services/packages/installPackage';
+import { MAX_RENAME_ENTRIES, MAX_RENAME_LENGTH } from '@/utils/shared/packageRename';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/packages/install/route');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -42,12 +51,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { source, packageId, version, secrets, modelMappings, consentGranted } = (body ?? {}) as {
+  const { source, packageId, version, secrets, modelMappings, renames, consentGranted } = (body ?? {}) as {
     source?: unknown;
     packageId?: unknown;
     version?: unknown;
     secrets?: unknown;
     modelMappings?: unknown;
+    renames?: unknown;
     consentGranted?: unknown;
   };
 
@@ -72,6 +82,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `model mapping "${k}" must be a string value` }, { status: 400 });
     }
   }
+  if (renames !== undefined && (typeof renames !== 'object' || renames === null || Array.isArray(renames))) {
+    return NextResponse.json({ error: 'renames must be an object' }, { status: 400 });
+  }
+  const renameGroups = (renames ?? {}) as Record<string, unknown>;
+  for (const group of Object.keys(renameGroups)) {
+    if (group !== 'flows' && group !== 'plannedExecutions') {
+      return NextResponse.json({ error: `renames.${group} is not a supported rename group` }, { status: 400 });
+    }
+    const entries = renameGroups[group];
+    if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) {
+      return NextResponse.json({ error: `renames.${group} must be an object of string values` }, { status: 400 });
+    }
+    const record = entries as Record<string, unknown>;
+    if (Object.keys(record).length > MAX_RENAME_ENTRIES) {
+      return NextResponse.json(
+        { error: `renames.${group} may not contain more than ${MAX_RENAME_ENTRIES} entries` },
+        { status: 400 },
+      );
+    }
+    for (const [k, v] of Object.entries(record)) {
+      if (typeof v !== 'string') {
+        return NextResponse.json({ error: `rename "${k}" must be a string value` }, { status: 400 });
+      }
+      if (v.length > MAX_RENAME_LENGTH) {
+        return NextResponse.json(
+          { error: `rename "${k}" must be ${MAX_RENAME_LENGTH} characters or fewer` },
+          { status: 400 },
+        );
+      }
+    }
+  }
   if (consentGranted !== undefined && typeof consentGranted !== 'boolean') {
     return NextResponse.json({ error: 'consentGranted must be a boolean' }, { status: 400 });
   }
@@ -90,8 +131,14 @@ export async function POST(request: NextRequest) {
     ...(version ? { version } : {}),
     secrets: secretRecord as Record<string, string>,
     modelMappings: modelMappingRecord as Record<string, string>,
+    renames: {
+      flows: (renameGroups.flows ?? {}) as Record<string, string>,
+      plannedExecutions: (renameGroups.plannedExecutions ?? {}) as Record<string, string>,
+    },
     consentGranted: consentGranted === undefined ? true : (consentGranted as boolean),
   });
 
   return NextResponse.json(summary, { status: summary.ok ? 200 : 400 });
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

@@ -11,13 +11,17 @@ export const FLUJO_AUTHORING_TOOLS = [
   'get_flow_authoring_guide',
   'validate_flow_spec',
   'draft_flow',
+  'draft_generated_flow',
   'create_flow',
   'suggest_tools_for_flow_step',
   'apply_tools_to_flow_step',
   'check_flow_plausibility',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
+  'read_persona_composition',
+  'update_persona_composition',
 ] as const;
 
 export const FLUJO_FLOW_TOOLS = [
@@ -40,9 +44,7 @@ export const FLUJO_SERVER_TOOLS = [
   'call_mcp_tool',
   'restart_mcp_server',
   'set_mcp_server_enabled',
-  'browser_capture_page',
-  'browser_capture_element_metrics',
-  'browser_capture_region',
+  'system_screenshot',
 ] as const;
 
 export const FLUJO_AUTOMATION_TOOLS = [
@@ -52,6 +54,7 @@ export const FLUJO_AUTOMATION_TOOLS = [
   'update_planned_execution',
   'create_planned_execution',
   'delete_planned_execution',
+  'create_ticket_for_human',
 ] as const;
 
 export const FLUJO_STATE_TOOLS = [

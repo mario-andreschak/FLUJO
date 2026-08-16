@@ -82,7 +82,6 @@ const SERVER: MCPServerConfig = {
   args: ['dist/index.js'],
   env: {},
   disabled: false,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',

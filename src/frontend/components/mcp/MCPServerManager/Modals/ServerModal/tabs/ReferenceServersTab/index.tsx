@@ -8,7 +8,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import FolderIcon from '@mui/icons-material/Folder';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CodeIcon from '@mui/icons-material/Code';
-import { useConsoleOutput } from '../LocalServerTab/hooks/useConsoleOutput';
+import { useConsoleOutput } from '../ConfigureTab/hooks/useConsoleOutput';
 import { 
   Alert, 
   Box, 
@@ -65,8 +65,7 @@ const getServerGradient = (theme: any): string => {
 const ReferenceServersTab: React.FC<TabProps> = ({
   onAdd,
   onClose,
-  setActiveTab,
-  onUpdate,
+  onHandoff,
 }) => {
   const theme = useTheme();
   const { t, tp } = useI18n();
@@ -536,7 +535,6 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         args: args,
         env: {},
         disabled: false,
-        autoApprove: [],
         transport: 'stdio',
         _buildCommand: buildCommand,
         _installCommand: installCommand,
@@ -549,14 +547,9 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         },
       };
       
-      // Update the config in the parent component
-      if (onUpdate) {
-        onUpdate(serverConfig);
-      }
-      
-      // Switch to LocalServerTab for further configuration
-      if (setActiveTab) {
-        setActiveTab('local');
+      // Hand the config to the configure-and-verify sink; the modal switches tabs
+      if (onHandoff) {
+        onHandoff({ to: 'configure', config: serverConfig });
       }
     } catch (error) {
       console.error('Error configuring server:', error);

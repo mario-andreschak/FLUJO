@@ -10,20 +10,20 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 
 **Visual flows** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
 
-[**Watch the 2:28 product film →**](https://mario-andreschak.github.io/FLUJO/githubpages/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
+[**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.42.1-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.45.0-green.svg)](package.json)
 
 </div>
 
-[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://mario-andreschak.github.io/FLUJO/githubpages/short/)
+[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
 
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
 
 ## ⚡ Quick Install (recommended)
 
-The installer sets up everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
+The installer sets up everything FLUJO needs (Git, Node.js, Python, uv, ripgrep), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
 **Windows installer (recommended)** — click below to download the latest `flujo-setup.exe`:
 
@@ -69,7 +69,7 @@ FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.i
 
 ### 🤖 Model Management
 
-- **Multiple providers**: OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
+- **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
 - **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
 - **Per-model system prompts** and tunable parameters, reused across any flow
 
@@ -180,6 +180,7 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
 - uv and/or yarn (optional, if you prefer these over npm or pip)
+- ripgrep (optional filesystem-search acceleration; the installer adds it automatically)
 
 ### Installation
 
@@ -230,9 +231,12 @@ Then open http://localhost:4200.
 > reuses the previously built image and runs the *old* version. `--build`
 > rebuilds when the source changed and is a fast no-op when it hasn't.
 
-- **Your data persists** in the named volumes `flujo-db` (flows, encrypted keys,
-  MCP configs, chat history) and `flujo-mcp-servers` (installed MCP server clones),
-  so it survives `docker compose down` / `up`.
+- **Your data persists** in `flujo-workspaces` (the workspace namespace and all
+  non-default workspace data), plus the existing `flujo-db` and
+  `flujo-mcp-servers` volumes mounted inside `default-workspace`. Reusing those
+  two established volume names makes an upgrade retain existing flows, models,
+  encrypted keys, chats, MCP configs, and installed server clones while every
+  newly created workspace also survives `docker compose down` / `up`.
 - **Updating**: use `git pull && docker compose up --build` instead of the
   in-app updater. FLUJO detects it is running in a container and shows this in
   the update settings. (`docker compose pull` only helps if you switched the
@@ -244,8 +248,9 @@ Then open http://localhost:4200.
   `claude setup-token` and pass it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - **fileWatch triggers**: bind-mount the host folder you want to watch into the
   container (see the commented volume example in `docker-compose.yml`).
-- **MCP Apps**: Compose also publishes the isolated sandbox origin on
-  `http://localhost:4201`, loopback-only. Keep both `4200` and `4201` mappings
+- **MCP Apps**: Compose also publishes the shared sandbox listener on port
+  `4201`, loopback-only. Each App is loaded through its own
+  `http://<originKey>.localhost:4201` browser origin. Keep both port mappings
   when using interactive MCP Apps.
 
 > ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
@@ -264,16 +269,20 @@ Use **Settings → Network access** to choose one deployment posture:
   this only behind an authenticating HTTPS reverse proxy.
 
 The one setting controls the UI, API, OpenAI/MCP endpoints, Host/Origin guard,
-and MCP Apps sandbox together. Restart FLUJO after changing it. Existing hosted
-installs that used the former host/sandbox environment variables remain
-supported as a compatibility path, but new setup no longer needs them.
+and MCP Apps sandbox binding together. Restart FLUJO after changing it.
 
-For MCP Apps over HTTPS, expose the sandbox listener on the same hostname at
-HTTPS port `4201` and proxy it to FLUJO's plain HTTP port `4201`. The port makes
-it a distinct browser origin, and FLUJO derives the URL and exact embedding
-origin automatically. Preserve the browser's `Referer` header through the
-proxy. Docker Compose still publishes both ports to host loopback by default;
-change those two port mappings when choosing Local Network or Public.
+MCP Apps require no additional configuration on localhost or a plain-HTTP Local
+Network install. FLUJO discovers the browser-visible host automatically and uses
+port `4201` for the sandbox. Hosted HTTPS deployments can optionally configure
+`FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` with `{app}` as one complete hostname label,
+for example `https://{app}.sandbox.example.com/sandbox.html`, and proxy those
+wildcard hostnames to FLUJO's plain HTTP port `4201`. Without wildcard
+DNS/TLS, set the same variable to a single shared sandbox origin instead
+(for example `https://sandbox.example.com`); the App key then travels in the
+authenticated sandbox URL. Preserve the browser's
+`Host` and `Referer` headers through the proxy. Docker Compose publishes both
+listener ports to host loopback by default; change those mappings when other LAN
+devices or a reverse proxy need to reach them.
 
 See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
 security guarantees, display modes, compatibility limits, and the versioned
@@ -295,7 +304,7 @@ installed command is still `flujo`.)
 
 ### One-line install (Windows)
 
-On a fresh Windows machine you can install everything (Git, Node.js, Python, uv),
+On a fresh Windows machine you can install everything (Git, Node.js, Python, uv, ripgrep),
 clone FLUJO, build it, and optionally start it with a single PowerShell command:
 
 ```powershell
@@ -319,7 +328,7 @@ wizard around the same `install.ps1` script above (see
 The Windows installer is a networked bootstrapper, not an offline file-copy
 package. It requires Windows App Installer (`winget`) and access to GitHub, the
 winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
-and uv are installed through winget; Ollama is optional. The installer also
+uv, and ripgrep are installed through winget; Ollama is optional. The installer also
 installs the Claude Code CLI used by the optional Claude Subscription provider.
 Running the installer again against an existing FLUJO Git checkout updates and
 rebuilds that checkout. For safety, an existing target that is not a Git checkout
@@ -328,7 +337,7 @@ is rejected before registration or cloning.
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
-uv) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
+uv, ripgrep) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
 registers the `flujo` command:
 
 ```bash
@@ -358,7 +367,7 @@ or, from inside your install folder:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-It asks, per prerequisite (Git, Node.js, Python, uv, and optional Ollama), whether
+It asks, per prerequisite (Git, Node.js, Python, uv, ripgrep, and optional Ollama), whether
 to remove it — defaulting to **yes** for ones FLUJO installed and **no** for ones
 that were already on your system — then removes the `flujo` command and the FLUJO
 folder. These ownership decisions come from
@@ -367,9 +376,11 @@ all detected prerequisites default to **keep**. The graphical bootstrapper is
 intentionally not registered in Windows Apps, so this direct PowerShell command
 is the supported uninstall entry point.
 
-> ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
-> configs and chat history live in `<install>\db\` and are removed with the folder. Use
-> FLUJO's built-in backup/export first if you want to keep them.
+> ⚠️ **This permanently deletes your data.** All workspace data—including flows,
+> encrypted API keys, MCP server configs, chat history, user files and runtime
+> artifacts—lives below `<data root>\workspaces\<workspace>\` and is removed with
+> the installation/data folder. Use FLUJO's built-in backup/export first if you
+> want to keep it.
 
 Installs created before this feature have no manifest; the uninstaller then defaults every
 prerequisite to **keep** (it can't tell which FLUJO installed). Re-running the installer

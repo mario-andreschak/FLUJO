@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * GET /api/packages/installed (issue #211).
  *
@@ -12,7 +13,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { listInstalledPackages } from '@/backend/services/packages/installPackage';
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -21,3 +22,5 @@ export async function GET(request: NextRequest) {
   const packages = await listInstalledPackages();
   return NextResponse.json({ packages }, { status: 200 });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

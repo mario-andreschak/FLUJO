@@ -1,5 +1,4 @@
 import path from 'node:path';
-import os from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -38,10 +37,6 @@ export function createLogger(scope: string): DiagnosticLogger {
 
 export function getDataDir(): string {
   return path.resolve(process.env.FLUJO_DATA_DIR?.trim() || process.cwd());
-}
-
-export function getHomeDir(): string {
-  return path.resolve(process.env.FLUJO_HOME_DIR?.trim() || os.homedir());
 }
 
 export function isInside(root: string, candidate: string): boolean {
@@ -103,44 +98,6 @@ export async function loadEffectiveRoots(
   if (!ceiling) return configured.length > 0 ? configured : [dataDir];
   const confined = configured.filter((candidate) => ceiling.some((root) => isInside(root, candidate)));
   return confined.length > 0 ? confined : ceiling;
-}
-
-function truthy(value: string | undefined): boolean {
-  return typeof value === 'string' && /^(1|true|yes|on)$/i.test(value.trim());
-}
-
-export const ALLOW_PROTECTED_PATHS_ENV = 'FLUJO_ALLOW_PROTECTED_PATHS';
-
-export async function isProtectedPathsEnabled(): Promise<boolean> {
-  if (truthy(process.env[ALLOW_PROTECTED_PATHS_ENV])) return false;
-  return truthy(process.env.FLUJO_PROTECTED_PATHS_ENABLED);
-}
-
-function protectedPaths(): string[] {
-  if (truthy(process.env[ALLOW_PROTECTED_PATHS_ENV])) return [];
-  const home = getHomeDir();
-  const underHome = (...segments: string[]) => path.resolve(home, ...segments);
-  if (process.platform === 'win32') {
-    return ['AppData', 'Downloads', 'Desktop', 'Documents', 'Pictures', 'Music', 'Videos', 'OneDrive'].map((item) => underHome(item));
-  }
-  if (process.platform === 'darwin') {
-    return [
-      'Downloads', 'Desktop', 'Documents', 'Pictures', 'Music', 'Movies',
-      'Library/Mail', 'Library/Messages', 'Library/Safari', 'Library/Cookies',
-      'Library/Calendars', 'Library/Application Support/AddressBook',
-      'Library/Application Support/com.apple.TCC', 'Library/PersonalizationPortrait',
-      'Library/Metadata/CoreSpotlight', 'Library/Suggestions',
-    ].map((item) => underHome(item)).concat(['/.Spotlight-V100', '/.fseventsd', '/.DocumentRevisions-V100'].map((item) => path.resolve(item)));
-  }
-  return ['Documents', 'Downloads', 'Desktop', '.ssh', '.gnupg', '.aws', '.config'].map((item) => underHome(item));
-}
-
-export function isProtected(candidate: string): { denied: boolean; matchedRoot?: string } {
-  const resolved = path.resolve(candidate);
-  const exempt = [getDataDir(), os.tmpdir()].map((item) => path.resolve(item));
-  if (exempt.some((root) => isInside(root, resolved))) return { denied: false };
-  const matchedRoot = protectedPaths().find((root) => isInside(root, resolved));
-  return matchedRoot ? { denied: true, matchedRoot } : { denied: false };
 }
 
 export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void {

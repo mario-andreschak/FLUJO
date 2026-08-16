@@ -35,6 +35,18 @@ jest.mock('@/backend/services/mcp', () => ({
   mcpService: { callTool: jest.fn() },
 }));
 
+jest.mock('@/backend/services/model/adapters/claudeRuntimeHome', () => ({
+  prepareClaudeRuntimeEnvironment: jest.fn(async () => ({
+    home: 'C:\\flujo\\db\\claude-runtime',
+    workingDirectory: 'C:\\flujo\\db\\claude-runtime\\workspace',
+    env: {
+      PATH: 'C:\\Windows',
+      CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+    },
+  })),
+}));
+
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 import { _clearAllSessionsForTests } from '@/backend/services/model/adapters/claudeSessionStore';
 

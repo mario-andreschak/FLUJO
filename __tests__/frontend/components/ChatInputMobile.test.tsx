@@ -45,13 +45,13 @@ import ChatInput from '@/frontend/components/Chat/ChatInput';
 describe('ChatInput phone layout', () => {
   it('moves advanced run controls into a bottom sheet', async () => {
     const onRequireApprovalChange = jest.fn();
-    const onExecuteInDebuggerChange = jest.fn();
+    const onToggleDebugger = jest.fn();
 
     render(
       <ChatInput
         onSendMessage={() => undefined}
         onRequireApprovalChange={onRequireApprovalChange}
-        onExecuteInDebuggerChange={onExecuteInDebuggerChange}
+        onToggleDebugger={onToggleDebugger}
       />,
     );
 
@@ -60,9 +60,17 @@ describe('ChatInput phone layout', () => {
 
     const sheet = await screen.findByRole('dialog', { name: 'Run options' });
     expect(within(sheet).getByText('Require tool approvals')).toBeInTheDocument();
-    expect(within(sheet).getByText('Run in debugger')).toBeInTheDocument();
+    // The debugger is now ONE toggle (no "run in debugger" checkbox): pressing
+    // it opens the debugger panel straight away.
+    const debuggerChip = within(sheet).getByText(
+      'Open the debugger: pauses the next step, or attaches to the run in progress',
+    );
+    expect(debuggerChip).toBeInTheDocument();
 
     fireEvent.click(within(sheet).getByLabelText('Require tool approvals'));
     expect(onRequireApprovalChange).toHaveBeenCalledWith(true);
+
+    fireEvent.click(debuggerChip);
+    expect(onToggleDebugger).toHaveBeenCalled();
   });
 });

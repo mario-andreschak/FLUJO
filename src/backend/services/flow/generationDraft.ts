@@ -79,7 +79,11 @@ export function compileGeneratedDraft(
   const repaired = repairFlowSpec(guarded.spec);
   const maxDepth = options?.maxDepth ?? DEFAULT_GENERATED_SUBFLOW_DEPTH;
   const maxFlows = options?.maxFlows ?? MAX_GENERATED_FLOWS;
-  const compiled = compileFlowSpec(repaired.spec, context.compile, { maxDepth, maxFlows });
+  const compiled = compileFlowSpec(repaired.spec, context.compile, {
+    maxDepth,
+    maxFlows,
+    newSubflowDefaults: true,
+  });
 
   if (!compiled.flow) {
     return {

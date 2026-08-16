@@ -15,8 +15,10 @@
  */
 
 const writeRunResourceMock = jest.fn();
+const getRunResourceLocalPathMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
 }));
 
 import { captureToolResult } from '@/backend/services/runResources/capture';
@@ -53,6 +55,8 @@ function fakeEntry(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   writeRunResourceMock.mockReset();
+  getRunResourceLocalPathMock.mockReset();
+  getRunResourceLocalPathMock.mockResolvedValue('C:\\artifacts\\captured-media');
   writeRunResourceMock.mockImplementation(async (input: { kind: string; mimeType?: string }) =>
     fakeEntry({ kind: input.kind, mimeType: input.mimeType }));
 });
@@ -75,6 +79,12 @@ describe('captureToolResult decision matrix', () => {
     expect(item.type).toBe('text');
     expect(item.text).toContain('flujo://run/conv-1/');
     expect(item.text).not.toContain('aGVsbG8=');
+    expect(outcome.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/png',
+      resourceUri: expect.stringContaining('flujo://run/conv-1/'),
+      localPath: 'C:\\artifacts\\captured-media',
+    })]);
   });
 
   it('registers a resource_link natively and keeps the item', async () => {
@@ -98,11 +108,15 @@ describe('captureToolResult decision matrix', () => {
     const outcome = await captureToolResult({ ...base, result });
 
     expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'blob',
+      kind: 'image',
       data: { base64: 'QUJD' },
       origin: { server: 'srv', uri: 'srv://img/1' },
     }));
     expect((outcome.result.content[0] as { type: string }).type).toBe('text');
+    expect(outcome.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/jpeg',
+    })]);
   });
 
   it('captures large text but KEEPS it inline by default', async () => {

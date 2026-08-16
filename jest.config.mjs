@@ -1,4 +1,7 @@
-import nextJest from "next/jest.js";
+// Resolve Next from this checkout explicitly. Bare package resolution walks up
+// parent directories, which made nested isolated worktrees silently borrow the
+// host FLUJO repository's Next/Jest toolchain when their own install was absent.
+import nextJest from "./node_modules/next/jest.js";
 import {
   jsdomTestMatch,
   nodeTestMatch,
@@ -28,6 +31,31 @@ const moduleNameMapper = {
   // path with its transformed extension.
   "^(\\.{1,2}/.*)\\.js$": "$1",
 };
+
+// Packages that ship ESM-only builds and are pulled in (directly or
+// transitively) by code under test — chokidar v4+ and its readdirp v5+
+// dependency from file-watch triggers, plus the MCP Apps browser bridge.
+//
+// next/jest hard-codes a leading "/node_modules/(?!(<transpilePackages>)/)"
+// ignore pattern and only APPENDS whatever a caller passes in. Because
+// transformIgnorePatterns is OR-ed, an extra pattern can never re-enable
+// transformation for a package the generated pattern already ignored. So we
+// widen that generated allowlist instead of appending to it.
+const esmOnlyTestPackages = [
+  "chokidar",
+  "readdirp",
+  "@modelcontextprotocol/ext-apps",
+];
+
+function allowEsmOnlyPackages(patterns = []) {
+  return patterns.map((pattern) =>
+    pattern.replace(
+      /\(\?!\(([^)]*)\)\/\)/,
+      (_match, allowed) =>
+        `(?!(${allowed}|${esmOnlyTestPackages.join("|")})/)`,
+    ),
+  );
+}
 
 // Crawl only application/test sources and the five first-party workspaces.
 // Runtime data may contain cloned FLUJO repositories (and therefore duplicate
@@ -82,6 +110,11 @@ const jsdomProject = {
 async function buildConfig() {
   const node = await createJestConfig(nodeProject)();
   const jsdom = await createJestConfig(jsdomProject)();
+  for (const project of [node, jsdom]) {
+    project.transformIgnorePatterns = allowEsmOnlyPackages(
+      project.transformIgnorePatterns,
+    );
+  }
   return {
     projects: [node, jsdom],
   };

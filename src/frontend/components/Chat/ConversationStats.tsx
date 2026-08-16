@@ -17,6 +17,7 @@ import {
 import DataUsageIcon from '@mui/icons-material/DataUsage';
 import type { Conversation } from './index';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { summarizeTokenMeter } from '@/shared/utils/tokenUsage';
 
 /** 12345 → "12.3k", 950 → "950". */
 export const formatTokens = (n: number): string =>
@@ -53,9 +54,11 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
   // conversations report absurd totals (#87), so the headline shows the FRESH
   // figure (total minus cached reads) and the cached amount is called out
   // separately in the tooltip/breakdown.
-  const cachedReads = usage?.cacheReadTokens ?? 0;
-  const freshPrompt = usage ? Math.max(0, usage.promptTokens - cachedReads) : 0;
-  const freshTotal = usage ? Math.max(0, usage.totalTokens - cachedReads) : 0;
+  const meter = usage ? summarizeTokenMeter(usage) : undefined;
+  const cachedReads = meter?.cacheReadTokens ?? 0;
+  const cacheWrites = meter?.cacheWriteTokens ?? 0;
+  const freshPrompt = meter?.freshPromptTokens ?? 0;
+  const freshTotal = meter?.meterTotalTokens ?? 0;
 
   // Context meter: provider-reported prompt tokens of the latest call vs the
   // bound model's configured window. Rendered only when both are known.
@@ -72,6 +75,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
             prompt: formatNumber(freshPrompt),
             completion: formatNumber(usage.completionTokens),
             cached: cachedReads > 0 ? t('chat.stats.cached', { count: formatNumber(cachedReads) }) : '',
+            written: cacheWrites > 0 ? t('chat.stats.written', { count: formatNumber(cacheWrites) }) : '',
           })}>
             <Chip
               icon={<DataUsageIcon />}
@@ -89,7 +93,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
             anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
             transformOrigin={{ vertical: 'top', horizontal: 'right' }}
           >
-            <Box sx={{ p: 2, maxWidth: 'min(420px, calc(100vw - 24px))', overflowX: 'auto' }}>
+            <Box sx={{ p: 2, maxWidth: 'min(680px, calc(100vw - 24px))', overflowX: 'auto' }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                 {t('chat.stats.title')}
               </Typography>
@@ -99,33 +103,47 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
                     <TableCell>{t('chat.stats.node')}</TableCell>
                     <TableCell align="right">{t('chat.stats.prompt')}</TableCell>
                     <TableCell align="right">{t('chat.stats.completion')}</TableCell>
+                    <TableCell align="right">{t('chat.stats.cachedRead')}</TableCell>
+                    <TableCell align="right">{t('chat.stats.cacheWrite')}</TableCell>
                     <TableCell align="right">{t('chat.stats.total')}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {byNode.map(([nodeId, n]) => (
-                    <TableRow key={nodeId}>
-                      <TableCell>
-                        <Tooltip title={nodeId}>
-                          <span>{nodeLabel(nodeId)}</span>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell align="right">{formatNumber(n.promptTokens)}</TableCell>
-                      <TableCell align="right">{formatNumber(n.completionTokens)}</TableCell>
-                      <TableCell align="right">{formatNumber(n.totalTokens)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {byNode.map(([nodeId, n]) => {
+                    const nodeMeter = summarizeTokenMeter(n);
+                    return (
+                      <TableRow key={nodeId}>
+                        <TableCell>
+                          <Tooltip title={nodeId}>
+                            <span>{nodeLabel(nodeId)}</span>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.freshPromptTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.completionTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.cacheReadTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.cacheWriteTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.meterTotalTokens)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                   <TableRow>
                     <TableCell sx={{ fontWeight: 'bold' }}>{t('chat.stats.total')}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.promptTokens)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(freshPrompt)}</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.completionTokens)}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.totalTokens)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(cachedReads)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(cacheWrites)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(freshTotal)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
               {cachedReads > 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                   {t('chat.stats.cacheHelp', { cached: formatNumber(cachedReads), fresh: formatNumber(freshTotal) })}
+                </Typography>
+              )}
+              {cacheWrites > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {t('chat.stats.cacheWriteHelp', { written: formatNumber(cacheWrites) })}
                 </Typography>
               )}
             </Box>

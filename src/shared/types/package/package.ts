@@ -15,6 +15,14 @@
  */
 import type { Flow } from '../flow/flow';
 import type { PlannedExecution, TriggerConfig, WebhookTriggerConfig } from '../plannedExecution/plannedExecution';
+import type {
+  PersonaAutonomyLevel,
+  PersonaInterruptionPolicy,
+  PersonaPresentation,
+  RoleBehaviorSlot,
+  RoleDefinition,
+  RoleVersion,
+} from '../enduringAgent/enduringAgent';
 import type { PackageSecret } from './secrets';
 import type {
   EnvDeclaration,
@@ -84,7 +92,6 @@ export interface PackagedMcpServer {
   name: string;
   transport: PackagedMcpTransport;
   disabled?: boolean;
-  autoApprove?: string[];
   folder?: string;
   installOrigin: McpInstallOrigin;
   envDeclarations: EnvDeclaration[];
@@ -138,9 +145,37 @@ export type PackagedTrigger =
  * `flowId` expressed as a package-internal flow reference and the webhook token
  * (and similar per-instance state) excluded.
  */
-export type PackagedPlannedExecution = Omit<PlannedExecution, 'trigger'> & {
+export type PackagedPlannedExecution = Omit<
+  PlannedExecution,
+  'trigger' | 'personaId' | 'behaviorSlotKey'
+> & {
   trigger: PackagedTrigger;
 };
+
+/** A reusable, unbound Behavior template. Flow-authored tool authority is preserved verbatim. */
+export interface PackagedBehaviorTemplate extends RoleBehaviorSlot {
+  id: string;
+}
+
+/** A reusable Role blueprint with its immutable Behavior templates embedded in each version. */
+export interface PackagedRoleTemplate {
+  definition: RoleDefinition;
+  versions: RoleVersion[];
+}
+
+/**
+ * Reusable Persona configuration only. Living identity and private state are
+ * deliberately absent: no Persona id, memory, activity, account, grant,
+ * conversation, mailbox, lease, credential, or workspace binding may appear.
+ */
+export interface PackagedPersonaTemplate {
+  name: string;
+  roleVersionId: string;
+  mission?: string;
+  presentation?: PersonaPresentation;
+  autonomyLevel: PersonaAutonomyLevel;
+  interruptionPolicy: PersonaInterruptionPolicy;
+}
 
 /**
  * The FLUJO package manifest, v1. A single JSON document (the registry stores
@@ -167,4 +202,8 @@ export interface FlujoPackage {
   mcpServers: PackagedMcpServer[];
   flows: PackagedFlow[];
   plannedExecutions: PackagedPlannedExecution[];
+  /** Optional additive Phase 8 fields; legacy Flow-only v1 packages remain valid. */
+  roleTemplates?: PackagedRoleTemplate[];
+  behaviorTemplates?: PackagedBehaviorTemplate[];
+  personaTemplates?: PackagedPersonaTemplate[];
 }

@@ -31,7 +31,14 @@ import {
   PromptRefKind,
   PromptReferenceSuggestion,
   createPromptReferenceSuggestion,
+  encodeDynamicReference,
 } from '@/utils/shared/promptRefs';
+import { flowService } from '@/frontend/services/flow';
+import { modelService } from '@/frontend/services/model';
+import { chatService } from '@/frontend/services/chat';
+import { mcpService } from '@/frontend/services/mcp';
+import { extractUiResourceUri, isMcpAppMimeType, isUiResourceUri } from '@/shared/utils/mcpApps';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import './PromptBuilder/promptBuilder.css';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -58,6 +65,12 @@ export interface GlobalReferenceEditorProps {
   containerSx?: Record<string, unknown>;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
+  /** Load the cross-application entity/file hitlist in addition to local refs. */
+  enhancedHitlist?: boolean;
+  /** Direction in which the completion hitlist opens relative to the editor. */
+  hitlistPlacement?: 'top' | 'bottom';
+  /** Optional roots used by `@@` file search; configured MCP roots are the fallback. */
+  workspaceRoots?: string[];
 }
 
 interface ReferenceElement {
@@ -116,29 +129,181 @@ export function filterGlobalNames(globalNames: string[], query: string): string[
 /** Detect an ordinary-text `@query` immediately before the caret. */
 export function findAtCompletion(text: string, offset = text.length): AtCompletion | null {
   const prefix = text.slice(0, offset);
-  const match = prefix.match(/(?:^|\s)@([^\s@{}]*)$/);
+  const match = prefix.match(/(?:^|\s)(@@?)([^\s@{}]*)$/);
   if (!match || match.index === undefined) return null;
   const atOffset = match.index + (match[0].startsWith('@') ? 0 : 1);
-  return { query: match[1], start: atOffset, end: offset };
+  return { query: `${match[1] === '@@' ? '@' : ''}${match[2]}`, start: atOffset, end: offset };
+}
+
+type HitlistScope = 'all' | 'conversation' | 'flow' | 'model' | 'app' | 'file';
+
+function parseHitlistQuery(query: string): { scope: HitlistScope; query: string } {
+  if (query.startsWith('@')) return { scope: 'file', query: query.slice(1) };
+  const prefix: Record<string, HitlistScope> = { c: 'conversation', f: 'flow', m: 'model', a: 'app' };
+  const scope = prefix[query[0]?.toLocaleLowerCase()];
+  return scope ? { scope, query: query.slice(1) } : { scope: 'all', query };
+}
+
+function fuzzyScore(haystack: string, needle: string): number | null {
+  const text = haystack.toLocaleLowerCase();
+  const query = needle.trim().toLocaleLowerCase();
+  if (!query) return 0;
+  const contiguous = text.indexOf(query);
+  if (contiguous >= 0) return contiguous;
+  let at = 0;
+  let score = 100;
+  for (const char of query) {
+    const found = text.indexOf(char, at);
+    if (found < 0) return null;
+    score += found - at;
+    at = found + 1;
+  }
+  return score;
 }
 
 export function filterReferenceSuggestions(
   suggestions: PromptReferenceSuggestion[],
   query: string,
 ): PromptReferenceSuggestion[] {
-  const lowered = query.toLocaleLowerCase();
   const seen = new Set<string>();
   return suggestions
-    .filter((item) => {
+    .map((item) => ({
+      item,
+      score: fuzzyScore(`${item.label} ${item.name} ${item.server} ${item.description ?? ''} ${item.searchText ?? ''}`, query),
+    }))
+    .filter(({ item, score }) => {
+      if (score === null) return false;
       if (seen.has(item.value)) return false;
       seen.add(item.value);
-      const haystack = `${item.label} ${item.name} ${item.server} ${item.description ?? ''}`.toLocaleLowerCase();
-      return haystack.includes(lowered);
+      return true;
     })
     .sort((a, b) => {
-      const kindOrder = { tool: 0, resource: 1, global: 2, runres: 3 } as const;
-      return kindOrder[a.kind] - kindOrder[b.kind] || a.label.localeCompare(b.label);
-    });
+      const kindOrder: Record<PromptRefKind, number> = { tool: 0, resource: 1, global: 2, runres: 3, mention: 4 };
+      return (a.score ?? 0) - (b.score ?? 0)
+        || kindOrder[a.item.kind] - kindOrder[b.item.kind]
+        || a.item.label.localeCompare(b.item.label);
+    })
+    .map(({ item }) => item);
+}
+
+const builtInMentionSuggestions = [
+  ['conversation', 'Current conversation'],
+  ['flows', 'Current flow'],
+  ['node', 'Current node'],
+  ['model', 'Current model'],
+  ['app', 'Current MCP app/server'],
+  ['time', 'Current local time'],
+  ['date', 'Current local date'],
+  ['folder', 'Current flow folder'],
+] as const;
+
+const hitlistCache = new Map<string, { expires: number; suggestions: PromptReferenceSuggestion[]; roots: string[] }>();
+
+function appNameFromUri(uri: string): string {
+  const tail = uri.replace(/^ui:\/\//i, '').split('/').filter(Boolean).at(-1);
+  if (!tail) return uri;
+  try {
+    return decodeURIComponent(tail).replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  } catch {
+    return tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+}
+
+async function loadEnhancedHitlist(): Promise<{ suggestions: PromptReferenceSuggestion[]; roots: string[] }> {
+  const workspace = getSelectedWorkspace();
+  const cached = hitlistCache.get(workspace);
+  if (cached && cached.expires > Date.now()) return cached;
+  const [flows, models, conversationPage, configsResult] = await Promise.all([
+    flowService.loadFlows().catch(() => []),
+    modelService.loadModels().catch(() => []),
+    chatService.listConversationPage({ limit: 50 }).catch(() => ({ items: [], total: 0, hasMore: false })),
+    mcpService.loadServerConfigs().catch(() => []),
+  ]);
+  const configs = Array.isArray(configsResult) ? configsResult : [];
+  const discoveredApps = (await Promise.all(configs
+    .filter((config) => config.disabled !== true && config.enableMcpApps === true)
+    .map(async (config) => {
+      const [resourceResult, toolResult] = await Promise.all([
+        mcpService.listServerResources(config.name).catch(() => ({ resources: [] })),
+        mcpService.listServerTools(config.name).catch(() => ({ tools: [] })),
+      ]);
+      const apps = new Map<string, { name: string; description?: string }>();
+      for (const resource of Array.isArray(resourceResult.resources) ? resourceResult.resources : []) {
+        if (!isUiResourceUri(resource.uri) || !isMcpAppMimeType(resource.mimeType)) continue;
+        apps.set(resource.uri, {
+          name: resource.title || resource.name || appNameFromUri(resource.uri),
+          description: resource.description,
+        });
+      }
+      for (const tool of Array.isArray(toolResult.tools) ? toolResult.tools : []) {
+        const uri = extractUiResourceUri(tool._meta);
+        if (uri && !apps.has(uri)) apps.set(uri, { name: appNameFromUri(uri) });
+      }
+      return [...apps].map(([uri, app]) => ({ ...app, uri, serverName: config.name }));
+    }))).flat();
+  const suggestions: PromptReferenceSuggestion[] = [
+    ...builtInMentionSuggestions.map(([kind, description]) => ({
+      kind: 'mention' as const,
+      server: '',
+      name: `@${kind}`,
+      label: `@${kind}`,
+      value: `@${kind}`,
+      description,
+      category: 'builtin' as const,
+    })),
+    ...flows.map((flow) => ({
+      kind: 'mention' as const,
+      server: '',
+      name: flow.id,
+      label: flow.name,
+      value: encodeDynamicReference('flows', flow.id),
+      description: flow.description || flow.id,
+      category: 'flow' as const,
+    })),
+    ...models.map((model) => ({
+      kind: 'mention' as const,
+      server: '',
+      name: model.id,
+      label: model.displayName || model.name,
+      value: encodeDynamicReference('model', model.id),
+      description: model.description || model.id,
+      category: 'model' as const,
+    })),
+    ...configs.map((config) => ({
+      kind: 'mention' as const,
+      server: config.name,
+      name: config.name,
+      label: config.name,
+      value: encodeDynamicReference('app', config.name),
+      description: 'MCP server',
+      category: 'mcpserver' as const,
+    })),
+    ...discoveredApps.map((app) => ({
+      kind: 'mention' as const,
+      server: app.serverName,
+      name: app.uri,
+      label: app.name,
+      value: encodeDynamicReference('app', app.uri),
+      description: app.description || `${app.serverName} · ${app.uri}`,
+      searchText: app.serverName,
+      category: 'app' as const,
+    })),
+    ...conversationPage.items.map((conversation) => ({
+      kind: 'mention' as const,
+      server: '',
+      name: conversation.id,
+      label: conversation.title,
+      value: encodeDynamicReference('conversation', conversation.id),
+      description: conversation.id,
+      category: 'conversation' as const,
+    })),
+  ];
+  const roots = [...new Set(configs.flatMap((config) => (
+    Array.isArray(config.roots) && config.roots.length > 0 ? config.roots : [config.rootPath]
+  )).filter((root): root is string => typeof root === 'string' && root.trim().length > 0))];
+  const result = { expires: Date.now() + 30_000, suggestions, roots };
+  hitlistCache.set(workspace, result);
+  return result;
 }
 
 const lineToChildren = (line: string): ParagraphElement['children'] => {
@@ -319,6 +484,9 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   containerSx,
   onKeyDown,
   onPaste,
+  enhancedHitlist = false,
+  hitlistPlacement = 'bottom',
+  workspaceRoots,
 }, ref) => {
   const { t } = useI18n();
   const editor = useMemo(() => withHistory(withReferencePills(withReact(createEditor()))), []);
@@ -327,13 +495,29 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   const [activeIndex, setActiveIndex] = useState(0);
   const [revision, setRevision] = useState(0);
   const applyingExternalValue = useRef(false);
+  const [enhancedSuggestions, setEnhancedSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  const [configuredRoots, setConfiguredRoots] = useState<string[]>([]);
+  const [asyncSuggestions, setAsyncSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+
+  useEffect(() => {
+    // Entity/app discovery can fan out to several services. Load it on the
+    // first ordinary `@` completion instead of on every mounted prompt field.
+    if (!enhancedHitlist || activeCompletion?.mode !== 'at') return;
+    let cancelled = false;
+    void loadEnhancedHitlist().then((result) => {
+      if (cancelled) return;
+      setEnhancedSuggestions(result.suggestions);
+      setConfiguredRoots(result.roots);
+    });
+    return () => { cancelled = true; };
+  }, [activeCompletion?.mode, enhancedHitlist]);
   const pickerSuggestions = useMemo(() => {
     const globals = globalNames.map((name) => createPromptReferenceSuggestion(
       { kind: 'global', server: '', name },
       name,
     ));
-    return filterReferenceSuggestions([...(suggestions ?? []), ...globals], '');
-  }, [globalNames, suggestions]);
+    return filterReferenceSuggestions([...(suggestions ?? []), ...globals, ...enhancedSuggestions], '');
+  }, [enhancedSuggestions, globalNames, suggestions]);
   const validatedValues = useMemo(
     () => suggestions ? new Set(pickerSuggestions.map((item) => item.value)) : null,
     [pickerSuggestions, suggestions],
@@ -358,10 +542,13 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       return;
     }
     const mode = atCompletion ? 'at' : 'global';
+    const parsedQuery = parseHitlistQuery(completion.query);
     const source = mode === 'at'
-      ? pickerSuggestions
+      ? pickerSuggestions.filter((item) => parsedQuery.scope === 'all'
+        || item.category === parsedQuery.scope
+        || (parsedQuery.scope === 'file' && item.category === 'folder'))
       : pickerSuggestions.filter((item) => item.kind === 'global');
-    const items = filterReferenceSuggestions(source, completion.query);
+    const items = filterReferenceSuggestions(source, mode === 'at' ? parsedQuery.query : completion.query);
     setActiveIndex(0);
     setActiveCompletion({
       ...completion,
@@ -374,6 +561,87 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     });
   }, [editor, pickerSuggestions]);
 
+  useEffect(() => {
+    if (!enhancedHitlist || activeCompletion?.mode !== 'at') {
+      setAsyncSuggestions([]);
+      return;
+    }
+    const parsed = parseHitlistQuery(activeCompletion.query);
+    if ((parsed.scope !== 'conversation' && parsed.scope !== 'file') || !parsed.query.trim()) {
+      setAsyncSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (parsed.scope === 'conversation') {
+        void chatService.listConversationPage({ limit: 50, search: parsed.query, dimension: 'content' })
+          .then((page) => page.items.map((conversation) => ({
+            kind: 'mention' as const,
+            server: '',
+            name: conversation.id,
+            label: conversation.title,
+            value: encodeDynamicReference('conversation', conversation.id),
+            description: conversation.id,
+            // The backend matched this query against message content. Preserve
+            // that match when the shared fuzzy filter ranks the returned rows.
+            searchText: parsed.query,
+            category: 'conversation' as const,
+          })))
+          .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
+          .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
+        return;
+      }
+      const roots = workspaceRoots?.length ? workspaceRoots : configuredRoots;
+      const params = new URLSearchParams({ q: parsed.query });
+      if (roots.length > 0) params.set('roots', JSON.stringify(roots));
+      void fetch(`/api/reference-search/files?${params.toString()}`)
+        .then((response) => response.ok ? response.json() : { items: [] })
+        .then((result) => (Array.isArray(result.items) ? result.items : []).map((item: { path: string; name: string; isDirectory: boolean }) => ({
+          kind: 'mention' as const,
+          server: '',
+          name: item.path,
+          label: item.name,
+          value: encodeDynamicReference(item.isDirectory ? 'folder' : 'file', item.path),
+          description: item.path,
+          category: item.isDirectory ? 'folder' as const : 'file' as const,
+        })))
+        .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
+        .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
+    }, 160);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeCompletion?.mode, activeCompletion?.query, configuredRoots, enhancedHitlist, workspaceRoots]);
+
+  // Refresh an already-open picker when cached entities or async content/file
+  // results arrive. This also clears stale remote matches when a later query has
+  // no results, without requiring another editor keystroke.
+  useEffect(() => {
+    if (!activeCompletion) return;
+    const parsed = parseHitlistQuery(activeCompletion.query);
+    const source = activeCompletion.mode === 'at'
+      ? pickerSuggestions.filter((item) => parsed.scope === 'all'
+        || item.category === parsed.scope
+        || (parsed.scope === 'file' && item.category === 'folder'))
+      : pickerSuggestions.filter((item) => item.kind === 'global');
+    const remote = activeCompletion.mode === 'at'
+      && (parsed.scope === 'conversation' || parsed.scope === 'file')
+      ? asyncSuggestions
+      : [];
+    const items = filterReferenceSuggestions(
+      [...source, ...remote],
+      activeCompletion.mode === 'at' ? parsed.query : activeCompletion.query,
+    );
+    setActiveCompletion((current) => {
+      if (!current
+        || current.mode !== activeCompletion.mode
+        || current.query !== activeCompletion.query
+        || current.items.length === items.length
+          && current.items.every((item, index) => item.value === items[index]?.value)) {
+        return current;
+      }
+      return { ...current, items };
+    });
+  }, [activeCompletion?.mode, activeCompletion?.query, asyncSuggestions, pickerSuggestions]);
+
   const chooseSuggestion = useCallback((item: PromptReferenceSuggestion) => {
     if (!activeCompletion) return;
     Transforms.select(editor, activeCompletion.range);
@@ -384,26 +652,53 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     ReactEditor.focus(editor);
   }, [activeCompletion, editor]);
 
+  // ReactEditor.focus throws when the editor is not (yet) attached to the DOM, which
+  // callers should never have to care about.
+  const safeFocus = useCallback(() => {
+    try {
+      ReactEditor.focus(editor);
+    } catch {
+      /* editor not mounted */
+    }
+  }, [editor]);
+
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
       const parsed = parsePromptRefPill(text);
       if (parsed) insertReference(editor, parsed);
       else editor.insertText(text);
       onChange(serializeReferenceValue(editor.children as Descendant[]));
-      ReactEditor.focus(editor);
+      safeFocus();
     },
-    focus: () => ReactEditor.focus(editor),
-  }), [editor, onChange]);
+    focus: safeFocus,
+  }), [editor, onChange, safeFocus]);
 
   useEffect(() => {
     const current = serializeReferenceValue(editor.children as Descendant[]);
     const normalized = serializeReferenceValue(deserializeReferenceValue(value || ''));
     if (current === normalized) return;
+    // Replacing the content from outside used to drop the selection, which blurs the
+    // contenteditable — that is what made the chat composer lose focus after every
+    // send. When the user is still in the editor we keep focus and park the caret at
+    // the end of the new content instead.
+    const wasFocused = ReactEditor.isFocused(editor);
     applyingExternalValue.current = true;
     editor.children = deserializeReferenceValue(value || '') as typeof editor.children;
-    editor.selection = null;
+    const end = Editor.end(editor, []);
+    editor.selection = wasFocused ? { anchor: end, focus: end } : null;
     editor.onChange();
     setRevision((currentRevision) => currentRevision + 1);
+    if (!wasFocused) return;
+    // Slate writes the DOM selection in a layout effect; refocus afterwards so the
+    // caret is actually visible and the next keystroke lands in the editor.
+    const frame = requestAnimationFrame(() => {
+      try {
+        ReactEditor.focus(editor);
+      } catch {
+        /* editor unmounted or detached — nothing to focus */
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [editor, value]);
 
   const handleChange = useCallback((nodes: Descendant[]) => {
@@ -472,6 +767,22 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     <Box sx={{ position: 'relative', width: '100%', ...containerSx }} data-revision={revision}>
       <Box
         className={bare ? 'global-reference-editor bare' : 'global-reference-editor'}
+        // Clicks that land on the frame's padding (not on the text line itself) used to
+        // be swallowed, so the first click of a click-to-type looked like it did nothing.
+        onMouseDown={(event) => {
+          if (disabled) return;
+          if (event.target !== event.currentTarget) return;
+          event.preventDefault();
+          try {
+            // Focus first: ReactEditor.focus defers itself while the editor has
+            // pending operations, so selecting before focusing would only focus a
+            // tick later.
+            ReactEditor.focus(editor);
+            Transforms.select(editor, Editor.end(editor, []));
+          } catch {
+            /* editor not mounted yet */
+          }
+        }}
         sx={{
           border: bare ? 'none' : '1px solid',
           borderColor: 'rgba(0, 0, 0, 0.23)',
@@ -512,10 +823,11 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
           sx={{
             position: 'absolute',
             zIndex: 1500,
-            top: '100%',
+            ...(hitlistPlacement === 'top'
+              ? { bottom: '100%', mb: 0.5 }
+              : { top: '100%', mt: 0.5 }),
             left: 0,
             right: 0,
-            mt: 0.5,
             maxHeight: 240,
             overflowY: 'auto',
           }}
@@ -525,8 +837,16 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
               <Typography variant="body2" color="text.secondary">{t('references.none')}</Typography>
             </Box>
           ) : activeCompletion.items.map((item, index) => {
-            const previousKind = activeCompletion.items[index - 1]?.kind;
-            const groupLabel = item.kind === 'tool'
+            const groupKey = item.category || item.kind;
+            const previousGroupKey = activeCompletion.items[index - 1]?.category || activeCompletion.items[index - 1]?.kind;
+            const groupLabel = item.category === 'conversation' ? 'Conversations'
+              : item.category === 'flow' ? 'Flows'
+              : item.category === 'model' ? 'Models'
+                  : item.category === 'mcpserver' ? 'MCP servers'
+                    : item.category === 'app' ? 'Apps'
+                    : item.category === 'file' || item.category === 'folder' ? 'Files & folders'
+                      : item.category === 'builtin' ? 'Current context'
+                        : item.kind === 'tool'
               ? t('references.tools')
               : item.kind === 'resource'
                 ? t('references.resources')
@@ -535,7 +855,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
                   : t('references.temporaryData');
             return (
               <React.Fragment key={item.value}>
-                {item.kind !== previousKind && (
+                {groupKey !== previousGroupKey && (
                   <Typography
                     component="div"
                     variant="overline"

@@ -25,6 +25,7 @@ jest.mock('@/backend/services/mcp', () => ({
     setNodeRoots: jest.fn(),
     setToolSchemaHash: jest.fn(),
     getClientGeneration: jest.fn(() => 1),
+    loadServerConfigs: jest.fn(),
   },
 }));
 
@@ -51,6 +52,7 @@ const mockService = mcpService as unknown as {
   getServerStatus: jest.Mock;
   setToolSchemaHash: jest.Mock;
   getClientGeneration: jest.Mock;
+  loadServerConfigs: jest.Mock;
 };
 
 const mcpNode = (boundServer: string, enabledTools: string[]) => ({
@@ -63,6 +65,7 @@ beforeEach(() => {
   // Default: no resources (graceful fallback for all existing tests)
   mockService.listServerResources?.mockResolvedValue({ resources: [] });
   mockService.listServerResourceTemplates?.mockResolvedValue({ resourceTemplates: [] });
+  mockService.loadServerConfigs.mockResolvedValue([]);
 });
 
 describe('ToolHandler.processMCPNodes', () => {
@@ -119,6 +122,50 @@ describe('ToolHandler.processMCPNodes', () => {
     expect(result.error.code).toBe('server_connection_failed');
     // We must NOT have proceeded to list tools after a failed connect.
     expect(mockService.listServerTools).not.toHaveBeenCalled();
+  });
+
+  it('hides merged fixed parameters from the model schema and carries their effective values', async () => {
+    mockService.connectServer.mockResolvedValue({ success: true });
+    mockService.loadServerConfigs.mockResolvedValue([{
+      name: 'demo-mcp-server',
+      toolParameterPresets: { demo_search: { tenant: '${global:TENANT}', limit: 10 } },
+    }]);
+    mockService.listServerTools.mockResolvedValue({
+      tools: [{
+        name: 'demo_search',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tenant: { type: 'string' },
+            limit: { type: 'integer' },
+            query: { type: 'string' },
+          },
+          required: ['tenant', 'query'],
+        },
+      }],
+    });
+
+    const result = await ToolHandler.processMCPNodes({
+      mcpNodes: [{
+        id: 'mcp-node-1',
+        properties: {
+          boundServer: 'demo-mcp-server',
+          enabledTools: ['demo_search'],
+          toolParameterPresets: { demo_search: { limit: 25 } },
+        },
+      }] as any,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('expected success');
+    expect(result.value.availableTools[0]).toMatchObject({
+      presetArgs: { tenant: '${global:TENANT}', limit: 25 },
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    });
   });
 
   it('propagates a tool-listing failure instead of silently returning no tools', async () => {

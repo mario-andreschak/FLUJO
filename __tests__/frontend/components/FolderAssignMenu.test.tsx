@@ -1,5 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import React, { useState } from 'react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+// FolderAssignMenu's new-folder dialog now renders DialogHeaderActions, which
+// pulls in AskFlujoButton (useAskFlujo()) — mock the context so it doesn't
+// throw outside an AskFlujoProvider (#369).
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 
 function FolderMenuHarness({

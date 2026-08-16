@@ -42,7 +42,10 @@ import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRounded';
 
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { Model } from '@/shared/types';
+import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import {
   buildGuidedModels,
@@ -148,6 +151,15 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     accountLabel: 'models.wizard.requestyPaid.account',
     keyLabel: 'models.wizard.requestyKey',
     note: 'models.wizard.requestyPaid.note',
+  },
+  azure: {
+    eyebrow: 'models.wizard.copy.azure',
+    title: 'models.wizard.azure.title',
+    summary: 'models.wizard.azure.summary',
+    accountUrl: 'https://ai.azure.com/',
+    accountLabel: 'models.wizard.azure.account',
+    keyLabel: 'models.wizard.azure.key',
+    note: 'models.wizard.azure.note',
   },
   'claude-subscription': {
     eyebrow: 'models.wizard.copy.claudeSubscription',
@@ -276,6 +288,9 @@ export default function ModelConnectionWizard({
   const [experience, setExperience] = useState<Experience>('beginner');
   const [kind, setKind] = useState<GuidedConnectionKind | null>(null);
   const [apiKey, setApiKey] = useState('');
+  const [azureEndpoint, setAzureEndpoint] = useState('');
+  const [azureDeployment, setAzureDeployment] = useState('');
+  const [azureApiVersion, setAzureApiVersion] = useState(AZURE_OPENAI_DEFAULT_API_VERSION);
   const [confirmedLogin, setConfirmedLogin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +313,9 @@ export default function ModelConnectionWizard({
     setExperience('beginner');
     setKind(null);
     setApiKey('');
+    setAzureEndpoint('');
+    setAzureDeployment('');
+    setAzureApiVersion(AZURE_OPENAI_DEFAULT_API_VERSION);
     setConfirmedLogin(false);
     setBusy(false);
     setError(null);
@@ -431,7 +449,26 @@ export default function ModelConnectionWizard({
       setError(t('models.wizard.confirmCodexLogin'));
       return;
     }
-    await finish(buildGuidedModels({ kind, apiKey }));
+    if (kind === 'azure') {
+      const endpoint = azureEndpoint.trim();
+      if (!endpoint || !azureDeployment.trim() || !azureApiVersion.trim()) {
+        setError(t('models.wizard.azure.completeFields'));
+        return;
+      }
+      try {
+        if (new URL(endpoint).protocol !== 'https:') throw new Error('https');
+      } catch {
+        setError(t('models.wizard.azure.endpointInvalid'));
+        return;
+      }
+    }
+    await finish(buildGuidedModels({
+      kind,
+      apiKey,
+      azureEndpoint,
+      azureDeployment,
+      azureApiVersion,
+    }));
   };
 
   const connectOllama = async () => {
@@ -483,7 +520,12 @@ export default function ModelConnectionWizard({
   const verbose = experience === 'beginner';
   const progress = Math.min(96, step === 'welcome' ? 8 : step === 'success' ? 100 : 22 + history.length * 15);
   const setup = kind && kind !== 'ollama' ? setupCopy[kind] : null;
-  const bundleNames = useMemo(() => kind ? guidedBundleNames(kind) : [], [kind]);
+  const bundleNames = useMemo(
+    () => kind === 'azure'
+      ? [`Azure ${azureDeployment.trim() || 'OpenAI deployment'}`]
+      : kind ? guidedBundleNames(kind) : [],
+    [azureDeployment, kind],
+  );
   const ollamaModel = ollama?.suggestedModel || 'llama3.2:3b';
   const ollamaInstalled = Boolean(ollama?.installedModels?.includes(ollamaModel));
 
@@ -607,10 +649,11 @@ export default function ModelConnectionWizard({
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose ? t('models.wizard.paidVerbose') : t('models.wizard.paidBrief')}
           </Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
+          <ChoiceGrid>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
-          </Box>
+            <OptionCard icon={CloudQueueRoundedIcon} title="Azure OpenAI" description={t('models.wizard.azureDescription')} onClick={() => selectSetup('azure')} />
+          </ChoiceGrid>
         </>
       );
     }
@@ -670,6 +713,7 @@ export default function ModelConnectionWizard({
     if (step === 'setup' && kind && setup) {
       const isClaude = kind === 'claude-subscription';
       const isCodex = kind === 'codex-subscription';
+      const isAzure = kind === 'azure';
       return (
         <>
           <Typography variant="overline" color="primary.main">{t(setup.eyebrow)}</Typography>
@@ -698,6 +742,36 @@ export default function ModelConnectionWizard({
             <Button href={setup.accountUrl} target="_blank" rel="noreferrer" variant="outlined" startIcon={<OpenInNewRoundedIcon />} sx={{ mb: 2 }}>
               {setup.accountLabel ? t(setup.accountLabel) : null}
             </Button>
+          ) : null}
+
+          {isAzure ? (
+            <Stack spacing={1.2} sx={{ mb: 1 }}>
+              <TextField
+                fullWidth
+                required
+                label={t('models.wizard.azure.endpoint')}
+                placeholder="https://your-resource.openai.azure.com"
+                value={azureEndpoint}
+                onChange={(event) => { setAzureEndpoint(event.target.value); setError(null); }}
+                helperText={t('models.wizard.azure.endpointHelp')}
+              />
+              <TextField
+                fullWidth
+                required
+                label={t('models.wizard.azure.deployment')}
+                value={azureDeployment}
+                onChange={(event) => { setAzureDeployment(event.target.value); setError(null); }}
+                helperText={t('models.wizard.azure.deploymentHelp')}
+              />
+              <TextField
+                fullWidth
+                required
+                label={t('models.wizard.azure.apiVersion')}
+                value={azureApiVersion}
+                onChange={(event) => { setAzureApiVersion(event.target.value); setError(null); }}
+                helperText={t('models.wizard.azure.apiVersionHelp')}
+              />
+            </Stack>
           ) : null}
 
           {!isCodex ? (
@@ -772,7 +846,11 @@ export default function ModelConnectionWizard({
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />
             </Box>
-            <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
+            <Box display="flex" alignItems="center" gap={0.5}>
+              <AskFlujoButton />
+              <BugReportButton variant="icon" />
+              <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
+            </Box>
           </Box>
 
           {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}

@@ -56,6 +56,33 @@ describe('kvScopeId', () => {
     expect(kvScopeId('folder', { flowId: 'f9' })).toBe('flow-f9');
   });
 
+  it('keeps Persona default/folder KV scope on the canonical folder board', () => {
+    const attribution = {
+      personaId: 'persona-kv',
+      activityId: 'activity-kv',
+      behaviorRevisionId: 'revision-kv',
+    };
+    const first = kvScopeId('folder', {
+      flowId: 'behavior-root',
+      folder: 'Canonical folder',
+      personaAttribution: attribution,
+    });
+    const second = kvScopeId('folder', {
+      flowId: 'another-behavior-root',
+      folder: 'Canonical folder',
+      personaAttribution: attribution,
+    });
+    const differentFolder = kvScopeId('folder', {
+      flowId: 'behavior-root',
+      folder: 'Different folder',
+      personaAttribution: attribution,
+    });
+
+    expect(first).toMatch(/^folder-[a-f0-9]{32}$/);
+    expect(second).toBe(first);
+    expect(differentFolder).not.toBe(first);
+  });
+
   it('falls back to global when the flow id is absent/unsafe', () => {
     expect(kvScopeId('flow', {})).toBe('global');
   });

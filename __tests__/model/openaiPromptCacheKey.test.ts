@@ -61,6 +61,12 @@ const unknownParamError = () =>
     error: { message: 'Unrecognized request argument supplied: prompt_cache_key' },
   });
 
+const unknownCacheControlsError = () =>
+  Object.assign(new Error('Unsupported parameter: prompt_cache_options'), {
+    status: 400,
+    error: { message: 'Unsupported parameter: prompt_cache_options' },
+  });
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockCreate.mockResolvedValue(OK);
@@ -145,6 +151,55 @@ describe('prompt_cache_key rejection handling', () => {
 
     await expect(call(model('openai'), 'flujo-tabc123')).rejects.toThrow('too long');
     expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GPT-5.6 explicit cache-control negotiation', () => {
+  const markedMessages = [{
+    role: 'user' as const,
+    content: [{
+      type: 'text' as const,
+      text: 'stable history',
+      prompt_cache_breakpoint: { mode: 'explicit' as const },
+    }],
+  }];
+
+  it('sends explicit mode with marked content to official OpenAI', async () => {
+    await new OpenAiAdapter().createCompletion({
+      model: model('openai', 'https://api.openai.com/v1'),
+      apiKey: 'sk-test',
+      messages: markedMessages,
+      temperature: 0,
+      promptCacheKey: 'flujo-c123',
+      promptCacheMode: 'explicit',
+    });
+
+    expect(bodyOf()).toMatchObject({
+      prompt_cache_key: 'flujo-c123',
+      prompt_cache_options: { mode: 'explicit' },
+      messages: markedMessages,
+    });
+  });
+
+  it('retries once without options or markers when the endpoint rejects them', async () => {
+    const strictModel = model('openai', 'https://old-openai-gateway.example/v1');
+    mockCreate.mockRejectedValueOnce(unknownCacheControlsError()).mockResolvedValue(OK);
+
+    await new OpenAiAdapter().createCompletion({
+      model: strictModel,
+      apiKey: 'sk-test',
+      messages: markedMessages,
+      temperature: 0,
+      promptCacheKey: 'flujo-c123',
+      promptCacheMode: 'explicit',
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(bodyOf(0)).toHaveProperty('prompt_cache_options');
+    expect(JSON.stringify(bodyOf(0))).toContain('prompt_cache_breakpoint');
+    expect(bodyOf(1)).not.toHaveProperty('prompt_cache_options');
+    expect(JSON.stringify(bodyOf(1))).not.toContain('prompt_cache_breakpoint');
+    expect(bodyOf(1).prompt_cache_key).toBe('flujo-c123');
   });
 });
 

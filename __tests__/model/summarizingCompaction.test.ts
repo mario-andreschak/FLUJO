@@ -8,6 +8,7 @@ import {
   COMPACTION_SUMMARY_MARKER,
   COMPACTION_SUMMARY_SECTIONS,
   estimateTokens,
+  type CompactHistoryOptions,
 } from '@/backend/execution/flow/handlers/summarizingCompaction';
 
 jest.mock('@/utils/logger', () => {
@@ -155,29 +156,48 @@ describe('compactHistory orchestrator (issue #248)', () => {
     user('recent question'),
     assistant('recent answer'),
   ];
+  const options = (overrides: Partial<CompactHistoryOptions> = {}): CompactHistoryOptions => ({
+    keepTokens: 20,
+    conversationId: 'conv1',
+    projection: {
+      conversationId: 'conv1',
+      nodeId: 'node-x',
+      view: 'node-projected' as const,
+      handoffPolicy: 'strip-v1' as const,
+      version: 1 as const,
+    },
+    sourceDigest: 'source-digest',
+    projectionDigest: 'projection-digest',
+    policyVersion: 'summary-v1',
+    modelId: 'model-1',
+    ...overrides,
+  });
+  const summaryOf = (result: NonNullable<Awaited<ReturnType<typeof compactHistory>>>) =>
+    result.wireMessages.find(isCompactionSummary)!;
 
-  it('builds a marked summary head, records removed ids, and rebuilds the array', async () => {
+  it('builds a wire-only artifact without mutating canonical input', async () => {
     const messages = longHistory();
     const d = deps('## Objective\n- ship it');
-    const result = await compactHistory(messages, { keepTokens: 20, nodeId: 'node-x' }, d);
+    const before = JSON.parse(JSON.stringify(messages));
+    const result = await compactHistory(messages, options({ nodeId: 'node-x' }), d);
 
     expect(result).not.toBeNull();
-    expect(isCompactionSummary(result!.summaryMessage)).toBe(true);
-    expect(result!.summaryMessage.processNodeId).toBe('node-x');
-    expect(result!.summaryMessage.id).toBe('summary-id');
-    // head + recent tail; older messages replaced
-    expect(result!.newMessages[0].id).toBe('summary-id');
-    expect(result!.newMessages[result!.newMessages.length - 1].content).toBe('recent answer');
-    expect(result!.removedIds).toEqual(expect.arrayContaining([messages[0].id, messages[1].id]));
+    expect(messages).toEqual(before);
+    const summary = summaryOf(result!);
+    expect(summary.processNodeId).toBe('node-x');
+    expect(result!.wireMessages[result!.wireMessages.length - 1].content).toBe('recent answer');
+    expect(result!.artifact.sourceDigest).toBe('source-digest');
+    expect(result).not.toHaveProperty('removedIds');
+    expect(result).not.toHaveProperty('newMessages');
   });
 
   it('aborts (no mutation) on an empty summary', async () => {
-    const result = await compactHistory(longHistory(), { keepTokens: 20 }, deps('   '));
+    const result = await compactHistory(longHistory(), options(), deps('   '));
     expect(result).toBeNull();
   });
 
   it('aborts (no mutation) when the model call throws', async () => {
-    const result = await compactHistory(longHistory(), { keepTokens: 20 }, {
+    const result = await compactHistory(longHistory(), options(), {
       summarize: jest.fn(async () => { throw new Error('boom'); }),
     });
     expect(result).toBeNull();
@@ -185,7 +205,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
 
   it('is a no-op when there is nothing old enough to summarize', async () => {
     const d = deps('summary');
-    const result = await compactHistory([user('a'), assistant('b')], { keepTokens: 100000 }, d);
+    const result = await compactHistory([user('a'), assistant('b')], options({ keepTokens: 100000 }), d);
     expect(result).toBeNull();
     expect(d.summarize).not.toHaveBeenCalled();
   });
@@ -199,7 +219,7 @@ describe('compactHistory orchestrator (issue #248)', () => {
     ];
     const summarize = jest.fn(async (_m: FlujoChatMessage[], _p: { system: string; user: string }) => 'merged anchor');
     const writeAnchor = jest.fn(async (_text: string) => 'flujo://run/conv1/anchor-1');
-    const result = await compactHistory(messages, { keepTokens: 20 }, {
+    const result = await compactHistory(messages, options(), {
       summarize,
       writeAnchor,
       now: () => 1,
@@ -209,23 +229,24 @@ describe('compactHistory orchestrator (issue #248)', () => {
     const promptArg = summarize.mock.calls[0][1];
     expect(promptArg!.user).toContain('old facts');
     // The anchor URI must be embedded in the head for recoverability.
-    expect(result!.summaryMessage.content).toContain('flujo://run/conv1/anchor-1');
+    expect(summaryOf(result!).content).toContain('flujo://run/conv1/anchor-1');
     expect(writeAnchor).toHaveBeenCalledTimes(1);
   });
 
   it('does not lose facts across two consecutive compactions (fact carried through)', async () => {
     // First compaction produces a head containing FACT_A.
-    const first = await compactHistory(longHistory(), { keepTokens: 20 }, {
+    const first = await compactHistory(longHistory(), options(), {
       summarize: jest.fn(async () => '## Important Details\n- FACT_A: /etc/config.yaml'),
       now: () => 1,
       uuid: () => 'sum1',
     });
-    expect(first!.summaryMessage.content).toContain('FACT_A: /etc/config.yaml');
+    const firstSummary = summaryOf(first!);
+    expect(firstSummary.content).toContain('FACT_A: /etc/config.yaml');
 
     // Second compaction over history that starts with the first summary head.
     const second = await compactHistory(
-      [first!.summaryMessage, user(bulk(4000)), assistant(bulk(4000)), user('recent')],
-      { keepTokens: 20 },
+      [firstSummary, user(bulk(4000)), assistant(bulk(4000)), user('recent')],
+      options({ sourceDigest: 'source-digest-2' }),
       {
         // A well-behaved model preserves the still-true fact from <previous-summary>.
         summarize: jest.fn(async (_m: FlujoChatMessage[], prompt: { system: string; user: string }) => {
@@ -236,8 +257,8 @@ describe('compactHistory orchestrator (issue #248)', () => {
         uuid: () => 'sum2',
       },
     );
-    expect(second!.summaryMessage.content).toContain('FACT_A: /etc/config.yaml');
-    expect(second!.summaryMessage.content).toContain('FACT_B: new');
+    expect(summaryOf(second!).content).toContain('FACT_A: /etc/config.yaml');
+    expect(summaryOf(second!).content).toContain('FACT_B: new');
   });
 });
 

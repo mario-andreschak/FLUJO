@@ -1,8 +1,17 @@
 import type { CallToolResult, Tool, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import type { Page } from 'patchright';
 import {
   BrowserMcpError,
   assertNavigationAllowed,
+  browserDiagnostics,
+  browserExtensions,
   closeSession,
+  createCaptureContext,
+  defaultViewport,
+  failureCategoryForCode,
   getSession,
   openSession,
   publicPageState,
@@ -11,9 +20,24 @@ import {
   timeoutMs,
   writeScreenshotArtifact,
   type BrowserErrorCode,
+  type BrowserFailureCategory,
   type BrowserSession,
 } from './runtime.js';
 import { BROWSER_APP_URI } from './resources.js';
+import {
+  captureDeterministicPng,
+  captureRegionPng,
+  evaluateElementMetrics,
+  finiteParameter,
+  navigateCaptureSource,
+  normalizeResolution,
+  resolutionFallbacks,
+  resolveCaptureSource,
+  sha256Hex,
+  writeCaptureArtifact,
+} from './capture.js';
+import { recordingStatus, startRecording, stopRecording } from './recording.js';
+import { prepareBrowserAudioStream } from './gateway.js';
 
 const MAX_TEXT_CHARS = 50_000;
 const MAX_SELECTOR_CHARS = 2_000;
@@ -52,12 +76,12 @@ export function browserToolDefinitions(): Tool[] {
   return [
     {
       name: 'browser_open',
-      description: 'Open or reuse an isolated incognito browser session, optionally navigating to an allowed HTTP(S) URL. Omitting sessionId reuses the most recently used live session, or creates one when none exists.',
+      description: 'Open a new browser session, or open/reuse the exact sessionId supplied. url may be remote, localhost, a bare hostname, or a local file path.',
       inputSchema: {
         type: 'object',
         properties: {
-          sessionId: { ...SESSION_PROPERTY, description: 'Optional stable id. Omit it to reuse the most recently used live session, or create one when none exists.' },
-          url: { type: 'string', description: 'Optional initial HTTP(S) URL.' },
+          sessionId: { ...SESSION_PROPERTY, description: 'Optional stable id. Omit it to create a fresh isolated session; supply it to open or reuse that exact session.' },
+          url: { type: 'string', description: 'Optional URL, bare hostname, localhost address, or local file path.' },
           timeoutMs: TIMEOUT_PROPERTY,
         },
         additionalProperties: false,
@@ -67,7 +91,7 @@ export function browserToolDefinitions(): Tool[] {
     },
     {
       name: 'browser_navigate',
-      description: 'Navigate an existing isolated browser session to an allowed HTTP(S) URL.',
+      description: 'Navigate the active browser to a remote URL, bare hostname, localhost address, or local file path. Only executable/non-browser URL schemes are rejected.',
       inputSchema: {
         type: 'object',
         properties: { sessionId: SESSION_PROPERTY, url: { type: 'string' }, timeoutMs: TIMEOUT_PROPERTY },
@@ -208,8 +232,132 @@ export function browserToolDefinitions(): Tool[] {
       _meta: APP_META,
     },
     {
+      name: 'browser_capture_page',
+      description: 'Capture a page as PNG. source may be a remote URL, localhost URL, local path, file:// URL, or inline HTML; omit source to capture the active session. Resolution presets such as 720p, 1080p, and 4k are accepted and safely adjusted when necessary.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', description: 'URL, localhost address, local path, file:// URL, or inline HTML. Omit to capture the active session.' },
+          sessionId: SESSION_PROPERTY,
+          resolution: { type: 'string', description: 'Preset or WIDTHxHEIGHT, for example 720p, 1080p, 4k, or 1600x900.' },
+          selector: { type: 'string', description: 'Optional CSS selector to capture only one element.' },
+          fullPage: { type: 'boolean', default: false },
+          outputPath: { type: 'string', description: 'Optional destination path, confined to the FLUJO data directory.' },
+        },
+        // Legacy url/html/filePath/width/height/etc. arguments remain accepted
+        // by the handler without cluttering the model-facing contract.
+        additionalProperties: true,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_capture_element_metrics',
+      description: 'Query per-selector layout metrics (bounding box, computed style, overflow/clipping flags, viewport visibility) without taking a screenshot.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          selectors: { type: 'array', items: { type: 'string', minLength: 1, maxLength: MAX_SELECTOR_CHARS }, minItems: 1, maxItems: 50 },
+          sessionId: SESSION_PROPERTY,
+          source: { type: 'string', description: 'Optional URL or local path to load before measuring.' },
+        },
+        required: ['selectors'],
+        additionalProperties: true,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_capture_region',
+      description: 'Capture a rectangular page region as PNG. source accepts remote URLs, localhost, or local paths; omit it to use the active session. Missing or out-of-range coordinates are safely normalized.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', description: 'Optional URL, localhost address, or local path.' },
+          sessionId: SESSION_PROPERTY,
+          region: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } },
+            description: 'Region in CSS pixels. Defaults to the visible viewport.',
+          },
+          outputPath: { type: 'string', description: 'Optional destination path, confined to the FLUJO data directory.' },
+        },
+        additionalProperties: true,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_record_start',
+      description: 'Start a sturdy browser recording and immediately return a sessionId. Optionally load source first and auto-stop after durationMs. Unsupported resolutions fall back automatically and are reported in warnings/effectiveResolution.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', description: 'Optional URL, localhost address, local path, or inline HTML to load before returning.' },
+          resolution: { type: 'string', description: 'Preset or WIDTHxHEIGHT, for example 720p, 1080p, 4k, or 1600x900.' },
+          audio: { type: 'boolean', default: true, description: 'Capture page audio into a WAV sidecar (and mux it in if ffmpeg is available).' },
+          durationMs: { type: 'number', description: 'Optional auto-stop delay. The start call still returns immediately; retrieve the artifact with stop or status.' },
+          outputPath: { type: 'string', description: 'Optional destination path for the finished artifact, confined to the FLUJO data directory.' },
+        },
+        additionalProperties: true,
+      },
+      annotations: INTERACTION_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_record_stop',
+      description: 'Stop and finalize a recording, or retrieve one that just auto-stopped. Returns usable artifact paths, recovery warnings, and the video itself as MCP media when small enough.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          recordingId: { ...SESSION_PROPERTY, description: 'Recording id returned by browser_record_start (same as its sessionId). Omit when exactly one recording is running.' },
+          sessionId: SESSION_PROPERTY,
+          outputPath: { type: 'string', description: 'Optional destination path for the finished artifact, confined to the FLUJO data directory.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_record_status',
+      description: 'Report recording, finalizing, or recently completed state. Completed status includes the artifact and embeds the video as MCP media when small enough.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          recordingId: SESSION_PROPERTY,
+          sessionId: SESSION_PROPERTY,
+        },
+        additionalProperties: false,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_diagnostics',
+      description: 'Report configured/actual browser mode, channel, headless state, persistence, locale, service-worker policy, and the active page fingerprint without opening a destination site.',
+      inputSchema: {
+        type: 'object',
+        properties: { sessionId: SESSION_PROPERTY },
+        additionalProperties: false,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_extensions',
+      description: 'List extensions installed in FLUJO\'s dedicated trusted Chrome profile, explicitly configured unpacked-extension directories, and currently active extension targets. Never reads the personal Chrome profile.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
       name: 'browser_close',
-      description: 'Close an isolated browser session and discard its cookies, storage, and temporary state.',
+      description: 'Close the session tab. Sandbox state is discarded; trusted-mode cookies and profile state remain in the dedicated persistent profile.',
       inputSchema: {
         type: 'object',
         properties: { sessionId: SESSION_PROPERTY },
@@ -228,13 +376,50 @@ function success(data: Record<string, unknown>, extraContent: CallToolResult['co
   };
 }
 
-function failure(code: BrowserErrorCode, message: string): CallToolResult {
-  const data = { success: false, error: { code, message } };
+function failure(
+  code: BrowserErrorCode,
+  message: string,
+  category?: BrowserFailureCategory,
+): CallToolResult {
+  const data = { success: false, error: { code, category: category ?? failureCategoryForCode(code), message } };
   return {
     isError: true,
     content: [{ type: 'text', text: JSON.stringify(data) }],
     structuredContent: data,
   };
+}
+
+async function recordingResult(data: Record<string, unknown>): Promise<CallToolResult> {
+  if (data.success === false) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: JSON.stringify(data) }],
+      structuredContent: data,
+    };
+  }
+  const outputPath = typeof data.outputPath === 'string' ? data.outputPath : undefined;
+  if (!outputPath || data.status !== 'stopped') return success(data);
+  const stat = await fs.stat(outputPath).catch(() => undefined);
+  const maxBytesRaw = Number(process.env.FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES);
+  const maxBytes = Number.isFinite(maxBytesRaw) && maxBytesRaw > 0 ? Math.trunc(maxBytesRaw) : 16 * 1024 * 1024;
+  if (!stat?.isFile() || stat.size <= 0) return success(data);
+  if (stat.size > maxBytes) {
+    const warnings = Array.isArray(data.warnings) ? [...data.warnings] : [];
+    warnings.push(`The ${stat.size}-byte video is available at outputPath but was not inlined into MCP because it exceeds the ${maxBytes}-byte transport limit.`);
+    return success({ ...data, warnings });
+  }
+  const mimeType = pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mp4')
+    ? 'video/mp4'
+    : (pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/webm');
+  const blob = (await fs.readFile(outputPath)).toString('base64');
+  return success(data, [{
+    type: 'resource',
+    resource: {
+      uri: pathToFileURL(outputPath).href,
+      mimeType,
+      blob,
+    },
+  }]);
 }
 
 function normalizedError(error: unknown): BrowserMcpError {
@@ -250,7 +435,8 @@ function normalizedError(error: unknown): BrowserMcpError {
   if (/Target page, context or browser has been closed|browser has disconnected/i.test(message)) {
     return new BrowserMcpError('BROWSER_UNAVAILABLE', 'The browser process became unavailable; open a new session.');
   }
-  return new BrowserMcpError('UNEXPECTED', 'The browser operation failed.');
+  const useful = message.trim().replace(/\s+/g, ' ').slice(0, 800);
+  return new BrowserMcpError('UNEXPECTED', useful ? `The browser operation failed: ${useful}` : 'The browser operation failed.');
 }
 
 function objectArgs(value: unknown): Record<string, unknown> {
@@ -271,13 +457,276 @@ function stringArg(args: Record<string, unknown>, key: string, maxLength = 100_0
 function finiteNumberArg(args: Record<string, unknown>, key: string, fallback?: number): number {
   const value = args[key];
   if (value === undefined && fallback !== undefined) return fallback;
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
     throw new BrowserMcpError('INVALID_ARGUMENT', `${key} must be a finite number.`);
   }
-  return value;
+  return parsed;
 }
 
-async function pageState(session: BrowserSession, timeout: number): Promise<Record<string, unknown>> {
+type CapturePageHandle = { page: Page; close: () => Promise<void> };
+
+function hasCaptureSource(args: Record<string, unknown>): boolean {
+  return ['source', 'url', 'html', 'filePath'].some((key) => typeof args[key] === 'string' && String(args[key]).trim().length > 0);
+}
+
+async function optionalCaptureSource(args: Record<string, unknown>) {
+  if (!hasCaptureSource(args)) return undefined;
+  return resolveCaptureSource({
+    source: args.source,
+    url: typeof args.url === 'string' ? args.url : undefined,
+    html: typeof args.html === 'string' ? args.html : undefined,
+    filePath: typeof args.filePath === 'string' ? args.filePath : undefined,
+    allowLocal: args.allowLocal === true,
+  });
+}
+
+/** Resolve the page a capture tool should operate on: an existing session's page, the active page, or an ephemeral context. */
+async function acquireCapturePage(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  viewport: { width: number; height: number; deviceScaleFactor?: number; colorScheme?: 'light' | 'dark' },
+  preferActive: boolean,
+): Promise<CapturePageHandle> {
+  if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
+    const session = getSession(args.sessionId);
+    return { page: session.page, close: async () => undefined };
+  }
+  if (preferActive) {
+    try {
+      const session = getSession(undefined);
+      return { page: session.page, close: async () => undefined };
+    } catch (error) {
+      if (!(error instanceof BrowserMcpError) || error.code !== 'NOT_FOUND') throw error;
+    }
+  }
+  const { context, page } = await createCaptureContext(signal, viewport);
+  return { page, close: () => context.close().catch(() => undefined) };
+}
+
+type CaptureToolResult = { data: Record<string, unknown>; image: { data: string; mimeType: string } };
+
+async function captureRegionOrPage(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  timeout: number,
+): Promise<CaptureToolResult> {
+  const resolution = normalizeResolution(args.resolution, args.width, args.height, {
+    defaultValue: { width: 1920, height: 1080 },
+    minWidth: 320,
+    minHeight: 240,
+    maxWidth: 3840,
+    maxHeight: 2160,
+  });
+  const rawScale = finiteParameter(args.deviceScaleFactor, 1);
+  const deviceScaleFactor = Math.min(3, Math.max(1, rawScale));
+  if (deviceScaleFactor !== rawScale) resolution.warnings.push(`deviceScaleFactor was adjusted to ${deviceScaleFactor}.`);
+  const colorScheme = args.colorScheme === 'dark' ? 'dark' : 'light';
+  const fullPage = args.fullPage === true;
+  let clipSelector = typeof args.selector === 'string' && args.selector.trim()
+    ? args.selector.trim()
+    : (typeof args.clipSelector === 'string' && args.clipSelector.trim() ? args.clipSelector.trim() : undefined);
+  if (clipSelector && clipSelector.length > MAX_SELECTOR_CHARS) {
+    resolution.warnings.push(`selector was shortened to ${MAX_SELECTOR_CHARS} characters.`);
+    clipSelector = clipSelector.slice(0, MAX_SELECTOR_CHARS);
+  }
+  const waitFor = typeof args.waitFor === 'string' && args.waitFor.length > 0 ? args.waitFor : undefined;
+  const source = await optionalCaptureSource(args);
+  const warnings = [...resolution.warnings, ...(source?.warnings ?? [])];
+  const attempts: string[] = [];
+  let lastError: unknown;
+
+  for (const candidate of resolutionFallbacks(resolution.effective).filter(({ width, height }) => width <= 3840 && height <= 2160)) {
+    const handle = await acquireCapturePage(
+      args,
+      signal,
+      { ...candidate, deviceScaleFactor, colorScheme },
+      !source,
+    );
+    try {
+      if (resolution.explicit && typeof handle.page.setViewportSize === 'function') {
+        await handle.page.setViewportSize(candidate).catch(() => undefined);
+      }
+      const { png, colorType } = await captureDeterministicPng(
+        handle.page,
+        source,
+        { fullPage, clipSelector, waitFor, timeoutMs: timeout },
+      );
+      const filePath = await writeCaptureArtifact(
+        typeof args.outputPath === 'string' ? args.outputPath : undefined,
+        ['captures', `${randomUUID()}.png`],
+        png,
+      );
+      if (attempts.length > 0) warnings.push(`Capture recovered at ${candidate.width}x${candidate.height} after ${attempts.length} failed attempt(s).`);
+      return {
+        data: {
+          success: true,
+          path: filePath,
+          requestedResolution: resolution.requested,
+          effectiveResolution: candidate,
+          width: candidate.width,
+          height: candidate.height,
+          deviceScaleFactor,
+          colorType,
+          fullPage,
+          selector: clipSelector ?? null,
+          bytes: png.length,
+          sha256: sha256Hex(png),
+          mimeType: 'image/png',
+          warnings,
+          ...(attempts.length ? { attempts } : {}),
+        },
+        image: { data: png.toString('base64'), mimeType: 'image/png' },
+      };
+    } catch (error) {
+      lastError = error;
+      attempts.push(`${candidate.width}x${candidate.height}: ${error instanceof Error ? error.message : 'capture failed'}`);
+    } finally {
+      await handle.close();
+    }
+  }
+  throw new BrowserMcpError(
+    'UNEXPECTED',
+    `Capture failed after safe resolution fallbacks. ${attempts.join(' | ') || (lastError instanceof Error ? lastError.message : '')}`,
+  );
+}
+
+async function captureRegionTool(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  timeout: number,
+): Promise<CaptureToolResult> {
+  const viewport = defaultViewport();
+  const region = args.region && typeof args.region === 'object' && !Array.isArray(args.region)
+    ? args.region as Record<string, unknown>
+    : args;
+  const rawX = finiteParameter(region.x, 0);
+  const rawY = finiteParameter(region.y, 0);
+  const x = Math.min(3839, Math.max(0, Math.round(rawX)));
+  const y = Math.min(2159, Math.max(0, Math.round(rawY)));
+  const rawWidth = finiteParameter(region.width, Math.max(1, viewport.width - x));
+  const rawHeight = finiteParameter(region.height, Math.max(1, viewport.height - y));
+  const width = Math.min(3840 - x, Math.max(1, Math.round(rawWidth)));
+  const height = Math.min(2160 - y, Math.max(1, Math.round(rawHeight)));
+  const warnings: string[] = [];
+  if (x !== rawX || y !== rawY || width !== rawWidth || height !== rawHeight) {
+    warnings.push(`Region was normalized to x=${x}, y=${y}, width=${width}, height=${height}.`);
+  }
+  const source = await optionalCaptureSource(args);
+  warnings.push(...(source?.warnings ?? []));
+  const { page, close } = await acquireCapturePage(args, signal, {
+    width: Math.min(3840, Math.max(viewport.width, x + width)),
+    height: Math.min(2160, Math.max(viewport.height, y + height)),
+  }, !source);
+  try {
+    const { png, colorType } = await captureRegionPng(page, source, { x, y, width, height }, timeout);
+    const filePath = await writeCaptureArtifact(
+      typeof args.outputPath === 'string' ? args.outputPath : undefined,
+      ['regions', `${randomUUID()}.png`],
+      png,
+    );
+    return {
+      data: {
+        success: true,
+        path: filePath,
+        x,
+        y,
+        width,
+        height,
+        colorType,
+        bytes: png.length,
+        sha256: sha256Hex(png),
+        mimeType: 'image/png',
+        warnings,
+      },
+      image: { data: png.toString('base64'), mimeType: 'image/png' },
+    };
+  } finally {
+    await close();
+  }
+}
+
+async function captureElementMetricsTool(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  timeout: number,
+): Promise<Record<string, unknown>> {
+  const rawSelectors = args.selectors;
+  if (!Array.isArray(rawSelectors) || rawSelectors.length === 0) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'Provide a non-empty "selectors" array.');
+  }
+  const selectors = rawSelectors
+    .map((value) => String(value))
+    .filter((value) => value.length > 0 && value.length <= MAX_SELECTOR_CHARS);
+  if (selectors.length === 0) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', `Each selector must be 1-${MAX_SELECTOR_CHARS} characters.`);
+  }
+  const hasSource = hasCaptureSource(args);
+
+  if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
+    const session = getSession(args.sessionId);
+    if (hasSource) {
+      const source = await optionalCaptureSource(args);
+      if (!source) throw new BrowserMcpError('INVALID_ARGUMENT', 'Could not resolve the supplied source.');
+      await navigateCaptureSource(session.page, source, timeout);
+    }
+    return { success: true, metrics: await evaluateElementMetrics(session.page, selectors) };
+  }
+
+  if (hasSource) {
+    const source = await optionalCaptureSource(args);
+    if (!source) throw new BrowserMcpError('INVALID_ARGUMENT', 'Could not resolve the supplied source.');
+    const { context, page } = await createCaptureContext(signal, defaultViewport());
+    try {
+      await navigateCaptureSource(page, source, timeout);
+      return { success: true, metrics: await evaluateElementMetrics(page, selectors), warnings: source.warnings };
+    } finally {
+      await context.close().catch(() => undefined);
+    }
+  }
+
+  const session = getSession(undefined);
+  return { success: true, metrics: await evaluateElementMetrics(session.page, selectors) };
+}
+
+type NavigationResponse = Awaited<ReturnType<Page['goto']>>;
+
+function siteBlockClassification(
+  status: number | undefined,
+  title: string,
+  text: string,
+  url: string,
+): Record<string, unknown> | undefined {
+  const challengeText = `${title}\n${text.slice(0, 4_000)}`;
+  const challengePattern = /just a moment|verify (?:that )?you are human|unusual traffic|ungewöhnlichen datenverkehr|tr[aá]fico inusual|trafic inhabituel|attention required|access denied|captcha|security check|request unsuccessful/i;
+  const challengeUrlPattern = /\/(?:sorry|captcha)(?:\/|$)|\/challenge(?:\/|$)|\/cdn-cgi\/challenge-platform(?:\/|$)/i;
+  if (status !== undefined && [401, 403, 407, 429, 451].includes(status)) {
+    return {
+      classification: 'site',
+      blocked: true,
+      status,
+      reason: `The destination returned HTTP ${status}; this was not blocked by FLUJO policy.`,
+    };
+  }
+  if (challengeUrlPattern.test(url) || challengePattern.test(challengeText)) {
+    return {
+      classification: 'site',
+      blocked: true,
+      ...(status !== undefined ? { status } : {}),
+      reason: 'The destination rendered an anti-bot, CAPTCHA, or access-denied challenge; this was not blocked by FLUJO policy.',
+    };
+  }
+  if (status !== undefined) {
+    return { classification: 'none', blocked: false, status };
+  }
+  return undefined;
+}
+
+async function pageState(
+  session: BrowserSession,
+  timeout: number,
+  response?: NavigationResponse,
+): Promise<Record<string, unknown>> {
   const [title, bodyText] = await Promise.all([
     session.page.title(),
     session.page.locator('body').innerText({ timeout }).catch(() => ''),
@@ -285,22 +734,33 @@ async function pageState(session: BrowserSession, timeout: number): Promise<Reco
   const text = bodyText.length > MAX_TEXT_CHARS
     ? `${bodyText.slice(0, MAX_TEXT_CHARS)}\n…[truncated]`
     : bodyText;
-  return { success: true, ...publicPageState(session), title, text };
+  const navigation = siteBlockClassification(response?.status(), title, text, session.page.url());
+  return {
+    success: true,
+    ...publicPageState(session),
+    title,
+    text,
+    ...(navigation ? { navigation } : {}),
+  };
 }
 
 async function navigate(session: BrowserSession, rawUrl: string, timeout: number, signal: AbortSignal): Promise<Record<string, unknown>> {
   const url = await assertNavigationAllowed(rawUrl);
+  // Install the main-world audio hook before page.goto: once a page has created
+  // its AudioContext or fired a media play event, it cannot be intercepted
+  // retroactively.
+  await prepareBrowserAudioStream(session.id);
   resetNavigationCounter(session);
   return runCancellable(session, signal, async () => {
     try {
-      await session.page.goto(url.href, { waitUntil: 'domcontentloaded', timeout });
+      const response = await session.page.goto(url.href, { waitUntil: 'domcontentloaded', timeout });
+      return pageState(session, timeout, response);
     } catch (error) {
       if (session.navigationBlocked) {
         throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation or one of its redirects was blocked by browser policy.');
       }
       throw error;
     }
-    return pageState(session, timeout);
   });
 }
 
@@ -317,7 +777,9 @@ export async function browserCallTool(
       const data = typeof args.url === 'string' && args.url.length > 0
         ? await navigate(session, args.url, timeout, signal)
         : { success: true, ...publicPageState(session) };
-      return success(data);
+      // Keep the session identity in the structured result at the process
+      // boundary; callers must not scrape the human-readable text payload.
+      return success({ ...data, sessionId: session.id });
     }
     if (name === 'browser_close') {
       let sessionId: string;
@@ -336,9 +798,66 @@ export async function browserCallTool(
       const closed = await closeSession(sessionId);
       return success({ success: true, sessionId, closed });
     }
+    if (name === 'browser_diagnostics') {
+      let session: BrowserSession | undefined;
+      if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
+        session = getSession(args.sessionId);
+      } else {
+        try {
+          session = getSession(undefined);
+        } catch (error) {
+          if (!(error instanceof BrowserMcpError) || error.code !== 'NOT_FOUND') throw error;
+        }
+      }
+      return success(await browserDiagnostics(session));
+    }
+    if (name === 'browser_extensions') {
+      return success(await browserExtensions());
+    }
+
+    const timeout = timeoutMs(args.timeoutMs);
+
+    if (name === 'browser_capture_page') {
+      const result = await captureRegionOrPage(args, signal, timeout);
+      return success(result.data, [{ type: 'image', data: result.image.data, mimeType: result.image.mimeType }]);
+    }
+    if (name === 'browser_capture_region') {
+      const result = await captureRegionTool(args, signal, timeout);
+      return success(result.data, [{ type: 'image', data: result.image.data, mimeType: result.image.mimeType }]);
+    }
+    if (name === 'browser_capture_element_metrics') {
+      return success(await captureElementMetricsTool(args, signal, timeout));
+    }
+    if (name === 'browser_record_start') {
+      return recordingResult(await startRecording(
+        {
+          source: args.source,
+          resolution: args.resolution,
+          width: args.width,
+          height: args.height,
+          audio: args.audio,
+          durationMs: args.durationMs,
+          outputPath: args.outputPath,
+          url: args.url,
+          html: args.html,
+          filePath: args.filePath,
+          timeoutMs: args.timeoutMs,
+        },
+        signal,
+      ));
+    }
+    if (name === 'browser_record_stop') {
+      return recordingResult(await stopRecording({
+        recordingId: args.recordingId,
+        sessionId: args.sessionId,
+        outputPath: args.outputPath,
+      }));
+    }
+    if (name === 'browser_record_status') {
+      return recordingResult(recordingStatus({ recordingId: args.recordingId, sessionId: args.sessionId }));
+    }
 
     const session = getSession(args.sessionId);
-    const timeout = timeoutMs(args.timeoutMs);
     if (name === 'browser_navigate') {
       return success(await navigate(session, stringArg(args, 'url', 8_192), timeout, signal));
     }
@@ -469,6 +988,6 @@ export async function browserCallTool(
     return failure('NOT_FOUND', `Unknown browser tool: ${name}`);
   } catch (error) {
     const normalized = normalizedError(error);
-    return failure(normalized.code, normalized.message);
+    return failure(normalized.code, normalized.message, normalized.category);
   }
 }

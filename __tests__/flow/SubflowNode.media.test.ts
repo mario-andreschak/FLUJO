@@ -111,7 +111,7 @@ describe('SubflowNode media output promotion', () => {
       type: 'video',
       resourceUri: 'flujo://run/parent-conv/parent-clip-1',
       localPath: 'C:\\parent-artifacts\\parent-clip-1.mp4',
-      url: '/v1/chat/conversations/parent-conv/resources/parent-clip-1/content',
+      url: '/v1/chat/conversations/parent-conv/resources/parent-clip-1/content?workspace=default-workspace',
     })]);
     expect(shared.lastResponse).toContain('C:\\parent-artifacts\\parent-clip-1.mp4');
   });

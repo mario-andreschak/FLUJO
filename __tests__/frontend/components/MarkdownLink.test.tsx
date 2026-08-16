@@ -79,6 +79,21 @@ describe('markdown links in chat', () => {
     expect(injectedCss()).toMatch(new RegExp(`${LINK_COLOR_VAR}:\\s*inherit`));
   });
 
+  it('keeps non-colour affordances: hover underline, focus-visible outline, safe wrapping', () => {
+    // WCAG 1.4.1 / 2.4.7: the link must stay identifiable and focusable even when
+    // colour is unavailable, and long URLs must not overflow a narrow bubble.
+    render(
+      <ThemeProvider theme={createAppTheme('light')}>
+        <MarkdownLink href="https://example.com/a-very-long-path-that-would-overflow">long link</MarkdownLink>
+      </ThemeProvider>,
+    );
+
+    const css = injectedCss();
+    expect(css).toMatch(/:hover\s*\{[^}]*text-decoration-thickness:\s*2px/);
+    expect(css).toMatch(/:focus-visible\s*\{[^}]*outline:\s*2px solid currentColor/);
+    expect(css).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
   it('publishes an accessible link colour on neutral surfaces and inherits on accent ones', () => {
     const theme = createAppTheme('light');
     expect(markdownLinkVars(theme)[LINK_COLOR_VAR]).toBe(theme.palette.primary.dark);

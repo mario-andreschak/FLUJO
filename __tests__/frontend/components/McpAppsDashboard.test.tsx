@@ -1,7 +1,15 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import McpAppsDashboard from '@/frontend/components/mcp/McpAppsDashboard';
+import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import { mcpService } from '@/frontend/services/mcp';
 
 jest.mock('@/frontend/services/mcp', () => ({
@@ -73,6 +81,44 @@ describe('McpAppsDashboard', () => {
     const frame = await screen.findByTestId('mcp-app-frame');
     expect(frame).toHaveAttribute('data-server', 'enabled-apps');
     expect(frame).toHaveAttribute('data-uri', 'ui://valid');
+  });
+
+  it('can retain ordinary enabled MCP servers without probing them for App resources', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'enabled-apps', disabled: false, enableMcpApps: true },
+      { name: 'tools-only', disabled: false, enableMcpApps: false },
+      { name: 'disabled-tools', disabled: true, enableMcpApps: false },
+    ] as any);
+
+    const { result } = renderHook(() => useMcpAppsDiscovery({
+      active: true,
+      includeAllServers: true,
+    }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.servers.map((server) => server.name))
+      .toEqual(['enabled-apps', 'tools-only']);
+    expect(service.listServerResources).toHaveBeenCalledTimes(1);
+    expect(service.listServerResources).toHaveBeenCalledWith('enabled-apps');
+  });
+
+  it('refreshes discovery when the user returns to the window', async () => {
+    service.loadServerConfigs
+      .mockResolvedValueOnce([
+        { name: 'first-app', disabled: false, enableMcpApps: true },
+      ] as any)
+      .mockResolvedValueOnce([
+        { name: 'first-app', disabled: false, enableMcpApps: true },
+        { name: 'new-app', disabled: false, enableMcpApps: true },
+      ] as any);
+
+    const { result } = renderHook(() => useMcpAppsDiscovery({ active: true }));
+    await waitFor(() => expect(result.current.servers).toHaveLength(1));
+
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(result.current.servers).toHaveLength(2));
+    expect(service.loadServerConfigs).toHaveBeenCalledTimes(2);
   });
 
   it('keeps per-server discovery errors while showing empty states for other servers', async () => {
@@ -160,5 +206,71 @@ describe('McpAppsDashboard', () => {
     await waitFor(() => expect(screen.queryByTestId('mcp-app-frame')).not.toBeInTheDocument());
     expect(await screen.findByText('No MCP Apps-capable servers are enabled')).toBeInTheDocument();
     expect(service.clearCapabilitiesCache).toHaveBeenCalledWith('weather');
+  });
+
+  it('previews the app a caller preselected instead of the first one (#396)', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'weather', disabled: false, enableMcpApps: true },
+    ] as any);
+    service.listServerResources.mockResolvedValue({
+      resources: [
+        { uri: 'ui://forecast', name: 'Forecast', mimeType: APP_MIME },
+        { uri: 'ui://radar', name: 'Radar', mimeType: APP_MIME },
+      ],
+      resourceTemplates: [],
+    });
+
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <McpAppsDashboard
+          open
+          onClose={jest.fn()}
+          onOpenToolTester={jest.fn()}
+          initialSelection={{ serverName: 'weather', uri: 'ui://radar' }}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mcp-app-frame')).toHaveAttribute('data-uri', 'ui://radar'));
+  });
+
+  it('uses fullScreen dialog and opts out of backdropFilter so fixed descendants are not clipped', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'enabled-apps', disabled: false, enableMcpApps: true },
+    ] as any);
+    service.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'ui://valid', name: 'Valid App', mimeType: APP_MIME }],
+      resourceTemplates: [],
+    });
+
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText('Valid App')).toBeInTheDocument());
+
+    const paper = document.querySelector('.MuiDialog-paper') as HTMLElement;
+    expect(paper).toBeInTheDocument();
+    // MUI v6 fullScreen adds this class to the paper element
+    expect(paper.className).toContain('MuiDialog-paperFullScreen');
+    // The sx prop on slotProps.paper sets backdropFilter: 'none' so that a
+    // position:fixed MCP App panel resolves against the real viewport (#371).
+    // Emotion emits it as a generated class, so assert on the injected rules
+    // that actually apply to this paper element.
+    const paperClasses = paper.className.split(/\s+/).filter(Boolean);
+    // Emotion may keep rules only in the CSSOM ("speedy" insertion), so read
+    // both the style tag text and the live stylesheets.
+    const emotionRules = [
+      ...Array.from(document.querySelectorAll('style')).map((tag) => tag.textContent ?? ''),
+      ...Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).map((rule) => rule.cssText);
+        } catch {
+          return [];
+        }
+      }),
+    ].join('').replace(/\s+/g, '');
+    const backdropRule = paperClasses.some((className) => (
+      new RegExp(`\\.${className}\\{[^}]*backdrop-filter:none`).test(emotionRules)
+    ));
+    expect(backdropRule).toBe(true);
   });
 });

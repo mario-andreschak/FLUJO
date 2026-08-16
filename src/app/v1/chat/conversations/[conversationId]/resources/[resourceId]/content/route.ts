@@ -1,9 +1,13 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import {
   buildRunResourceUri,
   readRunResource,
 } from '@/backend/services/runResources';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 /**
  * Browser-facing payload endpoint for persisted model/tool media.
@@ -12,8 +16,8 @@ import {
  * its MCP read shape back into HTTP bytes so <img>, <audio>, and <video> can
  * consume it without putting base64 in conversation JSON.
  */
-export async function GET(
-  _request: NextRequest,
+async function GET_handler(
+  request: NextRequest,
   {
     params,
   }: {
@@ -26,6 +30,12 @@ export async function GET(
   const { conversationId, resourceId } = await params;
   if (!conversationId || !resourceId) {
     return NextResponse.json({ error: 'Missing resource identifier' }, { status: 400 });
+  }
+
+  const state = await loadConversationState(conversationId);
+  if (!state || isPersonaOwnedConversationState(state)) {
+    const notLocal = assertLocalRequest(request);
+    if (notLocal) return notLocal;
   }
 
   try {
@@ -61,3 +71,5 @@ export async function GET(
     return NextResponse.json({ error: 'Failed to read resource' }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

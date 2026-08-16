@@ -2,10 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Dialog from '@mui/material/Dialog';
-import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import {
   Box,
   Typography,
@@ -212,10 +212,17 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={running ? undefined : onClose} maxWidth="sm" fullWidth onClick={(e) => e.stopPropagation()}>
-      <DialogTitle component="div" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <SystemUpdateAltIcon color="primary" />
-        {t('mcp.update.title', { server: serverName })}
-      </DialogTitle>
+      <DialogHeaderActions
+        title={(
+          <Box display="flex" alignItems="center" gap={1} minWidth={0}>
+            <SystemUpdateAltIcon color="primary" />
+            <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {t('mcp.update.title', { server: serverName })}
+            </Typography>
+          </Box>
+        )}
+        onClose={() => { if (!running) onClose(); }}
+      />
       <DialogContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
           <Chip size="small" label={shortSha(updateInfo.localSha)} sx={{ fontFamily: 'monospace' }} />

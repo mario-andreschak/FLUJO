@@ -7,6 +7,10 @@ import type {
   ConversationListItem,
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
+import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
+import type { WirePreviewResponse } from '@/backend/execution/flow/types';
+import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -32,13 +36,17 @@ export class ChatApiError extends Error {
 export interface CreateConversationPayload {
   id: string;
   title: string;
-  flowId: string;
+  flowId: string | null;
   createdAt: number;
   updatedAt: number;
   /** Quick-Chats (issue #61): seed an in-memory flow snapshot onto the new
    *  conversation instead of referencing a stored flow. `flowId` is the
    *  snapshot's id (quickchat-<id>). */
   flowSnapshot?: Flow;
+  /** Strict-local, non-authoritative target for a fresh Persona chat. */
+  personaTargetId?: string;
+  /** `primary` selects the Persona's Main role; another key selects a named Behavior. */
+  personaBehaviorSlotKey?: string;
 }
 
 // Handlers for the live execution event stream (SSE).
@@ -54,7 +62,16 @@ export interface RevertPreview {
   files: Array<{ path: string; status: string }>;
   diff: string;
   truncated: boolean;
+  fileRestoreAvailable: boolean;
+  fileRestoreUnavailableReason?:
+    | 'no-snapshotted-file-changes'
+    | 'multiple-roots'
+    | 'unsafe-path';
+  /** The selected message and every displayed message after it. */
+  chatMessageCount: number;
 }
+
+export type RestoreMode = 'chat-and-files' | 'files-only' | 'chat-only';
 
 export interface ConversationPage {
   items: ConversationListItem[];
@@ -68,6 +85,13 @@ export interface ConversationPageQuery {
   cursor?: string;
   search?: string;
   dimension?: 'title' | 'content';
+  origin?: 'chat' | 'schedule' | 'subflow' | 'meeting';
+  /** Exact resolved session-key match. Session keys must not contain secrets. */
+  sessionKey?: string;
+  /** Return only transitive descendants of this conversation. */
+  descendantsOf?: string;
+  /** Cancels both the current page request and any all-pages traversal. */
+  signal?: AbortSignal;
 }
 
 export interface SubflowRecoveryOptions {
@@ -93,6 +117,8 @@ export interface SubflowRecoveryResult {
 }
 
 const BASE = '/v1/chat/conversations';
+// Read-only chain projection for the experimental chain-chat page (#405).
+const CHAINS_BASE = '/v1/chat/conversation-chains';
 
 // Parse a fetch Response, throwing ChatApiError on non-2xx. For 204/empty
 // bodies returns undefined.
@@ -114,6 +140,23 @@ async function parse<T>(response: Response): Promise<T> {
       (body && typeof body === 'object' && (body.error || body.message)) ||
       `Request failed with status ${response.status}`;
     throw new ChatApiError(message, response.status, body);
+  }
+  // Issue #383 (gap 4): the OpenAI-compatible chat-completions envelope
+  // returns HTTP 200 even on a provider/flow error, so a non-streaming
+  // client stays spec-compliant. Detect that shape here (body.error present
+  // AND no choices, so a legitimate completion whose CONTENT merely mentions
+  // the word "error" is never mistaken for a failure) and throw the same
+  // ChatApiError callers already handle for a non-2xx response.
+  if (
+    body
+    && typeof body === 'object'
+    && body.error
+    && typeof body.error === 'object'
+    && !Array.isArray(body.choices)
+  ) {
+    const message = typeof body.error.message === 'string' ? body.error.message : 'Request failed.';
+    const status = typeof body.error.status === 'number' ? body.error.status : response.status;
+    throw new ChatApiError(message, status, body);
   }
   return body as T;
 }
@@ -149,6 +192,88 @@ class ChatService {
     return parse<Conversation>(response);
   }
 
+  /** Build a read-only current-state model-input preview for one selected node. */
+  async getWirePreview(
+    conversationId: string,
+    nodeId: string,
+    options: { targetConversationId?: string; signal?: AbortSignal } = {},
+  ): Promise<WirePreviewResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/wire-preview`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        signal: options.signal,
+        body: JSON.stringify({
+          nodeId,
+          ...(options.targetConversationId
+            ? { targetConversationId: options.targetConversationId }
+            : {}),
+        }),
+      },
+    );
+    return parse<WirePreviewResponse>(response);
+  }
+
+  /** Durable, exact SDK-dispatch markers for the Chat model-turn timeline. */
+  async getModelTurns(
+    conversationId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ModelTurnTimelineResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/model-turns`),
+      { cache: 'no-store', signal: options.signal },
+    );
+    return parse<ModelTurnTimelineResponse>(response);
+  }
+
+  /** Lazily load one historical SDK request only after its marker is selected. */
+  async getModelTurn(
+    conversationId: string,
+    dispatchId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ModelTurnSnapshot> {
+    const response = await fetch(
+      withWorkspaceUrl(
+        `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}`,
+      ),
+      { cache: 'no-store', signal: options.signal },
+    );
+    return parse<ModelTurnSnapshot>(response);
+  }
+
+  modelTurnMediaUrl(conversationId: string, dispatchId: string, mediaId: string): string {
+    return withWorkspaceUrl(
+      `${BASE}/${encodeURIComponent(conversationId)}/model-turns/${encodeURIComponent(dispatchId)}/media/${encodeURIComponent(mediaId)}`,
+    );
+  }
+
+  /**
+   * GET /v1/chat/conversation-chains — read-only chain projection (#405).
+   * Returns recent conversations grouped by chain root with ONE bounded
+   * message preview per node; never a full history. Active state is included
+   * as metadata. Accepts an AbortSignal so
+   * the page can drop a stale request on refresh/unmount.
+   */
+  async getConversationChains(
+    options: { rootId?: string; limit?: number; signal?: AbortSignal } = {}
+  ): Promise<ConversationChainsResponse> {
+    log.debug('getConversationChains: Entering method', { rootId: options.rootId, limit: options.limit });
+    const params = new URLSearchParams();
+    // URLSearchParams encodes both the id and the limit for us.
+    if (options.rootId) params.set('root', options.rootId);
+    if (typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+      params.set('limit', String(Math.trunc(options.limit)));
+    }
+    const query = params.toString();
+    const response = await fetch(
+      query ? `${CHAINS_BASE}?${query}` : CHAINS_BASE,
+      options.signal ? { signal: options.signal } : undefined
+    );
+    return parse<ConversationChainsResponse>(response);
+  }
+
   /** POST /v1/chat/conversations — create and persist a new conversation. */
   async createConversation(
     payload: CreateConversationPayload
@@ -172,6 +297,20 @@ class ChatService {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ flowId }),
+    });
+    return parse<ConversationListItem>(response);
+  }
+
+  /** PATCH a fresh conversation to a Persona target (never runtime authority). */
+  async updateConversationPersonaTarget(
+    id: string,
+    personaTargetId: string
+  ): Promise<ConversationListItem> {
+    log.debug('updateConversationPersonaTarget: Entering method', { conversationId: id, personaTargetId });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personaTargetId }),
     });
     return parse<ConversationListItem>(response);
   }
@@ -232,14 +371,12 @@ class ChatService {
     id: string,
     action: 'approve' | 'reject',
     toolCallId: string,
-    always?: boolean,
-    feedback?: string   // Issue #247: optional rejection reason for the model
   ): Promise<any> {
-    log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId, always });
+    log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, toolCallId, ...(always ? { always: true } : {}), ...(feedback ? { feedback } : {}) }),
+      body: JSON.stringify({ action, toolCallId }),
     });
     return parse<any>(response);
   }
@@ -275,6 +412,26 @@ class ChatService {
       method: 'POST',
     });
     return parse<any>(response);
+  }
+
+  /** POST /v1/chat/conversations/{id}/debug/attach — pause at the next safe boundary. */
+  async attachDebugger(id: string): Promise<void> {
+    log.debug('attachDebugger: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/attach`, {
+      method: 'POST',
+    });
+    await parse<void>(response);
+  }
+
+  /**
+   * GET /v1/chat/conversations/{id}/debug/state — read the current debug state.
+   * Lets the debugger panel attach to a run this tab did not start (or one that
+   * paused after its POST had already resolved) instead of waiting forever.
+   */
+  async getDebugState(id: string): Promise<{ status: string; breakpoints: string[]; debugState: any }> {
+    log.debug('getDebugState: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/state`);
+    return parse<{ status: string; breakpoints: string[]; debugState: any }>(response);
   }
 
   /** PUT /v1/chat/conversations/{id}/breakpoints — replace breakpoint set. */
@@ -368,7 +525,13 @@ class ChatService {
     if (query.cursor) params.set('cursor', query.cursor);
     if (query.search?.trim()) params.set('search', query.search.trim());
     if (query.dimension) params.set('dimension', query.dimension);
-    const response = await fetch(`${BASE}?${params.toString()}`);
+    if (query.origin) params.set('origin', query.origin);
+    if (query.sessionKey) params.set('sessionKey', query.sessionKey);
+    if (query.descendantsOf) params.set('descendantsOf', query.descendantsOf);
+    const url = `${BASE}?${params.toString()}`;
+    const response = query.signal
+      ? await fetch(url, { signal: query.signal })
+      : await fetch(url);
     return parse<ConversationPage>(response);
   }
 
@@ -377,9 +540,11 @@ class ChatService {
     const items: ConversationListItem[] = [];
     let cursor: string | undefined;
     do {
+      query.signal?.throwIfAborted();
       const page = await this.listConversationPage({ ...query, limit: 200, cursor });
       items.push(...page.items);
       cursor = page.nextCursor;
+      query.signal?.throwIfAborted();
     } while (cursor);
     return items;
   }
@@ -447,13 +612,18 @@ class ChatService {
     return parse<RevertPreview>(response);
   }
 
-  async revertToMessage(id: string, messageId: string, previewId: string): Promise<{ operationId: string }> {
+  async revertToMessage(
+    id: string,
+    messageId: string,
+    previewId: string,
+    mode: RestoreMode,
+  ): Promise<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }> {
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, previewId }),
+      body: JSON.stringify({ messageId, previewId, mode }),
     });
-    return parse<{ operationId: string }>(response);
+    return parse<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }>(response);
   }
 
   async undoRevert(id: string, operationId: string): Promise<void> {
@@ -480,7 +650,7 @@ class ChatService {
       fromSeq !== undefined
         ? `${BASE}/${encodeURIComponent(id)}/events?fromSeq=${fromSeq}`
         : `${BASE}/${encodeURIComponent(id)}/events`;
-    const es = new EventSource(url);
+    const es = new EventSource(withWorkspaceUrl(url));
     es.onopen = () => {
       log.debug('Execution event stream open', { conversationId: id });
       handlers.onOpen?.();
@@ -506,7 +676,7 @@ class ChatService {
    * and other high-volume execution events never reach the sidebar.
    */
   subscribeToSidebarEvents(handlers: EventStreamHandlers): EventSource {
-    const es = new EventSource('/v1/chat/events?scope=sidebar');
+    const es = new EventSource(withWorkspaceUrl('/v1/chat/events?scope=sidebar'));
     es.onopen = () => {
       log.debug('Sidebar lifecycle event stream open');
       handlers.onOpen?.();

@@ -50,7 +50,10 @@ import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
-import type { PlannedExecution } from '@/shared/types/plannedExecution';
+import {
+  isPersonaControlledPlannedExecution,
+  type PlannedExecution,
+} from '@/shared/types/plannedExecution';
 import { isSecretEnvVar, isSecretHeaderKey } from '@/utils/shared/common';
 import { StorageKey } from '@/shared/types/storage';
 
@@ -417,8 +420,9 @@ export interface McpValidationResult {
 /**
  * Validate + pack the selected MCP servers by reference. Local-only servers
  * (no `source`, or `source.type === 'local'`) HARD-ABORT with a clear error —
- * their untrusted code cannot be packaged (#193). Everything else becomes a
- * by-reference entry carrying only env/header declarations.
+ * their untrusted code cannot be packaged (#193). Launch-and-connect servers
+ * (#392) hard-abort too: the format cannot carry a `launch` spec. Everything
+ * else becomes a by-reference entry carrying only env/header declarations.
  */
 export function validateMcpSelection(
   serverNames: string[],
@@ -441,6 +445,16 @@ export function validateMcpSelection(
       );
       continue;
     }
+    // #392: a launch-and-connect server carries a `launch` spec describing a
+    // local process that must be running behind its URL. The package format has
+    // no representation for that, and silently dropping it would export a
+    // package that installs an endpoint nobody starts. Reject explicitly.
+    if ((config as { launch?: unknown }).launch) {
+      errors.push(
+        `MCP server "${name}" is a launch-and-connect server (it runs locally but speaks HTTP). Packages cannot carry its launch command yet, so it cannot be exported.`,
+      );
+      continue;
+    }
     const headers = (config as { headers?: Record<string, EnvVarValue> }).headers;
     const headerDeclarations: HeaderDeclaration[] = declarationsFrom(headers, isSecretHeaderKey);
     const argTemplates =
@@ -455,7 +469,6 @@ export function validateMcpSelection(
       name: config.name,
       transport: config.transport,
       ...(config.disabled ? { disabled: true } : {}),
-      ...(config.autoApprove && config.autoApprove.length ? { autoApprove: config.autoApprove } : {}),
       ...(config.folder ? { folder: config.folder } : {}),
       installOrigin,
       envDeclarations: declarationsFrom(config.env, isSecretEnvVar),
@@ -806,6 +819,17 @@ export async function resolvePackageSelection(selection: PackageSelection): Prom
   entities: PackageEntities;
 }> {
   const entities = await loadPackageableEntities();
+  const requestedExecutionIds = new Set(selection.plannedExecutionIds ?? []);
+  if (entities.plannedExecutions.some((execution) => (
+    requestedExecutionIds.has(execution.id)
+    && isPersonaControlledPlannedExecution(execution)
+  ))) {
+    // Package workflows are portable legacy-Flow workflows. Refuse at the
+    // shared selection choke point so resolve, secret scanning/model passes,
+    // manifest building and publishing helpers cannot inspect or serialize a
+    // workspace-local Persona target.
+    throw new Error('Persona-targeted planned executions cannot be packaged.');
+  }
   const resolved = resolveDependencies(selection, entities);
   return { resolved, entities };
 }

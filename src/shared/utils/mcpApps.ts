@@ -195,28 +195,79 @@ export function isValidCspSourceToken(
 }
 
 /**
+ * Loopback origin grammar: `http://` or `ws://`, host exactly `127.0.0.1`,
+ * `localhost`, or `[::1]`, and a REQUIRED port that is either explicit digits or
+ * the CSP port wildcard `*` — so the token stays one unambiguous, non-routable
+ * origin and can never degrade to a portless host. `[::1]` is handled here
+ * explicitly because the secure-origin grammar's hostname class excludes the
+ * bracketed-colon form.
+ */
+const LOOPBACK_CSP_ORIGIN = /^(http|ws):\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5}|\*)$/i;
+
+/**
+ * Shared parse for the loopback exception. Returns the scheme/host pair when
+ * `token` is a well-formed loopback origin whose scheme the caller permits.
+ */
+function parseLoopbackCspOrigin(
+  token: unknown,
+  allowedSchemes: ReadonlyArray<'http' | 'ws'>,
+): { scheme: 'http' | 'ws'; host: string } | undefined {
+  if (typeof token !== 'string' || token.length === 0 || token.length > 2_048) return undefined;
+  // Same defence-in-depth as isValidCspSourceToken: no CSP-special characters.
+  if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return undefined;
+  const match = LOOPBACK_CSP_ORIGIN.exec(token);
+  if (!match) return undefined;
+  const scheme = match[1].toLowerCase() as 'http' | 'ws';
+  if (!allowedSchemes.includes(scheme)) return undefined;
+  if (match[3] !== '*') {
+    const port = Number(match[3]);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) return undefined;
+  }
+  return { scheme, host: match[2].toLowerCase() };
+}
+
+/**
  * Strict validator for a plain-HTTP/WS LOOPBACK origin declared by a local MCP
  * App server (e.g. an IDE gateway on `http://127.0.0.1:<port>` with its bridge
- * on `ws://127.0.0.1:<port>`). Accepted shape: `http://` or `ws://`, host
- * exactly `127.0.0.1`, `localhost`, or `[::1]`, and a REQUIRED explicit port —
- * so the token stays one unambiguous, non-routable origin. `[::1]` is handled
- * here explicitly because the secure-origin grammar's hostname class excludes
- * the bracketed-colon form.
+ * on `ws://127.0.0.1:<port>`). A portless host is still rejected; an explicit
+ * `:*` port wildcard is accepted (see {@link canonicalizeLoopbackCspOrigin}).
  *
- * This is an opt-in exception: callers must gate it on FLUJO's `localhost`
- * exposure mode. Public/hosted deployments keep the secure-origin-only policy.
+ * This is an opt-in exception: callers must gate it on FLUJO not being publicly
+ * exposed (the `localhost` and `network` modes, where the operator's browser and
+ * the MCP servers share a machine). Public/hosted deployments keep the
+ * secure-origin-only policy.
  */
 export function isLoopbackCspOrigin(
   token: unknown,
   allowedSchemes: ReadonlyArray<'http' | 'ws'> = ['http', 'ws'],
 ): boolean {
-  if (typeof token !== 'string' || token.length === 0 || token.length > 2_048) return false;
-  // Same defence-in-depth as isValidCspSourceToken: no CSP-special characters.
-  if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return false;
-  const match = /^(http|ws):\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/i.exec(token);
-  if (!match || !allowedSchemes.includes(match[1].toLowerCase() as 'http' | 'ws')) return false;
-  const port = Number(match[3]);
-  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+  return parseLoopbackCspOrigin(token, allowedSchemes) !== undefined;
+}
+
+/**
+ * Collapse a loopback origin to its port-wildcard form (`http://127.0.0.1:*`),
+ * or return `undefined` when `token` is not an admissible loopback origin.
+ *
+ * Local App servers routinely bind an EPHEMERAL port (`listen(0)`), so the port
+ * they advertise in `_meta.ui.csp` is only valid until their next restart. The
+ * host commits a resource's CSP once — as a response header on the sandbox proxy
+ * document — and never re-issues it, so a pinned port turns every subsequent
+ * restart into a hard `frame-src`/`connect-src` violation: the app loads once,
+ * then breaks with the granted port and the live port one restart apart.
+ *
+ * CSP's `host-source` grammar allows `port = ":" ( 1*DIGIT / "*" )`, so widening
+ * the grant to the wildcard keeps an already-committed policy valid across those
+ * restarts. The trade-off is deliberate: within the loopback host we are already
+ * trusting, the grant stops naming one port and covers any of them. Callers gate
+ * this on FLUJO not being publicly exposed, so the hosts named here belong to the
+ * operator's own machine.
+ */
+export function canonicalizeLoopbackCspOrigin(
+  token: unknown,
+  allowedSchemes: ReadonlyArray<'http' | 'ws'> = ['http', 'ws'],
+): string | undefined {
+  const parsed = parseLoopbackCspOrigin(token, allowedSchemes);
+  return parsed && `${parsed.scheme}://${parsed.host}:*`;
 }
 
 /**

@@ -16,6 +16,7 @@ import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { createHash } from "crypto";
 import { createLogger } from "@/utils/logger";
 import {
   MCPServerConfig,
@@ -26,9 +27,16 @@ import {
 import { ChildProcess } from "child_process";
 import { createOAuthClientProvider } from "./oauth";
 import { isClientConnectionClosed } from "@/utils/mcp/utils";
+import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
+import { getDataDir } from "@/utils/paths";
 import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
 import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
-import { getDataDir } from "@/utils/paths";
+import {
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  remapLegacyDefaultWorkspaceReference,
+} from "@/utils/workspace";
+import { shippedDescriptorForConfig } from './shippedServers';
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -51,6 +59,10 @@ import {
   STDIO_OAUTH_EXTENSION_CAPABILITY,
   STDIO_OAUTH_EXTENSION_ID,
 } from "mcp-stdio-oauth/protocol";
+import {
+  issueMcpAppRuntimeBrokerEnvironment,
+  revokeMcpAppRuntimeBrokerLease,
+} from '@/backend/mcpApps/runtimeBroker';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -82,6 +94,8 @@ export interface TransportWithConfigKey {
   __flujoStdioKey?: string;
   __flujoHttpKey?: string;
   __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
+  /** Capability lease for one managed MCP Apps stdio process generation. */
+  __flujoRuntimeBrokerLeaseId?: string;
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
 }
@@ -302,7 +316,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.42.1",
+      version: "3.45.0",
     },
     {
       capabilities: {
@@ -345,11 +359,17 @@ export function createNewClient(config: MCPServerConfig): Client {
   return client;
 }
 
+export interface TransportCreationOptions {
+  /** Mint sidecar registration credentials only for the managed live process. */
+  enableRuntimeBroker?: boolean;
+}
+
 /**
  * Create a transport for the MCP client
  */
 export function createTransport(
   config: MCPServerConfig,
+  options?: TransportCreationOptions,
 ):
   | StdioClientTransport
   | WebSocketClientTransport
@@ -512,7 +532,7 @@ export function createTransport(
     );
     return new WebSocketClientTransport(new URL(config.websocketUrl));
   } else {
-    return createStdioTransport(config);
+    return createStdioTransport(config, options);
   }
 }
 
@@ -531,12 +551,161 @@ export interface StdioLaunch {
 }
 
 /**
+ * Create the private home/cache tree inherited by one stdio MCP server.
+ *
+ * The MCP SDK supplies a small set of host environment defaults even when an
+ * explicit `env` object is passed. In particular HOME/USERPROFILE otherwise
+ * point at the account running FLUJO, so two workspaces can silently share a
+ * third-party server's tokens, sqlite files and caches. Keep those conventional
+ * persistence roots below the selected workspace and below a hash of the
+ * server name (names are user-controlled and must never become path segments).
+ */
+interface IsolatedStdioRuntime {
+  cwd: string;
+  env: Record<string, string>;
+}
+
+function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
+  const workspaceRoot = getWorkspaceDataDir();
+  const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
+
+  const assertOrCreateRealDirectory = (candidate: string, label: string): void => {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      fs.mkdirSync(candidate, { mode: 0o700 });
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    }
+  };
+
+  // Never create a workspace as a side effect of launching a child. The HTTP
+  // boundary/startup migration has already validated and created this root.
+  const workspaceStat = fs.lstatSync(workspaceRoot);
+  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
+    throw new Error(`Workspace root must be a real directory: ${workspaceRoot}`);
+  }
+
+  let current = workspaceRoot;
+  for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
+    current = path.join(current, segment);
+    assertOrCreateRealDirectory(current, 'MCP runtime directory');
+  }
+  const runtimeRoot = current;
+  const home = path.join(runtimeRoot, 'home');
+  const cwd = path.join(runtimeRoot, 'cwd');
+  assertOrCreateRealDirectory(home, 'MCP runtime home');
+  assertOrCreateRealDirectory(cwd, 'MCP runtime cwd');
+
+  const directories = {
+    appData: path.join(home, 'AppData', 'Roaming'),
+    localAppData: path.join(home, 'AppData', 'Local'),
+    config: path.join(home, '.config'),
+    cache: path.join(home, '.cache'),
+    data: path.join(home, '.local', 'share'),
+    state: path.join(home, '.local', 'state'),
+    runtime: path.join(home, '.runtime'),
+    temp: path.join(home, 'tmp'),
+    npm: path.join(home, '.npm'),
+    pip: path.join(home, '.cache', 'pip'),
+    uv: path.join(home, '.cache', 'uv'),
+  };
+  for (const directory of Object.values(directories)) {
+    const relative = path.relative(home, directory);
+    let cursor = home;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, segment);
+      assertOrCreateRealDirectory(cursor, 'MCP runtime directory');
+    }
+  }
+
+  const result: Record<string, string> = {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: directories.appData,
+    LOCALAPPDATA: directories.localAppData,
+    XDG_CONFIG_HOME: directories.config,
+    XDG_CACHE_HOME: directories.cache,
+    XDG_DATA_HOME: directories.data,
+    XDG_STATE_HOME: directories.state,
+    XDG_RUNTIME_DIR: directories.runtime,
+    TMPDIR: directories.temp,
+    TMP: directories.temp,
+    TEMP: directories.temp,
+    NPM_CONFIG_CACHE: directories.npm,
+    PIP_CACHE_DIR: directories.pip,
+    UV_CACHE_DIR: directories.uv,
+  };
+  if (process.platform === 'win32') {
+    const parsed = path.parse(home);
+    result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
+    result.HOMEPATH = home.slice(parsed.root.length - 1);
+  }
+  return { cwd, env: result };
+}
+
+/**
+ * Backfill the Windows environment variables a child needs in order to launch
+ * anything itself.
+ *
+ * We hand every stdio server an explicit `env`, and the MCP SDK's default
+ * Windows inherit list contains neither ComSpec nor windir/PATHEXT. Any server
+ * that shells out then breaks at spawn time rather than at run time: `npm run`
+ * takes its script shell from `process.env.ComSpec` without a fallback, so a
+ * missing value makes npm spawn `undefined` and abort with ERR_INVALID_ARG_TYPE
+ * before the script produces any diagnostics. Gap-filling only, so an explicit
+ * per-server `env` and the forced runtime boundary above both still win.
+ *
+ * A key that is present but blank counts as missing: a persisted config can
+ * carry `COMSPEC: ""`, and since Windows resolves environment variables
+ * case-insensitively, leaving that empty spelling beside the one we add would
+ * let the child inherit the blank value and crash exactly as before. So the
+ * blank spellings are dropped before the canonical name is written.
+ */
+function applyWindowsSpawnEssentials(env: Record<string, string>): void {
+  if (process.platform !== 'win32') return;
+  const nonEmpty = (
+    source: Record<string, string | undefined>,
+    key: string,
+  ): string | undefined => Object.entries(source).find(
+    ([name, value]) => name.toLowerCase() === key.toLowerCase() && (value ?? '').trim() !== '',
+  )?.[1];
+  const fromHost = (key: string): string | undefined => nonEmpty(process.env, key);
+  const systemRoot = fromHost('SystemRoot') ?? fromHost('windir') ?? 'C:\\Windows';
+  const defaults: Record<string, string> = {
+    SystemRoot: systemRoot,
+    windir: systemRoot,
+    ComSpec: fromHost('ComSpec') ?? path.join(systemRoot, 'System32', 'cmd.exe'),
+    PATHEXT: fromHost('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD',
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    // A spelling that already carries a real value wins untouched, so a server
+    // reading `%windir%` keeps seeing the name it was configured with.
+    if (nonEmpty(env, key) !== undefined) continue;
+    for (const spelling of Object.keys(env)) {
+      if (spelling.toLowerCase() === key.toLowerCase()) delete env[spelling];
+    }
+    env[key] = value;
+  }
+}
+
+/**
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
 export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
-  let command = config.command;
-  let args = config.args ? [...config.args] : [];
+  const isShipped = Boolean(shippedDescriptorForConfig(config));
+  const remapMcpPath = (value: string): string => isShipped
+    ? value
+    : remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
+  let command = remapMcpPath(config.command);
+  let args = config.args ? config.args.map(remapMcpPath) : [];
   const serverDir = `${SERVER_DIR_PREFIX}/${config.name}`;
 
   log.info(`Creating stdio transport for server ${config.name}`);
@@ -560,7 +729,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
     // If it's just a filename (e.g., "run.bat"), check if it exists in the server directory
     if (isJustFilename) {
-      const fullPath = path.join(getDataDir(), serverDir, command);
+      const fullPath = path.join(getWorkspaceDataDir(), serverDir, command);
       log.debug(`Checking if file exists at: ${fullPath}`);
 
       const fileExists = fs.existsSync(fullPath);
@@ -606,7 +775,8 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  const resolvedCwd = resolveServerCwd({
+  const runtime = isolatedStdioRuntime(config.name);
+  const resolvedCwd = remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
     command: config.command,
@@ -615,15 +785,53 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     cwd: config.cwd,
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
-  });
+    // Package managers walk ancestor directories for package.json/node_modules.
+    // Keep their cwd outside both the server root and every other server root.
+    packageRunnerCwd: runtime.cwd,
+  }));
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
-    : path.join(getDataDir(), resolvedCwd);
+    : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 
-  // Transform the env object to extract only the value part from each key
+  // Transform the env object to extract only the value part from each key.
   const transformedEnv = transformEnv(config.env);
+  if (!isShipped) {
+    for (const [name, value] of Object.entries(transformedEnv)) {
+      transformedEnv[name] = remapMcpPath(value);
+    }
+  }
+  // Force the live child boundary for every stdio server, not only shipped
+  // packages. These assignments intentionally win over persisted config and
+  // over inherit-all launch modes; otherwise ordinary SDK defaults expose the
+  // host account and let workspace A reuse workspace B's auth/config state.
+  Object.assign(transformedEnv, runtime.env);
+  applyWindowsSpawnEssentials(transformedEnv);
+  const parentDataDir = getDataDir();
+  const workspaceDataDir = getWorkspaceDataDir();
+  transformedEnv.FLUJO_PARENT_DATA_DIR = parentDataDir;
+  transformedEnv.FLUJO_DATA_DIR = workspaceDataDir;
+  transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
+  if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {
+    // Durable browser output/profile overrides from a pre-workspace config must
+    // not keep writing beside (or outside) the workspace tree.
+    transformedEnv.FLUJO_BROWSER_PROFILE_DIR = path.join(
+      workspaceDataDir,
+      'browser-profile',
+      'trusted',
+    );
+    transformedEnv.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(
+      workspaceDataDir,
+      'screenshots',
+      'browser',
+    );
+    transformedEnv.FLUJO_BROWSER_RECORD_DIR = path.join(
+      workspaceDataDir,
+      'recordings',
+      'browser',
+    );
+  }
   log.verbose(
     "Transformed environment variables",
     JSON.stringify(transformedEnv),
@@ -637,6 +845,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
  */
 export function createStdioTransport(
   config: MCPServerConfig,
+  options?: TransportCreationOptions,
 ): StdioClientTransport {
   log.debug("Entering createStdioTransport method");
 
@@ -646,6 +855,9 @@ export function createStdioTransport(
   }
 
   const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
 
   // Create the transport with stderr capture
   log.info(
@@ -655,12 +867,22 @@ export function createStdioTransport(
   const transportoptions: StdioServerParameters = {
     command: command,
     args: args,
-    env: env,
+    env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
     cwd: cwd,
     stderr: "pipe",
   };
 
-  const transport = new StdioClientTransport(transportoptions);
+  let transport: StdioClientTransport;
+  try {
+    transport = new StdioClientTransport(transportoptions);
+  } catch (error) {
+    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    throw error;
+  }
+  if (runtimeBroker) {
+    (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
+      runtimeBroker.leaseId;
+  }
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
@@ -924,6 +1146,16 @@ export interface SafeCloseOptions {
   killEscalationMs?: number;
 }
 
+/** What actually happened during a close — reported so teardown is verifiable (#413). */
+export interface SafeCloseResult {
+  /** The child process (and its group/tree) is gone, or there was no child. */
+  exited: boolean;
+  /** Termination needed signals/taskkill rather than a voluntary exit. */
+  forced: boolean;
+  /** Total time spent tearing the child down, ms. */
+  durationMs: number;
+}
+
 /**
  * Safely close a client connection following the MCP shutdown sequence.
  *
@@ -941,15 +1173,18 @@ export async function safelyCloseClient(
   serverName: string,
   config?: MCPServerConfig,
   options?: SafeCloseOptions,
-): Promise<void> {
+): Promise<SafeCloseResult> {
   log.debug("Entering safelyCloseClient method");
+  const startedAt = Date.now();
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
+  let exited = true;
+  let forced = false;
+  const rawTransport = getUnderlyingTransport(client.transport);
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
     // instanceof, so beta-built connections get the same graceful shutdown.
-    const rawTransport = getUnderlyingTransport(client.transport);
     const child: ChildProcess | undefined = (
       rawTransport as { _process?: ChildProcess } | undefined
     )?._process;
@@ -965,30 +1200,34 @@ export async function safelyCloseClient(
           log.warn(`Error closing stdin for ${serverName}:`, stdinError);
         }
 
-        let exited = await waitForExit(child, gracePeriodMs);
+        exited = await waitForExit(child, gracePeriodMs);
 
         if (!exited) {
+          // Issue #413: escalate against the whole process TREE, not just the
+          // immediate child. Most stdio servers are launched through a shell /
+          // `npx` wrapper, so `child.kill()` only ever reached the wrapper and
+          // left the real server (and anything it spawned — a browser, a
+          // language server, a python venv) running as an orphan for the
+          // lifetime of the machine. The awaiting variant also VERIFIES exit, so
+          // a replacement connection can never be built on top of a predecessor
+          // that is still holding its port/profile/lock.
           log.warn(
-            `Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`,
+            `Process did not exit within ${gracePeriodMs}ms after stdin close; escalating to a tree kill for ${serverName}`,
           );
-          try {
-            child.kill("SIGTERM");
-          } catch (termError) {
-            log.error(`Error sending SIGTERM for ${serverName}:`, termError);
-          }
-          // On Windows SIGTERM is already TerminateProcess, so this second wait
-          // resolves almost immediately; on POSIX it gives handlers a chance.
-          exited = await waitForExit(child, killEscalationMs);
-        }
-
-        if (!exited) {
-          log.warn(
-            `Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`,
-          );
-          try {
-            child.kill("SIGKILL");
-          } catch (killError) {
-            log.error(`Error sending SIGKILL for ${serverName}:`, killError);
+          const killed = await killProcessTreeAndWait(child, {
+            graceMs: killEscalationMs,
+            finalWaitMs: killEscalationMs,
+          });
+          exited = killed.exited;
+          forced = killed.forced;
+          if (!exited) {
+            log.error(
+              `Process tree for ${serverName} (pid ${killed.pid ?? "unknown"}) did not exit after forced escalation`,
+            );
+          } else {
+            log.warn(
+              `Process tree for ${serverName} force-terminated after ${killed.durationMs}ms`,
+            );
           }
         } else {
           log.info(`Process exited gracefully for ${serverName}`);
@@ -1003,5 +1242,10 @@ export async function safelyCloseClient(
   } catch (error) {
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
+  } finally {
+    revokeMcpAppRuntimeBrokerLease(
+      (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
+    );
   }
+  return { exited, forced, durationMs: Date.now() - startedAt };
 }

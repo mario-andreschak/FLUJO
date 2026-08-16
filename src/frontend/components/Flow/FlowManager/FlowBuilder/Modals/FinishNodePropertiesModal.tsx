@@ -3,19 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
   Typography,
   Box,
-  IconButton,
   Divider,
   Paper,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface FinishNodePropertiesModalProps {
   open: boolean;
@@ -69,16 +67,10 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
         }
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {t('flows.modal.properties', { name: nodeData.label || t('flows.modal.finishNode') })}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.modal.finishNode') })}
+        onClose={onClose}
+      />
       
       <Divider />
       

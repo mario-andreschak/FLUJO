@@ -21,6 +21,7 @@ export function conversationOriginColor(key: ConversationOriginKey, theme: Theme
     case 'trigger': return flowNodeColors.light.signal;
     // Connected-app runs retain the FlowBuilder MCP cyan.
     case 'mcp': return theme.palette.info.main;
+    case 'meeting': return theme.palette.secondary.main;
     // Direct conversations and unclassified runs use the Process node color.
     case 'chat':
     case 'unknown':

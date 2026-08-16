@@ -124,7 +124,45 @@ describe('cross-provider media hydration', () => {
     }]);
   });
 
-  it('fails clearly when persisted media has disappeared', async () => {
+  it('does not mislabel unsupported audio formats on strict OpenAI inputs', async () => {
+    readRunResource.mockResolvedValue({
+      entry: { mimeType: 'audio/ogg' },
+      contents: {
+        contents: [{
+          uri: 'flujo://run/conv/audio-ogg',
+          mimeType: 'audio/ogg',
+          blob: 'OGG_BYTES',
+        }],
+      },
+    });
+    const messages = [{
+      role: 'user',
+      content: [{
+        type: 'audio_url',
+        audio_url: { url: 'flujo://run/conv/audio-ogg' },
+      }],
+    }] as unknown as OpenAI.ChatCompletionMessageParam[];
+
+    const strict = await hydrateRunResourceMedia(messages, undefined, {
+      strictOpenAiAudioFormats: true,
+    });
+    expect(strict[0].content).toEqual([{
+      type: 'text',
+      text: expect.stringContaining('accepts only MP3 or WAV'),
+    }]);
+    expect(JSON.stringify(strict)).not.toContain('OGG_BYTES');
+
+    const permissive = await hydrateRunResourceMedia(messages);
+    expect(permissive[0].content).toEqual([{
+      type: 'audio_url',
+      audio_url: {
+        url: 'data:audio/ogg;base64,OGG_BYTES',
+        mime_type: 'audio/ogg',
+      },
+    }]);
+  });
+
+  it('degrades to an explicit text note when persisted media has disappeared', async () => {
     readRunResource.mockResolvedValue(null);
     const messages = [{
       role: 'user',
@@ -134,8 +172,13 @@ describe('cross-provider media hydration', () => {
       }],
     }] as unknown as OpenAI.ChatCompletionMessageParam[];
 
-    await expect(hydrateRunResourceMedia(messages))
-      .rejects.toThrow('Generated media resource is unavailable');
+    await expect(hydrateRunResourceMedia(messages)).resolves.toEqual([{
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: expect.stringContaining('flujo://run/conv/missing'),
+      }],
+    }]);
   });
 
   it('drops only explicitly unsupported media for text-only models', () => {

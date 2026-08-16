@@ -5,15 +5,14 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   FormControl,
   FormControlLabel,
   FormHelperText,
-  IconButton,
   InputLabel,
   MenuItem,
   Select,
@@ -21,15 +20,18 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import LanguageIcon from '@mui/icons-material/Language';
 import AltRouteIcon from '@mui/icons-material/AltRoute';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
 import {
   FileWatchTriggerConfig,
   FlowEventTriggerConfig,
@@ -44,7 +46,9 @@ import {
 import {
   plannedExecutionsService,
   PlannedExecutionInput,
+  PlannedExecutionPatch,
 } from '@/frontend/services/plannedExecutions';
+import { personasService } from '@/frontend/services/personas';
 import { createLogger } from '@/utils/logger';
 import OptionCard from './OptionCard';
 import SchedulePanel from './SchedulePanel';
@@ -89,6 +93,8 @@ const DEFAULT_FLOW_EVENT: FlowEventTriggerConfig = {
   on: ['completed'],
 };
 
+type ExecutionTargetKind = 'flow' | 'persona';
+
 interface ExecutionModalProps {
   open: boolean;
   /** null = create a new execution. */
@@ -99,14 +105,17 @@ interface ExecutionModalProps {
 }
 
 /**
- * Create/edit modal for a planned execution: name → flow → trigger → prompt.
+ * Create/edit modal for a planned execution: name → target → trigger → assignment.
  * Trigger types beyond Schedule land in follow-up slices and extend the
  * radio-card row below.
  */
 const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalProps) => {
   const { t } = useI18n();
   const [name, setName] = useState('');
+  const [targetKind, setTargetKind] = useState<ExecutionTargetKind>('flow');
   const [flowId, setFlowId] = useState('');
+  const [personaId, setPersonaId] = useState('');
+  const [behaviorSlotKey, setBehaviorSlotKey] = useState('');
   const [prompt, setPrompt] = useState('');
   const [saveConversations, setSaveConversations] = useState(false);
   const [overlapStrategy, setOverlapStrategy] = useState<OverlapStrategy>('skip');
@@ -119,6 +128,12 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [draftId, setDraftId] = useState('');
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(false);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [loadingPersonas, setLoadingPersonas] = useState(false);
+  const [personasError, setPersonasError] = useState(false);
+  const [personaComposition, setPersonaComposition] = useState<PersonaComposition | null>(null);
+  const [loadingPersonaComposition, setLoadingPersonaComposition] = useState(false);
+  const [personaCompositionError, setPersonaCompositionError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -127,7 +142,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     if (!open) return;
     setSaveError(null);
     setName(execution?.name ?? '');
+    setTargetKind(execution?.personaId ? 'persona' : 'flow');
     setFlowId(execution?.flowId ?? '');
+    setPersonaId(execution?.personaId ?? '');
+    setBehaviorSlotKey(execution?.behaviorSlotKey ?? '');
     setPrompt(execution?.prompt ?? '');
     setSaveConversations(execution?.saveConversations === true);
     setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
@@ -135,6 +153,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
     setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
     setDraftId(execution ? '' : crypto.randomUUID());
+    setPersonaComposition(null);
+    setPersonaCompositionError(false);
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
@@ -156,7 +176,91 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     return () => { cancelled = true; };
   }, [open]);
 
-  const selectedMissing = !!flowId && !loadingFlows && flows.length > 0 && !flows.some((f) => f.id === flowId);
+  // Personas are a first-class, plain-language Automation target alongside
+  // Flows. Their internal revision ids never enter the editor.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoadingPersonas(true);
+    setPersonasError(false);
+    personasService.list()
+      .then((loaded) => {
+        if (!cancelled) setPersonas(loaded || []);
+      })
+      .catch((err) => {
+        log.warn('Failed to load Personas for execution picker', err);
+        if (!cancelled) {
+          setPersonas([]);
+          setPersonasError(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPersonas(false);
+      });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || targetKind !== 'persona' || !personaId) {
+      setPersonaComposition(null);
+      setPersonaCompositionError(false);
+      setLoadingPersonaComposition(false);
+      return;
+    }
+    let cancelled = false;
+    setPersonaComposition(null);
+    setPersonaCompositionError(false);
+    setLoadingPersonaComposition(true);
+    personasService.getComposition(personaId)
+      .then((loaded) => {
+        if (!cancelled) setPersonaComposition(loaded);
+      })
+      .catch((err) => {
+        log.warn('Failed to load Persona skills for execution picker', err);
+        if (!cancelled) setPersonaCompositionError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPersonaComposition(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, targetKind, personaId]);
+
+  // flowId remains required persisted provenance, but Persona users choose a
+  // person and a friendly skill. The matching Flow reference is derived here.
+  useEffect(() => {
+    if (targetKind !== 'persona' || !personaComposition) return;
+    const effectiveFlowRef = behaviorSlotKey
+      ? personaComposition.behaviorCards.find((card) => card.slotKey === behaviorSlotKey)
+          ?.effectiveFlowRef
+      : personaComposition.core?.effectiveFlowRef ?? personaComposition.coreFlowRef;
+    setFlowId(effectiveFlowRef ?? '');
+  }, [targetKind, personaComposition, behaviorSlotKey]);
+
+  const selectedMissing = targetKind === 'flow'
+    && !!flowId
+    && !loadingFlows
+    && flows.length > 0
+    && !flows.some((f) => f.id === flowId);
+  const selectedPersona = personas.find((persona) => persona.id === personaId);
+  const selectedPersonaMissing = targetKind === 'persona'
+    && !!personaId
+    && !loadingPersonas
+    && !personasError
+    && !selectedPersona;
+  const selectedBehavior = behaviorSlotKey
+    ? personaComposition?.behaviorCards.find((card) => card.slotKey === behaviorSlotKey)
+    : undefined;
+  const selectedPersonaUnavailable = selectedPersona
+    ? selectedPersona.provisioningState !== 'ready' || selectedPersona.lifecycleState === 'disabled'
+    : false;
+  const selectedPersonaWorkReady = targetKind !== 'persona' || Boolean(
+    personaId
+    && personaComposition
+    && flowId
+    && (behaviorSlotKey
+      ? selectedBehavior?.readiness.state === 'ready'
+      : personaComposition.core?.readiness.state === 'ready')
+  );
 
   const handleSave = async () => {
     setSaving(true);
@@ -171,11 +275,22 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       nonExclusiveBehavior,
       trigger,
       enabled: execution?.enabled ?? true,
+      ...(targetKind === 'persona'
+        ? {
+            personaId,
+            ...(behaviorSlotKey ? { behaviorSlotKey } : {}),
+          }
+        : {}),
       // The pre-generated id makes the webhook URL shown in the panel real.
       ...(execution ? {} : { id: draftId }),
     };
     const result = execution
-      ? await plannedExecutionsService.update(execution.id, input)
+      ? await plannedExecutionsService.update(execution.id, {
+          ...input,
+          personaId: targetKind === 'persona' ? personaId : null,
+          behaviorSlotKey:
+            targetKind === 'persona' && behaviorSlotKey ? behaviorSlotKey : null,
+        } satisfies PlannedExecutionPatch)
       : await plannedExecutionsService.create(input);
     setSaving(false);
     if (!result.success) {
@@ -201,16 +316,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         },
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('automations.modal.closeAria')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
+        onClose={onClose}
+      />
 
       <Divider />
 
@@ -408,30 +517,195 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           {t('automations.modal.what')}
         </Typography>
 
-        <Box sx={{ mt: 2 }}>
-          <FlowSelector
-            selectedFlowId={flowId || null}
-            onSelectFlow={setFlowId}
-            disabled={saving}
-            hideLabel
+        <Box
+          role="radiogroup"
+          aria-label={t('automations.modal.targetTypeAria')}
+          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 2 }}
+        >
+          <OptionCard
+            selected={targetKind === 'persona'}
+            onClick={() => {
+              if (targetKind !== 'persona') {
+                setTargetKind('persona');
+                setFlowId('');
+              }
+            }}
+            icon={<PersonRoundedIcon />}
+            title={t('automations.modal.targetPersona')}
+            description={t('automations.modal.targetPersonaHelp')}
+          />
+          <OptionCard
+            selected={targetKind === 'flow'}
+            onClick={() => {
+              if (targetKind !== 'flow') {
+                setTargetKind('flow');
+                setFlowId('');
+              }
+            }}
+            icon={<AccountTreeRoundedIcon />}
+            title={t('automations.modal.targetFlow')}
+            description={t('automations.modal.targetFlowHelp')}
           />
         </Box>
 
-        {selectedMissing && (
-          <Alert severity="warning" sx={{ mt: 1 }}>
-            {t('automations.modal.flowMissing')}
-          </Alert>
+        {targetKind === 'flow' ? (
+          <>
+            <Box sx={{ mt: 2 }}>
+              <FlowSelector
+                selectedFlowId={flowId || null}
+                onSelectFlow={setFlowId}
+                disabled={saving}
+                hideLabel
+              />
+            </Box>
+
+            {selectedMissing && (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {t('automations.modal.flowMissing')}
+              </Alert>
+            )}
+          </>
+        ) : (
+          <Box sx={{ mt: 1 }}>
+            <FormControl fullWidth margin="normal" required>
+              <InputLabel id="automation-persona-label">
+                {t('automations.modal.persona')}
+              </InputLabel>
+              <Select
+                labelId="automation-persona-label"
+                label={t('automations.modal.persona')}
+                value={personaId}
+                disabled={saving || loadingPersonas}
+                onChange={(event) => {
+                  setPersonaId(event.target.value);
+                  setBehaviorSlotKey('');
+                  setFlowId('');
+                }}
+              >
+                <MenuItem value="" disabled>
+                  {t('automations.modal.choosePersona')}
+                </MenuItem>
+                {personaId && !personas.some((persona) => persona.id === personaId) && (
+                  <MenuItem value={personaId} disabled>
+                    {loadingPersonas
+                      ? t('automations.modal.loadingPersonas')
+                      : t('automations.modal.personaUnavailable')}
+                  </MenuItem>
+                )}
+                {personas.map((persona) => {
+                  const unavailable = persona.provisioningState !== 'ready'
+                    || persona.lifecycleState === 'disabled';
+                  return (
+                    <MenuItem key={persona.id} value={persona.id} disabled={unavailable}>
+                      {persona.name}{unavailable ? ` — ${t('automations.modal.personaUnavailable')}` : ''}
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+              <FormHelperText>
+                {loadingPersonas
+                  ? t('automations.modal.loadingPersonas')
+                  : t('automations.modal.personaHelp')}
+              </FormHelperText>
+            </FormControl>
+
+            {personasError && (
+              <Alert severity="error" sx={{ mt: 1 }}>
+                {t('automations.modal.personasLoadFailed')}
+              </Alert>
+            )}
+            {!loadingPersonas && !personasError && personas.length === 0 && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                {t('automations.modal.noPersonas')}
+              </Alert>
+            )}
+            {selectedPersonaMissing && (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {t('automations.modal.personaMissing')}
+              </Alert>
+            )}
+            {selectedPersonaUnavailable && (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {t('automations.modal.personaNotReady')}
+              </Alert>
+            )}
+
+            {loadingPersonaComposition && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
+                <CircularProgress size={18} />
+                <Typography variant="body2" color="text.secondary">
+                  {t('automations.modal.loadingPersonaSkills')}
+                </Typography>
+              </Box>
+            )}
+            {personaCompositionError && (
+              <Alert severity="error" sx={{ mt: 1 }}>
+                {t('automations.modal.personaSkillsLoadFailed')}
+              </Alert>
+            )}
+            {personaComposition && (
+              <FormControl fullWidth margin="normal">
+                <InputLabel id="automation-persona-skill-label">
+                  {t('automations.modal.personaSkill')}
+                </InputLabel>
+                <Select
+                  labelId="automation-persona-skill-label"
+                  label={t('automations.modal.personaSkill')}
+                  value={behaviorSlotKey}
+                  disabled={saving}
+                  onChange={(event) => setBehaviorSlotKey(event.target.value)}
+                >
+                  <MenuItem
+                    value=""
+                    disabled={personaComposition.core?.readiness.state !== 'ready'}
+                  >
+                    {t('automations.modal.personaMainRole')}
+                  </MenuItem>
+                  {personaComposition.behaviorCards.map((behavior) => (
+                    <MenuItem
+                      key={behavior.ref}
+                      value={behavior.slotKey}
+                      disabled={behavior.readiness.state !== 'ready'}
+                    >
+                      {behavior.name}
+                    </MenuItem>
+                  ))}
+                  {behaviorSlotKey
+                    && !personaComposition.behaviorCards.some(
+                      (behavior) => behavior.slotKey === behaviorSlotKey,
+                    ) && (
+                      <MenuItem value={behaviorSlotKey} disabled>
+                        {t('automations.modal.personaUnavailable')}
+                      </MenuItem>
+                    )}
+                </Select>
+                <FormHelperText>
+                  {selectedBehavior?.description || t('automations.modal.personaSkillHelp')}
+                </FormHelperText>
+              </FormControl>
+            )}
+
+            {personaComposition && !selectedPersonaWorkReady && (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {t('automations.modal.personaWorkMissing')}
+              </Alert>
+            )}
+          </Box>
         )}
 
         <TextField
           fullWidth
-          label={t('automations.modal.prompt')}
+          label={t(targetKind === 'persona'
+            ? 'automations.modal.personaPrompt'
+            : 'automations.modal.prompt')}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           margin="normal"
           multiline
           rows={3}
-          helperText={t('automations.modal.promptHelp')}
+          helperText={t(targetKind === 'persona'
+            ? 'automations.modal.personaPromptHelp'
+            : 'automations.modal.promptHelp')}
         />
 
         <FormControlLabel
@@ -458,7 +732,16 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           onClick={handleSave}
           variant="contained"
           color="primary"
-          disabled={saving || !name.trim() || !flowId}
+          disabled={
+            saving
+            || !name.trim()
+            || !flowId
+            || (targetKind === 'persona' && (
+              loadingPersonaComposition
+              || selectedPersonaUnavailable
+              || !selectedPersonaWorkReady
+            ))
+          }
         >
           {saving ? t('automations.modal.saving') : t('automations.modal.saveTrigger')}
         </Button>

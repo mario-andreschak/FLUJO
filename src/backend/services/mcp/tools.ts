@@ -5,11 +5,16 @@ import { resolveGlobalVars } from "@/backend/utils/resolveGlobalVars";
 import {
   MCPToolResponse as ToolResponse,
   MCPServiceResponse,
-  isTaskCallResponse,
-  MCPTaskHandle,
 } from "@/shared/types/mcp";
+import { classifyToolCallResult } from "@/shared/types/mcp/tasks";
 import { isBetaClient } from "./betaClient";
-import { sleep } from "@/backend/utils/sleep";
+import {
+  buildTaskAugmentation,
+  decideTaskAugmentation,
+  mcpTasksClientEnabled,
+} from "./tasksProtocol";
+import { runRemoteTaskLifecycle } from "./clientTasks";
+import { resolveServerIdentity } from "./remoteTaskStore";
 import {
   checkToolCallVisibility,
   filterToolsForAudience,
@@ -128,15 +133,13 @@ export async function listServerTools(
     log.verbose("Raw response from MCP server:", response);
 
     const tools = (response.tools || []).map((tool) => ({
-      name: tool.name,
+      // Preserve the complete SDK-validated definition so newer standard
+      // display and execution metadata (title, icons, outputSchema, execution)
+      // reaches host UIs without requiring another lossy mapping update. The
+      // explicit fallbacks retain FLUJO's existing behavior for older servers.
+      ...tool,
       description: tool.description || "",
-      inputSchema: tool.inputSchema || {},
-      // Preserve server-declared annotations and `_meta`. MCP Apps (#97) link a
-      // tool to its `ui://` UI resource via `_meta.ui.resourceUri` on the tool
-      // DEFINITION (per SEP-1865 / ext-apps), so this must survive listing or
-      // the app link is lost before detection can ever see it.
-      ...(tool.annotations ? { annotations: tool.annotations } : {}),
-      ...(tool._meta ? { _meta: tool._meta } : {}),
+      inputSchema: tool.inputSchema || { type: "object" },
     })) as ToolResponse[];
 
     const visibleTools = filterToolsForAudience(tools, audience);
@@ -259,6 +262,19 @@ export async function callTool(
         onProgress?.(progress);
       },
     };
+    // MCP Tasks negotiation (issue #404). Task-augmented execution is
+    // requested per request through `params.task` and ONLY when: the client
+    // feature flag is on, the LIVE server advertised
+    // `capabilities.tasks.requests.tools.call`, and the tool itself declares
+    // `execution.taskSupport` (required/optional). Classic or incompatible
+    // servers therefore never receive any Tasks metadata.
+    const taskDecision = await decideTaskAugmentation(client, toolName);
+    if (taskDecision.request) {
+      log.info(
+        `Requesting task-augmented execution of ${toolName} on ${serverName} (${taskDecision.reason})`,
+      );
+    }
+
     // The ONE v1/v2 signature difference FLUJO hits (see betaClient.ts): v1 is
     // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
     // schema parameter — passing options in the v1 slot would silently discard
@@ -266,6 +282,7 @@ export async function callTool(
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
+      ...(taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
       ...(callerNodeId || ownerScope
         ? {
             _meta: {
@@ -287,174 +304,62 @@ export async function callTool(
       : await client.callTool(requestParams, undefined, callOptions);
 
     // -----------------------------------------------------------------------
-    // MCP Tasks extension (SEP-2663 / spec 2026-07-28)
-    // If the server returned a task handle instead of a CallToolResult, enter
-    // a poll loop: poll tasks/get until a terminal status, forwarding status
-    // updates through the existing onProgress seam. If the caller aborts
-    // (user Stop), send tasks/cancel (best-effort) and throw.
-    // Only engaged on the v2 beta client path because Tasks require 2026-07-28
-    // protocol support; on v1 clients the response will never match the guard.
+    // MCP Tasks extension (io.modelcontextprotocol/tasks)
+    // A task-augmented tools/call answers with `CreateTaskResult` ({ task })
+    // instead of a CallToolResult. The full lifecycle (durable record, polling,
+    // input_required, cancellation, terminal mapping) lives in clientTasks.ts;
+    // classification is strict, so a normal tool payload that merely contains a
+    // `task` key is never reinterpreted as a task handle.
     // -----------------------------------------------------------------------
-    if (isTaskCallResponse(response)) {
-      const taskHandle = response.task as MCPTaskHandle;
-      log.info(
-        `Tool ${toolName} on ${serverName} returned task handle ${taskHandle.taskId} (status: ${taskHandle.status})`,
+    const classified = classifyToolCallResult(response, {
+      taskRequested: taskDecision.request,
+    });
+
+    if (classified.kind === "protocol-invalid") {
+      log.warn(
+        `Server ${serverName} returned an invalid task result for ${toolName}: ${classified.reason}`,
       );
-      onProgress?.({
-        progress: 0,
-        message: `Task ${taskHandle.taskId} created (${taskHandle.status})`,
+      return {
+        success: false,
+        error: `Server '${serverName}' returned an invalid MCP task result: ${classified.reason}`,
+        errorType: "task-protocol-invalid",
+        statusCode: 502,
+        toolName,
+      };
+    }
+
+    if (classified.kind === "task") {
+      // Durable records are part of the gated feature. Resolving the server
+      // identity fingerprint is only meaningful (and only worth the config
+      // read) when a record is actually going to be persisted.
+      const persist = mcpTasksClientEnabled();
+      const serverIdentity = persist
+        ? await resolveServerIdentity(serverName)
+        : "unnegotiated";
+      return await runRemoteTaskLifecycle({
+        client,
+        serverName,
+        serverIdentity,
+        toolName,
+        args: normalizedArgs,
+        task: classified.task,
+        timeoutMs,
+        ...(signal ? { signal } : {}),
+        ...(onProgress ? { onProgress } : {}),
+        ownership: {
+          ...(callerNodeId ? { nodeId: callerNodeId } : {}),
+          ...(ownerScope ? { ownerScope } : {}),
+          source,
+        },
+        // Without the flag the lifecycle still runs (a server may answer with
+        // a task regardless) — it just does not claim durable compliance.
+        persist,
+        // With no negotiated capability information, cancellation stays
+        // best-effort exactly as it was before this change.
+        supportsCancel:
+          taskDecision.negotiation.supportsCancel ||
+          !taskDecision.negotiation.supported,
       });
-
-      const POLL_MIN_MS = 1_000;
-      const POLL_MAX_MS = 30_000;
-      const pollMs = Math.min(
-        Math.max(taskHandle.pollInterval ?? 5_000, POLL_MIN_MS),
-        POLL_MAX_MS,
-      );
-
-      const TERMINAL = new Set(["completed", "failed", "cancelled"]);
-      let currentStatus = taskHandle.status;
-      let elapsed = 0;
-      let terminal = TERMINAL.has(currentStatus);
-
-      // A server may return an already-terminal task. Preserve its actual
-      // outcome instead of treating every terminal handle as cancellation.
-      if (currentStatus === "completed") {
-        return {
-          success: true,
-          data: taskHandle.result,
-          progressToken: taskHandle.taskId,
-        };
-      }
-      if (currentStatus === "failed") {
-        return {
-          success: false,
-          error: taskHandle.error ?? `Task ${taskHandle.taskId} failed`,
-          progressToken: taskHandle.taskId,
-        };
-      }
-
-      let cancelTaskPromise: Promise<void> | undefined;
-      const cancelTask = (): Promise<void> => {
-        if (!cancelTaskPromise) {
-          // Never reuse the caller's already-aborted signal: doing so prevents
-          // tasks/cancel from reaching the server. This request gets its own
-          // short SDK timeout and is deliberately best-effort.
-          cancelTaskPromise = (async () => {
-            try {
-              await (
-                client as unknown as {
-                  request: (
-                    req: unknown,
-                    schema: unknown,
-                    opts?: unknown,
-                  ) => Promise<unknown>;
-                }
-              ).request(
-                {
-                  method: "tasks/cancel",
-                  params: { taskId: taskHandle.taskId },
-                },
-                undefined,
-                { timeout: 10_000 },
-              );
-            } catch (cancelError) {
-              log.warn(
-                `Best-effort cancellation failed for task ${taskHandle.taskId}:`,
-                cancelError,
-              );
-            }
-          })();
-        }
-        return cancelTaskPromise;
-      };
-      const onTaskAbort = () => {
-        void cancelTask();
-      };
-      signal?.addEventListener("abort", onTaskAbort, { once: true });
-
-      try {
-        while (!TERMINAL.has(currentStatus)) {
-          if (signal?.aborted) {
-            await cancelTask();
-            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
-          }
-
-          await sleep(pollMs);
-          elapsed += pollMs;
-
-          if (signal?.aborted) {
-            await cancelTask();
-            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
-          }
-
-          const pollResponse = (await (
-            client as unknown as {
-              request: (
-                req: unknown,
-                schema: unknown,
-                opts?: unknown,
-              ) => Promise<unknown>;
-            }
-          ).request(
-            { method: "tasks/get", params: { taskId: taskHandle.taskId } },
-            undefined,
-            { signal, timeout: timeoutMs },
-          )) as { task: MCPTaskHandle };
-
-          if (signal?.aborted) {
-            await cancelTask();
-            throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
-          }
-
-          const task = pollResponse.task;
-          currentStatus = task.status;
-          terminal = TERMINAL.has(currentStatus);
-          log.debug(
-            `Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`,
-          );
-
-          onProgress?.({
-            progress:
-              task.status === "completed"
-                ? 100
-                : Math.min(99, Math.round(elapsed / 1000)),
-            message: `Task ${taskHandle.taskId}: ${task.status}`,
-          });
-
-          if (task.status === "completed") {
-            return {
-              success: true,
-              data: task.result,
-              progressToken: taskHandle.taskId,
-            };
-          }
-          if (task.status === "failed") {
-            return {
-              success: false,
-              error: task.error ?? `Task ${taskHandle.taskId} failed`,
-              progressToken: taskHandle.taskId,
-            };
-          }
-          // 'input_required': continue polling (tasks/update deferred to Phase 3)
-          // 'cancelled': loop will exit on next TERMINAL check
-        }
-
-        // Reached terminal 'cancelled' from the server side.
-        return {
-          success: false,
-          error: `Tool '${toolName}' task ${taskHandle.taskId} was cancelled by the server.`,
-          errorType: "cancelled",
-          progressToken: taskHandle.taskId,
-        };
-      } catch (taskError) {
-        // An aborted tasks/get and a polling timeout both leave the remote task
-        // alive unless we explicitly cancel it with a fresh request.
-        if (!terminal) await cancelTask();
-        throw taskError;
-      } finally {
-        signal?.removeEventListener("abort", onTaskAbort);
-      }
     }
 
     return {

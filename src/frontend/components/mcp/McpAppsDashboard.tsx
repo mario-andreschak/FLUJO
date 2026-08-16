@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -13,7 +13,6 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   IconButton,
   Stack,
@@ -23,57 +22,28 @@ import {
 import AppsIcon from '@mui/icons-material/Apps';
 import BuildIcon from '@mui/icons-material/Build';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import CloseIcon from '@mui/icons-material/Close';
 import McpAppFrame from '@/frontend/components/Chat/McpAppFrame';
-import { mcpService } from '@/frontend/services/mcp';
-import { MCPServerConfig } from '@/shared/types/mcp';
-import {
-  extractUiResourceUri,
-  isMcpAppMimeType,
-  isUiResourceUri,
-} from '@/shared/utils/mcpApps';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
+import { mcpAppKey as appKey, useMcpAppsDiscovery } from './useMcpAppsDiscovery';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+
+/** Server + `ui://` resource the dashboard should preview when it opens (#396). */
+export interface McpAppsDashboardSelection {
+  serverName: string;
+  uri: string;
+}
 
 interface McpAppsDashboardProps {
   open: boolean;
   onClose: () => void;
   onOpenToolTester: (serverName: string, toolName: string) => void;
+  /**
+   * #396: the quick-actions menu opens this dashboard on a specific app.
+   * Applied once per discovery run; discovery, rendering and the sandbox
+   * boundary are unchanged, and an unknown target falls back to the first app.
+   */
+  initialSelection?: McpAppsDashboardSelection | null;
 }
-
-interface DashboardApp {
-  serverName: string;
-  uri: string;
-  name: string;
-  description?: string;
-  mimeType: string;
-  toolNames: string[];
-  listedResource: boolean;
-}
-
-interface ServerDiscovery {
-  name: string;
-  apps: DashboardApp[];
-  error?: string;
-}
-
-const appKey = (serverName: string, uri: string) => `${serverName}\u0000${uri}`;
-const MCP_APP_MIME_TYPE = 'text/html;profile=mcp-app';
-
-const appNameFromUri = (uri: string): string => {
-  const tail = uri.replace(/^ui:\/\//i, '').split('/').filter(Boolean).at(-1);
-  if (!tail) return uri;
-  try {
-    return decodeURIComponent(tail).replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-  } catch {
-    return tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-  }
-};
-
-const readableError = (error: unknown, fallback: string): string => {
-  if (typeof error === 'string' && error.trim()) return error;
-  if (error instanceof Error && error.message.trim()) return error.message;
-  return fallback;
-};
 
 /**
  * Discover and launch standalone MCP App resources without weakening the
@@ -83,201 +53,130 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
   open,
   onClose,
   onOpenToolTester,
+  initialSelection = null,
 }) => {
   const { t, tp } = useI18n();
-  const [servers, setServers] = useState<ServerDiscovery[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const requestIdRef = useRef(0);
 
-  const discover = useCallback(async (refresh = false) => {
-    const requestId = ++requestIdRef.current;
+  // Discovery is shared with the navigation quick-actions menu (#396) so the
+  // two surfaces cannot disagree about what an MCP App is. The dashboard keeps
+  // its unfiltered mode: every enabled, opted-in server, apps or not.
+  const {
+    servers,
+    apps: allApps,
+    loading,
+    refreshing,
+    error: loadError,
+    serverErrors: discoveryErrors,
+    discoveryId,
+    refresh,
+  } = useMcpAppsDiscovery({ active: open });
+
+  // Each discovery run (open, refresh, server config change) restarts the
+  // selection exactly as before, so a revoked server can never keep an app
+  // frame on screen.
+  useEffect(() => {
     setSelectedKey(null);
-    setLoadError(null);
-    if (refresh) setRefreshing(true);
-    else setLoading(true);
-
-    try {
-      const configsResult = await mcpService.loadServerConfigs();
-      if (requestId !== requestIdRef.current) return;
-      if (!Array.isArray(configsResult)) {
-        setServers([]);
-        setLoadError(readableError(
-          (configsResult as { error?: unknown } | null)?.error,
-          t('mcp.apps.configFailed'),
-        ));
-        return;
-      }
-
-      const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
-        server.disabled !== true && server.enableMcpApps === true
-      ));
-
-      const discoveries = await Promise.all(eligible.map(async (server): Promise<ServerDiscovery> => {
-        if (refresh) {
-          mcpService.clearCapabilitiesCache(server.name);
-          mcpService.clearToolsCache(server.name);
-        }
-
-        const [resourceResult, toolResult] = await Promise.all([
-          mcpService.listServerResources(server.name),
-          mcpService.listServerTools(server.name),
-        ]);
-        const toolsByResource = new Map<string, string[]>();
-        for (const tool of Array.isArray(toolResult?.tools) ? toolResult.tools : []) {
-          const uri = extractUiResourceUri(tool?._meta);
-          if (!uri || typeof tool?.name !== 'string' || !tool.name.trim()) continue;
-          toolsByResource.set(uri, [...(toolsByResource.get(uri) || []), tool.name]);
-        }
-
-        if (resourceResult?.error && toolsByResource.size === 0) {
-          return {
-            name: server.name,
-            apps: [],
-            error: readableError(resourceResult.error, t('mcp.apps.discoveryUnavailable')),
-          };
-        }
-
-        const appsByUri = new Map<string, DashboardApp>();
-        for (const resource of Array.isArray(resourceResult?.resources) ? resourceResult.resources : []) {
-          if (!isUiResourceUri(resource?.uri) || !isMcpAppMimeType(resource?.mimeType)) continue;
-          const title = typeof resource.title === 'string' && resource.title.trim()
-            ? resource.title.trim()
-            : typeof resource.name === 'string' && resource.name.trim()
-              ? resource.name.trim()
-              : resource.uri;
-          appsByUri.set(resource.uri, {
-            serverName: server.name,
-            uri: resource.uri,
-            name: title,
-            description: typeof resource.description === 'string' && resource.description.trim()
-              ? resource.description.trim()
-              : undefined,
-            mimeType: resource.mimeType,
-            toolNames: toolsByResource.get(resource.uri) || [],
-            listedResource: true,
-          });
-        }
-
-        // MCP Apps are primarily discovered through tool metadata, and the
-        // extension explicitly permits servers to omit UI-only resources from
-        // resources/list. Include those linked URIs as launchable candidates;
-        // McpAppFrame still performs the authoritative resources/read MIME,
-        // URI, CSP, and HTML validation before anything is rendered.
-        for (const [uri, toolNames] of toolsByResource) {
-          if (appsByUri.has(uri)) continue;
-          appsByUri.set(uri, {
-            serverName: server.name,
-            uri,
-            name: appNameFromUri(uri),
-            mimeType: MCP_APP_MIME_TYPE,
-            toolNames,
-            listedResource: false,
-          });
-        }
-
-        return {
-          name: server.name,
-          apps: Array.from(appsByUri.values()),
-        };
-      }));
-
-      if (requestId === requestIdRef.current) setServers(discoveries);
-    } catch (error) {
-      if (requestId === requestIdRef.current) {
-        setServers([]);
-        setLoadError(readableError(error, t('mcp.apps.discoveryFailed')));
-      }
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [t]);
+  }, [discoveryId]);
 
   useEffect(() => {
-    if (!open) {
-      requestIdRef.current += 1;
-      setSelectedKey(null);
-      return;
-    }
-    void discover(false);
-  }, [discover, open]);
+    if (!open) setSelectedKey(null);
+  }, [open]);
 
+  // #396: a caller-supplied target is honored once and then forgotten, so a
+  // later refresh or a manual click is not undone by it.
+  const pendingSelectionRef = useRef<McpAppsDashboardSelection | null>(null);
   useEffect(() => {
-    if (!open) return;
-    const onServerConfigChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        serverName?: string;
-        config?: { enableMcpApps?: boolean; disabled?: boolean };
-      }>).detail;
-      if (!detail?.serverName) return;
+    pendingSelectionRef.current = open ? initialSelection : null;
+  }, [initialSelection, open]);
 
-      const selectedServer = servers.find((server) => (
-        selectedKey?.startsWith(`${server.name}\u0000`)
-      ));
-      const accessLost = detail.config?.disabled === true
-        || detail.config?.enableMcpApps === false;
-      if (selectedServer?.name === detail.serverName && accessLost) setSelectedKey(null);
-      mcpService.clearCapabilitiesCache(detail.serverName);
-      mcpService.clearToolsCache(detail.serverName);
-      void discover(true);
-    };
-    window.addEventListener('flujo:mcp-server-config-changed', onServerConfigChanged);
-    return () => window.removeEventListener('flujo:mcp-server-config-changed', onServerConfigChanged);
-  }, [discover, open, selectedKey, servers]);
-
-  const allApps = useMemo(() => servers.flatMap((server) => server.apps), [servers]);
   const selectedApp = useMemo(
     () => allApps.find((app) => appKey(app.serverName, app.uri) === selectedKey),
     [allApps, selectedKey],
   );
-  const discoveryErrors = servers.filter((server) => server.error);
   const eligibleServerCount = servers.length;
 
   // Opening the library should show an app, not another empty selection step.
   useEffect(() => {
     if (!open || selectedKey || allApps.length === 0) return;
+    const wanted = pendingSelectionRef.current;
+    if (wanted) {
+      pendingSelectionRef.current = null;
+      const match = allApps.find(
+        (app) => app.serverName === wanted.serverName && app.uri === wanted.uri,
+      );
+      if (match) {
+        setSelectedKey(appKey(match.serverName, match.uri));
+        return;
+      }
+    }
     setSelectedKey(appKey(allApps[0].serverName, allApps[0].uri));
   }, [allApps, open, selectedKey]);
 
+
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" aria-labelledby="mcp-apps-dashboard-title">
-      <DialogTitle id="mcp-apps-dashboard-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <AppsIcon color="primary" />
-        {t('mcp.apps.title')}
-        <Box sx={{ flex: 1 }} />
-        <Tooltip title={t('mcp.apps.refresh')}>
-          <span>
-            <IconButton
-              aria-label={t('mcp.apps.refresh')}
-              onClick={() => void discover(true)}
-              disabled={loading || refreshing}
-              size="small"
-            >
-              {refreshing ? <CircularProgress size={20} /> : <RefreshIcon fontSize="small" />}
-            </IconButton>
-          </span>
-        </Tooltip>
-        <IconButton aria-label={t('mcp.apps.closeAria')} onClick={onClose} size="small">
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullScreen
+      aria-labelledby="mcp-apps-dashboard-title"
+      slotProps={{
+        paper: {
+          sx: {
+            // Opt out of the global theme's backdropFilter so that
+            // position:fixed descendants (MCP App panels) resolve against
+            // the real viewport instead of being clipped by this dialog.
+            backdropFilter: 'none',
+            borderRadius: 0,
+            border: 0,
+            margin: 0,
+            width: '100%',
+            maxWidth: '100%',
+            height: '100%',
+            maxHeight: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        },
+      }}
+    >
+      <DialogHeaderActions
+        title={(
+          <Box display="flex" alignItems="center" gap={1} minWidth={0}>
+            <AppsIcon color="primary" />
+            <Typography id="mcp-apps-dashboard-title" variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {t('mcp.apps.title')}
+            </Typography>
+          </Box>
+        )}
+        onClose={onClose}
+        additionalActions={(
+          <Tooltip title={t('mcp.apps.refresh')}>
+            <span>
+              <IconButton
+                aria-label={t('mcp.apps.refresh')}
+                onClick={refresh}
+                disabled={loading || refreshing}
+                size="small"
+              >
+                {refreshing ? <CircularProgress size={20} /> : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+      />
       <Divider />
 
-      <DialogContent sx={{ p: 0, minHeight: { xs: 480, md: 620 } }}>
+      <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ minHeight: 420 }}>
+          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ flex: 1 }}>
             <CircularProgress />
             <Typography color="text.secondary">{t('mcp.apps.discovering')}</Typography>
           </Stack>
         ) : loadError ? (
           <Alert severity="error" sx={{ m: 3 }}>{loadError}</Alert>
         ) : eligibleServerCount === 0 ? (
-          <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 420, p: 3 }}>
+          <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, p: 3 }}>
             <AppsIcon color="disabled" sx={{ fontSize: 48 }} />
             <Typography variant="h6">{t('mcp.apps.noServers')}</Typography>
             <Typography color="text.secondary" textAlign="center">
@@ -285,8 +184,8 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
             </Typography>
           </Stack>
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 38%) 1fr' }, minHeight: 620 }}>
-            <Box sx={{ borderRight: { md: '1px solid' }, borderColor: { md: 'divider' }, p: 2, overflow: 'auto' }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 34%) 1fr' }, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Box sx={{ borderRight: { md: '1px solid' }, borderColor: { md: 'divider' }, p: 2, overflow: 'auto', minHeight: 0 }}>
               <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
                 {t('mcp.apps.summary', {
                   apps: tp('mcp.apps.app', allApps.length),
@@ -344,9 +243,9 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
               )}
             </Box>
 
-            <Box sx={{ p: { xs: 2, md: 3 }, minWidth: 0, overflow: 'auto' }}>
+            <Box sx={{ p: { xs: 2, md: 3 }, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
               {!selectedApp ? (
-                <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 360 }}>
+                <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: '100%' }}>
                   <AppsIcon color="disabled" sx={{ fontSize: 44 }} />
                   <Typography variant="h6">{t('mcp.apps.select')}</Typography>
                   <Typography color="text.secondary" textAlign="center">

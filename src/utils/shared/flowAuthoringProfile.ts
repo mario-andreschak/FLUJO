@@ -32,17 +32,16 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
   'concurrencyLimit',
   'joinSeparator',
   'errorStrategy',
-  'resultPresentation',
   'allowCallerPrompt',
   'saveConversation',
+  'sessionKey',
   'captureVariable',
   'captureResource',
   'captureKv',
 ]);
 
 /** True when Guided mode would hide authored behavior on this flow. */
-export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'permissionRules'>): boolean {
-  if (flow.permissionRules !== undefined) return true;
+export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges'>): boolean {
   const nodeById = new Map((flow.nodes ?? []).map(node => [node.id, node]));
   const guidedSubagentPairs = new Set(
     getGuidedSubagentLinks(flow.nodes ?? [], flow.edges ?? [])
@@ -56,6 +55,10 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'p
     [...guidedSubagentPairs].map(pair => pair.split('\u0000')[1]),
   );
   for (const node of flow.nodes ?? []) {
+    // Guided allow-list (issue #380 decision record: docs/architecture/flowspec-node-inclusion-policy.md).
+    // Any node type NOT in this list — including 'static', 'resource', 'signal', 'trigger' — flags the
+    // flow as advanced. This is intentional: those types are Advanced/FlowSpec-only by design, not an
+    // oversight, so do not "fix" this list by adding them without updating the policy doc first.
     if (!['start', 'process', 'finish', 'subflow', 'mcp'].includes(node.type ?? '')) return true;
     const properties = node.data?.properties ?? {};
     const keys = Object.keys(properties);
@@ -71,6 +74,11 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'p
     if (
       node.type === 'subflow' &&
       (
+        // Newly created Guided sub-agents persist these two defaults even
+        // though the simple UI does not expose their advanced alternatives.
+        // Legacy absence is also safe; any non-default explicit choice is not.
+        (properties.resultPresentation !== undefined && properties.resultPresentation !== 'separate') ||
+        (properties.sessionScope !== undefined && properties.sessionScope !== 'per-key') ||
         (properties.inputMode !== undefined && properties.inputMode !== (
           guidedSubagentNodeIds.has(node.id) ? 'isolated' : 'full-history'
         )) ||

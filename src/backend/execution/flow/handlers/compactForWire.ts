@@ -58,6 +58,8 @@ export interface CompactForWireOptions {
   toolResultHeadChars?: number;
   /** Drop assistant prose from old assistant turns that also have tool_calls. Default true. */
   dropOldAssistantProse?: boolean;
+  /** Whether this model can use the synthetic read_resource tool. Default true. */
+  canUseTools?: boolean;
   /**
    * Captured run resources keyed by producing tool_call_id (issue #168). When a
    * truncated tool result has a `.result` entry here, its URI is embedded so the
@@ -88,6 +90,7 @@ const DEFAULTS: Required<Omit<CompactForWireOptions, 'resourceMarkers'>> = {
   keepRecentMessages: 12,
   toolResultHeadChars: 2000,
   dropOldAssistantProse: true,
+  canUseTools: true,
   allowLossyTruncation: false,
   compactRecentToolResults: false,
 };
@@ -138,7 +141,7 @@ export function compactForWire(
   messages: OpenAI.ChatCompletionMessageParam[],
   opts?: CompactForWireOptions
 ): OpenAI.ChatCompletionMessageParam[] {
-  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, allowLossyTruncation, compactRecentToolResults } = {
+  const { keepRecentMessages, toolResultHeadChars, dropOldAssistantProse, canUseTools, allowLossyTruncation, compactRecentToolResults } = {
     ...DEFAULTS,
     ...opts,
   };
@@ -174,8 +177,10 @@ export function compactForWire(
         return {
           ...msg,
           content:
-            `${head}\n…\n[tool result truncated for context — the full ${total}-character result ` +
-            `is stored as run resource ${uri}; call read_resource with this uri to read all of it]`,
+            canUseTools
+              ? `${head}\n…\n[tool result truncated for context — the full ${total}-character result ` +
+                `is stored as run resource ${uri}; call read_resource with this uri to read all of it]`
+              : `${head}\n…\n[tool result truncated for context — ${total} characters; full content is stored server-side]`,
         };
       }
       if (allowLossyTruncation) {

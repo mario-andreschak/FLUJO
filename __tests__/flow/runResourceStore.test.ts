@@ -24,7 +24,13 @@ import {
   _setRunResourcesDirForTests,
   _clearRunResourceSettingsCache,
 } from '@/backend/services/runResources';
-import type { RunResourceEntry } from '@/shared/types/runResources';
+import { captureToolResult } from '@/backend/services/runResources/capture';
+import {
+  executeRunResourceTool,
+  READ_RESOURCE_TOOL_NAME,
+} from '@/backend/execution/flow/handlers/runResourceTools';
+import { DEFAULT_RUN_RESOURCE_SETTINGS, type RunResourceEntry } from '@/shared/types/runResources';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // Settings come from storage (loadItem). Pin them to defaults with a tight
 // per-resource cap so the cap paths are testable without megabyte payloads.
@@ -122,6 +128,54 @@ describe('write/read/list round-trip', () => {
   it('unknown uri reads as null', async () => {
     expect(await readRunResource(buildRunResourceUri('convA', 'no-such-id'))).toBeNull();
     expect(await readRunResource('flujo://run/never-seen-conv/no-such-id')).toBeNull();
+  });
+});
+
+describe('capture → durable reload → read_resource round-trip (#368)', () => {
+  it('reads the exact substituted payload after a cold reload and keeps conversation authorization', async () => {
+    const conversationId = 'capture-resume-conv';
+    const originalText = 'durable tool output '.repeat(20);
+    const result: CallToolResult = { content: [{ type: 'text', text: originalText }] };
+    const captured = await captureToolResult({
+      conversationId,
+      server: 'filesystem',
+      toolName: 'read_file',
+      toolCallId: 'call-capture-resume',
+      result,
+      settings: {
+        ...DEFAULT_RUN_RESOURCE_SETTINGS,
+        textThresholdChars: 10,
+        replaceLargeTextWithStub: true,
+      },
+    });
+
+    expect(captured.captured).toHaveLength(1);
+    const marker = (captured.result.content[0] as { text?: string }).text ?? '';
+    const uri = marker.match(/flujo:\/\/run\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/)?.[0];
+    expect(uri).toBe(captured.captured[0].uri);
+    expect(parseRunResourceUri(uri!)).toEqual({
+      conversationId,
+      id: captured.captured[0].id,
+    });
+
+    // Simulate process-memory loss at a resume boundary. Pointing the store at
+    // the same durable directory clears its in-memory index cache.
+    _setRunResourcesDirForTests(tmpDir);
+
+    const resumed = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId },
+    );
+    expect(resumed).toMatchObject({ success: true, data: { uri, content: originalText } });
+
+    const denied = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId: 'different-conversation' },
+    );
+    expect(denied.success).toBe(false);
+    expect(denied.error).toContain('not part of this run');
   });
 });
 

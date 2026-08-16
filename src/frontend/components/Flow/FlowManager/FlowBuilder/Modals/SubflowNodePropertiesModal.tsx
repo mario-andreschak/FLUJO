@@ -3,20 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
   Typography,
   Box,
-  IconButton,
   Divider,
   TextField,
   Alert,
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
@@ -24,10 +21,13 @@ import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import ViewAgendaOutlinedIcon from '@mui/icons-material/ViewAgendaOutlined';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
@@ -148,6 +148,14 @@ export const SubflowNodePropertiesModal = ({
         return;
       }
       const properties = { ...nodeData.properties };
+      const rawTurnCap = properties.sessionTurnCap;
+      const normalizedTurnCap = typeof rawTurnCap === 'number' ? rawTurnCap : Number(rawTurnCap);
+      if (rawTurnCap === undefined || rawTurnCap === '') delete properties.sessionTurnCap;
+      else if (Number.isSafeInteger(normalizedTurnCap) && normalizedTurnCap > 0) {
+        properties.sessionTurnCap = normalizedTurnCap;
+      } else {
+        return;
+      }
 
       // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
       // when empty, so flowToSpec never emits an empty captureX and existing
@@ -196,6 +204,14 @@ export const SubflowNodePropertiesModal = ({
   const promptTemplate = nodeData.properties?.promptTemplate || '';
   const inputMode: 'full-history' | 'latest-message' | 'isolated' =
     nodeData.properties?.inputMode || (promptTemplate.trim() ? 'isolated' : 'full-history');
+  const sessionScope: 'per-visit' | 'per-run' | 'per-key' =
+    nodeData.properties?.sessionScope || 'per-visit';
+  const sessionInputMode: 'resume' | 'summary' =
+    nodeData.properties?.sessionInputMode || 'resume';
+  const sessionTurnCapValue = nodeData.properties?.sessionTurnCap ?? '';
+  const sessionTurnCapNumber = Number(sessionTurnCapValue);
+  const sessionTurnCapInvalid = sessionTurnCapValue !== ''
+    && (!Number.isSafeInteger(sessionTurnCapNumber) || sessionTurnCapNumber <= 0);
 
   return (
     <Dialog
@@ -212,16 +228,10 @@ export const SubflowNodePropertiesModal = ({
         },
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {t('flows.modal.properties', { name: nodeData.label || t('flows.subflow.title') })}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.subflow.title') })}
+        onClose={onClose}
+      />
 
       <Divider />
 
@@ -430,6 +440,35 @@ export const SubflowNodePropertiesModal = ({
           />
         </Box>
 
+        {/* Issue #384 (deferred UI half of #359): how parallel lane results are
+            presented in chat. Only takes effect when a run produces >1 lane. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.resultPresentationTitle')}
+        </Typography>
+        <Box
+          role="radiogroup"
+          aria-label={t('flows.subflow.resultPresentationAria')}
+          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}
+        >
+          <OptionCard
+            selected={(nodeData.properties?.resultPresentation ?? 'joined') === 'separate'}
+            onClick={() => handlePropertyChange('resultPresentation', 'separate')}
+            icon={<ViewAgendaOutlinedIcon />}
+            title={t('flows.subflow.resultSeparate')}
+            description={t('flows.subflow.resultSeparateHelp')}
+          />
+          <OptionCard
+            selected={(nodeData.properties?.resultPresentation ?? 'joined') !== 'separate'}
+            onClick={() => handlePropertyChange('resultPresentation', 'joined')}
+            icon={<MergeTypeIcon />}
+            title={t('flows.subflow.resultJoined')}
+            description={t('flows.subflow.resultJoinedHelp')}
+          />
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          {t('flows.subflow.resultPresentationHelp')}
+        </Typography>
+
         {/* Debugging (issue #125): persist each queued child conversation into
             the chat sidebar, linked to the parent run. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
@@ -449,6 +488,128 @@ export const SubflowNodePropertiesModal = ({
           {t('flows.subflow.saveConversationHelp')}
         </Typography>
 
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.sessionTitle')}
+        </Typography>
+        <Box
+          role="radiogroup"
+          aria-label={t('flows.subflow.sessionAria')}
+          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}
+        >
+          <OptionCard
+            selected={sessionScope === 'per-visit'}
+            onClick={() => {
+              removeProperty('sessionScope');
+              removeProperty('sessionKey');
+              removeProperty('sessionInputMode');
+              removeProperty('sessionTurnCap');
+            }}
+            icon={<ChatBubbleOutlineIcon />}
+            title={t('flows.subflow.sessionPerVisit')}
+            description={t('flows.subflow.sessionPerVisitHelp')}
+          />
+          <OptionCard
+            selected={sessionScope === 'per-run'}
+            onClick={() => {
+              handlePropertyChange('sessionScope', 'per-run');
+              removeProperty('sessionKey');
+            }}
+            icon={<HistoryIcon />}
+            title={t('flows.subflow.sessionPerRun')}
+            description={t('flows.subflow.sessionPerRunHelp')}
+          />
+          <OptionCard
+            selected={sessionScope === 'per-key'}
+            onClick={() => handlePropertyChange('sessionScope', 'per-key')}
+            icon={<AccountTreeOutlinedIcon />}
+            title={t('flows.subflow.sessionPerKey')}
+            description={t('flows.subflow.sessionPerKeyHelp')}
+          />
+        </Box>
+        {sessionScope === 'per-key' && (
+          <TextField
+            fullWidth
+            label={t('flows.subflow.sessionKey')}
+            value={nodeData.properties?.sessionKey || ''}
+            onChange={(e) => {
+              if (e.target.value === '') removeProperty('sessionKey');
+              else handlePropertyChange('sessionKey', e.target.value);
+            }}
+            margin="normal"
+            helperText={t('flows.subflow.sessionKeyHelp')}
+          />
+        )}
+        {sessionScope !== 'per-visit' && (
+          <>
+            <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+              {t('flows.subflow.sessionInputMode')}
+            </Typography>
+            <Box role="radiogroup" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <OptionCard
+                selected={sessionInputMode === 'resume'}
+                onClick={() => removeProperty('sessionInputMode')}
+                icon={<HistoryIcon />}
+                title={t('flows.subflow.sessionResume')}
+                description={t('flows.subflow.sessionResumeHelp')}
+              />
+              <OptionCard
+                selected={sessionInputMode === 'summary'}
+                onClick={() => handlePropertyChange('sessionInputMode', 'summary')}
+                icon={<ShortTextIcon />}
+                title={t('flows.subflow.sessionSummary')}
+                description={t('flows.subflow.sessionSummaryHelp')}
+              />
+            </Box>
+            <TextField
+              fullWidth
+              type="number"
+              inputProps={{ min: 1, step: 1 }}
+              label={t('flows.subflow.sessionTurnCap')}
+              value={sessionTurnCapValue}
+              onChange={(event) => {
+                if (event.target.value === '') removeProperty('sessionTurnCap');
+                else handlePropertyChange('sessionTurnCap', event.target.value);
+              }}
+              margin="normal"
+              error={sessionTurnCapInvalid}
+              helperText={sessionTurnCapInvalid
+                ? t('flows.subflow.sessionTurnCapError')
+                : t('flows.subflow.sessionTurnCapHelp')}
+            />
+          </>
+        )}
+        {sessionScope !== 'per-visit' && nodeData.properties?.saveConversation === false && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {t('flows.subflow.sessionRequiresSaved')}
+          </Alert>
+        )}
+        {sessionScope !== 'per-visit' && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {t('flows.subflow.sessionExperimentalHelp')}
+          </Typography>
+        )}
+
+        {/* Callable-subflow TOOL invocation (issue #385, deferred Part B of
+            #359): a small opt-in toggle. Backend-gated behind the experimental
+            "Let Subflow nodes be called as tools" setting, so leaving this on
+            with the setting off silently keeps today's handoff behaviour. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.invocationTitle')}
+        </Typography>
+        <FormControlLabel
+          sx={{ display: 'block' }}
+          control={
+            <Switch
+              checked={nodeData.properties?.invocationMode === 'tool'}
+              onChange={(e) => handlePropertyChange('invocationMode', e.target.checked ? 'tool' : 'handoff')}
+            />
+          }
+          label={t('flows.subflow.invocationTool')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
+          {t('flows.subflow.invocationToolHelp')}
+        </Typography>
+
         <Divider sx={{ my: 3 }} />
         <CaptureFields
           value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}
@@ -464,7 +625,7 @@ export const SubflowNodePropertiesModal = ({
 
       <DialogActions>
         <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
-        <Button onClick={handleSave} variant="contained" color="primary">
+        <Button onClick={handleSave} variant="contained" color="primary" disabled={sessionTurnCapInvalid}>
           {t('flows.modal.save')}
         </Button>
       </DialogActions>

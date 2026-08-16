@@ -30,6 +30,8 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
+import { _setSnapshotStoreDirForTests, snapshotStore } from './SnapshotStore';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('backend/services/snapshot/ShadowRepoService');
 
@@ -48,19 +50,25 @@ let shadowRootDir: string | null = null;
 export function _setShadowRepoDirForTests(dir: string | null): string | null {
   const previous = shadowRootDir;
   shadowRootDir = dir;
+  _setSnapshotStoreDirForTests(dir);
   return previous;
 }
 
 function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
   // Lazy require so importing this module never eagerly touches paths/env.
+  // Snapshots are workspace-owned user data (#406).
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { getDataDir } = require('@/utils/paths');
-  return path.join(getDataDir(), 'snapshots');
+  const { getWorkspaceDataDir } = require('@/utils/workspace');
+  return path.join(getWorkspaceDataDir(), 'snapshots');
 }
 
-/** Snapshots globally on unless the operator or user switches them off. */
-async function snapshotsEnabled(): Promise<boolean> {
+/**
+ * One authoritative gate for snapshot capture and restore UI/API availability.
+ * The operator can force the feature off; otherwise the user must explicitly
+ * opt in through Settings > Experimental.
+ */
+export async function snapshotsEnabled(): Promise<boolean> {
   const raw = (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'off') return false;
 
@@ -69,10 +77,10 @@ async function snapshotsEnabled(): Promise<boolean> {
       StorageKey.SPEECH_SETTINGS,
       undefined,
     );
-    return settings?.experimental?.snapshotsEnabled !== false;
+    return settings?.experimental?.snapshotsEnabled === true;
   } catch (error) {
-    log.warn('Could not load snapshot setting; keeping snapshots enabled', error);
-    return true;
+    log.warn('Could not load snapshot setting; disabling snapshots', error);
+    return false;
   }
 }
 
@@ -97,23 +105,29 @@ function gitArgs(root: string): string[] {
 }
 
 class ShadowRepoService {
+  private async isEligibleRoot(root: string): Promise<boolean> {
+    try {
+      const abs = path.resolve(root);
+      const stat = await fs.stat(abs).catch(() => null);
+      if (!stat || !stat.isDirectory()) return false;
+      const git = simpleGit(abs);
+      if (!(await git.checkIsRepo())) return false;
+      const topLevel = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
+      return path.resolve(topLevel) === abs;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * True when snapshots are on AND `root` is an existing git repository.
    * Read-only: `checkIsRepo` inspects the real repo but never mutates it.
    */
   async isEnabledFor(root: string): Promise<boolean> {
     if (!(await snapshotsEnabled())) return false;
-    try {
-      const abs = path.resolve(root);
-      const stat = await fs.stat(abs).catch(() => null);
-      if (!stat || !stat.isDirectory()) return false;
-      // checkIsRepo on the root's OWN git context (no --git-dir override): this
-      // asks "is the user's target a git repo?" without touching it.
-      return await simpleGit(abs).checkIsRepo();
-    } catch (err) {
-      log.debug('isEnabledFor: not a git repo / unavailable', { root, err });
-      return false;
-    }
+    const eligible = await this.isEligibleRoot(root);
+    if (!eligible) log.debug('isEnabledFor: not a git repo / unavailable', { root });
+    return eligible;
   }
 
   /** Ensure the shadow gitdir exists and is initialised (idempotent). */
@@ -136,28 +150,69 @@ class ShadowRepoService {
     await git.raw([...gitArgs(root), 'config', 'core.autocrlf', 'false']);
   }
 
+  private async captureCommit(root: string): Promise<string> {
+    await this.ensureShadowRepo(root);
+    const git = clientFor(root);
+    await git.raw([...gitArgs(root), 'add', '-A']);
+    const tree = (await git.raw([...gitArgs(root), 'write-tree'])).trim();
+    // Parentless commits make captures independently expirable. Each returned
+    // SHA is held by a retention-owned ref until policy explicitly removes it.
+    const sha = (await git.raw([
+      ...gitArgs(root),
+      'commit-tree',
+      tree,
+      '-m',
+      `snapshot ${new Date().toISOString()}`,
+    ])).trim();
+    const previousHead = await git.raw([...gitArgs(root), 'rev-parse', '--verify', 'HEAD'])
+      .then(value => value.trim())
+      .catch(() => '');
+    if (/^[a-f0-9]{40,64}$/i.test(previousHead)) {
+      const legacyRef = `refs/flujo/legacy/${previousHead}`;
+      const alreadyRetained = await git.raw([
+        ...gitArgs(root),
+        'for-each-ref',
+        '--format=%(objectname)',
+        'refs/flujo',
+      ]).then(value => value.split(/\s+/).includes(previousHead));
+      if (!alreadyRetained) await git.raw([...gitArgs(root), 'update-ref', legacyRef, previousHead]);
+    }
+    const ref = `refs/flujo/captures/${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    await git.raw([...gitArgs(root), 'update-ref', ref, sha]);
+    await git.raw([...gitArgs(root), 'update-ref', 'HEAD', sha]);
+    return sha;
+  }
+
+  private async assertSnapshotAvailable(root: string, sha: string): Promise<void> {
+    if (!/^[a-f0-9]{40,64}$/i.test(sha) && sha !== 'HEAD') {
+      throw new Error('Invalid snapshot reference');
+    }
+    const git = clientFor(root);
+    await git.raw([...gitArgs(root), 'fsck', '--full', '--no-dangling']);
+    await git.raw([...gitArgs(root), 'cat-file', '-e', `${sha}^{commit}`]);
+  }
+
   /**
    * Capture the current worktree state of `root` into the shadow repo and
    * return the commit SHA, or `null` when disabled / on any failure. Respects
-   * the root's `.gitignore`, includes untracked files, and (with --allow-empty)
-   * always produces a commit so a no-change before/after pair still yields two
-   * comparable SHAs. NEVER throws.
+   * the root's `.gitignore`, includes untracked files, and always produces an
+   * independently retained commit. NEVER throws.
    */
   async capture(root: string): Promise<string | null> {
     if (!(await this.isEnabledFor(root))) return null;
     try {
-      await this.ensureShadowRepo(root);
-      const git = clientFor(root);
-      await git.raw([...gitArgs(root), 'add', '-A']);
-      await git.raw([
-        ...gitArgs(root),
-        'commit',
-        '--no-verify',
-        '--allow-empty',
-        '-m',
-        `snapshot ${new Date().toISOString()}`,
-      ]);
-      const sha = (await git.raw([...gitArgs(root), 'rev-parse', 'HEAD'])).trim();
+      if (!(await snapshotStore.ensureCaptureCapacity())) {
+        log.warn('capture suspended because snapshot retention cannot make safe space');
+        return null;
+      }
+      const sha = await snapshotStore.withAccess(
+        'capture',
+        () => this.captureCommit(root),
+      );
+      const policy = await snapshotStore.policy();
+      if (policy.enabled && policy.automaticCleanup) {
+        await snapshotStore.cleanup().catch((error: unknown) => log.warn('snapshot cleanup failed', { error }));
+      }
       return sha || null;
     } catch (err) {
       log.warn('capture failed — degrading to no snapshot', { root, err });
@@ -172,10 +227,14 @@ class ShadowRepoService {
    */
   async files(root: string, from: string, to?: string): Promise<ChangedFile[]> {
     try {
-      const git = clientFor(root);
-      const range = to ? [from, to] : [from];
-      const out = await git.raw([...gitArgs(root), 'diff', '--name-status', ...range]);
-      return this.parseNameStatus(out);
+      return await snapshotStore.withAccess('read', async () => {
+        await this.assertSnapshotAvailable(root, from);
+        if (to) await this.assertSnapshotAvailable(root, to);
+        const git = clientFor(root);
+        const range = to ? [from, to] : [from];
+        const out = await git.raw([...gitArgs(root), 'diff', '--name-status', ...range]);
+        return this.parseNameStatus(out);
+      });
     } catch (err) {
       log.warn('files() failed', { root, from, to, err });
       return [];
@@ -185,9 +244,13 @@ class ShadowRepoService {
   /** Per-file unified patch between two snapshots (or snapshot→worktree). */
   async diff(root: string, from: string, to?: string): Promise<string> {
     try {
-      const git = clientFor(root);
-      const range = to ? [from, to] : [from];
-      return await git.raw([...gitArgs(root), 'diff', ...range]);
+      return await snapshotStore.withAccess('read', async () => {
+        await this.assertSnapshotAvailable(root, from);
+        if (to) await this.assertSnapshotAvailable(root, to);
+        const git = clientFor(root);
+        const range = to ? [from, to] : [from];
+        return git.raw([...gitArgs(root), 'diff', ...range]);
+      });
     } catch (err) {
       log.warn('diff() failed', { root, from, to, err });
       return '';
@@ -205,31 +268,33 @@ class ShadowRepoService {
    * the caller can un-revert. Returns `null` on failure (best-effort).
    */
   async revert(root: string, toSnapshot: string, paths?: string[]): Promise<string | null> {
-    if (!(await this.isEnabledFor(root))) return null;
+    if (!(await this.isEligibleRoot(root))) return null;
     try {
-      // Un-revert anchor: capture the current state before mutating anything.
-      const preRevert = await this.capture(root);
-      const git = clientFor(root);
+      return await snapshotStore.withAccess('revert', async () => {
+        await this.assertSnapshotAvailable(root, toSnapshot);
+        // Anchor and target share one lease. Retention cannot expire either SHA
+        // between validation and the selective worktree update.
+        const preRevert = await this.captureCommit(root);
+        const git = clientFor(root);
+        const changed = await this.files(root, toSnapshot, 'HEAD');
+        const wanted = paths && paths.length
+          ? new Set(paths.map((p) => p.replace(/\\/g, '/')))
+          : null;
+        const selected = changed.filter((c) => !wanted || wanted.has(c.path));
 
-      // What differs between the target snapshot and the current HEAD.
-      const changed = await this.files(root, toSnapshot, 'HEAD');
-      const wanted = paths && paths.length ? new Set(paths.map((p) => p.replace(/\\/g, '/'))) : null;
-      const selected = changed.filter((c) => !wanted || wanted.has(c.path));
-
-      for (const c of selected) {
-        if (c.status.startsWith('A')) {
-          // Added after the snapshot → remove it to revert the creation.
-          await git.raw([...gitArgs(root), 'rm', '-f', '--', c.path]).catch((err) => {
-            log.warn('revert: rm failed for added path', { path: c.path, err });
-          });
-        } else {
-          // Modified/deleted → restore the snapshot version into the worktree.
-          await git.raw([...gitArgs(root), 'checkout', toSnapshot, '--', c.path]).catch((err) => {
-            log.warn('revert: checkout failed', { path: c.path, err });
-          });
+        for (const c of selected) {
+          if (c.status.startsWith('A')) {
+            await git.raw([...gitArgs(root), 'rm', '-f', '--', c.path]).catch((err) => {
+              log.warn('revert: rm failed for added path', { path: c.path, err });
+            });
+          } else {
+            await git.raw([...gitArgs(root), 'checkout', toSnapshot, '--', c.path]).catch((err) => {
+              log.warn('revert: checkout failed', { path: c.path, err });
+            });
+          }
         }
-      }
-      return preRevert;
+        return preRevert;
+      });
     } catch (err) {
       log.warn('revert failed', { root, toSnapshot, err });
       return null;

@@ -19,10 +19,17 @@ jest.mock('@/backend/services/flow/index', () => ({
 }));
 
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ERROR_ACTION } from '@/backend/execution/flow/types';
 import type { SharedState, SubflowNodeParams } from '@/backend/execution/flow/types';
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function makeShared(overrides: Record<string, unknown> = {}): SharedState {
   return {
@@ -56,6 +63,25 @@ beforeEach(() => {
 });
 
 describe('SubflowNode fan-out (issue #102)', () => {
+  it('falls back to the configured prompt when a parallel handoff omits prompt', async () => {
+    const node = makeNode();
+    const shared = makeShared({
+      handoffInput: {
+        targetNodeId: 'sub-1',
+        parallelFlows: ['a', 'b'],
+      },
+    });
+
+    const prep = await node.prep(shared, makeParams({
+      allowCallerFanout: true,
+      parallelSubflowIds: ['fallback'],
+    }));
+
+    expect(prep.inputText).toBe('GO');
+    expect(prep.lanes?.map((lane) => lane.subflowId)).toEqual(['a', 'b']);
+    expect(shared.handoffInput).toBeUndefined();
+  });
+
   it('runs lanes through a bounded worker pool (concurrencyLimit)', async () => {
     let active = 0;
     let maxActive = 0;
@@ -77,6 +103,98 @@ describe('SubflowNode fan-out (issue #102)', () => {
     expect(maxActive).toBeGreaterThan(1); // genuinely concurrent
     expect(exec.success).toBe(true);
     expect(exec.lanes).toHaveLength(5);
+  });
+
+  it('resolves {{scene_id}} independently from each lane JSON input', async () => {
+    const node = makeNode();
+    const prep = await node.prep(makeShared(), makeParams({
+      subflowId: 'child',
+      mapOverList: true,
+      itemSplit: 'json-array',
+      promptTemplate: '[{"scene_id":"opening"},{"scene_id":"finale"}]',
+      sessionScope: 'per-key',
+      sessionKey: '{{scene_id}}',
+    }));
+
+    expect(prep.lanes?.map((lane) => lane.sessionKey)).toEqual(['opening', 'finale']);
+  });
+
+  it('serialises equal session keys while allowing another key to use the bounded pool', async () => {
+    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(true);
+    const releaseFirstA = deferred();
+    const bStarted = deferred();
+    const started: string[] = [];
+    const events: Array<Record<string, unknown>> = [];
+    const laneInputs: Array<Record<string, unknown>> = [];
+    let activeA = 0;
+    let maxActiveA = 0;
+    runFlowMock.mockImplementation(async ({ prompt, emit, lane }: {
+      prompt: string;
+      emit?: (event: Record<string, unknown>) => void;
+      lane?: Record<string, unknown>;
+    }) => {
+      started.push(prompt);
+      laneInputs.push(lane ?? {});
+      emit?.({ type: 'run:start', flowId: 'child' });
+      if (prompt.startsWith('a')) {
+        activeA += 1;
+        maxActiveA = Math.max(maxActiveA, activeA);
+        if (prompt === 'a1') await releaseFirstA.promise;
+        activeA -= 1;
+      } else {
+        bStarted.resolve();
+      }
+      emit?.({ type: 'run:done', status: 'completed' });
+      return { status: 'completed', outputText: prompt };
+    });
+
+    const node = makeNode();
+    const shared = makeShared({
+      emit: (event: Record<string, unknown>) => events.push(event),
+      handoffInput: {
+        targetNodeId: 'sub-1',
+        tasks: ['a1', 'a2', 'b'],
+        sessionKeys: ['same', 'same', 'other'],
+      },
+    });
+    FlowExecutor.conversationStates.set(shared.conversationId!, shared);
+    const prep = await node.prep(shared, makeParams({
+      subflowId: 'child',
+      sessionScope: 'per-key',
+      sessionKey: 'authored-default',
+      saveConversation: true,
+      concurrencyLimit: 2,
+    }));
+    expect(prep.lanes?.map((lane) => lane.sessionKey)).toEqual(['same', 'same', 'other']);
+    const execution = node.execCore(prep);
+
+    await bStarted.promise;
+    expect(started).toEqual(['a1', 'b']);
+    expect(maxActiveA).toBe(1);
+    releaseFirstA.resolve();
+    const exec = await execution;
+
+    expect(started).toEqual(['a1', 'b', 'a2']);
+    expect(maxActiveA).toBe(1);
+    expect(exec.outputText).toBe('a1\n\na2\n\nb');
+    expect(laneInputs.map((lane) => ({
+      key: lane.sessionKey,
+      visit: lane.sessionVisit,
+      hasIdentity: typeof lane.sessionIdentity === 'string',
+    }))).toEqual([
+      { key: 'same', visit: 1, hasIdentity: true },
+      { key: 'other', visit: 1, hasIdentity: true },
+      { key: 'same', visit: 2, hasIdentity: true },
+    ]);
+    expect(events.filter((event) => event.type === 'subflow:start').map((event) => ({
+      key: event.sessionKey,
+      visit: event.sessionVisit,
+    }))).toEqual([
+      { key: 'same', visit: 1 },
+      { key: 'other', visit: 1 },
+      { key: 'same', visit: 2 },
+    ]);
+    FlowExecutor.conversationStates.delete(shared.conversationId!);
   });
 
   it('joins lane outputs in child order regardless of completion order', async () => {

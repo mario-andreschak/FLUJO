@@ -624,6 +624,11 @@ class FlowService {
             // properties modal and validation never see an undefined array.
             : type === 'static'
             ? { entries: [] }
+            : type === 'subflow'
+            ? {
+                resultPresentation: 'separate',
+                sessionScope: 'per-key',
+              }
             : {},
       },
     };

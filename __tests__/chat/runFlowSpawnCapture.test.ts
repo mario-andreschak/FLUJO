@@ -249,4 +249,20 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
       tasks: [''],
     });
   });
+
+  it('keeps caller session keys aligned with their queued Subflow tasks', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'draft', sessionKey: 'writer-a' }) } },
+      { id: 'c2', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'review' }) } },
+      { id: 'c3', type: 'function', function: { name: 'handoff_to_worker', arguments: JSON.stringify({ task: 'revise', sessionKey: 'writer-a' }) } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      tasks: ['draft', 'review', 'revise'],
+      sessionKeys: ['writer-a', null, 'writer-a'],
+    });
+  });
 });

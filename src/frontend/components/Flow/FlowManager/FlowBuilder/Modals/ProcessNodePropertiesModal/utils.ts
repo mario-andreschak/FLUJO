@@ -11,7 +11,7 @@ export const getNodeProperties = (t?: Translator): PropertyDefinition[] => [
     min: 1,
     helperText: t
       ? t('flows.nodeProperties.maxTurnsHelp')
-      : 'Optional. Replaces the bound model\'s maximum turns for this node. Leave empty to inherit the model setting (default: 50).',
+      : 'Optional. Replaces the bound model\'s maximum turns for this node. Leave empty to inherit the model setting (default: 255).',
   },
   {
     key: 'maxTokens',

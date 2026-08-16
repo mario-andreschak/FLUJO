@@ -1,5 +1,6 @@
 import { createLogger } from '@/utils/logger';
 import { NormalizedModel } from '@/shared/types/model/response';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/model/cache');
 
@@ -14,8 +15,18 @@ interface CacheEntry {
  * Each provider URL gets its own cache entry with TTL
  */
 class ModelCache {
-  private cache = new Map<string, CacheEntry>();
+  private caches = new Map<string, Map<string, CacheEntry>>();
   private readonly DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
+
+  private currentCache(): Map<string, CacheEntry> {
+    const workspace = getCurrentWorkspace();
+    let cache = this.caches.get(workspace);
+    if (!cache) {
+      cache = new Map();
+      this.caches.set(workspace, cache);
+    }
+    return cache;
+  }
 
   /**
    * Generate cache key from provider URL
@@ -37,7 +48,8 @@ class ModelCache {
    */
   get(baseUrl: string): NormalizedModel[] | null {
     const key = this.getCacheKey(baseUrl);
-    const entry = this.cache.get(key);
+    const cache = this.currentCache();
+    const entry = cache.get(key);
 
     if (!entry) {
       log.debug('Cache miss - no entry found', { baseUrl, key });
@@ -46,7 +58,7 @@ class ModelCache {
 
     if (!this.isValid(entry)) {
       log.debug('Cache miss - entry expired', { baseUrl, key, age: Date.now() - entry.timestamp });
-      this.cache.delete(key);
+      cache.delete(key);
       return null;
     }
 
@@ -65,7 +77,7 @@ class ModelCache {
       ttl: ttl || this.DEFAULT_TTL
     };
 
-    this.cache.set(key, entry);
+    this.currentCache().set(key, entry);
     log.debug('Models cached', { baseUrl, key, modelCount: models.length, ttl: entry.ttl });
   }
 
@@ -74,7 +86,7 @@ class ModelCache {
    */
   clear(baseUrl: string): void {
     const key = this.getCacheKey(baseUrl);
-    const deleted = this.cache.delete(key);
+    const deleted = this.currentCache().delete(key);
     log.debug('Cache cleared', { baseUrl, key, deleted });
   }
 
@@ -82,8 +94,9 @@ class ModelCache {
    * Clear all cached entries
    */
   clearAll(): void {
-    const size = this.cache.size;
-    this.cache.clear();
+    const cache = this.currentCache();
+    const size = cache.size;
+    cache.clear();
     log.debug('All cache cleared', { entriesCleared: size });
   }
 
@@ -91,11 +104,12 @@ class ModelCache {
    * Get cache statistics
    */
   getStats(): { totalEntries: number; validEntries: number; expiredEntries: number } {
-    const totalEntries = this.cache.size;
+    const cache = this.currentCache();
+    const totalEntries = cache.size;
     let validEntries = 0;
     let expiredEntries = 0;
 
-    for (const entry of this.cache.values()) {
+    for (const entry of cache.values()) {
       if (this.isValid(entry)) {
         validEntries++;
       } else {
@@ -110,15 +124,16 @@ class ModelCache {
    * Clean up expired entries
    */
   cleanup(): void {
+    const cache = this.currentCache();
     const keysToDelete: string[] = [];
     
-    for (const [key, entry] of this.cache.entries()) {
+    for (const [key, entry] of cache.entries()) {
       if (!this.isValid(entry)) {
         keysToDelete.push(key);
       }
     }
 
-    keysToDelete.forEach(key => this.cache.delete(key));
+    keysToDelete.forEach(key => cache.delete(key));
     
     if (keysToDelete.length > 0) {
       log.debug('Cache cleanup completed', { expiredEntriesRemoved: keysToDelete.length });

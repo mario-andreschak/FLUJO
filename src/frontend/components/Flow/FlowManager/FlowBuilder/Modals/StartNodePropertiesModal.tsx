@@ -3,20 +3,18 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
   TextField,
   Typography,
   Box,
-  IconButton,
   Divider,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import PromptBuilder from '@/frontend/components/shared/PromptBuilder';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface StartNodePropertiesModalProps {
   open: boolean;
@@ -99,16 +97,10 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
         }
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {t('flows.modal.properties', { name: nodeData.label || t('flows.modal.startNode') })}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.modal.startNode') })}
+        onClose={onClose}
+      />
       
       <Divider />
       

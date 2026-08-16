@@ -3,7 +3,6 @@
 import React from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -18,6 +17,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 export interface ModelTestDialogProps {
   open: boolean;
@@ -103,7 +103,7 @@ export const ModelTestDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('models.test.title', { model: modelLabel })}</DialogTitle>
+      <DialogHeaderActions title={t('models.test.title', { model: modelLabel })} onClose={onClose} />
       <DialogContent dividers>
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>
@@ -124,9 +124,30 @@ export const ModelTestDialog = ({
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
             </Typography>
+            {result.adapterRoute && (
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('models.test.adapterRoute')}:
+                  </Typography>
+                  <Chip size="small" label={result.adapterRoute.adapterId} />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={t('models.test.adapterEndpoint', { endpoint: result.adapterRoute.endpoint })}
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {t('models.test.adapterReason', { reason: result.adapterRoute.reason })}
+                </Typography>
+              </Box>
+            )}
             <Divider sx={{ mb: 2 }} />
             <AttemptBlock title={sdkTitle} attempt={result.sdk} />
             <AttemptBlock title={t('models.test.axios')} attempt={result.axios} />
+            {result.adapter && (
+              <AttemptBlock title={t('models.test.adapterAttempt')} attempt={result.adapter} />
+            )}
           </>
         ) : null}
       </DialogContent>

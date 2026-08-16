@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * GET /api/packages/search?q=&tag=&page=&pageSize= (issue #198 follow-up).
  *
@@ -13,7 +14,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { searchPackageRegistry } from '@/backend/services/packages/packageRegistry';
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -32,3 +33,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json(result, { status: result.error ? 502 : 200 });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

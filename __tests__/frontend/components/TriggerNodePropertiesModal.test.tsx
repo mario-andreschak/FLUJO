@@ -1,4 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import TriggerNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/TriggerNodePropertiesModal';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
 
@@ -6,6 +13,11 @@ jest.mock('@/frontend/services/plannedExecutions', () => ({
   plannedExecutionsService: {
     create: jest.fn(),
     update: jest.fn(),
+    // SchedulePanel live-previews the next fire times from a 300ms debounced
+    // timer. Whether that timer elapses before the test finishes depends on
+    // machine load, so the stub must exist or the suite fails intermittently.
+    // Mirrors the real Promise<{ valid, error?, nextRuns }> contract.
+    previewSchedule: jest.fn().mockResolvedValue({ valid: true, nextRuns: [] }),
   },
 }));
 

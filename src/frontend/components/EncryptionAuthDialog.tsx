@@ -24,6 +24,7 @@ import {
   installEncryptionLockInterceptor,
   ENCRYPTION_LOCKED_EVENT,
   ENCRYPTION_UNLOCKED_EVENT,
+  encryptionSessionStorageKey,
 } from '@/frontend/utils/encryptionLock';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
@@ -72,7 +73,9 @@ export default function EncryptionAuthDialog() {
         }
         
         // Check if already authenticated in this session
-        const sessionAuth = sessionStorage.getItem('encryption_authenticated');
+        const sessionAuth = sessionStorage.getItem(
+          encryptionSessionStorageKey('encryption_authenticated'),
+        );
         log.debug(`Session authentication status: ${sessionAuth}`);
         if (sessionAuth === 'true') {
           log.info('Already authenticated in this session');

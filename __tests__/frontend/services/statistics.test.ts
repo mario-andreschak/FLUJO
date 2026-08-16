@@ -18,6 +18,9 @@ describe('statistics frontend service', () => {
   it('serializes every aggregate filter with the API contract keys', () => {
     const url = buildStatisticsUrl({
       range: { from: '2026-07-24', to: '2026-07-30' },
+      personaIds: ['persona-a'],
+      activityIds: ['activity-a'],
+      behaviorRevisionIds: ['behavior-revision-a'],
       flowIds: ['flow-a', 'flow-b'],
       plannedExecutionIds: ['plan-a'],
       sources: ['chat', 'schedule'],
@@ -31,6 +34,9 @@ describe('statistics frontend service', () => {
     expect(parsed.pathname).toBe('/api/statistics');
     expect(parsed.searchParams.get('from')).toBe('2026-07-24');
     expect(parsed.searchParams.get('to')).toBe('2026-07-30');
+    expect(parsed.searchParams.getAll('personaId')).toEqual(['persona-a']);
+    expect(parsed.searchParams.getAll('activityId')).toEqual(['activity-a']);
+    expect(parsed.searchParams.getAll('behaviorRevisionId')).toEqual(['behavior-revision-a']);
     expect(parsed.searchParams.getAll('flowId')).toEqual(['flow-a', 'flow-b']);
     expect(parsed.searchParams.getAll('plannedExecutionId')).toEqual(['plan-a']);
     expect(parsed.searchParams.getAll('source')).toEqual(['chat', 'schedule']);

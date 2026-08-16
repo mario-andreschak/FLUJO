@@ -3,6 +3,7 @@
  */
 export type ModelProvider =
   | 'openai'
+  | 'azure'
   | 'openrouter'
   | 'requesty'
   | 'anthropic'
@@ -13,6 +14,9 @@ export type ModelProvider =
   | 'litellm'
   | 'claude-subscription'
   | 'codex';
+
+/** Stable Azure OpenAI data-plane API version used for new connections. */
+export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
 
 /**
  * Which backend completion adapter (and SDK) drives a model.
@@ -27,6 +31,8 @@ export type ModelProvider =
  *                   model in an agentic tool loop stops re-deriving its own
  *                   reasoning each iteration. Only worthwhile for reasoning
  *                   models; 'openai' remains the default everywhere else.
+ * - 'azure'      -> AzureOpenAiAdapter, Azure OpenAI's deployment-scoped Chat
+ *                   Completions API through the AzureOpenAI SDK client.
  * - 'gemini'     -> GeminiAdapter, native Google GenAI SDK.
  * - 'anthropic'  -> AnthropicAdapter, native Anthropic SDK.
  * - 'claude-cli' -> ClaudeSubscriptionAdapter, drives the `claude` CLI against a
@@ -37,6 +43,7 @@ export type ModelProvider =
 export type ModelAdapter =
   | 'openai'
   | 'openai-responses'
+  | 'azure'
   | 'gemini'
   | 'anthropic'
   | 'claude-cli'
@@ -71,6 +78,97 @@ export interface ModelConfigurationCapabilities {
   priority?: boolean;
   /** Whether a single-call output-token cap reaches the selected adapter. */
   maxOutputTokens: boolean;
+}
+
+/**
+ * Validate optional generation settings before they are persisted. This keeps
+ * direct API callers and hand-authored payloads within the same capability
+ * contract as the configuration modal.
+ */
+export function validateModelConfiguration(
+  model: {
+    provider?: ModelProvider;
+    adapter?: ModelAdapter;
+    name?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
+    temperature?: unknown;
+    reasoningEffort?: unknown;
+    thinkingLevel?: unknown;
+    thinkingBudget?: unknown;
+    serviceTier?: unknown;
+  }
+): string | undefined {
+  if (model.adapter === 'azure' || model.provider === 'azure') {
+    if (!model.name?.trim()) return 'Azure OpenAI deployment name is required';
+    const endpoint = model.baseUrl?.trim();
+    if (!endpoint) return 'Azure OpenAI endpoint is required';
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.protocol !== 'https:') return 'Azure OpenAI endpoint must use HTTPS';
+    } catch {
+      return 'Azure OpenAI endpoint must be a valid URL';
+    }
+    if (!model.azureApiVersion?.trim()) return 'Azure OpenAI API version is required';
+  }
+
+  const capabilities = getModelConfigurationCapabilities(model.provider, model.adapter, model.name ?? '');
+
+  if (model.temperature !== undefined && model.temperature !== '') {
+    const temperature = typeof model.temperature === 'number'
+      ? model.temperature
+      : typeof model.temperature === 'string' ? Number(model.temperature) : NaN;
+    if (!capabilities.creativity || !Number.isFinite(temperature) ||
+      temperature < capabilities.creativity.min || temperature > capabilities.creativity.max) {
+      return capabilities.creativity
+        ? `Creativity must be between ${capabilities.creativity.min} and ${capabilities.creativity.max}`
+        : 'Creativity is not supported by this model';
+    }
+  }
+
+  if (model.reasoningEffort !== undefined && model.reasoningEffort !== '') {
+    if (!capabilities.effortLevels?.includes(model.reasoningEffort as ModelReasoningEffort)) {
+      return 'The selected reasoning effort is not supported by this model';
+    }
+  }
+  if (model.thinkingLevel !== undefined && model.thinkingLevel !== '') {
+    if (!capabilities.thinkingLevels?.includes(model.thinkingLevel as GeminiThinkingLevel)) {
+      return 'The selected thinking level is not supported by this model';
+    }
+  }
+  if (model.thinkingBudget !== undefined && model.thinkingBudget !== '') {
+    if (!capabilities.thinkingBudget || typeof model.thinkingBudget !== 'number' ||
+      !Number.isInteger(model.thinkingBudget) || model.thinkingBudget < -1) {
+      return 'Thinking budget must be an integer greater than or equal to -1 for this model';
+    }
+  }
+  if (model.serviceTier !== undefined && model.serviceTier !== '') {
+    if (!capabilities.priority ||
+      (model.serviceTier !== 'default' && model.serviceTier !== 'priority')) {
+      return 'The selected service tier is not supported by this model';
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Parse a persisted creativity value for the execution path. Invalid values
+ * are omitted rather than allowing NaN or an out-of-range value into a SDK.
+ */
+export function normalizeModelTemperature(
+  value: unknown,
+  provider?: ModelProvider,
+  adapter?: ModelAdapter,
+  modelName = ''
+): number | undefined {
+  const capabilities = getModelConfigurationCapabilities(provider, adapter, modelName);
+  if (!capabilities.creativity || value === undefined || value === '') return undefined;
+  const temperature = typeof value === 'number'
+    ? value
+    : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(temperature)) return undefined;
+  return Math.min(capabilities.creativity.max, Math.max(capabilities.creativity.min, temperature));
 }
 
 const OPENAI_REASONING_MODEL = /(^|[/_-])(o[1-9]|gpt-5)(?:[./_-]|$)/i;
@@ -183,6 +281,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1'
   },
+  azure: {
+    label: 'Azure OpenAI',
+    baseUrl: ''
+  },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1'
@@ -257,6 +359,10 @@ export interface ProviderProfile {
   baseUrl: string;
   /** Whether the Base URL field is shown/editable for this profile. */
   showBaseUrl: boolean;
+  /** Whether the inference endpoint exposes an OpenAI-compatible model list. */
+  supportsModelDiscovery?: boolean;
+  /** Default Azure API version persisted when this profile is selected. */
+  defaultApiVersion?: string;
   /**
    * Suggested model names for the technical-name autocomplete. Used for native
    * providers that have no reachable OpenAI `/models` endpoint. The field stays
@@ -291,6 +397,17 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     // carrying encrypted reasoning items across turns of an agentic tool loop.
     // Non-reasoning models should stay on the plain 'OpenAI' profile.
     defaultModels: ['gpt-5', 'gpt-5-mini', 'o4-mini', 'o3'],
+  },
+  {
+    id: 'azure',
+    label: 'Azure OpenAI',
+    provider: 'azure',
+    adapter: 'azure',
+    sdkLabel: 'AzureOpenAI SDK',
+    baseUrl: '',
+    showBaseUrl: true,
+    supportsModelDiscovery: false,
+    defaultApiVersion: AZURE_OPENAI_DEFAULT_API_VERSION,
   },
   {
     id: 'openrouter',
@@ -381,7 +498,14 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     adapter: 'anthropic',
     sdkLabel: 'Anthropic SDK',
     baseUrl: '',
-    showBaseUrl: false,
+    // The native SDK defaults to api.anthropic.com when this is blank, but it
+    // also supports Anthropic-compatible endpoints such as Microsoft Foundry.
+    // Keep the field editable so a custom URL loaded from models.json is not a
+    // runtime-only setting that the connection modal cannot maintain.
+    showBaseUrl: true,
+    // Native Anthropic endpoints do not expose the OpenAI-compatible /models
+    // discovery route used by the modal. Foundry also omits the Models API.
+    supportsModelDiscovery: false,
     defaultModels: [
       'claude-opus-4-8',
       'claude-sonnet-4-6',

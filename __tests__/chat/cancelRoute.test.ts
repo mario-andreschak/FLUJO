@@ -49,6 +49,11 @@ jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
   },
 }));
 
+const cancelPersonaFlowDispatchMock = jest.fn();
+jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
+  cancelPersonaFlowDispatch: (...args: unknown[]) => cancelPersonaFlowDispatchMock(...args),
+}));
+
 import { POST } from '@/app/v1/chat/conversations/[conversationId]/cancel/route';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
@@ -88,6 +93,7 @@ beforeEach(() => {
   conversationStates.clear();
   persistMock.mockClear();
   emitMock.mockClear();
+  cancelPersonaFlowDispatchMock.mockReset();
 });
 
 describe('cancel route', () => {
@@ -161,6 +167,37 @@ describe('cancel route', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
+  });
+
+  it('uses scoped dispatcher cancellation for an attributed conversation', async () => {
+    const state = seedState({
+      status: 'paused_debug',
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    });
+    cancelPersonaFlowDispatchMock.mockResolvedValue({
+      id: 'dispatch_test',
+      personaId: 'persona_test',
+      state: 'cancelled',
+    });
+
+    const res = await cancel();
+
+    expect(res.status).toBe(200);
+    expect(cancelPersonaFlowDispatchMock).toHaveBeenCalledWith({
+      personaId: 'persona_test',
+      activityId: 'activity_test',
+      behaviorRevisionId: 'revision_test',
+      conversationId: CONV_ID,
+      reason: 'Execution was cancelled by the user.',
+    }, { waitForCompletion: true });
+    expect(state.isCancelled).toBeUndefined();
+    expect(state.status).toBe('paused_debug');
+    expect(persistMock).not.toHaveBeenCalled();
+    expect(emitMock).not.toHaveBeenCalled();
   });
 
   it('403s a cross-origin (DNS-rebinding) request before touching state (#142/#143 DiD)', async () => {

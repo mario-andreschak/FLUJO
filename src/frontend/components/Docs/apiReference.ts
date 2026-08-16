@@ -45,6 +45,28 @@ export interface ApiGroup {
   endpoints: ApiEndpoint[];
 }
 
+/**
+ * Render an endpoint for the selected workspace without URL-normalizing path
+ * placeholders such as `{conversationId}`. Default-workspace keeps the legacy
+ * compact spelling; sibling workspaces are always explicit so a copied example
+ * cannot silently fall back to default-workspace.
+ */
+export function workspaceAwareEndpointPath(path: string, workspace: string): string {
+  if (!workspace || workspace === 'default-workspace') return path;
+  const hashAt = path.indexOf('#');
+  const beforeHash = hashAt >= 0 ? path.slice(0, hashAt) : path;
+  const hash = hashAt >= 0 ? path.slice(hashAt) : '';
+  const separator = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${separator}workspace=${encodeURIComponent(workspace)}${hash}`;
+}
+
+/** Header form for SDKs whose base URL cannot safely carry a query string. */
+export function workspaceHeaderForReference(workspace: string): string | null {
+  return !workspace || workspace === 'default-workspace'
+    ? null
+    : `x-flujo-workspace: ${workspace}`;
+}
+
 export const API_GROUPS: ApiGroup[] = [
   {
     id: 'openai',
@@ -416,7 +438,7 @@ export const API_GROUPS: ApiGroup[] = [
         alsoMethods: ['GET', 'DELETE'],
         path: '/mcp-flows',
         summary:
-          'MCP server with two tool families. Flow tools: one per saved flow (name = slug of the flow name; input = a single "input" string sent as the user turn; runs are ephemeral and never appear in the chat sidebar). Authoring tools: list_flow_building_blocks (models, MCP servers + tools, and existing flows a spec may reference — call first), validate_flow_spec (compile + validate without saving; iterate on the returned issues), create_flow (compile + validate + save; only saves when validation finds zero errors), plus capability acquisition: search_mcp_marketplace (search the public registry) and install_mcp_server (install + connect a registry server — downloads and RUNS third-party packages on the FLUJO host; required keys can be passed via its env argument). The FlowSpec format is documented on POST /api/flow/compile above and inside the tools\' own descriptions.',
+          'MCP server with flow tools plus authoring and connector acquisition. find_mcp_server and find_best_mcp_server are read-only discovery tools. install_mcp_server installs a specified Registry name, GitHub URL, hosted URL, command, server.json, or MCP config; install_best_mcp_server researches and installs for a capability. Install tools may download and run third-party code and remain consent-gated and audited. The FlowSpec format is documented on POST /api/flow/compile and in the tools\' descriptions.',
         response: 'MCP JSON-RPC over Streamable HTTP (handled by your MCP client, not called directly).',
       },
     ],

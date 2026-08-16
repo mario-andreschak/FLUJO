@@ -7,12 +7,11 @@ import {
   DialogContent,
   Box,
   Typography,
-  IconButton,
   Tabs,
   Tab,
   Divider,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ToolManager from '../MCPToolManager';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import CapabilitiesManager from '../MCPCapabilitiesManager';
@@ -94,25 +93,42 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="lg"
-      fullWidth
-      PaperProps={{ sx: { height: '85vh', maxHeight: '85vh' } }}
+      fullScreen
+      slotProps={{
+        paper: {
+          sx: {
+            // Opt out of the global theme's backdropFilter so that
+            // position:fixed descendants (MCP App panels) resolve against
+            // the real viewport instead of being clipped by this dialog.
+            backdropFilter: 'none',
+            borderRadius: 0,
+            border: 0,
+            margin: 0,
+            width: '100%',
+            maxWidth: '100%',
+            height: '100%',
+            maxHeight: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        },
+      }}
     >
-      <DialogTitle component="div" sx={{ pb: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5 }}>
-            <Typography variant="h6">{serverName}</Typography>
+      <DialogHeaderActions
+        title={(
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, minWidth: 0 }}>
+            <Typography variant="h6" sx={{ overflowWrap: 'anywhere' }}>{serverName}</Typography>
             {server && (
               <Typography variant="body2" sx={{ color: statusColor(server.status) }}>
                 {statusLabel(server.status)}
               </Typography>
             )}
           </Box>
-          <IconButton edge="end" onClick={onClose} aria-label={t('mcp.details.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-        <Tabs value={tab} onChange={(_, v: DetailsTab) => setTab(v)} sx={{ mt: 1 }}>
+        )}
+        onClose={onClose}
+      />
+      <DialogTitle component="div" sx={{ pt: 0, pb: 0 }}>
+        <Tabs value={tab} onChange={(_, v: DetailsTab) => setTab(v)} sx={{ mt: 0 }}>
           <Tab label={t('mcp.details.tools')} value="tools" />
           <Tab label={t('mcp.details.resources')} value="resources" />
           <Tab label={t('mcp.details.prompts')} value="prompts" />
@@ -120,7 +136,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
         </Tabs>
       </DialogTitle>
       <Divider />
-      <DialogContent sx={{ overflow: 'auto' }}>
+      <DialogContent sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
         {/* Keep the active server name; render only the active tab's content. */}
         {open && tab === 'tools' && <ToolManager serverName={serverName} prefill={toolPrefill} />}
         {open && tab === 'resources' && <CapabilitiesManager serverName={serverName} show="resources" />}

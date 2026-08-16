@@ -2,12 +2,19 @@
  * Component tests for the Resource Node properties modal (issue #183).
  *
  * Covers the UX refinements that are deterministically checkable under jsdom:
- *  - item 2: a NEW resource node defaults to the run-scoped "Temporary Data" type;
- *  - item 3: the run-scoped type is labelled "Temporary Data" (not "Run artifact");
+ *  - item 2: a NEW resource node defaults to the run-scoped "Temporary data" type;
+ *  - item 3: the run-scoped type is labelled "Temporary data" (not "Run artifact");
  *  - item 1: Name/Description live behind a collapsed "Advanced" disclosure;
  *  - item 4: the name field auto-suggests ${res:NAME} names used elsewhere in the flow.
  */
 import { render, screen, fireEvent } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import ResourceNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ResourceNodePropertiesModal';
 
 // The modal reads live MCP server status and (in mcp scope) browses resources.
@@ -49,14 +56,14 @@ const renderModal = () =>
   );
 
 describe('ResourceNodePropertiesModal', () => {
-  it('defaults a new node to the run-scoped "Temporary Data" type', () => {
+  it('defaults a new node to the run-scoped "Temporary data" type', () => {
     renderModal();
-    const temp = screen.getByRole('radio', { name: 'Temporary Data' });
+    const temp = screen.getByRole('radio', { name: 'Temporary data' });
     const mcp = screen.getByRole('radio', { name: 'MCP resource' });
     expect(temp).toBeChecked();
     expect(mcp).not.toBeChecked();
     // The run-scope field uses the renamed label.
-    expect(screen.getByLabelText('Temporary Data name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Temporary data name')).toBeInTheDocument();
     // The old wording is gone.
     expect(screen.queryByText('Run artifact')).not.toBeInTheDocument();
   });
@@ -74,7 +81,7 @@ describe('ResourceNodePropertiesModal', () => {
 
   it('auto-suggests ${res:NAME} names referenced elsewhere in the flow', () => {
     renderModal();
-    const input = screen.getByLabelText('Temporary Data name');
+    const input = screen.getByLabelText('Temporary data name');
     // Typing opens the freeSolo listbox and filters to the matching suggestion,
     // proving the options came from the sibling node's ${res:...} references.
     fireEvent.change(input, { target: { value: 'sum' } });
@@ -109,14 +116,14 @@ describe('ResourceNodePropertiesModal — scope reveal', () => {
   it('switching to MCP scope reveals the server/URI fields and hides the run-scope field', () => {
     renderNode(makeNode('Resource Node'));
     // Run-scope field is present initially, mcp-only field is not.
-    expect(screen.getByLabelText('Temporary Data name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Temporary data name')).toBeInTheDocument();
     expect(screen.queryByLabelText('Resource URI')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('radio', { name: 'MCP resource' }));
 
     // MCP fields appear; the run-scope name field is gone.
     expect(screen.getByLabelText('Resource URI')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Temporary Data name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Temporary data name')).not.toBeInTheDocument();
   });
 });
 
@@ -150,10 +157,10 @@ describe('ResourceNodePropertiesModal — save persistence', () => {
     expect(onSave.mock.calls[0][1].label).toBe('draft');
   });
 
-  it('falls back the label to "Temporary Data" when neither label nor run name is set', () => {
+  it('falls back the label to "Temporary data" when neither label nor run name is set', () => {
     const onSave = renderNode(makeNode('', { scope: 'run' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(onSave.mock.calls[0][1].label).toBe('Temporary Data');
+    expect(onSave.mock.calls[0][1].label).toBe('Temporary data');
   });
 
   it('falls back the label to "MCP resource" in MCP scope with no custom label', () => {

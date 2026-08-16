@@ -11,6 +11,8 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { emitErrorOnce } from './normalizeError';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -24,6 +26,18 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 declare global {
   var __flujo_flow_engine: FlowEngine | undefined;
   var __flujo_conversation_states: Map<string, SharedState> | undefined;
+  var __flujo_flow_engines_by_workspace: Map<string, FlowEngine> | undefined;
+  var __flujo_conversation_states_by_workspace: Map<string, Map<string, SharedState>> | undefined;
+}
+
+function enginesByWorkspace(): Map<string, FlowEngine> {
+  return global.__flujo_flow_engines_by_workspace ??
+    (global.__flujo_flow_engines_by_workspace = new Map());
+}
+
+function statesByWorkspace(): Map<string, Map<string, SharedState>> {
+  return global.__flujo_conversation_states_by_workspace ??
+    (global.__flujo_conversation_states_by_workspace = new Map());
 }
 
 // --- Debug snapshot slimming -------------------------------------------------
@@ -42,7 +56,7 @@ declare global {
  *  promoted to its own DebugStep.modelInput field, so drop it from the raw
  *  prep snapshot to avoid embedding it twice per step. 'modelInputs' is the
  *  per-model-call array (issue #167) — promoted the same way, so strip it too. */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs'] as const;
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs', 'modelInputForArchive'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {
@@ -89,10 +103,19 @@ export class FlowExecutor {
   // planned (saveConversations) run, so its .jsonl held only the turn-start
   // reconcile line and the transcript vanished on reload (issue #49).
   static get conversationStates(): Map<string, SharedState> {
-    if (!global.__flujo_conversation_states) {
-      global.__flujo_conversation_states = new Map<string, SharedState>();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_conversation_states) {
+        global.__flujo_conversation_states = new Map<string, SharedState>();
+      }
+      return global.__flujo_conversation_states;
     }
-    return global.__flujo_conversation_states;
+    let states = statesByWorkspace().get(workspace);
+    if (!states) {
+      states = new Map<string, SharedState>();
+      statesByWorkspace().set(workspace, states);
+    }
+    return states;
   }
 
   // The active execution engine. Replace the constructed engine to swap
@@ -100,16 +123,27 @@ export class FlowExecutor {
   // flow cache is shared across module instances and clearFlowCache() is
   // coherent everywhere.
   private static get engine(): FlowEngine {
-    if (!global.__flujo_flow_engine) {
-      global.__flujo_flow_engine = new PocketflowEngine();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_flow_engine) {
+        global.__flujo_flow_engine = new PocketflowEngine();
+      }
+      return global.__flujo_flow_engine;
     }
-    return global.__flujo_flow_engine;
+    let engine = enginesByWorkspace().get(workspace);
+    if (!engine) {
+      engine = new PocketflowEngine();
+      enginesByWorkspace().set(workspace, engine);
+    }
+    return engine;
   }
   // Writable so the engine can be swapped for another framework, and so tests can
   // stub it. The setter writes through to the shared global to keep every module
   // instance pointing at the one engine.
   private static set engine(value: FlowEngine) {
-    global.__flujo_flow_engine = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flow_engine = value;
+    else enginesByWorkspace().set(workspace, value);
   }
 
   /** Invalidate cached/compiled flow definitions (e.g. after a flow is edited). */
@@ -137,6 +171,11 @@ export class FlowExecutor {
     } catch {
       return null;
     }
+  }
+
+  /** Build the exact pre-call wire preview for the next Process node. */
+  static previewNextModelInput(sharedState: SharedState) {
+    return this.engine.previewModelInput(sharedState);
   }
 
   /**
@@ -209,6 +248,23 @@ export class FlowExecutor {
 
       // --- Filesystem snapshot: END capture + changed-files emit (issue #250) ---
       await captureAfterAndEmit(node, snapshotCtx, sharedState, emit);
+
+      // Issue #383 (gap 1): a handler can RETURN `{ success: false, error }`
+      // and resolve to ERROR_ACTION without ever throwing (e.g. ProcessNode's
+      // non-critical execCore failure path). That never reaches the catch
+      // block below, so without this the UI never learns why the run stopped.
+      // `post()` already set sharedState.lastResponse before returning here.
+      if (action === ERROR_ACTION) {
+        const priorResponse = sharedState.lastResponse as { error?: string; errorDetails?: Record<string, unknown> } | string | undefined;
+        const priorMessage = typeof priorResponse === 'string' ? priorResponse : priorResponse?.error;
+        const priorDetails = typeof priorResponse === 'object' ? priorResponse?.errorDetails : undefined;
+        emitErrorOnce(
+          sharedState,
+          emit,
+          Object.assign(new Error(priorMessage || 'Node execution failed.'), priorDetails ? { details: priorDetails } : {}),
+          { nodeId: node.id, nodeName: node.name }
+        );
+      }
 
       emit?.({ type: 'node:exit', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type }, action });
 
@@ -286,10 +342,9 @@ export class FlowExecutor {
       // Keep track of where the error occurred
       sharedState.currentNodeId = attemptedNodeId;
 
-      emit?.({
-        type: 'error',
-        node: attemptedNodeId ? { nodeId: attemptedNodeId } : undefined,
-        message: error instanceof Error ? error.message : String(error),
+      emitErrorOnce(sharedState, emit, error, {
+        nodeId: attemptedNodeId,
+        nodeName: attemptedNodeName,
       });
 
       // --- Add error step to trace (only if debug mode is enabled) ---

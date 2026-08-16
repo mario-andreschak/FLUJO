@@ -193,4 +193,39 @@ describe('applyLaneEvent (issue #157)', () => {
     expect(lanes.byIndex[1].label).toBe('worker 2/3');
     expect(lanes.byIndex[1].laneConversationId).toBeUndefined();
   });
+
+  it('retains session metadata when a later terminal event omits optional fields', () => {
+    let lanes = applyLaneEvent(
+      EMPTY_LIVE_LANES,
+      laneStart(0, 1, { sessionKey: 'writer-main', sessionVisit: 2 }),
+      NOW,
+    );
+    lanes = applyLaneEvent(
+      lanes,
+      laneDone(0, 1, 'completed', { sessionKey: undefined, sessionVisit: undefined }),
+      NOW + 1,
+    );
+
+    expect(lanes.byIndex[0]).toMatchObject({
+      status: 'completed',
+      sessionKey: 'writer-main',
+      sessionVisit: 2,
+    });
+  });
+
+  it('keeps concurrent lane session badges isolated', () => {
+    let lanes = applyLaneEvent(
+      EMPTY_LIVE_LANES,
+      laneStart(0, 2, { sessionKey: 'alpha', sessionVisit: 1 }),
+      NOW,
+    );
+    lanes = applyLaneEvent(
+      lanes,
+      laneStart(1, 2, { sessionKey: 'beta', sessionVisit: 4 }),
+      NOW + 1,
+    );
+
+    expect(lanes.byIndex[0]).toMatchObject({ sessionKey: 'alpha', sessionVisit: 1 });
+    expect(lanes.byIndex[1]).toMatchObject({ sessionKey: 'beta', sessionVisit: 4 });
+  });
 });

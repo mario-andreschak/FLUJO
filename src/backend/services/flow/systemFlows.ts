@@ -1,9 +1,10 @@
 /**
  * Editable flows shipped with FLUJO (issue #338).
  *
- * Vendored flows are ordinary saved flows after their first seed. Startup creates
- * a missing flow and performs the one known v1→v2 repair; that save archives the
- * old definition. Other existing/editable definitions are left untouched.
+ * Vendored flows are ordinary saved flows after their first seed. The generator
+ * is created lazily when its experimental authoring mode is first used and
+ * performs known version repairs through the normal archived-save path. Other
+ * existing/editable definitions are left untouched.
  */
 import type { Flow } from '@/shared/types/flow';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
@@ -14,14 +15,15 @@ import {
 } from './generationDraft';
 
 export const FLOW_GENERATOR_ID = 'system-flow-generator';
-export const FLOW_GENERATOR_VERSION = 3;
+export const FLOW_GENERATOR_VERSION = 5;
 export const FLOW_GENERATOR_ROLE = 'flow-generator';
 
 const SAFE_AUTHORING_TOOLS = [
   'list_flow_building_blocks',
   'get_flow_authoring_guide',
   'draft_generated_flow',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
 ] as const;
 const INSTALL_AUTHORING_TOOLS = [
   'install_mcp_server',
@@ -53,7 +55,7 @@ On EVERY visit:
 4. If a required external capability is missing, search the MCP marketplace. Install only when the run's MCP installation policy explicitly permits it and installation tools are actually available.
 5. Return ONLY one complete advanced FlowSpec JSON object as your final response—no prose or Markdown fences.
 
-Use inline subflowSpec / parallelSubflowSpecs for newly-created subflows. Do not emit generateSubflow because the deterministic compiler cannot expand it. Do not merely explain what you would build.`;
+Use inline subflowSpec / parallelSubflowSpecs for newly-created subflows. Do not emit generateSubflow because the deterministic compiler cannot expand it. Use \${var:NAME} with captureVariable for values passed between steps in this run. Do not generate captureKv or \${kv:...}: persistent cross-run state requires an explicit author decision about scope and retention. Do not merely explain what you would build.`;
 
 const COMPILER_PROMPT = `You are the Generation Compiler and repair stage.
 
@@ -85,7 +87,8 @@ export function buildVendoredFlowGenerator(): Flow {
           tools: [
             'list_flow_building_blocks',
             'get_flow_authoring_guide',
-            'search_mcp_marketplace',
+            'find_mcp_server',
+            'find_best_mcp_server',
             ...INSTALL_AUTHORING_TOOLS,
           ],
         }],
@@ -124,9 +127,8 @@ export function buildVendoredFlowGenerator(): Flow {
   compiled.flow.id = FLOW_GENERATOR_ID;
   compiled.flow.name = 'Experimental Flow Generator';
   compiled.flow.folder = 'System';
-  // The saved/editable system Flow is safe to run manually: it can discover
-  // marketplace options but cannot install. An opted-in session snapshot adds
-  // the install tools and permission rules below.
+  // The saved/editable system Flow can discover marketplace options but cannot
+  // install. An opted-in session snapshot adds the install tools below.
   const installNames = new Set<string>(INSTALL_AUTHORING_TOOLS);
   for (const node of compiled.flow.nodes.filter((candidate) => candidate.type === 'mcp')) {
     const enabled = node.data?.properties?.enabledTools;
@@ -137,11 +139,6 @@ export function buildVendoredFlowGenerator(): Flow {
       };
     }
   }
-  compiled.flow.permissionRules = SAFE_AUTHORING_TOOLS.map((action) => ({
-    action,
-    resource: '*',
-    effect: 'allow' as const,
-  }));
   const stages = compiled.flow.nodes.filter((node) => node.type === 'process');
   if (stages.length !== 2) {
     throw new Error('Bundled Flow Generator must contain architect and compiler stages');
@@ -158,9 +155,9 @@ export function buildVendoredFlowGenerator(): Flow {
 }
 
 /**
- * Seed once when missing. Versions 1 and 2 were the incomplete conversions that did
- * not execute the production generator's deterministic pipeline. Upgrade those exact
- * versions once; saveFlow archives the prior definition so edits remain recoverable.
+ * Seed once when missing. Versions 1–4 predate the current authoring guidance.
+ * Upgrade those exact bundled versions once; saveFlow archives the prior definition
+ * so edits remain recoverable.
  */
 export async function ensureVendoredFlowGenerator(): Promise<Flow> {
   const existing = await flowService.getFlow(FLOW_GENERATOR_ID);
@@ -168,7 +165,7 @@ export async function ensureVendoredFlowGenerator(): Promise<Flow> {
     .filter((node) => node.type === 'process')
     .map((node) => Number(node.data?.properties?.systemFlowVersion ?? 0))
     .find((version) => version > 0);
-  if (existing && existingVersion !== 1 && existingVersion !== 2) return existing;
+  if (existing && existingVersion !== 1 && existingVersion !== 2 && existingVersion !== 3 && existingVersion !== 4) return existing;
   const bundled = buildVendoredFlowGenerator();
   const saved = await flowService.saveFlow(bundled);
   if (!saved.success) {
@@ -232,13 +229,6 @@ export async function buildFlowGeneratorSnapshot(
         enabledTools: [...new Set([...enabled, ...INSTALL_AUTHORING_TOOLS])],
       };
     }
-    const existingActions = new Set((snapshot.permissionRules ?? []).map((rule) => rule.action));
-    snapshot.permissionRules = [
-      ...(snapshot.permissionRules ?? []),
-      ...INSTALL_AUTHORING_TOOLS
-        .filter((action) => !existingActions.has(action))
-        .map((action) => ({ action, resource: '*', effect: 'allow' as const })),
-    ];
   } else {
     for (const node of snapshot.nodes.filter((candidate) => candidate.type === 'mcp')) {
       const enabled = node.data?.properties?.enabledTools;
@@ -249,8 +239,6 @@ export async function buildFlowGeneratorSnapshot(
         };
       }
     }
-    snapshot.permissionRules = (snapshot.permissionRules ?? [])
-      .filter((rule) => !installNames.has(rule.action));
   }
 
   const start = snapshot.nodes.find((node) => node.type === 'start');

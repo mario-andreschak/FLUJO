@@ -127,6 +127,22 @@ describe('compileSpec service', () => {
     expect(a.flow.id).not.toBe(b.flow.id);
   });
 
+  it('defaults Simple-profile Subflow steps to separate messages and per-key sessions', async () => {
+    loadFlowsMock.mockResolvedValue([{ id: 'child-flow', name: 'Reviewer', nodes: [], edges: [] }]);
+    const result = await compileSpec({
+      name: 'delegator',
+      goal: 'Delegate a review',
+      steps: [{ id: 'review', task: 'Review the draft', flow: 'Reviewer' }],
+    }, { profile: 'simple' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.flow.nodes.find((node) => node.type === 'subflow')?.data.properties)
+      .toEqual(expect.objectContaining({
+        resultPresentation: 'separate',
+        sessionScope: 'per-key',
+      }));
+  });
+
   describe('updateFlowId (replace an existing flow in place)', () => {
     it('keeps the target id and lets the flow keep its own name (no dedup rename)', async () => {
       loadFlowsMock.mockResolvedValue([{ id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] }]);
@@ -163,6 +179,30 @@ describe('compileSpec service', () => {
       if (!result.success) return;
       expect(result.saved).toBe(false);
       expect(saveFlowMock).not.toHaveBeenCalled();
+    });
+
+    it('does not retrofit new Subflow defaults onto an existing definition', async () => {
+      loadFlowsMock.mockResolvedValue([
+        { id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] },
+        { id: 'child-flow', name: 'Child', nodes: [], edges: [] },
+      ]);
+      const result = await compileSpec({
+        name: 'wired_flow',
+        nodes: [
+          { key: 's', type: 'start' },
+          { key: 'sub', type: 'subflow', flow: 'Child' },
+          { key: 'f', type: 'finish' },
+        ],
+        edges: [
+          { from: 's', to: 'sub' },
+          { from: 'sub', to: 'f' },
+        ],
+      }, { updateFlowId: 'flow-1' });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const properties = result.flow.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+      expect(properties).not.toHaveProperty('resultPresentation');
+      expect(properties).not.toHaveProperty('sessionScope');
     });
   });
 });
@@ -254,6 +294,10 @@ describe('compileSpec — nested bundle (#94)', () => {
     // The parent's subflow node points at the (already-saved) child id.
     const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.subflowId).toBe(firstSaved.id);
+    expect(sub.data.properties).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
   });
 
   it('saves NOTHING when a nested child has validation errors', async () => {

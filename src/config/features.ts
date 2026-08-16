@@ -32,6 +32,34 @@ export const FEATURES = {
    */
   ENABLE_EXECUTION_TRACKER: false, // Enabled by default
 
-  /** Enables the preview/confirm per-message worktree revert UI and API. */
-  ENABLE_REVERT_TO_HERE: false,
+  /** Admit durable post-Activity Behavior assessment records. Shadow rollout is opt-in. */
+  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: false,
+
+  /** Permit diagnosis work after admission. Independent so admission can be observed safely. */
+  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: false,
+
+  /**
+   * MCP Tasks extension (issue #404), CLIENT side.
+   *
+   * When true, FLUJO may request task-augmented execution (`params.task`) from
+   * servers that advertise `capabilities.tasks.requests.tools.call`, and runs
+   * the durable poll/cancel lifecycle in
+   * backend/services/mcp/clientTasks.ts.
+   *
+   * Default OFF: the Tasks APIs in @modelcontextprotocol/sdk 1.30.0 are still
+   * marked experimental, and this flag governs BOTH negotiation and durable
+   * record creation so FLUJO never advertises or half-implements the extension.
+   * A server that returns a schema-valid task handle anyway is still handled
+   * (never misread as a tool result) — see shared/types/mcp/tasks.ts.
+   */
+  ENABLE_MCP_TASKS_CLIENT: false,
+
+  /**
+   * MCP Tasks extension, SERVER side (FLUJO's own /mcp-proxy and /mcp-flows
+   * endpoints). Kept OFF and unimplemented on purpose: neither endpoint can
+   * currently bind a stable caller identity to a task, and task-id-only lookup
+   * across stateless Streamable HTTP requests would be an authorization hole.
+   * See docs/mcp-tasks.md ("Server-side status").
+   */
+  ENABLE_MCP_TASKS_SERVER: false,
 };

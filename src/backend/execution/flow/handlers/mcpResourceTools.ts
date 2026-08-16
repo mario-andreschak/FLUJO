@@ -21,14 +21,21 @@
 import { createLogger } from '@/utils/logger';
 import { MCPNodeReference, ToolDefinition } from '../types';
 import { mcpService } from '@/backend/services/mcp';
-import { writeRunResource } from '@/backend/services/runResources';
+import { listRunResources, writeRunResource } from '@/backend/services/runResources';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { MCPResource, MCPResourceTemplate, MCPReadResourceResult } from '@/shared/types/mcp';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 
 const log = createLogger('backend/flow/execution/handlers/mcpResourceTools');
 
 export const LIST_MCP_RESOURCES_TOOL_NAME = 'list_mcp_resources';
+const INTERNAL_RUN_RESOURCE_SERVER = 'flujo';
 
 /** Max total entries returned by list_mcp_resources (resources + templates combined). */
 const LIST_MCP_RESOURCES_CAP = 200;
@@ -73,7 +80,7 @@ function filterTemplatesByEnabledResources(
 // Public interface
 // ---------------------------------------------------------------------------
 
-export interface MCPResourceToolContext {
+export interface MCPResourceToolContext extends FlowDurableMutationContext {
   conversationId?: string;
   nodeId?: string;
   ephemeral?: boolean;
@@ -107,7 +114,10 @@ export function isMCPResourceToolName(name: string): boolean {
  * Configuration is flow-static, so this list is stable for the life of a run.
  */
 function eligibleResourceServers(mcpNodes: MCPNodeReference[]): string[] {
-  const names = new Set<string>();
+  // Run resources are part of the same discovery surface as native MCP
+  // resources. Advertising `flujo` up front is deterministic and lets a model
+  // discover concrete URIs created by a tool call earlier in the same loop.
+  const names = new Set<string>([INTERNAL_RUN_RESOURCE_SERVER]);
   for (const mcpNode of mcpNodes ?? []) {
     const { boundServer, enabledResources } = mcpNode.properties;
     if (!boundServer) continue;
@@ -129,7 +139,8 @@ export function buildListMCPResourcesTool(mcpNodes: MCPNodeReference[]): ToolDef
   return {
     name: LIST_MCP_RESOURCES_TOOL_NAME,
     description:
-      `List the native MCP resources and resource templates available from bound servers (${serverList}). ` +
+      `List resources and resource templates available from servers (${serverList}). ` +
+      'The flujo server contains concrete run-resource URIs captured during the current run. ' +
       'Returns a JSON object with a "servers" array, each entry containing the server name, its ' +
       '"resources" list (uri, name, description, mimeType) and its "templates" list (uriTemplate, name, ' +
       'description, mimeType). Once you have a resource URI call read_resource to fetch its content.',
@@ -221,6 +232,43 @@ async function executeListMCPResources(
   let totalCount = 0;
   let truncated = false;
 
+  // FLUJO-generated resources do not come from a bound MCP node, so querying
+  // only ctx.mcpNodes (the old behavior) made their concrete URIs invisible.
+  // Keep this list conversation-scoped: read_resource enforces the same owner
+  // boundary, and models do not need resources from unrelated runs.
+  if (
+    ctx.conversationId
+    && !ctx.ephemeral
+    && (!serverFilter || serverFilter === INTERNAL_RUN_RESOURCE_SERVER)
+  ) {
+    try {
+      const entries = await listRunResources(ctx.conversationId);
+      const resources: MCPResource[] = [...entries]
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .slice(0, LIST_MCP_RESOURCES_CAP)
+        .map((entry) => ({
+          uri: entry.uri,
+          name: entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`,
+          description: entry.producedBy.toolName
+            ? `Captured ${entry.producedBy.source} from ${entry.producedBy.server ?? 'unknown'}/${entry.producedBy.toolName}`
+            : `Captured ${entry.producedBy.source} run resource`,
+          mimeType: entry.mimeType,
+          size: entry.size,
+        }));
+      if (entries.length > resources.length) truncated = true;
+      totalCount += resources.length;
+      // Include the internal server even before its first spill. This makes the
+      // advertised server list truthful and tells the model where later URIs
+      // will appear without changing the tool definition mid-conversation.
+      result.push({ server: INTERNAL_RUN_RESOURCE_SERVER, resources, templates: [] });
+    } catch (err) {
+      log.warn('executeListMCPResources: failed to list current run resources', {
+        conversationId: ctx.conversationId,
+        err,
+      });
+    }
+  }
+
   for (const mcpNode of ctx.mcpNodes) {
     const { boundServer, enabledResources } = mcpNode.properties;
     if (!boundServer) continue;
@@ -228,6 +276,7 @@ async function executeListMCPResources(
     if (serverFilter && boundServer !== serverFilter) continue;
 
     try {
+      await ctx.executionAuthority?.authorizePersonaCoreMcp?.(boundServer, mcpNode.id);
       const [resourcesResult, templatesResult] = await Promise.all([
         mcpService.listServerResources(boundServer),
         mcpService.listServerResourceTemplates(boundServer),
@@ -302,6 +351,7 @@ export async function executeNativeReadResource(
   // 1. Find which bound server advertises this URI (or a matching template).
   //    Re-list on demand to ensure freshness.
   let owningServer: string | undefined;
+  let owningNodeId: string | undefined;
   let ownerEnabledResources: string[] | 'all' | undefined;
 
   for (const mcpNode of ctx.mcpNodes) {
@@ -317,10 +367,12 @@ export async function executeNativeReadResource(
 
     // Re-list the server's resources to confirm the URI is advertised
     try {
+      await ctx.executionAuthority?.authorizePersonaCoreMcp?.(boundServer, mcpNode.id);
       const resourcesResult = await mcpService.listServerResources(boundServer);
       const found = (resourcesResult.resources ?? []).some((r) => r.uri === uri);
       if (found) {
         owningServer = boundServer;
+        owningNodeId = mcpNode.id;
         ownerEnabledResources = enabledResources;
         break;
       }
@@ -345,8 +397,14 @@ export async function executeNativeReadResource(
   // 2. Call mcpService.readResource
   let readResult: { success: boolean; data?: MCPReadResourceResult; error?: string; statusCode?: number };
   try {
+    await assertFlowExecutionCurrent(ctx);
+    await ctx.executionAuthority?.authorizePersonaCoreMcp?.(owningServer, owningNodeId);
     readResult = await mcpService.readResource(owningServer, uri) as typeof readResult;
+    // Resource reads can block on a remote server.  Reject a late response
+    // before it is captured, emitted, or returned into a stale transcript.
+    await assertFlowExecutionCurrent(ctx);
   } catch (err) {
+    rethrowFlowExecutionAuthorityError(err);
     log.error('executeNativeReadResource: mcpService.readResource threw', { server: owningServer, uri, err });
     return {
       success: false,
@@ -414,51 +472,54 @@ export async function executeNativeReadResource(
 
     const mimeType = (contents[0] as { mimeType?: string })?.mimeType;
 
-    const written = await writeRunResource({
-      conversationId: ctx.conversationId,
-      mimeType,
-      kind,
-      data,
-      producedBy: {
-        source: 'capture',
-        nodeId: ctx.node?.nodeId,
-        nodeName: ctx.node?.nodeName,
-      },
-      origin: { server: owningServer, uri },
-    });
-
-    if ('skipped' in written) {
-      log.warn('executeNativeReadResource: auto-capture skipped by store cap', {
-        server: owningServer, uri, reason: written.skipped,
+    return await commitFlowDurableMutation(ctx, async () => {
+      const written = await writeRunResource({
+        conversationId: ctx.conversationId!,
+        mimeType,
+        kind,
+        data,
+        producedBy: {
+          source: 'capture',
+          nodeId: ctx.node?.nodeId,
+          nodeName: ctx.node?.nodeName,
+        },
+        origin: { server: owningServer, uri },
       });
-      // Fall back to inline truncated text
-      const fallback = hasBinary
-        ? `[binary resource ${mimeType ?? 'unknown'} from ${owningServer} — too large to store]`
-        : fullText.slice(0, TEXT_CAPTURE_THRESHOLD) + '\n…[truncated — store cap exceeded]';
-      return { success: true, data: { uri, server: owningServer, content: fallback } };
-    }
 
-    ctx.emit?.({
-      type: 'resource:write',
-      node: ctx.node,
-      server: owningServer,
-      uri: written.uri,
-      name: written.name,
-      mimeType: written.mimeType,
-      size: written.size,
-      source: 'capture',
+      if ('skipped' in written) {
+        log.warn('executeNativeReadResource: auto-capture skipped by store cap', {
+          server: owningServer, uri, reason: written.skipped,
+        });
+        // Fall back to inline truncated text
+        const fallback = hasBinary
+          ? `[binary resource ${mimeType ?? 'unknown'} from ${owningServer} — too large to store]`
+          : fullText.slice(0, TEXT_CAPTURE_THRESHOLD) + '\n…[truncated — store cap exceeded]';
+        return { success: true, data: { uri, server: owningServer, content: fallback } };
+      }
+
+      ctx.emit?.({
+        type: 'resource:write',
+        node: ctx.node,
+        server: owningServer,
+        uri: written.uri,
+        name: written.name,
+        mimeType: written.mimeType,
+        size: written.size,
+        source: 'capture',
+      });
+
+      const stub =
+        `[FLUJO stored the native resource "${uri}" from server "${owningServer}" as run resource ` +
+        `${written.uri} (${written.size} bytes, ${written.mimeType ?? written.kind}). ` +
+        `Use read_resource with URI ${written.uri} to retrieve the full content.]`;
+
+      log.info('executeNativeReadResource: auto-captured as run resource', {
+        server: owningServer, uri, runUri: written.uri, size: written.size,
+      });
+      return { success: true, data: { uri, server: owningServer, stub, runUri: written.uri } };
     });
-
-    const stub =
-      `[FLUJO stored the native resource "${uri}" from server "${owningServer}" as run resource ` +
-      `${written.uri} (${written.size} bytes, ${written.mimeType ?? written.kind}). ` +
-      `Use read_resource with URI ${written.uri} to retrieve the full content.]`;
-
-    log.info('executeNativeReadResource: auto-captured as run resource', {
-      server: owningServer, uri, runUri: written.uri, size: written.size,
-    });
-    return { success: true, data: { uri, server: owningServer, stub, runUri: written.uri } };
   } catch (err) {
+    rethrowFlowExecutionAuthorityError(err);
     log.error('executeNativeReadResource: auto-capture failed, returning inline fallback', { err });
     const fallback = hasBinary
       ? `[binary resource from ${owningServer} — capture failed]`

@@ -9,7 +9,9 @@ import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/validation';
-import { getAppDir, getDataDir } from '@/utils/paths';
+import { getAppDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
@@ -35,18 +37,20 @@ type CommandExecutionOptions = {
 // data dir (see utils/paths) so a packaged install (npm/Docker) clones servers
 // into the writable data dir; defaults to the app dir, so a git checkout is
 // unchanged (<repo>/mcp-servers).
-const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
-log.debug(`Repository base directory: ${REPOS_BASE_DIR}`);
+// Workspaces (#406): resolved per call, since mcp-servers/ belongs to the
+// SELECTED workspace and a module constant would pin the route to whichever
+// workspace happened to load it first.
+const reposBaseDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 // Ensure the base directory exists
 async function ensureReposDir() {
   log.debug('Ensuring repository base directory exists');
   try {
-    await fs.access(REPOS_BASE_DIR);
+    await fs.access(reposBaseDir());
     log.debug('Repository base directory already exists');
   } catch {
     log.debug('Creating repository base directory');
-    await fs.mkdir(REPOS_BASE_DIR, { recursive: true });
+    await fs.mkdir(reposBaseDir(), { recursive: true });
     log.debug('Repository base directory created successfully');
   }
 }
@@ -443,7 +447,7 @@ function streamCommandInRepo(
   }, { signal: request.signal });
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -726,7 +730,7 @@ export async function POST(request: NextRequest) {
         const isAbsolutePath = path.isAbsolute(savePath);
         
         // Construct the full path - if savePath is absolute, use it directly; otherwise join with base dir
-        const fullFilePath = isAbsolutePath ? savePath : path.join(REPOS_BASE_DIR, savePath);
+        const fullFilePath = isAbsolutePath ? savePath : path.join(reposBaseDir(), savePath);
         log.debug(`Constructed full file path: ${fullFilePath} [${requestId}] (path is ${isAbsolutePath ? 'absolute' : 'relative'})`);
         
         try {
@@ -793,8 +797,8 @@ export async function POST(request: NextRequest) {
       case 'list': {
         log.info(`Starting list action [${requestId}]`);
         try {
-          log.debug(`Reading directory: ${REPOS_BASE_DIR} [${requestId}]`);
-          const entries = await fs.readdir(REPOS_BASE_DIR, { withFileTypes: true });
+          log.debug(`Reading directory: ${reposBaseDir()} [${requestId}]`);
+          const entries = await fs.readdir(reposBaseDir(), { withFileTypes: true });
           const directories = entries
             .filter(entry => entry.isDirectory())
             .map(dir => dir.name);
@@ -906,3 +910,7 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+
+
+// Workspaces (#406): clones land in the selected workspace's mcp-servers/.
+export const POST = withWorkspaceRoute(POST_handler);

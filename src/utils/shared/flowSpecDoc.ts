@@ -35,7 +35,7 @@ NODE TYPES:
     "isolatedPrompt": "...",                                            // only with inputMode "isolated"
     "allowCallerPrompt": true | false,                                 // optional, only with inputMode "isolated"; default true — a step that hands off to this isolated step may pass a "prompt" via its handoff tool that overrides "isolatedPrompt". Set false to forbid it
     "outputMode": "full-conversation" | "latest-message",              // optional, default full-conversation; latest-message hides this step's tool calls/results from later steps (they see only its final response)
-    "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (50)
+    "maxTurns": 20,                                                     // optional; per-step cap on agentic tool-loop turns (retry-until-done in ONE node). Unset = model/system default (255)
     "allowedTools": ["tool_a"],                                        // optional; step-level tool allowlist (independent of servers[].tools)
     "captureVariable": "NAME",                                         // optional; save this step's output into a run variable other steps inject with \${var:NAME}
     "captureKv": "NAME",                                               // optional; ALSO save this step's output to a PERSISTENT cross-run key other steps inject with \${kv:NAME} (see rule 9d)
@@ -46,8 +46,11 @@ NODE TYPES:
     "flow": "<existing flow name or id>",          // reference exactly ONE existing child flow, OR:
     "subflowSpec": { ...a nested FlowSpec... },     // define exactly ONE new child flow inline (compiled and wired automatically)
     "concurrencyLimit": 4,                          // optional; maximum ACTIVE child jobs, default 4. 1 = sequential; queued jobs are never discarded
+    "resultPresentation": "separate" | "joined",  // optional; newly compiled flows default separate (one parent message per lane); joined opts into one combined legacy message
     "inputMode": "full-history" | "latest-message" | "isolated",   // optional, default full-history. DIFFERS from a process node: history modes ALWAYS sanitize the parent transcript first — system messages, tool-result messages, and ANY assistant turn that made tool calls are dropped (only user + prose-only assistant messages survive). full-history = the full sanitized transcript; latest-message = the most recent EXCHANGE of the sanitized transcript (the last user message + the last assistant response after it, intermediate turns dropped); isolated = ignore the parent conversation and send "prompt" as the child's single user message
     "prompt": "default child instruction",         // optional, only with inputMode "isolated"; a handoff's task overrides it for that queued job
+    "sessionScope": "per-visit" | "per-run" | "per-key", // optional/experimental; newly compiled flows default per-key; per-visit opts into a fresh child; per-run reuses one child in this parent run; per-key lets the caller pass sessionKey and later follow up in that finished child chat
+    "sessionKey": "optional-fixed-key",              // optional with per-key; omit it when the calling Process should choose sessionKey on each handoff
     "captureVariable": "NAME",                     // optional; save the subflow's output into a run variable other steps inject with \${var:NAME}
     "captureResource": "NAME",                     // optional; ALSO save the subflow's output as a tracked run resource (\${res:NAME}, rule 9b)
     "captureKv": "NAME",                           // optional; ALSO save the subflow's output to a PERSISTENT cross-run key (\${kv:NAME}, rule 9d)
@@ -59,6 +62,12 @@ NODE TYPES:
 - { "key": "...", "type": "resource", "label": "...",              // OPTIONAL/advanced (rule 9c): a data artifact shown in the graph
     "server": "<server name>", "uri": "<resource uri>",            // EITHER a static MCP resource…
     "runName": "NAME" }                                            // …OR a run artifact steps produce/consume
+- { "key": "...", "type": "static", "label": "...",                // OPTIONAL/advanced (rule 13): injects pre-authored
+    "entries": [                                                    //   messages / few-shot examples, then passes through unchanged
+      { "kind": "message", "role": "system|user|assistant", "content": "..." },
+      { "kind": "toolCall", "executionMode": "mock|real", "serverName": "...", "toolName": "...", "argumentsJson": "{...}", "result": "..." }
+    ],
+    "injectOnce": true }                                            // optional; default appends every traversal; true injects once per run
 
 EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
          "condition": { "kind": "contains"|"regex"|"equals", "value": "...",
@@ -83,5 +92,6 @@ RULES:
 10. Keep flows minimal — only the steps the task needs. Write clear, specific prompts and labels; fill "description" on process nodes.
 11. Signals (fire-and-forget events): a "signal" node is a deterministic pass-through that, when the path reaches it, emits an event {topic, payload} onto the flow-run event bus and then continues to its successor unchanged (it never calls a model or touches the conversation). Use it when the flow should notify or kick off ANOTHER flow mid-run — a flow-event trigger configured elsewhere listens for the same "topic" (e.g. "when the review finds blockers, emit a review-blocked signal"). Always give it a "topic" (a signal with no topic emits nothing); "payloadTemplate" is the optional event body and may inject \${var:NAME}. Make emission conditional by putting a conditioned edge (rule 5b) INTO the signal node.
 12. Input vs output modes are two DISTINCT axes whose value names differ per node type (issue #152 clarification). inputMode ("full-history" | "latest-message" | "isolated") controls what a step RECEIVES and exists on BOTH process and subflow nodes, but they behave differently: a process node keeps the current turn's in-flight tool calls/results, while a subflow node ALWAYS strips system/tool-result/tool-call turns from the parent transcript in every history mode (see the inputMode notes above). "latest-message" means the last user message plus the last settled assistant response after it, with the current in-flight tool tail retained for Process nodes. outputMode controls what LATER steps see of a step's work and is a SEPARATE enum per node type: a process node uses "full-conversation" | "latest-message" (latest-message hides this step's tool exchange from later steps), a subflow node uses "steps" | "final-only" (live-view folding only). Common word traps: "last-message" = inputMode latest-message; "full-conversation" is a process outputMode value, NOT an input mode. A subflow's final answer is always injected back into the parent transcript regardless of outputMode.
+13. Static conversation sequence: a "static" node is a non-LLM pass-through that injects its authored "entries" onto the conversation, in order, when reached, then continues to its successor unchanged. Prefer a process node's "prompt" for ordinary instructions. A "message" entry adds one system/user/assistant turn. A "toolCall" entry adds an assistant tool call plus its matching result (two turns); "argumentsJson" must be valid JSON. Missing/"mock" executionMode injects the authored result. "real" executes serverName/toolName and requires that server/tool in the node's "servers" attachment list (the compiler also derives this attachment from well-formed real entries). Several calls for one server share one MCP node. "injectOnce": true injects only on the first traversal per run. A static node with no entries injects nothing.
 
 COMPATIBILITY: the compiler/runtime can still read legacy fan-out, map-over-list, authored-brief, join, and fail-fast fields from saved FlowSpecs. Do not emit those fields in new FlowSpecs; author one child flow and let repeated handoff calls form the job queue.`;

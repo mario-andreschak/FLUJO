@@ -1,5 +1,5 @@
 /**
- * Static node (issue #358): deterministic conversation injection.
+ * Static node (issue #358): authored conversation injection with mock or real tools.
  *
  * Pins the node contract:
  *  - authored `message` entries are appended to sharedState.messages in order;
@@ -12,9 +12,18 @@
  */
 import { StaticNode } from '@/backend/execution/flow/nodes/StaticNode';
 import type { SharedState, StaticNodeParams } from '@/backend/execution/flow/types';
+import { mcpService } from '@/backend/services/mcp';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
   resolveRunResourceRefs: jest.fn(async (value: string) => value),
+}));
+
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: { callTool: jest.fn() },
 }));
 
 function makeState(overrides: Partial<SharedState> = {}): SharedState {
@@ -88,6 +97,149 @@ describe('StaticNode', () => {
     expect(tool.content).toBe('contents');
   });
 
+  it('executes real tool calls through the connected MCP node', async () => {
+    (mcpService.callTool as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'live result' }] },
+    });
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall',
+        executionMode: 'real',
+        serverName: 'files',
+        toolName: 'read_file',
+        argumentsJson: '{"path":"a.txt"}',
+        result: 'stale mock',
+      }],
+      mcpNodes: [{
+        id: 'mcp-files',
+        properties: { boundServer: 'files', enabledTools: ['read_file'], toolTimeout: 42 },
+      }],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'a.txt' },
+      42,
+      undefined,
+      'stat',
+    );
+    expect(state.messages).toHaveLength(2);
+    expect((state.messages[0] as any).mcpToolCalls).toEqual({
+      [(state.messages[0] as any).tool_calls[0].id]: { serverName: 'files', toolName: 'read_file' },
+    });
+    expect(state.messages[1].content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'live result' }] }));
+  });
+
+  it('executes the internal maintenance gateway without an authored MCP binding', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    const commitPersonaMemoryMaintenance = jest.fn(async () => ({
+      status: 'saved',
+      proposedCount: 1,
+      createdCount: 1,
+      rejectedCount: 0,
+      created: [{ id: 'memory_1', status: 'candidate', trust: 'model_inference' }],
+      issues: [],
+    }));
+    const assertCurrent = jest.fn(async () => undefined);
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall',
+        executionMode: 'real',
+        serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+        toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+        argumentsJson: '{"candidate_variable":"persona_memory_candidates"}',
+        result: '',
+      }],
+    });
+    const output = '{"memories":[]}';
+    const state = makeState({
+      variables: { persona_memory_candidates: output },
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_maintenance',
+        behaviorRevisionId: 'revision_maintenance',
+      },
+      executionAuthority: {
+        signal: new AbortController().signal,
+        assertCurrent,
+        commitPersonaMemoryMaintenance,
+      },
+    });
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+    expect(commitPersonaMemoryMaintenance).toHaveBeenCalledWith(output);
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(state.messages[1].content).toContain('"status":"saved"');
+    expect((state.messages[0] as any).mcpToolCalls).toEqual({
+      [(state.messages[0] as any).tool_calls[0].id]: {
+        serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+        toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+      },
+    });
+  });
+
+  it('keeps legacy and explicit mock calls deterministic without executing MCP', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [
+        { kind: 'toolCall', serverName: 'files', toolName: 'legacy', argumentsJson: '{}', result: 'legacy result' },
+        { kind: 'toolCall', executionMode: 'mock', serverName: 'files', toolName: 'mocked', argumentsJson: '{}', result: 'mock result' },
+      ],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+    expect(state.messages[1].content).toBe('legacy result');
+    expect(state.messages[3].content).toBe('mock result');
+  });
+
+  it('rejects a real call that is not backed by the connected MCP tool', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall', executionMode: 'real', serverName: 'files', toolName: 'write_file', argumentsJson: '{}', result: '',
+      }],
+      mcpNodes: [{ id: 'mcp-files', properties: { boundServer: 'files', enabledTools: ['read_file'] } }],
+    });
+
+    await expect(run(node, makeState(), p)).rejects.toThrow('is not enabled on its connected MCP server');
+  });
+
+  it('projects static message attachments onto text and media', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'message',
+        role: 'user',
+        content: 'Review these',
+        attachments: [
+          { id: 'doc', type: 'document', originalName: 'notes.txt', content: 'hello' },
+          { id: 'image', type: 'image', originalName: 'diagram.png', mimeType: 'image/png', content: 'data:image/png;base64,YQ==' },
+        ],
+      }],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(state.messages[0].content).toContain('[DOCUMENT: notes.txt]\nhello');
+    expect(state.messages[0].media).toEqual([{
+      type: 'image', mimeType: 'image/png', data: 'YQ==', name: 'diagram.png', transcript: undefined,
+    }]);
+  });
+
   it('rejects invalid JSON arguments', async () => {
     const node = nodeWithSuccessor();
     const p = params({ entries: [{ kind: 'toolCall', toolName: 'x', argumentsJson: '{oops', result: '' }] });
@@ -142,5 +294,111 @@ describe('StaticNode', () => {
     const action = await run(node, state, params({ entries: [] }));
 
     expect(action).toBe('default');
+  });
+  it('uses per-run staticInjected bookkeeping across re-entry and state serialization', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'once' }], injectOnce: true });
+    const state = makeState();
+
+    await run(node, state, p);
+    // No logicalRunId on this bare state, so the marker falls back to 'no-run'.
+    expect(state.staticInjected).toEqual({ stat: 'no-run' });
+
+    const restored = JSON.parse(JSON.stringify(state)) as SharedState;
+    await run(node, restored, p);
+    expect(restored.messages).toHaveLength(1);
+
+    const freshState = makeState();
+    await run(node, freshState, p);
+    expect(freshState.messages).toHaveLength(1);
+  });
+
+  it('treats non-true injectOnce values as append and re-resolves variables', async () => {
+    const node = nodeWithSuccessor();
+    const state = makeState({ variables: { attempt: 'one' } });
+    const p = params({
+      entries: [{ kind: 'message', role: 'user', content: 'attempt ${var:attempt}' }],
+      injectOnce: 'true',
+    });
+
+    await run(node, state, p);
+    state.variables = { attempt: 'two' };
+    await run(node, state, p);
+
+    expect(state.messages.map((message) => message.content)).toEqual(['attempt one', 'attempt two']);
+  });
+
+  it('does not mark an empty once-only node and mints fresh tool-call ids on re-entry', async () => {
+    const node = nodeWithSuccessor();
+    const state = makeState();
+    const empty = params({ entries: [], injectOnce: true });
+    await run(node, state, empty);
+    expect(state.staticInjected).toBeUndefined();
+
+    const tool = params({ entries: [{ kind: 'toolCall', toolName: 'lookup', argumentsJson: '{}', result: 'ok' }] });
+    await run(node, state, tool);
+    await run(node, state, tool);
+    const first = (state.messages[0] as any).tool_calls[0].id;
+    const second = (state.messages[2] as any).tool_calls[0].id;
+    expect(first).not.toBe(second);
+    expect((state.messages[1] as any).tool_call_id).toBe(first);
+    expect((state.messages[3] as any).tool_call_id).toBe(second);
+  });
+
+  it('injectOnce dedupes within one logical run but injects again on the next one (#381)', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'primer' }], injectOnce: true });
+    const state = makeState({ logicalRunId: 'run-1' });
+
+    await run(node, state, p);
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(1);
+    expect(state.staticInjected).toEqual({ stat: 'run-1' });
+
+    // A new user turn keeps the persisted state but assigns a fresh logical run id.
+    state.logicalRunId = 'run-2';
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(2);
+    expect(state.staticInjected).toEqual({ stat: 'run-2' });
+  });
+
+  it('appends on every traversal by default, regardless of the logical run', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'again' }] });
+    const state = makeState({ logicalRunId: 'run-1' });
+
+    await run(node, state, p);
+    await run(node, state, p);
+    state.logicalRunId = 'run-2';
+    await run(node, state, p);
+
+    expect(state.messages).toHaveLength(3);
+  });
+
+  it('keys the marker per node, so two once-only nodes each inject in the same run', async () => {
+    const first = nodeWithSuccessor();
+    const second = nodeWithSuccessor();
+    const state = makeState({ logicalRunId: 'run-1' });
+    const entries = [{ kind: 'message', role: 'user', content: 'x' }];
+    const a = { ...params({ entries, injectOnce: true }), id: 'a' } as StaticNodeParams;
+    const b = { ...params({ entries, injectOnce: true }), id: 'b' } as StaticNodeParams;
+
+    await run(first, state, a);
+    await run(second, state, b);
+    await run(first, state, a);
+    await run(second, state, b);
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.staticInjected).toEqual({ a: 'run-1', b: 'run-1' });
+  });
+
+  it('prunes markers left behind by an earlier logical run', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'x' }], injectOnce: true });
+    const state = makeState({ logicalRunId: 'run-2', staticInjected: { stale: 'run-1' } });
+
+    await run(node, state, p);
+
+    expect(state.staticInjected).toEqual({ stat: 'run-2' });
   });
 });

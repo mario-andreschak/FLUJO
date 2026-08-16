@@ -13,7 +13,7 @@
  * signal every adapter forwards to its SDK. An abort is reported as a clean
  * 'cancelled' model error, not a provider failure.
  */
-import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
@@ -65,6 +65,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -182,6 +183,88 @@ describe('mid-flight completion cancellation', () => {
       state,
       [{ type: 'message:removed', messageId: 'prose-1' }]
     );
+  });
+
+  it('discards a self-orchestrating transcript callback that arrives after authority loss', async () => {
+    const state = seedState('conv-stale-transcript');
+    getModelMock.mockResolvedValue({
+      id: 'model-1',
+      name: 'claude-test',
+      provider: 'claude-subscription',
+      adapter: 'claude-cli',
+    });
+    let releaseLateOutput!: () => void;
+    const outputGate = new Promise<void>((resolve) => { releaseLateOutput = resolve; });
+    let markProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+      markProviderStarted();
+      await outputGate;
+      input.onTranscriptMessage?.({
+        id: 'stale-prose',
+        timestamp: 5,
+        role: 'assistant',
+        content: 'This belongs to the old generation.',
+      });
+      await Promise.resolve();
+      return {
+        completion: {
+          id: 'cmpl-stale',
+          object: 'chat.completion',
+          created: 5,
+          model: 'claude-test',
+          choices: [
+            { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'done', refusal: null } },
+          ],
+        },
+        transcript: [{
+          id: 'stale-prose',
+          timestamp: 5,
+          role: 'assistant',
+          content: 'This belongs to the old generation.',
+        }],
+      };
+    });
+
+    let current = true;
+    const lost = new Error('Persona generation replaced before transcript callback');
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw lost;
+    });
+    const commitWhileCurrent = jest.fn(async <T>(task: () => Promise<T>): Promise<T> => {
+      if (!current) throw lost;
+      return task();
+    }) as unknown as jest.MockedFunction<NonNullable<FlowExecutionAuthority['commitWhileCurrent']>>;
+    const emit = jest.fn();
+    const emitterSpy = jest.spyOn(executionEventBus, 'emitterFor').mockReturnValue(emit);
+
+    const pending = ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'hi',
+      messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-stale-transcript',
+      executionAuthority: {
+        assertCurrent,
+        commitWhileCurrent,
+        signal: new AbortController().signal,
+      },
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    });
+
+    await providerStarted;
+    current = false;
+    releaseLateOutput();
+
+    await expect(pending).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    expect(state.messages).toEqual([]);
+    expect(emit).not.toHaveBeenCalled();
+    expect(mockAppendRawForState).not.toHaveBeenCalled();
+    expect(commitWhileCurrent).toHaveBeenCalled();
+    emitterSpy.mockRestore();
   });
 
   it('passes no signal-driven abort for calls without a conversation (no watch, normal completion)', async () => {

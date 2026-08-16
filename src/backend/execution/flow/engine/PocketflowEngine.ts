@@ -1,10 +1,14 @@
+import { createHash } from 'crypto';
 import { Flow as PocketFlow, BaseNode } from '../pocketflow';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from '../FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { IMPLICIT_SUBFLOW_RETURN_ACTION, SharedState } from '../types';
+import { IMPLICIT_SUBFLOW_RETURN_ACTION, ProcessNodePrepResult, SharedState } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
+import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import cloneDeep from 'lodash/cloneDeep';
+import { personaCoreAppNodeId } from '@/backend/services/enduringAgents/personaCoreAppIdentity';
 
 const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
 
@@ -14,14 +18,72 @@ const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
  * it (FlowExecutor, routes, UI) talks only to the FlowEngine interface.
  */
 export class PocketflowEngine implements FlowEngine {
-  // Cache of compiled PocketFlow conversions, keyed by flowId.
+  // Live Flows use their id; immutable snapshots add a content digest so two
+  // concurrent runs pinned to different same-id definitions never share a
+  // compiled graph.
   private pocketFlowCache = new Map<string, PocketFlow>();
+  private snapshotDigests = new WeakMap<object, string>();
+
+  private snapshotDigest(snapshot: NonNullable<SharedState['flowSnapshot']>): string {
+    const cached = this.snapshotDigests.get(snapshot);
+    if (cached) return cached;
+    const digest = createHash('sha256')
+      .update(JSON.stringify(snapshot))
+      .digest('base64url');
+    this.snapshotDigests.set(snapshot, digest);
+    return digest;
+  }
+
+  private trustedPersonaAppBindings(sharedState: SharedState): Map<string, string> {
+    if (
+      typeof sharedState.executionAuthority?.authorizePersonaCoreMcp !== 'function'
+      || !sharedState.personaAttribution
+      || !sharedState.personaInstructionContext
+      || !sharedState.flowSnapshot
+      || !Array.isArray(sharedState.personaCoreAppRefs)
+    ) return new Map();
+
+    const bindings = new Map<string, string>();
+    for (const serverName of Array.from(new Set(sharedState.personaCoreAppRefs)).sort()) {
+      if (typeof serverName !== 'string' || !serverName) continue;
+      bindings.set(personaCoreAppNodeId(serverName), serverName);
+    }
+    return bindings;
+  }
+
+  private personaAppBindingsDigest(sharedState: SharedState): string | undefined {
+    const entries = [...this.trustedPersonaAppBindings(sharedState).entries()];
+    if (entries.length === 0) return undefined;
+    return createHash('sha256').update(JSON.stringify(entries)).digest('base64url');
+  }
+
+  private cacheKey(sharedState: SharedState): string {
+    if (!sharedState.flowSnapshot) return workspaceCacheKey(sharedState.flowId);
+    const parts = [
+      sharedState.flowId,
+      'snapshot',
+      this.snapshotDigest(sharedState.flowSnapshot),
+    ];
+    const personaAppBindingsDigest = this.personaAppBindingsDigest(sharedState);
+    if (personaAppBindingsDigest) parts.push('persona-apps', personaAppBindingsDigest);
+    return workspaceCacheKey(
+      ...parts,
+    );
+  }
 
   clearCache(flowId?: string): void {
     if (flowId) {
-      this.pocketFlowCache.delete(flowId);
+      const exact = workspaceCacheKey(flowId);
+      const snapshotPrefix = `${exact}\0snapshot\0`;
+      this.pocketFlowCache.delete(exact);
+      for (const key of this.pocketFlowCache.keys()) {
+        if (key.startsWith(snapshotPrefix)) this.pocketFlowCache.delete(key);
+      }
     } else {
-      this.pocketFlowCache.clear();
+      const prefix = `${getCurrentWorkspace()}\0`;
+      for (const key of this.pocketFlowCache.keys()) {
+        if (key.startsWith(prefix)) this.pocketFlowCache.delete(key);
+      }
     }
   }
 
@@ -29,17 +91,18 @@ export class PocketflowEngine implements FlowEngine {
    * Resolve the compiled flow for a run. Quick-Chats (issue #61) carry a
    * `flowSnapshot` on the state: when present it is converted directly,
    * bypassing the flows store; otherwise we fall back to the store lookup by
-   * `flowId` (the unchanged path for every saved flow). The compiled-flow cache
-   * is keyed by flowId either way — a snapshot's `quickchat-<convId>` id can
-   * never collide with a stored flow id, and the snapshot is immutable for the
-   * life of the conversation so its cache entry is always safe.
+   * `flowId` (the unchanged path for every saved flow). Live Flow cache entries
+   * remain id-keyed. Snapshot entries additionally include a digest of their
+   * exact content, which isolates concurrent same-id immutable revisions;
+   * runFlow also evicts prior/successor ids when a Persona Activity changes.
    */
   private async resolveFlowDefinition(sharedState: SharedState): Promise<PocketFlow> {
     const flowId = sharedState.flowId;
-    if (this.pocketFlowCache.has(flowId)) {
+    const cacheKey = this.cacheKey(sharedState);
+    if (this.pocketFlowCache.has(cacheKey)) {
       log.debug(`Using cached Pocket Flow for flowId: ${flowId}`);
       // Return a clone to prevent modification of the cached instance
-      return this.pocketFlowCache.get(flowId)!.clone() as PocketFlow;
+      return this.pocketFlowCache.get(cacheKey)!.clone() as PocketFlow;
     }
 
     let reactFlow = sharedState.flowSnapshot;
@@ -60,8 +123,11 @@ export class PocketflowEngine implements FlowEngine {
       edgeCount: reactFlow.edges.length
     });
 
-    const pocketFlow = FlowConverter.convert(reactFlow);
-    this.pocketFlowCache.set(flowId, pocketFlow);
+    const trustedInlineMcpBindings = this.trustedPersonaAppBindings(sharedState);
+    const pocketFlow = FlowConverter.convert(reactFlow, {
+      ...(trustedInlineMcpBindings.size > 0 ? { trustedInlineMcpBindings } : {}),
+    });
+    this.pocketFlowCache.set(cacheKey, pocketFlow);
     log.verbose(`Flow ${flowId} converted and cached.`);
     return pocketFlow.clone() as PocketFlow;
   }
@@ -235,5 +301,38 @@ export class PocketflowEngine implements FlowEngine {
     } finally {
       delete sharedState.emit;
     }
+  }
+
+  async previewModelInput(sharedState: SharedState) {
+    const previewState = cloneDeep(sharedState);
+    if (sharedState.executionAuthority) {
+      Object.defineProperty(previewState, 'executionAuthority', {
+        value: sharedState.executionAuthority,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+    if (Array.isArray(sharedState.personaCoreAppRefs)) {
+      Object.defineProperty(previewState, 'personaCoreAppRefs', {
+        value: [...sharedState.personaCoreAppRefs],
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+    delete previewState.emit;
+    // The preview is debugger-only even if a recovered legacy state omitted the
+    // flag. ProcessNode.prep gates its model-input derivation on debugMode.
+    previewState.debugMode = true;
+
+    const resolved = await this.resolveNode(previewState);
+    if (resolved.type !== 'process') return null;
+
+    const node = resolved.handle as BaseNode;
+    const prepResult = await node.prep(previewState, node.node_params) as ProcessNodePrepResult;
+    return prepResult.modelInput
+      ? { nodeId: resolved.id, modelInput: prepResult.modelInput }
+      : null;
   }
 }

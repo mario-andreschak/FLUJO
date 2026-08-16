@@ -8,7 +8,11 @@ import {
 import { isSecretEnvVar } from '@/utils/shared/common';
 import { createLogger } from '@/utils/logger';
 import { Settings } from '@/shared/types/storage/storage';
-import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
+import { createDefaultSettings } from '@/shared/config/defaultSettings';
+import {
+  ENCRYPTION_UNLOCKED_EVENT,
+  encryptionSessionStorageKey,
+} from '@/frontend/utils/encryptionLock';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/contexts/StorageContext');
@@ -49,14 +53,7 @@ const StorageContext = createContext<StorageContextType>({
   decryptValue: async () => null,
   isUserEncryptionEnabled: async () => false,
   isLoading: true,
-  settings: {
-    speech: {
-      enabled: true
-    },
-    update: {
-      checkOnStartup: false
-    }
-  },
+  settings: createDefaultSettings(),
   settingsHydrated: false,
   updateSettings: async () => {},
 });
@@ -70,14 +67,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // 423 fallback to defaults). See StorageContextType.settingsHydrated.
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [globalEnvVars, setGlobalEnvVarsState] = useState<Record<string, { value: string, metadata: { isSecret: boolean } }>>({});
-  const [settings, setSettings] = useState<Settings>({
-    speech: {
-      enabled: true
-    },
-    update: {
-      checkOnStartup: false
-    }
-  });
+  const [settings, setSettings] = useState<Settings>(createDefaultSettings);
 
   // Define encryption-related functions first
   const isEncryptionInitialized = useCallback(async (): Promise<boolean> => {
@@ -151,7 +141,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // If successful and we have a session token, update it
       if (data.success && typeof window !== 'undefined') {
         // Get the current token
-        const currentToken = sessionStorage.getItem('encryption_token');
+        const currentToken = sessionStorage.getItem(encryptionSessionStorageKey('encryption_token'));
         if (currentToken) {
           // Authenticate with the new password to get a new token
           const authResponse = await fetch('/api/encryption/secure', {
@@ -169,10 +159,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const authData = await authResponse.json();
             if (authData.success && authData.token) {
               // Update the session token
-              sessionStorage.setItem('encryption_token', authData.token);
-              sessionStorage.setItem('encryption_authenticated', 'true');
+              sessionStorage.setItem(encryptionSessionStorageKey('encryption_token'), authData.token);
+              sessionStorage.setItem(encryptionSessionStorageKey('encryption_authenticated'), 'true');
               // Remove the old password if it exists
-              sessionStorage.removeItem('encryption_key');
+              sessionStorage.removeItem(encryptionSessionStorageKey('encryption_key'));
             }
           }
         }
@@ -207,10 +197,10 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       
       // If the password is valid and we have a token, store it in session storage
       if (data.valid && data.token && typeof window !== 'undefined') {
-        sessionStorage.setItem('encryption_token', data.token);
-        sessionStorage.setItem('encryption_authenticated', 'true');
+        sessionStorage.setItem(encryptionSessionStorageKey('encryption_token'), data.token);
+        sessionStorage.setItem(encryptionSessionStorageKey('encryption_authenticated'), 'true');
         // Remove the old password if it exists
-        sessionStorage.removeItem('encryption_key');
+        sessionStorage.removeItem(encryptionSessionStorageKey('encryption_key'));
       }
       
       return data.valid === true;
@@ -226,21 +216,25 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // is locked) we keep the defaults and leave settingsHydrated false so the
   // guided tour won't auto-start on fallback data.
   const loadSettings = useCallback(async () => {
-    const defaultSettings: Settings = {
-      speech: { enabled: true },
-      update: { checkOnStartup: false }
-    };
+    const defaultSettings = createDefaultSettings();
     try {
       const response = await fetch(
-        `/api/storage?key=${encodeURIComponent(StorageKey.SPEECH_SETTINGS)}&defaultValue=${encodeURIComponent(JSON.stringify(defaultSettings))}`
+        `/api/storage?key=${encodeURIComponent(StorageKey.SPEECH_SETTINGS)}&defaultValue=${encodeURIComponent(JSON.stringify(null))}`
       );
       if (!response.ok) {
         log.debug('loadSettings: settings read not ok, keeping defaults', { status: response.status });
         return;
       }
       const data = await response.json();
-      log.debug('Loaded settings from storage', { settings: data.value });
-      setSettings(data.value ?? defaultSettings);
+      const loadedSettings = data.value ?? defaultSettings;
+      if (data.value == null) {
+        // Persist fresh-install defaults so backend-only feature checks see the
+        // same values as the settings UI. Existing settings are never merged or
+        // rewritten here, preserving every prior explicit choice.
+        await saveItem(StorageKey.SPEECH_SETTINGS, defaultSettings);
+      }
+      log.debug('Loaded settings from storage', { settings: loadedSettings });
+      setSettings(loadedSettings);
       setSettingsHydrated(true);
     } catch (error) {
       log.warn('loadSettings: failed to load settings:', error);
@@ -323,9 +317,13 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
     log.debug('encryptValue: Entering method');
     try {
       // Check if we have a token in session storage (from authentication)
-      const sessionToken = typeof window !== 'undefined' ? sessionStorage.getItem('encryption_token') : null;
+      const sessionToken = typeof window !== 'undefined'
+        ? sessionStorage.getItem(encryptionSessionStorageKey('encryption_token'))
+        : null;
       // Check if we have a password in session storage (legacy support)
-      const sessionPassword = typeof window !== 'undefined' ? sessionStorage.getItem('encryption_key') : null;
+      const sessionPassword = typeof window !== 'undefined'
+        ? sessionStorage.getItem(encryptionSessionStorageKey('encryption_key'))
+        : null;
       
       // Prepare the request body
       const requestBody: any = {

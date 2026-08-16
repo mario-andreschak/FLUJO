@@ -431,6 +431,57 @@ describe('compileFlowSpec — subflow resolution', () => {
     const { issues } = compileFlowSpec(subflowSpec(undefined), context);
     expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-missing-flow', severity: 'error' }));
   });
+
+  it('round-trips keyed child-conversation persistence', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const { flow, issues } = compileFlowSpec(spec, context);
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'invalid-session-scope' }));
+    const properties = flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const serialized = flowToSpec(flow!);
+    expect(serialized.nodes.find((node) => node.type === 'subflow')).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+  });
+
+  it('applies the new Subflow defaults only when the authoring surface opts in', () => {
+    const legacy = compileFlowSpec(subflowSpec('flow-1'), context).flow!
+      .nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(legacy).not.toHaveProperty('resultPresentation');
+    expect(legacy).not.toHaveProperty('sessionScope');
+
+    const authored = compileFlowSpec(subflowSpec('flow-1'), context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(authored).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
+  });
+
+  it('honors explicit legacy-mode opt-outs when new defaults are enabled', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      resultPresentation: 'joined',
+      sessionScope: 'per-visit',
+    });
+
+    const properties = compileFlowSpec(spec, context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).not.toHaveProperty('resultPresentation');
+    expect(properties).not.toHaveProperty('sessionScope');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -496,7 +547,7 @@ describe('compileFlowSpec — servers and tools', () => {
     expect(mcps.map((m) => m.data.properties!.enabledTools)).toEqual([['read_file'], ['write_file']]);
   });
 
-  it('servers on a non-process node are ignored with a warning', () => {
+  it('servers on an unsupported node are ignored with a warning', () => {
     const spec: FlowSpec = {
       nodes: [
         { key: 's', type: 'start', servers: [{ name: 'filesystem' }] } as any,
@@ -505,7 +556,7 @@ describe('compileFlowSpec — servers and tools', () => {
       edges: [{ from: 's', to: 'f' }],
     };
     const { flow, issues } = compileFlowSpec(spec, context);
-    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-non-process' }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-unsupported-node' }));
     expect(flow!.nodes.filter((n) => n.type === 'mcp')).toHaveLength(0);
   });
 });
@@ -1381,6 +1432,10 @@ describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b
     expect(proc(compileFlowSpec(procWrap({ maxTurns: 20 }), context).flow!).data.properties!.maxTurns).toBe(20);
     expect(proc(compileFlowSpec(procWrap({ maxTurns: 0 }), context).flow!).data.properties!.maxTurns).toBe(1);
     expect(proc(compileFlowSpec(procWrap({ maxTurns: 999999 }), context).flow!).data.properties!.maxTurns).toBe(1000);
+  });
+
+  it('preserves an explicit 255 (the new system default) without clamping (#399)', () => {
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 255 }), context).flow!).data.properties!.maxTurns).toBe(255);
   });
 
   it('warns and omits a non-numeric maxTurns', () => {

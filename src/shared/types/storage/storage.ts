@@ -4,6 +4,7 @@
 export enum StorageKey {
   MODELS = 'models',
   FLOWS = 'flows',
+  TICKETS = 'tickets',
   CHAT_HISTORY = 'history',
   THEME = 'theme',
   // Visual generation is stored separately from light/dark for backwards
@@ -23,7 +24,13 @@ export enum StorageKey {
   PLANNED_EXECUTIONS = 'planned_executions',
   MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings',
   MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
+  /** Per-app decisions used while the optional click-to-display policy is enabled. */
+  MCP_APP_CONSENT = 'mcp_app_consent',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
+  SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
+  // Bounds for the remote MCP Tasks lifecycle (issue #404): poll interval
+  // clamps, requested TTL, retention and poll-concurrency limits. No secrets.
+  MCP_REMOTE_TASK_SETTINGS = 'mcp_remote_task_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
   // Legacy per-internal-server overrides retained only as migration input.
@@ -42,6 +49,9 @@ export enum StorageKey {
   MCP_SHIPPED_SERVERS_MIGRATION_V4 = 'mcp_shipped_servers_migration_v4',
   // Backfills the absolute package root omitted from earlier shipped-server records.
   MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5 = 'mcp_shipped_server_roots_migration_v5',
+  // Repairs browser records created under the former @flujo-ai package id and
+  // clears stale process-status fields that could preserve a duplicated path.
+  MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6 = 'mcp_shipped_browser_repair_migration_v6',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -59,7 +69,9 @@ export enum StorageKey {
   REGISTRY_SETTINGS = 'registry_settings',
   // Anonymous daily-activity delivery state. Contains only UTC dates and the
   // current day's rotating random id; never a permanent installation id.
-  TELEMETRY_STATE = 'telemetry_state'
+  TELEMETRY_STATE = 'telemetry_state',
+  /** Workspace-scoped retention policy for derived filesystem snapshots (#414). */
+  SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy'
 }
 
 export const StorageKeys = {
@@ -80,7 +92,10 @@ export const StorageKeys = {
   PLANNED_EXECUTIONS: StorageKey.PLANNED_EXECUTIONS,
   MCP_AUTO_INSTALL_SETTINGS: StorageKey.MCP_AUTO_INSTALL_SETTINGS,
   MCP_QUALITY_SETTINGS: StorageKey.MCP_QUALITY_SETTINGS,
+  MCP_APP_CONSENT: StorageKey.MCP_APP_CONSENT,
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
+  SUBFLOW_TASK_SETTINGS: StorageKey.SUBFLOW_TASK_SETTINGS,
+  MCP_REMOTE_TASK_SETTINGS: StorageKey.MCP_REMOTE_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
@@ -89,11 +104,13 @@ export const StorageKeys = {
   MCP_INTERNAL_BROWSER_MIGRATION_V3: StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
   MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
   MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5: StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5,
+  MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6: StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
   REGISTRY_SETTINGS: StorageKey.REGISTRY_SETTINGS,
   TELEMETRY_STATE: StorageKey.TELEMETRY_STATE,
+  SNAPSHOT_RETENTION_POLICY: StorageKey.SNAPSHOT_RETENTION_POLICY,
 } as const;
 
 /**
@@ -113,13 +130,65 @@ export interface UpdateSettings {
 }
 
 /**
+ * Stable identifiers for the individually dismissible dashboard cards. These
+ * never depend on translated titles or array positions so persisted state stays
+ * valid across copy and layout changes.
+ */
+export type DashboardCardId = 'ai' | 'assistant' | 'talk' | 'connectedApps';
+
+/** Canonical order used when persisting dismissed dashboard cards. */
+export const DASHBOARD_CARD_IDS: readonly DashboardCardId[] = ['ai', 'assistant', 'talk', 'connectedApps'];
+
+/**
+ * Cards covered by the removed collective "hide completed setup steps" toggle.
+ * The legacy flag never hid the connected-apps notice, so it must not be
+ * migrated as if it did.
+ */
+export const LEGACY_HIDDEN_DASHBOARD_CARD_IDS: readonly DashboardCardId[] = ['ai', 'assistant', 'talk'];
+
+/** Type guard used when reading persisted values that may predate this type. */
+export function isDashboardCardId(value: unknown): value is DashboardCardId {
+  return typeof value === 'string' && (DASHBOARD_CARD_IDS as readonly string[]).includes(value);
+}
+
+/**
  * Onboarding / guided-tour settings interface
  */
 export interface OnboardingSettings {
   /** True once the user has finished or skipped the first-run guided tour. */
   completed: boolean;
-  /** Hide the completed three-card setup journey on the dashboard. */
+  /**
+   * Legacy collective hide flag for the three-card setup journey. Kept only so
+   * existing installs keep their hidden cards hidden; new dismissals are stored
+   * in `dashboardDismissedCards`.
+   */
   dashboardCardsHidden?: boolean;
+  /** Dashboard cards the user dismissed individually via their X control. */
+  dashboardDismissedCards?: DashboardCardId[];
+  /** Progress for the first hands-on tutorial that follows onboarding. */
+  tutorials?: TutorialSettings;
+}
+
+export type TutorialStatus = 'active' | 'paused' | 'completed' | 'cancelled';
+
+/**
+ * Durable tutorial state. Step ids, rather than array indexes, make a paused
+ * tutorial safe to resume after copy or step-order changes. The optional
+ * nested id is also used as the visual parent for a short prerequisite tour.
+ */
+export interface TutorialProgress {
+  status: TutorialStatus;
+  stepId: string;
+  flowId?: string;
+  processNodeId?: string;
+  taskPrompt?: string;
+  conversationId?: string;
+  recommendedServerName?: string;
+  nestedTutorialId?: 'install-web-app' | 'enable-web-app';
+}
+
+export interface TutorialSettings {
+  bigTutorialStage1?: TutorialProgress;
 }
 
 /**
@@ -143,6 +212,14 @@ export interface NetworkSettings {
    * is intended only behind an authenticating HTTPS reverse proxy.
    */
   exposure: ExposureMode;
+  /**
+   * When true, the MCP Apps sandbox accepts any embedder/child origin instead
+   * of enforcing the host-origin allowlist. This disables the cross-origin
+   * isolation boundary and is intended only as an escape hatch for hosted
+   * deployments behind a reverse proxy that rewrites Host/Referer headers.
+   * Defaults to false (secure).
+   */
+  allowAllMcpAppContent?: boolean;
 }
 
 /**
@@ -168,12 +245,55 @@ export interface ExperimentalSettings {
    * When true, the Claude Subscription adapter REUSES its Agent SDK session
    * across turns of the same single-node Flow — resuming the persisted session
    * (`resume`) and sending only the per-turn delta instead of re-flattening the
-   * whole conversation each turn (issue #154). Off by default: it changes how
-   * conversation context reaches the model, so it stays opt-in until verified on
-   * real token curves. Independent of `enabled` (a backend behaviour, not a UI
-   * reveal). A missing value is treated as disabled.
+   * whole conversation each turn (issue #154). Enabled for new installations;
+   * a missing value in existing persisted settings remains disabled. Independent
+   * of `enabled` (a backend behaviour, not a UI reveal).
    */
   claudeSessionResume?: boolean;
+  /**
+   * When true, pass the normal Codex installation's `models_cache.json` to the
+   * SDK as its `model_catalog_json` startup override. This can avoid Codex's
+   * online catalogue refresh, but the cached file may be incompatible with the
+   * bundled Codex version. Off by default; a missing value is disabled.
+   */
+  codexModelCatalogCache?: boolean;
+  /**
+   * When true, a Subflow node whose `invocationMode` property is `'tool'` is
+   * advertised to the routing model as a distinct `call_subflow_<slug>` tool
+   * (issue #385, deferred Part B of #359) instead of the usual `handoff_to_*`
+   * transition tool. Calling it runs the target Subflow's lanes INLINE inside
+   * the tool call (same bounded lane pool as a normal parallel Subflow) and
+   * returns a structured JSON result straight to the model, so the model can
+   * keep working in the SAME node instead of leaving it via a graph handoff.
+   * Off by default: tool-mode invocations are NOT resumable in v1 (no graph
+   * transition means no persist point, so a mid-call crash re-runs the lanes
+   * from scratch), so this stays opt-in until checkpointed resumability lands
+   * in a future phase. When off, a Subflow authored with `invocationMode:
+   * 'tool'` silently falls back to ordinary `'handoff'` behaviour — flipping
+   * this flag never breaks an existing flow. A missing value is treated as
+   * disabled.
+   */
+  subflowToolInvocation?: boolean;
+  /**
+   * Enable durable, detached subflow task handles (issue #386). Enabled for new
+   * installations; a missing value in existing settings remains disabled.
+   */
+  subflowDetachedInvocation?: boolean;
+  /**
+   * When true, a Subflow node honours its `sessionScope` configuration and may
+   * RESUME the same child conversation across repeat visits inside one parent
+   * run, instead of starting a fresh child run every visit (issue #363 Phase
+   * 1, gated by #391). Enabled for new installations; a missing value in
+   * existing settings remains disabled. Resumed children inherit their own
+   * prior transcript, which changes what the child model sees each visit. Both
+   * `sessionScope: 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
+   * conversation for equal resolved keys and serialise same-key execution while
+   * allowing different keys to proceed concurrently (#388). `sessionInputMode: 'summary'` compacts completed child turns before the next task; an optional positive `sessionTurnCap` enforces deterministic retention.
+   * When off, reusable scopes silently fall back to `'per-visit'`, so flipping
+   * this flag never breaks an existing flow. A missing value is treated as
+   * disabled.
+   */
+  subflowSessions?: boolean;
   /**
    * When true, MCP client connections are built on the v2 beta SDK
    * (`@modelcontextprotocol/client`, spec revision 2026-07-28) with automatic
@@ -191,8 +311,8 @@ export interface ExperimentalSettings {
    * from VRAM before sending a completion request for a different model on the
    * same Ollama server URL. This frees GPU memory on constrained hardware.
    * Requests to the same Ollama URL are serialised while this is on, so it adds
-   * a small latency in parallel fan-out scenarios. Off by default: zero impact
-   * on existing behaviour.
+   * a small latency in parallel fan-out scenarios. Enabled for new
+   * installations; a missing value in existing settings remains disabled.
    */
   autoUnloadOllamaModels?: boolean;
   /**
@@ -210,15 +330,8 @@ export interface ExperimentalSettings {
    */
   restrictMcpFilesystemToRoots?: boolean;
   /**
-   * When true, installed filesystem and bash MCP packages block sensitive
-   * home-directory locations even when a configured root would otherwise allow
-   * them. Off by default: configured roots are an explicit user grant and take
-   * precedence unless this additional defense-in-depth layer is opted into.
-   */
-  protectedPathsEnabled?: boolean;
-  /**
-   * When false, filesystem snapshots and snapshot-based revert are disabled.
-   * Missing values default to true to preserve existing installations.
+   * Enables filesystem snapshots plus the message-level restore UI/API.
+   * Missing values default to false: this experimental feature is opt-in.
    */
   snapshotsEnabled?: boolean;
   /**
@@ -240,10 +353,11 @@ export interface ExperimentalSettings {
    * When true, FLUJO applies SUMMARIZING COMPACTION to long conversations
    * (issue #248): before a request that would overflow the model's context
    * window — and after a context-length error — it summarizes the older part of
-   * the persisted history into an anchored summary head and continues, instead
-   * of only shrinking the wire copy. Off by default: it MUTATES persisted
-   * conversation history (behind a recoverable run-resource anchor), so it stays
-   * opt-in until verified. A missing value is treated as disabled.
+   * the oldest provider-facing wire history into an anchored summary head and
+   * continues. The canonical persisted conversation is never replaced. Enabled
+   * for new installations; a missing value in existing settings remains
+   * disabled. AI summarization is lossy even though the exact source is retained
+   * in a run-resource anchor.
    */
   compactionEnabled?: boolean;
   /**

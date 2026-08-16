@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ServerModalProps, type ServerSetupTab } from './types';
+import { ServerModalProps, type ServerSetupTab, type TabHandoff } from './types';
 import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
-import LocalServerTab from './tabs/LocalServerTab';
+import ConfigureTab from './tabs/ConfigureTab';
 import MarketplaceTab from './tabs/MarketplaceTab';
 import SpotlightTab from './tabs/SpotlightTab';
 import ReferenceServersTab from './tabs/ReferenceServersTab';
@@ -12,18 +12,17 @@ import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
-  IconButton,
   Tabs,
   Tab,
   Box,
-  Typography
+  useMediaQuery,
+  useTheme
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -36,29 +35,42 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onSaveAndAuthenticate
 }) => {
   const { t } = useI18n();
+  const theme = useTheme();
+  // Phones get the whole viewport: the desktop 95vw shell leaves the six setup
+  // tabs and the configure form unusable at phone widths (#394).
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const [activeTab, setActiveTab] = useState<ServerSetupTab>(initialTab);
   
-  // Store parsed configuration from GitHub tab
-  const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
-  // Marketplace handoff: the config is ready to run, so the local tab should
-  // start a test run automatically. Cleared on any manual tab change.
-  const [autoTestRun, setAutoTestRun] = useState<boolean>(false);
-  // Marketplace "manual setup" handoff: repository URL to prefill in the GitHub tab
-  const [githubPrefillUrl, setGithubPrefillUrl] = useState<string>('');
+  // The single source→sink message (#392). Every inbound tab prop below is
+  // derived from it, so adding a new handoff never adds a prop to all six tabs.
+  const [handoff, setHandoff] = useState<TabHandoff | null>(null);
+  // Bumped on every handoff so the configure tab can re-arm its auto-run guard:
+  // installing the same server twice in a row must test-run both times.
+  const [handoffId, setHandoffId] = useState<number>(0);
+
+  const parsedConfig: MCPServerConfig | null = handoff?.to === 'configure' ? handoff.config : null;
+  const autoTestRun = handoff?.to === 'configure' && Boolean(handoff.autoTestRun);
+  const githubPrefillUrl = handoff?.to === 'github' ? handoff.repoUrl : '';
+
+  const handleHandoff = (next: TabHandoff) => {
+    setHandoff(next);
+    setHandoffId(id => id + 1);
+    setActiveTab(next.to === 'github' ? 'github' : 'configure');
+  };
   
   // Track which tabs have been visited/initialized
   const [initializedTabs, setInitializedTabs] = useState<{
     spotlight: boolean;
     marketplace: boolean;
     github: boolean;
-    local: boolean;
+    configure: boolean;
     reference: boolean;
     remote: boolean;
   }>({
     spotlight: false,
     marketplace: false,
     github: false,
-    local: false,
+    configure: false,
     reference: false,
     remote: false
   });
@@ -80,19 +92,21 @@ const ServerModal: React.FC<ServerModalProps> = ({
   const { getThemeValue } = useThemeUtils();
   
   const handleTabChange = (event: React.SyntheticEvent, newValue: ServerSetupTab) => {
-    // A manual tab change is not a marketplace handoff — don't re-trigger the auto run
-    // or keep a stale GitHub-URL prefill around
-    setAutoTestRun(false);
-    setGithubPrefillUrl('');
+    // A manual tab change is not a handoff — don't re-trigger the auto run or
+    // keep a stale GitHub-URL prefill around. The configured draft itself is
+    // deliberately kept, so switching tabs never discards work in progress.
+    setHandoff(prev => {
+      if (!prev) return prev;
+      if (prev.to === 'github') return null;
+      return prev.autoTestRun ? { ...prev, autoTestRun: false } : prev;
+    });
     setActiveTab(newValue);
   };
 
   // Handle close with state reset
   const handleClose = () => {
-    // Reset parsed config when modal is closed
-    setParsedConfig(null);
-    setAutoTestRun(false);
-    setGithubPrefillUrl('');
+    // Drop the handoff (and with it the parsed config / auto-run / prefill)
+    setHandoff(null);
     // Reset to default tab
     setActiveTab('spotlight');
     // Call the original onClose
@@ -105,40 +119,32 @@ const ServerModal: React.FC<ServerModalProps> = ({
       onClose={handleClose}
       maxWidth="xl"
       fullWidth
+      fullScreen={isPhoneLayout}
       PaperProps={{
-        sx: {
-          width: '95vw',
-          maxWidth: '95vw',
-          maxHeight: '95vh',
-          height: 'auto',
-        }
+        // The desktop sizing must not fight `fullScreen`, so it is only applied
+        // above the phone breakpoint.
+        sx: isPhoneLayout
+          ? {
+              width: '100%',
+              maxWidth: '100%',
+              height: '100%',
+              maxHeight: '100%',
+              m: 0,
+            }
+          : {
+              width: '95vw',
+              maxWidth: '95vw',
+              maxHeight: '95vh',
+              height: 'auto',
+            }
       }}
     >
-      <DialogTitle 
-        component="div"
-        sx={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-          pb: 1
-        }}
-      >
-        <Typography variant="h6">
-          {initialConfig
-            ? t('mcp.modal.editTitle', { name: initialConfig.name })
-            : t('mcp.modal.addTitle')}
-        </Typography>
-        <IconButton
-          edge="end"
-          color="inherit"
-          onClick={handleClose}
-          aria-label={t('mcp.modal.close')}
-        >
-          <CloseIcon />
-        </IconButton>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={initialConfig
+          ? t('mcp.modal.editTitle', { name: initialConfig.name })
+          : t('mcp.modal.addTitle')}
+        onClose={handleClose}
+      />
 
       <DialogContent sx={{ p: 0 }}>
         {/* Only show tabs in creation mode, not in edit mode */}
@@ -148,22 +154,25 @@ const ServerModal: React.FC<ServerModalProps> = ({
               value={activeTab} 
               onChange={handleTabChange}
               aria-label={t('mcp.modal.tabsAria')}
-              sx={{ px: 2 }}
+              variant="scrollable"
+              scrollButtons="auto"
+              allowScrollButtonsMobile
+              sx={{ px: { xs: 1, sm: 2 } }}
             >
               <Tab label={t('mcp.modal.spotlight')} value="spotlight" />
-              <Tab label={t('mcp.modal.marketplace')} value="marketplace" />
+              <Tab data-tour="mcp-marketplace-tab" label={t('mcp.modal.marketplace')} value="marketplace" />
               <Tab label={t('mcp.modal.github')} value="github" />
-              <Tab label={t('mcp.modal.local')} value="local" />
+              <Tab label={t('mcp.modal.local')} value="configure" />
               <Tab label={t('mcp.modal.remote')} value="remote" />
               <Tab label={t('mcp.modal.reference')} value="reference" />
             </Tabs>
           </Box>
         ) : null}
 
-        <Box sx={{ p: 3 }}>
+        <Box sx={{ p: { xs: 2, sm: 3 } }}>
           {/* Render the active tab or the edit form */}
           {initialConfig ? (
-            <LocalServerTab
+            <ConfigureTab
               initialConfig={initialConfig}
               onAdd={onAdd}
               onUpdate={onUpdate}
@@ -172,68 +181,29 @@ const ServerModal: React.FC<ServerModalProps> = ({
               onSaveAndAuthenticate={onSaveAndAuthenticate}
             />
           ) : activeTab === 'spotlight' ? (
-            <SpotlightTab
-              onAdd={onAdd}
-              onClose={onClose}
-              setActiveTab={setActiveTab}
-              onUpdate={(config, options) => {
-                setParsedConfig(config);
-                setAutoTestRun(Boolean(options?.autoTestRun));
-              }}
-            />
+            <SpotlightTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
           ) : activeTab === 'marketplace' ? (
-            <MarketplaceTab
-              onAdd={onAdd}
-              onClose={onClose}
-              setActiveTab={setActiveTab}
-              onUpdate={(config, options) => {
-                setParsedConfig(config);
-                setAutoTestRun(Boolean(options?.autoTestRun));
-              }}
-              onOpenInGitHubTab={(repoUrl) => {
-                setGithubPrefillUrl(repoUrl);
-                setActiveTab('github');
-              }}
-            />
+            <MarketplaceTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
           ) : activeTab === 'github' ? (
             <GitHubTab
               onAdd={onAdd}
               onClose={onClose}
-              setActiveTab={setActiveTab}
+              onHandoff={handleHandoff}
               initialGitHubUrl={githubPrefillUrl}
-              onUpdate={(config) => {
-                setParsedConfig(config);
-                setAutoTestRun(false);
-              }}
             />
-          ) : activeTab === 'local' ? (
-            <LocalServerTab
+          ) : activeTab === 'configure' ? (
+            <ConfigureTab
               initialConfig={parsedConfig}
               onAdd={onAdd}
               onClose={onClose}
               autoTestRun={autoTestRun}
+              handoffId={handoffId}
               onSaveAndAuthenticate={onSaveAndAuthenticate}
             />
           ) : activeTab === 'remote' ? (
-            <RemoteTab
-              onAdd={onAdd}
-              onClose={onClose}
-              setActiveTab={setActiveTab}
-              onUpdate={(config) => {
-                setParsedConfig(config);
-                setAutoTestRun(false);
-              }}
-            />
+            <RemoteTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
           ) : (
-            <ReferenceServersTab
-              onAdd={onAdd}
-              onClose={onClose}
-              setActiveTab={setActiveTab}
-              onUpdate={(config) => {
-                setParsedConfig(config);
-                setAutoTestRun(false);
-              }}
-            />
+            <ReferenceServersTab onAdd={onAdd} onClose={onClose} onHandoff={handleHandoff} />
           )}
         </Box>
       </DialogContent>

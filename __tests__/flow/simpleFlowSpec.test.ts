@@ -72,7 +72,11 @@ describe('SimpleFlowSpec', () => {
     expect(result.flow?.nodes.find((node) => node.data.label === 'Draft')?.data.properties)
       .toEqual(expect.objectContaining({ boundModel: 'model-2' }));
     expect(result.flow?.nodes.find((node) => node.type === 'subflow')?.data.properties)
-      .toEqual(expect.objectContaining({ subflowId: 'flow-review' }));
+      .toEqual(expect.objectContaining({
+        subflowId: 'flow-review',
+        resultPresentation: 'separate',
+        sessionScope: 'per-key',
+      }));
   });
 
   it('infers entry and terminal edges around explicit branches', () => {

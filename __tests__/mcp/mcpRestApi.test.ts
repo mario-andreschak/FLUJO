@@ -26,6 +26,12 @@
  */
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 
+jest.mock('@/backend/utils/resolveDynamicReferences', () => ({
+  resolvePromptDynamicReferences: jest.fn(async (value: unknown) => value),
+  resolvePresetArguments: jest.fn(async (value: unknown) => value),
+  applyPresetArguments: jest.fn(async (value: unknown) => value),
+}));
+
 const migrateMcpServerReferences = jest.fn(async () => ({
   success: true,
   migratedFlows: 0,
@@ -68,7 +74,6 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
   args: ['hello'],
   env: {},
   disabled: true,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',
@@ -121,17 +126,17 @@ describe('MCP REST API', () => {
   it('PUT /api/mcp/servers/{name} merges a partial body onto the stored config', async () => {
     await createServer(req(serverFixture()));
 
-    const res = await updateServer(req({ autoApprove: ['toolX'] }), ctx('srv1'));
+    const res = await updateServer(req({ folder: 'updated' }), ctx('srv1'));
     expect(res.status).toBe(200);
     const updated = await res.json();
-    expect(updated.autoApprove).toEqual(['toolX']);
+    expect(updated.folder).toBe('updated');
     // Fields not present in the partial body are preserved.
     expect(updated.command).toBe('echo');
     expect(updated.disabled).toBe(true);
   });
 
   it('PUT /api/mcp/servers/{name} returns 404 for an unknown server', async () => {
-    const res = await updateServer(req({ autoApprove: [] }), ctx('ghost'));
+    const res = await updateServer(req({ disabled: false }), ctx('ghost'));
     expect(res.status).toBe(404);
   });
 

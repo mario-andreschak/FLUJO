@@ -36,7 +36,6 @@ describe('POST /api/registry/feedback', () => {
   });
 
   it.each([
-    [{ notice: '', rating: 5 }],
     [{ notice: 'hello', rating: 3 }],
     [{ notice: 'hello', rating: 5, unexpected: true }],
     [{ notice: 'x'.repeat(256), rating: 1 }],
@@ -45,6 +44,30 @@ describe('POST /api/registry/feedback', () => {
 
     expect(response.status).toBe(400);
     expect(submitFeedbackMock).not.toHaveBeenCalled();
+  });
+
+  it.each([5, 1] as const)('accepts an empty message with rating %i', async (rating) => {
+    submitFeedbackMock.mockResolvedValue({
+      status: 201,
+      body: { accepted: true },
+    });
+
+    const response = await POST(request({ notice: '', rating }));
+
+    expect(response.status).toBe(201);
+    expect(submitFeedbackMock).toHaveBeenCalledWith('', rating);
+  });
+
+  it('accepts a whitespace-only message as empty', async () => {
+    submitFeedbackMock.mockResolvedValue({
+      status: 201,
+      body: { accepted: true },
+    });
+
+    const response = await POST(request({ notice: '   ', rating: 5 }));
+
+    expect(response.status).toBe(201);
+    expect(submitFeedbackMock).toHaveBeenCalledWith('', 5);
   });
 
   it('preserves the registry rate-limit response', async () => {

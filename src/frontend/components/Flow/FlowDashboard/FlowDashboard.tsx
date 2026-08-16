@@ -32,7 +32,10 @@ import AddIcon from '@mui/icons-material/Add';
 import LayersIcon from '@mui/icons-material/Layers';
 import LayersClearIcon from '@mui/icons-material/LayersClear';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import FlowCard, { FlowCardSkeleton } from './FlowCard';
+import QuickChangeModelsDialog, { type QuickModelChangeResult } from './QuickChangeModelsDialog';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import {
   groupByFolder,
@@ -42,13 +45,20 @@ import {
   DEFAULT_CARD_GROUP_MODE,
 } from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { Flow } from '@/frontend/types/flow/flow';
+import type { Model } from '@/shared/types/model';
+import type { FlowModelReplacementMap } from '@/utils/shared/flowModelReplacement';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
+import {
+  BIG_TUTORIAL_EVENT,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowDashboard');
 
@@ -66,6 +76,11 @@ interface FlowDashboardProps {
   onSetFolder?: (flowId: string, folder: string | undefined) => void;
   /** Toggle a flow's favorite flag (#120). */
   onToggleFavorite?: (flowId: string) => void;
+  /** Persist model-id substitutions across several selected flows (#401). */
+  onReplaceModels?: (
+    flowIds: string[],
+    replacements: FlowModelReplacementMap,
+  ) => Promise<QuickModelChangeResult>;
   isLoading?: boolean;
 }
 
@@ -83,35 +98,52 @@ const FlowDashboard = ({
   onCreateFlow,
   onSetFolder,
   onToggleFavorite,
+  onReplaceModels,
   isLoading = false,
 }: FlowDashboardProps) => {
   const { t, tp, formatNumber } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'filter-agent-search') return;
+      setSearchTerm(event.detail.query);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
+  // #372: place the caret in the search field automatically. The toolbar Paper
+  // already sits outside the inner scroll container below, so it stays visible
+  // without a sticky wrapper — only auto-focus is needed here.
+  const searchInputRef = useAutoFocusSearch();
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
   // anchors stay ephemeral.
-  const [sortOption, setSortOption] = useUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
-  const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
+  const [viewMode, setViewMode] = useWorkspaceUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
+  const [modelSelectionMode, setModelSelectionMode] = useState(false);
+  const [selectedForModelChange, setSelectedForModelChange] = useState<Set<string>>(new Set());
+  const [quickChangeOpen, setQuickChangeOpen] = useState(false);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
   // Persisted as a string[] and re-derived into a Set for O(1) lookups.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:flows:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:flows:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   // Context for the per-card consistency badge. Loaded once; flows are revalidated
   // whenever the list or the context changes. A failed load leaves a family undefined
   // so the validator skips those checks rather than mislabelling every card.
   const [validationContext, setValidationContext] = useState<{
-    models?: Array<{ id: string; name?: string; displayName?: string }>;
+    models?: Model[];
     servers?: Array<{ name: string; status?: string }>;
   }>({});
+  const [modelsLoading, setModelsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const ctx: { models?: any[]; servers?: Array<{ name: string; status?: string }> } = {};
+      const ctx: { models?: Model[]; servers?: Array<{ name: string; status?: string }> } = {};
       try {
         const res = await fetch('/api/model');
         if (res.ok) {
@@ -132,12 +164,23 @@ const FlowDashboard = ({
       } catch (error) {
         log.warn('Could not load servers for flow badges', error);
       }
-      if (!cancelled) setValidationContext(ctx);
+      if (!cancelled) {
+        setValidationContext(ctx);
+        setModelsLoading(false);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const availableIds = new Set(flows.map((flow) => flow.id));
+    setSelectedForModelChange((current) => {
+      const next = new Set(Array.from(current).filter((id) => availableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [flows]);
 
   const validationByFlow = useMemo(() => {
     const map: Record<string, FlowValidationResult> = {};
@@ -192,6 +235,21 @@ const FlowDashboard = ({
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
     );
   };
+
+  const toggleModelSelection = (flowId: string) => {
+    setSelectedForModelChange((current) => {
+      const next = new Set(current);
+      if (next.has(flowId)) next.delete(flowId);
+      else next.add(flowId);
+      return next;
+    });
+  };
+
+  const leaveModelSelectionMode = () => {
+    setModelSelectionMode(false);
+    setSelectedForModelChange(new Set());
+    setQuickChangeOpen(false);
+  };
   
   // Filter and sort flows
   const filteredFlows = useMemo(() => {
@@ -213,9 +271,9 @@ const FlowDashboard = ({
   }, [flows, searchTerm, sortOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the cards load.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:flows',
-    { deps: [isLoading, filteredFlows.length] },
+    { deps: [isLoading, filteredFlows.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker.
@@ -278,8 +336,8 @@ const FlowDashboard = ({
         >
           <FlowCard
             flow={flow}
-            selected={selectedFlow === flow.id}
-            onSelect={onSelectFlow}
+            selected={modelSelectionMode ? selectedForModelChange.has(flow.id) : selectedFlow === flow.id}
+            onSelect={modelSelectionMode ? toggleModelSelection : onSelectFlow}
             onDelete={onDeleteFlow}
             onCopy={onCopyFlow}
             onEdit={onEditFlow}
@@ -288,6 +346,7 @@ const FlowDashboard = ({
             onToggleFavorite={onToggleFavorite}
             folders={folders}
             validation={validationByFlow[flow.id]}
+            selectionMode={modelSelectionMode}
           />
         </Grid>
       ))}
@@ -312,12 +371,14 @@ const FlowDashboard = ({
         }}>
           {/* Search field */}
           <TextField
+            data-tour="agents-search"
             placeholder={t('flows.dashboard.search')}
             variant="outlined"
             size="small"
             fullWidth
             value={searchTerm}
             onChange={handleSearchChange}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -328,7 +389,54 @@ const FlowDashboard = ({
             sx={{ maxWidth: { sm: 300 } }}
           />
           
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+            {onReplaceModels && (
+              modelSelectionMode ? (
+                <>
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedForModelChange(new Set(filteredFlows.map((flow) => flow.id)))}
+                  >
+                    {t('flows.quickModels.selectVisible')}
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => setSelectedForModelChange(new Set())}
+                    disabled={selectedForModelChange.size === 0}
+                  >
+                    {t('flows.quickModels.clear')}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<SwapHorizRoundedIcon />}
+                    disabled={selectedForModelChange.size === 0}
+                    onClick={() => setQuickChangeOpen(true)}
+                  >
+                    {t('flows.quickModels.changeSelected', {
+                      count: formatNumber(selectedForModelChange.size),
+                    })}
+                  </Button>
+                  <IconButton
+                    size="small"
+                    aria-label={t('flows.quickModels.cancelSelection')}
+                    onClick={leaveModelSelectionMode}
+                  >
+                    <CloseRoundedIcon fontSize="small" />
+                  </IconButton>
+                </>
+              ) : (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<SwapHorizRoundedIcon />}
+                  disabled={flows.length === 0 || isLoading}
+                  onClick={() => setModelSelectionMode(true)}
+                >
+                  {t('flows.quickModels.start')}
+                </Button>
+              )
+            )}
             {/* View mode toggle */}
             <Box sx={{ 
               display: 'flex', 
@@ -436,6 +544,7 @@ const FlowDashboard = ({
             groups.map((group) => (
               <CollapsibleCardSection
                 key={group.key}
+                groupKey={group.key}
                 label={group.label}
                 count={group.items.length}
                 expanded={!collapsedKeys.has(group.key)}
@@ -575,7 +684,25 @@ const FlowDashboard = ({
         </MenuItem>
       </Menu>
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollNavCluster {...scrollNavProps} />
+
+      {onReplaceModels && (
+        <QuickChangeModelsDialog
+          open={quickChangeOpen}
+          flows={flows.filter((flow) => selectedForModelChange.has(flow.id))}
+          models={validationContext.models ?? []}
+          modelsLoading={modelsLoading}
+          onClose={() => setQuickChangeOpen(false)}
+          onApply={async (replacements) => {
+            const result = await onReplaceModels(Array.from(selectedForModelChange), replacements);
+            if (result.updatedFlowCount > 0 || result.failedFlowCount === 0) {
+              setModelSelectionMode(false);
+              setSelectedForModelChange(new Set());
+            }
+            return result;
+          }}
+        />
+      )}
     </Box>
   );
 };

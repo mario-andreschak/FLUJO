@@ -27,7 +27,10 @@ export interface OpenAiUsageLike {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number } | null;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  } | null;
 }
 
 /** FLUJO-shaped usage numbers derived from an OpenAI-compatible completion. */
@@ -44,6 +47,8 @@ export interface MappedOpenAiUsage {
    * tell "0 cached" apart from "provider doesn't report caching".
    */
   cacheReadTokens?: number;
+  /** Subset of `promptTokens` written to the provider prompt cache. */
+  cacheWriteTokens?: number;
 }
 
 /**
@@ -58,10 +63,12 @@ export function mapOpenAiUsage(
   if (!rawUsage) return undefined;
 
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens;
+  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens;
   return {
     promptTokens: rawUsage.prompt_tokens ?? 0,
     completionTokens: rawUsage.completion_tokens ?? 0,
     totalTokens: rawUsage.total_tokens ?? 0,
     ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
+    ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
   };
 }

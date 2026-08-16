@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -10,7 +11,7 @@ const log = createLogger('app/api/model/route');
  * GET /api/model
  * List all models.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -39,7 +40,7 @@ export async function GET() {
  * POST /api/model
  * Create a new model. The request body is the model object itself.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -75,3 +76,11 @@ export async function POST(request: NextRequest) {
     });
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);

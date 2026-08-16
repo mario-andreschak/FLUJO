@@ -56,6 +56,7 @@ RUN apt-get update \
         python-is-python3 \
         ca-certificates \
         curl \
+        ripgrep \
     && rm -rf /var/lib/apt/lists/*
 # Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
 # server configs run exactly that, and inside a disposable container the
@@ -85,17 +86,34 @@ COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts ./scripts
 
 # Keep writable data separate from the immutable bundled package workspace so a
-# persistent mcp-servers volume cannot mask the offline built-ins. HOME remains
-# writable for npm's cache when installing optional external npx servers.
+# persistent mcp-servers volume cannot mask the offline built-ins. Seed the
+# workspace layout (including every runtime-owned subtree) before Docker creates
+# its named volumes; this gives fresh volumes the correct node:node ownership.
+# The two legacy mount points remain as empty directories so the transactional
+# upgrader can also consume images/volumes created by older launchers.
+# HOME remains writable for npm's cache when installing optional external npx
+# servers.
 ENV HOME=/home/node
-RUN mkdir -p /app/data/db /app/data/mcp-servers /home/node/.npm \
+RUN mkdir -p \
+      /app/data/db \
+      /app/data/mcp-servers \
+      /app/data/workspaces/default-workspace/db \
+      /app/data/workspaces/default-workspace/mcp-servers \
+      /app/data/workspaces/default-workspace/userdata \
+      /app/data/workspaces/default-workspace/snapshots \
+      /app/data/workspaces/default-workspace/screenshots \
+      /app/data/workspaces/default-workspace/recordings \
+      /app/data/workspaces/default-workspace/browser-profile \
+      /app/data/workspaces/default-workspace/bash-utils \
+      /app/data/workspaces/default-workspace/artifacts \
+      /home/node/.npm \
     && chown -R node:node /app/data /home/node
 
 USER node
 
 # Port 4200: main HTTPS proxy
-# Ports 4201-4216: MCP Apps sandbox listeners (Mode A port pool)
-EXPOSE 4200 4201-4216
+# Port 4201: shared MCP Apps transport listener (`*.localhost` browser origins)
+EXPOSE 4200 4201
 
 # /api/cwd is a side-effect-free GET (returns the resolved paths), so it is a
 # safe readiness probe.

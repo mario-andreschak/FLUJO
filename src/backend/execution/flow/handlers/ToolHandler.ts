@@ -11,9 +11,10 @@ import { mcpService } from '@/backend/services/mcp';
 import { ToolDefinition } from '../types';
 import { encodeToolName, hashSchema } from './toolNamespace';
 import { buildMCPResourceTools } from './mcpResourceTools';
-import { isWhollyDenied } from '../permissionEngine';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import OpenAI from 'openai';
+import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
+import type { MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 
@@ -214,6 +215,15 @@ export class ToolHandler {
     
     try {
       const allTools: ToolDefinition[] = [];
+      let serverConfigs: MCPServerConfig[] = [];
+      try {
+        const loadedConfigs = await mcpService.loadServerConfigs?.();
+        serverConfigs = Array.isArray(loadedConfigs) ? loadedConfigs : [];
+      } catch (error) {
+        // Listing/using tools remains available if config storage has a
+        // transient read failure; only server-wide presets are unavailable.
+        log.warn('Could not load server-wide tool parameter presets', error);
+      }
       
       // Process each MCP node
       for (const mcpNode of mcpNodes) {
@@ -223,6 +233,7 @@ export class ToolHandler {
           const boundServer = properties.boundServer;
           const enabledTools = properties.enabledTools || [];
           const toolTimeout = properties.toolTimeout;
+          const serverConfig = serverConfigs.find((config) => config.name === boundServer);
 
           // Node-level roots (issue 46): register this node's workspace-folder overlay
           // BEFORE connecting, so roots/list answers with the union of server-level and
@@ -273,13 +284,14 @@ export class ToolHandler {
 
           // An empty list with no error is valid (server exposes none / none are enabled).
           // Filter and format tools
-          const { permissionRules } = input;
           const serverTools = (toolsResult.tools || [])
             .filter(tool => enabledTools.includes(tool.name))
-            // Phase 2 (issue #246): drop wholly-denied tools before advertising
-            // them to the model — saves tokens and keeps context clean.
-            .filter(tool => !permissionRules || !isWhollyDenied(permissionRules, tool.name))
             .map(tool => {
+              const presetArgs = mergeToolParameterPresets(
+                serverConfig?.toolParameterPresets,
+                properties.toolParameterPresets,
+                tool.name,
+              );
               // Issue #255: capture the tool's identity at advertise time so a
               // later dispatch can detect that the server reconnected or the
               // schema changed. Record the current schema hash as the advertised
@@ -293,7 +305,8 @@ export class ToolHandler {
                 name: encodeToolName(boundServer, tool.name),
                 timeout: toolTimeout,
                 description: tool.description,
-                inputSchema: tool.inputSchema,
+                inputSchema: hidePresetParameters(tool.inputSchema as Record<string, unknown>, presetArgs),
+                ...(Object.keys(presetArgs).length > 0 ? { presetArgs } : {}),
                 annotations: tool.annotations,
                 clientGeneration: mcpService.getClientGeneration(boundServer),
                 schemaHash,

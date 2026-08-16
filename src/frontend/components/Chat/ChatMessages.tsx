@@ -35,7 +35,7 @@ import {
   DialogContentText,
   DialogActions,
 } from '@mui/material';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import BlockIcon from '@mui/icons-material/Block';
@@ -48,34 +48,43 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
 import RestoreIcon from '@mui/icons-material/Restore';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import { ChatMessage } from './index';
+import { magicLinkUrl } from '@/frontend/utils/magicLink';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
-import { FEATURES } from '@/config/features';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
-import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import { type CapturedToolResource, type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
 import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
 import type { LazyToolPayloadRef, McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import { summarizeTokenMeter } from '@/shared/utils/tokenUsage';
 import {
   MARKDOWN_LINK_COMPONENTS,
-  MarkdownLink,
   markdownLinkVars,
 } from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import SubflowLaneChip from './SubflowLaneChip';
+import { formatPartialJson } from '@/frontend/utils/partialJson';
 import {
   groupMcpAppOccurrences,
   latestMcpAppResultIdsByResource,
 } from './mcpAppProjection';
+import { ChatMarkdownContent } from './ChatMarkdown';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -108,6 +117,8 @@ export interface PendingQuestion {
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
+  /** Live resource:write metadata keyed by its stable producing tool-call id. */
+  capturedResourcesByToolCall?: Readonly<Record<string, CapturedToolResource>>;
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[] | null; // Add pending calls prop
   /** Active elicitation request from the server, if any. */
   pendingElicitation?: PendingElicitation | null;
@@ -117,13 +128,20 @@ interface ChatMessagesProps {
   /** Id of the message currently being edited in the ChatInput (or null). */
   editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
+  /** Split off the head of the thread: start → the picked message (inclusive). */
   onSplitConversation: (messageId: string) => void;
+  /**
+   * Mirror of `onSplitConversation`: split off the TAIL of the thread — the
+   * picked message → end. Optional so read-only hosts (debugger, flow
+   * generator preview) can omit it and simply not show the entry.
+   */
+  onSplitConversationFromHere?: (messageId: string) => void;
   /** Called after a confirmed message-scoped worktree revert. */
   onRevertToHere?: (messageId: string) => void;
   /** Start editing a message — opens the editor in the ChatInput, not inline. */
   onBeginEditMessage?: (messageId: string) => void;
-  onApproveToolCall?: (toolCallId: string, always?: boolean) => void; // Add approve handler prop
-  onRejectToolCall?: (toolCallId: string, always?: boolean, feedback?: string) => void; // Add reject handler prop (feedback: issue #247)
+  onApproveToolCall?: (toolCallId: string) => void;
+  onRejectToolCall?: (toolCallId: string) => void;
   onCancelToolCall?: (toolCallId: string) => void; // Issue #357: cancel one in-flight tool call
   /** Submit elicitation form — called with the collected field values. */
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
@@ -163,8 +181,20 @@ interface ChatMessagesProps {
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   /** Conversation-scoped App identities the user explicitly closed. */
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  /**
+   * #375: true while the user has collapsed the whole canvas dock — blocks
+   * every AUTOMATIC (non-user-initiated) open until they manually re-open
+   * something or expand the dock again.
+   */
+  autoOpenSuppressed?: boolean;
   /** Clear a persisted dismissal when the user explicitly opens a launcher. */
   onMcpAppManualOpen?: (appKey: string) => void;
+  /**
+   * #374: a specific message to scroll to and briefly highlight (from a
+   * `?conversation=<id>&message=<id>` magic link). Expands the render window
+   * if the target message is currently outside it.
+   */
+  anchorMessageId?: string | null;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -195,6 +225,13 @@ export interface CanvasLaunchInfo {
   updateId?: string | number;
   /** True when this handoff originated from the live-result auto-open policy. */
   automatic?: boolean;
+  /**
+   * #375: false when this frame already failed its post-handshake validation
+   * (unsupported display mode / access revoked). Defensive guard so an
+   * errored frame can never be routed into the canvas, even from a stale
+   * closure. Undefined is treated as healthy.
+   */
+  healthy?: boolean;
 }
 
 // Type guard to check if a message has tool_calls
@@ -264,52 +301,22 @@ const formatTime = (timestamp: number) => {
   });
 };
 
-// Markdown renderers are pure of any per-message state, so they live at module
-// scope: a stable identity means memoized bubbles don't re-parse/re-render
-// their markdown when the list re-renders.
-const MARKDOWN_COMPONENTS: Components = {
-  p: (props) => <Typography variant="body1" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Typography>,
-  h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
-  h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
-  h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
-  h4: (props) => <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
-  h5: (props) => <Typography variant="body1" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
-  h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
-  ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
-  ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
-  li: (props) => <Box component="li" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Box>,
-  // Link color comes from the `--flujo-link-color` the surrounding surface sets
-  // (see MarkdownLink): `primary.main` was invisible on the accent-filled user
-  // bubble in the light modern theme.
-  a: MarkdownLink,
-  blockquote: (props) => (
-    <Box component="blockquote" sx={{
-      borderLeft: '4px solid',
-      borderColor: 'divider',
-      pl: 2,
-      py: 0.5,
-      my: 1,
-      bgcolor: 'action.hover',
-      borderRadius: '4px'
-    }}>{props.children}</Box>
-  ),
-  code: ({ node, className, children, ...props }: any) => {
-    const match = /language-(\w+)/.exec(className || '');
-    const isInline = !match && !className;
-    return isInline ? (
-      <Typography component="code" sx={{
-        bgcolor: 'action.hover', px: 0.5, py: 0.25, borderRadius: '4px', fontFamily: 'monospace',
-        wordBreak: 'break-all', // Break inline code if needed
-      }}>{children}</Typography>
-    ) : (
-      <Box component="pre" sx={{
-        bgcolor: 'action.hover', p: 1.5, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
-        fontSize: '0.875rem', my: 1, whiteSpace: 'pre-wrap', // Ensure wrapping in code blocks
-        wordBreak: 'break-word', // Break long words in code blocks
-      }}>{children}</Box>
-    );
-  }
-};
+/** Plain text represented by a message body, for the header copy action. */
+export function messageContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      const record = part as Record<string, unknown>;
+      if (typeof record.text === 'string') return record.text;
+      return typeof record.content === 'string' ? record.content : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
 
 const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => {
   const { t } = useI18n();
@@ -587,7 +594,7 @@ const ToolCallDetails: React.FC<{
   /** Issue #357: cancel THIS still-running tool call (confirmed first). */
   onCancelToolCall?: (toolCallId: string) => void;
 }> = ({ pair, showRaw, onRawChange, onCancelToolCall }) => {
-  const { t } = useI18n();
+  const { t, formatNumber } = useI18n();
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const args = useLazyToolPayload(pair.argumentPayload, pair.toolCall.function.arguments);
@@ -613,16 +620,20 @@ const ToolCallDetails: React.FC<{
           tool: toolTesterDestination.toolName,
           args: JSON.stringify(parsedArgs),
         });
-        window.location.assign(`/mcp?${query.toString()}`);
+        window.location.assign(withWorkspaceUrl(`/mcp?${query.toString()}`));
       }
     : undefined;
-  const formattedArgs = useMemo(() => {
-    try {
-      return JSON.stringify(JSON.parse(args.value), null, 2);
-    } catch {
-      return args.value;
-    }
-  }, [args.value]);
+  // This preview is intentionally display-only; execution and approval continue
+  // to use the authoritative raw argument string.
+  const formattedArgs = useMemo(() => formatPartialJson(args.value), [args.value]);
+  const capturedSize = pair.capturedResource?.size;
+  const formattedCapturedSize = typeof capturedSize === 'number'
+    ? capturedSize < 1024
+      ? `${formatNumber(capturedSize)} B`
+      : capturedSize < 1024 * 1024
+        ? `${formatNumber(Math.round(capturedSize / 1024))} KB`
+        : `${formatNumber(capturedSize / (1024 * 1024), { maximumFractionDigits: 1 })} MB`
+    : undefined;
 
   return (
     <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
@@ -634,6 +645,9 @@ const ToolCallDetails: React.FC<{
           size="small" color="default" variant="outlined"
           sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
         />
+        {!formattedArgs.complete && (
+          <Chip label="streaming…" size="small" color="primary" sx={{ ml: 1, height: 20, fontSize: '0.7rem' }} />
+        )}
       </Box>
       {args.loading ? (
         <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 1 }}>
@@ -648,8 +662,11 @@ const ToolCallDetails: React.FC<{
             bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
             fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           }}>
-            {formattedArgs}
+            {formattedArgs.text}
           </Box>
+          <Typography variant="caption" color="text.secondary">
+            {args.value.length.toLocaleString()} characters
+          </Typography>
         </>
       )}
       {openInToolTester && (
@@ -670,11 +687,58 @@ const ToolCallDetails: React.FC<{
         )}
       </Box>
       {pair.result ? (
-        <DeferredToolResultView
-          content={pair.result.content}
-          payload={pair.resultPayload}
-          showRaw={showRaw}
-        />
+        <>
+          {pair.capturedResource && (
+            <Box
+              role="status"
+              aria-label={`${t('chat.messages.storedResource')}: ${pair.capturedResource.uri}${formattedCapturedSize ? `, ${formattedCapturedSize}` : ''}`}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                mb: 1,
+                p: 0.75,
+                border: '1px solid',
+                borderColor: 'info.main',
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                minWidth: 0,
+              }}
+            >
+              <LinkRoundedIcon fontSize="small" color="info" />
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                  {t('chat.messages.storedResource')}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  component="code"
+                  title={pair.capturedResource.uri}
+                  sx={{ display: 'block', color: 'text.secondary', overflowWrap: 'anywhere' }}
+                >
+                  {pair.capturedResource.uri}
+                </Typography>
+              </Box>
+              {formattedCapturedSize && (
+                <Chip label={formattedCapturedSize} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+              )}
+              <Tooltip title={t('chat.actions.copy')}>
+                <IconButton
+                  size="small"
+                  aria-label={`${t('chat.actions.copy')}: ${pair.capturedResource.uri}`}
+                  onClick={() => { void copyText(pair.capturedResource!.uri); }}
+                >
+                  <ContentCopyRoundedIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
+          <DeferredToolResultView
+            content={pair.result.content}
+            payload={pair.resultPayload}
+            showRaw={showRaw}
+          />
+        </>
       ) : (
         <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
@@ -743,6 +807,7 @@ export const ToolCallTimeline: React.FC<{
   autoOpenMcpApps?: boolean;
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  autoOpenSuppressed?: boolean;
   onMcpAppManualOpen?: (appKey: string) => void;
   /** Conversation-level ownership: only these latest results may host a live View. */
   mcpAppHostResultIds?: ReadonlySet<string>;
@@ -760,6 +825,7 @@ export const ToolCallTimeline: React.FC<{
   autoOpenMcpApps = true,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   mcpAppHostResultIds,
 }) => {
@@ -794,7 +860,10 @@ export const ToolCallTimeline: React.FC<{
           autoOpenMcpApps
           && latest.resultMessageId
           && autoOpenMcpAppResultIds?.has(latest.resultMessageId)
-          && !dismissedMcpAppKeys?.has(group.key),
+          && !dismissedMcpAppKeys?.has(group.key)
+          // #375: collapsing the dock is a sticky "stop auto-opening" intent —
+          // do not even mount an auto-docking frame while it is in effect.
+          && !autoOpenSuppressed,
         );
         const launchInfo: CanvasLaunchInfo = {
           serverName: latest.serverName,
@@ -906,6 +975,7 @@ interface MessageBubbleProps {
   autoOpenMcpApps?: boolean;
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  autoOpenSuppressed?: boolean;
   onMcpAppManualOpen?: (appKey: string) => void;
   mcpAppHostResultIds?: ReadonlySet<string>;
   /** Issue #357: cancel a single in-flight tool call. */
@@ -918,6 +988,8 @@ interface MessageBubbleProps {
   hoistedHandoffs?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** True while THIS message is being edited in the ChatInput (dims the bubble). */
   isBeingEdited?: boolean;
+  /** #374: true for the message targeted by a `?message=<id>` magic link — briefly highlighted. */
+  isAnchor?: boolean;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
   onToggleRaw: (messageId: string, checked: boolean) => void;
 }
@@ -943,16 +1015,36 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   autoOpenMcpApps,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   mcpAppHostResultIds,
   onCancelToolCall,
   hoistedHandoffs,
   isBeingEdited,
+  isAnchor,
   onMenuOpen,
   onToggleRaw,
 }) {
   const { t, formatDate: formatLocalizedDate, formatNumber } = useI18n();
   const [orphanToolExpanded, setOrphanToolExpanded] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copyableText = useMemo(() => messageContentText(message.content), [message.content]);
+  const handleCopyMessage = useCallback(async () => {
+    const copied = await copyText(copyableText);
+    setCopyStatus(copied ? 'copied' : 'failed');
+  }, [copyableText]);
+
+  useEffect(() => {
+    if (copyStatus === 'idle') return;
+    const timeout = window.setTimeout(() => setCopyStatus('idle'), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copyStatus]);
+
+  const copyLabel = copyStatus === 'copied'
+    ? t('chat.actions.copied')
+    : copyStatus === 'failed'
+      ? t('chat.actions.copyFailed')
+      : t('chat.actions.copy');
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
@@ -969,6 +1061,13 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           borderLeft: '2px solid',
           borderColor: 'divider',
           ml: 1,
+        }),
+        // #374: brief highlight for the target of a `?message=<id>` magic link.
+        ...(isAnchor && {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          borderRadius: 1,
+          transition: 'outline-color 2s ease-out',
         }),
       }}
     >
@@ -997,6 +1096,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           </Tooltip>
         )}
 
+        {message.subflowResult && (
+          <SubflowLaneChip result={message.subflowResult} />
+        )}
+
         {depth > 0 && (
           <Tooltip title={t('chat.messages.nested', { depth })}>
             <Chip
@@ -1019,25 +1122,46 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           />
         )}
 
-        {message.usage && (
-          <Tooltip title={t('chat.messages.tokenUsage', {
-            prompt: formatNumber(message.usage.promptTokens),
-            completion: formatNumber(message.usage.completionTokens),
-          })}>
-            <Chip
-              label={`${formatTokenCount(message.usage.totalTokens)} tok`}
+        {message.usage && (() => {
+          const meter = summarizeTokenMeter(message.usage);
+          return (
+            <Tooltip title={t('chat.messages.tokenUsage', {
+              prompt: formatNumber(meter.freshPromptTokens),
+              completion: formatNumber(meter.completionTokens),
+              cached: formatNumber(meter.cacheReadTokens),
+              written: formatNumber(meter.cacheWriteTokens),
+            })}>
+              <Chip
+                label={`${formatTokenCount(meter.meterTotalTokens)} tok`}
+                size="small"
+                color="default"
+                variant="outlined"
+                sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
+              />
+            </Tooltip>
+          );
+        })()}
+
+        {copyableText && (
+          <Tooltip title={copyLabel} disableInteractive>
+            <IconButton
               size="small"
-              color="default"
-              variant="outlined"
-              sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
-            />
+              onClick={() => void handleCopyMessage()}
+              aria-label={copyLabel}
+              sx={{ ml: 1 }}
+            >
+              {copyStatus === 'copied'
+                ? <CheckRoundedIcon fontSize="small" color="success" />
+                : <ContentCopyRoundedIcon fontSize="small" />}
+            </IconButton>
           </Tooltip>
         )}
 
         <IconButton
           size="small"
           onClick={(e) => onMenuOpen(e, message.id)}
-          sx={{ ml: 1 }}
+          aria-label={t('chat.actions.more')}
+          sx={{ ml: copyableText ? 0.25 : 1 }}
         >
           <MoreVertIcon fontSize="small" />
         </IconButton>
@@ -1075,6 +1199,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           outlineColor: 'warning.main',
           overflowWrap: 'break-word', // Ensure long words break
           wordBreak: 'break-word', // Ensure words break correctly
+          // The default white-on-violet selection is effectively invisible on
+          // the modern light user bubble. Reverse those colors locally so the
+          // selected range has a clear light block and dark-violet text.
+          ...(message.role === 'user' && {
+            ':root.modern-theme:not(.dark-theme) & ::selection': {
+              color: theme.palette.primary.dark,
+              backgroundColor: theme.palette.common.white,
+            },
+          }),
           // NOTE: do NOT set white-space: pre-wrap here. react-markdown emits
           // literal "\n" text nodes *between* block elements; a pre-wrap
           // container renders those as visible blank lines on top of the
@@ -1088,12 +1221,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <>
             {/* Render message content only if it's a string and not a tool message */}
             {message.role !== 'tool' && typeof message.content === 'string' && (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={MARKDOWN_COMPONENTS}
-              >
-                {message.content}
-              </ReactMarkdown>
+              <ChatMarkdownContent>{message.content}</ChatMarkdownContent>
             )}
             {/* Multipart content (text + images): user attachments and generated
                 assistant images are normalized to an OpenAI-style content-part
@@ -1103,9 +1231,12 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 {(message.content as any[]).map((part, partIndex) => {
                   if (part?.type === 'text') {
                     return (
-                      <ReactMarkdown key={partIndex} remarkPlugins={[remarkGfm]}>
-                        {part.text}
-                      </ReactMarkdown>
+                      // Same renderer map as the string-content path above: it
+                      // routes anchors through MarkdownLink, so multipart text
+                      // links consume the bubble's `--flujo-link-color` instead
+                      // of the UA default (invisible violet-on-violet in the
+                      // light modern theme).
+                      <ChatMarkdownContent key={partIndex}>{part.text}</ChatMarkdownContent>
                     );
                   }
                   if (part?.type === 'image_url' && part.image_url?.url) {
@@ -1193,6 +1324,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             autoOpenMcpApps={autoOpenMcpApps}
             autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
             dismissedMcpAppKeys={dismissedMcpAppKeys}
+            autoOpenSuppressed={autoOpenSuppressed}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
             onCancelToolCall={onCancelToolCall}
@@ -1566,6 +1698,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
 
 const ChatMessages: React.FC<ChatMessagesProps> = ({
   messages,
+  capturedResourcesByToolCall,
   pendingToolCalls, // Destructure new prop
   pendingElicitation,
   availableNodes = [], // Destructure with default empty array
@@ -1573,6 +1706,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   editingMessageId,
   onToggleDisabled,
   onSplitConversation,
+  onSplitConversationFromHere,
   onRevertToHere,
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
@@ -1590,15 +1724,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   autoOpenMcpApps = true,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
+  anchorMessageId,
 }) => {
+  const { settings, settingsHydrated } = useStorage();
+  const restoreEnabled = settingsHydrated && settings?.experimental?.snapshotsEnabled === true;
   const { t, tp } = useI18n();
-  // Issue #247: per-tool-call rejection feedback text (keyed by tool-call id),
-  // so the user can tell the model *why* a call was rejected / what to do instead.
-  const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
-
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
   useEffect(() => {
@@ -1611,6 +1745,27 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     () => (Array.isArray(messages) ? (hiddenCount > 0 ? messages.slice(hiddenCount) : messages) : []),
     [messages, hiddenCount]
   );
+
+  // #374: `?message=<id>` magic link target. Expand the render window (if
+  // needed) so the anchor is actually mounted, then scroll it into view once
+  // it is; the highlight itself is driven by `isAnchor` on MessageBubble.
+  useEffect(() => {
+    if (!anchorMessageId || !Array.isArray(messages)) return;
+    const idx = messages.findIndex((m) => m.id === anchorMessageId);
+    if (idx === -1) return;
+    const neededVisible = totalCount - idx;
+    if (neededVisible > visibleCount) {
+      setVisibleCount(neededVisible);
+      return; // re-run after the window has expanded to include it
+    }
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const raf = window.requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-ask-flujo-message-id="${anchorMessageId}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [anchorMessageId, messages, totalCount, visibleCount]);
 
   // #95 (follow-up): group each contiguous assistant run's (non-handoff) tool
   // calls onto ONE anchor bubble — the run's narration message — so the
@@ -1650,14 +1805,21 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       const pairs = pairsByAnchorId.get(group.anchorId) ?? [];
       const handoffs = handoffsByAnchorId.get(group.anchorId) ?? [];
       const effectiveId = group.memberIds.find((id) => visibleIdSet.has(id)) ?? group.anchorId;
-      if (pairs.length > 0) renderPairsById.set(effectiveId, pairs);
+      if (pairs.length > 0) {
+        renderPairsById.set(effectiveId, pairs.map((pair) => {
+          const structured = pair.toolCall.id
+            ? capturedResourcesByToolCall?.[pair.toolCall.id]
+            : undefined;
+          return structured ? { ...pair, capturedResource: structured } : pair;
+        }));
+      }
       if (handoffs.length > 0) renderHandoffsById.set(effectiveId, handoffs);
       for (const id of group.hoistedIds) {
         if (id !== effectiveId) suppressedIds.add(id);
       }
     }
     return { renderPairsById, renderHandoffsById, suppressedIds };
-  }, [groups, pairsByAnchorId, handoffsByAnchorId, visibleIdSet]);
+  }, [groups, pairsByAnchorId, handoffsByAnchorId, visibleIdSet, capturedResourcesByToolCall]);
 
   // Auto-scroll is owned by the parent (Chat/index.tsx), which holds the scroll
   // container ref and implements position-aware stick-to-bottom + a jump-to-latest
@@ -1711,6 +1873,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     }
   };
 
+  const handleSplitConversationFromHere = () => {
+    if (activeMessageId && onSplitConversationFromHere) {
+      onSplitConversationFromHere(activeMessageId);
+      handleMenuClose();
+    }
+  };
+
   const handleRevertToHere = () => {
     if (activeMessageId) {
       setRevertMessageId(activeMessageId);
@@ -1724,6 +1893,19 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       onBeginEditMessage?.(activeMessageId);
       handleMenuClose();
     }
+  };
+
+  // #374: shareable `/chat?conversation=<id>&message=<id>` magic link — ids only.
+  const handleCopyMessageLink = () => {
+    if (activeMessageId) {
+      const url = magicLinkUrl({
+        kind: 'message',
+        id: activeMessageId,
+        extra: conversationId ? { conversation: conversationId } : undefined,
+      });
+      void copyText(url);
+    }
+    handleMenuClose();
   };
 
   // Resolve node ids to display labels once per availableNodes change.
@@ -1801,11 +1983,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             autoOpenMcpApps={autoOpenMcpApps}
             autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
             dismissedMcpAppKeys={dismissedMcpAppKeys}
+            autoOpenSuppressed={autoOpenSuppressed}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
             onCancelToolCall={onCancelToolCall}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
+            isAnchor={!!anchorMessageId && message.id === anchorMessageId}
             onMenuOpen={handleMenuOpen}
             onToggleRaw={handleToggleRaw}
           />
@@ -1897,15 +2081,32 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <ListItemIcon><CallSplitIcon fontSize="small" /></ListItemIcon>
           <ListItemText>{t('chat.actions.split')}</ListItemText>
         </MenuItem>
-        {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
+        {/* Same action mirrored: keep this message through the end instead.
+            The icon is the split glyph flipped, so the two directions read as
+            a pair at a glance. */}
+        {onSplitConversationFromHere && (
+          <MenuItem onClick={handleSplitConversationFromHere}>
+            <ListItemIcon>
+              <CallSplitIcon fontSize="small" sx={{ transform: 'rotate(180deg)' }} />
+            </ListItemIcon>
+            <ListItemText>{t('chat.actions.splitFromHere')}</ListItemText>
+          </MenuItem>
+        )}
+        {restoreEnabled
+          && activeMsgForMenu
+          && (activeMsgForMenu.role === 'user' || activeMsgForMenu.role === 'assistant') ? (
           <MenuItem onClick={handleRevertToHere}>
             <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
             <ListItemText>{t('chat.actions.revert')}</ListItemText>
           </MenuItem>
         ) : null}
+        <MenuItem onClick={handleCopyMessageLink}>
+          <ListItemIcon><LinkRoundedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>{t('magicLink.copy')}</ListItemText>
+        </MenuItem>
       </Menu>
 
-      {FEATURES.ENABLE_REVERT_TO_HERE && conversationId && (
+      {restoreEnabled && conversationId && (
         <RevertPreviewDialog
           open={!!revertMessageId}
           conversationId={conversationId}
@@ -1981,42 +2182,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   }}>
                     {formattedArgs}
                   </Box>
-                  {/* Issue #247: optional reason carried back to the model on reject. */}
-                  <TextField
-                    label={t('chat.approval.reason')}
-                    placeholder={t('chat.approval.reasonPlaceholder')}
-                    value={rejectFeedback[toolCall.id] ?? ''}
-                    onChange={(e) => setRejectFeedback(prev => ({ ...prev, [toolCall.id]: e.target.value }))}
-                    multiline minRows={1} maxRows={4} fullWidth size="small"
-                    sx={{ mt: 1, mb: 1 }}
-                  />
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                     <Button
                       variant="outlined" color="error" size="small" startIcon={<ThumbDownIcon />}
-                      onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, false, rejectFeedback[toolCall.id]?.trim() || undefined)}
+                      onClick={() => onRejectToolCall?.(toolCall.id)}
                       disabled={!onRejectToolCall}
                     >
                       {t('chat.approval.reject')}
                     </Button>
                     <Button
-                      variant="outlined" color="error" size="small"
-                      onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, true)}
-                      disabled={!onRejectToolCall}
-                      title={t('chat.approval.denyHelp')}
-                    >
-                      {t('chat.approval.alwaysDeny')}
-                    </Button>
-                    <Button
-                      variant="outlined" color="success" size="small" startIcon={<ThumbUpIcon />}
-                      onClick={() => onApproveToolCall && onApproveToolCall(toolCall.id, true)}
-                      disabled={!onApproveToolCall}
-                      title={t('chat.approval.allowHelp')}
-                    >
-                      {t('chat.approval.alwaysAllow')}
-                    </Button>
-                    <Button
                       variant="contained" color="success" size="small" startIcon={<ThumbUpIcon />}
-                      onClick={() => onApproveToolCall && onApproveToolCall(toolCall.id)}
+                      onClick={() => onApproveToolCall?.(toolCall.id)}
                       disabled={!onApproveToolCall}
                     >
                       {t('chat.approval.approve')}

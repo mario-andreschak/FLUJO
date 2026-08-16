@@ -25,10 +25,55 @@ import {
   readRunResource,
   parseRunResourceUri,
 } from '@/backend/services/runResources';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { decodeListCursor, encodeListCursor } from './listQuery';
 
 const log = createLogger('backend/services/mcp/internalResources');
+
+const RESOURCE_PAGE_SIZE = 200;
+
+type LoadPersonaDispatchConversationIds = () => Promise<ReadonlySet<string>>;
+
+/**
+ * Ephemeral Persona runs intentionally leave no conversation snapshot after
+ * completion. Their durable dispatch envelope remains authoritative, so lazily
+ * index both the submitted and terminal conversation ids when state is absent.
+ */
+function createPersonaDispatchConversationIdLoader(): LoadPersonaDispatchConversationIds {
+  let pending: Promise<ReadonlySet<string>> | undefined;
+  return () => {
+    if (!pending) {
+      pending = import('@/backend/services/enduringAgents/personaDispatcher')
+        .then(async ({ listPersonaFlowDispatches }) => {
+          const conversationIds = new Set<string>();
+          for (const dispatch of await listPersonaFlowDispatches()) {
+            const inputConversationId = dispatch.flowInput?.conversationId;
+            const outcomeConversationId = dispatch.outcome?.conversationId;
+            if (inputConversationId) conversationIds.add(inputConversationId);
+            if (outcomeConversationId) conversationIds.add(outcomeConversationId);
+          }
+          return conversationIds;
+        });
+    }
+    return pending;
+  };
+}
+
+/**
+ * Persona ownership is carried by the conversation snapshot, never by the
+ * public run-resource entry. Resolve it at this shared MCP boundary so both the
+ * direct HTTP facade and `/mcp-proxy/flujo` enforce the same policy.
+ */
+async function isPersonaRunResourceConversation(
+  conversationId: string,
+  loadDispatchConversationIds: LoadPersonaDispatchConversationIds,
+): Promise<boolean> {
+  const state = await loadConversationState(conversationId);
+  if (state) return isPersonaOwnedConversationState(state);
+  return (await loadDispatchConversationIds()).has(conversationId);
+}
 
 function describeProducer(entry: Awaited<ReturnType<typeof listAllRunResources>>[number]): string {
   const p = entry.producedBy;
@@ -51,20 +96,50 @@ export async function internalListResources(cursor?: string): Promise<{
   error?: string;
 }> {
   try {
-    const offset = cursor ? decodeListCursor(cursor) : 0;
-    const entries = await listAllRunResources(201, offset);
-    const hasMore = entries.length > 200;
-    const resources: MCPResource[] = entries.slice(0, 200).map((entry) => ({
-      uri: entry.uri,
-      name: entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`,
-      mimeType: entry.mimeType,
-      description: describeProducer(entry),
-      // MCP size hint (bytes), per spec an optional annotation-ish field.
-      size: entry.size,
-    }));
+    let offset = cursor ? decodeListCursor(cursor) : 0;
+    let hasMore = false;
+    const resources: MCPResource[] = [];
+    const ownership = new Map<string, Promise<boolean>>();
+    const loadDispatchConversationIds = createPersonaDispatchConversationIdLoader();
+    const isPersonaOwned = (conversationId: string): Promise<boolean> => {
+      let pending = ownership.get(conversationId);
+      if (!pending) {
+        pending = isPersonaRunResourceConversation(conversationId, loadDispatchConversationIds);
+        ownership.set(conversationId, pending);
+      }
+      return pending;
+    };
+
+    // The cursor tracks the RAW resource offset. Continue across chunks until
+    // the page is full or the store is exhausted, otherwise filtered Persona
+    // entries could create short pages, duplicate cursors, or skipped entries.
+    outer: while (true) {
+      const entries = await listAllRunResources(RESOURCE_PAGE_SIZE + 1, offset);
+      if (entries.length === 0) break;
+      for (const entry of entries) {
+        if (await isPersonaOwned(entry.conversationId)) {
+          offset += 1;
+          continue;
+        }
+        if (resources.length === RESOURCE_PAGE_SIZE) {
+          hasMore = true;
+          break outer;
+        }
+        resources.push({
+          uri: entry.uri,
+          name: entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`,
+          mimeType: entry.mimeType,
+          description: describeProducer(entry),
+          // MCP size hint (bytes), per spec an optional annotation-ish field.
+          size: entry.size,
+        });
+        offset += 1;
+      }
+      if (entries.length <= RESOURCE_PAGE_SIZE) break;
+    }
     return {
       resources,
-      ...(hasMore ? { nextCursor: encodeListCursor(offset + resources.length) } : {}),
+      ...(hasMore ? { nextCursor: encodeListCursor(offset) } : {}),
     };
   } catch (error) {
     log.error('internalListResources failed', error);
@@ -95,6 +170,16 @@ export async function internalReadResource(uri: string): Promise<MCPServiceRespo
     return { success: false, error: `Not a run-resource URI: ${uri}`, statusCode: 400 };
   }
   try {
+    if (await isPersonaRunResourceConversation(
+      parsed.conversationId,
+      createPersonaDispatchConversationIdLoader(),
+    )) {
+      return {
+        success: false,
+        error: 'Persona run resources require the trusted local control plane.',
+        statusCode: 403,
+      };
+    }
     const read = await readRunResource(uri, { at: Date.now(), source: 'mcp-read' });
     if (!read) {
       return { success: false, error: `Run resource not found: ${uri}`, statusCode: 404 };

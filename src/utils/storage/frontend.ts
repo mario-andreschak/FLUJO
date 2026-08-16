@@ -8,7 +8,13 @@ import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
 const log = createLogger('utils/storage/frontend.ts');
 
-export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void, boolean] {
+// Despite its historical name, this hook persists through the server storage
+// API. Workspace isolation is supplied by the request's `workspace` parameter,
+// so callers must pass the base enum key rather than a browser-storage suffix.
+export function useLocalStorage<T>(
+  key: StorageKey,
+  initialValue: T,
+): [T, (value: T) => void, boolean] {
   log.verbose('useLocalStorage: Entering method'); // Changed to verbose
   const [storedValue, setStoredValue] = useState<T>(initialValue);
   const [isLoading, setIsLoading] = useState(true);

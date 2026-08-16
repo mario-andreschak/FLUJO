@@ -3,8 +3,6 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
-import { extractResource, evaluatePermission } from '@/backend/execution/flow/permissionEngine';
-import { SavedPermissionRule } from '@/shared/types/permissions';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -66,8 +64,6 @@ export async function applyApprovalDecision(
   sharedState: SharedState,
   toolCallId: string,
   action: 'approve' | 'reject',
-  always?: boolean,
-  feedback?: string   // Issue #247: optional rejection feedback for the model
 ): Promise<ApprovalDecisionOutcome> {
   const pending = sharedState.pendingToolCalls ?? [];
   const toolCallToProcess = pending.find(tc => tc.id === toolCallId);
@@ -78,95 +74,6 @@ export async function applyApprovalDecision(
   // Messages appended by this decision; folded into the append-only
   // conversation log by the caller after the state is saved.
   const appendedMessages: FlujoChatMessage[] = [];
-
-  // Issue #246: if the user clicked "Always Allow" or "Always Deny", save a new
-  // SavedPermissionRule to the conversation's savedPermissionRules so future calls
-  // to the same tool are auto-resolved without an approval prompt.
-  if (always) {
-    const decoded = decodeToolName(toolCallToProcess.function.name, sharedState.toolNameMap);
-    if (decoded) {
-      let callArgs: Record<string, unknown> = {};
-      try { callArgs = JSON.parse(toolCallToProcess.function.arguments); } catch { /* best effort */ }
-      const resource = extractResource(callArgs);
-      const savedEffect = action === 'approve' ? 'allow' : 'deny';
-      const newRule: SavedPermissionRule = {
-        action: decoded.tool,
-        // Save with the actual extracted resource so re-evaluations hit the same bucket;
-        // use '*' as the fallback so the rule covers the whole tool when no resource
-        // could be extracted.
-        resource: resource === '*' ? '*' : resource,
-        effect: savedEffect,
-        savedAt: Date.now(),
-        server: decoded.server,
-        tool: decoded.tool,
-      };
-      sharedState.savedPermissionRules = [
-        ...(sharedState.savedPermissionRules ?? []),
-        newRule,
-      ];
-      log.info(`Saved ${savedEffect} rule for ${decoded.tool} on ${decoded.server} (resource: ${resource})`);
-
-      // Re-evaluate remaining pending calls: any that are now covered by a saved
-      // rule are auto-resolved (no further user action needed).
-      if (sharedState.pendingToolCalls && sharedState.pendingToolCalls.length > 0) {
-        const remaining = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
-        const stillPending: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
-        for (const tc of remaining) {
-          const tcDecoded = decodeToolName(tc.function.name, sharedState.toolNameMap);
-          if (!tcDecoded) { stillPending.push(tc); continue; }
-          let tcArgs: Record<string, unknown> = {};
-          try { tcArgs = JSON.parse(tc.function.arguments); } catch { /* best effort */ }
-          const tcResource = extractResource(tcArgs);
-          const tcEffect = evaluatePermission(
-            sharedState.permissionRules ?? [],
-            sharedState.savedPermissionRules ?? [],
-            tcDecoded.server,
-            tcDecoded.tool,
-            tcResource,
-          );
-          if (tcEffect === 'allow') {
-            // Auto-approve and process
-            const autoResult = await ModelHandler.processToolCalls({
-              toolCalls: [tc],
-              toolNameMap: sharedState.toolNameMap,
-              mcpNodes: sharedState.currentMCPNodes,
-              permissionRules: sharedState.permissionRules,
-              savedPermissionRules: sharedState.savedPermissionRules,
-            });
-            if (autoResult.success) {
-              const msgs = autoResult.value.toolCallMessages.map(m => ({
-                ...m,
-                id: (m as Partial<FlujoChatMessage>).id || uuidv4(),
-                timestamp: (m as Partial<FlujoChatMessage>).timestamp || Date.now(),
-                processNodeId: (m as Partial<FlujoChatMessage>).processNodeId || sharedState.currentNodeId,
-              }));
-              sharedState.messages.push(...msgs);
-              appendedMessages.push(...msgs);
-            } else {
-              stillPending.push(tc);
-            }
-          } else if (tcEffect === 'deny') {
-            // Auto-deny
-            const deniedReason = `Permission denied (always deny rule): ${tc.function.name}`;
-            const ui = await cancelledUiForToolCall(sharedState, tc, deniedReason);
-            const deniedMsg: FlujoChatMessage = {
-              id: uuidv4(),
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: deniedReason,
-              timestamp: Date.now(),
-              ...(ui ? { ui } : {}),
-            };
-            sharedState.messages.push(deniedMsg);
-            appendedMessages.push(deniedMsg);
-          } else {
-            stillPending.push(tc);
-          }
-        }
-        sharedState.pendingToolCalls = stillPending;
-      }
-    }
-  }
 
   if (action === 'approve') {
     log.info(`Approving tool call ${toolCallId} (${toolCallToProcess.function.name})`);
@@ -210,9 +117,7 @@ export async function applyApprovalDecision(
   } else {
     // action === 'reject'
     log.info(`Rejecting tool call ${toolCallId} (${toolCallToProcess.function.name})`);
-    const rejectionReason = feedback
-      ? `User rejected this tool call: ${feedback}`
-      : `User rejected tool call: ${toolCallToProcess.function.name}`;
+    const rejectionReason = 'tool denied';
     const ui = await cancelledUiForToolCall(
       sharedState,
       toolCallToProcess,
@@ -221,8 +126,6 @@ export async function applyApprovalDecision(
     const rejectionMessage: FlujoChatMessage = {
       role: 'tool',
       tool_call_id: toolCallId,
-      // Issue #247: when the user supplies a reason, carry it back to the model
-      // so it can adjust; otherwise preserve the exact original fixed string.
       content: rejectionReason,
       id: uuidv4(),
       timestamp: Date.now(),

@@ -44,6 +44,12 @@ function devcanvasHtml(): string {
 }
 
 describe('filesystem MCP App', () => {
+  it('advertises inline, fullscreen, and pip from every published app View', () => {
+    for (const html of [appHtml(), devcanvasHtml()]) {
+      expect(html).toContain('availableDisplayModes: ["inline", "fullscreen", "pip"]');
+    }
+  });
+
   it('sends ui/message content as an array of content blocks (not a bare object)', () => {
     const html = appHtml();
     // The correct, array-shaped call.

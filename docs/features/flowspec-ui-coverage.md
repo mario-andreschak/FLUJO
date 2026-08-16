@@ -23,13 +23,15 @@ edges, and common input/output defaults are inferred.
 
 Advanced is opt-in and preserves the complete FlowSpec and builder surface:
 
-- MCP, Resource, Signal, and Trigger nodes.
+- MCP, Resource, Signal, Trigger, and Static nodes (see
+  `docs/architecture/flowspec-node-inclusion-policy.md` for why each node type
+  is Guided vs. Advanced vs. excluded from FlowSpec entirely).
 - Prompt composition and input/output modes.
 - Conditional/bidirectional edges.
 - Variables, subflow resource capture, persistent KV state, and explicit
   Process → Resource artifact production.
 - Subflow child-job queues and their maximum simultaneous-child setting.
-- Unattended execution and flow-level permission rules.
+- Unattended execution.
 
 The builder preference is stored under `flujo-ui:flow-builder:mode`. When a flow
 contains advanced behavior while Guided is selected, the builder shows a

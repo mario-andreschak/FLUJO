@@ -25,6 +25,20 @@ jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => undefined),
 }));
 
+let mockPersonaDeleted = false;
+const mockGetPersona = jest.fn(async (_personaId: string) => ({
+  id: 'persona-target',
+  provisioningState: 'ready',
+  lifecycleState: 'idle',
+}));
+const mockGetPersonaDeletionTombstone = jest.fn(async (_personaId: string) =>
+  mockPersonaDeleted ? { status: 'completed' } : null);
+jest.mock('@/backend/services/enduringAgents', () => ({
+  getPersona: (personaId: string) => mockGetPersona(personaId),
+  getPersonaDeletionTombstone: (personaId: string) =>
+    mockGetPersonaDeletionTombstone(personaId),
+}));
+
 // The route imports a frontend component module only for a type; stub it so the
 // test doesn't pull the React tree into a node test.
 jest.mock('@/frontend/components/Chat', () => ({}));
@@ -34,6 +48,8 @@ type Route = typeof import('@/app/v1/chat/conversations/route');
 let tmpDir: string;
 let dbDir: string;
 let POST: Route['POST'];
+let withConversationExecutionLock:
+  typeof import('@/backend/execution/flow/conversationExecutionLock').withConversationExecutionLock;
 
 const exists = async (p: string) => {
   try { await fs.access(p); return true; } catch { return false; }
@@ -43,11 +59,22 @@ const makeReq = (body: unknown) => makeLocalRequest({ body });
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-'));
-  dbDir = path.join(tmpDir, 'db');
+  dbDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db');
+  await fs.mkdir(dbDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
   // STORAGE_DIR / data dir are resolved at module load, so re-import fresh.
   jest.resetModules();
   ({ POST } = await import('@/app/v1/chat/conversations/route'));
+  ({ withConversationExecutionLock } = await import(
+    '@/backend/execution/flow/conversationExecutionLock'
+  ));
+  mockPersonaDeleted = false;
+  mockGetPersona.mockReset().mockResolvedValue({
+    id: 'persona-target',
+    provisioningState: 'ready',
+    lifecycleState: 'idle',
+  });
+  mockGetPersonaDeletionTombstone.mockClear();
 });
 
 afterEach(async () => {
@@ -70,7 +97,7 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       expect(await exists(path.join(dbDir, 'mcp_servers.json'))).toBe(false);
     });
 
-  it('creates exactly db/conversations/<id>.json for a valid uuid id (201)', async () => {
+  it('creates exactly the default workspace db/conversations/<id>.json for a valid uuid id (201)', async () => {
     const id = '123e4567-e89b-12d3-a456-426614174000';
     const res = await POST(makeReq({
       id, title: 'Hello', flowId: 'flow-1', createdAt: 1, updatedAt: 1,
@@ -83,5 +110,240 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
     expect(stored.source).toBe('chat');
     // And nothing leaked to the db root.
     expect(await exists(path.join(dbDir, 'encryption_key.json'))).toBe(false);
+  });
+
+  it('creates a Persona-owned draft through a direct localhost POST', async () => {
+    const id = 'persona-draft';
+    const response = await POST(makeReq({
+      id,
+      title: 'Ask Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      id,
+      flowId: null,
+      personaId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
+    });
+    const stored = JSON.parse(await fs.readFile(
+      path.join(dbDir, 'conversations', `${id}.json`),
+      'utf-8',
+    ));
+    expect(stored).toMatchObject({
+      conversationId: id,
+      flowId: '',
+      personaTargetId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
+    });
+  });
+
+  it('rejects a Persona Behavior key with no Persona target', async () => {
+    const id = 'flow-with-persona-behavior';
+    const response = await POST(makeReq({
+      id,
+      title: 'Flow chat',
+      flowId: 'flow-1',
+      personaBehaviorSlotKey: 'research',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rejects an invalid Persona id before lookup or persistence', async () => {
+    const id = 'invalid-persona-draft';
+    const response = await POST(makeReq({
+      id,
+      title: 'Invalid Persona',
+      flowId: null,
+      personaTargetId: 'not a valid persona id',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mockGetPersona).not.toHaveBeenCalled();
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rejects a deleted Persona without persisting a draft', async () => {
+    const id = 'deleted-persona-draft';
+    mockPersonaDeleted = true;
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Deleted Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rejects an unavailable Persona without persisting a draft', async () => {
+    const id = 'unavailable-persona-draft';
+    mockGetPersona.mockResolvedValueOnce({
+      id: 'persona-target',
+      provisioningState: 'pending',
+      lifecycleState: 'idle',
+    });
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Unavailable Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('cannot overwrite an existing Persona conversation and strip its attribution', async () => {
+    const id = 'persona-conversation';
+    const conversationDir = path.join(dbDir, 'conversations');
+    await fs.mkdir(conversationDir, { recursive: true });
+    const original = {
+      conversationId: id,
+      title: 'Persona work',
+      flowId: 'pinned-flow',
+      messages: [],
+      trackingInfo: { executionId: 'persona-run', startTime: 1, nodeExecutionTracker: [] },
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const conversationPath = path.join(conversationDir, `${id}.json`);
+    await fs.writeFile(conversationPath, JSON.stringify(original), 'utf-8');
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Overwrite',
+      flowId: 'mutable-flow',
+      createdAt: 2,
+      updatedAt: 2,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(JSON.parse(await fs.readFile(conversationPath, 'utf-8'))).toEqual(original);
+  });
+
+  it('waits for anonymization and cannot erase personaArchived with a stale legacy create', async () => {
+    const id = 'conversation-create-archive-race';
+    const conversationDir = path.join(dbDir, 'conversations');
+    await fs.mkdir(conversationDir, { recursive: true });
+    const conversationPath = path.join(conversationDir, `${id}.json`);
+    await fs.writeFile(conversationPath, JSON.stringify({
+      conversationId: id,
+      title: 'Persona draft',
+      flowId: '',
+      personaTargetId: 'persona-target',
+      messages: [],
+      trackingInfo: { executionId: 'persona-run', startTime: 1, nodeExecutionTracker: [] },
+      createdAt: 1,
+      updatedAt: 1,
+    }), 'utf-8');
+
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const anonymization = withConversationExecutionLock(id, async () => {
+      entered();
+      await gate;
+      const archived = JSON.parse(await fs.readFile(conversationPath, 'utf-8'));
+      delete archived.personaTargetId;
+      archived.personaArchived = true;
+      await fs.writeFile(conversationPath, JSON.stringify(archived), 'utf-8');
+    });
+    await enteredLock;
+
+    const create = POST(makeReq({
+      id,
+      title: 'Stale legacy overwrite',
+      flowId: 'legacy-flow',
+      createdAt: 2,
+      updatedAt: 2,
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    await anonymization;
+
+    const response = await create;
+    expect(response.status).toBe(409);
+    const durable = JSON.parse(await fs.readFile(conversationPath, 'utf-8'));
+    expect(durable).toMatchObject({ personaArchived: true, title: 'Persona draft' });
+    expect(durable).not.toHaveProperty('personaTargetId');
+  });
+
+  it('revalidates a Persona tombstone after waiting and never recreates its draft', async () => {
+    const id = 'conversation-create-deleted-persona';
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const deletion = withConversationExecutionLock(id, async () => {
+      entered();
+      await gate;
+    });
+    await enteredLock;
+
+    const create = POST(makeReq({
+      id,
+      title: 'Deleted Persona draft',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mockPersonaDeleted = true;
+    release();
+    await deletion;
+
+    const response = await create;
+    expect(response.status).toBe(409);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rolls a Persona draft into a nonidentifying archive if deletion starts during save', async () => {
+    const id = 'conversation-create-delete-after-validation';
+    mockGetPersonaDeletionTombstone
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ status: 'deleting' });
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Racing Persona draft',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(409);
+    const durable = JSON.parse(await fs.readFile(
+      path.join(dbDir, 'conversations', `${id}.json`),
+      'utf-8',
+    ));
+    expect(durable).toMatchObject({ personaArchived: true });
+    expect(durable).not.toHaveProperty('personaTargetId');
   });
 });

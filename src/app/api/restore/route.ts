@@ -1,22 +1,90 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
-import { assertSafeCollectionId, saveCollectionItem, saveItem } from '@/utils/storage/backend';
+import {
+  assertSafeCollectionId,
+  loadCollectionItem,
+  loadItem,
+  saveCollectionItem,
+  saveItem,
+} from '@/utils/storage/backend';
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/storage';
 import type { Flow } from '@/shared/types/flow';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
+import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
 
 const log = createLogger('app/api/restore/route');
 
-const MCP_SERVERS_DIR = path.join(getDataDir(), 'mcp-servers');
+// Workspaces (#406): restore writes into the SELECTED workspace only. A legacy
+// (pre-workspace) archive therefore lands in default-workspace by default,
+// which is exactly where its data used to live.
+const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
-export async function POST(request: NextRequest) {
+interface StorageRestorePlan {
+  storageKey: StorageKey;
+  archivePath: string;
+  data: unknown;
+}
+
+interface ConversationRestorePlan {
+  conversationId: string;
+  conversation: Record<string, unknown>;
+}
+
+function storageKeyForSelection(selection: unknown): StorageKey | undefined {
+  switch (selection) {
+    case 'models': return StorageKey.MODELS;
+    case 'mcpServers': return StorageKey.MCP_SERVERS;
+    case 'flows': return StorageKey.FLOWS;
+    case 'chatHistory': return StorageKey.CHAT_HISTORY;
+    case 'settings': return StorageKey.THEME;
+    case 'globalEnvVars': return StorageKey.GLOBAL_ENV_VARS;
+    case 'encryptionKey': return StorageKey.ENCRYPTION_KEY;
+    default: return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPersonaConversationSnapshot(value: unknown): boolean {
+  return isRecord(value) && (
+    Object.prototype.hasOwnProperty.call(value, 'personaAttribution')
+    || Object.prototype.hasOwnProperty.call(value, 'personaTargetId')
+    || Object.prototype.hasOwnProperty.call(value, 'personaInstructionContext')
+    || value.personaArchived === true
+    || value.personaOwned === true
+  );
+}
+
+function historyContainsPersonaConversation(value: unknown): boolean {
+  return isPersonaConversationSnapshot(value)
+    || (Array.isArray(value) && value.some(isPersonaConversationSnapshot));
+}
+
+function conversationIdsInHistory(value: unknown): string[] {
+  const entries = Array.isArray(value) ? value : [value];
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const id = typeof entry.conversationId === 'string'
+      ? entry.conversationId
+      : typeof entry.id === 'string'
+        ? entry.id
+        : undefined;
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -61,81 +129,46 @@ export async function POST(request: NextRequest) {
     const metadata = JSON.parse(await metadataFile.async('string'));
     log.debug(`Backup metadata [${requestId}]:`, metadata);
     
-    // Restore storage files (saveItem creates the storage directory itself)
-    const storageSelections = selections.filter(s => s !== 'mcpServersFolder');
+    // Build a complete, immutable restore plan before the first write. This is
+    // the safety transaction boundary: a Persona-owned entry found late in the
+    // archive rejects the whole request instead of leaving earlier keys saved.
+    const storageRestorePlan: StorageRestorePlan[] = [];
+    const storageSelections = selections.filter((selection) => selection !== 'mcpServersFolder');
     for (const selection of storageSelections) {
-      let storageKey: StorageKey | undefined;
-      
-      // Map selection to storage key
-      switch (selection) {
-        case 'models':
-          storageKey = StorageKey.MODELS;
-          break;
-        case 'mcpServers':
-          storageKey = StorageKey.MCP_SERVERS;
-          break;
-        case 'flows':
-          storageKey = StorageKey.FLOWS;
-          break;
-        case 'chatHistory':
-          storageKey = StorageKey.CHAT_HISTORY;
-          break;
-        case 'settings':
-          storageKey = StorageKey.THEME;
-          break;
-        case 'globalEnvVars':
-          storageKey = StorageKey.GLOBAL_ENV_VARS;
-          break;
-        case 'encryptionKey':
-          storageKey = StorageKey.ENCRYPTION_KEY;
-          break;
-      }
-      
-      if (storageKey) {
-        try {
-          const zipFile = zip.file(`storage/${storageKey}.json`);
-          if (!zipFile) {
-            log.warn(`File not found in backup [${requestId}]:`, `storage/${storageKey}.json`);
-            continue;
-          }
-          
-          const content = await zipFile.async('string');
-          const data = JSON.parse(content);
-          
-          if (storageKey === StorageKey.FLOWS) {
-            // The backup stores flows as a single array (frozen zip format), but
-            // flows are now persisted one file per flow. Import each via the
-            // service (which validates the id and invalidates caches). This is an
-            // upsert; flows already present are overwritten, others are added.
-            const flows: Flow[] = Array.isArray(data) ? data : [];
-            for (const flow of flows) {
-              const result = await flowService.saveFlow(flow);
-              if (!result.success) {
-                log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
-              }
-            }
-          } else {
-            // Save the data
-            await saveItem(storageKey, data);
-          }
-          log.debug(`Restored file [${requestId}]:`, `storage/${storageKey}.json`);
-        } catch (error) {
-          log.error(`Error restoring file [${requestId}]:`, error);
-          // Continue with other files
+      const storageKey = storageKeyForSelection(selection);
+      if (!storageKey) continue;
+      const archivePath = `storage/${storageKey}.json`;
+      try {
+        const zipFile = zip.file(archivePath);
+        if (!zipFile) {
+          log.warn(`File not found in backup [${requestId}]:`, archivePath);
+          continue;
         }
+        const data: unknown = JSON.parse(await zipFile.async('string'));
+        if (
+          storageKey === StorageKey.CHAT_HISTORY
+          && historyContainsPersonaConversation(data)
+        ) {
+          return NextResponse.json(
+            { error: 'Persona-attributed conversation history cannot be restored.' },
+            { status: 400 },
+          );
+        }
+        storageRestorePlan.push({ storageKey, archivePath, data });
+      } catch (error) {
+        log.error(`Error preflighting restore file [${requestId}]:`, error);
+        // Preserve the existing tolerant archive semantics for malformed or
+        // missing non-Persona entries, while still performing no writes yet.
       }
     }
-    
-    // Restore modern conversation snapshots independently from legacy history.
-    // Only accept one-level JSON entries with validated ids; archive paths are
-    // never joined to the filesystem. Restoration is intentionally upsert-only.
+
+    const conversationRestorePlan: ConversationRestorePlan[] = [];
     if (selections.includes('chatHistory')) {
       const conversationPrefix = 'storage/conversations/';
       const conversationEntries = Object.keys(zip.files).filter((entryPath) =>
-        entryPath.startsWith(conversationPrefix) &&
-        !zip.files[entryPath].dir
+        entryPath.startsWith(conversationPrefix)
+        && !zip.files[entryPath].dir
       );
-
       for (const entryPath of conversationEntries) {
         try {
           const relativePath = entryPath.slice(conversationPrefix.length);
@@ -143,20 +176,96 @@ export async function POST(request: NextRequest) {
             log.warn(`Skipped unsafe conversation archive entry [${requestId}]:`, entryPath);
             continue;
           }
-
           const conversationId = relativePath.slice(0, -'.json'.length);
           assertSafeCollectionId(conversationId);
-          const conversation = JSON.parse(await zip.files[entryPath].async('string')) as Record<string, unknown>;
-          if (conversation.conversationId !== conversationId) {
+          const parsed: unknown = JSON.parse(await zip.files[entryPath].async('string'));
+          if (!isRecord(parsed) || parsed.conversationId !== conversationId) {
             log.warn(`Skipped conversation with mismatched id [${requestId}]:`, entryPath);
             continue;
           }
-          assertSafeCollectionId(conversation.conversationId);
-          await saveCollectionItem('conversations', conversationId, conversation);
-          log.debug(`Restored conversation [${requestId}]:`, conversationId);
+          assertSafeCollectionId(parsed.conversationId);
+          if (isPersonaConversationSnapshot(parsed)) {
+            return NextResponse.json(
+              { error: 'Persona-attributed conversation snapshots cannot be restored.' },
+              { status: 400 },
+            );
+          }
+          const existing = await loadCollectionItem<Record<string, unknown> | null>(
+            'conversations',
+            conversationId,
+            null,
+          );
+          if (isPersonaConversationSnapshot(existing)) {
+            return NextResponse.json(
+              { error: 'Restore cannot overwrite an existing Persona conversation.' },
+              { status: 409 },
+            );
+          }
+          conversationRestorePlan.push({ conversationId, conversation: parsed });
         } catch (error) {
-          log.error(`Error restoring conversation [${requestId}] from ${entryPath}:`, error);
+          log.error(`Error preflighting conversation [${requestId}] from ${entryPath}:`, error);
         }
+      }
+    }
+
+    if (storageRestorePlan.some(({ storageKey }) => storageKey === StorageKey.CHAT_HISTORY)) {
+      const existingHistory = await loadItem<unknown>(StorageKey.CHAT_HISTORY, null);
+      if (historyContainsPersonaConversation(existingHistory)) {
+        return NextResponse.json(
+          { error: 'Restore cannot overwrite existing Persona conversation history.' },
+          { status: 409 },
+        );
+      }
+      const importedHistory = storageRestorePlan.find(
+        ({ storageKey }) => storageKey === StorageKey.CHAT_HISTORY,
+      )?.data;
+      for (const conversationId of conversationIdsInHistory(importedHistory)) {
+        try {
+          assertSafeCollectionId(conversationId);
+        } catch {
+          continue;
+        }
+        const existing = await loadCollectionItem<Record<string, unknown> | null>(
+          'conversations',
+          conversationId,
+          null,
+        );
+        if (isPersonaConversationSnapshot(existing)) {
+          return NextResponse.json(
+            { error: 'Restore cannot overwrite an existing Persona conversation.' },
+            { status: 409 },
+          );
+        }
+      }
+    }
+
+    // Persona safety preflight is complete; ordinary tolerant restore semantics
+    // begin only after this point.
+    for (const { storageKey, archivePath, data } of storageRestorePlan) {
+      try {
+        if (storageKey === StorageKey.FLOWS) {
+          const flows: Flow[] = Array.isArray(data) ? data : [];
+          for (const flow of flows) {
+            const result = await flowService.saveFlow(flow);
+            if (!result.success) {
+              log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
+            }
+          }
+        } else {
+          await saveItem(storageKey, data);
+        }
+        log.debug(`Restored file [${requestId}]:`, archivePath);
+      } catch (error) {
+        log.error(`Error restoring file [${requestId}]:`, error);
+      }
+    }
+
+    for (const { conversationId, conversation } of conversationRestorePlan) {
+      try {
+        await saveCollectionItem('conversations', conversationId, conversation);
+        log.debug(`Restored conversation [${requestId}]:`, conversationId);
+      } catch (error) {
+        log.error(`Error restoring conversation [${requestId}]:`, error);
       }
     }
 
@@ -164,7 +273,13 @@ export async function POST(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Restoring MCP servers folder [${requestId}]`);
-        await restoreFolderFromZip(zip, 'mcp-servers', MCP_SERVERS_DIR);
+        await restoreFolderFromZipLinkSafe(
+          zip,
+          'mcp-servers',
+          mcpServersDir(),
+          getWorkspaceDataDir(),
+          (entryPath, reason) => log.warn(`Skipped unsafe MCP restore entry ${entryPath}: ${reason}`),
+        );
         log.debug(`Restored MCP servers folder [${requestId}]`);
       } catch (error) {
         log.error(`Error restoring MCP servers folder [${requestId}]:`, error);
@@ -180,50 +295,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Helper function to ensure a directory exists
-async function ensureDir(dir: string) {
-  try {
-    await fs.access(dir);
-  } catch {
-    await fs.mkdir(dir, { recursive: true });
-  }
-}
-
-// Helper function to recursively restore a folder from a zip file
-async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: string) {
-  // Ensure the target directory exists
-  await ensureDir(targetPath);
-  
-  // Get all files in the zip folder
-  const files = Object.keys(zip.files)
-    .filter(key => key.startsWith(`${zipPath}/`) && key !== `${zipPath}/`)
-    .map(key => ({
-      path: key,
-      isDirectory: zip.files[key].dir,
-      relativePath: key.substring(zipPath.length + 1)
-    }));
-  
-  // Process directories first
-  for (const file of files.filter(f => f.isDirectory)) {
-    if (!file.relativePath) continue;
-    
-    const dirPath = path.join(targetPath, file.relativePath);
-    await ensureDir(dirPath);
-  }
-  
-  // Then process files
-  for (const file of files.filter(f => !f.isDirectory)) {
-    if (!file.relativePath) continue;
-    
-    const filePath = path.join(targetPath, file.relativePath);
-    const content = await zip.files[file.path].async('nodebuffer');
-    
-    // Ensure parent directory exists
-    const parentDir = path.dirname(filePath);
-    await ensureDir(parentDir);
-    
-    // Write the file
-    await fs.writeFile(filePath, content);
-  }
-}
+// Workspaces (#406): restores into the selected workspace only; archive entries
+// that would escape it or traverse links are refused by backupRestoreFs.
+export const POST = withWorkspaceRoute(POST_handler);
 

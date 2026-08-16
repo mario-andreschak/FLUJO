@@ -26,6 +26,7 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
 import type { Flow, FlowNode } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
@@ -74,6 +75,12 @@ interface InspectorPanelProps {
   onClearSelection: () => void;
   onCommitNode: (nodeId: string, data: FlowNode['data']) => void;
   onOpenAdvanced: (node: FlowNode) => void;
+  /**
+   * Opens the read-only technical-details modal for the given node (#412).
+   * Optional so the panel can be rendered standalone; the FlowBuilder always
+   * supplies it and owns the modal state.
+   */
+  onOpenTechnicalDetails?: (node: FlowNode) => void;
   flowName: string;
   flowNameError: string | null;
   onFlowNameChange: (value: string) => void;
@@ -81,8 +88,6 @@ interface InspectorPanelProps {
   onFlowDescriptionChange: (value: string) => void;
   authoringMode: FlowAuthoringMode;
   onAuthoringModeChange: (mode: FlowAuthoringMode) => void;
-  permissionRuleCount: number;
-  onOpenPermissionRules: () => void;
   beginnerMode?: boolean;
   onSuggestTools?: (node: FlowNode) => void;
   onSuggestAgents?: (node: FlowNode) => void;
@@ -127,6 +132,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onClearSelection,
   onCommitNode,
   onOpenAdvanced,
+  onOpenTechnicalDetails,
   flowName,
   flowNameError,
   onFlowNameChange,
@@ -134,8 +140,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onFlowDescriptionChange,
   authoringMode,
   onAuthoringModeChange,
-  permissionRuleCount,
-  onOpenPermissionRules,
   beginnerMode = false,
   onSuggestTools,
   onSuggestAgents,
@@ -178,17 +182,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!selectedNode) return [];
     const properties = selectedNode.data.properties ?? {};
     const entries: Array<{ label: string; value: string }> = [];
-    if (typeof properties.boundModel === 'string' && properties.boundModel) {
-      const model = models.find((candidate) => candidate.id === properties.boundModel);
-      entries.push({
-        label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'),
-        value: model?.displayName || model?.name || properties.boundModel,
-      });
-    } else if (typeof properties.modelId === 'string' && properties.modelId) {
-      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.modelId });
-    } else if (typeof properties.model === 'string' && properties.model) {
-      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.model });
-    }
+    // The bound model is deliberately NOT listed here: `InspectorModelBinding`
+    // is the single authoritative display for the connected model (and owns
+    // selection/removal), so a generic summary row would only duplicate it.
     const serverHasInlinePicker = selectedNode.data.type === 'mcp'
       && !!loadMcpServers
       && !!onSelectMcpNodeServer;
@@ -202,7 +198,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
-  }, [selectedNode, beginnerMode, models, t, loadMcpServers, onSelectMcpNodeServer]);
+  }, [selectedNode, beginnerMode, t, loadMcpServers, onSelectMcpNodeServer]);
 
   // Subflow nodes get their target flow shown as a pill in the node header. The
   // stored value is a flow id, so resolve it to the flow name when we know it
@@ -284,6 +280,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   return (
     <InspectorSurface
+      data-tour="flow-inspector"
       elevation={0}
       aria-label={beginnerMode && selectedNode ? t('flows.inspector.stepSettings') : beginnerMode ? t('flows.inspector.agentSettings') : t('flows.inspector.flowInspector')}
     >
@@ -358,6 +355,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               )}
             </Stack>
 
+            {/* The escape hatch into advanced configuration sits directly below the
+                node context pills so it is reachable before the editable fields and
+                the variable-length connection sections further down. */}
+            <Button
+              data-tour="flow-full-settings"
+              variant={beginnerMode ? 'outlined' : 'contained'}
+              startIcon={<TuneRoundedIcon />}
+              endIcon={<OpenInNewRoundedIcon />}
+              onClick={() => {
+                const updatedNode = commitNode();
+                if (updatedNode) onOpenAdvanced(updatedNode);
+              }}
+            >
+              {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
+            </Button>
+
             <TextField
               label={beginnerMode ? t('flows.inspector.stepName') : t('flows.inspector.nodeName')}
               size="small"
@@ -373,6 +386,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {(selectedNode.data.type === 'process' || selectedNode.data.type === 'start') && (
               <Stack spacing={0.75}>
                 <TextField
+                  data-tour="flow-task-prompt"
                   label={
                     beginnerMode
                       ? selectedNode.data.type === 'start' ? t('flows.inspector.helpfulBackground') : t('flows.inspector.aiTask')
@@ -443,6 +457,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               && onSelectMcpNodeServer
               && (
                 <InspectorMcpServers
+                  dataTour="flow-connected-apps"
                   processNodeId={selectedNode.id}
                   connections={typeof selectedNode.data.properties?.boundServer === 'string'
                     && selectedNode.data.properties.boundServer
@@ -457,18 +472,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   loadServers={loadMcpServers}
                 />
               )}
-
-            <Button
-              variant={beginnerMode ? 'outlined' : 'contained'}
-              startIcon={<TuneRoundedIcon />}
-              endIcon={<OpenInNewRoundedIcon />}
-              onClick={() => {
-                const updatedNode = commitNode();
-                if (updatedNode) onOpenAdvanced(updatedNode);
-              }}
-            >
-              {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
-            </Button>
 
             {selectedNode.data.type === 'process' && (
               <InspectorModelBinding
@@ -537,6 +540,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 {t('flows.inspector.suggestAgents')}
               </Button>
             )}
+
+            {/* Technical details are the LAST actionable option for a selected
+                node (issue #412). The tip below is explanatory copy, not an
+                option, so it may stay underneath. */}
+            <Button
+              variant="text"
+              size="small"
+              startIcon={<CodeRoundedIcon />}
+              onClick={() => {
+                // Commit the in-progress label/prompt edits first so the modal
+                // shows the current draft instead of stale selection data.
+                const updatedNode = commitNode();
+                if (updatedNode) onOpenTechnicalDetails?.(updatedNode);
+              }}
+            >
+              {t('flows.inspector.technicalDetails')}
+            </Button>
 
             <Typography variant="caption" color="text.secondary">
               {beginnerMode
@@ -616,18 +636,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   : t('flows.inspector.guidedHelp')}
               </Typography>
             </Box>
-            )}
-
-            {authoringMode === 'advanced' && (
-              <Button
-                variant="outlined"
-                onClick={onOpenPermissionRules}
-                startIcon={<SettingsSuggestRoundedIcon />}
-              >
-                {permissionRuleCount
-                  ? tp('flows.inspector.permissionRules', permissionRuleCount)
-                  : t('flows.inspector.permissionRules')}
-              </Button>
             )}
 
             {!beginnerMode && (

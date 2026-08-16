@@ -4,8 +4,19 @@ import { fireEvent, render, screen } from '@testing-library/react';
 
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/FlowPreview', () => ({
   __esModule: true,
-  default: ({ flow }: { flow: { nodes: unknown[] } }) => (
-    <div data-testid="expert-flow-renderer">{flow.nodes.length} nodes</div>
+  default: ({
+    flow,
+    relayoutTopToBottom,
+  }: {
+    flow: { nodes: unknown[] };
+    relayoutTopToBottom?: boolean;
+  }) => (
+    <div
+      data-testid="expert-flow-renderer"
+      data-relayout-top-to-bottom={String(relayoutTopToBottom === true)}
+    >
+      {flow.nodes.length} nodes
+    </div>
   ),
 }));
 
@@ -98,8 +109,12 @@ describe('VisualGenerationCanvas', () => {
     expect(screen.getByText('Using web / search')).toBeInTheDocument();
     expect(screen.getByText('Source checker · level 1')).toBeInTheDocument();
     expect(screen.getByText('Expert-mode preview')).toBeInTheDocument();
-    expect(screen.getByText('Auto-aligned')).toBeInTheDocument();
+    expect(screen.getByText('Re-layout top-to-bottom')).toBeInTheDocument();
     expect(screen.getByTestId('expert-flow-renderer')).toHaveTextContent('1 nodes');
+    expect(screen.getByTestId('expert-flow-renderer')).toHaveAttribute(
+      'data-relayout-top-to-bottom',
+      'true',
+    );
     fireEvent.click(screen.getByText('Source checker · level 1'));
     expect(onSelect).toHaveBeenCalledWith('child');
   });

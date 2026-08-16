@@ -74,6 +74,31 @@ export function canvasKey(serverName: string, uri: string): string {
   return `${serverName}::${uri}`;
 }
 
+/**
+ * #375: the click-to-mount consent gate for AUTOMATIC canvas opens, extracted
+ * into a pure/testable predicate. A MANUAL open (the user explicitly clicked
+ * "Open in Canvas") always wins and never goes through this gate.
+ *
+ * - `dismissed`: this specific app key was previously closed/collapsed away.
+ * - `suppressed`: the user collapsed the whole dock; ALL automatic opens are
+ *   held back until they manually re-open something (or expand the dock).
+ * - `healthy`: false when the frame already failed its handshake/validation
+ *   (unsupported display mode, access revoked) — such a frame must never
+ *   reach the canvas just to show an error.
+ */
+export function shouldOpenCanvasApp(input: {
+  automatic: boolean;
+  dismissed: boolean;
+  suppressed: boolean;
+  healthy?: boolean;
+}): boolean {
+  if (!input.automatic) return true;
+  if (input.healthy === false) return false;
+  if (input.suppressed) return false;
+  if (input.dismissed) return false;
+  return true;
+}
+
 /** Input describing a tool result that carries a `ui://` canvas app link. */
 export interface CanvasAppInput {
   serverName: string;

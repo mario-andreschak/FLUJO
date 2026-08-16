@@ -7,9 +7,11 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { persistConversationState } from './persistConversationState';
+import type { StorageKey } from '@/shared/types/storage';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -51,6 +53,8 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
   'node:exit',
   'node:snapshot',
   'node:changed-files',
+  'model:dispatch',
+  'model:dispatch-result',
   'handoff',
   'message',
   'message:removed',
@@ -68,20 +72,40 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
 // so a hostile id can never escape the log directory.
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
-let logDir = path.join(getDataDir(), 'db', 'conversation-logs');
+// Resolved per call: conversation logs live in the selected workspace's db/
+// (#406), so this must not be captured at import time.
+let logDirOverride: string | undefined;
+const logDir = () =>
+  logDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'conversation-logs');
 
-/** Test seam: point the store at a temp directory. Returns the previous dir. */
+/**
+ * Cache/chain key for a conversation. Conversation ids are unique only WITHIN a
+ * workspace, so the process-wide seq counters and append chains must be
+ * namespaced by workspace — otherwise workspace B would continue workspace A's
+ * sequence numbering, or serialize its appends behind A's (#406).
+ */
+const ck = (conversationId: string) => workspaceCacheKey('conversation-log', conversationId);
+
+/**
+ * Test seam: point the store at a temp directory. Returns the previous
+ * override, or the newly installed directory on first setup.
+ *
+ * Install the override before resolving the return value. Global Jest setup
+ * runs after each suite's mocks are registered; asking workspace/path helpers
+ * for the production default at that point can execute an intentionally
+ * partial suite mock before the test has even started.
+ */
 export function _setConversationLogDirForTests(dir: string): string {
-  const previous = logDir;
-  logDir = dir;
+  const previous = logDirOverride;
+  logDirOverride = dir;
   // Counters are seeded from the store on cold start; switching stores must
   // re-seed from the new directory rather than reuse a stale counter.
   nextSeq.clear();
-  return previous;
+  return previous ?? dir;
 }
 
 function logFilePath(conversationId: string): string {
-  return path.join(logDir, `${conversationId}.jsonl`);
+  return path.join(logDir(), `${conversationId}.jsonl`);
 }
 
 // Per-conversation append chains so concurrent appends for the same log never
@@ -108,7 +132,7 @@ const nextSeq = new Map<string, number>();
  *  most once per conversation per process; a one-time synchronous read keeps
  *  allocateSeq usable from the bus's synchronous emit path. */
 function initSeqIfNeeded(conversationId: string): void {
-  if (nextSeq.has(conversationId)) return;
+  if (nextSeq.has(ck(conversationId))) return;
   let max = -1;
   try {
     const content = readFileSync(logFilePath(conversationId), 'utf-8');
@@ -126,7 +150,7 @@ function initSeqIfNeeded(conversationId: string): void {
       log.warn(`Could not read conversation log ${conversationId} to seed seq; starting at 0.`, { err });
     }
   }
-  nextSeq.set(conversationId, max + 1);
+  nextSeq.set(ck(conversationId), max + 1);
 }
 
 /**
@@ -137,8 +161,8 @@ function initSeqIfNeeded(conversationId: string): void {
  */
 export function allocateSeq(conversationId: string): number {
   initSeqIfNeeded(conversationId);
-  const seq = nextSeq.get(conversationId)!;
-  nextSeq.set(conversationId, seq + 1);
+  const seq = nextSeq.get(ck(conversationId))!;
+  nextSeq.set(ck(conversationId), seq + 1);
   return seq;
 }
 
@@ -150,21 +174,22 @@ export function allocateSeq(conversationId: string): number {
 export async function latestSequence(conversationId: string): Promise<number> {
   if (!SAFE_ID.test(conversationId)) return -1;
   initSeqIfNeeded(conversationId);
-  return nextSeq.get(conversationId)! - 1;
+  return nextSeq.get(ck(conversationId))! - 1;
 }
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior append's error was logged by its own caller */ })
     .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
+      await fs.mkdir(logDir(), { recursive: true });
       await fs.appendFile(logFilePath(conversationId), lines);
     });
-  appendChains.set(conversationId, run);
+  appendChains.set(key, run);
   return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
+    if (appendChains.get(key) === run) {
+      appendChains.delete(key);
     }
   }) as Promise<void>;
 }
@@ -174,17 +199,18 @@ function chainAppend(conversationId: string, lines: string): Promise<void> {
 // by the self-heal repair (repairTruncatedConversationLog) to replace a log that
 // lost events with one rebuilt from the authoritative SharedState snapshot.
 function chainWrite(conversationId: string, content: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior op's error was logged by its own caller */ })
     .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
+      await fs.mkdir(logDir(), { recursive: true });
       await fs.writeFile(logFilePath(conversationId), content);
     });
-  appendChains.set(conversationId, run);
+  appendChains.set(key, run);
   return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
+    if (appendChains.get(key) === run) {
+      appendChains.delete(key);
     }
   }) as Promise<void>;
 }
@@ -197,22 +223,39 @@ function chainWrite(conversationId: string, content: string): Promise<void> {
  * default, since every legitimate emitter has the state registered before it
  * emits (runFlow registers it before run:start; control routes load it first).
  */
-function isPersistable(conversationId: string): boolean {
+function persistableState(conversationId: string): SharedState | undefined {
   try {
     // A deleted conversation's in-flight run keeps emitting until its next
     // cancellation check; those events must not re-create the just-deleted log.
-    if (isConversationDeleted(conversationId)) return false;
+    if (isConversationDeleted(conversationId)) return undefined;
     // Lazy require to avoid a static import cycle (FlowExecutor → engine →
     // nodes → handlers → executionEventBus → this module).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
     const state: SharedState | undefined = FlowExecutor.conversationStates.get(conversationId);
-    if (!state) return false;
-    return !state.ephemeral;
+    if (!state || state.ephemeral) return undefined;
+    return state;
   } catch (err) {
     log.warn(`Could not resolve persistence policy for ${conversationId}; not persisting.`, { err });
-    return false;
+    return undefined;
   }
+}
+
+async function commitConversationWrite<T>(
+  state: SharedState,
+  task: () => Promise<T>,
+): Promise<T> {
+  if (state.personaAttribution && !state.executionAuthority) {
+    throw new Error(
+      'Persona-attributed transcript persistence requires current execution authority.',
+    );
+  }
+  if (!state.executionAuthority) return task();
+  if (state.executionAuthority?.commitWhileCurrent) {
+    return state.executionAuthority.commitWhileCurrent(task);
+  }
+  await state.executionAuthority.assertCurrent();
+  return task();
 }
 
 function serialize(event: ExecutionEvent): string {
@@ -232,8 +275,12 @@ export function appendFromBus(event: ExecutionEvent): void {
     log.warn(`Refusing to log event for unsafe conversation id`, { conversationId: event.conversationId });
     return;
   }
-  if (!isPersistable(event.conversationId)) return;
-  void chainAppend(event.conversationId, serialize(event)).catch((err) =>
+  const state = persistableState(event.conversationId);
+  if (!state) return;
+  void commitConversationWrite(
+    state,
+    () => chainAppend(event.conversationId, serialize(event)),
+  ).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );
 }
@@ -257,9 +304,12 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
     .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
     .join('');
   try {
-    await chainAppend(conversationId, lines);
+    await commitConversationWrite(state, () => chainAppend(conversationId, lines));
   } catch (err) {
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
+    // Persona-related input is acknowledged only after this append succeeds;
+    // surface the failure so runFlow can requeue the stable message ids.
+    if (state.executionAuthority || state.personaAttribution) throw err;
   }
 }
 
@@ -269,8 +319,81 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
  * observe them (projection reads, tests) can flush first. Never rejects.
  */
 export function flushConversationLog(conversationId: string): Promise<void> {
-  const pending = appendChains.get(conversationId);
+  const pending = appendChains.get(ck(conversationId));
   return pending ? pending.then(() => undefined, () => undefined) : Promise.resolve();
+}
+
+/**
+ * Authoritatively replace a persisted conversation transcript while preserving
+ * the append-only audit log. The log receives removals for every prior projected
+ * message followed by the replacement in canonical order; the SharedState
+ * snapshot is then persisted. If snapshot persistence fails, both the log bytes
+ * and in-memory transcript are rolled back before the error is rethrown.
+ */
+export async function replaceConversationTranscript(
+  state: SharedState,
+  replacement: FlujoChatMessage[],
+): Promise<void> {
+  if (state.ephemeral) throw new Error('Cannot rewrite an ephemeral conversation transcript.');
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) {
+    throw new Error('Cannot rewrite a transcript without a safe conversation id.');
+  }
+
+  await flushConversationLog(conversationId);
+  const file = logFilePath(conversationId);
+  let originalLog = '';
+  try {
+    originalLog = await fs.readFile(file, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
+  const originalMessages = state.messages;
+  const existingEvents = originalLog
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try { return [JSON.parse(line) as ExecutionEvent]; } catch { return []; }
+    });
+  const projected = projectMessages(existingEvents);
+  const baseline = projected.length > 0
+    ? projected
+    : originalMessages.filter((message) => message.role !== 'system');
+  const raws: RawExecutionEvent[] = [
+    ...baseline.map((message) => ({ type: 'message:removed' as const, messageId: message.id })),
+    ...replacement
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({ type: 'message' as const, message })),
+  ];
+  const appended = raws
+    .map((raw) => serialize({
+      ...raw,
+      conversationId,
+      seq: allocateSeq(conversationId),
+      timestamp: Date.now(),
+    } as ExecutionEvent))
+    .join('');
+
+  await commitConversationWrite(state, () => chainWrite(conversationId, originalLog + appended));
+  state.messages = structuredClone(replacement);
+  try {
+    await persistConversationState(
+      `conversations/${conversationId}` as StorageKey,
+      state,
+    );
+  } catch (error) {
+    state.messages = originalMessages;
+    try {
+      await commitConversationWrite(state, () => chainWrite(conversationId, originalLog));
+    } catch (rollbackError) {
+      log.error('Failed to roll back conversation log after transcript rewrite failure', {
+        conversationId,
+        rollbackError,
+      });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -485,6 +608,17 @@ export function repairDanglingToolCalls(
   state: SharedState,
   content: string = INTERRUPTED_TOOL_RESULT_CONTENT,
 ): FlujoChatMessage[] {
+  // An approval/debug pause intentionally persists an unanswered assistant
+  // tool-call turn. It is not crash damage: the parked state carries the exact
+  // calls/action that resume must process. Repairing it here would insert fake
+  // "interrupted" results before Step/Continue and either duplicate execution
+  // or erase the approval boundary.
+  const intentionallyPending =
+    (state.status === 'paused_debug'
+      && (!!state.debugPendingAction || !!state.debugPendingToolCalls?.length))
+    || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length);
+  if (intentionallyPending) return [];
+
   const messages = state.messages ?? [];
   if (messages.length === 0) return [];
 
@@ -596,6 +730,11 @@ export async function repairTruncatedConversationLog(
   state: SharedState,
 ): Promise<FlujoChatMessage[] | undefined> {
   if (state.ephemeral) return undefined;
+  if (state.personaAttribution && !state.executionAuthority) {
+    // A read/detail route must never rewrite a Persona-owned transcript. The
+    // dispatcher may perform this repair only after reinstalling live authority.
+    return undefined;
+  }
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return undefined;
 
@@ -616,9 +755,9 @@ export async function repairTruncatedConversationLog(
   const content = snapshot
     .map((m) => serialize({ type: 'message', message: m, conversationId, seq: rebuiltSeq++, timestamp: Date.now() } as ExecutionEvent))
     .join('');
-  nextSeq.set(conversationId, rebuiltSeq);
   try {
-    await chainWrite(conversationId, content);
+    await commitConversationWrite(state, () => chainWrite(conversationId, content));
+    nextSeq.set(ck(conversationId), rebuiltSeq);
     log.info(
       `Rebuilt truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} message(s)); issue #49 self-heal.`
     );

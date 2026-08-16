@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+// FLUJO_INSTALLATION_WIDE_ROUTE: records one installation-level telemetry heartbeat.
 import {
   checkDailyActivity,
   fetchDailyActivityCount,

@@ -6,8 +6,10 @@ import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
   toolCancellationReason,
@@ -17,8 +19,10 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
+import { paceToolCallArguments } from './toolArgumentPacing';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
+import { mapCodexUsage, type CodexUsageLike } from './codexUsage';
 import {
   codexSessionKey,
   computeCodexPrefixHash,
@@ -33,6 +37,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -115,13 +120,6 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
   media?: import('@/shared/types/model/media').ModelMediaPart[];
 };
 
-/** The Codex SDK usage block (turn.completed). */
-interface CodexUsage {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-}
-
 /**
  * Codex adapter — drives OpenAI's `codex` CLI through the Codex SDK
  * (`@openai/codex-sdk`, which bundles the CLI). Authentication is either an
@@ -167,11 +165,17 @@ export class CodexAdapter implements CompletionAdapter {
       tools,
       toolNameMap,
       localToolExecutors,
+      shouldEndAgenticTurn,
       requestToolApproval,
       onTranscriptMessage,
       consumeSteeringMessages,
       onModelDelta,
+      onToolProgress,
       signal,
+      beforeToolDispatch,
+      authorizePersonaCoreMcp,
+      afterToolDispatch,
+      commitDurableMutation,
       conversationId,
       runId,
       nodeId,
@@ -179,6 +183,8 @@ export class CodexAdapter implements CompletionAdapter {
       sessionResume,
       codexSession,
       onCodexSessionChange,
+      onSdkRequest,
+      onSdkRequestResult,
     } = input;
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
@@ -189,6 +195,11 @@ export class CodexAdapter implements CompletionAdapter {
     const { systemPrompt } = fullInput;
 
     const abortController = new AbortController();
+    let endedByCaller = false;
+    const endedToolResult = (): CallToolResult => ({
+      content: [{ type: 'text', text: 'This agentic turn has ended; no further tools may run.' }],
+      isError: true,
+    });
     const onExternalAbort = () => abortController.abort();
     if (signal?.aborted) {
       abortController.abort();
@@ -221,12 +232,33 @@ export class CodexAdapter implements CompletionAdapter {
       transcript.push(message);
       onTranscriptMessage?.(message);
     };
-    const recordToolCall = (ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>): void => {
+    const recordToolCall = (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+      messageId?: string,
+    ): void => {
       recordMessage({
         role: 'assistant',
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
+      }, messageId);
+    };
+    // Issue #337: the Codex SDK only surfaces a tool call once its arguments are
+    // complete, so replay them as paced name-first deltas under the SAME message
+    // id the durable transcript message will use. The streamed draft therefore
+    // fills in visibly and is then reconciled (not duplicated) by the durable
+    // message. Presentation only — approval and execution keep using `argsJson`.
+    const streamToolCall = async (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+    ): Promise<void> => {
+      const messageId = getStreamMessageId(`toolcall_${ti.id}`);
+      await paceToolCallArguments({
+        messageId,
+        callId: ti.id,
+        name: ti.name,
+        argsJson: ti.argsJson,
+        onModelDelta,
       });
+      recordToolCall(ti, messageId);
     };
     const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
       recordMessage({
@@ -256,11 +288,9 @@ export class CodexAdapter implements CompletionAdapter {
       resolveRejectedUi?: (reason: string) => Promise<ToolUi | undefined>,
     ): Promise<CallToolResult | null> => {
       if (!requestToolApproval) return null;
-      const { approved, feedback } = await requestToolApproval({ id: callId, name, args });
+      const approved = await requestToolApproval({ id: callId, name, args });
       if (approved) return null;
-      const rejectionText = feedback
-        ? `User rejected this tool call: ${feedback}`
-        : 'Tool call rejected by the user.';
+      const rejectionText = 'tool denied';
       const ui = await resolveRejectedUi?.(rejectionText);
       recordToolResult({
         id: callId,
@@ -292,6 +322,8 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              if (shouldEndAgenticTurn?.()) return endedToolResult();
+              await beforeToolDispatch?.();
               const toolStartedAt = Date.now();
               handoffCalls.push({ name: fnName, args: args ?? {} });
               if (runId) {
@@ -328,14 +360,17 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              if (shouldEndAgenticTurn?.()) return endedToolResult();
               const callId = `call_${uuidv4()}`;
               const argsJson = JSON.stringify(args ?? {});
               // The bridge receives a call only after Codex has assembled its
               // arguments. Surface it immediately, before approval or execution,
-              // so the existing UI renders a live pending tool card.
-              recordToolCall({ id: callId, name: fnName, argsJson });
+              // so the existing UI renders a live pending tool card whose
+              // arguments stream in (#337) instead of appearing all at once.
+              await streamToolCall({ id: callId, name: fnName, argsJson });
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
+              await beforeToolDispatch?.();
               log.debug('Codex local tool call', { tool: fnName });
               const toolStartedAt = Date.now();
               let resultContent: string;
@@ -343,6 +378,7 @@ export class CodexAdapter implements CompletionAdapter {
               try {
                 resultContent = JSON.stringify(await localExec(args ?? {}));
               } catch (err) {
+                if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
                 resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
                 isError = true;
               }
@@ -372,6 +408,8 @@ export class CodexAdapter implements CompletionAdapter {
           nodeId: callerNodeId,
           annotations,
           uiResourceUri,
+          presetArgs,
+          context,
         } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return {
@@ -380,12 +418,15 @@ export class CodexAdapter implements CompletionAdapter {
           inputSchema,
           ...(annotations ? { annotations } : {}),
           handler: async (args) => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             const callId = `call_${uuidv4()}`;
             const argsJson = JSON.stringify(args ?? {});
             // Emit before the approval gate and mcpService call. Large/slow tools
             // therefore appear in chat as pending as soon as the MCP request
-            // reaches FLUJO instead of after their result is available.
-            recordToolCall({ id: callId, name: readableName, argsJson });
+            // reaches FLUJO instead of after their result is available, with the
+            // arguments paced into the card while they are still being read (#337).
+            await streamToolCall({ id: callId, name: readableName, argsJson });
+            const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
             const denied = await gate(
               callId,
               readableName,
@@ -404,18 +445,35 @@ export class CodexAdapter implements CompletionAdapter {
               },
             );
             if (denied) return denied;
+            await beforeToolDispatch?.();
+            await authorizePersonaCoreMcp?.(server, callerNodeId);
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
               server,
               originalTool,
-              args ?? {},
+              effectiveArgs,
               timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
-              undefined,
+              onToolProgress
+                ? (progress) => onToolProgress({
+                    toolCallId: callId,
+                    name: readableName,
+                    progress: progress.progress,
+                    total: progress.total,
+                    message: progress.message,
+                  })
+                : undefined,
               callerNodeId,
               abortController.signal,
               'model',
+              // Issue #413: the self-orchestrating adapters must derive the SAME
+              // run owner key as the normal ModelHandler path. Without it a
+              // Codex-driven Bash session landed under `caller:<nodeId>` and was
+              // never released when the run ended.
+              ownerScopeForRun({ runId, conversationId }),
+              conversationId ? { conversationId } : undefined,
             );
+            await afterToolDispatch?.();
             if (runId) {
               const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
               recordStatisticsEvent(createStatisticsEvent({
@@ -433,28 +491,43 @@ export class CodexAdapter implements CompletionAdapter {
             let resultContent: string;
             if (result.success) {
               callResult = result.data as CallToolResult;
-              resultContent = JSON.stringify(result.data);
+              // Media is exempt from the size bound, same rationale as the
+              // subscription path: base64 measured against a byte budget
+              // silently deleted every real image (a ~37 KB picture already
+              // blows the 50 KB default once stringified). Bound the text,
+              // forward the media blocks untouched over the MCP bridge.
+              const { mediaItems, textResult } = splitToolResultMedia(callResult);
+              resultContent = JSON.stringify(textResult);
               // Tool-boundary bound (#251), same as the subscription path: this
               // bypasses ModelHandler's processToolCalls, so bound here or the
               // guarantee silently wouldn't apply on Codex runs.
               if (conversationId) {
-                try {
-                  const settings = await getRunResourceSettings();
-                  const bounded = await boundToolResult({
-                    conversationId,
-                    toolCallId: callId,
-                    server,
-                    toolName: originalTool,
-                    nodeId: callerNodeId,
-                    content: resultContent,
-                    settings,
-                  });
-                  if (bounded.spilled) {
-                    resultContent = bounded.content;
-                    callResult = { content: [{ type: 'text', text: bounded.content }] };
+                const bound = async () => {
+                  try {
+                    const settings = await getRunResourceSettings();
+                    return await boundToolResult({
+                      conversationId,
+                      toolCallId: callId,
+                      server,
+                      toolName: originalTool,
+                      nodeId: callerNodeId,
+                      content: resultContent,
+                      settings,
+                    });
+                  } catch (err) {
+                    log.warn('boundToolResult failed on Codex path; keeping full result', err);
+                    return null;
                   }
-                } catch (err) {
-                  log.warn('boundToolResult failed on Codex path; keeping full result', err);
+                };
+                const bounded = commitDurableMutation
+                  ? await commitDurableMutation(bound)
+                  : await bound();
+                if (bounded?.spilled) {
+                  resultContent = bounded.content;
+                  callResult = {
+                    ...callResult,
+                    content: [...mediaItems, { type: 'text', text: bounded.content }],
+                  };
                 }
               }
             } else {
@@ -595,7 +668,7 @@ export class CodexAdapter implements CompletionAdapter {
 
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
     let resultText = '';
-    let usage: CodexUsage | undefined;
+    let usage: CodexUsageLike | undefined;
     let streamedText = false;
     let failure: string | undefined;
     let completedTurn = false;
@@ -617,7 +690,7 @@ export class CodexAdapter implements CompletionAdapter {
         developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
         // Do not expose Codex's built-in shell. FLUJO filesystem operations
         // must go through the bridged MCP tools so they remain observable and
-        // subject to FLUJO's approval and protected-path policies.
+        // subject to FLUJO's approval setting.
         features: {
           shell_tool: false,
         },
@@ -691,6 +764,7 @@ export class CodexAdapter implements CompletionAdapter {
       while (true) {
         let attemptFailure: Error | undefined;
         let steeringMessages: FlujoChatMessage[] = [];
+        let dispatchId: string | undefined;
         const streamedAgentText = new Map<string, string>();
         const turnIndex = sdkTurnIndex++;
         const streamId = (itemId: string) =>
@@ -703,12 +777,37 @@ export class CodexAdapter implements CompletionAdapter {
         else abortController.signal.addEventListener('abort', abortTurn, { once: true });
 
         try {
+          try {
+            dispatchId = await onSdkRequest?.({
+              adapter: 'codex-cli',
+              operation: 'thread.runStreamed',
+              request: {
+                input: nextTurnInput,
+                options: { signal: '[AbortSignal]' },
+                thread: {
+                  resumed: Boolean(resumeThreadId),
+                  id: capturedThreadId,
+                  options: threadOptions,
+                },
+              },
+            });
+          } catch (archiveError) {
+            log.warn('Could not archive Codex SDK request', archiveError);
+          }
           const { events } = await thread.runStreamed(nextTurnInput, {
             signal: turnAbortController.signal,
           });
 
           for await (const event of events) {
             if (signal?.aborted) break;
+            // A terminal local control (meeting silence) ends this SDK turn at
+            // the first safe event boundary, before post-control narration or
+            // another tool dispatch can be observed.
+            if (shouldEndAgenticTurn?.()) {
+              endedByCaller = true;
+              turnAbortController.abort();
+              break;
+            }
             if (event.type === 'thread.started') {
               capturedThreadId = event.thread_id;
               continue;
@@ -782,7 +881,7 @@ export class CodexAdapter implements CompletionAdapter {
               // handlers already record each call/result pair (with approval and
               // bounding applied), so mirroring the item would duplicate them.
             } else if (event.type === 'turn.completed') {
-              usage = event.usage as CodexUsage;
+              usage = event.usage as CodexUsageLike;
               completedTurn = true;
             } else if (event.type === 'turn.failed') {
               attemptFailure = new Error(
@@ -813,9 +912,23 @@ export class CodexAdapter implements CompletionAdapter {
           attemptFailure = err instanceof Error ? err : new Error(String(err));
         } finally {
           abortController.signal.removeEventListener('abort', abortTurn);
+          if (dispatchId && onSdkRequestResult) {
+            const outcome = endedByCaller || handoffCalls.length > 0
+              ? 'completed'
+              : steeringMessages.length > 0 || signal?.aborted
+                ? 'cancelled'
+                : attemptFailure
+                  ? 'error'
+                  : 'completed';
+            try {
+              await onSdkRequestResult({ dispatchId, outcome });
+            } catch (archiveError) {
+              log.warn('Could not update Codex SDK request archive', archiveError);
+            }
+          }
         }
 
-        if (signal?.aborted && handoffCalls.length === 0) {
+        if (signal?.aborted && handoffCalls.length === 0 && !endedByCaller) {
           throw new Error('Codex run cancelled by user.');
         }
         if (steeringMessages.length > 0) {
@@ -835,7 +948,7 @@ export class CodexAdapter implements CompletionAdapter {
           });
           continue;
         }
-        if (!attemptFailure || handoffCalls.length > 0) break;
+        if (endedByCaller || !attemptFailure || handoffCalls.length > 0) break;
         if (!connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
           connectionRetryUsed = true;
           nextTurnInput = continuationInput;
@@ -846,7 +959,7 @@ export class CodexAdapter implements CompletionAdapter {
         break;
       }
 
-      if (failure && handoffCalls.length === 0) {
+      if (failure && handoffCalls.length === 0 && !endedByCaller) {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
@@ -856,7 +969,7 @@ export class CodexAdapter implements CompletionAdapter {
       }
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
-      if (resumeThreadId && handoffCalls.length === 0) {
+      if (resumeThreadId && handoffCalls.length === 0 && !endedByCaller) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,
           nodeId,
@@ -866,7 +979,7 @@ export class CodexAdapter implements CompletionAdapter {
         return this.createCompletion({ ...input, codexSession: undefined });
       }
       // A handoff aborts the stream on purpose; only genuine errors propagate.
-      if (handoffCalls.length === 0) throw err;
+      if (handoffCalls.length === 0 && !endedByCaller) throw err;
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
       await bridge?.close().catch(() => undefined);
@@ -886,7 +999,7 @@ export class CodexAdapter implements CompletionAdapter {
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
-    } else if (!streamedText) {
+    } else if (!streamedText && !endedByCaller) {
       recordMessage({ role: 'assistant', content: resultText || '' });
     }
 
@@ -895,6 +1008,7 @@ export class CodexAdapter implements CompletionAdapter {
         completedTurn &&
         !failure &&
         !signal?.aborted &&
+        !endedByCaller &&
         handoffCalls.length === 0 &&
         capturedThreadId;
       if (reusable) {
@@ -923,12 +1037,11 @@ export class CodexAdapter implements CompletionAdapter {
         transcriptMessages: transcript.length,
         watermark: messages.length + transcript.length,
         endedByHandoff: handoffCalls.length > 0,
+        endedByCaller,
       });
     }
 
-    const promptTokens = usage?.input_tokens ?? 0;
-    const completionTokens = usage?.output_tokens ?? 0;
-    const cachedTokens = usage?.cached_input_tokens ?? 0;
+    const mappedUsage = mapCodexUsage(usage);
 
     const completion: OpenAI.Chat.Completions.ChatCompletion = {
       id: `codex_${uuidv4()}`,
@@ -949,12 +1062,21 @@ export class CodexAdapter implements CompletionAdapter {
         },
       ],
       usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
+        prompt_tokens: mappedUsage.promptTokens,
+        completion_tokens: mappedUsage.completionTokens,
+        total_tokens: mappedUsage.totalTokens,
         // Same fresh/cached split surfaced for the Claude path (#87): the cheap
-        // cache RE-READ subset rides in OpenAI's own usage-detail field.
-        ...(cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+        // cache RE-READ and cache-write subsets ride in OpenAI's usage details.
+        ...(
+          mappedUsage.cacheReadTokens != null || mappedUsage.cacheWriteTokens != null
+            ? {
+                prompt_tokens_details: {
+                  cached_tokens: mappedUsage.cacheReadTokens ?? 0,
+                  cache_write_tokens: mappedUsage.cacheWriteTokens ?? 0,
+                },
+              }
+            : {}
+        ),
       },
     };
 

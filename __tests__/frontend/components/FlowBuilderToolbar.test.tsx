@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { FlowBuilder } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import { modelService } from '@/frontend/services/model';
 import { flowService } from '@/frontend/services/flow';
+import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 
 jest.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -122,7 +123,10 @@ describe('FlowBuilder toolbar', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('advanced'),
+    );
   });
 
   it('keeps the high-frequency authoring goals visible and flow details in the inspector', () => {
@@ -135,26 +139,29 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Flow Name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flow name')).toBeInTheDocument();
     expect(screen.getByLabelText('Description')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Advanced' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Save Flow' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
     expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auto-Align' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Tidy up layout' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-Align' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Tidy up layout' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
 
   it('always exposes the Easy/Expert view toggle', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     render(
       <FlowBuilder
         initialFlow={initialFlow}
@@ -178,7 +185,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('opens flows that require expert features directly in Expert view', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     const expertFlow = {
       ...initialFlow,
       nodes: [
@@ -206,7 +216,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('honors an explicit simple-builder handoff for flows with expert features', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('advanced'),
+    );
     const expertFlow = {
       ...initialFlow,
       nodes: [
@@ -232,7 +245,8 @@ describe('FlowBuilder toolbar', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Expert view' })).not.toBeChecked();
     expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
   });
 
   it('retains both automatic and AI repair paths', () => {
@@ -251,7 +265,7 @@ describe('FlowBuilder toolbar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Repair with AI/i }));
-    expect(screen.getByTestId('improve-dialog')).toHaveTextContent(/Repair this flow's wiring/i);
+    expect(screen.getByTestId('improve-dialog')).toHaveTextContent(/Repair this flow[’']s wiring/i);
   });
 
   it('gates saved-flow actions behind the More actions menu', () => {
@@ -266,16 +280,16 @@ describe('FlowBuilder toolbar', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'AI-Improve' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Improve with AI' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'History' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Duplicate Flow' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete Flow' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Duplicate flow' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete flow' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'History' }));
     expect(screen.getByTestId('history-dialog')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Flow' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete flow' }));
     expect(onDelete).toHaveBeenCalledWith('flow-1');
 
     rerender(
@@ -291,12 +305,12 @@ describe('FlowBuilder toolbar', () => {
   it('preserves disabled states for invalid and empty flows', () => {
     render(<FlowBuilder onSave={() => {}} onDelete={() => {}} allFlows={[]} />);
 
-    fireEvent.change(screen.getByLabelText('Flow Name'), { target: { value: '' } });
-    expect(screen.getByRole('button', { name: 'Save Flow' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Save flow' })).toBeDisabled();
 
-    expect(screen.getByRole('button', { name: 'Auto-Align' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Tidy up layout' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-Align' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Tidy up layout' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
@@ -312,13 +326,13 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('Flow Name'), { target: { value: 'renamed_flow' } });
-    expect(screen.getByLabelText('Save status: unsaved')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: 'renamed_flow' } });
+    expect(screen.getByLabelText('Save status: Unsaved')).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 's', ctrlKey: true });
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'renamed_flow' })));
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
     expect(screen.queryByText('Rename Flow')).not.toBeInTheDocument();
   });
 
@@ -334,9 +348,9 @@ describe('FlowBuilder toolbar', () => {
     );
 
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Still working' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Save status: failed')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Save failed')).toBeInTheDocument());
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
@@ -359,7 +373,7 @@ describe('FlowBuilder toolbar', () => {
 
     expect(onSave).toHaveBeenCalledTimes(1);
     finishSave(true);
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
   });
 
   it('appends and wires a legal next step in one palette click', async () => {
@@ -449,9 +463,12 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
+    // Mobile opening layout runs `computeAutoLayout` with `rankSep: 90`
+    // (FlowBuilder/index.tsx), so rank 1 sits at the `start` node's fallback
+    // height (84, see layoutGeometry NODE_SIZE_FALLBACK) + 90 = 174.
     await waitFor(() => {
       expect(screen.getByTestId('canvas').getAttribute('data-positions'))
-        .toContain('start:0,0|process-existing:0,170');
+        .toContain('start:0,0|process-existing:0,174');
     });
     expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
     Object.defineProperty(window, 'matchMedia', {
@@ -501,12 +518,15 @@ describe('FlowBuilder toolbar', () => {
     fireEvent.click(triggerButton);
     fireEvent.click(triggerButton);
 
-    await waitFor(() => expect(screen.getByText(/Trigger node already exists/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/already has a Trigger node/i)).toBeInTheDocument());
     expect(screen.getByTestId('canvas')).toHaveTextContent('2:0');
   });
 
   it('does not block goal creation when no AI is connected', async () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     (modelService.loadModels as jest.Mock).mockResolvedValueOnce([]);
     render(
       <FlowBuilder
@@ -528,7 +548,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('asks permission, prefills the favorite model, and saves before Try', async () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     const onSave = jest.fn().mockResolvedValue(true);
     const onTry = jest.fn();
     const guidedDraft = {

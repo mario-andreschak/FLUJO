@@ -57,6 +57,13 @@ jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => null),
 }));
 
+// This suite isolates the origin guard itself. Workspace selection has its own
+// route tests; bypassing that wrapper here keeps a missing workspace fixture
+// from returning 404 before the security boundary is reached.
+jest.mock('@/app/api/_workspace', () => ({
+  withWorkspaceRoute: (handler: unknown) => handler,
+}));
+
 jest.mock('uuid', () => ({ v4: () => 'test-request-id' }));
 jest.mock('@/utils/mcp', () => ({ processPathLikeArgument: (p: string) => p }));
 

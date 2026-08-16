@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import {
   _setStatisticsDirForTests,
+  anonymizeStatisticsPersonaAttribution,
   appendStatisticsEvent,
   createStatisticsEvent,
   credentialFingerprint,
@@ -44,6 +45,12 @@ describe('metadata-only statistics store', () => {
   it('validates schema versions and rebuilds records from the metadata allowlist', () => {
     const event = sanitizeStatisticsEvent({
       ...runStarted('run-1'),
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+        prompt: 'ATTRIBUTION_CANARY',
+      },
       prompt: 'PROMPT_CANARY',
       response: 'RESPONSE_CANARY',
       toolArguments: 'ARGS_CANARY',
@@ -56,11 +63,20 @@ describe('metadata-only statistics store', () => {
       schemaVersion: STATISTICS_SCHEMA_VERSION,
       type: 'run.started',
       runId: 'run-1',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+      },
     }));
     expect(JSON.stringify(event)).not.toMatch(
-      /PROMPT_CANARY|RESPONSE_CANARY|ARGS_CANARY|ERROR_CANARY|KEY_CANARY|secret\.example/,
+      /ATTRIBUTION_CANARY|PROMPT_CANARY|RESPONSE_CANARY|ARGS_CANARY|ERROR_CANARY|KEY_CANARY|secret\.example/,
     );
     expect(sanitizeStatisticsEvent({ ...runStarted('run-2'), schemaVersion: 99 })).toBeUndefined();
+    expect(sanitizeStatisticsEvent({
+      ...runStarted('run-3'),
+      personaAttribution: { personaId: '../unsafe' },
+    })).not.toHaveProperty('personaAttribution');
   });
 
   it('allowlists scheduler fire metadata without persisting trigger content', () => {
@@ -113,6 +129,162 @@ describe('metadata-only statistics store', () => {
       '2026-07-30.jsonl',
       '2026-07-31.jsonl',
     ]));
+  });
+
+  it('keeps a queued append bound to the data root resolved at enqueue time', async () => {
+    const originalDataDir = process.env.FLUJO_DATA_DIR;
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-statistics-root-a-'));
+    const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-statistics-root-b-'));
+    _setStatisticsDirForTests(undefined);
+
+    try {
+      process.env.FLUJO_DATA_DIR = firstRoot;
+      const pending = appendStatisticsEvent(runStarted('enqueue-root'));
+
+      // The append operation runs in a promise continuation. Simulate Jest or
+      // runtime teardown restoring the inherited root before that continuation.
+      process.env.FLUJO_DATA_DIR = secondRoot;
+      await pending;
+
+      const relativeFile = path.join(
+        'workspaces',
+        'default-workspace',
+        'db',
+        'statistics',
+        '2026-07-30.jsonl',
+      );
+      await expect(fs.readFile(path.join(firstRoot, relativeFile), 'utf8'))
+        .resolves.toContain('enqueue-root');
+      await expect(fs.stat(path.join(secondRoot, relativeFile))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      process.env.FLUJO_DATA_DIR = originalDataDir;
+      _setStatisticsDirForTests(tempDir);
+      await Promise.all([
+        fs.rm(firstRoot, { recursive: true, force: true }),
+        fs.rm(secondRoot, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it('flushes events enqueued while an earlier append is still pending', async () => {
+    const appendFile = fs.appendFile.bind(fs);
+    let appendCount = 0;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let signalFirstStarted!: () => void;
+    let signalSecondStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { signalFirstStarted = resolve; });
+    const secondStarted = new Promise<void>((resolve) => { signalSecondStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const appendSpy = jest.spyOn(fs, 'appendFile').mockImplementation(async (...args) => {
+      appendCount += 1;
+      if (appendCount === 1) {
+        signalFirstStarted();
+        await firstGate;
+      } else if (appendCount === 2) {
+        signalSecondStarted();
+        await secondGate;
+      }
+      return appendFile(...args);
+    });
+
+    try {
+      const first = appendStatisticsEvent(runStarted('flush-first'));
+      await firstStarted;
+      const flushing = flushStatisticsEvents();
+      const second = appendStatisticsEvent(runStarted('flush-second'));
+
+      releaseFirst();
+      await secondStarted;
+      let flushResolved = false;
+      void flushing.then(() => { flushResolved = true; });
+      await Promise.resolve();
+      expect(flushResolved).toBe(false);
+
+      releaseSecond();
+      await expect(flushing).resolves.toBeUndefined();
+      await Promise.all([first, second]);
+      await expect(readStatisticsEvents('2026-07-30')).resolves.toEqual([
+        expect.objectContaining({ runId: 'flush-first' }),
+        expect.objectContaining({ runId: 'flush-second' }),
+      ]);
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      appendSpy.mockRestore();
+    }
+  });
+
+  it('atomically and idempotently anonymizes only one Persona across queued partitions', async () => {
+    const target = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const other = {
+      personaId: 'persona-2',
+      activityId: 'activity-2',
+      behaviorRevisionId: 'behavior-revision-2',
+    };
+    await appendStatisticsEvent(createStatisticsEvent({
+      type: 'run.started',
+      runId: 'run-other',
+      timestamp: '2026-07-30T09:00:00.000Z',
+      source: 'api',
+      flow: { id: 'flow-other' },
+      personaAttribution: other,
+    }));
+    await fs.appendFile(
+      path.join(tempDir, '2026-07-30.jsonl'),
+      '{unrelated-corrupt-line}\n{"schemaVersion":1,"personaAttribution":{"personaId":"persona-1"\n',
+      'utf8',
+    );
+
+    // Do not await these appends. The anonymizer must first drain the existing
+    // per-partition chains, including a partition that does not exist yet.
+    const pending = [
+      appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.started',
+        runId: 'run-target',
+        timestamp: '2026-07-30T10:00:00.000Z',
+        source: 'api',
+        flow: { id: 'flow-target' },
+        personaAttribution: target,
+      })),
+      appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.finished',
+        runId: 'run-target',
+        timestamp: '2026-07-31T10:00:01.000Z',
+        source: 'api',
+        flow: { id: 'flow-target' },
+        outcome: 'completed',
+        durationMs: 1,
+        personaAttribution: target,
+      })),
+    ];
+
+    await expect(anonymizeStatisticsPersonaAttribution('persona-1')).resolves.toBe(3);
+    await Promise.all(pending);
+
+    const dayOne = await readStatisticsEvents('2026-07-30');
+    const dayTwo = await readStatisticsEvents('2026-07-31');
+    expect(dayOne.find((event) => event.runId === 'run-other')?.personaAttribution).toEqual(other);
+    expect(dayOne.find((event) => event.runId === 'run-target')).not.toHaveProperty('personaAttribution');
+    expect(dayTwo).toHaveLength(1);
+    expect(dayTwo[0]).not.toHaveProperty('personaAttribution');
+
+    const paths = ['2026-07-30.jsonl', '2026-07-31.jsonl'].map((file) => path.join(tempDir, file));
+    const beforeRetry = await Promise.all(paths.map((file) => fs.readFile(file, 'utf8')));
+    expect(beforeRetry[0]).toContain('{unrelated-corrupt-line}');
+    expect(beforeRetry.join('\n')).not.toContain('persona-1');
+    expect(beforeRetry.join('\n')).toContain('persona-2');
+
+    await expect(anonymizeStatisticsPersonaAttribution('persona-1')).resolves.toBe(0);
+    await expect(Promise.all(paths.map((file) => fs.readFile(file, 'utf8'))))
+      .resolves.toEqual(beforeRetry);
   });
 
   it('strips unexpected content fields before serialized persistence', async () => {

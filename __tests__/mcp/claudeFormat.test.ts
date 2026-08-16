@@ -11,7 +11,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         args: ['-y', 'server-filesystem'],
         env: { API_KEY: 'abc' },
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -36,7 +35,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         headers: { Authorization: 'Bearer x' },
         env: {},
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -59,7 +57,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         serverUrl: 'https://example.com/sse',
         env: {},
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -70,7 +67,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         websocketUrl: 'wss://example.com/socket',
         env: {},
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -91,7 +87,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         args: [],
         env: { TOKEN: { value: 'sekret', metadata: { isSecret: true } } },
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -112,7 +107,6 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
         env: { SECRET: 'shh' },
         exposeAsMcpServer: true,
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -125,6 +119,26 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
       type: 'http',
       url: 'http://localhost:4200/mcp-proxy/abap-mcp-flujo',
     });
+  });
+
+  it('makes the selected workspace explicit on exported proxy URLs', () => {
+    const server = {
+      name: 'shared name',
+      transport: 'stdio',
+      exposeAsMcpServer: true,
+      disabled: false,
+      rootPath: '',
+      env: {},
+      _buildCommand: '',
+      _installCommand: '',
+      command: 'node',
+    } as unknown as MCPServerConfig;
+    const out = toClaudeFormat([server], {
+      proxyBaseUrl: 'http://localhost:4200',
+      workspace: 'team-a',
+    });
+    expect(out.mcpServers['shared name'].url)
+      .toBe('http://localhost:4200/mcp-proxy/shared%20name?workspace=team-a');
   });
 });
 
@@ -144,7 +158,6 @@ describe('claudeFormat — import (fromClaudeFormat)', () => {
     expect(s.args).toEqual(['-y', 'srv']);
     expect(s.env).toEqual({ K: 'v' });
     expect(s.disabled).toBe(false);
-    expect(s.autoApprove).toEqual([]);
   });
 
   it('maps Claude type aliases (http, streamable-http) to streamable', () => {
@@ -217,7 +230,6 @@ describe('claudeFormat — import (fromClaudeFormat)', () => {
         args: ['-y', 'srv'],
         env: { K: 'v' },
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',
@@ -229,7 +241,6 @@ describe('claudeFormat — import (fromClaudeFormat)', () => {
         headers: { Authorization: 'Bearer x' },
         env: {},
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         _buildCommand: '',
         _installCommand: '',

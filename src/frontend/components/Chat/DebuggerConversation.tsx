@@ -4,20 +4,20 @@ import React, { useMemo, useState } from 'react';
 import {
   Box, Typography, Chip, Paper,
   Accordion, AccordionSummary, AccordionDetails,
-  ToggleButtonGroup, ToggleButton,
+  ToggleButtonGroup, ToggleButton, Alert,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { ModelInputSnapshot } from '@/backend/execution/flow/types';
+import type { ModelInputSnapshot, WirePreviewWarning } from '@/backend/execution/flow/types';
 import type { ChatMessage } from './index';
 import ChatMessages from './ChatMessages';
-import { AnnotatedHistory, wireSummary } from './DebuggerModelInput';
+import { AnnotatedHistory, ContextCompactionPanel, wireSummary } from './DebuggerModelInput';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
- * Conversation section of the Visual Debugger (issue #162).
+ * Read-only model-input conversation shown in the regular chat transcript.
  *
  * Shows the *wired* conversation for the currently-selected Process-node model
- * call using the REAL chat renderer (`ChatMessages`) — so the debugger renders
+ * call using the REAL chat renderer (`ChatMessages`) — so the model-input view renders
  * tool-call timelines, tool results and attribution pills exactly as the chat
  * does, reflecting the conversation after all fold / inputMode-scope /
  * handoff-strip plumbing but before the model call. A toggle switches to the
@@ -34,11 +34,18 @@ const noop = () => {};
 
 interface DebuggerConversationProps {
   modelInput: ModelInputSnapshot;
-  /** Owning conversation id — used only to key the ChatMessages render window. */
+  /** Owning conversation/step id — used only to key the ChatMessages render window. */
   conversationId?: string;
+  source?: 'historical-request' | 'current-preview';
+  warnings?: WirePreviewWarning[];
 }
 
-const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput, conversationId }) => {
+const DebuggerConversation: React.FC<DebuggerConversationProps> = ({
+  modelInput,
+  conversationId,
+  source = 'historical-request',
+  warnings = [],
+}) => {
   const { t } = useI18n();
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
   const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
@@ -52,14 +59,51 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
   );
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1 }}>
-      {/* Summary + input mode */}
+    <Box sx={{ display: 'flex', flexDirection: 'column', p: 1 }}>
+      {/* Source is explicit: captured debugger history and predictive previews
+          must never be visually confused. */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
+        <Chip
+          size="small"
+          color={source === 'current-preview' ? 'warning' : 'default'}
+          label={source === 'current-preview'
+            ? t('chat.preview.current')
+            : t('chat.preview.historicalRequest')}
+        />
         <Typography variant="caption" color="textSecondary">{wireSummary(counts, t)}</Typography>
         {inputMode && inputMode !== 'full-history' && (
           <Chip size="small" variant="outlined" label={`inputMode: ${inputMode}`} />
         )}
       </Box>
+
+      {warnings.map((warning, index) => (
+        <Alert
+          key={`${warning.code}-${index}`}
+          severity={warning.code === 'current_state' ? 'info' : 'warning'}
+          variant="outlined"
+          sx={{ mb: 1 }}
+        >
+          {warning.message}
+        </Alert>
+      ))}
+
+      <ContextCompactionPanel diagnostic={modelInput.contextCompaction} />
+
+      {modelInput.visualCompaction && (
+        <Alert
+          severity={modelInput.visualCompaction.route === 'image' ? 'warning' : 'info'}
+          variant="outlined"
+          sx={{ mb: 1 }}
+        >
+          Visual context route: {modelInput.visualCompaction.route}
+          {modelInput.visualCompaction.candidate
+            ? ` · ${modelInput.visualCompaction.candidate.messageCount} old messages evaluated`
+            : ''}
+          {modelInput.visualCompaction.fallbackReason
+            ? ` · ${modelInput.visualCompaction.fallbackReason}`
+            : ''}
+        </Alert>
+      )}
 
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
@@ -93,7 +137,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
 
       {/* Content-capped preview note (WIRE_CONTENT_MAX): so truncation isn't
           mistaken for stripping. */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', minHeight: 0 }}>
+      <Box>
         {view === 'wire' ? (
           wireBody.length === 0 ? (
             <Typography variant="body2" color="textSecondary" sx={{ p: 1 }}>

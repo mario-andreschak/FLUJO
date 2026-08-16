@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/registry/feedback
  *
@@ -10,6 +11,7 @@ import { z } from 'zod';
 import { submitFeedback } from '@/backend/utils/packageRegistryClient';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 
 const log = createLogger('app/api/registry/feedback/route');
 
@@ -22,14 +24,19 @@ const feedbackSchema = z
   .refine(
     ({ notice }) => {
       const length = Array.from(notice).length;
-      return length >= 1 && length <= 255;
+      // Issue #377: an empty message is allowed; only the upper bound is enforced.
+      return length <= 255;
     },
-    { path: ['notice'], message: 'Feedback must contain 1–255 characters' },
+    { path: ['notice'], message: 'Feedback must not exceed 255 characters' },
   );
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+
+  // #77 deny-by-default encryption gate.
+  const locked = await assertUnlocked();
+  if (locked) return locked;
 
   let json: unknown;
   try {
@@ -41,7 +48,7 @@ export async function POST(request: NextRequest) {
   const parsed = feedbackSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: 'Feedback and a happy/unhappy selection are required' },
+      { error: 'A happy/unhappy selection is required and feedback must not exceed 255 characters.' },
       { status: 400 },
     );
   }
@@ -69,3 +76,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

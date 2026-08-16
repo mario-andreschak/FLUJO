@@ -128,6 +128,16 @@ class PackageService {
     version?: string;
     secrets?: Record<string, string>;
     modelMappings?: Record<string, string>;
+    /**
+     * Bulk DISPLAY-NAME renames (issue #407). Flow entries are keyed by the
+     * manifest-local flow id, planned-execution entries by the manifest
+     * execution name. Sending them on the dry-run returns the validated
+     * preview (`preview.renameErrors`) without mutating anything.
+     */
+    renames?: {
+      flows?: Record<string, string>;
+      plannedExecutions?: Record<string, string>;
+    };
     consentGranted?: boolean;
   }): Promise<InstallSummary> {
     const response = await fetch('/api/packages/install', {

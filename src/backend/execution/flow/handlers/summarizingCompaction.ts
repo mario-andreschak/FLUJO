@@ -1,6 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { CompactionProjectionIdentity, WireSummaryArtifact } from '../compaction/types';
 
 const log = createLogger('backend/execution/flow/handlers/summarizingCompaction');
 
@@ -14,13 +15,13 @@ const log = createLogger('backend/execution/flow/handlers/summarizingCompaction'
  * window there is no "summarize and continue" path — only a single emergency
  * lossy refit of the wire.
  *
- * This module implements a real, PERSISTED summarizing compaction modelled on
+ * This module implements wire-only summarizing compaction modelled on
  * opencode's `compaction.ts`:
  *   - an anchored-summary template (Objective / Important Details / Work State /
  *     Next Move / Relevant Files) the model fills in;
  *   - UPDATE-the-previous-summary semantics so repeated compactions don't
  *     degrade into a summary-of-a-summary;
- *   - the summary becomes the new HEAD of the persisted conversation;
+ *   - the summary becomes the head of a copied provider-facing projection;
  *   - `flujo://run/...` URIs referenced by the summarized slice are preserved so
  *     they stay dereferenceable via `read_resource`.
  *
@@ -233,8 +234,16 @@ export function preserveResourceUris(
 export interface CompactHistoryOptions {
   /** Recent-tail budget kept verbatim (tokens). */
   keepTokens: number;
-  /** Owning process node id, stamped onto the summary head for projection. */
+  /** Owning process node id, stamped onto the summary wire message. */
   nodeId?: string;
+  conversationId: string;
+  projection: CompactionProjectionIdentity;
+  sourceDigest: string;
+  projectionDigest: string;
+  policyVersion: string;
+  modelId?: string;
+  /** Candidate selected by the caller; reused only after exact identity checks. */
+  reusableArtifact?: WireSummaryArtifact;
 }
 
 export interface CompactHistoryDeps {
@@ -243,30 +252,27 @@ export interface CompactHistoryDeps {
     messages: FlujoChatMessage[],
     prompt: { system: string; user: string },
   ) => Promise<string>;
-  /** Persist the pre-summary slice as a run resource for recoverability; returns
-   *  its `flujo://run/...` URI (or undefined on failure/skip). Optional. */
-  writeAnchor?: (text: string) => Promise<string | undefined>;
+  /** Persist an immutable, complete projected-source artifact. */
+  writeAnchor?: (
+    text: string,
+    metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
+  ) => Promise<string | undefined>;
   now?: () => number;
   uuid?: () => string;
 }
 
 export interface CompactHistoryResult {
-  /** The new summary message that becomes the conversation head. */
-  summaryMessage: FlujoChatMessage;
-  /** ids of the messages replaced by the summary (to emit `message:removed`). */
-  removedIds: string[];
-  /** The fully rebuilt message array to assign to `state.messages`. */
-  newMessages: FlujoChatMessage[];
+  /** Provider-facing materialization. Never assign this to SharedState.messages. */
+  wireMessages: FlujoChatMessage[];
+  artifact: WireSummaryArtifact;
+  /** Canonical message identities replaced by the injected summary on this wire. */
+  summarizedMessageIds: string[];
 }
 
 /**
- * Orchestrate a summarizing compaction over a message array.
- *
- * Returns `null` (a no-op — caller falls back to existing behaviour) when there
- * is nothing old enough to summarize, or when the model returns an empty/failed
- * summary (a bad summary is NEVER persisted). Otherwise returns the new summary
- * head, the ids it replaces, and the rebuilt array. The caller owns persistence
- * (log events + snapshot) so this stays pure and testable.
+ * Orchestrate summarizing compaction over an already node-projected message
+ * array. The input is canonical-derived and read-only; only the returned wire
+ * materialization may contain summaries or omissions.
  */
 export async function compactHistory(
   messages: FlujoChatMessage[],
@@ -280,6 +286,39 @@ export async function compactHistory(
   if (split.toSummarize.length === 0) {
     log.debug('compactHistory: nothing old enough to summarize; no-op');
     return null;
+  }
+
+  const reusable = opts.reusableArtifact;
+  if (
+    reusable &&
+    reusable.schemaVersion === 1 &&
+    reusable.conversationId === opts.conversationId &&
+    reusable.nodeId === opts.nodeId &&
+    reusable.sourceDigest === opts.sourceDigest &&
+    reusable.projectionDigest === opts.projectionDigest &&
+    reusable.policyVersion === opts.policyVersion &&
+    reusable.modelId === opts.modelId &&
+    reusable.sourceStartId === split.toSummarize[0]?.id &&
+    reusable.sourceEndId === split.toSummarize.at(-1)?.id &&
+    reusable.sourceMessageCount === split.toSummarize.length
+  ) {
+    const summaryMessage: FlujoChatMessage = {
+      id: reusable.artifactId,
+      role: 'assistant',
+      content: reusable.summaryText,
+      timestamp: reusable.createdAt,
+      ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
+    } as FlujoChatMessage;
+    return {
+      wireMessages: [
+        ...split.leadingSystem,
+        summaryMessage,
+        ...split.preservedSubflow,
+        ...split.toKeep,
+      ],
+      artifact: reusable,
+      summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
+    };
   }
 
   const prompt = buildCompactionPrompt({ previousSummary: split.previousSummary });
@@ -299,17 +338,20 @@ export async function compactHistory(
   // Preserve dereferenceable resource URIs from the summarized slice.
   summaryBody = preserveResourceUris(summaryBody, split.toSummarize);
 
-  // Capture the pre-summary slice as a run resource for recoverability and embed
-  // its URI in the head so nothing is silently destroyed. Best-effort.
+  const artifactId = uuid();
+  // The artifact payload is the complete projected source, including canonical
+  // identity and metadata. It is diagnostic/reusable wire state, never a backup
+  // that is allowed to replace canonical history.
   let anchorUri: string | undefined;
   if (deps.writeAnchor) {
     try {
-      const anchorText = JSON.stringify(
-        split.toSummarize.map((m) => ({ role: m.role, content: m.content, tool_calls: (m as { tool_calls?: unknown }).tool_calls })),
-      );
-      anchorUri = await deps.writeAnchor(anchorText);
+      anchorUri = await deps.writeAnchor(JSON.stringify(split.toSummarize), {
+        artifactId,
+        sourceDigest: opts.sourceDigest,
+        projectionDigest: opts.projectionDigest,
+      });
     } catch (error) {
-      log.warn('compactHistory: failed to capture pre-summary anchor resource; continuing', error);
+      log.warn('compactHistory: failed to persist wire artifact; continuing without resource', error);
     }
   }
 
@@ -325,20 +367,39 @@ export async function compactHistory(
     ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
   } as FlujoChatMessage;
 
-  const newMessages: FlujoChatMessage[] = [
+  const wireMessages: FlujoChatMessage[] = [
     ...split.leadingSystem,
     summaryMessage,
     ...split.preservedSubflow,
     ...split.toKeep,
   ];
-  const removedIds = split.toSummarize.map((m) => m.id);
+  const artifact: WireSummaryArtifact = {
+    artifactId,
+    conversationId: opts.conversationId,
+    nodeId: opts.nodeId,
+    sourceStartId: split.toSummarize[0]?.id,
+    sourceEndId: split.toSummarize.at(-1)?.id,
+    sourceMessageCount: split.toSummarize.length,
+    sourceDigest: opts.sourceDigest,
+    projectionDigest: opts.projectionDigest,
+    summaryText: String(summaryMessage.content ?? ''),
+    summaryResourceUri: anchorUri,
+    policyVersion: opts.policyVersion,
+    modelId: opts.modelId,
+    schemaVersion: 1,
+    createdAt: now(),
+  };
 
-  log.info('compactHistory: built summary head', {
+  log.info('compactHistory: built wire summary artifact', {
     summarized: split.toSummarize.length,
     kept: split.toKeep.length,
     updatedPrevious: Boolean(split.previousSummary),
     anchorUri: anchorUri ?? null,
   });
 
-  return { summaryMessage, removedIds, newMessages };
+  return {
+    wireMessages,
+    artifact,
+    summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
+  };
 }

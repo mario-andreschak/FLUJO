@@ -63,9 +63,13 @@ import {
   sortPlannedExecutions,
   TRIGGER_TYPE_LABELS,
 } from '@/utils/shared/plannedExecutionGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
@@ -93,23 +97,26 @@ const PlannedExecutionsManager = () => {
   // the next poll (issue #118).
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useUiPreference<PlannedExecutionFilter>(
+  // #372: caret placed automatically; this page scrolls the document, so the
+  // search toolbar also needs to stay pinned while scrolling (see wrapper below).
+  const searchInputRef = useAutoFocusSearch();
+  const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<PlannedExecutionFilter>(
     'flujo-ui:planned-executions:filter',
     'all',
   );
-  const [triggerFilter, setTriggerFilter] = useUiPreference<'all' | TriggerType>(
+  const [triggerFilter, setTriggerFilter] = useWorkspaceUiPreference<'all' | TriggerType>(
     'flujo-ui:planned-executions:trigger',
     'all',
   );
-  const [sortOption, setSortOption] = useUiPreference<PlannedExecutionSortOption>(
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<PlannedExecutionSortOption>(
     'flujo-ui:planned-executions:sort',
     'name-asc',
   );
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>(
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(
     'flujo-ui:planned-executions:group',
     DEFAULT_CARD_GROUP_MODE,
   );
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>(
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>(
     'flujo-ui:planned-executions:collapsed',
     [],
   );
@@ -253,6 +260,11 @@ const PlannedExecutionsManager = () => {
   const hasActiveFilters =
     searchTerm.trim() !== '' || statusFilter !== 'all' || triggerFilter !== 'all';
 
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
+    'flujo-ui:scroll:automations',
+    { deps: [loaded, filteredEntries.length], groupsEnabled: groupMode !== 'none' },
+  );
+
   const renderEntries = (items: PlannedExecutionListEntry[]) => (
     <Box
       sx={modern
@@ -284,7 +296,7 @@ const PlannedExecutionsManager = () => {
   );
 
   return (
-    <Box sx={{ width: '100%' }}>
+    <Box ref={scrollRef} sx={{ width: '100%' }}>
       <PageHeader
         eyebrowKey="automations.list.eyebrow"
         titleKey="automations.list.title"
@@ -335,6 +347,7 @@ const PlannedExecutionsManager = () => {
 
       {entries.length > 0 && (
         <>
+          <StickySearchBar mode="page">
           <Paper elevation={0} variant="outlined" sx={{ mb: 1.5, p: 1.2, borderRadius: 3 }}>
             <Box
               sx={{
@@ -352,6 +365,7 @@ const PlannedExecutionsManager = () => {
                 fullWidth
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
+                inputRef={searchInputRef}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -443,6 +457,7 @@ const PlannedExecutionsManager = () => {
               </Box>
             </Box>
           </Paper>
+          </StickySearchBar>
 
           <Box
             sx={{
@@ -529,6 +544,7 @@ const PlannedExecutionsManager = () => {
           : groups.map(group => (
               <CollapsibleCardSection
                 key={group.key}
+                groupKey={group.key}
                 label={group.label}
                 count={group.items.length}
                 expanded={!collapsedKeys.has(group.key)}
@@ -624,6 +640,8 @@ const PlannedExecutionsManager = () => {
           <ListItemText primary={sortLabel('last-run')} />
         </MenuItem>
       </Menu>
+
+      <ScrollNavCluster {...scrollNavProps} />
 
       <ExecutionModal
         open={modalOpen}

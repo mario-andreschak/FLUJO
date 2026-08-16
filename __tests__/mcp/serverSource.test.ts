@@ -13,12 +13,14 @@
 
 import path from 'path';
 
-// config.ts computes REPOS_BASE_DIR from getDataDir() at module load, so getDataDir
-// must be mocked before it is imported. Pin it to a deterministic absolute dir.
+// Pin the selected workspace root directly. Other suites can load workspace.ts
+// first in the same Jest process, so mocking only its getDataDir() dependency
+// would leave this fixture dependent on module-cache order.
 const DATA_DIR = path.join(process.cwd(), '__source_test_data');
-jest.mock('@/utils/paths', () => ({
-  getDataDir: () => path.join(process.cwd(), '__source_test_data'),
-  getAppDir: () => process.cwd(),
+const mockWorkspaceDataDir = path.join(DATA_DIR, 'workspaces', 'default-workspace');
+jest.mock('@/utils/workspace', () => ({
+  getWorkspaceDataDir: () => mockWorkspaceDataDir,
+  remapLegacyDefaultWorkspaceReference: (value: string) => value,
 }));
 
 // A shared fake git object whose `remote` behaviour each test controls.
@@ -39,7 +41,7 @@ import { MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 const { loadItem } = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
 const { __git: mockGit } = jest.requireMock('simple-git') as { __git: { remote: jest.Mock } };
 
-const REPOS_BASE = path.join(DATA_DIR, 'mcp-servers');
+const REPOS_BASE = path.join(mockWorkspaceDataDir, 'mcp-servers');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -156,5 +158,28 @@ describe('loadServerConfigs install-origin backfill (#193)', () => {
       version: '3.0.0',
     });
     expect(mockGit.remote).not.toHaveBeenCalled();
+  });
+
+  it('migrates the old shared Registry package root without changing a local explicit dot', async () => {
+    const configs = await load({
+      'registry-package': {
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@acme/registry-package'],
+        rootPath: '.',
+        source: { type: 'registry', registryName: 'io.github.acme/registry-package' },
+      },
+      'local-package': {
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@acme/local-package'],
+        rootPath: '.',
+        source: { type: 'local' },
+      },
+    });
+
+    expect(configs.find(c => c.name === 'registry-package')?.rootPath)
+      .toBe('mcp-servers/registry-package');
+    expect(configs.find(c => c.name === 'local-package')?.rootPath).toBe('.');
   });
 });

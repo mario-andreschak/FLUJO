@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -7,6 +8,7 @@ import { resolveWaves, WaveResolverExecutionEntry } from '@/backend/services/wav
 import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import type { TriggerConfig } from '@/shared/types/plannedExecution';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/waves/route');
 
@@ -16,16 +18,31 @@ const log = createLogger('app/api/waves/route');
  * for the /waves visualization. Never arms, fires or persists anything.
  * Response: WavesResponse { paused, generatedAt, waves, orphans }.
  */
-export async function GET() {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
-    await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
     const scheduler = getSchedulerService();
-    const [paused, listEntries, flows] = await Promise.all([
+    // Inspect persisted scheduler config before initialization. Backend init can
+    // reconcile/arm triggers, so a public-mode read must not use it to wake
+    // Persona work before ownership has been classified.
+    const preflightEntries = await scheduler.list();
+    const containsPersonaWork = preflightEntries.some((entry) => Boolean(entry.execution.personaId));
+    const personaControlAllowed = assertLocalRequest(request, { strictLoopback: true }) === null;
+
+    let listEntries = preflightEntries;
+    if (personaControlAllowed || !containsPersonaWork) {
+      await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
+      // Initialization may populate live status; refresh after it completes.
+      listEntries = await scheduler.list();
+    }
+    if (!personaControlAllowed) {
+      listEntries = listEntries.filter((entry) => !entry.execution.personaId);
+    }
+
+    const [paused, flows] = await Promise.all([
       scheduler.isPaused(),
-      scheduler.list(),
       flowService.loadFlows(),
     ]);
 
@@ -74,4 +91,11 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

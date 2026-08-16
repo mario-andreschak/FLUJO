@@ -3,13 +3,13 @@
 import React, { useMemo } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
   Box,
   Typography,
 } from '@mui/material';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import AutoModeIcon from '@mui/icons-material/AutoMode';
 import {
   ReactFlow,
@@ -153,7 +153,7 @@ export const FlowNodePicker: React.FC<FlowNodePickerProps> = ({
   const hasFlow = !!(flow && (flow.nodes?.length ?? 0) > 0);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>{t('chat.nodePicker.title')}</DialogTitle>
+      <DialogHeaderActions title={t('chat.nodePicker.title')} onClose={onClose} />
       <DialogContent dividers sx={{ p: 0 }}>
         <Box sx={{ px: 2, pt: 1.5 }}>
           <Typography variant="caption" color="text.secondary">

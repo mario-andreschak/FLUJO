@@ -42,6 +42,20 @@ export interface ChatCompletionMetadata {
 
   /** FLUJO UI extension: return large tool bodies as expansion-time references. */
   compactToolPayloads?: "true";
+
+  /**
+   * Local trusted-control-plane extension: route this request to a durable
+   * Persona instead of invoking a Flow directly. External OpenAI-compatible
+   * clients cannot use this field; the route applies the local-request guard
+   * whenever it is present.
+   */
+  personaId?: string;
+
+  /** Optional Persona-owned Behavior slot. Defaults to the runtime's slot for the Activity kind. */
+  behaviorSlotKey?: string;
+
+  /** Optional caller retry key for durable Persona mailbox idempotency. */
+  idempotencyKey?: string;
 }
 
 import OpenAI from 'openai';
@@ -171,6 +185,8 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
      * cache reads as fresh input on every turn (#87). Absent when unknown.
      */
     cacheReadTokens?: number;
+    /** Subset of `promptTokens` written to the provider prompt cache. */
+    cacheWriteTokens?: number;
   };
 
   /**
@@ -194,5 +210,7 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     laneCount: number;
     status: 'completed' | 'error';
     conversationId?: string;
+    /** Stable handle the parent can reuse for a follow-up handoff. */
+    sessionKey?: string;
   };
 };

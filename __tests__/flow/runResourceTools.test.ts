@@ -21,7 +21,7 @@ jest.mock('@/backend/services/runResources', () => ({
     const SCHEME = 'flujo://run/';
     if (typeof uri !== 'string' || !uri.startsWith(SCHEME)) return null;
     const parts = uri.slice(SCHEME.length).split('/');
-    if (parts.length !== 2) return null;
+    if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))) return null;
     return { conversationId: parts[0], id: parts[1] };
   },
 }));
@@ -147,6 +147,18 @@ describe('read_resource execution (#168)', () => {
   it('rejects a non-run URI', async () => {
     const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, { uri: 'http://example.com' }, { conversationId: 'conv-1' });
     expect(outcome.success).toBe(false);
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('reserves malformed flujo://run URIs for the internal resolver', async () => {
+    const malformed = 'flujo://run/conv-1/../escape';
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri: malformed },
+      { conversationId: 'conv-1', mcpNodes: [{ id: 'mcp-1', properties: {} }] },
+    );
+
+    expect(outcome).toEqual({ success: false, error: `Invalid run-resource URI: ${malformed}` });
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });
 

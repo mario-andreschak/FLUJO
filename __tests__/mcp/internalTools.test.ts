@@ -19,6 +19,13 @@ jest.mock('@/backend/services/model', () => ({
     loadModels: jest.fn(),
   },
 }));
+// create_ticket_for_human writes through the ticket service (#379); stub it so
+// the dispatch contract is pinned without touching the tickets collection.
+jest.mock('@/backend/services/ticket', () => ({
+  ticketService: {
+    createTicket: jest.fn(),
+  },
+}));
 jest.mock('@/backend/services/scheduler', () => {
   const list = jest.fn();
   const runNow = jest.fn();
@@ -41,6 +48,17 @@ jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   ],
   authoringCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'authored' }] })),
 }));
+jest.mock('@/backend/services/mcp/personaCompositionTools', () => ({
+  isPersonaCompositionTool: (name: string) => name === 'read_persona_composition',
+  personaCompositionToolDefinitions: () => [{
+    name: 'read_persona_composition',
+    description: 'persona composition',
+    inputSchema: { type: 'object', properties: {} },
+  }],
+  callPersonaCompositionTool: jest.fn(async () => ({
+    content: [{ type: 'text', text: 'persona composition' }],
+  })),
+}));
 // update_flow goes through compileSpec, which pulls gatherGenerationContext -> mcpService.
 jest.mock('@/backend/services/flow/compileFlow', () => ({
   compileSpec: jest.fn(),
@@ -58,14 +76,25 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
   executionEventBus: { currentSeq: jest.fn(() => 0) },
 }));
-// list_conversations reads db/conversations under the data dir; point it at a
-// per-test temp dir when set (terminal tests keep the real data dir).
+// list_conversations reads db/conversations under the selected workspace; point
+// its parent data root at a per-test temp dir (terminal tests keep the real root).
 jest.mock('@/utils/paths', () => {
   const actual = jest.requireActual('@/utils/paths');
   return {
     ...actual,
     getDataDir: () =>
       (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir ?? actual.getDataDir(),
+  };
+});
+// Mock the workspace resolver directly as well: setup modules can import it
+// before this suite replaces paths, so relying only on getDataDir is order-sensitive.
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    getWorkspaceDataDir: () =>
+      (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir
+      ?? actual.getWorkspaceDataDir(),
   };
 });
 
@@ -82,9 +111,10 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
+import { callPersonaCompositionTool } from '@/backend/services/mcp/personaCompositionTools';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
-import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
+import { flushConversationLog, readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const flows = flowService as unknown as {
   loadFlows: jest.Mock;
@@ -102,6 +132,7 @@ const scheduler = (
 const runFlowMock = runFlow as jest.Mock;
 const compileSpecMock = compileSpec as jest.Mock;
 const loadConversationStateMock = loadConversationState as jest.Mock;
+const flushConversationLogMock = flushConversationLog as jest.Mock;
 const readConversationLogMock = readConversationLog as jest.Mock;
 const projectMessagesMock = projectMessages as jest.Mock;
 
@@ -133,6 +164,7 @@ describe('internalToolDefinitions', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
+        'read_persona_composition',
         'propose_ui_action',
         'list_flows',
         'discover_capabilities',
@@ -360,6 +392,16 @@ describe('authoring tool routing', () => {
     const r = await internalCallTool(makeService(), 'create_flow', { spec: {} });
     expect(authoringCallTool).toHaveBeenCalledWith('create_flow', { spec: {} });
     expect(text(r)).toBe('authored');
+  });
+
+  it('routes Persona composition tools through the closed registry', async () => {
+    const args = { persona_id: 'persona_1' };
+    const r = await internalCallTool(makeService(), 'read_persona_composition', args);
+    expect(callPersonaCompositionTool).toHaveBeenCalledWith(
+      'read_persona_composition',
+      args,
+    );
+    expect(text(r)).toBe('persona composition');
   });
 });
 
@@ -1141,10 +1183,13 @@ describe('delete_planned_execution', () => {
 
 describe('list_conversations', () => {
   let dataDir: string;
+  let workspaceDbDir: string;
 
   beforeAll(async () => {
     dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-test-'));
-    const convDir = path.join(dataDir, 'db', 'conversations');
+    const workspaceDir = path.join(dataDir, 'workspaces', 'default-workspace');
+    workspaceDbDir = path.join(workspaceDir, 'db');
+    const convDir = path.join(workspaceDbDir, 'conversations');
     await fsp.mkdir(convDir, { recursive: true });
     await fsp.writeFile(
       path.join(convDir, 'c1.json'),
@@ -1163,10 +1208,12 @@ describe('list_conversations', () => {
       JSON.stringify({ conversationId: 'c2', title: 'Newer', flowId: 'f2', status: 'running', createdAt: 2, updatedAt: 200 })
     );
     (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir = dataDir;
+    (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir = workspaceDir;
   });
 
   afterAll(async () => {
     delete (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir;
+    delete (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir;
     await fsp.rm(dataDir, { recursive: true, force: true });
   });
 
@@ -1205,7 +1252,7 @@ describe('list_conversations', () => {
 
   it('builds reusable summary sidecars without copying transcript bodies', async () => {
     await internalCallTool(makeService(), 'list_conversations', {});
-    const summaryPath = path.join(dataDir, 'db', 'conversation-summaries', 'c1.json');
+    const summaryPath = path.join(workspaceDbDir, 'conversation-summaries', 'c1.json');
     const summary = await fsp.readFile(summaryPath, 'utf8');
     expect(summary).toContain('"id": "c1"');
     expect(summary).not.toContain('transcript-body-must-not-leak');
@@ -1214,6 +1261,7 @@ describe('list_conversations', () => {
 
 describe('read_conversation', () => {
   beforeEach(() => {
+    flushConversationLogMock.mockClear();
     readConversationLogMock.mockResolvedValue(undefined);
     projectMessagesMock.mockReturnValue([]);
   });
@@ -1223,6 +1271,47 @@ describe('read_conversation', () => {
     const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'nope' });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('nope');
+  });
+
+  it('rejects Persona conversations before flushing or reading their log', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending target', { personaTargetId: 'persona-1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona-1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('rejects %s ownership markers before flushing or reading the log', async (_label, markers) => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      ...markers,
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
   });
 
   it('falls back to snapshot messages and excludes system-role messages', async () => {
@@ -1311,5 +1400,112 @@ describe('unknown tools and thrown errors', () => {
     const r = await internalCallTool(makeService(), 'list_models', {});
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('storage exploded');
+  });
+});
+
+describe('create_ticket_for_human (#379)', () => {
+  const tickets = (
+    jest.requireMock('@/backend/services/ticket') as { ticketService: { createTicket: jest.Mock } }
+  ).ticketService;
+
+  const created = (overrides: Record<string, unknown> = {}) => ({
+    success: true,
+    ticket: {
+      id: 'ticket-1',
+      message: 'Please review the deploy',
+      labels: ['ops', 'review'],
+      status: 'open',
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    },
+  });
+
+  it('is advertised with a required message and bounded optional context', () => {
+    const def = internalToolDefinitions().find((t) => t.name === 'create_ticket_for_human');
+
+    expect(def).toBeDefined();
+    expect(def!.inputSchema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+    }));
+    expect(Object.keys((def!.inputSchema as { properties: Record<string, unknown> }).properties)).toEqual(
+      expect.arrayContaining(['message', 'labels', 'title', 'conversation_id', 'flow_id']),
+    );
+  });
+
+  it('dispatches to the ticket service and reports the created id and labels', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+      source: 'agent',
+    }));
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(text(result))).toEqual({ created: true, id: 'ticket-1', labels: ['ops', 'review'] });
+  });
+
+  it('carries snake_case provenance arguments over to the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'context',
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      flow_id: 'flow-1',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      flowId: 'flow-1',
+    }));
+  });
+
+  it('marks host-originated tickets as host', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'from the host' });
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({ source: 'host' }));
+  });
+
+  it('rejects an empty message without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: '   ' });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe provenance ids without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'hi',
+      conversation_id: '../../etc/passwd',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a service failure as an error result', async () => {
+    tickets.createTicket.mockResolvedValue({ success: false, error: 'Open ticket limit reached.' });
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'hi' });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Open ticket limit reached.');
   });
 });

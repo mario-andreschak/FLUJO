@@ -26,6 +26,7 @@ import {
   bashCallTool,
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
+  _resolveCommandTimeoutMsForTests,
   wrapPowerShellCommand,
   wrapCmdCommand,
 } from '@/backend/services/mcp/internal/bashTools';
@@ -121,7 +122,7 @@ describe('bash tool definitions', () => {
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
       expect.arrayContaining([
-        'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
+        'run', 'start', 'status', 'wait', 'sleep', 'write_stdin', 'kill', 'list_sessions',
         'open_terminal', 'terminal_read', 'terminal_write', 'terminal_resize', 'terminal_close', 'terminal_list',
       ])
     );
@@ -139,6 +140,18 @@ describe('bash tool definitions', () => {
     expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({
       enum: ['default', 'pwsh', 'bash', 'cmd'],
     }));
+    expect(run?.inputSchema.properties?.timeout).toEqual(expect.objectContaining({
+      description: expect.stringContaining('-1 disables it'),
+    }));
+    expect(tools.find((tool) => tool.name === 'sleep')?.inputSchema).toEqual(expect.objectContaining({
+      required: ['seconds'],
+    }));
+  });
+
+  it('allows multi-hour and explicitly unbounded foreground timeouts', () => {
+    expect(_resolveCommandTimeoutMsForTests(301)).toBe(301_000);
+    expect(_resolveCommandTimeoutMsForTests(3_600)).toBe(3_600_000);
+    expect(_resolveCommandTimeoutMsForTests(-1)).toBeUndefined();
   });
 });
 
@@ -183,20 +196,6 @@ describe('bash run (foreground)', () => {
     expect(parse(r).output as string).toMatch(/^ripgrep \d+/);
   });
 
-  it.each([
-    "rg needle -g '/.git/**' .",
-    "rg needle --glob '!/.git/**' .",
-    "rg needle --glob='/.git/**' .",
-    "rg needle --iglob '/.git/**' .",
-  ])('does not treat a ripgrep glob as an external path: %s', async (command) => {
-    const r = await bashCallTool('run', { command });
-    expect(parse(r).warnings).toBeUndefined();
-  });
-
-  it('continues warning about genuine absolute paths', async () => {
-    const r = await bashCallTool('run', { command: 'echo /.git/config' });
-    expect(parse(r).warnings).toBeDefined();
-  });
 });
 
 describe('bash shell selection (issues #225, #327)', () => {
@@ -329,9 +328,17 @@ describe('bash shell selection (issues #225, #327)', () => {
     const executable = path.join(tempDir, 'Microsoft', 'WindowsApps', 'pwsh.exe');
     const originalPath = process.env.PATH;
     const originalLocalAppData = process.env.LocalAppData;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.windir;
     await fsp.mkdir(path.dirname(executable), { recursive: true });
     process.env.PATH = '';
     process.env.LocalAppData = tempDir;
+    // Windows PowerShell 5.1 would otherwise be substituted for the missing
+    // pwsh (issue #314); hide it so "no PowerShell at all" is really tested.
+    process.env.ProgramFiles = tempDir;
+    delete process.env.SystemRoot;
+    delete process.env.windir;
     try {
       _resetBashShellCacheForTests();
       const unavailable = await bashCallTool('run', {
@@ -352,6 +359,9 @@ describe('bash shell selection (issues #225, #327)', () => {
     } finally {
       restoreEnv('PATH', originalPath);
       restoreEnv('LocalAppData', originalLocalAppData);
+      restoreEnv('ProgramFiles', originalProgramFiles);
+      restoreEnv('SystemRoot', originalSystemRoot);
+      restoreEnv('windir', originalWindir);
       _resetBashShellCacheForTests();
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
@@ -517,6 +527,26 @@ describe('bash shell selection (issues #225, #327)', () => {
     });
   });
 
+  it('emits strictly increasing MCP progress values across a large output burst', async () => {
+    await withResolvedPwsh(async () => {
+      const progress = jest.fn();
+      mockCompletedChild('x'.repeat(9_000));
+      const completed = await bashCallTool(
+        'run',
+        { command: 'stream-large-output', shell: 'pwsh' },
+        undefined,
+        undefined,
+        { onProgress: progress },
+      );
+      expect(completed.isError).toBeUndefined();
+      const values = progress.mock.calls.map(([update]) => update.progress as number);
+      expect(values.length).toBeGreaterThan(1);
+      for (let i = 1; i < values.length; i += 1) {
+        expect(values[i]).toBeGreaterThan(values[i - 1]);
+      }
+    });
+  });
+
   it('returns an explicit error without executing when the requested shell is unavailable', async () => {
     const originalPath = process.env.PATH;
     const originalWinPath = process.env.Path;
@@ -548,8 +578,18 @@ describe('bash shell selection (issues #225, #327)', () => {
   it('rejects an unavailable explicit shell for background execution', async () => {
     const originalPath = process.env.PATH;
     const originalWinPath = process.env.Path;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalLocalAppData = process.env.LocalAppData;
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.windir;
     process.env.PATH = '';
     process.env.Path = '';
+    process.env.ProgramFiles = '';
+    process.env.LocalAppData = '';
+    // No pwsh AND no Windows PowerShell 5.1: the request must fail rather than
+    // be substituted (issue #314).
+    delete process.env.SystemRoot;
+    delete process.env.windir;
     try {
       _resetBashShellCacheForTests();
       const r = await bashCallTool('start', { command: 'echo must-not-run', shell: 'pwsh' });
@@ -558,15 +598,54 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(out.shell).toBe('pwsh');
       expect(out.sessionId).toBeUndefined();
     } finally {
-      process.env.PATH = originalPath;
-      process.env.Path = originalWinPath;
+      restoreEnv('PATH', originalPath);
+      restoreEnv('Path', originalWinPath);
+      restoreEnv('ProgramFiles', originalProgramFiles);
+      restoreEnv('LocalAppData', originalLocalAppData);
+      restoreEnv('SystemRoot', originalSystemRoot);
+      restoreEnv('windir', originalWindir);
     }
   });
 
-  it('does not report a Windows dir /b switch as an external path', async () => {
-    if (!isWin) return;
-    const r = await bashCallTool('run', { command: 'echo dir /b' });
-    expect(parse(r).warnings).toBeUndefined();
+});
+
+describe('bash sleep (fixed duration)', () => {
+  it('waits for the requested fixed duration and reports elapsed time', async () => {
+    const startedAt = Date.now();
+    const result = parse(await bashCallTool('sleep', { seconds: 0.05 }));
+    const wallElapsed = Date.now() - startedAt;
+
+    expect(result).toEqual(expect.objectContaining({
+      slept: true,
+      requestedSeconds: 0.05,
+    }));
+    expect(result.elapsedMs as number).toBeGreaterThanOrEqual(35);
+    expect(wallElapsed).toBeGreaterThanOrEqual(35);
+  });
+
+  it('rejects invalid durations instead of silently substituting a default', async () => {
+    expect((await bashCallTool('sleep', { seconds: 0 })).isError).toBe(true);
+    expect((await bashCallTool('sleep', { seconds: Number.NaN })).isError).toBe(true);
+    expect((await bashCallTool('sleep', {})).isError).toBe(true);
+  });
+
+  it('is cancellation-aware', async () => {
+    const controller = new AbortController();
+    const sleeping = bashCallTool(
+      'sleep',
+      { seconds: 60 },
+      undefined,
+      undefined,
+      { signal: controller.signal },
+    );
+    controller.abort();
+    const result = await sleeping;
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual(expect.objectContaining({
+      slept: false,
+      cancelled: true,
+      requestedSeconds: 60,
+    }));
   });
 });
 
@@ -591,6 +670,14 @@ describe('bash background sessions', () => {
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
     expect(waited.running).toBe(false);
     expect(waited.output as string).toContain('bg-done');
+    expect(waited).toEqual(expect.objectContaining({
+      timedOut: false,
+      requestedTimeoutMs: 10_000,
+      returnedEarly: true,
+    }));
+    expect(waited.waitedMs as number).toBeLessThan(10_000);
+    expect(waited.remainingSeconds as number).toBeGreaterThan(0);
+    expect(waited.hint as string).toContain('call sleep');
 
     const list = parse(await bashCallTool('list_sessions', {}));
     const ids = (list.sessions as Array<{ sessionId: string }>).map((s) => s.sessionId);
@@ -612,6 +699,23 @@ describe('bash background sessions', () => {
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({
       message: 'background-progress-marker',
     }));
+  });
+
+  it('reports when a finite wait uses its full timeout', async () => {
+    mockNeverClosingChild();
+    const started = parse(await bashCallTool('start', { command: 'background-keeps-running' }));
+    const waited = parse(await bashCallTool('wait', {
+      sessionId: started.sessionId as string,
+      timeout: 0.02,
+    }));
+    expect(waited).toEqual(expect.objectContaining({
+      running: true,
+      timedOut: true,
+      requestedTimeoutMs: 20,
+      returnedEarly: false,
+    }));
+    expect(waited.waitedMs as number).toBeGreaterThanOrEqual(10);
+    expect(waited.hint).toBeUndefined();
   });
 
   it('kills a long-running background session', async () => {

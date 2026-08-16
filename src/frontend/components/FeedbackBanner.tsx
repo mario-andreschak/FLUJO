@@ -31,7 +31,8 @@ export default function FeedbackBanner() {
 
   const characterCount = Array.from(notice).length;
   const trimmedCharacterCount = Array.from(notice.trim()).length;
-  const canSubmit = sentiment !== null && trimmedCharacterCount >= 1 && trimmedCharacterCount <= 255;
+  // Issue #377: the message is optional — only the sentiment is required.
+  const canSubmit = sentiment !== null && trimmedCharacterCount <= 255;
 
   const handleSubmit = async () => {
     if (!sentiment || !canSubmit) return;

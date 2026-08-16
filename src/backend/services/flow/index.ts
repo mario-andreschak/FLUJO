@@ -17,6 +17,11 @@ import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
 import {
+  generatedFlowName,
+  validateFlowDisplayName,
+} from '@/utils/shared/flowNamePolicy';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
+import {
   archiveFlowVersion,
   listFlowVersions,
   getFlowVersion,
@@ -24,6 +29,12 @@ import {
   FlowVersionRecord,
   FlowVersionSummary,
 } from './flowVersions';
+import {
+  createFlowExecutionSnapshot,
+  type FlowExecutionSnapshot,
+} from './executionSnapshot';
+
+export type { FlowExecutionSnapshot } from './executionSnapshot';
 
 const log = createLogger('backend/services/flow/index');
 
@@ -64,9 +75,21 @@ function stripNonPersistedProperties(flow: Flow): void {
 // MCP service's global recovery maps.
 declare global {
   var __flujo_flowsCache: Flow[] | null | undefined;
+  var __flujo_flowsCacheByWorkspace: Map<string, Flow[] | null> | undefined;
   // One-shot promise guarding the legacy-file -> per-flow-file migration so it
   // runs at most once per process (idempotent even if it somehow ran twice).
   var __flujo_flowsMigration: Promise<void> | undefined;
+  var __flujo_flowsMigrationByWorkspace: Map<string, Promise<void>> | undefined;
+}
+
+function flowsCacheByWorkspace(): Map<string, Flow[] | null> {
+  return global.__flujo_flowsCacheByWorkspace ??
+    (global.__flujo_flowsCacheByWorkspace = new Map());
+}
+
+function flowsMigrationByWorkspace(): Map<string, Promise<void>> {
+  return global.__flujo_flowsMigrationByWorkspace ??
+    (global.__flujo_flowsMigrationByWorkspace = new Map());
 }
 
 // Flows are stored one file per flow under db/flows/<id>.json (the legacy layout
@@ -87,17 +110,28 @@ function stripTimestamps(flow: Flow): string {
 // failure the guard is cleared so a later call can retry (the migration is
 // idempotent, so retrying is safe).
 async function ensureFlowsMigrated(): Promise<void> {
-  if (!global.__flujo_flowsMigration) {
-    global.__flujo_flowsMigration = (async () => {
+  const workspace = getCurrentWorkspace();
+  const migrations = flowsMigrationByWorkspace();
+  const existing = workspace === DEFAULT_WORKSPACE
+    ? global.__flujo_flowsMigration
+    : migrations.get(workspace);
+  if (existing) return existing;
+
+  const migration = (async () => {
       try {
         await migrateArrayFileToCollection<Flow>(StorageKey.FLOWS, FLOWS_COLLECTION, (f) => f.id);
       } catch (error) {
         log.error('Flow storage migration failed', error);
-        global.__flujo_flowsMigration = undefined;
+        if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = undefined;
+        else migrations.delete(workspace);
       }
     })();
-  }
-  return global.__flujo_flowsMigration;
+
+  // Keep the legacy globals authoritative for the default workspace because
+  // existing HMR/test reset hooks intentionally poke them directly.
+  if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = migration;
+  else migrations.set(workspace, migration);
+  return migration;
 }
 
 /**
@@ -106,10 +140,15 @@ async function ensureFlowsMigrated(): Promise<void> {
  */
 export class FlowService { // Add export keyword here
   private get flowsCache(): Flow[] | null {
-    return global.__flujo_flowsCache ?? null;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__flujo_flowsCache ?? null
+      : flowsCacheByWorkspace().get(workspace) ?? null;
   }
   private set flowsCache(value: Flow[] | null) {
-    global.__flujo_flowsCache = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsCache = value;
+    else flowsCacheByWorkspace().set(workspace, value);
   }
 
   /**
@@ -195,6 +234,24 @@ export class FlowService { // Add export keyword here
   }
 
   /**
+   * Capture the current workspace Flow as one immutable, content-addressed
+   * execution source. This deliberately bypasses the mutable cache and returns
+   * the exact persisted definition and hash from a single authoritative read.
+   */
+  async readFlowExecutionSnapshot(flowId: string): Promise<FlowExecutionSnapshot | null> {
+    try {
+      assertSafeCollectionId(flowId);
+      await ensureFlowsMigrated();
+      const flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      if (!flow || flow.id !== flowId) return null;
+      return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
+    } catch (error) {
+      log.debug(`readFlowExecutionSnapshot: could not capture flow ${flowId}`, error);
+      return null;
+    }
+  }
+
+  /**
    * Invalidate the execution engine's compiled-flow cache for a flow (or all
    * flows when no id is given). Uses a lazy import so this service does not
    * statically depend on the execution layer, which depends back on it.
@@ -215,6 +272,11 @@ export class FlowService { // Add export keyword here
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
     try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
+      const nameError = validateFlowDisplayName(flow.name);
+      if (nameError) {
+        throw new Error(`Invalid Flow display name (${nameError}).`);
+      }
+      flow.name = flow.name.normalize('NFC').trim();
       // Validate the id before it is used as a file name (path-traversal guard).
       assertSafeCollectionId(flow.id);
       await ensureFlowsMigrated();
@@ -278,6 +340,52 @@ export class FlowService { // Add export keyword here
         error: error instanceof Error ? error.message : 'Failed to save flow' 
       };
     }
+  }
+
+  /**
+   * Clone one canonical Flow into a distinct Persona-owned ordinary Flow.
+   * Nested callable Flows remain referenced normally and are frozen by the
+   * existing execution-snapshot closure when future Activities begin.
+   */
+  async cloneFlowForPersona(
+    sourceFlowId: string,
+    personaId: string,
+    name?: string,
+    options: {
+      id?: string;
+      groupId?: string;
+      kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
+    } = {},
+  ): Promise<{ success: boolean; flow?: Flow; error?: string }> {
+    const source = await this.getFlow(sourceFlowId);
+    if (!source) {
+      return { success: false, error: `Flow "${sourceFlowId}" not found.` };
+    }
+    if (source.personaOwnership && source.personaOwnership.personaId !== personaId) {
+      return { success: false, error: 'A Flow owned by another Persona cannot be copied.' };
+    }
+
+    const clone = JSON.parse(JSON.stringify(source)) as Flow;
+    clone.id = options.id ?? uuidv4();
+    clone.name = generatedFlowName(
+      name?.trim() || `${source.name} Persona copy`,
+      [],
+      clone.id,
+    );
+    clone.favorite = undefined;
+    clone.folder = options.groupId ? `Persona ${personaId}` : undefined;
+    clone.createdAt = undefined;
+    clone.updatedAt = undefined;
+    clone.personaOwnership = {
+      personaId,
+      sourceFlowId: source.personaOwnership?.sourceFlowId ?? source.id,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      kind: options.kind ?? 'custom',
+    };
+    const saved = await this.saveFlow(clone);
+    return saved.success
+      ? { success: true, flow: clone }
+      : { success: false, error: saved.error || 'Failed to create Persona Flow copy.' };
   }
 
   /**

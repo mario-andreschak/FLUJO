@@ -49,6 +49,21 @@ describe('standalone stdio MCP packages', () => {
       ]));
       const called = await client.callTool({ name: 'get_allowed_directories', arguments: {} });
       expect(called.structuredContent).toEqual({ directories: [path.resolve(root)] });
+
+      await fs.writeFile(path.join(root, 'searchable.txt'), 'first\npackaged search token\nlast');
+      const searched = await client.callTool({
+        name: 'search',
+        arguments: { path: root, content: 'search token' },
+      });
+      expect(searched.isError).not.toBe(true);
+      expect(searched.structuredContent).toEqual(expect.objectContaining({
+        matches: [expect.objectContaining({
+          path: path.join(root, 'searchable.txt'),
+          line: 2,
+          text: 'packaged search token',
+        })],
+        truncated: false,
+      }));
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
@@ -61,8 +76,42 @@ describe('standalone stdio MCP packages', () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-        'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
+        'run', 'start', 'status', 'wait', 'sleep', 'write_stdin', 'kill', 'list_sessions',
       ]));
+      const slept = await client.callTool({ name: 'sleep', arguments: { seconds: 0.02 } });
+      expect(slept.isError).not.toBe(true);
+      const sleepContent = (slept as { content?: Array<{ type?: string; text?: unknown }> }).content;
+      const sleepText = sleepContent?.[0]?.text;
+      expect(typeof sleepText).toBe('string');
+      expect(JSON.parse(String(sleepText))).toEqual(expect.objectContaining({
+        slept: true,
+        requestedSeconds: 0.02,
+      }));
+      const quickCommand = process.platform === 'win32'
+        ? "Write-Output 'wait-finished'"
+        : "printf 'wait-finished\\n'";
+      const started = await client.callTool({
+        name: 'start',
+        arguments: { command: quickCommand, cwd: root },
+      });
+      const startText = (started as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0]?.text;
+      expect(typeof startText).toBe('string');
+      const sessionId = (JSON.parse(String(startText)) as { sessionId?: string }).sessionId;
+      expect(sessionId).toBeTruthy();
+      const waited = await client.callTool({
+        name: 'wait',
+        arguments: { sessionId, timeout: 10 },
+      });
+      const waitText = (waited as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0]?.text;
+      expect(typeof waitText).toBe('string');
+      expect(JSON.parse(String(waitText))).toEqual(expect.objectContaining({
+        running: false,
+        timedOut: false,
+        requestedTimeoutMs: 10_000,
+        returnedEarly: true,
+        remainingSeconds: expect.any(Number),
+        hint: expect.stringContaining('call sleep'),
+      }));
       const progressMessages: string[] = [];
       const command = process.platform === 'win32'
         ? "Write-Output 'progress-one'; Start-Sleep -Milliseconds 150; Write-Output 'progress-two'"
@@ -102,18 +151,30 @@ describe('standalone stdio MCP packages', () => {
 
   it('serves the interactive browser and reports an absolute screenshot artifact', async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-browser-'));
-    const client = await connectPackage('browser', { FLUJO_DATA_DIR: dataDir });
-    let sessionId = '';
+      const client = await connectPackage('browser', { FLUJO_DATA_DIR: dataDir });
+      let sessionId = '';
+      let secondSessionId = '';
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
         'browser_open', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll',
       ]));
       const opened = await client.callTool({ name: 'browser_open', arguments: {} });
+      if (opened.isError) {
+        const errorCode = (opened.structuredContent as {
+          error?: { code?: string };
+        } | undefined)?.error?.code;
+        if (errorCode === 'BROWSER_UNAVAILABLE') return;
+        throw new Error(
+          `browser_open failed unexpectedly: ${JSON.stringify(opened.structuredContent)}`,
+        );
+      }
       sessionId = (opened.structuredContent as { sessionId: string }).sessionId;
       expect(sessionId).toBeTruthy();
       const reopened = await client.callTool({ name: 'browser_open', arguments: {} });
-      expect((reopened.structuredContent as { sessionId: string }).sessionId).toBe(sessionId);
+      secondSessionId = (reopened.structuredContent as { sessionId: string }).sessionId;
+      expect(secondSessionId).toBeTruthy();
+      expect(secondSessionId).not.toBe(sessionId);
 
       const screenshot = await client.callTool({
         name: 'browser_screenshot',
@@ -125,13 +186,16 @@ describe('standalone stdio MCP packages', () => {
         path.resolve(dataDir),
         'screenshots',
         'browser',
-        sessionId,
+        secondSessionId,
         'viewport.png',
       ));
       expect((await fs.stat(screenshotPath)).isFile()).toBe(true);
     } finally {
       if (sessionId) {
-        await client.callTool({ name: 'browser_close', arguments: {} }).catch(() => undefined);
+        await client.callTool({ name: 'browser_close', arguments: { sessionId } }).catch(() => undefined);
+      }
+      if (secondSessionId) {
+        await client.callTool({ name: 'browser_close', arguments: { sessionId: secondSessionId } }).catch(() => undefined);
       }
       await client.close();
       await fs.rm(dataDir, { recursive: true, force: true });

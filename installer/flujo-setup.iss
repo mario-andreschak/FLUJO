@@ -5,7 +5,7 @@
 ; collects the same answers install.ps1 would ask interactively (install
 ; folder, desktop shortcut, Ollama, execution policy), then runs install.ps1
 ; unattended by passing those answers through the FLUJO_* environment
-; variables. All the real work - checking for Git / Node.js / Python / uv,
+; variables. All the real work - checking for Git / Node.js / Python / uv / ripgrep,
 ; installing what is missing via winget, cloning the repo, building, and
 ; registering the global 'flujo' command - lives in install.ps1, so the
 ; one-liner installer and this exe can never drift apart.
@@ -62,7 +62,7 @@ Filename: "{localappdata}\FLUJO-cli\flujo.cmd"; Description: "Start FLUJO now"; 
   Flags: postinstall nowait shellexec skipifsilent; Check: FlujoLauncherExists
 
 [Messages]
-WelcomeLabel2=This will install [name] on your computer - including anything it needs that is missing (Git, Node.js, Python, and uv).%n%nIt is recommended that you close all other applications before continuing.
+WelcomeLabel2=This will install [name] on your computer - including anything it needs that is missing (Git, Node.js, Python, uv, and ripgrep).%n%nIt is recommended that you close all other applications before continuing.
 
 [Code]
 function SetEnvironmentVariable(lpName: string; lpValue: string): Boolean;
@@ -90,7 +90,7 @@ begin
               ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
   begin
     MsgBox('winget (App Installer) was not found.' + #13#10#13#10 +
-           'FLUJO uses winget to install its prerequisites (Git, Node.js, Python, uv).' + #13#10 +
+           'FLUJO uses winget to install its prerequisites (Git, Node.js, Python, uv, ripgrep).' + #13#10 +
            'Install "App Installer" from the Microsoft Store, then run this setup again.',
            mbCriticalError, MB_OK);
     Result := False;

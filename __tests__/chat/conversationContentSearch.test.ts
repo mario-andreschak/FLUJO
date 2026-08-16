@@ -14,6 +14,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { NextRequest } from 'next/server';
 import { makeLocalRequest } from '../utils/localRequest';
 
 jest.mock('@/utils/encryption/lockGate', () => ({
@@ -28,6 +29,10 @@ type Route = typeof import('@/app/v1/chat/conversations/route');
 let tmpDir: string;
 let convDir: string;
 let GET: Route['GET'];
+let DELETE: Route['DELETE'];
+let withConversationExecutionLock:
+  typeof import('@/backend/execution/flow/conversationExecutionLock').withConversationExecutionLock;
+const originalExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 
 const writeConv = async (id: string, obj: Record<string, unknown>) => {
   await fs.writeFile(
@@ -43,17 +48,25 @@ const getJson = async (query = '') => {
 };
 
 beforeEach(async () => {
+  process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-search-'));
-  convDir = path.join(tmpDir, 'db', 'conversations');
+  convDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'conversations');
   await fs.mkdir(convDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
+  delete (global as any).__flujo_flowsCache;
   jest.resetModules();
-  ({ GET } = await import('@/app/v1/chat/conversations/route'));
+  ({ DELETE, GET } = await import('@/app/v1/chat/conversations/route'));
+  ({ withConversationExecutionLock } = await import('@/backend/execution/flow/conversationExecutionLock'));
 });
 
 afterEach(async () => {
   delete process.env.FLUJO_DATA_DIR;
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  if (originalExposureMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+  else process.env.FLUJO_EXPOSURE_MODE = originalExposureMode;
 });
 
 describe('GET /v1/chat/conversations content search (issue #182)', () => {
@@ -136,10 +149,112 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(second.body).toMatchObject({ total: 3, hasMore: false });
   });
 
+  it('filters paged title searches on the server by title, origin, and agent name', async () => {
+    const flowDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'flows');
+    await fs.mkdir(flowDir, { recursive: true });
+    await fs.writeFile(
+      path.join(flowDir, 'invoice-agent.json'),
+      JSON.stringify({ id: 'invoice-agent', name: 'Invoice Assistant', nodes: [], edges: [] }),
+      'utf-8',
+    );
+    await writeConv('invoice-run', {
+      title: 'Quarterly reconciliation',
+      flowId: 'invoice-agent',
+      source: 'schedule',
+      updatedAt: 30,
+      messages: [],
+    });
+    await writeConv('other', {
+      title: 'Unrelated chat',
+      flowId: 'flow-2',
+      source: 'chat',
+      updatedAt: 20,
+      messages: [],
+    });
+
+    const byTitle = await getJson('?paged=1&limit=50&search=reconciliation&dimension=title');
+    expect(byTitle.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const byOrigin = await getJson('?paged=1&limit=50&search=automation&dimension=title');
+    expect(byOrigin.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const byAgent = await getJson('?paged=1&limit=50&search=assistant&dimension=title');
+    expect(byAgent.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const originFilter = await getJson('?paged=1&limit=50&origin=schedule');
+    expect(originFilter.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+  });
+
+  it('returns only transitive descendants for delete-family checks', async () => {
+    await writeConv('root', { title: 'Root', messages: [], updatedAt: 40 });
+    await writeConv('child', {
+      title: 'Child', messages: [], parentConversationId: 'root', rootConversationId: 'root', updatedAt: 30,
+    });
+    await writeConv('grandchild', {
+      title: 'Grandchild', messages: [], parentConversationId: 'child', rootConversationId: 'root', updatedAt: 20,
+    });
+    await writeConv('other', { title: 'Other', messages: [], updatedAt: 10 });
+
+    const { status, body } = await getJson('?paged=1&limit=50&descendantsOf=root');
+    expect(status).toBe(200);
+    expect(body.items.map((c: any) => c.id)).toEqual(['child', 'grandchild']);
+    expect(body).toMatchObject({ total: 2, hasMore: false });
+  });
+
   it('returns 400 for an invalid paging cursor or limit', async () => {
     await writeConv('a', { title: 'A', messages: [] });
     await expect(getJson('?paged=1&limit=0')).resolves.toMatchObject({ status: 400 });
     await expect(getJson('?paged=1&cursor=broken')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&origin=invalid')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&descendantsOf=../escape')).resolves.toMatchObject({ status: 400 });
+  });
+
+  it('filters exact session keys before pagination in summary and content-search paths', async () => {
+    const keyedLane = (sessionKey: string) => ({
+      laneIndex: 0,
+      sessionKey,
+      sessionIdentity: `parent::node::${encodeURIComponent(sessionKey)}`,
+    });
+    await writeConv('alpha-new', {
+      title: 'Alpha new', updatedAt: 30, messages: [{ role: 'user', content: 'needle' }],
+      parentConversationId: 'root', rootConversationId: 'root',
+      subflowLane: keyedLane('writer/main'),
+    });
+    await writeConv('beta', {
+      title: 'Beta', updatedAt: 20, messages: [{ role: 'user', content: 'needle' }],
+      subflowLane: keyedLane('writer-main'),
+    });
+    await writeConv('alpha-old', {
+      title: 'Alpha old', updatedAt: 10, messages: [{ role: 'user', content: 'needle' }],
+      parentConversationId: 'alpha-new', rootConversationId: 'root',
+      subflowLane: keyedLane('writer/main'),
+    });
+
+    const first = await getJson('?paged=1&limit=1&sessionKey=writer%2Fmain');
+    expect(first.body.items.map((c: any) => c.id)).toEqual(['alpha-new']);
+    expect(first.body).toMatchObject({ total: 2, hasMore: true });
+    expect(first.body.items[0]).toMatchObject({
+      sessionKey: 'writer/main',
+      sessionIdentity: 'parent::node::writer%2Fmain',
+    });
+
+    const second = await getJson(
+      `?paged=1&limit=1&sessionKey=writer%2Fmain&cursor=${encodeURIComponent(first.body.nextCursor)}`,
+    );
+    expect(second.body.items.map((c: any) => c.id)).toEqual(['alpha-old']);
+
+    const content = await getJson(
+      '?paged=1&limit=50&dimension=content&search=needle&sessionKey=writer%2Fmain&descendantsOf=root',
+    );
+    expect(content.body.items.map((c: any) => c.id)).toEqual(['alpha-new', 'alpha-old']);
+
+    const noMatch = await getJson('?paged=1&limit=50&sessionKey=missing');
+    expect(noMatch.body).toMatchObject({ items: [], total: 0, hasMore: false });
+  });
+
+  it('rejects an over-long session key with 400', async () => {
+    const key = 'x'.repeat(129);
+    await expect(getJson(`?paged=1&sessionKey=${key}`)).resolves.toMatchObject({ status: 400 });
   });
 
   it('rejects an over-long search term with 400', async () => {
@@ -166,5 +281,109 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(root.source).toBe('chat');
     // A top-level conversation has no parent link.
     expect(root.parentConversationId).toBeNull();
+  });
+
+  it('omits Persona-owned conversations from every public-mode list projection', async () => {
+    await writeConv('legacy', { title: 'Legacy', messages: [{ role: 'user', content: 'visible' }] });
+    await writeConv('persona', {
+      title: 'Persona private',
+      messages: [{ role: 'user', content: 'private needle' }],
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    const remote = async (query = '') => {
+      const response = await GET(new NextRequest(
+        `https://flujo.example.com/v1/chat/conversations${query}`,
+        { headers: { host: 'flujo.example.com' } },
+      ));
+      return response.json();
+    };
+
+    expect((await remote()).map((item: any) => item.id)).toEqual(['legacy']);
+    expect((await remote('?paged=1&limit=50')).items.map((item: any) => item.id))
+      .toEqual(['legacy']);
+    expect(await remote('?presence=1')).toEqual({ count: 1 });
+    expect(await remote('?search=needle&dimension=content')).toEqual([]);
+  });
+
+  it('bulk deletion leaves Persona-owned conversations intact', async () => {
+    await writeConv('legacy', { title: 'Legacy', messages: [] });
+    await writeConv('persona', {
+      title: 'Persona private',
+      messages: [],
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+
+    const response = await DELETE(makeLocalRequest({
+      body: { ids: ['legacy', 'persona'] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 1, errors: 1 });
+    await expect(fs.access(path.join(convDir, 'legacy.json'))).rejects.toThrow();
+    await expect(fs.access(path.join(convDir, 'persona.json'))).resolves.toBeUndefined();
+  });
+
+  it('bulk deletion leaves a pending Persona draft intact', async () => {
+    await writeConv('persona-draft', {
+      flowId: '',
+      title: 'Pending Persona draft',
+      messages: [],
+      personaTargetId: 'persona-1',
+    });
+
+    const response = await DELETE(makeLocalRequest({
+      body: { ids: ['persona-draft'] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 0, errors: 1 });
+    await expect(fs.access(path.join(convDir, 'persona-draft.json'))).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['a concurrent Persona-target PATCH', 'bulk-patch-race', { flowId: '', personaTargetId: 'persona-1' }],
+    ['concurrent Persona anonymization', 'bulk-anonymize-race', { personaArchived: true }],
+  ])('serializes bulk deletion after %s', async (_scenario, id, personaMarkers) => {
+    await writeConv(id, { title: 'Fresh conversation', messages: [] });
+
+    let enteredLock!: () => void;
+    const lockEntered = new Promise<void>((resolve) => { enteredLock = resolve; });
+    let releaseLock!: () => void;
+    const holdLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const personaMutation = withConversationExecutionLock(id, async () => {
+      enteredLock();
+      await holdLock;
+      await writeConv(id, {
+        title: 'Persona-owned after mutation',
+        messages: [],
+        ...personaMarkers,
+      });
+    });
+    await lockEntered;
+
+    const deletion = DELETE(makeLocalRequest({
+      body: { ids: [id] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseLock();
+    await personaMutation;
+
+    const response = await deletion;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 0, errors: 1 });
+    const durable = JSON.parse(await fs.readFile(path.join(convDir, `${id}.json`), 'utf-8'));
+    expect(durable).toMatchObject(personaMarkers);
   });
 });

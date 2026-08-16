@@ -76,6 +76,8 @@ describe('getConnectionError — resource matrix', () => {
   it('existing MCP rules are unchanged', () => {
     expect(getConnectionError('process', 'process-right-mcp', 'mcp', 'mcp-left')).toBeNull();
     expect(getConnectionError('mcp', 'mcp-bottom', 'process', 'process-left-mcp')).toBeNull();
+    expect(getConnectionError('static', 'static-right-mcp', 'mcp', 'mcp-left')).toBeNull();
+    expect(getConnectionError('mcp', 'mcp-right', 'static', 'static-left-mcp')).toBeNull();
     expect(getConnectionError('process', 'process-bottom', 'mcp', 'mcp-top')).not.toBeNull();
     expect(getConnectionError('process', 'process-bottom', 'process', 'process-top')).toBeNull();
   });

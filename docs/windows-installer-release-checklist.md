@@ -39,7 +39,7 @@ Windows VM. Restore a snapshot between scenarios when prerequisite state matters
 
 | Scenario | Required verification | Result / evidence |
 | --- | --- | --- |
-| No Git, Node.js, Python, or uv | Wizard detects the missing tools, installs them through winget, builds FLUJO, and leaves a working `flujo` command and manifest. | |
+| No Git, Node.js, Python, uv, or ripgrep | Wizard detects the missing tools, installs them through winget, builds FLUJO, and leaves a working `flujo` command and manifest. | |
 | All prerequisites preinstalled | Installer keeps them, records `preexisting: true`, and a later uninstall defaults to keeping them. | |
 | Mixed prerequisite state | Only missing prerequisites are installed; manifest ownership matches the before/after state. | |
 | Missing winget/App Installer | Wizard and PowerShell entry point stop with actionable App Installer guidance and leave no launcher, shortcut, or partial registration. | |

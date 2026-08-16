@@ -6,6 +6,7 @@ import {
   ToClaudeFormatOptions,
   flattenEnv,
   fromClaudeFormat,
+  exposedProxyUrl,
 } from './claudeFormat';
 
 /**
@@ -15,13 +16,13 @@ import {
  * Cline is very close to the Claude format but differs in a few ways:
  *   - remote servers use `type: "streamableHttp"` (camelCase) rather than
  *     Claude's `type: "http"` / `"streamable-http"`;
- *   - every entry carries `disabled`, `autoApprove`, and a `timeout` (seconds);
+ *   - every entry carries `disabled` and a `timeout` (seconds);
  *   - omitting `type` on a remote server defaults to legacy SSE, so we always
  *     emit an explicit `type` for non-stdio transports.
  *
  * On import, Cline and Claude entries overlap enough that the tolerant
  * `fromClaudeFormat` parser handles both (it already accepts `streamableHttp`,
- * `disabled`, and `autoApprove`), so the Cline importer simply delegates to it.
+ * `disabled`), so the Cline importer simply delegates to it.
  */
 
 // Cline defaults a server's request timeout to 60s; FLUJO has no equivalent
@@ -30,7 +31,6 @@ const CLINE_DEFAULT_TIMEOUT = 60;
 
 interface ClineServerEntry extends ClaudeServerEntry {
   disabled: boolean;
-  autoApprove: string[];
   timeout: number;
 }
 
@@ -43,9 +43,8 @@ export function toClineFormat(
 
   for (const server of servers) {
     const disabled = (server as MCPServerConfig).disabled ?? false;
-    const autoApprove = (server as MCPServerConfig).autoApprove ?? [];
     // Common to every Cline entry regardless of transport.
-    const common = { disabled, autoApprove, timeout: CLINE_DEFAULT_TIMEOUT };
+    const common = { disabled, timeout: CLINE_DEFAULT_TIMEOUT };
 
     // Exposed servers are re-hosted by FLUJO's mcp-proxy: emit them as the
     // recommended streamableHttp transport pointing at the proxy URL.
@@ -53,7 +52,7 @@ export function toClineFormat(
       mcpServers[server.name] = {
         ...common,
         type: 'streamableHttp',
-        url: `${proxyBaseUrl}/mcp-proxy/${server.name}`,
+        url: exposedProxyUrl(proxyBaseUrl, server.name, options.workspace),
       };
       continue;
     }

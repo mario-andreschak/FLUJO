@@ -3,18 +3,29 @@ import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
 import { EmitFn, RecoveryLaneIdentity, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
-import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { MCPToolParameterPresets } from '@/shared/types/mcp';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import type { MeetingToolAction } from '@/shared/types/meeting';
+import type { ConversationCompactionState } from './compaction/types';
+import type {
+  Persona,
+  PersonaActivity,
+  PersonaAttribution,
+  PersonaInstructionContext,
+  PersonaNativeAbilityId,
+} from '@/shared/types/enduringAgent';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
 /**
  * Explicit origin for every runFlow invocation (issue #339). Chat and direct
- * API calls have an interactive caller; scheduled/triggered, subflow, MCP, and
- * internal-tool runs are headless and therefore unattended.
+ * API calls have an interactive caller; scheduled/triggered, subflow, MCP,
+ * meeting-participant, and internal-tool runs are headless and unattended.
  */
 export const FLOW_INVOCATION_SOURCES = [
   'chat',
@@ -24,6 +35,7 @@ export const FLOW_INVOCATION_SOURCES = [
   'subflow',
   'mcp',
   'internal',
+  'meeting',
 ] as const;
 
 export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
@@ -51,7 +63,16 @@ export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolea
  *   - 'handoff-stripped' — removed/rewritten by stripHandoffPlumbing (handoff
  *                          tool-call/result + synthetic "Continue").
  */
-export type WireStatus = 'system' | 'sent' | 'folded' | 'scoped-out' | 'handoff-stripped';
+export type WireStatus =
+  | 'system'
+  | 'sent'
+  | 'folded'
+  | 'scoped-out'
+  | 'handoff-stripped'
+  | 'summarized'
+  | 'visually-archived'
+  | 'emergency-stripped'
+  | 'content-truncated';
 
 /** Per-message provenance in a ModelInputSnapshot (see WireStatus). Carries only
  *  a short content preview, never the full payload, so the snapshot stays bounded. */
@@ -59,7 +80,7 @@ export interface ModelInputProvenanceEntry {
   id?: string;
   role: string;
   status: WireStatus;
-  /** Human-readable why (for scoped-out/folded/handoff-stripped). */
+  /** Human-readable explanation of the wire transformation. */
   reason?: string;
   /** Truncated content preview for the annotated history view. */
   preview?: string;
@@ -85,10 +106,54 @@ export interface ModelInputSnapshot {
   /** One entry per message in the node's full threaded history. */
   provenance: ModelInputProvenanceEntry[];
   /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
-  counts: { threaded: number; sent: number; folded: number; scopedOut: number; handoffStripped: number };
+  counts: {
+    threaded: number;
+    sent: number;
+    folded: number;
+    scopedOut: number;
+    handoffStripped: number;
+    summarized?: number;
+    visuallyArchived?: number;
+    emergencyStripped?: number;
+    contentTruncated?: number;
+  };
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** Final wire-time visual routing metrics, captured by ModelHandler. */
   visualCompaction?: VisualCompactionDiagnostic;
+  /** Ordered late-wire transformations, including emergency provider refits. */
+  contextCompaction?: ContextCompactionDiagnostic;
+}
+
+export type WirePreviewUnavailableReason =
+  | 'non_process_node'
+  | 'missing_node'
+  | 'missing_history'
+  | 'scope_mismatch'
+  | 'unsupported_transformation';
+
+export type WirePreviewWarningCode =
+  | 'current_state'
+  | 'provider_finalization_omitted'
+  | 'resource_resolution_omitted'
+  | 'tool_configuration_omitted'
+  | 'history_projection_omitted';
+
+export interface WirePreviewWarning {
+  code: WirePreviewWarningCode;
+  message: string;
+}
+
+export interface WirePreviewResponse {
+  status: 'available' | 'unavailable';
+  mode: 'current-preview';
+  conversationId: string;
+  rootConversationId: string | null;
+  parentConversationId: string | null;
+  nodeId: string;
+  snapshot?: ModelInputSnapshot;
+  providerMessages?: OpenAI.ChatCompletionMessageParam[];
+  warnings: WirePreviewWarning[];
+  unavailableReason?: WirePreviewUnavailableReason;
 }
 
 /**
@@ -116,6 +181,57 @@ export interface DebugStep {
    *  the singular renderer. Populated only in debug mode; absent for non-model
    *  nodes / older traces. The frontend pages through this array. */
   modelInputs?: ModelInputSnapshot[];
+}
+
+/** The operation represented by the debugger's current safe boundary. */
+export type DebugBoundaryOperation = 'node' | 'model' | 'tool' | 'handoff';
+
+/**
+ * A small, durable state view captured immediately before the run is marked
+ * `paused_debug`. The live SharedState still carries the complete conversation;
+ * this snapshot preserves the execution-relevant values as they were at the
+ * boundary so the inspector does not accidentally show a later mutation.
+ */
+export interface DebugBoundaryStateSnapshot {
+  status?: SharedState['status'];
+  currentNodeId?: string;
+  messageCount: number;
+  lastMessage?: {
+    id?: string;
+    role: string;
+    processNodeId?: string;
+    toolCallIds?: string[];
+  };
+  variables?: Record<string, unknown>;
+  usage?: UsageTotals;
+  lastResponse?: unknown;
+  handoffInput?: SharedState['handoffInput'];
+  pendingSubflowReturn?: SharedState['pendingSubflowReturn'];
+}
+
+/**
+ * The debugger cursor at a safe runtime boundary. Unlike DebugStep (which is a
+ * completed node visit), this represents what is about to happen or what just
+ * happened. Tool arguments and the exact model input are included when they
+ * are available, but credentials and provider headers are never captured.
+ */
+export interface DebugBoundary {
+  index: number;
+  operation: DebugBoundaryOperation;
+  phase: 'before' | 'after';
+  timestamp: string;
+  nodeId?: string;
+  targetNodeId?: string;
+  edgeId?: string;
+  toolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+  /** MCP canvas node ids advertising the pending/running tools. */
+  toolNodeIds?: string[];
+  /** Exact wire input for the model turn relevant to this boundary. */
+  modelInput?: ModelInputSnapshot;
+  /** Adjacent operation sharing the same state (for example after-tool/before-model). */
+  previousOperation?: DebugBoundaryOperation;
+  nextOperation?: DebugBoundaryOperation;
+  stateSnapshot: DebugBoundaryStateSnapshot;
 }
 
 // --- Core Flow Types ---
@@ -196,14 +312,15 @@ export interface ProcessNodeProperties {
     outputMode?: 'full-conversation' | 'latest-message';
     /** Issue #258: opt in to the synthetic `question` tool so this node's model
      *  can ask the user a structured multiple-choice question mid-run and keep
-     *  working with the answer. Off by default; leave off for unattended flows
-     *  (or deny action `question` via permissionRules). */
+     *  working with the answer. Off by default; leave off for unattended flows. */
     allowQuestion?: boolean;
     /** Issue #259: opt in to the synthetic `todo` tool so this node's model can
      *  maintain a run-scoped task list (SharedState.todos) across a multi-turn
      *  visit. The list is re-injected into the system prompt each turn and shown
      *  live in the UI. Off by default (undefined/false = off). */
     enableTodoTool?: boolean;
+    /** Issue #415: explicit native Persona tools authored for this Process. */
+    personaTools?: PersonaNativeAbilityId[];
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -214,7 +331,7 @@ export interface ProcessNodeProperties {
     /**
      * Per-node override of the bound model's Max Turns cap (agentic turns for
      * self-orchestrating adapters). Unset/0 = inherit the model setting, then
-     * the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
+     * the system default (DEFAULT_AGENTIC_MAX_TURNS = 255).
      */
     maxTurns?: number;
     /**
@@ -293,6 +410,8 @@ export interface MCPNodeProperties {
     nameIsCustom?: boolean;
     boundServer?: string;
     enabledTools?: string[];
+    /** Per-node overrides for server-wide fixed MCP tool arguments. */
+    toolParameterPresets?: MCPToolParameterPresets;
     /**
      * @deprecated Never applied. MCP connections are singletons keyed by server
      * name (shared across all nodes/flows) and a stdio server's process env is
@@ -482,6 +601,30 @@ export interface SubflowNodeProperties {
      *  Ignored if `sessionScope` is absent/per-visit. Do NOT write this into stored
      *  data unless the user explicitly changes it (issue #138). */
     sessionInputMode?: 'resume' | 'summary';
+    /** Maximum retained logical child turns for one resolved session. Positive
+     *  integers only; absence means unbounded. The incoming task counts as one. */
+    sessionTurnCap?: number;
+    /** Callable-subflow invocation mode (issue #385, deferred Part B of #359):
+     *    - 'handoff' (default/absent): today's behaviour — the routing model
+     *      calls the node's `handoff_to_<slug>` tool, the engine TRANSITIONS to
+     *      this Subflow node, and it runs through the normal prep/execCore/post
+     *      lifecycle (durable, resumable when `saveConversation` is set).
+     *    - 'tool': the node is instead advertised as a distinct
+     *      `call_subflow_<slug>` tool. Calling it runs this Subflow's target
+     *      flow INLINE inside the tool call (via `runSubflowLanes()`, the same
+     *      bounded lane engine) and returns a structured JSON lane result
+     *      straight to the calling model — no graph transition, so the model
+     *      stays on its current node and can keep working with the answer.
+     *  Gated behind the experimental `subflowToolInvocation` setting (default
+     *  OFF): when the setting is off, a node authored with `'tool'` silently
+     *  falls back to `'handoff'` behaviour, so flipping the setting can never
+     *  change an existing flow's behaviour by itself. Tool-mode invocations are
+     *  NOT resumable in v1 (no graph transition means no persist point); a
+     *  mid-call crash re-runs the lanes from scratch. */
+    invocationMode?: 'handoff' | 'tool' | 'detached';
+    /** Optional per-node detached-task polling hint and runtime cap (issue #386). */
+    detachedPollIntervalMs?: number;
+    detachedMaxRuntimeMs?: number;
 }
 
 /** One resolved job in a SubflowNode queue. Legacy code and event payloads still
@@ -505,6 +648,12 @@ export interface SubflowLanePlan {
     laneId?: string;
     /** Stable child conversation id reused by every recovery attempt. */
     conversationId?: string;
+    /** Optional handoff value, kept separate so it can override an authored
+     *  per-key template after lane-specific resolution. */
+    callerSessionKey?: string;
+    /** Canonical resolved per-key session handle for this job. Reusing the same
+     *  key resumes this lane's child conversation as a serialised new turn. */
+    sessionKey?: string;
 }
 
 /** The outcome of one queued child job, kept in request order. */
@@ -521,6 +670,8 @@ export interface SubflowLaneResult {
     laneTitle?: string;
     laneId?: string;
     conversationId?: string;
+    /** Stable caller-visible handle for a resumable keyed child conversation. */
+    sessionKey?: string;
 }
 
 export type SubflowInvocationLaneStatus =
@@ -550,6 +701,8 @@ export interface SubflowInvocationLane extends SubflowLanePlan {
     sessionKey?: string;
     /** Issue #363: true if this lane reused a child conversation from a prior visit. */
     resumedVisit?: boolean;
+    /** Issue #390: 1-based ordinal of the visit currently executing. */
+    sessionVisit?: number;
 }
 
 export type SubflowInvocationStatus = 'running' | 'blocked' | 'ready' | 'folded';
@@ -573,6 +726,11 @@ export interface SubflowInvocation {
     concurrencyLimit: number;
     joinSeparator: string;
     errorStrategy: 'fail-fast' | 'collect-all';
+    /** Session configuration frozen with this durable visit so crash recovery
+     *  cannot silently fall back to per-visit behavior. */
+    sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+    sessionInputMode?: 'resume' | 'summary';
+    sessionTurnCap?: number;
     /** Shared node input stored once for fan-out lanes. Per-lane briefs/items
      *  remain on the lane itself, avoiding N copies of a full chat transcript. */
     sharedInput?: { prompt: string } | { messages: FlujoChatMessage[] };
@@ -631,21 +789,50 @@ export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
     type: 'static';
 }
 
+export interface StaticAttachment {
+    id?: string;
+    type: 'document' | 'audio' | 'image' | 'video';
+    content: string;
+    originalName?: string;
+    mimeType?: string;
+    transcript?: string;
+}
+
 /**
- * Static node (issue #358): a deterministic, non-LLM, pass-through node that
- * INJECTS pre-authored entries into the conversation when traversed. Each entry
- * is either a plain message (system/user/assistant) or a synthetic assistant
- * tool-call plus its matching tool result (two messages).
+ * Static node entries. A missing executionMode on a tool call is the legacy
+ * mock behavior, preserving existing flows byte-for-byte at runtime.
  */
 export type StaticEntry =
-    | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
-    | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+    | {
+        kind: 'message';
+        role: 'system' | 'user' | 'assistant';
+        content: string;
+        attachments?: StaticAttachment[];
+      }
+    | {
+        kind: 'toolCall';
+        toolName: string;
+        argumentsJson: string;
+        result: string;
+        executionMode?: 'mock' | 'real';
+        serverName?: string;
+      };
 
 export interface StaticNodeProperties {
     name?: string;
-    /** Entries injected, in order, onto sharedState.messages. */
+    /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
-    /** When true, inject only the first time the node is traversed in a run. */
+    /** MCP attachments derived from static↔MCP graph edges at conversion time. */
+    mcpNodes?: MCPNodeReference[];
+    /**
+     * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
+     * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.
+     * `true`: inject only on the first traversal of this node **within one logical run**
+     * (one user turn). An approval/debug resume of the same run does NOT re-inject; a new
+     * user turn on the same conversation DOES, and subflow runs are scoped separately.
+     * Tracked in `SharedState.staticInjected`, keyed by `(logicalRunId, nodeId)`.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
+     */
     injectOnce?: boolean;
 }
 
@@ -686,6 +873,8 @@ export interface MCPNodeReference {
     properties: {
         boundServer?: string;
         enabledTools?: string[];
+        /** Per-node overrides for server-wide fixed MCP tool arguments. */
+        toolParameterPresets?: MCPToolParameterPresets;
         /** @deprecated Never applied — see MCPNodeProperties.env (issue #63). Set env
          *  on the MCP server config instead. Retained only for back-compat loading. */
         env?: Record<string, string>;
@@ -721,8 +910,88 @@ export interface CodexSessionMetadata {
     updatedAt: number;
 }
 
+/**
+ * Runtime-only authority owned by a higher-level orchestrator (currently the
+ * Persona Activity dispatcher). The opaque lease/fencing capability stays in
+ * the closure behind `assertCurrent`; it must never be serialized into a
+ * conversation, prompt, Flow variable, log, or API response.
+ */
+export interface FlowExecutionAuthority {
+    assertCurrent: () => Promise<void>;
+    signal: AbortSignal;
+    /**
+     * Persona Core-only authorization for runtime-injected MCP nodes. Generic
+     * Flow nodes never call this hook, and the capability is never persisted.
+     */
+    authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
+    /** Hold the higher-level lease lock across one authoritative durable write. */
+    commitWhileCurrent?: <T>(task: () => Promise<T>) => Promise<T>;
+    /**
+     * Persona-only mutation capability. The opaque fence stays in the runtime
+     * closure; callers receive scoped records plus the one whole-Persona update
+     * operation that must share the already-held runtime lock.
+     */
+    commitPersonaMutation?: <T>(
+      task: (context: PersonaActivityMutationContext) => Promise<T>,
+    ) => Promise<T>;
+    /**
+     * One-shot, maintenance-only gateway supplied by the Persona dispatcher.
+     * The extractor passes only its output text; identity, evidence, policy and
+     * the write fence remain captured in the host-owned closure.
+     */
+    commitPersonaMemoryMaintenance?: (outputText: string) => Promise<unknown>;
+    /**
+     * Maintenance-only model-facing proposal gateway. The `remember` tool sends
+     * untrusted arguments through this callback; the dispatcher owns evidence
+     * validation, limits, idempotency, and the durable candidate write.
+     */
+    proposePersonaMemoryMaintenance?: (
+      proposal: Record<string, unknown>,
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+    /** Fetch durable related input only at a transcript-safe runFlow boundary. */
+    pollRelatedInputs?: () => Promise<void>;
+    /** ACK stable ids only after their messages are durably folded once. */
+    acknowledgeRelatedInputs?: (messageIds: readonly string[]) => Promise<void>;
+}
+
+export interface PersonaActivityMutationContext {
+    persona: Persona;
+    /** Absent only for an idle strict-local administrative mutation. */
+    activity?: PersonaActivity;
+    updatePersona: (next: Persona) => Promise<Persona>;
+}
+
 // Shared state (minimized)
 export interface SharedState {
+    /**
+     * Runtime-only execution fence. `persistConversationState` strips this
+     * field and asserts it immediately before every attributed state write.
+     */
+    executionAuthority?: FlowExecutionAuthority;
+    /**
+     * Exact MCP server config names projected from the owning Persona Activity.
+     * Runtime-only and installed non-enumerably beside executionAuthority; the
+     * compiled-flow cache and FlowConverter use it as an out-of-band allowlist.
+     */
+    personaCoreAppRefs?: string[];
+    /**
+     * Present only for a top-level participant conversation driven by the
+     * MeetingEngine. The process-node prompt and synthetic meeting controls use
+     * this identity; nested subflows deliberately do not receive it.
+     */
+    meetingParticipant?: {
+        protocolVersion: 1;
+        meetingId: string;
+        participantId: string;
+        participantName: string;
+        role: 'participant' | 'moderator';
+    };
+    /** Fresh, coordinator-owned action buffer for the current barrier round. */
+    meetingTurn?: {
+        turnId: string;
+        roundId: string;
+        actions: MeetingToolAction[];
+    };
     /** Stable logical execution id used only for metadata-only statistics. It is
      * preserved while approval/debug is paused, then replaced for a new turn. */
     logicalRunId?: string;
@@ -752,6 +1021,18 @@ export interface SharedState {
     /** On a persisted child conversation, identifies the exact parent lane that
      *  this conversation must satisfy after a retry or continued turn. */
     subflowLane?: RecoveryLaneIdentity;
+    /**
+     * Static-node injection bookkeeping, keyed by node id; the value is the
+     * `logicalRunId` of the run that last injected that node (`'no-run'` when a run
+     * has no logical id, e.g. in isolated tests). `injectOnce: true` suppresses a
+     * repeat injection only while the stored id equals the current `logicalRunId`,
+     * which makes "once" mean *once per logical run* (issue #381): it is persisted
+     * with the run state so it survives pause/resume of the same run, while a new
+     * user turn gets a fresh id and therefore injects again. Subflow runs have their
+     * own SharedState and therefore their own markers.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
+     */
+    staticInjected?: Record<string, string>;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */
@@ -761,22 +1042,34 @@ export interface SharedState {
     /** Display-name snapshots captured once for this logical run. */
     statisticsFlowName?: string;
     statisticsPlannedExecutionName?: string;
+    /**
+     * Opaque, installation-local fingerprint of the saved flow configuration,
+     * resolved once per logical run so before/after revision comparisons are
+     * possible without ever persisting the configuration itself.
+     */
+    statisticsFlowRevisionId?: string;
     // Only tracking info in shared state
     trackingInfo: {
         executionId: string;
         startTime: number;
         nodeExecutionTracker: NodeExecutionTrackerEntry[];
     };
-    // Messages as the single source of truth, now using our timestamped type
+    // Messages are the immutable-under-compaction canonical source of truth.
     messages: FlujoChatMessage[];
+    /** Versioned provider-wire summary artifacts, persisted separately. */
+    compactionState?: ConversationCompactionState;
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
-    /** Server-owned anchors for undoing a confirmed per-message revert. */
+    /** Server-owned anchors for undoing a confirmed per-message restore. */
     revertOperations?: Record<string, {
         messageId: string;
-        root: string;
-        snapshotId: string;
-        paths: string[];
+        mode?: 'chat-and-files' | 'files-only' | 'chat-only';
+        root?: string;
+        snapshotId?: string;
+        paths?: string[];
+        /** Projection ids before/after a suffix restore; content stays in the log. */
+        chatHeadMessageIds?: string[];
+        chatTailMessageIds?: string[];
         createdAt: number;
         undoneAt?: number;
     }>;
@@ -797,12 +1090,27 @@ export interface SharedState {
      * mode:'conversation' quick chats by the normal persistConversationState
      * path, which is what makes follow-up turns, crash recovery and app
      * restarts work without any temp-flow store or GC. The snapshot is
-     * immutable for the life of the conversation. Removed by the "Save as flow"
-     * promotion, after which the conversation behaves like any flow-backed one.
+     * immutable for the life of a Quick Chat. Persona conversations additionally
+     * use this field for an Activity-pinned Behavior; a successor Activity may
+     * replace it only through runFlow's trusted instruction-context boundary.
+     * Removed by the "Save as flow" promotion, after which the conversation
+     * behaves like any flow-backed one.
      */
     flowSnapshot?: Flow;
+    /** Active policy is restored from the immutable Flow snapshot at boundaries. */
+    permissionRules?: Flow['permissionRules'];
+    savedPermissionRules?: Flow['permissionRules'];
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
+    /** Issue #383: normalized terminal error, kept in sync with `lastResponse`
+     *  by `emitErrorOnce()`/the derive fallback so the chat error message +
+     *  code survive a page reload. Cleared wherever `lastResponse` is cleared
+     *  for a new turn. */
+    lastError?: NormalizedChatError;
+    /** Issue #383: per-run dedupe guard so the (now several) terminal error
+     *  paths cannot double-emit an `error` event for the same run. Cleared
+     *  alongside `lastError`/`lastResponse` at the start of a new turn. */
+    errorEventEmitted?: boolean;
     /**
      * Tier 2c (named variables): a run-scoped scratchpad of string values a node
      * can CAPTURE (`captureVariable`) and any later step can INJECT via
@@ -898,6 +1206,9 @@ export interface SharedState {
          *  the node's `subflowId`; concurrencyLimit controls only active workers.
          *  Single-shot and node-id-scoped like `prompt`. */
         tasks?: string[];
+        /** Per-task session handles aligned by index with `tasks`. `null` means
+         *  that call did not provide a handle. Used only by keyed Subflows. */
+        sessionKeys?: Array<string | null>;
         /** Legacy Phase 4 (issue #130): caller-chosen fan-out target flow ids.
          *  No handoff tool exposes this parameter anymore (superseded by the
          *  spawn-with-brief `task` calls above — issue #156), but the capture
@@ -951,20 +1262,6 @@ export interface SharedState {
      *  Read by the chat loop (OpenAI path) and by self-orchestrating adapters
      *  (Claude subscription) to gate tool calls. */
     requireApproval?: boolean;
-    /**
-     * Tool permission rules (issue #246): merged at ProcessNode.prep() from the
-     * flow's `permissionRules` + per-server `autoApprove` desugaring. Evaluated
-     * per-call in ModelHandler.processToolCalls() to allow/deny/ask before
-     * dispatching. Reset on each node transition (re-merged from the flow).
-     */
-    permissionRules?: PermissionRule[];
-    /**
-     * Saved "always" permission rules (issue #246): user choices from "Always
-     * Allow" / "Always Deny" approval prompts. Scoped to this conversation;
-     * persisted with the conversation state. Evaluated after `permissionRules`
-     * but cannot override a flow-level deny.
-     */
-    savedPermissionRules?: SavedPermissionRule[];
     /** Unattended execution (issue #218/#339), derived for this run solely from
      *  its invocation source. When true, a Process node that ends its turn on
      *  plain text is driven forward along its single non-returning successor
@@ -976,6 +1273,27 @@ export interface SharedState {
     /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
     lastBreakNodeId?: string;
     /**
+     * One-shot request made by the live "Attach debugger" control. Unlike the
+     * legacy `'*'` breakpoint sentinel, this does not overwrite authored
+     * breakpoints and is checked at every safe runtime boundary (after a model
+     * turn, after tools, and before the next node).
+    */
+    debugPauseRequested?: boolean;
+    /** One-shot marker set by Continue after it changes paused_debug -> running.
+     * Keeps that detached resume on the same logical run even though its public
+     * status is already updated for other clients. */
+    debugResumeAfterDetach?: boolean;
+    /**
+     * An action already produced by a node but deliberately not applied yet
+     * because the debugger paused after the completed model turn. Resuming
+     * consumes this action without invoking the model a second time.
+     */
+    debugPendingAction?: {
+        action: string;
+        nodeId?: string;
+        phase: 'after-model';
+    };
+    /**
      * Tool calls a Process node's model just produced that are waiting to be
      * executed, captured ONLY while single-stepping in the debugger. It lets a
      * step pause *before* running the tools (so the user can inspect the model's
@@ -983,6 +1301,10 @@ export interface SharedState {
      * *after* the results come back. Unset during normal (non-debug) runs.
      */
     debugPendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+    /** Structured before/after cursor rendered by the visual debugger. */
+    debugBoundary?: DebugBoundary;
+    /** Monotonic sequence for debugBoundary within this conversation. */
+    debugBoundaryCounter?: number;
 
     /**
      * Maps each model-facing MCP tool name (mcp_<slug>_<hash>, see toolNamespace.ts)
@@ -992,7 +1314,7 @@ export interface SharedState {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -1008,6 +1330,22 @@ export interface SharedState {
     /** Target node types keyed by node id, populated alongside handoffNameMap so
      *  transition handling can enforce target-specific runtime contracts. */
     handoffTargetTypes?: Record<string, string>;
+    /**
+     * Model-facing `call_subflow_<slug>` tool name -> target Subflow node id
+     * (issue #385, deferred Part B of #359). Populated alongside
+     * handoffNameMap whenever a Process node generates its tool set, but kept
+     * in a SEPARATE map: a `call_subflow_*` call is dispatched to
+     * subflowToolInvocation.executeSubflowToolCall (runs the target's lanes
+     * inline and returns JSON) rather than to processHandoffToolCalls (which
+     * only ever matches `handoff_to_*` and transitions the graph).
+     */
+    subflowToolNameMap?: Record<string, string>;
+    /** Persona-authorized call_behavior_* registry, separate from graph Subflows. */
+    behaviorToolRegistry?: import('./handlers/behaviorToolInvocation').BehaviorToolRegistry;
+    /** Model-facing start_subflow_* tool name -> detached target node id. */
+    subflowDetachedToolNameMap?: Record<string, string>;
+    /** Durable task handles launched while this conversation was active. */
+    launchedTaskIds?: string[];
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
@@ -1051,12 +1389,53 @@ export interface SharedState {
     rootConversationId?: string;
 
     /**
-     * Where this run originated (issue #113/#339). Set by runFlow from the
-     * required FlowRunInput.source at every run boundary and surfaced read-only
-     * by GET /api/runs/active. Optional only for persisted legacy states created
-     * before the invocation-context contract existed.
+     * Where this conversation originated (issue #113/#339). Set by runFlow from
+     * the first required FlowRunInput.source and preserved across later resume
+     * boundaries; per-invocation behavior uses FlowRunInput.source directly.
+     * Surfaced read-only by GET /api/runs/active. Optional only for persisted
+     * legacy states created before the invocation-context contract existed.
      */
     source?: FlowInvocationSource;
+
+    /**
+     * Safe persisted attribution stamped by the trusted Persona dispatcher.
+     * It identifies the leased Activity and immutable Behavior revision but
+     * never contains holder ids, lease ids, or fencing capabilities.
+     */
+    personaAttribution?: PersonaAttribution;
+
+    /**
+     * Capability-free Persona identity/mission prefix, frozen for one owning
+     * top-level Activity. It is durable for approval/debug/crash recovery but
+     * is deliberately not part of SubflowNode prep inputs, so a structural
+     * child may retain causal attribution without inheriting Persona identity.
+     */
+    personaInstructionContext?: PersonaInstructionContext;
+
+    /**
+     * Non-authoritative Chat UI target for a fresh Persona conversation. This
+     * is deliberately separate from `personaAttribution`: selecting a Persona
+     * does not own a conversation or grant runtime authority. The trusted
+     * dispatcher replaces this draft intent with the full attribution triple
+     * after it claims an Activity and resolves an immutable Behavior revision.
+     * Strict-loopback conversation routes are the only writers/readers.
+     */
+    personaTargetId?: string;
+
+    /**
+     * Plain Chat target choice captured before the first Persona turn. `primary`
+     * means the Persona's Main role; any other value names one of its specialist
+     * Behaviors. This is routing preference only, never execution authority.
+     */
+    personaBehaviorSlotKey?: string;
+
+    /**
+     * Non-identifying tombstone for a retained conversation whose Persona was
+     * deleted under the anonymize policy. Archived Persona conversations remain
+     * trusted-local evidence and can be renamed or deleted, but never executed,
+     * resumed, retargeted, or treated as an ordinary Flow conversation.
+     */
+    personaArchived?: true;
 
     /**
      * For scheduler-originated runs (source === 'schedule'): the planned
@@ -1133,6 +1512,18 @@ export interface ToolDefinition {
     annotations?: ToolAnnotations;
     /** MCP Apps UI resource declared on this tool definition. */
     uiResourceUri?: string;
+    /** Fixed arguments hidden from the model-facing input schema. */
+    presetArgs?: Record<string, unknown>;
+    context?: ToolReferenceContext;
+}
+
+/** Execution context used to resolve dynamic references in fixed tool args. */
+export interface ToolReferenceContext {
+    conversationId?: string;
+    flowId?: string;
+    nodeId?: string;
+    modelId?: string;
+    appId?: string;
 }
 
 // MCP Context
@@ -1195,6 +1586,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
+    /** Approval behavior forwarded to adapters which execute their own tool loop. */
+    onApprovalRequired?: 'auto' | 'fail' | 'pause';
     /** Unattended run (issue #258): forwarded so the synthetic `question` tool
      *  degrades to a tool-error instead of blocking for an answer. */
     unattended?: boolean;
@@ -1211,9 +1604,20 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  node produced during the visit, in call order (see DebugStep.modelInputs).
      *  `modelInput` above is the first/representative entry. Same debug gate. */
     modelInputs?: ModelInputSnapshot[];
+    /** Always-available structural snapshot used by the durable Chat model-turn
+     * archive. Kept separate from debugger state so normal runs stay trace-free. */
+    modelInputForArchive?: ModelInputSnapshot;
+    /** False for ephemeral child runs, whose state must never reach Chat storage. */
+    archiveModelTurns?: boolean;
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+    /** Immutable permission policy restored with the authoritative Flow snapshot. */
+    permissionRules?: Flow['permissionRules'];
+    /** Runtime-only guard checked before provider and tool dispatch. */
+    executionAuthority?: FlowExecutionAuthority;
+    /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
+    personaAttribution?: PersonaAttribution;
 }
 
 // FinishNode prep result
@@ -1258,6 +1662,10 @@ export interface SubflowNodePrepResult extends BasePrepResult {
      *  wave membership instead of falling into the "Ad-hoc" bucket. Undefined for
      *  ad-hoc parent runs (no wave), which keeps the child ad-hoc too. */
     plannedExecutionId?: string;
+    /** Safe actor attribution inherited by a structural child run. */
+    personaAttribution?: PersonaAttribution;
+    /** Runtime-only Persona lease authority inherited by a structural child. */
+    executionAuthority?: FlowExecutionAuthority;
     /** Whether the child run's events are folded into the parent conversation
      *  (outputMode 'steps', the default) or hidden ('final-only'). */
     showSteps: boolean;
@@ -1313,6 +1721,8 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     /** Issue #363: how resumed children are re-entered.
      *  'resume' (default) | 'summary'. */
     sessionInputMode?: 'resume' | 'summary';
+    /** Normalized positive-integer logical-turn retention bound. */
+    sessionTurnCap?: number;
 }
 
 // Union type for all prep results

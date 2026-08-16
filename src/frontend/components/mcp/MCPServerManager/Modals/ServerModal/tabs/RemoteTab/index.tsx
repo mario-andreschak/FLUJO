@@ -15,14 +15,13 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import SamplingManager from '../LocalServerTab/SamplingManager';
+import SamplingManager from '../ConfigureTab/SamplingManager';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const RemoteTab: React.FC<TabProps> = ({
   onAdd,
   onClose,
-  setActiveTab,
-  onUpdate
+  onHandoff
 }) => {
   const { t } = useI18n();
   const [url, setUrl] = useState<string>('');
@@ -32,7 +31,7 @@ const RemoteTab: React.FC<TabProps> = ({
   // so the user understands they'll sign in (rather than hand-enter a header) on the next
   // screen. A second click ("Continue to setup") then proceeds.
   const [oauthDetected, setOauthDetected] = useState<boolean>(false);
-  // Sampling policy configured here is forwarded to LocalServerTab via the remoteConfig.
+  // Sampling policy configured here is forwarded to ConfigureTab via the remoteConfig.
   const [samplingPolicy, setSamplingPolicy] = useState<MCPSamplingPolicy | undefined>(undefined);
 
   // URL validation
@@ -73,7 +72,6 @@ const RemoteTab: React.FC<TabProps> = ({
       serverUrl: url,
       rootPath: `mcp-servers/${serverName}`,
       disabled: false,
-      autoApprove: [],
       env: {},
       _buildCommand: '',
       _installCommand: '',
@@ -83,14 +81,15 @@ const RemoteTab: React.FC<TabProps> = ({
       ...(samplingPolicy ? { sampling: samplingPolicy } : {}),
     };
 
-    // Pass the config to the parent component before switching tabs
-    if (onUpdate) {
-      onUpdate(remoteConfig as MCPServerConfig);
-    }
-
-    // Switch to the local tab with pre-filled data
-    if (setActiveTab) {
-      setActiveTab('local');
+    // The URL is already a complete runnable config. Use the same streamlined
+    // handoff as Marketplace: Configure collapses the prefilled sections, tests
+    // immediately, then leaves Save as the only action when the probe succeeds.
+    if (onHandoff) {
+      onHandoff({
+        to: 'configure',
+        config: remoteConfig as MCPServerConfig,
+        autoTestRun: true,
+      });
     }
   };
 

@@ -1,22 +1,29 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import {
   RegistryListResponse,
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  ManualLaunchOption,
   getInstallOptions,
-  buildConfigFromOption,
+  isAutoInstallable,
   displayName,
-  missingRequiredInputs,
   registryTypeLabel,
   verificationStatusOf,
   isVerifiedStatus,
   serverIconUrl
 } from '@/utils/mcp/registry';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { InstallOptionList } from '../../components/InstallOptionPicker';
+import useRegistryInstall from '../../hooks/useRegistryInstall';
+import {
+  DEFAULT_MARKETPLACE_FILTERS,
+  filterMarketplaceResults,
+  hasActiveMarketplaceFilters,
+  type MarketplaceSearchFilters,
+} from './search';
 import { useTheme } from '@mui/material/styles';
 import {
   Alert,
@@ -33,15 +40,15 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
   FormControlLabel,
   Grid,
   IconButton,
   InputAdornment,
+  InputLabel,
   Link,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Typography
@@ -55,6 +62,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import StarIcon from '@mui/icons-material/Star';
 import DownloadIcon from '@mui/icons-material/Download';
+import TuneIcon from '@mui/icons-material/Tune';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
 
@@ -62,9 +70,7 @@ const PAGE_SIZE = 30;
 
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
-  setActiveTab,
-  onUpdate,
-  onOpenInGitHubTab
+  onHandoff
 }) => {
   const theme = useTheme();
   const { t, formatNumber, formatList } = useI18n();
@@ -77,22 +83,28 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
-  const [selectedServer, setSelectedServer] = useState<RegistryServer | null>(null);
-  // The trust gate: Install actions stay disabled until the user explicitly
-  // confirms they trust the server. Reset every time the details dialog opens.
-  const [trustConfirmed, setTrustConfirmed] = useState<boolean>(false);
+  const [filters, setFilters] = useState<MarketplaceSearchFilters>(DEFAULT_MARKETPLACE_FILTERS);
+  // The trust gate lives in the shared install pipeline: install actions stay
+  // disabled until the user explicitly confirms they trust the server, and the
+  // confirmation is reset every time the details dialog opens (#392).
+  const registryInstall = useRegistryInstall({ requireTrust: true, onHandoff });
+  const selectedServer = registryInstall.selection?.server ?? null;
+  const trustConfirmed = registryInstall.trustConfirmed;
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
+  const visibleResults = useMemo(
+    () => filterMarketplaceResults(results, filters),
+    [filters, results],
+  );
+  const filtersActive = hasActiveMarketplaceFilters(filters);
 
   const openServerDetails = useCallback((server: RegistryServer) => {
-    setTrustConfirmed(false);
-    setSelectedServer(server);
-  }, []);
+    registryInstall.open(server);
+  }, [registryInstall]);
 
   const closeServerDetails = useCallback(() => {
-    setSelectedServer(null);
-    setTrustConfirmed(false);
-  }, []);
+    registryInstall.close();
+  }, [registryInstall]);
 
   const fetchServers = useCallback(async (search: string, cursor?: string) => {
     const fetchId = ++fetchIdRef.current;
@@ -159,19 +171,27 @@ const MarketplaceTab: React.FC<TabProps> = ({
     setMessage(null);
   };
 
-  const handleInstall = (server: RegistryServer, option: InstallOption) => {
-    const config = buildConfigFromOption(server, option);
-    const missing = missingRequiredInputs(option);
+  const handleSearch = () => {
+    const term = searchInput.trim();
+    if (!term) {
+      handleClearSearch();
+    } else if (term === activeSearch) {
+      // Same term committed again — re-run it (e.g. retry after an error).
+      fetchServers(term);
+    } else {
+      setActiveSearch(term);
+    }
+  };
 
-    if (onUpdate) {
-      // autoTestRun: registry configs need no manual install/build step, so the
-      // local tab can start the test run (which performs the install) right away
-      onUpdate(config as MCPServerConfig, { autoTestRun: true });
-    }
-    closeServerDetails();
-    if (setActiveTab) {
-      setActiveTab('local');
-    }
+  const updateFilter = <Key extends keyof MarketplaceSearchFilters>(
+    key: Key,
+    value: MarketplaceSearchFilters[Key],
+  ) => {
+    setFilters(current => ({ ...current, [key]: value }));
+  };
+
+  const handleInstall = (server: RegistryServer, option: InstallOption) => {
+    const missing = registryInstall.install(server, option);
     setMessage({
       type: missing.length > 0 ? 'warning' : 'success',
       text:
@@ -179,6 +199,13 @@ const MarketplaceTab: React.FC<TabProps> = ({
           ? t('mcp.marketplace.preparedMissing', { values: formatList(missing) })
           : t('mcp.marketplace.prepared')
     });
+  };
+
+  // Launch-and-connect (#392): save it as an HTTP server carrying its launch
+  // spec. No test run — nothing answers until the user starts the process.
+  const handleConfigureAsRemote = (server: RegistryServer, option: ManualLaunchOption) => {
+    registryInstall.configureAsRemote(server, option);
+    setMessage({ type: 'success', text: t('mcp.marketplace.prepared') });
   };
 
   // Repository URL if it points at github.com — the GitHub tab supports nothing else
@@ -197,9 +224,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
   // user can clone the repo and configure the server from there
   const handleManualInstall = (server: RegistryServer) => {
     const repoUrl = githubRepoUrl(server);
-    if (!repoUrl || !onOpenInGitHubTab) return;
+    if (!repoUrl || !onHandoff) return;
     closeServerDetails();
-    onOpenInGitHubTab(repoUrl);
+    onHandoff({ to: 'github', repoUrl });
   };
 
   // Every card click routes through the details/trust dialog — nothing installs
@@ -224,7 +251,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
     return chips;
   };
 
-  const selectedOptions = selectedServer ? getInstallOptions(selectedServer) : [];
+  const selectedOptions = registryInstall.options;
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -246,43 +273,122 @@ const MarketplaceTab: React.FC<TabProps> = ({
           />
         </Typography>
 
-        <TextField
-          fullWidth
-          size="small"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              const term = searchInput.trim();
-              if (!term) {
-                // Committing an empty search clears the results instead of fetching
-                handleClearSearch();
-              } else if (term === activeSearch) {
-                // Same term committed again — re-run it (e.g. retry after an error)
-                fetchServers(term);
-              } else {
-                setActiveSearch(term);
-              }
-            }
+        <Box
+          data-tour="mcp-marketplace-search"
+          component="form"
+          role="search"
+          onSubmit={event => {
+            event.preventDefault();
+            handleSearch();
           }}
-          placeholder={t('mcp.marketplace.search')}
-          variant="outlined"
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-            endAdornment: searchInput ? (
-              <InputAdornment position="end">
-                <IconButton size="small" onClick={handleClearSearch} aria-label={t('mcp.marketplace.clearSearch')}>
-                  <ClearIcon fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ) : undefined
+          sx={{ display: 'flex', gap: 1, alignItems: 'stretch' }}
+        >
+          <TextField
+            fullWidth
+            size="small"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            placeholder={t('mcp.marketplace.search')}
+            variant="outlined"
+            inputProps={{ 'aria-label': t('mcp.marketplace.searchLabel') }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+              endAdornment: searchInput ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={handleClearSearch} aria-label={t('mcp.marketplace.clearSearch')}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ) : undefined
+            }}
+          />
+          <Button
+            type="submit"
+            variant="contained"
+            startIcon={<SearchIcon />}
+            disabled={!searchInput.trim() || isLoading}
+            sx={{ flexShrink: 0, px: { xs: 2, sm: 3 } }}
+          >
+            {t('mcp.marketplace.searchAction')}
+          </Button>
+        </Box>
+
+        <Box
+          aria-label={t('mcp.marketplace.filters')}
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr)) auto' },
+            gap: 1,
+            alignItems: 'center',
           }}
-        />
+        >
+          <FormControl size="small">
+            <InputLabel id="marketplace-transport-filter-label">{t('mcp.marketplace.filterType')}</InputLabel>
+            <Select
+              labelId="marketplace-transport-filter-label"
+              value={filters.transport}
+              label={t('mcp.marketplace.filterType')}
+              onChange={event => updateFilter('transport', event.target.value as MarketplaceSearchFilters['transport'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnyType')}</MenuItem>
+              <MenuItem value="local">{t('mcp.marketplace.filterLocal')}</MenuItem>
+              <MenuItem value="remote">{t('mcp.marketplace.filterRemote')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-setup-filter-label">{t('mcp.marketplace.filterSetup')}</InputLabel>
+            <Select
+              labelId="marketplace-setup-filter-label"
+              value={filters.setup}
+              label={t('mcp.marketplace.filterSetup')}
+              onChange={event => updateFilter('setup', event.target.value as MarketplaceSearchFilters['setup'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnySetup')}</MenuItem>
+              <MenuItem value="automatic">{t('mcp.marketplace.filterAutomatic')}</MenuItem>
+              <MenuItem value="manual">{t('mcp.marketplace.filterManual')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-verification-filter-label">{t('mcp.marketplace.filterTrust')}</InputLabel>
+            <Select
+              labelId="marketplace-verification-filter-label"
+              value={filters.verification}
+              label={t('mcp.marketplace.filterTrust')}
+              onChange={event => updateFilter('verification', event.target.value as MarketplaceSearchFilters['verification'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnyTrust')}</MenuItem>
+              <MenuItem value="verified">{t('mcp.marketplace.filterVerified')}</MenuItem>
+              <MenuItem value="unverified">{t('mcp.marketplace.unverified')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-sort-label">{t('mcp.marketplace.sort')}</InputLabel>
+            <Select
+              labelId="marketplace-sort-label"
+              value={filters.sort}
+              label={t('mcp.marketplace.sort')}
+              onChange={event => updateFilter('sort', event.target.value as MarketplaceSearchFilters['sort'])}
+            >
+              <MenuItem value="relevance">{t('mcp.marketplace.sortRelevance')}</MenuItem>
+              <MenuItem value="stars">{t('mcp.marketplace.sortStars')}</MenuItem>
+              <MenuItem value="downloads">{t('mcp.marketplace.sortDownloads')}</MenuItem>
+              <MenuItem value="name">{t('mcp.marketplace.sortName')}</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            size="small"
+            startIcon={<TuneIcon />}
+            disabled={!filtersActive}
+            onClick={() => setFilters(DEFAULT_MARKETPLACE_FILTERS)}
+            sx={{ whiteSpace: 'nowrap', justifySelf: { xs: 'start', md: 'stretch' } }}
+          >
+            {t('mcp.marketplace.resetFilters')}
+          </Button>
+        </Box>
 
         {message && (
           <Alert severity={message.type} onClose={() => setMessage(null)}>
@@ -296,9 +402,17 @@ const MarketplaceTab: React.FC<TabProps> = ({
           </Box>
         ) : (
           <>
-            {results.length === 0 && !message && (
+            {results.length > 0 && (
+              <Typography variant="caption" color="text.secondary" aria-live="polite">
+                {t('mcp.marketplace.resultCount', { shown: visibleResults.length, loaded: results.length })}
+              </Typography>
+            )}
+
+            {visibleResults.length === 0 && !message && (
               <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
-                {activeSearch ? (
+                {results.length > 0 && filtersActive ? (
+                  <>{t('mcp.marketplace.noFilteredResults')}</>
+                ) : activeSearch ? (
                   <>{t('mcp.marketplace.noResults', { search: activeSearch })}</>
                 ) : (
                   <>{t('mcp.marketplace.startSearch')}</>
@@ -307,9 +421,11 @@ const MarketplaceTab: React.FC<TabProps> = ({
             )}
 
             <Grid container spacing={2}>
-              {results.map(result => {
+              {visibleResults.map(result => {
                 const server = result.server;
-                const installable = getInstallOptions(server).length > 0;
+                // Launch-and-connect entries are visible but not one-click
+                // installable, so they still read as "manual setup".
+                const installable = getInstallOptions(server).some(isAutoInstallable);
                 const verified = isVerifiedStatus(verificationStatusOf(result));
                 return (
                   <Grid item xs={12} sm={6} md={4} key={server.name}>
@@ -508,7 +624,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                 control={
                   <Checkbox
                     checked={trustConfirmed}
-                    onChange={e => setTrustConfirmed(e.target.checked)}
+                    onChange={e => registryInstall.setTrustConfirmed(e.target.checked)}
                   />
                 }
                 label={t('mcp.marketplace.trust')}
@@ -519,43 +635,22 @@ const MarketplaceTab: React.FC<TabProps> = ({
                   <Typography variant="subtitle2" gutterBottom>
                     {t('mcp.marketplace.chooseInstall')}
                   </Typography>
-                  <List>
-                    {selectedOptions.map((option, index) => {
-                      const missing = missingRequiredInputs(option);
-                      return (
-                        <ListItemButton
-                          key={index}
-                          disabled={!trustConfirmed}
-                          onClick={() => handleInstall(selectedServer, option)}
-                        >
-                          <ListItemIcon>
-                            {option.kind === 'package' ? <TerminalIcon /> : <CloudIcon />}
-                          </ListItemIcon>
-                          <ListItemText
-                            primary={option.label}
-                            secondary={
-                              missing.length > 0
-                                ? t('mcp.marketplace.requires', { values: formatList(missing) })
-                                : option.kind === 'package'
-                                  ? t('mcp.marketplace.runsLocal')
-                                  : t('mcp.marketplace.hostedRemote')
-                            }
-                            primaryTypographyProps={{ sx: { wordBreak: 'break-all' } }}
-                          />
-                        </ListItemButton>
-                      );
-                    })}
-                  </List>
+                  <InstallOptionList
+                    options={selectedOptions}
+                    disabled={registryInstall.installBlocked}
+                    onSelect={option => handleInstall(selectedServer, option)}
+                    onConfigureAsRemote={option => handleConfigureAsRemote(selectedServer, option)}
+                  />
                 </>
               ) : (
                 <>
                   <Alert severity="info">
                     {t('mcp.marketplace.noAutomatic')}
-                    {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                    {githubRepoUrl(selectedServer) && onHandoff && (
                       <> {t('mcp.marketplace.githubFallback')}</>
                     )}
                   </Alert>
-                  {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                  {githubRepoUrl(selectedServer) && onHandoff && (
                     <Button
                       variant="contained"
                       startIcon={<GitHubIcon />}

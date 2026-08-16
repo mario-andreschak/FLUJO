@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -37,9 +37,14 @@ import {
 
 const log = createLogger('backend/services/kvStore');
 
-// Mutable so tests can point the store at a temp directory (same seam as
-// runResources' _setRunResourcesDirForTests).
-let kvStoreDir = path.join(getDataDir(), 'db', 'kv-store');
+// Resolved per call, never captured at import time: db/ lives inside the
+// SELECTED workspace (#406), so a module-level constant would pin every request
+// to whichever workspace loaded this module first. The override is the existing
+// test seam (same shape as runResources' _setRunResourcesDirForTests) and, when
+// set, deliberately wins over the workspace so temp-dir tests stay hermetic.
+let kvStoreDirOverride: string | undefined;
+const kvStoreDir = () =>
+  kvStoreDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'kv-store');
 
 // Scope ids and key names become directory / index-entry names; they must pass
 // the same gate as storage collection ids so nothing can escape the store dir
@@ -58,18 +63,22 @@ function assertSafeName(name: string): void {
   }
 }
 
-const scopeDir = (scope: KvScopeId) => path.join(kvStoreDir, scope);
+const scopeDir = (scope: KvScopeId) => path.join(kvStoreDir(), scope);
 const indexPath = (scope: KvScopeId) => path.join(scopeDir(scope), 'index.json');
 const chainKey = (scope: KvScopeId) => `kv-store/${scope}`;
 
 // --- Settings ---------------------------------------------------------------
 
-let settingsCache: { value: KvStoreSettings; at: number } | null = null;
+// Keyed by workspace: kv-store settings are ordinary workspace-owned storage, so
+// caching a single value would leak workspace A's caps into workspace B.
+const settingsCache = new Map<string, { value: KvStoreSettings; at: number }>();
 const SETTINGS_TTL_MS = 30_000;
 
-export async function getKvStoreSettings(): Promise<KvStoreSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
-    return settingsCache.value;
+export async function getKvStoreSettings(options?: { fresh?: boolean }): Promise<KvStoreSettings> {
+  const settingsKey = workspaceCacheKey('kv-settings');
+  const cached = settingsCache.get(settingsKey);
+  if (!options?.fresh && cached && Date.now() - cached.at < SETTINGS_TTL_MS) {
+    return cached.value;
   }
   let value: KvStoreSettings;
   try {
@@ -82,13 +91,13 @@ export async function getKvStoreSettings(): Promise<KvStoreSettings> {
     log.warn('Failed to load kv-store settings; using defaults', error);
     value = DEFAULT_KV_STORE_SETTINGS;
   }
-  settingsCache = { value, at: Date.now() };
+  settingsCache.set(settingsKey, { value, at: Date.now() });
   return value;
 }
 
 /** Test seam: drop the settings cache. */
 export function _clearKvStoreSettingsCache(): void {
-  settingsCache = null;
+  settingsCache.clear();
 }
 
 // --- Index cache -------------------------------------------------------------
@@ -102,8 +111,13 @@ declare global {
 const indexCache: Map<string, KvEntry[]> =
   global.__flujo_kv_store ?? (global.__flujo_kv_store = new Map());
 
+// Scope ids are unique only WITHIN a workspace, so the shared process-wide cache
+// must be keyed by workspace as well — otherwise workspace B reads workspace A's
+// entries straight out of memory (#406).
+const cacheKey = (scope: KvScopeId) => workspaceCacheKey('kv', scope);
+
 async function loadIndex(scope: KvScopeId): Promise<KvEntry[]> {
-  const cached = indexCache.get(scope);
+  const cached = indexCache.get(cacheKey(scope));
   if (cached) return cached;
   let entries: KvEntry[] = [];
   try {
@@ -117,7 +131,7 @@ async function loadIndex(scope: KvScopeId): Promise<KvEntry[]> {
       log.error(`Failed to read kv index for scope ${scope}; treating as empty`, error);
     }
   }
-  indexCache.set(scope, entries);
+  indexCache.set(cacheKey(scope), entries);
   return entries;
 }
 
@@ -137,7 +151,7 @@ async function mutateIndex<T>(
     const entries = await loadIndex(scope);
     const { next, result } = mutator(entries);
     if (next !== entries) {
-      indexCache.set(scope, next);
+      indexCache.set(cacheKey(scope), next);
       await fs.mkdir(scopeDir(scope), { recursive: true });
       await writeFileAtomic(indexPath(scope), JSON.stringify(next, null, 2));
     }
@@ -169,7 +183,9 @@ export async function kvSet(
 ): Promise<KvSetResult> {
   assertSafeScope(scope);
   assertSafeName(name);
-  const settings = await getKvStoreSettings();
+  // Writes must reflect a freshly changed admin policy immediately; cached
+  // settings remain appropriate for read-only callers.
+  const settings = await getKvStoreSettings({ fresh: true });
   if (!settings.enabled) return { skipped: 'disabled' };
 
   const str = typeof value === 'string' ? value : String(value ?? '');
@@ -261,7 +277,7 @@ export async function loadKvSnapshot(scope: KvScopeId): Promise<Record<string, s
 /** All board ids that exist on disk (for UI/inspection). */
 export async function listKvScopes(): Promise<string[]> {
   try {
-    const dirents = await fs.readdir(kvStoreDir, { withFileTypes: true });
+    const dirents = await fs.readdir(kvStoreDir(), { withFileTypes: true });
     return dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -283,8 +299,8 @@ export async function listAllKv(): Promise<KvEntry[]> {
 
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setKvStoreDirForTests(dir: string): string {
-  const previous = kvStoreDir;
-  kvStoreDir = dir;
+  const previous = kvStoreDir();
+  kvStoreDirOverride = dir;
   indexCache.clear();
   return previous;
 }

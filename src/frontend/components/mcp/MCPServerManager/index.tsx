@@ -1,13 +1,25 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
+import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
-import McpAppsDashboard from '../McpAppsDashboard';
+import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
+import {
+  MCP_APP_PARAM,
+  MCP_APP_TOKEN_PARAM,
+  MCP_APP_URI_PARAM,
+  consumeQuickActionToken,
+  subscribeOpenMcpApp,
+  type McpAppQuickAction,
+} from '@/frontend/utils/quickActions';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
@@ -62,9 +74,11 @@ import {
   DEFAULT_CARD_GROUP_MODE,
 } from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
@@ -80,6 +94,7 @@ interface ServerManagerProps {
 }
 
 const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) => {
+  const router = useRouter();
   const { t, tp, formatNumber } = useI18n();
   const {
     servers,
@@ -110,8 +125,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+  // #374: whether THIS instance pushed the `?server=` history entry (vs. it
+  // being present on initial load from a deep link) — see handleOpenDetails.
+  const detailsPushedByUsRef = useRef(false);
   const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
   const [showAppsDashboard, setShowAppsDashboard] = useState(false);
+  // #396: app the MCP Apps dashboard should preview when opened from the
+  // navigation quick-actions menu (held in state so its identity is stable).
+  const [appsSelection, setAppsSelection] = useState<McpAppsDashboardSelection | null>(null);
   // Git update status per repository rootPath (locally cloned stdio servers).
   const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
 
@@ -164,30 +185,104 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       return;
     }
     setDetailsServerName(serverName);
+    // #374: opening the modal is a real history entry, so Back closes it
+    // instead of leaving the page. `detailsPushedByUsRef` remembers whether
+    // this instance pushed the entry (vs. it being the initial deep-linked
+    // URL) so handleCloseDetails knows whether router.back() is safe.
+    detailsPushedByUsRef.current = true;
+    router.push(magicLinkPath({ kind: 'mcp-server', id: serverName }));
   };
 
+  // While the details modal is open, a browser Back should close it (and only
+  // it) rather than leaving `/mcp` entirely — mirrors the FlowBuilder's
+  // history-guarded editor (#374).
+  useEffect(() => {
+    if (typeof window === 'undefined' || !detailsServerName) return;
+    const handlePopState = () => {
+      const query = new URLSearchParams(window.location.search);
+      if (!query.get('server')) {
+        detailsPushedByUsRef.current = false;
+        setDetailsServerName(null);
+        setToolPrefill(undefined);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [detailsServerName]);
+
+  // `?server=<id>` alone is the magic link (#374): opens the details modal and
+  // stays in the URL (durable) so Back/Forward and refresh keep it in sync,
+  // cleared on close. `?server=<id>&tool=<name>[&args=<json>]` is the older,
+  // one-shot tool-tester deep link — it still consumes/clears immediately.
   useEffect(() => {
     if (typeof window === 'undefined' || servers.length === 0) return;
     const query = new URLSearchParams(window.location.search);
     const serverName = query.get('server');
+    if (!serverName) return;
     const toolName = query.get('tool');
-    if (!serverName || !toolName) return;
     const server = servers.find((candidate) => candidate.name === serverName);
     if (!server || server.disabled) return;
-    let argumentsPrefill: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(query.get('args') || '{}');
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
-    } catch { /* malformed query arguments safely become an empty object */ }
-    setToolPrefill({ toolName, arguments: argumentsPrefill });
+    if (toolName) {
+      let argumentsPrefill: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(query.get('args') || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
+      } catch { /* malformed query arguments safely become an empty object */ }
+      setToolPrefill({ toolName, arguments: argumentsPrefill });
+    }
     setDetailsServerName(serverName);
-    window.history.replaceState(window.history.state, '', '/mcp');
-  }, [servers]);
+    if (toolName) {
+      router.replace('/mcp');
+    }
+  }, [servers, router]);
+
+  // #396: quick actions hand an MCP target to the page that already owns the
+  // dashboard and the Tool Tester. A linked tool reuses the pre-existing
+  // `?server=&tool=` deep link above; an app opens the dashboard preselected.
+  // Nothing here invokes a tool.
+  const openMcpQuickTarget = useCallback((request: McpAppQuickAction) => {
+    if (request.toolName) {
+      setShowAppsDashboard(false);
+      setToolPrefill({ toolName: request.toolName, arguments: {} });
+      setDetailsServerName(request.serverName);
+      return;
+    }
+    setAppsSelection(request.uri ? { serverName: request.serverName, uri: request.uri } : null);
+    setShowAppsDashboard(true);
+  }, []);
+
+  // Route intent, for when this page was not mounted yet. One-shot: the token
+  // is claimed and the params are dropped so a refresh does not reopen it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const query = new URLSearchParams(window.location.search);
+    const serverName = query.get(MCP_APP_PARAM);
+    if (!serverName) return;
+    if (!consumeQuickActionToken(query.get(MCP_APP_TOKEN_PARAM))) return;
+    openMcpQuickTarget({ serverName, uri: query.get(MCP_APP_URI_PARAM) || undefined });
+    router.replace('/mcp');
+  }, [openMcpQuickTarget, router]);
+
+  // In-page intent, for when the menu is used while `/mcp` is already open
+  // (pushing the same route would not re-run the effect above).
+  useEffect(() => subscribeOpenMcpApp((request, token) => {
+    if (!consumeQuickActionToken(token)) return;
+    openMcpQuickTarget(request);
+  }), [openMcpQuickTarget]);
 
   const handleCloseDetails = () => {
     const name = detailsServerName;
     setDetailsServerName(null);
     setToolPrefill(undefined);
+    if (detailsPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened the modal, so Back
+      // afterwards leaves `/mcp` instead of re-opening it.
+      detailsPushedByUsRef.current = false;
+      router.back();
+    } else if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('server')) {
+      // The modal was opened from a deep link with nothing safe to pop back to.
+      router.replace('/mcp');
+    }
     // Opening the modal (Tool tester / resources) self-heals a stale connection via the
     // backend's reconnect-on-use; refresh this card's status so it stops showing a stale
     // "crashed" message without a full page reload.
@@ -208,13 +303,19 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
-  const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
+  // #372: place the caret in the search field automatically and keep the field
+  // visible while the server list scrolls. Unlike the Flows dashboard, this page
+  // has no height-constrained ancestor, so the list Box below never becomes its
+  // own scrollport — the document scrolls instead. The toolbar therefore needs
+  // the same `StickySearchBar mode="page"` wrapper as Models/Automations.
+  const searchInputRef = useAutoFocusSearch();
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
+  const [filterOption, setFilterOption] = useWorkspaceUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Collapsed sections persisted as a string[] and re-derived into a Set.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
@@ -231,6 +332,19 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setShowAddModal(true);
     onServerModalToggle?.(true);
   };
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'open-app-marketplace') return;
+      setShowConnectionWizard(false);
+      setEditingServer(null);
+      setInitialSetupTab('marketplace');
+      setShowAddModal(true);
+      onServerModalToggle?.(true);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, [onServerModalToggle]);
 
   const handleConnectApp = () => {
     setEditingServer(null);
@@ -357,6 +471,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     // against this origin (e.g. http://localhost:4200/mcp-proxy/<name>).
     const config = format.export(servers as unknown as MCPServerConfig[], {
       proxyBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
+      workspace: getSelectedWorkspace(),
     });
 
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
@@ -496,9 +611,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the list loads.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:mcp',
-    { deps: [isLoading, filteredAndSortedServers.length] },
+    { deps: [isLoading, filteredAndSortedServers.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
@@ -735,10 +850,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       />
 
       {/* Toolbar with search, sort, and bulk actions */}
+      {/* #372: the outer spacing lives on the sticky wrapper (as padding rather
+          than the Paper's margin) so the pinned strip stays fully opaque and
+          scrolled cards cannot bleed through above/below the toolbar. */}
+      <StickySearchBar mode="page" sx={{ pt: 3, pb: 1.5 }}>
       <Paper
         elevation={0}
         variant="outlined"
-        sx={{ mx: { xs: 2, md: 3, lg: 4 }, mt: 3, mb: 1.5, p: 1.2, borderRadius: 3 }}
+        sx={{ mx: { xs: 2, md: 3, lg: 4 }, p: 1.2, borderRadius: 3 }}
       >
         <Box sx={{ 
           display: 'flex', 
@@ -755,6 +874,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             fullWidth
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -861,6 +981,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </Box>
         </Box>
       </Paper>
+      </StickySearchBar>
       
       {/* Statistics bar */}
       <Box sx={{ 
@@ -890,6 +1011,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           serverGroups.map((group) => (
             <CollapsibleCardSection
               key={group.key}
+              groupKey={group.key}
               label={group.label}
               count={group.items.length}
               expanded={!collapsedKeys.has(group.key)}
@@ -1100,7 +1222,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
       <McpAppsDashboard
         open={showAppsDashboard}
-        onClose={() => setShowAppsDashboard(false)}
+        onClose={() => {
+          setShowAppsDashboard(false);
+          setAppsSelection(null);
+        }}
+        initialSelection={appsSelection}
         onOpenToolTester={(serverName, toolName) => {
           setShowAppsDashboard(false);
           setToolPrefill({ toolName, arguments: {} });
@@ -1108,7 +1234,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         }}
       />
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollNavCluster {...scrollNavProps} />
     </Box>
   );
 };

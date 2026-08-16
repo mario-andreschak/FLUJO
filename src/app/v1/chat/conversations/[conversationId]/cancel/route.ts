@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -13,10 +14,12 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
 import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
+import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -64,6 +67,58 @@ export async function POST(
       log.warn(`Conversation state not found for cancellation`, { requestId, conversationId });
       // If the conversation doesn't exist, cancellation is technically successful (it's not running)
       return NextResponse.json({ success: true, message: 'Conversation not found, assumed cancelled.' });
+    }
+
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request);
+      if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be cancelled or resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced cancellation.',
+      }, { status: 409 });
+    }
+
+    if (sharedState.personaAttribution) {
+      const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
+      if (!activityId || !behaviorRevisionId) {
+        return NextResponse.json({
+          error: 'Persona conversation attribution is incomplete; refusing an unfenced cancellation.',
+        }, { status: 409 });
+      }
+      // These registries are process-local wake/abort aids only. Durable state
+      // finalization and Activity cancellation remain dispatcher-owned.
+      clearSteeringInbox(conversationId);
+      cancelAllToolCalls(conversationId);
+      if (listPendingToolCalls(conversationId).length > 0) {
+        clearPendingApprovals(conversationId);
+      }
+      const dispatch = await cancelPersonaFlowDispatch({
+        personaId,
+        activityId,
+        behaviorRevisionId,
+        conversationId,
+        reason: 'Execution was cancelled by the user.',
+      }, { waitForCompletion: true });
+      if (dispatch.state === 'error') {
+        return NextResponse.json({
+          error: dispatch.error?.message ?? 'Persona cancellation failed.',
+          code: dispatch.error?.code ?? 'persona_dispatch_error',
+          dispatch_id: dispatch.id,
+        }, { status: 500 });
+      }
+      return NextResponse.json({
+        success: true,
+        message: 'Cancellation request processed.',
+        dispatch_id: dispatch.id,
+        dispatch_state: dispatch.state,
+      }, { status: dispatch.state === 'cancelled' ? 200 : 202 });
     }
 
     // 3. Durably record the cancellation request BEFORE signalling the live
@@ -131,6 +186,13 @@ export async function POST(
       } catch (repairError) {
         log.warn(`Failed to synthesize tool results on cancel; continuing`, { requestId, conversationId, repairError });
       }
+      sharedState.debugMode = false;
+      sharedState.debugPauseRequested = false;
+      sharedState.debugResumeAfterDetach = false;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPendingToolCalls = undefined;
+      sharedState.breakpoints = [];
+      sharedState.lastBreakNodeId = undefined;
     }
 
     // 4. Save updated state (both memory and storage)
@@ -163,3 +225,5 @@ export async function POST(
     return NextResponse.json({ error: 'Internal server error processing cancellation' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

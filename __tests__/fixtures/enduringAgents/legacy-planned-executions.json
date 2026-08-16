@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "paused": false,
+  "executions": [
+    {
+      "id": "legacy-scheduled-run",
+      "name": "Legacy scheduled run",
+      "enabled": false,
+      "flowId": "legacy-tool-flow",
+      "prompt": "Run the legacy tool flow once each morning.",
+      "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "timezone": "UTC",
+        "catchUp": false
+      },
+      "createdAt": "2023-11-14T22:13:20.000Z",
+      "updatedAt": "2023-11-14T22:13:20.000Z"
+    }
+  ]
+}

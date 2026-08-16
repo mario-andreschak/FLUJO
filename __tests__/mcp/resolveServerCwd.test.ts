@@ -37,6 +37,32 @@ describe('isPackageRunnerCommand (#40)', () => {
 });
 
 describe('resolveServerCwd (#40)', () => {
+  it('prefers a private runtime cwd for package runners', () => {
+    expect(
+      resolveServerCwd({
+        command: 'npx',
+        args: ['-y', '@example/weather-mcp'],
+        rootPath: 'C:/flujo/workspaces/demo/mcp-servers/weather-mcp',
+        serverName: 'weather-mcp',
+        defaultCwd: 'mcp-servers/weather-mcp',
+        packageRunnerCwd: 'C:/flujo/workspaces/demo/userdata/mcp-runtime/hash/cwd',
+      })
+    ).toBe('C:/flujo/workspaces/demo/userdata/mcp-runtime/hash/cwd');
+  });
+
+  it('does not apply the private package-runner cwd to ordinary commands', () => {
+    expect(
+      resolveServerCwd({
+        command: 'node',
+        args: ['dist/index.js'],
+        rootPath: 'C:/flujo/workspaces/demo/mcp-servers/weather-mcp',
+        serverName: 'weather-mcp',
+        defaultCwd: 'mcp-servers/weather-mcp',
+        packageRunnerCwd: 'C:/flujo/workspaces/demo/userdata/mcp-runtime/hash/cwd',
+      })
+    ).toBe('C:/flujo/workspaces/demo/mcp-servers/weather-mcp');
+  });
+
   it('drops the package-named leaf dir for npx (the reported bug)', () => {
     expect(
       resolveServerCwd({

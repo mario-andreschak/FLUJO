@@ -13,6 +13,7 @@ import {
   ensureVendoredFlowGenerator,
   FLOW_GENERATOR_ID,
   FLOW_GENERATOR_ROLE,
+  FLOW_GENERATOR_VERSION,
   restoreVendoredFlowGenerator,
 } from '@/backend/services/flow/systemFlows';
 
@@ -31,13 +32,13 @@ describe('vendored Flow Generator', () => {
       expect.objectContaining({
         systemRole: FLOW_GENERATOR_ROLE,
         systemStage: 'architect',
-        systemFlowVersion: 3,
+        systemFlowVersion: FLOW_GENERATOR_VERSION,
         maxTurns: 12,
       }),
       expect.objectContaining({
         systemRole: FLOW_GENERATOR_ROLE,
         systemStage: 'compiler',
-        systemFlowVersion: 3,
+        systemFlowVersion: FLOW_GENERATOR_VERSION,
         maxTurns: 16,
       }),
     ]);
@@ -48,22 +49,30 @@ describe('vendored Flow Generator', () => {
       'list_flow_building_blocks',
       'get_flow_authoring_guide',
       'draft_generated_flow',
-      'search_mcp_marketplace',
+      'find_mcp_server',
+      'find_best_mcp_server',
     ]));
     expect(enabledTools).not.toEqual(expect.arrayContaining([
       'install_mcp_server',
       'install_best_mcp_server',
     ]));
     expect(stages.every((stage) => stage.data.properties?.boundModel === undefined)).toBe(true);
-    expect(flow.permissionRules?.map((rule) => rule.action)).toEqual(expect.arrayContaining([
-      'list_flow_building_blocks',
-      'get_flow_authoring_guide',
-      'draft_generated_flow',
-      'search_mcp_marketplace',
-    ]));
-    expect(flow.permissionRules?.map((rule) => rule.action)).not.toEqual(
-      expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server'])
+  });
+
+  // #338/A3: generated flows must hand values over with run-scoped ${var:}
+  // rather than minting persistent KV state, which needs an explicit author
+  // decision about scope and retention. The guidance lives in the vendored
+  // prompts, so a version bump is what ships it to existing installs.
+  it('tells the architect to use run variables and never author KV state', () => {
+    const flow = buildVendoredFlowGenerator();
+    const architect = flow.nodes.find(
+      (node) => node.type === 'process' && node.data.properties?.systemStage === 'architect',
     );
+    const prompt = String(architect?.data.properties?.promptTemplate ?? '');
+    expect(prompt).toContain('${var:NAME}');
+    expect(prompt).toContain('captureVariable');
+    expect(prompt).toContain('Do not generate captureKv');
+    expect(prompt).toContain('${kv:...}');
   });
 
   it('seeds only when missing and never overwrites an edited flow', async () => {
@@ -78,7 +87,7 @@ describe('vendored Flow Generator', () => {
     expect(saveFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([1, 2])('upgrades incomplete v%s through the versioned save path', async (version) => {
+  it.each([1, 2, 3, 4])('upgrades incomplete v%s through the versioned save path', async (version) => {
     const legacy = buildVendoredFlowGenerator();
     for (const stage of legacy.nodes.filter((node) => node.type === 'process')) {
       stage.data.properties = {
@@ -116,8 +125,6 @@ describe('vendored Flow Generator', () => {
     expect(snapshot.nodes
       .filter((node) => node.type === 'mcp')
       .flatMap((node) => node.data.properties?.enabledTools ?? []))
-      .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
-    expect(snapshot.permissionRules?.map((rule) => rule.action))
       .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
     expect(snapshot.nodes.find((node) => node.type === 'start')
       ?.data.properties?.promptTemplate).toContain('NOT opted in');

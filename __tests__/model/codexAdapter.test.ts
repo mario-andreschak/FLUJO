@@ -8,7 +8,7 @@
  *     final answer) and usage maps into the OpenAI shape with the cached split.
  *   - FLUJO tools are exposed through the bridge; an MCP dispatch records the
  *     assistant(tool_call)+tool(result) pair; a rejected approval never runs
- *     the tool and surfaces the #247 feedback text.
+ *     the tool and returns the fixed denial result.
  *   - a plain handoff ends the run and surfaces as a routing tool_call.
  */
 import type OpenAI from 'openai';
@@ -75,8 +75,9 @@ jest.mock('@/backend/services/mcp', () => ({
 jest.mock('@/backend/services/runResources', () => ({
   getRunResourceSettings: jest.fn(async () => ({})),
 }));
+const boundToolResultMock = jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content }));
 jest.mock('@/backend/services/runResources/boundToolResult', () => ({
-  boundToolResult: jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content })),
+  boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
 }));
 jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
   resolveCodexModelCatalogPath: jest.fn(async () => 'C:\\Users\\test\\.codex\\models_cache.json'),
@@ -131,13 +132,20 @@ beforeEach(() => {
   ]);
   listServerToolsMock.mockResolvedValue({ tools: [] });
   bridgeCloseMock.mockClear();
+  boundToolResultMock.mockReset();
+  boundToolResultMock.mockImplementation(async ({ content }: { content: string }) => ({ spilled: false, content }));
   capturedBridgeTools = [];
   capturedBridgeInstructions = undefined;
   _clearCodexSessionsForTests();
   runStreamedMock.mockImplementation(async () => ({
     events: eventStream([
       agentMessage('hello from codex'),
-      turnCompleted({ input_tokens: 100, cached_input_tokens: 40, output_tokens: 7 }),
+      turnCompleted({
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        cache_write_input_tokens: 25,
+        output_tokens: 7,
+      }),
     ])(),
   }));
 });
@@ -240,6 +248,7 @@ describe('CodexAdapter — transcript & usage', () => {
     expect(completion.usage?.prompt_tokens).toBe(100);
     expect(completion.usage?.completion_tokens).toBe(7);
     expect(completion.usage?.prompt_tokens_details?.cached_tokens).toBe(40);
+    expect(completion.usage?.prompt_tokens_details?.cache_write_tokens).toBe(25);
 
     // The assistant text streamed live is the SAME (single) transcript entry —
     // no duplicate final message.
@@ -429,6 +438,29 @@ const mcpTool: OpenAI.ChatCompletionFunctionTool = {
   },
 };
 
+describe('CodexAdapter — cooperative terminal controls', () => {
+  it('stops before another SDK turn can narrate after a terminal local control', async () => {
+    let turnEnded = false;
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        yield threadStarted('thread-terminal-control');
+        turnEnded = true;
+        yield agentMessage('This narration must not escape.');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const result = await new CodexAdapter().createCompletion(baseInput({
+      shouldEndAgenticTurn: () => turnEnded,
+    }));
+
+    expect(result.transcript).toEqual([]);
+    expect(result.completion.choices[0].message.content).toBeNull();
+    const options = runStreamedMock.mock.calls[0][1] as { signal: AbortSignal };
+    expect(options.signal.aborted).toBe(true);
+  });
+});
+
 describe('CodexAdapter — tool bridging', () => {
   it('exposes MCP tools on the bridge under readable names and wires the config', async () => {
     await new CodexAdapter().createCompletion(
@@ -494,6 +526,7 @@ describe('CodexAdapter — tool bridging', () => {
 
     const { transcript } = await new CodexAdapter().createCompletion(
       baseInput({
+        conversationId: 'conversation-current',
         tools: [mcpTool],
         toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things', timeout: 30 } },
       }),
@@ -508,10 +541,77 @@ describe('CodexAdapter — tool bridging', () => {
       undefined,
       expect.any(AbortSignal),
       'model',
+      'conversation:conversation-current',
+      { conversationId: 'conversation-current' },
     );
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
+  });
+
+  it('forwards MCP progress from a bridged tool to FLUJO live progress', async () => {
+    const onToolProgress = jest.fn();
+    callToolMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const report = args[4] as ((value: { progress: number; total?: number; message?: string }) => void);
+      report({ progress: 7, total: 10, message: 'building' });
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      onToolProgress,
+    }));
+
+    expect(onToolProgress).toHaveBeenCalledWith({
+      toolCallId: expect.any(String),
+      name: 'my-server__list_things',
+      progress: 7,
+      total: 10,
+      message: 'building',
+    });
+  });
+
+  it('preserves native media when oversized text is replaced by a bounded preview', async () => {
+    const image = { type: 'image' as const, data: 'BASE64_IMAGE', mimeType: 'image/png' };
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }, image] },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let bridgeResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        bridgeResult = await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conv-1',
+        tools: [mcpTool],
+        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      }),
+    );
+
+    expect(bridgeResult).toMatchObject({
+      content: [image, { type: 'text', text: '[bounded text preview]' }],
+    });
+    const toolMessage = transcript!.find(message => message.role === 'tool');
+    expect(toolMessage?.content).toContain('[bounded text preview]');
+    expect(toolMessage?.content).not.toContain('BASE64_IMAGE');
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.not.stringContaining('BASE64_IMAGE'),
+    }));
   });
 
   it('streams a pending tool call before the bridge result resolves', async () => {
@@ -556,6 +656,47 @@ describe('CodexAdapter — tool bridging', () => {
     if (transcript?.[1].role === 'tool') {
       expect(transcript[1].tool_call_id).toBe(pendingCall.tool_calls[0].id);
     }
+  });
+
+  it('paces the assembled tool arguments as deltas under the pending card id (#337)', async () => {
+    const payload = 'x'.repeat(2_000);
+    callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'ok' }] } });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ payload });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+    const streamed: FlujoChatMessage[] = [];
+    const deltas: Array<{ messageId: string; toolCallDelta?: { id?: string; nameDelta?: string; argumentsDelta?: string } }> = [];
+
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+        onTranscriptMessage: message => streamed.push(message),
+        onModelDelta: delta => deltas.push(delta),
+      }),
+    );
+
+    const pendingCall = streamed.find(message =>
+      Array.isArray((message as { tool_calls?: unknown[] }).tool_calls)) as FlujoChatMessage & {
+        tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[];
+      };
+    const toolDeltas = deltas.filter(delta => delta.toolCallDelta);
+
+    // The name arrives first, then the arguments in several visible fragments.
+    expect(toolDeltas[0].toolCallDelta).toMatchObject({
+      id: pendingCall.tool_calls[0].id,
+      nameDelta: pendingCall.tool_calls[0].function.name,
+    });
+    expect(toolDeltas.length).toBeGreaterThan(2);
+    expect(toolDeltas.map(delta => delta.toolCallDelta?.argumentsDelta ?? '').join(''))
+      .toBe(pendingCall.tool_calls[0].function.arguments);
+    // Same message id as the durable pending card, so the draft reconciles
+    // instead of leaving a duplicate tool call in the transcript.
+    expect(new Set(toolDeltas.map(delta => delta.messageId))).toEqual(new Set([pendingCall.id]));
   });
 
   it('records the definition-advertised MCP App UI and ignores a result redirect', async () => {
@@ -740,8 +881,8 @@ describe('CodexAdapter — tool bridging', () => {
     expect(transcript!.filter(m => m.role === 'tool')).toHaveLength(1);
   });
 
-  it('a rejected approval never dispatches and surfaces the feedback (#247)', async () => {
-    const approvals = jest.fn(async () => ({ approved: false, feedback: 'wrong target' }));
+  it('a rejected approval never dispatches and returns the fixed denial result', async () => {
+    const approvals = jest.fn(async () => false);
     runStreamedMock.mockImplementationOnce(async () => ({
       events: (async function* () {
         const res = await capturedBridgeTools[0].handler({ q: 'x' });
@@ -775,12 +916,12 @@ describe('CodexAdapter — tool bridging', () => {
     const toolMsg = transcript!.find(m => m.role === 'tool')!;
     expect(callMsg?.tool_calls).toHaveLength(1);
     expect(toolMsg.role === 'tool' ? toolMsg.tool_call_id : undefined).toBe(callMsg?.tool_calls?.[0].id);
-    expect(toolMsg.content).toContain('User rejected this tool call: wrong target');
+    expect(toolMsg.content).toBe('tool denied');
     expect(toolMsg.ui).toEqual({
       uri: 'ui://advertised-dashboard',
       serverName: 'my-server',
       toolName: 'list_things',
-      cancelledReason: 'User rejected this tool call: wrong target',
+      cancelledReason: 'tool denied',
       isError: true,
     });
   });

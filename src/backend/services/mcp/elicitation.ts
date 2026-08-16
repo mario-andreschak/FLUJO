@@ -11,6 +11,12 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import { getElicitationContext } from './elicitationContext';
 import { registerPendingElicitation } from './elicitationRegistry';
 import { captureExternalAuthorizationElicitation } from './externalAuthorization';
+import { relatedTaskIdOf } from '@/shared/types/mcp/tasks';
+import {
+  noteTaskInputRequested,
+  noteTaskInputResolved,
+} from './taskInputRegistry';
+import { bindToCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/elicitation');
 
@@ -54,14 +60,23 @@ export function registerElicitationHandler(client: Client, config: MCPServerConf
 export function createElicitationHandler(
   config: MCPServerConfig
 ): (request: { params?: unknown }) => Promise<ElicitResult> {
-  return async (request): Promise<ElicitResult> => {
+  return bindToCurrentWorkspace(async (request: { params?: unknown }): Promise<ElicitResult> => {
     const params = request.params as {
       mode?: string;
       message?: string;
       requestedSchema?: Record<string, unknown>;
       elicitationId?: string;
       url?: string;
+      _meta?: Record<string, unknown>;
     } | undefined;
+
+    // MCP Tasks (#404): a server asks for the input a task is waiting on by
+    // relating an ordinary elicitation to the task via
+    // `_meta["io.modelcontextprotocol/related-task"]`. Answering it IS the task
+    // update (the resolved spec/SDK has no `tasks/update`), so the two channels
+    // are correlated here for the client task poll loop. Only ids are recorded —
+    // never the prompt, schema or the user's answer.
+    const relatedTaskId = relatedTaskIdOf(params?._meta);
 
     const externalAuthorizationResult =
       await captureExternalAuthorizationElicitation(config.name, params ?? {});
@@ -72,6 +87,11 @@ export function createElicitationHandler(
     }
 
     const ctx = getElicitationContext(config.name);
+    if (!ctx && relatedTaskId) {
+      log.warn(
+        `Task ${relatedTaskId} on ${config.name} requested input outside an attended run; auto-cancelling`
+      );
+    }
     if (!ctx) {
       // No active run context means we're outside a flow run (e.g. a test
       // call from the server settings). Auto-cancel to avoid hanging.
@@ -89,6 +109,9 @@ export function createElicitationHandler(
 
     const elicitationId = crypto.randomUUID();
     log.info(`Suspending for elicitation ${elicitationId} from ${config.name} in conv ${ctx.conversationId}`);
+    if (relatedTaskId) {
+      noteTaskInputRequested(config.name, relatedTaskId, elicitationId);
+    }
 
     // Emit SSE event to the frontend.
     const emit = executionEventBus.emitterFor(ctx.conversationId);
@@ -102,6 +125,10 @@ export function createElicitationHandler(
     // Await the user's response (or a 5-minute timeout).
     const result = await registerPendingElicitation(elicitationId);
     log.info(`Elicitation ${elicitationId} resolved with action=${result.action}`);
+    if (relatedTaskId) {
+      // Idempotent: a duplicate submission for the same id is ignored.
+      noteTaskInputResolved(config.name, relatedTaskId, elicitationId, result.action);
+    }
     return result;
-  };
+  });
 }

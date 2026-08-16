@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextResponse } from 'next/server';
 import { loadItem } from '@/utils/storage/backend';
@@ -8,7 +9,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/v1/models/route');
 
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -80,4 +81,11 @@ export async function GET() {
       { status: 500 }
     );
   }
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

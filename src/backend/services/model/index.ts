@@ -10,7 +10,13 @@ import {
   CompletionResponse,
   NormalizedModel
 } from '@/shared/types/model/response';
-import { ModelProvider, ModelAdapter, isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
+import {
+  ModelProvider,
+  ModelAdapter,
+  isSelfOrchestratingAdapter,
+  normalizeModelTemperature,
+  validateModelConfiguration,
+} from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import {
   encryptApiKey,
@@ -98,6 +104,11 @@ class ModelService {
   async addModel(model: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
+      const configurationError = validateModelConfiguration(model);
+      if (configurationError) {
+        return { success: false, error: configurationError };
+      }
+
       // Load current models
       const models = await this.loadModels();
 
@@ -205,6 +216,11 @@ class ModelService {
       if (!model.provider) {
         log.warn('updateModel: Missing provider', { modelId: model.id });
         return { success: false, error: 'Provider is required' };
+      }
+
+      const configurationError = validateModelConfiguration(model);
+      if (configurationError) {
+        return { success: false, error: configurationError };
       }
 
       // Check for duplicate display name (excluding the current model)
@@ -521,6 +537,20 @@ class ModelService {
       }
     }
 
+    // Merge the resolved overrides (name/baseUrl/provider/adapter) onto the
+    // stored model so route resolution (getCompletionAdapter /
+    // describeCompletionAdapter) sees exactly what will run, not a stale
+    // stored record when a draft edit changed provider/adapter/baseUrl.
+    const mergedModel: Model | undefined = storedModel
+      ? {
+          ...storedModel,
+          name: modelName,
+          baseUrl: baseUrl ?? storedModel.baseUrl,
+          provider: (provider ?? storedModel.provider) as Model['provider'],
+          adapter: adapter ?? storedModel.adapter,
+        }
+      : undefined;
+
     return testModelConnection({
       modelName,
       baseUrl,
@@ -528,7 +558,7 @@ class ModelService {
       provider,
       adapter,
       // Native adapters need a Model-shaped object to run via getCompletionAdapter.
-      model: storedModel ?? undefined,
+      model: mergedModel,
     });
   }
 
@@ -649,11 +679,10 @@ class ModelService {
       }
 
       const temperature =
-        typeof params.temperature === 'number'
+        typeof params.temperature === 'number' && Number.isFinite(params.temperature)
           ? params.temperature
-          : model.temperature
-            ? parseFloat(model.temperature)
-            : 0.0;
+          : normalizeModelTemperature(model.temperature, model.provider, model.adapter, model.name) ??
+            (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
 
       // --- Single provider call through the completion-adapter seam ---
       // Resolve the output-token cap once, here at the seam boundary, so the

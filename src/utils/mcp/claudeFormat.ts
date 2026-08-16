@@ -33,7 +33,6 @@ export interface ClaudeServerEntry {
   serverUrl?: string;
   websocketUrl?: string;
   disabled?: boolean;
-  autoApprove?: string[];
 }
 
 export interface ClaudeConfig {
@@ -66,6 +65,13 @@ export interface ToClaudeFormatOptions {
    * an empty string, yielding a relative `/mcp-proxy/<name>` URL.
    */
   proxyBaseUrl?: string;
+  /** Workspace made explicit on exported FLUJO proxy endpoints. */
+  workspace?: string;
+}
+
+export function exposedProxyUrl(base: string, name: string, workspace?: string): string {
+  const url = `${base.replace(/\/$/, '')}/mcp-proxy/${encodeURIComponent(name)}`;
+  return workspace ? `${url}?workspace=${encodeURIComponent(workspace)}` : url;
 }
 
 /**
@@ -87,7 +93,7 @@ export function toClaudeFormat(
     if ((server as MCPServerConfig).exposeAsMcpServer) {
       mcpServers[server.name] = {
         type: 'http',
-        url: `${proxyBaseUrl}/mcp-proxy/${server.name}`,
+        url: exposedProxyUrl(proxyBaseUrl, server.name, options.workspace),
       };
       continue;
     }
@@ -105,6 +111,9 @@ export function toClaudeFormat(
         break;
       }
       case 'streamable': {
+        // NOTE (#392): a `launch` spec is deliberately NOT exported. It is
+        // FLUJO-specific lifecycle metadata with no Claude equivalent; Claude
+        // would be handed a URL it cannot reach and nothing to start behind it.
         entry.type = 'http';
         entry.url = server.serverUrl;
         if (server.headers && Object.keys(server.headers).length > 0) {
@@ -235,7 +244,6 @@ export function fromClaudeFormat(input: string | object): ImportResult {
       name,
       env,
       disabled: entry.disabled ?? false,
-      autoApprove: Array.isArray(entry.autoApprove) ? entry.autoApprove : [],
       rootPath: '',
       _buildCommand: '',
       _installCommand: '',

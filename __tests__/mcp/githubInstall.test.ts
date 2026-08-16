@@ -24,8 +24,9 @@ jest.mock('simple-git', () => ({
 }));
 
 let mockDataDir = '';
-jest.mock('@/utils/paths', () => ({
-  getDataDir: () => mockDataDir,
+let mockWorkspaceDataDir = '';
+jest.mock('@/utils/workspace', () => ({
+  getWorkspaceDataDir: () => mockWorkspaceDataDir,
 }));
 
 const updateServerConfigMock = jest.fn();
@@ -75,6 +76,7 @@ async function writeProject(repoPath: string): Promise<void> {
 beforeEach(async () => {
   jest.clearAllMocks();
   mockDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-github-install-'));
+  mockWorkspaceDataDir = path.join(mockDataDir, 'workspaces', 'default-workspace');
   mockPackageJson = {
     bin: { server: './dist/server.js' },
     packageManager: 'pnpm@10.0.0',
@@ -131,7 +133,6 @@ describe('installGithubServer', () => {
       env: { API_TOKEN: 'super-secret', LOG_LEVEL: 'debug' },
       secretEnvNames: ['API_TOKEN'],
       disabled: true,
-      autoApprove: ['search'],
       folder: 'package-folder',
     });
 
@@ -170,7 +171,6 @@ describe('installGithubServer', () => {
         command: 'node',
         args: ['./dist/server.js'],
         disabled: true,
-        autoApprove: ['search'],
         folder: 'package-folder',
         env: {
           API_TOKEN: { value: 'super-secret', metadata: { isSecret: true } },

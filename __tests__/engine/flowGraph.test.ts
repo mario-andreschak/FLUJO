@@ -92,6 +92,38 @@ describe('PocketflowEngine graph traversal', () => {
     expect(node.type).toBe('start');
   });
 
+  it('filters a presentation-only Trigger at position 1 and still starts at Start', async () => {
+    const flow = fixtureFlow();
+    const triggerId = 'presentation-trigger';
+    flow.nodes = [
+      {
+        id: triggerId,
+        type: 'trigger',
+        position: { x: 0, y: -1 },
+        data: { label: 'Daily', type: 'trigger', properties: { executionId: 'planned-1' } },
+      } as any,
+      ...flow.nodes,
+    ];
+    flow.edges = [
+      {
+        id: `${triggerId}-${START}`,
+        source: triggerId,
+        target: START,
+        sourceHandle: 'trigger-bottom',
+        targetHandle: 'start-top',
+        data: { edgeType: 'standard' },
+      } as any,
+      ...flow.edges,
+    ];
+    getFlow.mockResolvedValue(flow);
+    engine = new PocketflowEngine();
+
+    const node = await engine.resolveNode(state(undefined));
+
+    expect(node.id).toBe(START);
+    expect(node.type).toBe('start');
+  });
+
   it('resolves a NON-start node by id (BFS must reach it through clones)', async () => {
     // This is the invariant that, if broken, makes resolveNode fall back to the
     // start node every step — the shape of the "stuck on start" bug.

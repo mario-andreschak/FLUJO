@@ -6,6 +6,7 @@ import {
   type StdioOAuthClient,
   type StdioOAuthMcpClient,
   type StdioOAuthMrtrController,
+  type ValidatedUrlElicitationRequest,
 } from "mcp-stdio-oauth/client";
 import {
   STDIO_OAUTH_EXTENSION_CAPABILITY,
@@ -17,6 +18,11 @@ import type {
   MCPStdioOAuthStatus,
 } from "@/shared/types/mcp";
 import { createLogger } from "@/utils/logger";
+import {
+  bindToCurrentWorkspace,
+  getCurrentWorkspace,
+  workspaceCacheKey,
+} from "@/utils/workspace";
 
 const log = createLogger("backend/services/mcp/externalAuthorization");
 
@@ -49,6 +55,7 @@ export interface ExternalAuthorizationPrompt {
 }
 
 type PendingSession = {
+  workspace: string;
   sessionId: string;
   serverName: string;
   authorizationId: string;
@@ -90,6 +97,18 @@ const STATUS_TIMEOUT_MS = 8_000;
 const PREPARE_TIMEOUT_MS = 30_000;
 const SESSION_TIMEOUT_MS = 5 * 60_000;
 
+function statusKey(serverName: string): string {
+  return workspaceCacheKey(serverName);
+}
+
+function sessionKey(workspace: string, sessionId: string): string {
+  return `${workspace}\0${sessionId}`;
+}
+
+function currentSessionKey(sessionId: string): string {
+  return sessionKey(getCurrentWorkspace(), sessionId);
+}
+
 /**
  * Bind the package helper to a client before connect. Calling this function is
  * also FLUJO's record that it advertised the extension. Only local stdio
@@ -107,14 +126,14 @@ export function registerExternalAuthorizationClient(
     mcpClient: client as unknown as StdioOAuthMcpClient,
     installElicitationHandler: false,
     ...(mrtrController ? { mrtrController } : {}),
-    onUrlElicitation: async (request) => {
+    onUrlElicitation: bindToCurrentWorkspace(async (request: ValidatedUrlElicitationRequest) => {
       const result = await captureExternalAuthorizationElicitation(serverName, {
         mode: request.mode,
         url: request.target.href,
         message: request.message,
       });
       return result ?? { action: "cancel" };
-    },
+    }),
   });
 
   stdioOAuthClients.set(client, oauth);
@@ -158,7 +177,8 @@ export async function getExternalAuthorizationStatus(
     return { supported: false, authorizations: [] };
   }
 
-  const cached = statusCache.get(serverName);
+  const key = statusKey(serverName);
+  const cached = statusCache.get(key);
   if (
     !options.force &&
     cached &&
@@ -183,14 +203,14 @@ export async function getExternalAuthorizationStatus(
     authorizations,
     blockingAuthorization: blockingAuthorization(authorizations),
   };
-  statusCache.set(serverName, { value, timestamp: Date.now() });
+  statusCache.set(key, { value, timestamp: Date.now() });
   return value;
 }
 
 export function invalidateExternalAuthorizationStatus(
   serverName: string,
 ): void {
-  statusCache.delete(serverName);
+  statusCache.delete(statusKey(serverName));
 }
 
 function publishPrompt(
@@ -214,14 +234,15 @@ function publishPrompt(
 }
 
 function findPendingSession(serverName: string): PendingSession | undefined {
+  const workspace = getCurrentWorkspace();
   return Array.from(pendingSessions.values())
-    .filter((session) => session.serverName === serverName)
+    .filter((session) => session.workspace === workspace && session.serverName === serverName)
     .sort((a, b) => b.createdAt - a.createdAt)[0];
 }
 
 function removeSession(session: PendingSession): void {
   if (session.timer) clearTimeout(session.timer);
-  pendingSessions.delete(session.sessionId);
+  pendingSessions.delete(sessionKey(session.workspace, session.sessionId));
 }
 
 export function cancelExternalAuthorization(
@@ -229,7 +250,7 @@ export function cancelExternalAuthorization(
   sessionId?: string,
 ): boolean {
   const session = sessionId
-    ? pendingSessions.get(sessionId)
+    ? pendingSessions.get(currentSessionKey(sessionId))
     : findPendingSession(serverName);
   if (!session || session.serverName !== serverName) return false;
   if (session.resolveElicitation) {
@@ -259,7 +280,7 @@ export function declineExternalAuthorization(
   serverName: string,
   sessionId: string,
 ): boolean {
-  const session = pendingSessions.get(sessionId);
+  const session = pendingSessions.get(currentSessionKey(sessionId));
   if (
     !session ||
     session.serverName !== serverName ||
@@ -386,7 +407,7 @@ export async function prepareExternalAuthorization(
   const previousSession = findPendingSession(serverName);
   if (previousSession) {
     cancelExternalAuthorization(serverName, previousSession.sessionId);
-    if (pendingSessions.has(previousSession.sessionId)) {
+    if (pendingSessions.has(sessionKey(previousSession.workspace, previousSession.sessionId))) {
       throw new Error(
         "The previous authorization request is still closing. Try again in a moment.",
       );
@@ -404,6 +425,7 @@ export async function prepareExternalAuthorization(
     },
   );
   const session: PendingSession = {
+    workspace: getCurrentWorkspace(),
     sessionId: crypto.randomUUID(),
     serverName,
     authorizationId,
@@ -413,27 +435,22 @@ export async function prepareExternalAuthorization(
     promptPromise,
     abortController: new AbortController(),
   };
-  session.timer = setTimeout(() => {
+  session.timer = setTimeout(bindToCurrentWorkspace(() => {
     const resolve = session.resolveElicitation;
     session.resolveElicitation = undefined;
     session.elicitationResponded = true;
     resolve?.({ action: "cancel" });
     session.abortController.abort();
     session.rejectPrompt(new Error("Authorization request timed out."));
-  }, SESSION_TIMEOUT_MS);
-  pendingSessions.set(session.sessionId, session);
+  }), SESSION_TIMEOUT_MS);
+  pendingSessions.set(sessionKey(session.workspace, session.sessionId), session);
 
-  const cancelFromCaller = (): void => {
+  const cancelFromCaller = bindToCurrentWorkspace((): void => {
     cancelExternalAuthorization(serverName, session.sessionId);
-  };
+  });
   options.signal?.addEventListener("abort", cancelFromCaller, { once: true });
 
-  void externalAuthorizationClient(client)
-    .start(authorizationId, {
-      timeout: SESSION_TIMEOUT_MS,
-      signal: session.abortController.signal,
-    })
-    .then(async (result) => {
+  const handleStarted = bindToCurrentWorkspace(async (result: { state: string }) => {
       invalidateExternalAuthorizationStatus(serverName);
       if (result.state === "ready") {
         session.resolvePrompt({
@@ -473,15 +490,22 @@ export async function prepareExternalAuthorization(
         ),
       );
       removeSession(session);
-    })
-    .catch((error) => {
-      session.rejectPrompt(
-        error instanceof Error ? error : new Error(String(error)),
-      );
-    })
-    .finally(() => {
-      removeSession(session);
     });
+  const handleStartError = bindToCurrentWorkspace((error: unknown) => {
+    session.rejectPrompt(
+      error instanceof Error ? error : new Error(String(error)),
+    );
+  });
+  const handleStartFinally = bindToCurrentWorkspace(() => removeSession(session));
+
+  void externalAuthorizationClient(client)
+    .start(authorizationId, {
+      timeout: SESSION_TIMEOUT_MS,
+      signal: session.abortController.signal,
+    })
+    .then(handleStarted)
+    .catch(handleStartError)
+    .finally(handleStartFinally);
 
   let prepareTimer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -514,7 +538,7 @@ export function confirmExternalAuthorization(
   serverName: string,
   sessionId: string,
 ): ExternalAuthorizationPrompt {
-  const session = pendingSessions.get(sessionId);
+  const session = pendingSessions.get(currentSessionKey(sessionId));
   if (!session || session.serverName !== serverName || !session.prompt) {
     throw new Error(
       "The authorization request is no longer active. Start it again.",
@@ -540,8 +564,9 @@ export function confirmExternalAuthorization(
 
 export function clearExternalAuthorizationState(serverName: string): void {
   invalidateExternalAuthorizationStatus(serverName);
+  const workspace = getCurrentWorkspace();
   for (const session of Array.from(pendingSessions.values())) {
-    if (session.serverName !== serverName) continue;
+    if (session.workspace !== workspace || session.serverName !== serverName) continue;
     session.resolveElicitation?.({ action: "cancel" });
     session.abortController.abort();
     session.rejectPrompt(

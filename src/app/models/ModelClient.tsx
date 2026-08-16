@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
@@ -27,6 +27,8 @@ import ModelModal from '@/frontend/components/models/modal';
 import ModelConnectionWizard, {
   GuidedCreationResult,
 } from '@/frontend/components/models/ModelConnectionWizard';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
 import { getModelService, ModelResult } from '@/frontend/services/model';
@@ -37,16 +39,16 @@ import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('app/models/ModelClient');
 
-interface ModelClientProps {
-  initialModels: Model[];
-}
-
-export default function ModelClient({ initialModels }: ModelClientProps) {
+export default function ModelClient() {
   const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [models, setModels] = useState(initialModels);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: caret placed automatically; this page scrolls the document, so the
+  // search toolbar also needs to stay pinned while scrolling (see wrapper below).
+  const searchInputRef = useAutoFocusSearch();
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
@@ -55,6 +57,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
+  // entry (vs. it being present on initial load from a deep link) — lets
+  // closing prefer `router.back()` (a clean history stack) over `router.push`
+  // while still falling back safely for a direct deep link.
+  const modalPushedByUsRef = useRef(false);
 
   useAskFlujoPage({
     scopeId: 'models:dashboard',
@@ -121,8 +128,31 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     }
   }, []);
 
+  // Models must be loaded by the browser only after WorkspaceBootstrap has
+  // installed the selected workspace on fetch. Server components have no
+  // access to the browser's selection and would otherwise seed this page with
+  // default-workspace models.
+  useEffect(() => {
+    if (!serviceReady) return;
+    let cancelled = false;
+    void getModelService().loadModels()
+      .then(loaded => {
+        if (!cancelled) setModels(loaded);
+      })
+      .catch(loadError => {
+        log.error('Failed to load models', loadError);
+        if (!cancelled) setError(t('models.error.description'));
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceReady, t]);
+
   // Show loading spinner if service is not ready
-  if (!serviceReady) {
+  if (!serviceReady || !modelsLoaded) {
     log.debug('Waiting for model service to be ready...');
     return <Spinner />;
   }
@@ -149,7 +179,12 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
 
         // Close modal by removing query param
         setNewModelDraft(null);
-        router.push('/models');
+        if (modalPushedByUsRef.current) {
+          modalPushedByUsRef.current = false;
+          router.back();
+        } else {
+          router.push('/models');
+        }
         return { success: true, model: result.model };
       } else {
         setError(result.error || t('models.saveFailed'));
@@ -166,7 +201,9 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   
   const handleEdit = async (model: Model): Promise<ModelResult> => {
     log.info('Editing model', { modelId: model.id, modelName: model.name });
-    // Open modal by adding query param
+    // Open modal by adding query param — a real history entry (#374) so Back
+    // closes the modal instead of leaving `/models`.
+    modalPushedByUsRef.current = true;
     router.push(`/models?edit=${model.id}`);
     return { success: true };
   };
@@ -174,6 +211,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const handleAdd = async () => {
     log.info('Opening guided model connection wizard');
     setAddMenuAnchor(null);
+    modalPushedByUsRef.current = true;
     router.push('/models?add=1');
   };
 
@@ -181,6 +219,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     log.info('Opening manual add-model modal');
     setAddMenuAnchor(null);
     // The draft lives in memory until the user saves.
+    modalPushedByUsRef.current = true;
     router.push('/models?add=manual');
   };
 
@@ -203,7 +242,12 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         const match = known.find((model) =>
           model.provider === candidate.provider &&
           (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
-          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase()
+          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
+          (candidate.provider !== 'azure' || (
+            (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
+              (candidate.baseUrl || '').replace(/\/+$/, '').toLowerCase() &&
+            model.azureApiVersion === candidate.azureApiVersion
+          ))
         );
         if (match) {
           existing.push(match);
@@ -332,7 +376,16 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const handleCloseModal = async () => {
     // Nothing to clean up: an unsaved new model only ever lived in memory.
     setNewModelDraft(null);
-    router.push('/models');
+    if (modalPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened, so Back afterwards
+      // leaves `/models` instead of re-opening the modal.
+      modalPushedByUsRef.current = false;
+      router.back();
+    } else {
+      // Opened from a deep link (e.g. a CopyLinkButton'd `/models?edit=<id>`
+      // URL) with nothing safe to pop back to.
+      router.replace('/models');
+    }
   };
 
   // Filter models by name/displayName for the search box (consistent with the
@@ -350,6 +403,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
+      <StickySearchBar mode="page">
       <Paper
         elevation={0}
         variant="outlined"
@@ -370,6 +424,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             size="small"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -414,6 +469,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
           </>
         </Box>
       </Paper>
+      </StickySearchBar>
 
       {error && (
         <Box sx={{ mb: 2 }}>

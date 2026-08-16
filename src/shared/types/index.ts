@@ -6,3 +6,5 @@ export * from './chat'; // Add export for chat types
 export * from './openai';
 export * from './package'; // FlujoPackage manifest format (#192)
 export * from './statistics';
+export * from './meeting';
+export * from './enduringAgent';

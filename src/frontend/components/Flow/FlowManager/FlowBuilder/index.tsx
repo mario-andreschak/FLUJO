@@ -20,6 +20,7 @@ import {
   useMediaQuery,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
+import { validateFlowDisplayName } from '@/utils/shared/flowNamePolicy';
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/index.tsx');
 
@@ -43,14 +44,20 @@ import {
 } from '@xyflow/react';
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry, NodeType } from '@/shared/types/flow';
-import { PermissionEffect, PermissionRule } from '@/shared/types/permissions';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { modelService } from '@/frontend/services/model';
+import {
+  BIG_TUTORIAL_EVENT,
+  emitBigTutorialEvent,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 import { createEdgeFromConnection, validateConnection } from './Canvas/utils/edgeUtils';
 import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
+import { computeTidyLayout } from './Canvas/utils/tidyLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
+import { reconcileStaticToolConnections } from './utils/staticToolConnections';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { getNodeTypes } from './nodeTypeCatalog';
@@ -65,6 +72,7 @@ import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
 import EdgePropertiesModal from './Modals/EdgePropertiesModal';
+import NodeTechnicalDetailsModal from './Modals/NodeTechnicalDetailsModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
@@ -78,9 +86,6 @@ import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ImproveFlowDialog, { ImprovedFlowInfo } from '../ImproveFlowDialog';
 import { autoRepairFlow } from '@/utils/shared/flowAutoRepair';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
@@ -89,7 +94,7 @@ import AutoAwesomeMotionRoundedIcon from '@mui/icons-material/AutoAwesomeMotionR
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import CloudOffRoundedIcon from '@mui/icons-material/CloudOffRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   flowUsesAdvancedFeatures,
   type FlowAuthoringMode,
@@ -207,8 +212,6 @@ type DialogType = 'none' | 'duplicate' | 'rename' | 'unsaved';
 type SaveResult = 'saved' | 'invalid-name' | 'failed';
 type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 
-type PermissionRuleDraft = PermissionRule & { id: string };
-
 const GUIDED_CONTROL_TYPES = new Set<NodeType>(['start', 'process', 'finish', 'subflow', 'signal']);
 const isPlaceholderGuidedName = (name: string, localizedUntitled?: string) => {
   const normalized = name.trim();
@@ -285,6 +288,23 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const isMobileBuilder = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'prepare-app-picker') return;
+      const { processNodeId, query } = event.detail;
+      setNodes(current => current.map(node => ({
+        ...node,
+        selected: node.id === processNodeId,
+      })));
+      window.setTimeout(() => emitBigTutorialEvent({
+        type: 'filter-app-picker',
+        query,
+      }), 150);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
   // Initialize with the *filtered* edges (same rule the init effect applies)
   // so the very first render already matches what history is seeded with —
   // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
@@ -307,11 +327,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     flowUsesAdvancedFeatures({
       nodes: initialFlow.nodes || [],
       edges: initialFlow.edges || [],
-      permissionRules: initialFlow.permissionRules,
     })
     || analyzeGuidedGraph(initialFlow.nodes || [], initialFlow.edges || []).unsafe
   );
-  const [persistedAuthoringMode, setPersistedAuthoringMode] = useUiPreference<FlowAuthoringMode>(
+  const [persistedAuthoringMode, setPersistedAuthoringMode] = useWorkspaceUiPreference<FlowAuthoringMode>(
     'flujo-ui:flow-builder:mode',
     'guided',
   );
@@ -322,27 +341,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setLocalAuthoringMode(mode);
     setPersistedAuthoringMode(mode);
   }, [setPersistedAuthoringMode]);
-  // Rule IDs are editor-only. PermissionRule has no persisted ID, so keep a
-  // stable key separately while still saving the shared rule shape unchanged.
-  const permissionRuleIdRef = useRef(0);
-  const createPermissionRuleDraft = useCallback((rule: PermissionRule): PermissionRuleDraft => ({
-    ...rule,
-    id: `permission-rule-${++permissionRuleIdRef.current}`,
-  }), []);
-  const [permissionRules, setPermissionRules] = useState<PermissionRuleDraft[]>(
-    () => (initialFlow?.permissionRules || []).map(createPermissionRuleDraft)
-  );
-  // Preserve omission for legacy flows until the user intentionally configures
-  // rules; an explicit empty array is used when an existing rule set is cleared.
-  const [permissionRulesConfigured, setPermissionRulesConfigured] = useState(
-    initialFlow?.permissionRules !== undefined
-  );
-  const [permissionRulesDialogOpen, setPermissionRulesDialogOpen] = useState(false);
-  const [permissionRulesError, setPermissionRulesError] = useState<string | null>(null);
   const hasHiddenAdvancedFeatures = flowUsesAdvancedFeatures({
     nodes,
     edges,
-    permissionRules: initialFlow?.permissionRules,
   });
   const guidedGraph = analyzeGuidedGraph(nodes, edges);
   const hasUnsafeGuidedGraph = hasHiddenAdvancedFeatures || guidedGraph.unsafe;
@@ -363,6 +364,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [staticModalOpen, setStaticModalOpen] = useState(false);
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
+  // Read-only technical details for the selected node (issue #412). Only the
+  // node id is stored so the dialog always reflects the live node data.
+  const [technicalDetailsNodeId, setTechnicalDetailsNodeId] = useState<string | null>(null);
   // Compact, non-blocking feedback for rejected quick-authoring actions.
   const [builderNotice, setBuilderNotice] = useState<string | null>(null);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
@@ -510,10 +514,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges(validEdges);
       setFlowName(initialFlow.name);
       setFlowDescription(initialFlow.description || '');
-      setPermissionRules((initialFlow.permissionRules || []).map(createPermissionRuleDraft));
-      setPermissionRulesConfigured(initialFlow.permissionRules !== undefined);
-      setPermissionRulesError(null);
-
       // Guided mode cannot safely author every graph shape or runtime option.
       // Open those flows directly in Expert view unless the action that opened
       // the builder explicitly requested a view. The guided composer can still
@@ -521,7 +521,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       const requiresExpert = flowUsesAdvancedFeatures({
         nodes: rawNodes,
         edges: validEdges,
-        permissionRules: initialFlow.permissionRules,
       }) || analyzeGuidedGraph(rawNodes, validEdges).unsafe;
       if (initialAuthoringMode) {
         setAuthoringMode(initialAuthoringMode);
@@ -544,10 +543,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setEdges([]);
       setFlowName(t('flows.page.untitled'));
       setFlowDescription('');
-      setPermissionRules([]);
-      setPermissionRulesConfigured(false);
-      setPermissionRulesError(null);
-
       // Initialize history with the Start node
       const emptyState: HistoryEntry = {
         nodes: [startNode],
@@ -559,7 +554,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // The builder owns edits for the lifetime of a selected flow. Parent state may
   // receive a freshly saved object (including new timestamps) without resetting
   // undo history; only switching to a different flow reinitializes the canvas.
-  }, [initialFlow?.id, initialAuthoringMode, createPermissionRuleDraft, setAuthoringMode]);
+  }, [initialFlow?.id, initialAuthoringMode, setAuthoringMode]);
   
   // Keys that don't represent a real edit: selection/drag/measurement state
   // must create neither an undo step nor "unsaved changes".
@@ -638,7 +633,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
     
     // Human-facing names may contain spaces; IDs remain the stable machine key.
-    if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
+    if (validateFlowDisplayName(name) !== null) {
       return t('flows.page.nameCharacters');
     }
     
@@ -663,53 +658,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setSaveStatus('unsaved');
   }, []);
 
-  const updatePermissionRule = (id: string, changes: Partial<PermissionRule>) => {
-    setPermissionRules(rules => rules.map(rule => rule.id === id ? { ...rule, ...changes } : rule));
-    setPermissionRulesConfigured(true);
-    setPermissionRulesError(null);
-    markDirty();
-  };
-
-  const addPermissionRule = () => {
-    setPermissionRules(rules => [...rules, createPermissionRuleDraft({ action: '', resource: '', effect: 'ask' })]);
-    setPermissionRulesConfigured(true);
-    setPermissionRulesError(null);
-    markDirty();
-  };
-
-  const removePermissionRule = (id: string) => {
-    setPermissionRules(rules => rules.filter(rule => rule.id !== id));
-    setPermissionRulesConfigured(true);
-    setPermissionRulesError(null);
-    markDirty();
-  };
-
-  const movePermissionRule = (index: number, direction: -1 | 1) => {
-    const targetIndex = index + direction;
-    if (targetIndex < 0 || targetIndex >= permissionRules.length) return;
-    setPermissionRules(rules => {
-      const reordered = [...rules];
-      [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
-      return reordered;
-    });
-    setPermissionRulesConfigured(true);
-    markDirty();
-  };
-
-  const getPermissionRulesForSave = useCallback((): PermissionRule[] | undefined =>
-    permissionRulesConfigured
-      ? permissionRules.map(({ id: _id, ...rule }) => rule)
-      : undefined,
-  [permissionRules, permissionRulesConfigured]);
-
-  const validatePermissionRules = useCallback((): boolean => {
-    const invalidRule = permissionRules.find(rule => !rule.action.trim() || !rule.resource.trim());
-    if (!invalidRule) return true;
-    setPermissionRulesError(t('flows.builder.permissionInvalid'));
-    setPermissionRulesDialogOpen(true);
-    return false;
-  }, [permissionRules, t]);
-
   // Handle save flow
   const handleSave = useCallback((): Promise<SaveResult> => {
     // Keyboard shortcuts and pointer actions share this promise. This matters
@@ -727,10 +675,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         setFlowNameError(error);
         return 'invalid-name';
       }
-      if (!validatePermissionRules()) {
-        return 'invalid-name';
-      }
-
       // Ensure there's at least a Start node in the flow
       let flowNodes = [...nodes];
 
@@ -749,7 +693,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edges,
         folder: initialFlow?.folder,    // Preserve folder assignment
         favorite: initialFlow?.favorite, // Preserve favorite status
-        permissionRules: getPermissionRulesForSave(),
       };
 
       log.info(`handleSave: Saving flow "${flowName}" with ${flowNodes.length} nodes and ${edges.length} edges`);
@@ -786,7 +729,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       }
     });
     return savePromise;
-  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave, getPermissionRulesForSave, validatePermissionRules]);
+  }, [flowName, flowDescription, nodes, edges, initialFlow, onSave]);
 
   const handleTry = useCallback(async () => {
     if (!onTry) return;
@@ -839,10 +782,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(info.flow.edges || []));
     setFlowName(info.flow.name);
     setFlowDescription(info.flow.description || '');
-    if (info.flow.permissionRules !== undefined) {
-      setPermissionRules(info.flow.permissionRules.map(createPermissionRuleDraft));
-      setPermissionRulesConfigured(true);
-    }
     setFlowNameError(validateFlowName(info.flow.name));
     setHasUnsavedChanges(true);
 
@@ -893,8 +832,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(filterInvalidEdges(restored.edges || []));
     setFlowName(restored.name);
     setFlowDescription(restored.description || '');
-    setPermissionRules((restored.permissionRules || []).map(createPermissionRuleDraft));
-    setPermissionRulesConfigured(restored.permissionRules !== undefined);
     setFlowNameError(validateFlowName(restored.name));
     setHasUnsavedChanges(true);
     setImproveNotice({
@@ -917,7 +854,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges,
       folder: initialFlow?.folder,
       favorite: initialFlow?.favorite,
-      permissionRules: getPermissionRulesForSave(),
     };
     const { flow: repaired, changes } = autoRepairFlow(currentFlow);
     if (changes.length === 0) {
@@ -938,7 +874,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       severity: 'success',
       message: t('flows.builder.repaired', { changes: formatList(parts) }),
     });
-  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges, getPermissionRulesForSave, formatList, t, tp]);
+  }, [initialFlow, flowName, flowDescription, nodes, edges, filterInvalidEdges, formatList, t, tp]);
 
   // AI-supported repair: pre-seed the AI-Improve dialog with the repair instruction and open
   // it, so model selection / install opt-in / result handling are all reused.
@@ -961,7 +897,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       edges: flowToCopy.edges,
       folder: flowToCopy.folder,    // Preserve folder assignment
       favorite: flowToCopy.favorite, // Preserve favorite status
-      permissionRules: flowToCopy.permissionRules,
     };
     
     log.info(`handleCopyFlow: Created copy of flow "${flowToCopy.name}" with new name "${newName}" (${flowToCopy.nodes.length} nodes, ${flowToCopy.edges.length} edges)`);
@@ -1011,7 +946,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         edges,
         folder: initialFlow?.folder,
         favorite: initialFlow?.favorite,
-        permissionRules: getPermissionRulesForSave(),
       };
       const saved = (await onSave(flow)) !== false;
       if (!saved) {
@@ -1466,6 +1400,27 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   ]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
+
+  // The technical-details dialog follows the Inspector selection: it retargets
+  // when another node is selected and closes when the selection is cleared or
+  // the node is deleted, so stale details can never stay on screen (#412).
+  const technicalDetailsNode = useMemo(
+    () => (technicalDetailsNodeId
+      ? nodes.find(node => node.id === technicalDetailsNodeId) ?? null
+      : null),
+    [nodes, technicalDetailsNodeId],
+  );
+  useEffect(() => {
+    if (!technicalDetailsNodeId) return;
+    if (!selectedNode) {
+      setTechnicalDetailsNodeId(null);
+      return;
+    }
+    if (selectedNode.id !== technicalDetailsNodeId) {
+      setTechnicalDetailsNodeId(selectedNode.id);
+    }
+  }, [selectedNode, technicalDetailsNodeId]);
+
   const addableNodeTypes = useMemo(() => getNodeTypes(t), [t]);
   const mcpConnectionsByProcess = useMemo(() => {
     const result = new Map<string, Array<{ nodeId: string; serverName: string }>>();
@@ -1531,15 +1486,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     ...(flowDescription.trim() ? { description: flowDescription } : {}),
     nodes,
     edges,
-    permissionRules: permissionRulesConfigured ? permissionRules.map(({ id: _id, ...rule }) => rule) : undefined,
   }), [
     edges,
     flowDescription,
     flowName,
     initialFlow,
     nodes,
-    permissionRules,
-    permissionRulesConfigured,
   ]);
 
   const highlightAskFlowNode = useCallback((nodeId: string) => {
@@ -1691,14 +1643,29 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     if (changes.length > 0) onNodesChange(changes);
   }, [nodes, onNodesChange]);
 
-  // Auto-Align (issue #100): re-arrange nodes into a clean top-to-bottom
-  // layered layout. Uses the functional setNodes so it stacks on the latest
-  // state; because positions change outside a drag gesture, the history effect
-  // records it as a single undoable step and flags the flow unsaved. Nothing
-  // is persisted until the user hits Save. fitView re-frames after the new
-  // positions are applied.
-  const handleAutoAlign = useCallback(() => {
-    log.debug('handleAutoAlign: auto-arranging flow nodes');
+  // Tidy up (issue #373 fix for #100's Auto-Align): a bounded, position-
+  // preserving pass that keeps every node roughly where the user put it and
+  // only resolves actual collisions (dragging MCP/resource satellites along
+  // with their parent). This is now the DEFAULT toolbar action so a clean,
+  // hand-arranged flow is no longer scrambled by a click. Uses the functional
+  // setNodes so it stacks on the latest state; because positions change
+  // outside a drag gesture, the history effect records it as a single
+  // undoable step and flags the flow unsaved. Nothing is persisted until the
+  // user hits Save. The user's viewport is already meaningful for a
+  // position-preserving pass, so this intentionally does NOT fitView (unlike
+  // the destructive re-layout below).
+  const handleTidyLayout = useCallback(() => {
+    log.debug('handleTidyLayout: resolving node overlaps in place');
+    setNodes(prev => computeTidyLayout(prev, edges));
+  }, [edges]);
+
+  // Re-layout top-to-bottom (issue #100, fixed for #373): discard existing
+  // coordinates and repack the graph into a clean layered layout. Explicit,
+  // opt-in action (kept out of the primary toolbar; reachable from the
+  // overflow "more actions" menu) since it no longer doubles as the default
+  // de-overlap action. fitView re-frames after the new positions are applied.
+  const handleRelayout = useCallback(() => {
+    log.debug('handleRelayout: re-arranging flow nodes top-to-bottom');
     setNodes(prev => computeAutoLayout(prev, edges));
     requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
   }, [edges, reactFlowInstance]);
@@ -1737,6 +1704,28 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, [updateNodeData]);
+
+  const handleStaticNodeUpdate = useCallback((nodeId: string, data: FlowNode['data']) => {
+    const renamedNodes = nodes.map((candidate) => candidate.id === nodeId
+      ? { ...candidate, data }
+      : candidate);
+    const updatedNodes = migrateHandoffPills(nodes, renamedNodes, edges);
+    const reconciled = reconcileStaticToolConnections({
+      staticNodeId: nodeId,
+      entries: Array.isArray(data.properties?.entries) ? data.properties.entries : [],
+      nodes: updatedNodes,
+      edges,
+      createMcpNode: (serverName, position) => {
+        const created = flowService.createNode('mcp', position);
+        created.data.label = serverName;
+        return created;
+      },
+    });
+    setNodes(reconciled.nodes);
+    setEdges(reconciled.edges);
+    setStaticModalOpen(false);
+    setNodeToEdit(null);
+  }, [edges, nodes]);
   
   // Connect-a-server shortcut from the Process node properties modal: create
   // an MCP node bound to the server, place it next to the process node, and
@@ -2018,7 +2007,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   }, []);
 
   return (
-    <FlowBuilderContainer>
+    <FlowBuilderContainer data-tour="flow-builder" data-tutorial-save-status={saveStatus}>
       {authoringMode === 'advanced' && !isMobileBuilder && (
         <Box sx={{ flex: '0 0 auto', height: '100%', minHeight: 0 }}>
           <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
@@ -2127,7 +2116,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   <span>
                     <IconButton
                       aria-label={t('flows.builder.autoAlign')}
-                      onClick={handleAutoAlign}
+                      onClick={handleTidyLayout}
                       disabled={nodes.length <= 1}
                       color="primary"
                       size="small"
@@ -2158,6 +2147,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
 
             <Button
+              data-tour="flow-save"
               variant={authoringMode === 'guided' ? 'outlined' : 'contained'}
               color="primary"
               onClick={() => void handleSave()}
@@ -2209,10 +2199,21 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   disabled={nodes.length <= 1}
                   onClick={() => {
                     setMoreActionsMenuAnchor(null);
-                    handleAutoAlign();
+                    handleTidyLayout();
                   }}
                 >
                   {t('flows.builder.autoAlign')}
+                </MenuItem>
+              )}
+              {authoringMode === 'advanced' && (
+                <MenuItem
+                  disabled={nodes.length <= 1}
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    handleRelayout();
+                  }}
+                >
+                  {t('flows.builder.relayout')}
                 </MenuItem>
               )}
               {authoringMode === 'advanced' && (
@@ -2315,6 +2316,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 markDirty();
               }}
               onSelectNode={handleSelectGuidedNode}
+              onOpenNode={(node) => openNodeProperties(node)}
               onAddTask={handleAddGuidedTask}
               onTry={onTry ? () => { void handleTry(); } : undefined}
               isSaving={saveStatus === 'saving'}
@@ -2392,6 +2394,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onClearSelection={handleClearNodeSelection}
           onCommitNode={updateNodeData}
           onOpenAdvanced={openNodeProperties}
+          onOpenTechnicalDetails={(node) => setTechnicalDetailsNodeId(node.id)}
           flowName={flowName}
           flowNameError={flowNameError}
           onFlowNameChange={(value) => {
@@ -2408,8 +2411,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           authoringMode={authoringMode}
           beginnerMode={authoringMode === 'guided'}
           onAuthoringModeChange={setAuthoringMode}
-          permissionRuleCount={permissionRules.length}
-          onOpenPermissionRules={() => setPermissionRulesDialogOpen(true)}
           onSuggestTools={(node) => {
             setAssistanceNodeId(node.id);
             setAssistanceFocus('apps');
@@ -2553,7 +2554,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={staticModalOpen}
         node={nodeToEdit}
         onClose={() => setStaticModalOpen(false)}
-        onSave={handleNodeUpdate}
+        onSave={handleStaticNodeUpdate}
       />
 
       <TriggerNodePropertiesModal
@@ -2562,6 +2563,15 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         flowId={initialFlow?.id || ''}
         onClose={() => { setTriggerModalOpen(false); setNodeToEdit(null); }}
         onSave={handleNodeUpdate}
+      />
+
+      {/* Node technical details (issue #412): read-only, sanitized view that
+          replaced the inline accordion on every canvas node. */}
+      <NodeTechnicalDetailsModal
+        open={!!technicalDetailsNode}
+        node={technicalDetailsNode}
+        flowNames={flowNames}
+        onClose={() => setTechnicalDetailsNodeId(null)}
       />
 
       <EdgePropertiesModal
@@ -2580,7 +2590,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           description: flowDescription,
           folder: initialFlow?.folder,
           favorite: initialFlow?.favorite,
-          permissionRules: getPermissionRulesForSave(),
           createdAt: initialFlow?.createdAt,
           updatedAt: initialFlow?.updatedAt,
           nodes,
@@ -2607,76 +2616,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           id: initialFlow?.id || '',
           name: flowName,
           description: flowDescription,
-          permissionRules: getPermissionRulesForSave(),
           nodes,
           edges,
         }}
         onImproved={handleImproved}
         initialDescription={improveInitialDescription}
       />
-      <Dialog
-        open={permissionRulesDialogOpen}
-        onClose={() => setPermissionRulesDialogOpen(false)}
-        fullWidth
-        maxWidth="md"
-        aria-labelledby="permission-rules-dialog-title"
-      >
-        <DialogTitle id="permission-rules-dialog-title">{t('flows.builder.permissionsTitle')}</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            {t('flows.builder.permissionsHelp')}
-          </DialogContentText>
-          {permissionRulesError && <Alert severity="error" sx={{ mb: 2 }}>{permissionRulesError}</Alert>}
-          {permissionRules.length === 0 ? (
-            <Typography color="text.secondary" sx={{ mb: 2 }}>
-              {t('flows.builder.noPermissions')}
-            </Typography>
-          ) : (
-            permissionRules.map((rule, index) => (
-              <Box key={rule.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Typography aria-label={t('flows.builder.rule', { number: index + 1 })} sx={{ minWidth: 24 }}>{index + 1}.</Typography>
-                <TextField
-                  label={t('flows.builder.action')}
-                  size="small"
-                  value={rule.action}
-                  onChange={(event) => updatePermissionRule(rule.id, { action: event.target.value })}
-                  inputProps={{ 'aria-label': `${t('flows.builder.rule', { number: index + 1 })}: ${t('flows.builder.action')}` }}
-                  sx={{ flex: 1 }}
-                />
-                <TextField
-                  label={t('flows.builder.resource')}
-                  size="small"
-                  value={rule.resource}
-                  onChange={(event) => updatePermissionRule(rule.id, { resource: event.target.value })}
-                  inputProps={{ 'aria-label': `${t('flows.builder.rule', { number: index + 1 })}: ${t('flows.builder.resource')}` }}
-                  sx={{ flex: 1 }}
-                />
-                <TextField
-                  select
-                  label={t('flows.builder.effect')}
-                  size="small"
-                  value={rule.effect}
-                  onChange={(event) => updatePermissionRule(rule.id, { effect: event.target.value as PermissionEffect })}
-                  inputProps={{ 'aria-label': `${t('flows.builder.rule', { number: index + 1 })}: ${t('flows.builder.effect')}` }}
-                  sx={{ minWidth: 100 }}
-                >
-                  <MenuItem value="allow">{t('flows.builder.allow')}</MenuItem>
-                  <MenuItem value="deny">{t('flows.builder.deny')}</MenuItem>
-                  <MenuItem value="ask">{t('flows.builder.ask')}</MenuItem>
-                </TextField>
-                <Tooltip title={t('flows.builder.moveRuleUp', { number: index + 1 })}><span><IconButton aria-label={t('flows.builder.moveRuleUp', { number: index + 1 })} onClick={() => movePermissionRule(index, -1)} disabled={index === 0}><ArrowUpwardIcon /></IconButton></span></Tooltip>
-                <Tooltip title={t('flows.builder.moveRuleDown', { number: index + 1 })}><span><IconButton aria-label={t('flows.builder.moveRuleDown', { number: index + 1 })} onClick={() => movePermissionRule(index, 1)} disabled={index === permissionRules.length - 1}><ArrowDownwardIcon /></IconButton></span></Tooltip>
-                <Tooltip title={t('flows.builder.deleteRule', { number: index + 1 })}><IconButton aria-label={t('flows.builder.deleteRule', { number: index + 1 })} onClick={() => removePermissionRule(rule.id)}><DeleteOutlineIcon /></IconButton></Tooltip>
-              </Box>
-            ))
-          )}
-          <Button startIcon={<AddIcon />} onClick={addPermissionRule}>{t('flows.builder.addRule')}</Button>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPermissionRulesDialogOpen(false)}>{t('flows.builder.done')}</Button>
-        </DialogActions>
-      </Dialog>
-      
       {/* Dialog for Copy/Rename/Unsaved Changes */}
       <Dialog open={dialogOpen} onClose={handleDialogClose}>
         <DialogTitle>

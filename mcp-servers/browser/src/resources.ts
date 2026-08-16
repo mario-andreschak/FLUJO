@@ -1,4 +1,5 @@
 import type { Resource, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { ensureBrowserGateway, browserSandboxAllowAll, type BrowserGatewayEndpoint } from './gateway.js';
 
 const MCP_APPS_PROTOCOL_VERSION = '2026-01-26';
 const APP_MIME_TYPE = 'text/html;profile=mcp-app';
@@ -10,21 +11,46 @@ export function browserListResources(): { resources: Resource[] } {
       uri: BROWSER_APP_URI,
       name: 'browser_view',
       mimeType: APP_MIME_TYPE,
-      description: 'Interactive view of the isolated server-side Patchright browser session.',
+      description: 'Live view of the isolated server-side Patchright browser session.',
     }],
   };
 }
 
-export function browserReadResource(uri: string): ReadResourceResult {
+/**
+ * Read the MCP App resource.
+ *
+ * The returned document is only a shell: it performs the MCP handshake, opens
+ * the browser session, and then frames the real UI served by the loopback
+ * gateway. The gateway origin is granted here through `_meta.ui.csp`, and the
+ * bearer token is templated into the shell so it never reaches the model.
+ */
+export async function browserReadResource(uri: string): Promise<ReadResourceResult> {
   if (uri !== BROWSER_APP_URI) throw new Error(`Unknown browser resource: ${uri}`);
+  const gateway = await ensureBrowserGateway();
+  const origins = gateway ? [gateway.origin] : [];
+  // Escape hatch: when the persisted `network.allowAllMcpAppContent` setting is
+  // enabled (propagated as FLUJO_MCP_APP_SANDBOX_ALLOW_ALL), widen the CSP so
+  // the shell can frame the gateway regardless of origin. This is intended only
+  // for hosted deployments behind a rewriting reverse proxy.
+  const allowAll = browserSandboxAllowAll();
+  const frameDomains = allowAll ? ['*'] : origins;
+  const connectDomains = allowAll ? ['*'] : origins;
+  const resourceDomains = allowAll ? ['*'] : origins;
   return {
     contents: [{
       uri,
       mimeType: APP_MIME_TYPE,
-      text: BROWSER_APP_HTML,
+      text: renderBrowserAppHtml(gateway),
       _meta: {
         ui: {
-          csp: { connectDomains: [], resourceDomains: [] },
+          prefersBorder: false,
+          csp: {
+            // frameDomains carries the live view; connect/resource keep the
+            // screenshot fallback working when the gateway is unavailable.
+            frameDomains,
+            connectDomains,
+            resourceDomains,
+          },
           permissions: {},
         },
       },
@@ -32,65 +58,307 @@ export function browserReadResource(uri: string): ReadResourceResult {
   };
 }
 
-const BROWSER_APP_HTML = `<!doctype html>
+/**
+ * The MCP App shell.
+ *
+ * Kept deliberately small: everything the host's app CSP would restrict
+ * (workers, blob URLs, media pipelines) lives in the framed gateway document
+ * instead. The shell owns the MCP bridge, so navigation still travels the tool
+ * channel and stays visible to the model.
+ */
+export function renderBrowserAppHtml(gateway?: BrowserGatewayEndpoint): string {
+  const config = JSON.stringify({
+    origin: gateway?.origin ?? '',
+    token: gateway?.token ?? '',
+  }).replace(/</g, '\\u003c');
+  return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
 <style>
-:root{--bg:#fff;--fg:#171717;--muted:#666;--border:#d7d9dc;--accent:#1565c0;--panel:#f3f4f6;--danger:#b42318;--toolbar:#eef0f3}
-[data-theme="dark"]{--bg:#171717;--fg:#eee;--muted:#aaa;--border:#444;--accent:#64b5f6;--panel:#242424;--danger:#ff8a80;--toolbar:#202225}
-*{box-sizing:border-box}html,body{margin:0;min-height:100%}body{font:13px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
-#wrap{padding:8px}.row{display:flex;gap:5px;align-items:center;margin-bottom:6px;flex-wrap:wrap}.toolbar{padding:6px;border:1px solid var(--border);border-radius:8px;background:var(--toolbar)}input,button{font:inherit;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);padding:6px 8px}button{cursor:pointer;min-width:34px}button:hover,button:focus-visible{border-color:var(--accent);outline:none}#url{flex:1;min-width:180px}.grow{flex:1;min-width:160px}.status{color:var(--muted);min-height:19px}.error{color:var(--danger)}.viewport{position:relative;border:1px solid var(--border);border-radius:8px;background:var(--panel);min-height:220px;display:grid;place-items:center;overflow:hidden;user-select:none}.viewport img{display:block;width:100%;height:auto;cursor:default;outline:none}.viewport img:focus{box-shadow:inset 0 0 0 2px var(--accent)}.empty{color:var(--muted);padding:35px}.meta,.artifact{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:3px 1px}.artifact{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.hint{font-size:12px;color:var(--muted);margin-left:auto}details{margin-top:7px}summary{cursor:pointer}pre{white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;background:var(--panel);padding:7px;border-radius:5px}.advanced{padding:6px 0}.kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;border:1px solid var(--border);border-radius:4px;padding:1px 4px}
+:root{--bg:#fff;--fg:#202124;--muted:#5f6368;--border:#dadce0;--danger:#c5221f}
+html[data-theme="dark"]{--bg:#202124;--fg:#e8eaed;--muted:#9aa0a6;--border:#3c4043;--danger:#f28b82}
+*{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#frame{width:100%;height:100%;border:0;display:block;background:var(--bg)}
+#fallback{display:none;height:100%;flex-direction:column}
+#fallback.show{display:flex}
+#frame.hide{display:none}
+.bar{display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid var(--border)}
+.bar input{flex:1;min-width:0;font:inherit;padding:6px 10px;border:1px solid var(--border);border-radius:14px;background:var(--bg);color:inherit}
+.bar button{font:inherit;padding:6px 10px;border:1px solid var(--border);border-radius:14px;background:var(--bg);color:inherit;cursor:pointer}
+#shot{flex:1;min-height:0;display:grid;place-items:center;overflow:hidden}
+#shot img{max-width:100%;max-height:100%;display:block}
+#note{padding:6px 10px;color:var(--muted);font-size:12px}
+#note.error{color:var(--danger)}
 </style>
 </head>
 <body>
-<div id="wrap">
-  <div class="row toolbar"><button id="back" title="Back">&#8592;</button><button id="forward" title="Forward">&#8594;</button><button id="reload" title="Reload">&#8635;</button><input id="url" type="url" placeholder="https://example.com" /><button id="go">Go</button><button id="refresh" title="Refresh viewport">View</button><button id="fullscreen" title="Open fullscreen">&#x26F6;</button><button id="close" title="Close session">Close</button></div>
-  <div class="row"><input id="pageText" class="grow" placeholder="Type into the focused page element" /><button id="sendText">Type</button><button id="enter">Enter</button><span class="hint">Click, type, and scroll on the viewport. <span class="kbd">Ctrl+L</span> focuses the address bar.</span></div>
-  <div id="status" class="status">Initializing isolated browser…</div>
-  <div id="meta" class="meta"></div><div id="artifact" class="artifact"></div>
-  <div id="viewport" class="viewport"><div class="empty">No screenshot yet.</div></div>
-  <details><summary>Advanced selector controls</summary><div class="row advanced"><input id="selector" class="grow" placeholder="CSS selector" /><button id="selectorClick">Click</button><input id="selectorText" class="grow" placeholder="Text to fill" /><button id="selectorFill">Fill</button></div></details>
-  <details><summary>Visible page text</summary><pre id="snapshot"></pre></details>
+<iframe id="frame" title="Live browser view" allow="autoplay; clipboard-read; clipboard-write; fullscreen" referrerpolicy="no-referrer"></iframe>
+<div id="fallback">
+  <div class="bar">
+    <button id="fbBack" title="Back">&#8592;</button>
+    <button id="fbForward" title="Forward">&#8594;</button>
+    <button id="fbReload" title="Reload">&#8635;</button>
+    <input id="fbUrl" type="text" placeholder="https://example.com" />
+    <button id="fbGo">Go</button>
+  </div>
+  <div id="shot"></div>
+  <div id="note"></div>
 </div>
 <script>
 (function(){
-  var parentWin=window.parent,idc=1,pending={},sessionId="",started=false,actionQueue=Promise.resolve(),typed="",typeTimer=0,scrollX=0,scrollY=0,scrollTimer=0;
-  var statusEl=document.getElementById("status"),metaEl=document.getElementById("meta"),artifactEl=document.getElementById("artifact"),viewEl=document.getElementById("viewport"),snapEl=document.getElementById("snapshot"),urlEl=document.getElementById("url");
-  function post(m){parentWin.postMessage(m,"*")}
-  function rpc(method,params){return new Promise(function(resolve,reject){var id=idc++;pending[id]={resolve:resolve,reject:reject};post({jsonrpc:"2.0",id:id,method:method,params:params||{}})})}
-  function notify(method,params){post({jsonrpc:"2.0",method:method,params:params||{}})}
-  function setStatus(text,error){statusEl.textContent=text;statusEl.className="status"+(error?" error":"")}
-  function errorText(e){return e&&e.message?e.message:String(e)}
-  function payload(result){if(result&&result.structuredContent)return result.structuredContent;try{var t=result&&result.content&&result.content[0]&&result.content[0].text;return t?JSON.parse(t):{}}catch(e){return{}}}
-  function failMessage(result){var p=payload(result);return p&&p.error&&p.error.message?p.error.message:"Browser operation failed"}
-  function apply(data){if(!data)return;if(data.sessionId)sessionId=data.sessionId;if(data.url){urlEl.value=data.url;metaEl.textContent=(data.title?data.title+" — ":"")+data.url}if(typeof data.text==="string")snapEl.textContent=data.text;if(typeof data.path==="string")artifactEl.textContent=data.path}
-  function imageOf(result){var items=result&&result.content||[];for(var i=0;i<items.length;i++){if(items[i].type==="image"&&items[i].data)return "data:"+(items[i].mimeType||"image/png")+";base64,"+items[i].data}return""}
-  async function call(name,args){setStatus("Working…");var result=await rpc("tools/call",{name:name,arguments:args||{}});if(result&&result.isError)throw new Error(failMessage(result));apply(payload(result));return result}
-  function size(){try{notify("ui/notifications/size-changed",{width:0,height:Math.ceil(document.documentElement.getBoundingClientRect().height)})}catch(e){}}
-  async function refresh(restoreFocus){if(!sessionId)return;var result=await call("browser_screenshot",{sessionId:sessionId});var image=imageOf(result);viewEl.innerHTML="";if(image){var img=document.createElement("img");img.src=image;img.alt="Interactive server-side browser viewport";img.tabIndex=0;viewEl.appendChild(img);if(restoreFocus)img.focus()}else{viewEl.innerHTML='<div class="empty">Screenshot was not available.</div>'}var snap=await call("browser_snapshot",{sessionId:sessionId});apply(payload(snap));setStatus("Ready — viewport is interactive");size()}
-  function queue(task){actionQueue=actionQueue.then(task,task).catch(function(e){setStatus(errorText(e),true)});return actionQueue}
-  function interact(name,args){var restoreFocus=document.activeElement&&document.activeElement.tagName==="IMG";return queue(async function(){if(!sessionId)throw new Error("Open a browser session first.");await call(name,Object.assign({sessionId:sessionId},args||{}));await refresh(restoreFocus)})}
-  async function open(initialUrl,requestedId){if(started)return;started=true;try{var args={};if(initialUrl)args.url=initialUrl;if(requestedId)args.sessionId=requestedId;var result=await call("browser_open",args);apply(payload(result));await refresh()}catch(e){started=false;setStatus(errorText(e),true)}}
-  function navigate(){var url=urlEl.value.trim();if(!url)return setStatus("Enter an HTTP(S) URL.",true);if(!sessionId){started=false;return open(url,"")}return interact("browser_navigate",{url:url})}
-  function flushTyped(){if(typeTimer){clearTimeout(typeTimer);typeTimer=0}if(!typed)return;var text=typed;typed="";interact("browser_type",{text:text})}
-  function queueTyped(text){typed+=text;if(typeTimer)clearTimeout(typeTimer);typeTimer=setTimeout(flushTyped,90)}
-  function press(key){flushTyped();interact("browser_press",{key:key})}
-  document.getElementById("go").onclick=navigate;urlEl.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();navigate()}};
-  document.getElementById("back").onclick=function(){interact("browser_back",{})};document.getElementById("forward").onclick=function(){interact("browser_forward",{})};document.getElementById("reload").onclick=function(){interact("browser_reload",{})};document.getElementById("refresh").onclick=function(){queue(refresh)};
-  document.getElementById("fullscreen").onclick=function(){rpc("ui/request-display-mode",{mode:"fullscreen"}).catch(function(e){setStatus(errorText(e),true)})};
-  document.getElementById("sendText").onclick=function(){var input=document.getElementById("pageText"),text=input.value;if(!text)return;input.value="";interact("browser_type",{text:text})};document.getElementById("enter").onclick=function(){press("Enter")};
-  document.getElementById("pageText").onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();document.getElementById("sendText").click()}};
-  document.getElementById("selectorClick").onclick=function(){var selector=document.getElementById("selector").value.trim();if(!selector)return setStatus("Enter a selector.",true);interact("browser_click",{selector:selector})};
-  document.getElementById("selectorFill").onclick=function(){var selector=document.getElementById("selector").value.trim();if(!selector)return setStatus("Enter a selector.",true);interact("browser_type",{selector:selector,text:document.getElementById("selectorText").value})};
-  document.getElementById("close").onclick=function(){queue(async function(){if(!sessionId)return;await call("browser_close",{sessionId:sessionId});sessionId="";started=false;viewEl.innerHTML='<div class="empty">Browser session closed.</div>';setStatus("Closed");size()})};
-  viewEl.addEventListener("click",function(e){var img=e.target;if(!img||img.tagName!=="IMG")return;img.focus();var r=img.getBoundingClientRect(),x=(e.clientX-r.left)*(img.naturalWidth/r.width),y=(e.clientY-r.top)*(img.naturalHeight/r.height);interact("browser_click",{x:Math.max(0,Math.min(img.naturalWidth-1,x)),y:Math.max(0,Math.min(img.naturalHeight-1,y)),button:"left"})});
-  viewEl.addEventListener("contextmenu",function(e){var img=e.target;if(!img||img.tagName!=="IMG")return;e.preventDefault();img.focus();var r=img.getBoundingClientRect(),x=(e.clientX-r.left)*(img.naturalWidth/r.width),y=(e.clientY-r.top)*(img.naturalHeight/r.height);interact("browser_click",{x:Math.max(0,Math.min(img.naturalWidth-1,x)),y:Math.max(0,Math.min(img.naturalHeight-1,y)),button:"right"})});
-  viewEl.addEventListener("wheel",function(e){if(!sessionId)return;e.preventDefault();scrollX+=e.deltaX;scrollY+=e.deltaY;if(scrollTimer)clearTimeout(scrollTimer);scrollTimer=setTimeout(function(){var x=scrollX,y=scrollY;scrollX=0;scrollY=0;interact("browser_scroll",{deltaX:x,deltaY:y})},80)},{passive:false});
-  viewEl.addEventListener("keydown",function(e){if(!e.target||e.target.tagName!=="IMG")return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="l"){e.preventDefault();urlEl.focus();urlEl.select();return}var modifiers=[];if(e.ctrlKey)modifiers.push("Control");if(e.metaKey)modifiers.push("Meta");if(e.altKey)modifiers.push("Alt");if(e.shiftKey&&e.key.length>1)modifiers.push("Shift");if(modifiers.length){e.preventDefault();press(modifiers.concat([e.key.length===1?e.key.toUpperCase():e.key]).join("+"));return}if(e.key.length===1){e.preventDefault();queueTyped(e.key);return}if(["Enter","Tab","Backspace","Delete","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","PageUp","PageDown","Home","End"].indexOf(e.key)>=0){e.preventDefault();press(e.key)}});
-  window.addEventListener("message",function(event){var m=event.data;if(!m||m.jsonrpc!=="2.0")return;if(m.id!==undefined&&(m.result!==undefined||m.error!==undefined)){var p=pending[m.id];if(!p)return;delete pending[m.id];if(m.error)p.reject(new Error(m.error.message||"RPC error"));else p.resolve(m.result);return}if(m.method==="ui/notifications/host-context-changed"){var theme=m.params&&m.params.theme;document.documentElement.setAttribute("data-theme",theme==="dark"?"dark":"light");return}if(m.method==="ui/notifications/tool-input"){var a=m.params&&m.params.arguments||{};if(!started)open(typeof a.url==="string"?a.url:"",typeof a.sessionId==="string"?a.sessionId:"");return}if(m.method==="ui/notifications/tool-result"){apply(payload(m.params));return}if(m.method==="ping"&&m.id!==undefined){post({jsonrpc:"2.0",id:m.id,result:{}});return}if(m.method==="ui/resource-teardown"&&m.id!==undefined){post({jsonrpc:"2.0",id:m.id,result:{}});return}});
-  rpc("ui/initialize",{appInfo:{name:"flujo-browser-view",version:"2.0.0"},appCapabilities:{availableDisplayModes:["inline","fullscreen","pip"]},protocolVersion:"${MCP_APPS_PROTOCOL_VERSION}"}).then(function(result){var theme=result&&result.hostContext&&result.hostContext.theme;document.documentElement.setAttribute("data-theme",theme==="dark"?"dark":"light");notify("ui/notifications/initialized",{});setTimeout(function(){if(!started)open("","")},400)}).catch(function(e){setStatus("App initialization failed: "+errorText(e),true)});
+  "use strict";
+  var GATEWAY = ${config};
+  var parentWin = window.parent, idc = 1, pending = {}, sessionId = "", starting = false, ownsSession = false;
+  var frame = document.getElementById("frame");
+  var fallback = document.getElementById("fallback");
+  var shot = document.getElementById("shot");
+  var note = document.getElementById("note");
+  var fbUrl = document.getElementById("fbUrl");
+  var theme = "light", pollTimer = 0, usingFallback = false;
+  var standaloneTimer = 0, toolResultTimer = 0, pendingToolInput = null;
+  // null = host did not report its sandbox CSP grant (unknown policy);
+  // [] = host reported a grant that excludes the gateway (denied).
+  var grantedFrameDomains = null, viewReady = false, readyTimer = 0;
+
+  function post(m){ parentWin.postMessage(m, "*"); }
+  function rpc(method, params){
+    return new Promise(function(resolve, reject){
+      var id = idc++;
+      pending[id] = { resolve: resolve, reject: reject };
+      post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    });
+  }
+  function notify(method, params){ post({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  function errorText(e){ return e && e.message ? e.message : String(e); }
+  function payload(result){
+    if (result && result.structuredContent) return result.structuredContent;
+    try {
+      var t = result && result.content && result.content[0] && result.content[0].text;
+      return t ? JSON.parse(t) : {};
+    } catch (e) { return {}; }
+  }
+  function failMessage(result){
+    var p = payload(result);
+    return p && p.error && p.error.message ? p.error.message : "Browser operation failed";
+  }
+  async function call(name, args){
+    var result = await rpc("tools/call", { name: name, arguments: args || {} });
+    if (result && result.isError) throw new Error(failMessage(result));
+    return result;
+  }
+  function toView(message){
+    if (usingFallback || !frame.contentWindow) return;
+    try { frame.contentWindow.postMessage(Object.assign({ source: "flujo-browser-shell" }, message), "*"); } catch (e) {}
+  }
+  function setNote(text, isError){
+    note.textContent = text || "";
+    note.className = isError ? "error" : "";
+  }
+
+  /* ---------- live view ---------- */
+  // Whether the host's effective frame-src grant covers the gateway origin.
+  // Grants may be exact origins, the loopback port-wildcard form
+  // (http://127.0.0.1:*), or the allow-all escape hatch.
+  function frameGrantCovers(origin){
+    if (grantedFrameDomains === null) return true; /* unknown policy: probe, the ready watchdog still guards */
+    var o = String(origin || "").toLowerCase();
+    for (var i = 0; i < grantedFrameDomains.length; i++){
+      var d = String(grantedFrameDomains[i] || "").toLowerCase();
+      if (d === "*" || d === o) return true;
+      if (d.slice(-2) === ":*" && o.indexOf(d.slice(0, -1)) === 0) return true;
+    }
+    return false;
+  }
+  function mountLiveView(){
+    frame.src = GATEWAY.origin + "/view?s=" + encodeURIComponent(sessionId) + "&t=" + encodeURIComponent(GATEWAY.token);
+    // A CSP-blocked or unreachable iframe fires neither load nor error, so a
+    // silent live view must degrade to screenshots on its own.
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(function(){
+      if (!viewReady) useFallback("The live view is not reachable from this browser; showing periodic screenshots.");
+    }, 8000);
+  }
+
+  /* ---------- screenshot fallback ---------- */
+  function useFallback(reason){
+    if (usingFallback) return;
+    usingFallback = true;
+    clearTimeout(readyTimer);
+    frame.classList.add("hide");
+    fallback.classList.add("show");
+    setNote(reason || "Live streaming is unavailable; showing periodic screenshots.", true);
+    pollOnce();
+  }
+  async function pollOnce(){
+    if (!usingFallback || !sessionId) return;
+    try {
+      var result = await call("browser_screenshot", { sessionId: sessionId });
+      var items = (result && result.content) || [];
+      for (var i = 0; i < items.length; i++){
+        if (items[i].type === "image" && items[i].data){
+          shot.innerHTML = "";
+          var img = document.createElement("img");
+          img.src = "data:" + (items[i].mimeType || "image/png") + ";base64," + items[i].data;
+          img.alt = "Browser viewport";
+          shot.appendChild(img);
+          break;
+        }
+      }
+      var state = payload(result);
+      if (state.url && document.activeElement !== fbUrl) fbUrl.value = state.url;
+      setNote("Screenshot fallback \\u2014 updated " + new Date().toLocaleTimeString());
+    } catch (e) {
+      setNote(errorText(e), true);
+    }
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(pollOnce, 2000);
+  }
+  function fallbackAction(kind, url){
+    return async function(){
+      try {
+        if (kind === "navigate") await call("browser_navigate", { sessionId: sessionId, url: url() });
+        else await call("browser_" + kind, { sessionId: sessionId });
+        pollOnce();
+      } catch (e) { setNote(errorText(e), true); }
+    };
+  }
+  document.getElementById("fbBack").onclick = fallbackAction("back");
+  document.getElementById("fbForward").onclick = fallbackAction("forward");
+  document.getElementById("fbReload").onclick = fallbackAction("reload");
+  document.getElementById("fbGo").onclick = fallbackAction("navigate", function(){ return fbUrl.value.trim(); });
+  fbUrl.onkeydown = function(e){ if (e.key === "Enter"){ e.preventDefault(); document.getElementById("fbGo").click(); } };
+
+  /* ---------- session ---------- */
+  async function start(initialUrl, requestedId, owned){
+    if (starting) return;
+    starting = true;
+    ownsSession = !!owned;
+    try {
+      var args = {};
+      if (initialUrl) args.url = initialUrl;
+      if (requestedId) args.sessionId = requestedId;
+      var result = await call("browser_open", args);
+      var state = payload(result);
+      sessionId = state.sessionId || "";
+      if (!sessionId) throw new Error("The browser session did not report an id.");
+      if (!GATEWAY.origin || !GATEWAY.token) useFallback("The live stream gateway is disabled, so this view falls back to screenshots.");
+      else if (!frameGrantCovers(GATEWAY.origin)) useFallback("This deployment cannot frame the local live-view gateway; showing periodic screenshots.");
+      else mountLiveView();
+    } catch (e) {
+      ownsSession = false;
+      starting = false;
+      useFallback(errorText(e));
+    }
+  }
+
+  async function teardownResource(requestId){
+    clearTimeout(pollTimer);
+    clearTimeout(readyTimer);
+    clearTimeout(standaloneTimer);
+    clearTimeout(toolResultTimer);
+    var ownedId = ownsSession ? sessionId : "";
+    ownsSession = false;
+    if (ownedId){
+      try { await call("browser_close", { sessionId: ownedId }); } catch (e) {}
+    }
+    post({ jsonrpc: "2.0", id: requestId, result: {} });
+  }
+
+  /* ---------- commands relayed from the framed view ---------- */
+  async function runViewCommand(data){
+    try {
+      if (data.type === "navigate" && data.url) await call("browser_navigate", { sessionId: sessionId, url: data.url });
+      else if (data.type === "back") await call("browser_back", { sessionId: sessionId });
+      else if (data.type === "forward") await call("browser_forward", { sessionId: sessionId });
+      else if (data.type === "reload") await call("browser_reload", { sessionId: sessionId });
+      else if (data.type === "close"){
+        await call("browser_close", { sessionId: sessionId });
+        notify("ui/notifications/request-teardown", {});
+      } else if (data.type === "fullscreen"){
+        await rpc("ui/request-display-mode", { mode: "fullscreen" });
+      }
+    } catch (e) {
+      toView({ type: "error", message: errorText(e) });
+    } finally {
+      toView({ type: "loading", value: false });
+    }
+  }
+
+  window.addEventListener("message", function(event){
+    var m = event.data;
+    if (m && m.source === "flujo-browser-view"){
+      if (event.source !== frame.contentWindow) return;
+      if (m.type === "ready"){ viewReady = true; clearTimeout(readyTimer); toView({ type: "theme", theme: theme }); }
+      else void runViewCommand(m);
+      return;
+    }
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)){
+      var p = pending[m.id];
+      if (!p) return;
+      delete pending[m.id];
+      if (m.error) p.reject(new Error(m.error.message || "RPC error"));
+      else p.resolve(m.result);
+      return;
+    }
+    if (m.method === "ui/notifications/host-context-changed"){
+      theme = (m.params && m.params.theme) === "dark" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", theme);
+      toView({ type: "theme", theme: theme });
+      return;
+    }
+    if (m.method === "ui/notifications/tool-input"){
+      var a = (m.params && m.params.arguments) || {};
+      pendingToolInput = a;
+      clearTimeout(standaloneTimer);
+      if (!starting && typeof a.sessionId === "string" && a.sessionId){
+        void start(typeof a.url === "string" ? a.url : "", a.sessionId, false);
+      } else if (!starting){
+        // Tool results carry the authoritative sessionId. Waiting for it avoids
+        // opening a second page after a no-id browser_open created its session.
+        clearTimeout(toolResultTimer);
+        toolResultTimer = setTimeout(function(){
+          if (!starting) void start(typeof a.url === "string" ? a.url : "", "", true);
+        }, 1000);
+      }
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result"){
+      var toolState = payload(m.params);
+      var toolSessionId = toolState && typeof toolState.sessionId === "string" ? toolState.sessionId : "";
+      if (!starting && toolSessionId){
+        clearTimeout(toolResultTimer);
+        var input = pendingToolInput || {};
+        void start(typeof input.url === "string" ? input.url : "", toolSessionId, false);
+      }
+      return;
+    }
+    if (m.method === "ping" && m.id !== undefined){ post({ jsonrpc: "2.0", id: m.id, result: {} }); return; }
+    if (m.method === "ui/resource-teardown" && m.id !== undefined){
+      void teardownResource(m.id);
+      return;
+    }
+  });
+
+  rpc("ui/initialize", {
+    appInfo: { name: "flujo-browser-view", version: "3.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
+    protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}"
+  }).then(function(result){
+    var sandboxCaps = result && result.capabilities && result.capabilities.sandbox;
+    if (sandboxCaps) grantedFrameDomains = (sandboxCaps.csp && sandboxCaps.csp.frameDomains) || [];
+    theme = (result && result.hostContext && result.hostContext.theme) === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", theme);
+    notify("ui/notifications/initialized", {});
+    notify("ui/notifications/size-changed", { width: 0, height: 640 });
+    standaloneTimer = setTimeout(function(){ if (!starting) void start("", "", true); }, 300);
+  }).catch(function(e){
+    useFallback("App initialization failed: " + errorText(e));
+  });
 })();
 </script>
 </body>
 </html>`;
+}

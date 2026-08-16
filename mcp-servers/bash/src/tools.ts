@@ -37,13 +37,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
-  ALLOW_PROTECTED_PATHS_ENV,
   createLogger,
   getDataDir,
-  getHomeDir,
   isInside,
-  isProtected,
-  isProtectedPathsEnabled,
   killProcessTree,
   loadEffectiveRoots,
 } from '@flujo-ai/mcp-shared';
@@ -54,17 +50,77 @@ export const BASH_TERMINAL_APP_URI = 'ui://bash/terminal';
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const MAX_TIMEOUT_MS = 600_000;
+/**
+ * Foreground commands and `wait` calls may wrap builds, renders, migrations,
+ * and other jobs that take far longer than the historical ten-minute ceiling.
+ * Keep a finite default safety ceiling, aligned with the background-session
+ * lifetime, while allowing deployments to lower or raise it. Passing -1
+ * disables this Bash-side timer; cancellation and shutdown still clean up.
+ */
+const DEFAULT_MAX_TIMEOUT_MS = 12 * 60 * 60_000;
 const MAX_OUTPUT_CHARS = 100_000;
 const MAX_SESSIONS = 25;
 const MAX_TERMINAL_OUTPUT_CHARS = 2_000_000;
 /**
- * Lifecycle: live sessions end only by process exit, explicit kill, or Bash
- * server shutdown. Finished owner-scoped records remain readable for ten
- * minutes, then are reaped. An MCP View teardown may be an inline→dock handoff,
- * so it is not treated as an owner disconnect signal.
+ * Lifecycle (issue #413): a live session ends by process exit, explicit kill,
+ * OWNER RELEASE when its run finishes, idle/max-lifetime expiry, or Bash server
+ * shutdown. Finished owner-scoped records remain readable for ten minutes, then
+ * are reaped. An MCP View teardown may be an inline-to-dock handoff, so it is
+ * still not treated as an owner disconnect signal.
+ *
+ * Owner release is what closes the original leak: nothing used to tell this
+ * server that the run which started a background command had ended, so a
+ * `start`ed process (and its whole descendant tree) outlived its run and stayed
+ * resident for the lifetime of the FLUJO process.
  */
 const SESSION_TTL_MS = 10 * 60_000;
+/**
+ * Host-wide cap across background AND terminal sessions. The per-owner cap alone
+ * could not bound the machine: N concurrent runs each stayed under their own
+ * limit while together they forked an unbounded number of live trees.
+ */
+const MAX_LIVE_SESSIONS_HOST = 50;
+/** A live session with no reads/writes/output for this long is expired. */
+const SESSION_IDLE_TIMEOUT_MS = 60 * 60_000;
+/** Absolute ceiling on a live session's age, idle or not. */
+const SESSION_MAX_LIFETIME_MS = 12 * 60 * 60_000;
+/** How often the expiry sweep runs. */
+const SESSION_SWEEP_INTERVAL_MS = 60_000;
+
+function positiveEnvNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+function maxLiveSessionsHost(): number {
+  return Math.floor(positiveEnvNumber('FLUJO_BASH_MAX_LIVE_SESSIONS', MAX_LIVE_SESSIONS_HOST));
+}
+
+function sessionIdleTimeoutMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_SESSION_IDLE_MS', SESSION_IDLE_TIMEOUT_MS);
+}
+
+function sessionMaxLifetimeMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_SESSION_MAX_LIFETIME_MS', SESSION_MAX_LIFETIME_MS);
+}
+
+function commandMaxTimeoutMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_COMMAND_MAX_TIMEOUT_MS', DEFAULT_MAX_TIMEOUT_MS);
+}
+
+/** `undefined` means no Bash-side timeout (the explicit timeout=-1 contract). */
+function resolveCommandTimeoutMs(value: unknown): number | undefined {
+  if (value === -1) return undefined;
+  const requested = typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value * 1_000
+    : DEFAULT_TIMEOUT_MS;
+  return Math.min(requested, commandMaxTimeoutMs());
+}
+
+/** Test seam for the public timeout contract; not used by the runtime. */
+export function _resolveCommandTimeoutMsForTests(value: unknown): number | undefined {
+  return resolveCommandTimeoutMs(value);
+}
 
 type ShellKind = 'default' | 'pwsh' | 'bash' | 'cmd';
 type EffectiveShell = 'pwsh' | 'powershell' | 'bash' | 'cmd' | 'sh';
@@ -178,8 +234,13 @@ function windowsGitBashCandidates(): string[] {
 function isWindowsWslBashLauncher(candidate: string): boolean {
   if (process.platform !== 'win32') return false;
   const systemRoot = getEnvCaseInsensitive('SystemRoot') ?? getEnvCaseInsensitive('windir');
-  if (!systemRoot) return false;
-  return path.resolve(candidate).toLowerCase() === path.resolve(systemRoot, 'System32', 'bash.exe').toLowerCase();
+  const resolved = path.resolve(candidate).toLowerCase();
+  // The legacy WSL relay may be reached through System32, SysWOW64, or a
+  // SystemRoot-relative shim. It is not a usable POSIX interpreter without a
+  // provisioned distro, so never select it as the Bash MCP's `bash` shell.
+  if (systemRoot && resolved.startsWith(`${path.resolve(systemRoot).toLowerCase()}${path.sep}`)
+    && path.basename(resolved) === 'bash.exe') return true;
+  return /[\\/]WindowsApps[\\/].*wsl.*[\\/]bash\.exe$/i.test(resolved);
 }
 
 let cachedBashPath: string | null | undefined;
@@ -340,6 +401,14 @@ function availableShellNames(): string[] {
   return collectShellInfo().shells.filter((entry) => entry.available).map((entry) => entry.shell);
 }
 
+function unavailableShellHint(shell: Exclude<ShellKind, 'default'>): string {
+  if (shell === 'bash' && process.platform === 'win32'
+    && findExecutablesOnPath('bash').some(isWindowsWslBashLauncher)) {
+    return 'Only the WSL bash launcher was found and no Linux distribution provides /bin/bash. Install Git for Windows (Git Bash) or a WSL distro.';
+  }
+  return 'Call "shell_info" to see which shells and interpreters exist on this machine.';
+}
+
 function shellInfoTool(): CallToolResult {
   return textResult(collectShellInfo());
 }
@@ -369,6 +438,16 @@ interface BashSession {
   endedAt?: number;
   cancelEscalation?: () => void;
   reapTimer?: NodeJS.Timeout;
+  /** Preflight found a command head that cannot be resolved on PATH. */
+  missingExecutableWarning?: boolean;
+  /**
+   * Explicit opt-in to surviving owner release (issue #413). Default false: a
+   * session outliving its run must be a deliberate choice, not the accident that
+   * made every `start` a permanent process.
+   */
+  detached?: boolean;
+  /** Last output/read/write — drives idle expiry. */
+  lastActivityAt: number;
 }
 
 interface TerminalSession {
@@ -385,6 +464,10 @@ interface TerminalSession {
   startedAt: number;
   endedAt?: number;
   reapTimer?: NodeJS.Timeout;
+  /** Explicit opt-in to surviving owner release (issue #413). */
+  detached?: boolean;
+  /** Last output/read/write — drives idle expiry. */
+  lastActivityAt: number;
 }
 
 // Process-global so all Next.js module-graph instances share one session table
@@ -398,6 +481,8 @@ declare global {
   var __flujo_bash_foreground_children: Set<ChildProcess> | undefined;
   // eslint-disable-next-line no-var
   var __flujo_bash_cleanup_registered: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __flujo_bash_sweep_timer: NodeJS.Timeout | undefined;
 }
 
 function sessions(): Map<string, BashSession> {
@@ -429,12 +514,229 @@ function ownedSession(id: string, ownerScope: string): BashSession | undefined {
   return session?.ownerScope === ownerScope ? session : undefined;
 }
 
+/** Mark a session as active so the idle sweep leaves it alone. */
+function touchSession(session: { lastActivityAt: number }): void {
+  session.lastActivityAt = Date.now();
+}
+
+/** Live sessions across BOTH tables — the quantity the host cap bounds. */
+function liveSessionCount(): number {
+  let count = 0;
+  for (const session of sessions().values()) if (session.running) count += 1;
+  for (const terminal of terminalSessions().values()) if (terminal.running) count += 1;
+  return count;
+}
+
+/** Live sessions for one owner across both tables. */
+function ownerLiveSessionCount(ownerScope: string): number {
+  let count = 0;
+  for (const session of sessions().values()) {
+    if (session.running && session.ownerScope === ownerScope) count += 1;
+  }
+  for (const terminal of terminalSessions().values()) {
+    if (terminal.running && terminal.ownerScope === ownerScope) count += 1;
+  }
+  return count;
+}
+
+/** Terminate one background session's whole process tree and drop its timers. */
+function terminateSession(session: BashSession): void {
+  if (session.running) {
+    try {
+      session.cancelEscalation = killProcessTree(session.child);
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (session.reapTimer) {
+    clearTimeout(session.reapTimer);
+    session.reapTimer = undefined;
+  }
+}
+
+/** Terminate one PTY session and drop its timers. */
+function terminateTerminal(terminal: TerminalSession): void {
+  try {
+    if (terminal.running) {
+      terminal.running = false;
+      terminal.pty.kill();
+    }
+  } catch {
+    /* best-effort */
+  }
+  if (terminal.reapTimer) {
+    clearTimeout(terminal.reapTimer);
+    terminal.reapTimer = undefined;
+  }
+}
+
+export interface OwnerReleaseResult {
+  ownerScope: string;
+  /** Background session ids that were killed. */
+  killedSessions: string[];
+  /** PTY session ids that were closed. */
+  closedTerminals: string[];
+  /** Sessions deliberately left alive because they opted into `detached`. */
+  retainedDetached: string[];
+}
+
+/**
+ * Atomically remove and terminate every NON-DETACHED session of one owner.
+ *
+ * Called when the owning FLUJO run reaches a terminal state. Removing the map
+ * entry BEFORE killing means a concurrent release (or a second call from a retry
+ * path) cannot observe the same session twice, so the operation is idempotent -
+ * repeated releases of the same scope are a no-op instead of a double kill
+ * against a possibly-recycled pid.
+ */
+export function releaseOwnerScope(ownerScope: string): OwnerReleaseResult {
+  const result: OwnerReleaseResult = {
+    ownerScope,
+    killedSessions: [],
+    closedTerminals: [],
+    retainedDetached: [],
+  };
+
+  for (const [id, session] of Array.from(sessions())) {
+    if (session.ownerScope !== ownerScope) continue;
+    if (session.detached) {
+      if (session.running) result.retainedDetached.push(id);
+      continue;
+    }
+    sessions().delete(id);
+    if (session.running) result.killedSessions.push(id);
+    terminateSession(session);
+  }
+
+  for (const [id, terminal] of Array.from(terminalSessions())) {
+    if (terminal.ownerScope !== ownerScope) continue;
+    if (terminal.detached) {
+      if (terminal.running) result.retainedDetached.push(id);
+      continue;
+    }
+    terminalSessions().delete(id);
+    if (terminal.running) result.closedTerminals.push(id);
+    terminateTerminal(terminal);
+  }
+
+  if (result.killedSessions.length || result.closedTerminals.length) {
+    log.info('Released owner-scoped bash sessions', {
+      ownerScope,
+      killed: result.killedSessions.length,
+      closedTerminals: result.closedTerminals.length,
+      retainedDetached: result.retainedDetached.length,
+    });
+  }
+  return result;
+}
+
+/**
+ * Expire live sessions that exceeded the idle timeout or the absolute lifetime.
+ *
+ * Detached sessions are exempt from IDLE expiry (being idle is often the point of
+ * a detached watcher) but NOT from the absolute lifetime ceiling - otherwise
+ * `detached` would be an unbounded leak with extra steps.
+ */
+export function expireStaleSessions(now = Date.now()): string[] {
+  const idleLimit = sessionIdleTimeoutMs();
+  const lifetimeLimit = sessionMaxLifetimeMs();
+  const expired: string[] = [];
+
+  for (const [id, session] of Array.from(sessions())) {
+    if (!session.running) continue;
+    const tooOld = now - session.startedAt >= lifetimeLimit;
+    const tooIdle = !session.detached && now - session.lastActivityAt >= idleLimit;
+    if (!tooOld && !tooIdle) continue;
+    sessions().delete(id);
+    terminateSession(session);
+    expired.push(id);
+  }
+
+  for (const [id, terminal] of Array.from(terminalSessions())) {
+    if (!terminal.running) continue;
+    const tooOld = now - terminal.startedAt >= lifetimeLimit;
+    const tooIdle = !terminal.detached && now - terminal.lastActivityAt >= idleLimit;
+    if (!tooOld && !tooIdle) continue;
+    terminalSessions().delete(id);
+    terminateTerminal(terminal);
+    expired.push(id);
+  }
+
+  if (expired.length) log.info('Expired stale bash sessions', { count: expired.length });
+  return expired;
+}
+
+/** Bounded per-session diagnostics: identity/state only, never output. */
+export function bashSessionDiagnostics(): {
+  liveSessions: number;
+  maxLiveSessions: number;
+  sessions: Array<{
+    sessionId: string;
+    type: 'background' | 'terminal';
+    ownerScope: string;
+    running: boolean;
+    detached: boolean;
+    ageMs: number;
+    idleMs: number;
+  }>;
+} {
+  const now = Date.now();
+  const rows: Array<{
+    sessionId: string;
+    type: 'background' | 'terminal';
+    ownerScope: string;
+    running: boolean;
+    detached: boolean;
+    ageMs: number;
+    idleMs: number;
+  }> = [];
+  for (const session of sessions().values()) {
+    rows.push({
+      sessionId: session.id,
+      type: 'background',
+      ownerScope: session.ownerScope,
+      running: session.running,
+      detached: session.detached === true,
+      ageMs: now - session.startedAt,
+      idleMs: now - session.lastActivityAt,
+    });
+  }
+  for (const terminal of terminalSessions().values()) {
+    rows.push({
+      sessionId: terminal.id,
+      type: 'terminal',
+      ownerScope: terminal.ownerScope,
+      running: terminal.running,
+      detached: terminal.detached === true,
+      ageMs: now - terminal.startedAt,
+      idleMs: now - terminal.lastActivityAt,
+    });
+  }
+  return {
+    liveSessions: liveSessionCount(),
+    maxLiveSessions: maxLiveSessionsHost(),
+    sessions: rows,
+  };
+}
+
 function terminalMeta(visibility: Array<'model' | 'app'> = ['model', 'app']): Tool['_meta'] {
   return { ui: { resourceUri: BASH_TERMINAL_APP_URI, visibility } };
 }
 
-/** Kill every live session's process tree — used on FLUJO process exit. */
+/**
+ * Kill every live session's process tree - used on Bash server shutdown and on
+ * FLUJO process exit.
+ *
+ * Idempotent and DETACHED-INCLUSIVE: a detached session survives owner release,
+ * but nothing survives the death of the server that owns its pipes. Timers are
+ * cleared too, so a repeated call cannot leave a handle keeping the event loop
+ * alive after "shutdown".
+ */
 export function shutdownBashSessions(): void {
+  if (global.__flujo_bash_sweep_timer) {
+    clearInterval(global.__flujo_bash_sweep_timer);
+    global.__flujo_bash_sweep_timer = undefined;
+  }
   for (const child of foregroundChildren()) {
     try {
       killProcessTree(child);
@@ -450,7 +752,10 @@ export function shutdownBashSessions(): void {
         /* best-effort */
       }
     }
-    if (s.reapTimer) clearTimeout(s.reapTimer);
+    if (s.reapTimer) {
+      clearTimeout(s.reapTimer);
+      s.reapTimer = undefined;
+    }
   }
   for (const terminal of terminalSessions().values()) {
     try {
@@ -461,11 +766,27 @@ export function shutdownBashSessions(): void {
     } catch {
       /* best-effort */
     }
-    if (terminal.reapTimer) clearTimeout(terminal.reapTimer);
+    if (terminal.reapTimer) {
+      clearTimeout(terminal.reapTimer);
+      terminal.reapTimer = undefined;
+    }
   }
 }
 
 function registerExitCleanup(): void {
+  if (!global.__flujo_bash_sweep_timer) {
+    // Idle/max-lifetime expiry needs a periodic sweep: a session that simply
+    // stops producing output never fires an event we could hang the check on.
+    const timer = setInterval(() => {
+      try {
+        expireStaleSessions();
+      } catch {
+        /* a sweep failure must never crash the server */
+      }
+    }, SESSION_SWEEP_INTERVAL_MS);
+    timer.unref?.();
+    global.__flujo_bash_sweep_timer = timer;
+  }
   if (global.__flujo_bash_cleanup_registered) return;
   global.__flujo_bash_cleanup_registered = true;
   const handler = () => shutdownBashSessions();
@@ -494,18 +815,6 @@ async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
 
-  // Optional defense-in-depth layer (issue #260). Configured roots win by
-  // default; users can opt into this stricter policy under Experimental Features.
-  if (await isProtectedPathsEnabled()) {
-    const prot = isProtected(resolved);
-    if (prot.denied) {
-      throw new Error(
-        `cwd "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
-          `Disable "Protect sensitive home-directory paths" in Experimental Features or set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override.`
-      );
-    }
-  }
-
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
@@ -520,93 +829,11 @@ async function resolveOutputFile(input: unknown, cwd: string, roots: string[]): 
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('"outputFile" must be a non-empty path.');
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(cwd, raw);
-  if (await isProtectedPathsEnabled()) {
-    const prot = isProtected(resolved);
-    if (prot.denied) {
-      throw new Error(`outputFile "${resolved}" is within a protected location (${prot.matchedRoot}).`);
-    }
-  }
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`outputFile "${resolved}" is outside the configured bash roots.`);
   }
   await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
   return resolved;
-}
-
-/**
- * Best-effort advisory scan (issue #260, item 4) of a command string for
- * absolute-looking paths that point OUTSIDE the configured roots or INTO a
- * protected location. Returns human-readable warning strings; it NEVER blocks —
- * a shell can reach anywhere regardless, so this is honest advice, not a
- * boundary. Known limitation: shell variable expansions (e.g. `$HOME/AppData`)
- * are not resolved.
- */
-function maskGlobOptionValues(command: string): string {
-  const chars = [...command];
-  const tokens = [...command.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)];
-  let maskNext = false;
-  for (const match of tokens) {
-    const raw = match[0];
-    const start = match.index ?? 0;
-    const unquoted = raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
-      ? raw.slice(1, -1)
-      : raw;
-    let valueOffset = 0;
-    if (maskNext) {
-      maskNext = false;
-    } else if (unquoted === '-g' || unquoted === '--glob' || unquoted === '--iglob') {
-      maskNext = true;
-      continue;
-    } else {
-      if (!/^(?:--glob|--iglob)=/.test(unquoted)) continue;
-      valueOffset = raw.indexOf('=') + 1;
-    }
-    for (let i = start + valueOffset; i < start + raw.length; i += 1) chars[i] = ' ';
-  }
-  return chars.join('');
-}
-
-async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
-  const warnings: string[] = [];
-  const protectedPathsEnabled = await isProtectedPathsEnabled();
-  const seen = new Set<string>();
-  // Ripgrep glob values are patterns, not filesystem paths. Mask only option
-  // values so a real path elsewhere in the same command is still inspected.
-  const commandForPathScan = maskGlobOptionValues(command);
-  // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
-  // POSIX (/foo), and ~-prefixed home paths.
-  const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const matches = (commandForPathScan.match(tokenRe) ?? []).filter(
-    // A single-letter slash token is a Windows command switch, not a POSIX path.
-    // Keep longer tokens so genuine POSIX absolute paths remain advisory notices.
-    (token) => !(process.platform === 'win32' && /^\/[A-Za-z]$/.test(token))
-  );
-  const home = (() => {
-    try {
-      return getHomeDir();
-    } catch {
-      return '';
-    }
-  })();
-  for (const rawToken of matches) {
-    let token = rawToken;
-    if (token.startsWith('~/') && home) token = path.join(home, token.slice(2));
-    let resolved: string;
-    try {
-      resolved = path.isAbsolute(token) ? path.resolve(token) : path.resolve(cwd, token);
-    } catch {
-      continue;
-    }
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    const prot = protectedPathsEnabled ? isProtected(resolved) : { denied: false };
-    if (prot.denied) {
-      warnings.push(`Command references "${rawToken}", which is inside a protected location (${prot.matchedRoot}).`);
-    } else if (roots.length > 0 && !roots.some((root) => isInside(root, resolved))) {
-      warnings.push(`Command references "${rawToken}", which is outside the configured working roots.`);
-    }
-  }
-  return warnings;
 }
 
 /**
@@ -633,6 +860,10 @@ const ENV_ALLOWLIST = new Set([
   'systemroot', 'windir', 'comspec', 'pathext', 'systemdrive',
   'programfiles', 'programfiles(x86)',
   'number_of_processors', 'processor_architecture',
+  // Non-secret FLUJO installation-root marker. A command that launches FLUJO
+  // must not reinterpret this Bash server's workspace-scoped FLUJO_DATA_DIR as
+  // the parent of a second `workspaces/<workspace>` namespace.
+  'flujo_parent_data_dir', 'flujo_workspace',
 ]);
 
 /**
@@ -674,6 +905,37 @@ function getBundledRipgrepDir(): string | null {
 }
 
 /**
+ * Read an env var case-insensitively, treating a blank value as absent. FLUJO
+ * launches this server with an explicit `env`, so vars can arrive defined but
+ * empty; an empty `ComSpec` is just as fatal as a missing one.
+ */
+function getNonEmptyEnv(name: string): string | undefined {
+  const value = getEnvCaseInsensitive(name);
+  return value && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * Ensure a Windows env var the child toolchain needs is present exactly once.
+ * A spelling that already carries a value wins, so a script reading `%windir%`
+ * or `$SYSTEMROOT` keeps seeing the name it was given; blank spellings are
+ * deleted first, because Node de-duplicates Windows env keys case-insensitively
+ * and must not settle on the empty one.
+ */
+function ensureWindowsEnvDefault(
+  target: NodeJS.ProcessEnv,
+  key: string,
+  value: string | undefined,
+): void {
+  if (!value) return;
+  const spellings = Object.keys(target).filter(
+    (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+  );
+  if (spellings.some((candidate) => (target[candidate] ?? '').trim() !== '')) return;
+  for (const candidate of spellings) delete target[candidate];
+  target[key] = value;
+}
+
+/**
  * Build the child process environment. By default only the minimal allow-list is
  * inherited (secrets never leave the backend). Explicit per-command overrides
  * are then applied. Setting `FLUJO_BASH_INHERIT_ENV` to a truthy value restores
@@ -706,6 +968,28 @@ function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEn
       if (key !== 'PATHEXT' && key.toLowerCase() === 'pathext') delete out[key];
     }
     out.PATHEXT = windowsExecutableExtensions().join(';');
+    // Windows essentials that must exist for the child to launch anything of
+    // its own. FLUJO passes stdio servers an explicit `env` and the MCP SDK's
+    // default Windows inherit list carries neither ComSpec nor windir, so these
+    // are absent here even though ENV_ALLOWLIST would have kept them.
+    // `npm run <script>` is the casualty: npm resolves its script shell from
+    // `process.env.ComSpec` with no fallback of its own, so a blank one makes it
+    // ask Node to spawn `undefined` and die with ERR_INVALID_ARG_TYPE — after
+    // printing its banner but before emitting one line of diagnostics, which is
+    // why `npm run test:mcp` looked like a silent, empty failure.
+    const systemRoot = getNonEmptyEnv('SystemRoot') ?? getNonEmptyEnv('windir') ?? 'C:\\Windows';
+    ensureWindowsEnvDefault(out, 'SystemRoot', systemRoot);
+    ensureWindowsEnvDefault(out, 'windir', systemRoot);
+    ensureWindowsEnvDefault(
+      out,
+      'SystemDrive',
+      getNonEmptyEnv('SystemDrive') ?? path.parse(systemRoot).root.replace(/[\\/]$/, ''),
+    );
+    ensureWindowsEnvDefault(
+      out,
+      'ComSpec',
+      resolveCmdExecutable() ?? path.join(systemRoot, 'System32', 'cmd.exe'),
+    );
   }
   // Deterministic text encoding and number formatting for children (issue #364):
   // without this, interpreters emit locale-dependent decimal commas and non-UTF-8
@@ -790,6 +1074,7 @@ interface SpawnPlan {
   windowsVerbatimArguments?: boolean;
   /** Explicit shell lookup failed before any user command was executed. */
   unavailableShell?: Exclude<ShellKind, 'default'>;
+  shellSubstitution?: { requested: 'pwsh'; used: 'powershell'; reason: string };
   startError?: string;
 }
 
@@ -805,6 +1090,19 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
     const resolved = resolvePwshExecutable();
     if (resolved) {
       return { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
+    }
+    const windowsPowerShell = resolveWindowsPowerShellExecutable();
+    if (windowsPowerShell) {
+      return {
+        file: windowsPowerShell,
+        args: powerShellArgs(command),
+        useShell: false,
+        effectiveShell: 'powershell',
+        shellSubstitution: {
+          requested: 'pwsh', used: 'powershell',
+          reason: 'PowerShell 7 (pwsh) is not installed on this machine.',
+        },
+      };
     }
     return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
@@ -904,6 +1202,7 @@ interface SpawnOutcome {
   startError?: string;
   effectiveShell: EffectiveShell;
   unavailableShell?: Exclude<ShellKind, 'default'>;
+  shellSubstitution?: SpawnPlan['shellSubstitution'];
 }
 
 function startChild(command: string, cwd: string, shell: ShellKind, env: Record<string, string>): SpawnOutcome {
@@ -915,6 +1214,7 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
     unavailableShell,
     startError,
     windowsVerbatimArguments,
+    shellSubstitution,
   } = buildSpawn(command, shell);
   if (unavailableShell) return { effectiveShell, unavailableShell };
   if (startError) return { effectiveShell, startError };
@@ -928,7 +1228,7 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
       detached,
       ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
-    return { child, effectiveShell };
+    return { child, effectiveShell, shellSubstitution };
   } catch (err) {
     return {
       startError: err instanceof Error ? err.message : String(err),
@@ -1000,7 +1300,21 @@ function makeAppender(
  */
 const POSIX_ONLY_BINARIES = new Set([
   'head', 'tail', 'grep', 'sed', 'awk', 'wc', 'cat', 'cut', 'tr', 'uniq', 'sort', 'xargs', 'touch', 'which',
+  'rg', 'jq', 'find', 'ls', 'pwd', 'less', 'du', 'df',
 ]);
+
+const SHELL_BUILTINS = new Set([
+  'cd', 'echo', 'exit', 'export', 'set', 'unset', 'if', 'then', 'else', 'fi', 'for', 'while', 'do', 'done',
+  'true', 'false', 'test', 'type', 'alias', 'function', 'return', 'shift', 'source', '.', 'dir', 'cls',
+  'copy', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir', 'move', 'ren', 'rename', 'pushd', 'popd',
+]);
+
+function isMissingCommandCandidate(head: string, shell: EffectiveShell): boolean {
+  const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
+  if (!name || SHELL_BUILTINS.has(name) || /^[-/$]/.test(head) || /^[A-Za-z_][\w-]*=/.test(head)) return false;
+  if (/^[A-Za-z]+-[A-Za-z][A-Za-z-]*$/.test(head) && (shell === 'pwsh' || shell === 'powershell')) return false;
+  return !/[\\/]/.test(head) && !/^\.?\.?$/.test(head);
+}
 
 /** Blank out quoted spans so operators inside string literals never trip us. */
 function stripQuotedSegments(command: string): string {
@@ -1033,12 +1347,18 @@ export function detectDialectMismatch(
   if (!posixShell) {
     for (const head of new Set(heads)) {
       const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
-      if (!POSIX_ONLY_BINARIES.has(name)) continue;
-      if (isAvailable(name)) continue;
-      warnings.push(
-        `"${name}" is a POSIX utility and is not available as an executable on this machine; `
-        + `under ${shell} it resolves to nothing (or to an unrelated alias). Pass shell:"bash" or use the native equivalent.`
-      );
+      if (!isMissingCommandCandidate(head, shell) || isAvailable(name)) continue;
+      if (POSIX_ONLY_BINARIES.has(name)) {
+        warnings.push(
+          `"${name}" is a POSIX utility and is not available as an executable on this machine; `
+          + `under ${shell} it resolves to nothing (or to an unrelated alias). Pass shell:"bash" or use the native equivalent.`
+        );
+      } else {
+        warnings.push(
+          `"${name}" was not found on PATH; under ${shell} this will fail with a "command not found" error. `
+          + 'Install it, use the native equivalent, or call "shell_info".'
+        );
+      }
     }
   }
 
@@ -1087,6 +1407,14 @@ export function detectDialectMismatch(
   }
 
   return warnings;
+}
+
+function missingExecutableHint(exitCode: number | null, warnings: string[]): Record<string, string> {
+  if ((exitCode === 9009 || exitCode === 255 || exitCode === 1)
+    && warnings.some((warning) => /not found on PATH|not available as an executable/.test(warning))) {
+    return { hint: 'A referenced executable was not found — see dialectWarnings.' };
+  }
+  return {};
 }
 
 /** Commands that typically hang forever waiting on a pager or interactive prompt. */
@@ -1200,7 +1528,7 @@ function buildPtySpawn(shell: ShellKind): PtySpawnPlan {
   };
 }
 
-function createCommandProgressReporter(context?: BashExecutionContext): {
+function createCommandProgressReporter(context?: BashExecutionContext, heartbeatMs = 10_000): {
   push: (chunk: string) => void;
   stop: () => Promise<void>;
 } {
@@ -1209,6 +1537,9 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
 
   const startedAt = Date.now();
   const maxMessageChars = 4_000;
+  // MCP requires `progress` to increase with every notification. It is a
+  // notification sequence here (not a byte count), because silent-command
+  // heartbeats must advance it too.
   let progress = 0;
   let pending = '';
   let flushTimer: NodeJS.Timeout | undefined;
@@ -1219,7 +1550,7 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
 
   const deliver = (message: string) => {
     if (!message) return;
-    const snapshot = progress;
+    const snapshot = ++progress;
     chain = chain
       .then(() => report({ progress: snapshot, message }))
       .catch((error) => {
@@ -1239,13 +1570,12 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
     if (stopped) return;
     if (pending) flush();
     else deliver(`[command still running: ${Math.max(1, Math.round((Date.now() - startedAt) / 1000))}s]`);
-  }, 10_000);
+  }, heartbeatMs);
   heartbeat.unref?.();
 
   return {
     push: (chunk) => {
       if (stopped || !chunk) return;
-      progress += Buffer.byteLength(chunk, 'utf8');
       const remaining = Math.max(0, MAX_OUTPUT_CHARS - forwardedChars);
       if (remaining > 0) {
         const accepted = chunk.slice(0, remaining);
@@ -1329,6 +1659,11 @@ export function bashToolDefinitions(): Tool[] {
           env: envProp,
           cols: { type: 'number', description: 'Initial terminal columns (20-400, default 100).' },
           rows: { type: 'number', description: 'Initial terminal rows (5-200, default 30).' },
+          detached: {
+            type: 'boolean',
+            description:
+              'Keep the terminal alive after the run that opened it finishes (default false). Still bounded by the host session cap and the absolute max lifetime.',
+          },
         },
       },
     },
@@ -1394,7 +1729,12 @@ export function bashToolDefinitions(): Tool[] {
           cwd: cwdProp,
           shell: shellProp,
           env: envProp,
-          timeout: { type: 'number', description: 'Timeout in seconds (default 60, max 600). On timeout the whole process tree is killed and elapsedMs/timeoutMs are reported.' },
+          timeout: {
+            type: 'number',
+            description:
+              'Bash-side timeout in seconds (default 60; -1 disables it; positive values are capped at 12 hours by default). '
+              + 'While running, output and 10-second liveness heartbeats are sent as MCP progress. On timeout the whole process tree is killed.',
+          },
           normalizeNewlines: { type: 'boolean', description: 'If true, CRLF/CR in the captured output are normalized to LF.' },
           encoding: encodingProp,
           maxOutputChars: maxOutputCharsProp,
@@ -1416,6 +1756,11 @@ export function bashToolDefinitions(): Tool[] {
           encoding: encodingProp,
           maxOutputChars: maxOutputCharsProp,
           outputFile: outputFileProp,
+          detached: {
+            type: 'boolean',
+            description:
+              'Survive the end of the run that started it (default false). Detached sessions are still bounded by the host session cap and the absolute max lifetime, and are always killed when the bash server shuts down.',
+          },
         },
         required: ['command'],
       },
@@ -1431,14 +1776,36 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'wait',
-      description: 'Wait for a background session, sending new output as live progress when supported. The wait timeout does not kill the session.',
+      description:
+        'Wait until a background session completes or the maximum timeout elapses, sending new output as live progress when supported. '
+        + 'The timeout does not kill the session. A finite wait that completes early reports the remaining duration and points to sleep for fixed delays.',
       inputSchema: {
         type: 'object',
         properties: {
           sessionId: { type: 'string', description: 'The id returned by start.' },
-          timeout: { type: 'number', description: 'Max seconds to wait (default 60, max 600).' },
+          timeout: {
+            type: 'number',
+            description:
+              'Max seconds to wait (default 60; -1 waits until completion or cancellation; positive values are capped at 12 hours by default).',
+          },
         },
         required: ['sessionId'],
+      },
+    },
+    {
+      name: 'sleep',
+      description:
+        'Wait for a fixed duration independent of background-session state. Use this instead of wait when the full delay must elapse even if a command finishes early.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          seconds: {
+            type: 'number',
+            exclusiveMinimum: 0,
+            description: 'Fixed positive number of seconds to sleep. Values above the configured Bash timeout ceiling are rejected rather than shortened.',
+          },
+        },
+        required: ['seconds'],
       },
     },
     {
@@ -1465,7 +1832,13 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'list_sessions',
-      description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, startedAt, endedAt }] }.',
+      description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, detached, startedAt, endedAt }] }.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'release_owner',
+      description:
+        'Kill and forget every non-detached background and terminal session owned by this caller scope. Idempotent. Sessions started with "detached": true are retained. FLUJO calls this when a run finishes; the scope is host-derived, so a caller can only release its own sessions. Returns { ownerScope, killedSessions, closedTerminals, retainedDetached }.',
       inputSchema: { type: 'object', properties: {} },
     },
   ];
@@ -1565,11 +1938,8 @@ async function runTool(
   }
 
   const cwd = await resolveCwd(args.cwd, roots);
-  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
-  const warn = warnings.length ? { warnings } : {};
   const normalize = args.normalizeNewlines === true;
-  const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
-  const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
   const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
   let outputFilePath: string | undefined;
   if (args.outputFile !== undefined) {
@@ -1599,7 +1969,7 @@ async function runTool(
     const decodeStderr = createStreamDecoder(encodingMode);
     const progress = createCommandProgressReporter(context);
 
-    const { child, startError, effectiveShell, unavailableShell } = startChild(
+    const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
       command,
       cwd,
       selection.shell,
@@ -1608,6 +1978,7 @@ async function runTool(
     const dialectWarnings = detectDialectMismatch(command, effectiveShell);
     const dialect = dialectWarnings.length ? { dialectWarnings } : {};
     const auto = selection.autoSelected ? { shellAutoSelected: true } : {};
+    const substitution = shellSubstitution ? { shellSubstitution } : {};
     const spoolInfo = () => (outputFilePath
       ? { outputFile: outputFilePath, outputBytes: spool.bytes(), ...(spool.error() ? { outputFileError: spool.error() } : {}) }
       : {});
@@ -1623,9 +1994,10 @@ async function runTool(
         resolve(textResult({
           error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
           cwd,
+          requestedShell,
           shell: unavailableShell,
           availableShells: availableShellNames(),
-          hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+          hint: unavailableShellHint(unavailableShell),
         }, true));
       });
       return;
@@ -1655,8 +2027,8 @@ async function runTool(
         ...outputStats(),
         ...spoolInfo(),
         ...dialect,
+        ...substitution,
         ...auto,
-        ...warn,
       }, true), true);
     };
     const finish = async (result: CallToolResult, keepKillEscalation = false) => {
@@ -1670,30 +2042,32 @@ async function runTool(
       resolve(result);
     };
 
-    timer = setTimeout(() => {
-      cancelEscalation = killProcessTree(child);
-      const finalOut = maybeNormalize(output, normalize);
-      const hangHints = detectInteractiveHangRisk(command);
-      void finish(textResult({
-        timedOut: true,
-        cwd,
-        requestedShell,
-        shell: effectiveShell,
-        exitCode: null,
-        timeoutMs,
-        elapsedMs: Date.now() - startedAt,
-        killedProcessTree: true,
-        suggestion: `Command exceeded ${timeoutMs / 1000}s and its process tree was killed. `
-          + 'Raise "timeout" (max 600s) or run it via "start" + "wait" for long jobs.',
-        output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
-        ...outputStats(),
-        ...spoolInfo(),
-        ...(hangHints.length ? { hangHints } : {}),
-        ...dialect,
-        ...auto,
-        ...warn,
-      }, true), true);
-    }, timeoutMs);
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        cancelEscalation = killProcessTree(child);
+        const finalOut = maybeNormalize(output, normalize);
+        const hangHints = detectInteractiveHangRisk(command);
+        void finish(textResult({
+          timedOut: true,
+          cwd,
+          requestedShell,
+          shell: effectiveShell,
+          exitCode: null,
+          timeoutMs,
+          elapsedMs: Date.now() - startedAt,
+          killedProcessTree: true,
+          suggestion: `Command exceeded ${timeoutMs / 1000}s and its process tree was killed. `
+            + `Raise "timeout" (positive values cap at ${commandMaxTimeoutMs() / 1000}s), pass -1, or use "start" + "wait" for a persistent job.`,
+          output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
+          ...outputStats(),
+          ...spoolInfo(),
+          ...(hangHints.length ? { hangHints } : {}),
+          ...dialect,
+          ...substitution,
+          ...auto,
+        }, true), true);
+      }, timeoutMs);
+    }
     child.stdout?.on('data', (d: Buffer) => {
       const chunk = decodeStdout(d);
       append(chunk);
@@ -1729,8 +2103,9 @@ async function runTool(
         ...outputStats(),
         ...spoolInfo(),
         ...dialect,
+        ...missingExecutableHint(code, dialectWarnings),
+        ...substitution,
         ...auto,
-        ...warn,
       }, code !== 0));
     });
     if (context?.signal?.aborted) onAbort();
@@ -1775,6 +2150,24 @@ async function startTool(
   if (table.size >= MAX_SESSIONS) {
     return textResult({ error: `Too many active background sessions (max ${MAX_SESSIONS}). Kill some first.` }, true);
   }
+  // Issue #413: the HOST-wide live cap spans background and terminal sessions.
+  // A per-owner limit alone let N concurrent runs each stay legal while together
+  // forking an unbounded number of live process trees on one machine. Expire
+  // stale sessions first so the cap is measured against genuinely live work.
+  expireStaleSessions();
+  const hostLimit = maxLiveSessionsHost();
+  if (liveSessionCount() >= hostLimit) {
+    return textResult({
+      error: `Too many live sessions on this host (max ${hostLimit} across background and terminal sessions). Wait for one to finish or kill one first.`,
+      liveSessions: liveSessionCount(),
+    }, true);
+  }
+  if (ownerLiveSessionCount(ownerScope) >= MAX_SESSIONS) {
+    return textResult({ error: `Too many live sessions for this caller (max ${MAX_SESSIONS}). Kill some first.` }, true);
+  }
+
+  // Surviving the owning run must be an explicit choice (see releaseOwnerScope).
+  const detached = args.detached === true || args.persistAfterRun === true;
 
   registerExitCleanup();
 
@@ -1784,8 +2177,6 @@ async function startTool(
   }
 
   const cwd = await resolveCwd(args.cwd, roots);
-  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
-  const warn = warnings.length ? { warnings } : {};
   const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
   let outputFilePath: string | undefined;
   if (args.outputFile !== undefined) {
@@ -1796,7 +2187,7 @@ async function startTool(
     }
   }
   const selection = selectShell(command, requestedShell);
-  const { child, startError, effectiveShell, unavailableShell } = startChild(
+  const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
     command,
     cwd,
     selection.shell,
@@ -1806,9 +2197,10 @@ async function startTool(
     return textResult({
       error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
       cwd,
+      requestedShell,
       shell: unavailableShell,
       availableShells: availableShellNames(),
-      hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+      hint: unavailableShellHint(unavailableShell),
     }, true);
   }
   if (startError || !child) {
@@ -1827,6 +2219,8 @@ async function startTool(
     running: true,
     exitCode: null,
     startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    ...(detached ? { detached: true } : {}),
   };
   table.set(id, session);
 
@@ -1840,12 +2234,14 @@ async function startTool(
   const decodeStderr = createStreamDecoder(encodingMode);
   child.stdout?.on('data', (d: Buffer) => {
     const chunk = decodeStdout(d);
+    touchSession(session);
     append(chunk);
     spool.write(chunk);
   });
   child.stderr?.on('data', (d: Buffer) => {
     const chunk = decodeStderr(d);
     session.stderrChars = (session.stderrChars ?? 0) + chunk.length;
+    touchSession(session);
     append(chunk);
     spool.write(chunk);
   });
@@ -1864,15 +2260,17 @@ async function startTool(
   });
 
   const dialectWarnings = detectDialectMismatch(command, effectiveShell);
+  session.missingExecutableWarning = dialectWarnings.some((warning) => /not found on PATH|not available as an executable/.test(warning));
   return textResult({
     sessionId: id,
     cwd,
     requestedShell,
     shell: effectiveShell,
+    ...(detached ? { detached: true } : {}),
+    ...(shellSubstitution ? { shellSubstitution } : {}),
     ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
     ...(dialectWarnings.length ? { dialectWarnings } : {}),
     ...(outputFilePath ? { outputFile: outputFilePath } : {}),
-    ...warn,
   });
 }
 
@@ -1884,6 +2282,8 @@ function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Re
     output: session.output,
     truncated: session.truncated,
     stderrChars: session.stderrChars ?? 0,
+    ...(session.missingExecutableWarning && (session.exitCode === 9009 || session.exitCode === 255 || session.exitCode === 1)
+      ? { hint: 'A referenced executable was not found — see dialectWarnings.' } : {}),
     ...extra,
   };
 }
@@ -1903,16 +2303,43 @@ async function waitTool(
   const id = String(args?.sessionId ?? '');
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
-  if (!session.running) return textResult(snapshot(session, { timedOut: false }));
+  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
+  const timing = (
+    outcome: 'completed' | 'timedOut' | 'cancelled',
+    waitedMs: number,
+  ): Record<string, unknown> => {
+    const finite = timeoutMs !== undefined;
+    const returnedEarly = finite && outcome === 'completed' && waitedMs < timeoutMs;
+    const remainingSeconds = returnedEarly
+      ? Math.ceil(Math.max(0, timeoutMs - waitedMs)) / 1_000
+      : 0;
+    return {
+      timedOut: outcome === 'timedOut',
+      waitedMs,
+      ...(finite ? { requestedTimeoutMs: timeoutMs, returnedEarly } : {}),
+      ...(returnedEarly
+        ? {
+            remainingSeconds,
+            hint:
+              '`wait.timeout` is a maximum, so wait returned when the background session completed. '
+              + `To wait the full requested duration, call sleep with {"seconds": ${remainingSeconds}}.`,
+          }
+        : {}),
+      ...(outcome === 'cancelled' ? { cancelled: true } : {}),
+    };
+  };
+  if (!session.running) return textResult(snapshot(session, timing('completed', 0)));
   if (context?.signal?.aborted) {
-    return textResult(snapshot(session, { timedOut: false, cancelled: true }), true);
+    return textResult(snapshot(session, timing('cancelled', 0)), true);
   }
 
-  const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
-  const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const startedAt = Date.now();
   const progress = createCommandProgressReporter(context);
 
-  const outcome = await new Promise<'completed' | 'timedOut' | 'cancelled'>((resolve) => {
+  const outcome = await new Promise<{
+    kind: 'completed' | 'timedOut' | 'cancelled';
+    waitedMs: number;
+  }>((resolve) => {
     let settled = false;
     let pollTimer: NodeJS.Timeout | undefined;
     let timeoutTimer: NodeJS.Timeout | undefined;
@@ -1924,8 +2351,9 @@ async function waitTool(
       if (timeoutTimer) clearTimeout(timeoutTimer);
       context?.signal?.removeEventListener('abort', onAbort);
       if (session.output.length > outputOffset) progress.push(session.output.slice(outputOffset));
+      const waitedMs = Date.now() - startedAt;
       await progress.stop();
-      resolve(value);
+      resolve({ kind: value, waitedMs });
     };
     const onAbort = () => void finish('cancelled');
     const poll = () => {
@@ -1939,17 +2367,66 @@ async function waitTool(
       }
       pollTimer = setTimeout(poll, 100);
     };
-    timeoutTimer = setTimeout(() => void finish('timedOut'), timeoutMs);
+    if (timeoutMs !== undefined) {
+      timeoutTimer = setTimeout(() => void finish('timedOut'), timeoutMs);
+    }
     context?.signal?.addEventListener('abort', onAbort, { once: true });
     poll();
   });
   return textResult(
-    snapshot(session, {
-      timedOut: outcome === 'timedOut',
-      ...(outcome === 'cancelled' ? { cancelled: true } : {}),
-    }),
-    outcome === 'cancelled',
+    snapshot(session, timing(outcome.kind, outcome.waitedMs)),
+    outcome.kind === 'cancelled',
   );
+}
+
+async function sleepTool(
+  args: Record<string, unknown>,
+  context?: BashExecutionContext,
+): Promise<CallToolResult> {
+  const seconds = args.seconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    return textResult({ error: 'Provide "seconds" as a finite number greater than 0.' }, true);
+  }
+  const requestedMs = seconds * 1_000;
+  const ceilingMs = Math.min(commandMaxTimeoutMs(), 2 ** 31 - 1);
+  if (requestedMs > ceilingMs) {
+    return textResult({
+      error: `Requested sleep exceeds the configured maximum of ${ceilingMs / 1_000} seconds.`,
+      requestedSeconds: seconds,
+      maxSeconds: ceilingMs / 1_000,
+    }, true);
+  }
+  if (context?.signal?.aborted) {
+    return textResult({ slept: false, cancelled: true, requestedSeconds: seconds, elapsedMs: 0 }, true);
+  }
+
+  const startedAt = Date.now();
+  // A one-second heartbeat keeps finite MCP request timers alive even when the
+  // requested fixed delay is longer than the caller's ordinary silent window.
+  const progress = createCommandProgressReporter(context, 1_000);
+  progress.push(`[sleeping for ${seconds}s]`);
+  const outcome = await new Promise<{ slept: boolean; elapsedMs: number }>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (slept: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      context?.signal?.removeEventListener('abort', onAbort);
+      resolve({ slept, elapsedMs: Date.now() - startedAt });
+    };
+    const onAbort = () => finish(false);
+    timer = setTimeout(() => finish(true), requestedMs);
+    if (context?.signal?.aborted) onAbort();
+    else context?.signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  await progress.stop();
+  return textResult({
+    slept: outcome.slept,
+    requestedSeconds: seconds,
+    elapsedMs: outcome.elapsedMs,
+    ...(!outcome.slept ? { cancelled: true } : {}),
+  }, !outcome.slept);
 }
 
 function writeStdinTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
@@ -1974,6 +2451,7 @@ function killTool(args: Record<string, unknown>, ownerScope: string): CallToolRe
   if (session.running) {
     session.cancelEscalation = killProcessTree(session.child);
   }
+  touchSession(session);
   return textResult({ sessionId: id, killed: true });
 }
 
@@ -1985,10 +2463,28 @@ function listSessionsTool(ownerScope: string): CallToolResult {
       command: s.command,
       running: s.running,
       exitCode: s.exitCode,
+      detached: s.detached === true,
       startedAt: new Date(s.startedAt).toISOString(),
       endedAt: s.endedAt ? new Date(s.endedAt).toISOString() : undefined,
     }));
   return textResult({ sessions: list });
+}
+
+/**
+ * Release every non-detached session of the CALLING scope.
+ *
+ * The scope is host-derived (`_meta.flujo.ownerScope`), never a tool argument, so
+ * a caller can only ever release its own sessions - releasing by arbitrary scope
+ * would be a cross-run kill primitive.
+ */
+function releaseOwnerTool(ownerScope: string): CallToolResult {
+  const released = releaseOwnerScope(ownerScope);
+  return textResult({
+    ownerScope: released.ownerScope,
+    killedSessions: released.killedSessions,
+    closedTerminals: released.closedTerminals,
+    retainedDetached: released.retainedDetached,
+  });
 }
 
 function terminalSnapshot(session: TerminalSession): Record<string, unknown> {
@@ -2033,6 +2529,20 @@ async function openTerminalTool(
   if (ownedRunning.length >= MAX_SESSIONS) {
     return textResult({ error: `Too many active terminal sessions (max ${MAX_SESSIONS}). Close one first.` }, true);
   }
+  // Issue #413: PTY sessions count against the SAME host-wide live cap as
+  // background sessions - a terminal is just as much a live process tree.
+  expireStaleSessions();
+  const hostLimit = maxLiveSessionsHost();
+  if (liveSessionCount() >= hostLimit) {
+    return textResult({
+      error: `Too many live sessions on this host (max ${hostLimit} across background and terminal sessions). Close one first.`,
+      liveSessions: liveSessionCount(),
+    }, true);
+  }
+  if (ownerLiveSessionCount(ownerScope) >= MAX_SESSIONS) {
+    return textResult({ error: `Too many live sessions for this caller (max ${MAX_SESSIONS}). Close one first.` }, true);
+  }
+  registerExitCleanup();
 
   const cwd = await resolveCwd(args.cwd, roots);
   const plan = buildPtySpawn(shellValidation.shell);
@@ -2082,9 +2592,14 @@ async function openTerminalTool(
     running: true,
     exitCode: null,
     startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    ...(args.detached === true || args.persistAfterRun === true ? { detached: true } : {}),
   };
   terminalSessions().set(id, session);
-  pty.onData((chunk) => appendTerminalOutput(session, chunk));
+  pty.onData((chunk) => {
+    touchSession(session);
+    appendTerminalOutput(session, chunk);
+  });
   pty.onExit(({ exitCode }) => {
     session.running = false;
     session.exitCode = exitCode;
@@ -2103,6 +2618,7 @@ function readTerminalTool(args: Record<string, unknown>, ownerScope: string): Ca
   const id = String(args.sessionId ?? '');
   const session = ownedTerminal(id, ownerScope);
   if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  touchSession(session);
   const requested = Number.isFinite(args.cursor) ? Math.max(0, Math.floor(Number(args.cursor))) : session.outputStart;
   const reset = requested < session.outputStart || requested > session.nextCursor;
   const cursor = reset ? session.outputStart : requested;
@@ -2122,6 +2638,7 @@ function writeTerminalTool(args: Record<string, unknown>, ownerScope: string): C
   const data = typeof args.data === 'string' ? args.data : '';
   if (data.length > 65_536) return textResult({ error: 'Terminal input is limited to 65,536 characters per write.' }, true);
   try {
+    touchSession(session);
     session.pty.write(data);
     return textResult({ sessionId: id, written: Buffer.byteLength(data, 'utf8') });
   } catch (error) {
@@ -2209,12 +2726,16 @@ export async function bashCallTool(
         return statusTool(args, scope);
       case 'wait':
         return await waitTool(args, scope, context);
+      case 'sleep':
+        return await sleepTool(args, context);
       case 'write_stdin':
         return writeStdinTool(args, scope);
       case 'kill':
         return killTool(args, scope);
       case 'list_sessions':
         return listSessionsTool(scope);
+      case 'release_owner':
+        return releaseOwnerTool(scope);
       default:
         return textResult({ error: `Unknown tool on the built-in bash server: ${toolName}` }, true);
     }

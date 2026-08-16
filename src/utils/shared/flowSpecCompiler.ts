@@ -51,6 +51,8 @@ export const MAX_SUBFLOW_DEPTH = 3;
 export const MAX_GENERATED_FLOWS = 8;
 /** Sanity ceiling for a process node's `maxTurns` override (no hard runtime cap exists). */
 export const MAX_PROCESS_MAX_TURNS = 1000;
+/** Cap on a static node's `entries` array so a generated spec cannot balloon a flow definition. */
+export const MAX_STATIC_ENTRIES = 200;
 
 function clamp(value: number | undefined, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
@@ -60,6 +62,28 @@ function clamp(value: number | undefined, min: number, max: number, fallback: nu
 // ---------------------------------------------------------------------------
 // FlowSpec — the DSL the generator model emits
 // ---------------------------------------------------------------------------
+
+/**
+ * Static node (issue #358/#380) entry shape for FlowSpec authoring. Structurally mirrors
+ * the runtime `StaticEntry` (src/backend/execution/flow/types.ts) — duplicated rather than
+ * imported because this module is shared with the browser and must not import from
+ * `src/backend/**`. Keep the two definitions in sync if the runtime shape changes.
+ */
+export type FlowSpecStaticEntry =
+  | {
+      kind: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      attachments?: Array<Record<string, unknown>>;
+    }
+  | {
+      kind: 'toolCall';
+      toolName: string;
+      argumentsJson: string;
+      result: string;
+      executionMode?: 'mock' | 'real';
+      serverName?: string;
+    };
 
 /** An MCP server a process step may call tools on. */
 export interface FlowSpecServerRef {
@@ -72,11 +96,28 @@ export interface FlowSpecServerRef {
 export interface FlowSpecNode {
   /** Spec-local handle other nodes' edges refer to. Must be unique. */
   key: string;
-  /** 'mcp' is deliberately NOT accepted — servers are attached via `servers`.
-   *  'resource' (Tier 3) is a data artifact: an edge resource→process means the
-   *  step READS it; process→resource means the step's output is SAVED to it
-   *  (run artifacts only). */
-  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal';
+  /**
+   * Inclusion policy (issue #380 decision record:
+   * docs/architecture/flowspec-node-inclusion-policy.md) — a node type is in this union
+   * when it is a graph-visible control node reached by ordinary edges, its full semantics
+   * are expressible as declarative serializable properties, and an author could reasonably
+   * choose it when describing intent.
+   *
+   * 'mcp' is deliberately NOT accepted — it is an ATTACHMENT configured through a process
+   * node's `servers` list, not a step an author places on the graph. 'trigger' is likewise
+   * excluded — it is an externally-triggered entry point configured outside the flow graph.
+   * Both stay out by design; see the policy doc for the full exclusion rationale.
+   *
+   * 'resource' (Tier 3) is a data artifact: an edge resource→process means the
+   * step READS it; process→resource means the step's output is SAVED to it
+   * (run artifacts only).
+   *
+   * 'static' (issue #358/#380) is an ordinary pass-through control node whose entire
+   * semantics fit in serializable `entries`/`injectOnce` properties, so it IS included —
+   * omitting it silently dropped static nodes on flowToSpec (AI-Improve data loss), the
+   * same class of bug previously fixed for 'signal' (#117) and 'resource'.
+   */
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal' | 'static';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
@@ -84,12 +125,12 @@ export interface FlowSpecNode {
   prompt?: string;
   /** process only: model id OR displayName/name — resolved against the context. */
   model?: string;
-  /** process only: MCP servers this step may use (each becomes an MCP node + mcp edge). */
+  /** process/static: MCP servers this node may use (each becomes an MCP node + mcp edge). */
   servers?: FlowSpecServerRef[];
   /**
    * process only: per-node cap on agentic turns (self-orchestrating tool loop). Clamped to
    * [1, {@link MAX_PROCESS_MAX_TURNS}]. Unset ⇒ inherit the model's setting, then the system
-   * default (50). Exposing it is the pragmatic "retry until it passes" loop: one process node
+   * default (255). Exposing it is the pragmatic "retry until it passes" loop: one process node
    * + a tool + a bounded maxTurns loops internally without a multi-node loop construct.
    */
   maxTurns?: number;
@@ -121,6 +162,15 @@ export interface FlowSpecNode {
   /** signal only (issue #117): the payload template emitted with the signal;
    *  \${var:NAME} is resolved from run variables at emit time. */
   payloadTemplate?: string;
+  /**
+   * static only (issue #358/#380): pre-authored entries injected onto the conversation
+   * when the node is traversed — either a plain message or a synthetic tool-call + result
+   * pair. Mirrors the runtime `StaticEntry` shape (src/backend/execution/flow/types.ts).
+   * Untrusted input: sanitised field-by-field at compile time, never spread verbatim.
+   */
+  entries?: FlowSpecStaticEntry[];
+  /** static only (issue #358/#380): inject only the first time the node is traversed in a run. */
+  injectOnce?: boolean;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
@@ -211,11 +261,20 @@ export interface FlowSpecNode {
    * subflow only (issue #359): result presentation mode for parallel subflows.
    * - 'separate': each lane produces its own framed assistant message in the
    *   parent conversation, carrying structured lane metadata (index, title, status).
-   * - 'joined' (default when absent): one framed message with joined outputs
-   *   and failure summary (back-compat).
-   * Only applies to parallel/spawn/fan-out/map-over-list executions.
+   * - 'joined': one framed message with joined outputs and failure summary.
+   * The low-level runtime keeps 'joined' when absent for backward compatibility;
+   * new-flow authoring surfaces persist 'separate' when this field is omitted.
+   * Only affects runs that actually produce more than one lane.
    */
   resultPresentation?: 'separate' | 'joined';
+  /** Subflow child-conversation memory. `per-key` exposes a `sessionKey`
+   *  argument on incoming handoff tools when the experiment is enabled. New-flow
+   *  authoring surfaces persist `per-key` when omitted; the low-level runtime
+   *  still treats absence as `per-visit` for saved-flow compatibility. */
+  sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+  /** Optional authored key/template for `per-key`; when absent the caller may
+   *  choose the key on each handoff. */
+  sessionKey?: string;
 }
 
 export interface FlowSpecEdge {
@@ -277,6 +336,13 @@ export interface CompileOptions {
    * behaviour used by the LLM flow-generation path).
    */
   keepPills?: boolean;
+  /**
+   * Defaults newly authored Subflow nodes to one message per lane and one child
+   * conversation per session key. Kept opt-in at the low-level compiler so
+   * round-tripping an existing flow with legacy/absent properties cannot change
+   * its behavior. Public new-flow authoring surfaces enable this option.
+   */
+  newSubflowDefaults?: boolean;
 }
 
 export interface CompileIssue {
@@ -516,12 +582,12 @@ function resourceEdge(source: FlowNode, target: FlowNode): Edge {
 }
 
 /** An MCP tool-wiring edge, shaped exactly like `createEdgeFromConnection`'s MCP branch. */
-function mcpEdge(processNode: FlowNode, mcpNode: FlowNode): Edge {
-  const sourceHandle = 'process-right-mcp';
+function mcpEdge(consumerNode: FlowNode, mcpNode: FlowNode): Edge {
+  const sourceHandle = consumerNode.type === 'static' ? 'static-right-mcp' : 'process-right-mcp';
   const targetHandle = 'mcp-left';
   return {
-    id: `${processNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
-    source: processNode.id,
+    id: `${consumerNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
+    source: consumerNode.id,
     sourceHandle,
     target: mcpNode.id,
     targetHandle,
@@ -596,7 +662,7 @@ export function compileFlowSpec(
     // --- Pass 1: nodes -------------------------------------------------------
     const nodesByKey = new Map<string, FlowNode>();
     const flowNodes: FlowNode[] = [];
-    const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+    const mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }> = [];
     // Spec-node-by-key map used for handoff pill resolution under keepPills.
     const specNodesByKey = new Map<string, FlowSpecNode>(
       specNodes.filter((n) => n?.key && typeof n.key === 'string').map((n) => [n.key, n])
@@ -621,7 +687,7 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
@@ -679,7 +745,6 @@ export function compileFlowSpec(
         if (typeof specNode.allowCallerPrompt === 'boolean') {
           properties.allowCallerPrompt = specNode.allowCallerPrompt;
         }
-
         if (specNode.outputMode !== undefined) {
           if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
             properties.outputMode = specNode.outputMode;
@@ -762,6 +827,30 @@ export function compileFlowSpec(
         if (typeof specNode.allowCallerFanout === 'boolean') {
           properties.allowCallerFanout = specNode.allowCallerFanout;
         }
+        const sessionScope = specNode.sessionScope
+          ?? (options.newSubflowDefaults ? 'per-key' : undefined);
+        if (
+          sessionScope === 'per-visit'
+          || sessionScope === 'per-run'
+          || sessionScope === 'per-key'
+        ) {
+          // Keep the legacy runtime default implicit when an author explicitly
+          // opts out with per-visit. The new-flow default is persisted as per-key.
+          if (sessionScope !== 'per-visit') properties.sessionScope = sessionScope;
+        } else if (specNode.sessionScope !== undefined) {
+          warn('invalid-session-scope', `Node "${key}": sessionScope "${String(specNode.sessionScope)}" is not valid (per-visit | per-run | per-key); omitted.`, key);
+        }
+        if (typeof specNode.sessionKey === 'string' && specNode.sessionKey.trim()) {
+          properties.sessionKey = specNode.sessionKey.trim();
+        }
+        // A single-child Subflow can still produce multiple lanes when its
+        // incoming Process queues repeated handoffs, so presentation belongs
+        // to every Subflow node rather than only legacy fan-out shapes.
+        const resultPresentation = specNode.resultPresentation
+          ?? (options.newSubflowDefaults ? 'separate' : undefined);
+        if (resultPresentation === 'separate') {
+          properties.resultPresentation = 'separate';
+        }
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
           properties.captureVariable = specNode.captureVariable.trim();
@@ -810,6 +899,91 @@ export function compileFlowSpec(
           // Back-compat authoring convenience: `prompt` doubles as the payload.
           properties.payloadTemplate = prompt;
         }
+      } else if (type === 'static') {
+        // Static node (issue #358/#380): pre-authored conversation injection; a pass-through
+        // control node whose payload is fully declarative. Sanitise field-by-field — `entries`
+        // is untrusted spec input and must never be spread verbatim into node properties.
+        const rawEntries = Array.isArray(specNode.entries) ? specNode.entries : [];
+        const clean: FlowSpecStaticEntry[] = [];
+        for (let i = 0; i < rawEntries.length && clean.length < MAX_STATIC_ENTRIES; i++) {
+          const entry = rawEntries[i] as Record<string, unknown> | null | undefined;
+          if (!entry || typeof entry !== 'object') {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} is not an object; dropped.`, key);
+            continue;
+          }
+          if (entry.kind === 'message') {
+            const role = entry.role;
+            const content = entry.content;
+            if ((role === 'system' || role === 'user' || role === 'assistant') && typeof content === 'string') {
+              const attachments = Array.isArray(entry.attachments)
+                ? entry.attachments.flatMap((candidate) => {
+                    if (!candidate || typeof candidate !== 'object') return [];
+                    const item = candidate as Record<string, unknown>;
+                    if (
+                      (item.type !== 'document' && item.type !== 'audio' && item.type !== 'image' && item.type !== 'video')
+                      || typeof item.content !== 'string'
+                    ) return [];
+                    return [{
+                      type: item.type,
+                      content: item.content,
+                      ...(typeof item.id === 'string' ? { id: item.id } : {}),
+                      ...(typeof item.originalName === 'string' ? { originalName: item.originalName } : {}),
+                      ...(typeof item.mimeType === 'string' ? { mimeType: item.mimeType } : {}),
+                      ...(typeof item.transcript === 'string' ? { transcript: item.transcript } : {}),
+                    }];
+                  })
+                : [];
+              clean.push({ kind: 'message', role, content, ...(attachments.length > 0 ? { attachments } : {}) });
+            } else {
+              warn('static-invalid-entry', `Node "${key}": message entry #${i + 1} has an invalid role/content; dropped.`, key);
+            }
+          } else if (entry.kind === 'toolCall') {
+            const toolName = entry.toolName;
+            const argumentsJson = entry.argumentsJson;
+            const result = entry.result;
+            if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
+              const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
+              const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+              if (executionMode === 'real' && !serverName) {
+                warn('static-real-toolcall-missing-server', `Node "${key}": real tool-call entry #${i + 1} needs a serverName; kept as a mock.`, key);
+                clean.push({ kind: 'toolCall', toolName, argumentsJson, result, executionMode: 'mock' });
+              } else {
+                clean.push({
+                  kind: 'toolCall',
+                  toolName,
+                  argumentsJson,
+                  result,
+                  ...(entry.executionMode === 'real' || entry.executionMode === 'mock' ? { executionMode } : {}),
+                  ...(serverName ? { serverName } : {}),
+                });
+              }
+              if (argumentsJson.trim()) {
+                try {
+                  JSON.parse(argumentsJson);
+                } catch {
+                  warn('static-toolcall-invalid-json', `Node "${key}": tool-call entry #${i + 1} has invalid JSON arguments.`, key);
+                }
+              }
+            } else {
+              warn('static-invalid-entry', `Node "${key}": tool-call entry #${i + 1} is missing toolName/argumentsJson/result; dropped.`, key);
+            }
+          } else {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} has unknown kind "${String((entry as { kind?: unknown }).kind)}"; dropped.`, key);
+          }
+        }
+        if (rawEntries.length > MAX_STATIC_ENTRIES) {
+          warn('static-too-many-entries', `Node "${key}": only the first ${MAX_STATIC_ENTRIES} entries were kept.`, key);
+        }
+        if (clean.length > 0) {
+          properties.entries = clean;
+        } else {
+          warn('static-no-entries', `Node "${key}": a static node has no entries; it injects nothing.`, key);
+        }
+        if (specNode.injectOnce === true) {
+          properties.injectOnce = true;
+        } else if (specNode.injectOnce !== undefined && typeof specNode.injectOnce !== 'boolean') {
+          warn('static-invalid-injectonce', `Node \"${key}\": injectOnce must be a boolean; value ignored.`, key);
+        }
       }
       // finish: no properties.
 
@@ -827,10 +1001,28 @@ export function compileFlowSpec(
       nodesByKey.set(key, node);
       flowNodes.push(node);
 
-      // --- MCP attachments (process only) ---
-      if (type === 'process' && Array.isArray(specNode.servers)) {
+      // --- MCP attachments (Process tool access or Static real tool calls) ---
+      const attachmentRefs: FlowSpecServerRef[] = Array.isArray(specNode.servers)
+        ? specNode.servers.map((ref) => ({ ...ref, ...(Array.isArray(ref.tools) ? { tools: [...ref.tools] } : {}) }))
+        : [];
+      if (type === 'static') {
+        for (const staticEntry of (properties.entries ?? []) as FlowSpecStaticEntry[]) {
+          if (staticEntry.kind !== 'toolCall' || staticEntry.executionMode !== 'real' || !staticEntry.serverName) continue;
+          const existing = attachmentRefs.find((ref) => ref.name === staticEntry.serverName);
+          if (!existing) {
+            attachmentRefs.push({ name: staticEntry.serverName, tools: [staticEntry.toolName] });
+          } else if (!Array.isArray(existing.tools)) {
+            // Static real calls must remain runnable even when the server is
+            // currently offline and the compiler cannot expand "all tools".
+            existing.tools = [staticEntry.toolName];
+          } else if (!existing.tools.includes(staticEntry.toolName)) {
+            existing.tools.push(staticEntry.toolName);
+          }
+        }
+      }
+      if ((type === 'process' || type === 'static') && attachmentRefs.length > 0) {
         const seenServers = new Set<string>();
-        for (const ref of specNode.servers) {
+        for (const ref of attachmentRefs) {
           const serverName = ref?.name;
           if (!serverName || typeof serverName !== 'string') {
             warn('server-missing-name', `Node "${key}": a server reference is missing its "name"; skipped.`, key);
@@ -867,10 +1059,10 @@ export function compileFlowSpec(
             },
           };
           flowNodes.push(mcpNode);
-          mcpAttachments.push({ processKey: key, mcpNode });
+          mcpAttachments.push({ consumerKey: key, mcpNode });
         }
-      } else if (type !== 'process' && Array.isArray(specNode.servers) && specNode.servers.length > 0) {
-        warn('servers-on-non-process', `Node "${key}": only process nodes can have "servers"; ignored.`, key);
+      } else if (type !== 'process' && type !== 'static' && attachmentRefs.length > 0) {
+        warn('servers-on-unsupported-node', `Node "${key}": only process and static nodes can have "servers"; ignored.`, key);
       }
     }
 
@@ -997,9 +1189,9 @@ export function compileFlowSpec(
     }
 
     // MCP edges after control edges (order is cosmetic; grouping aids debugging).
-    for (const { processKey, mcpNode } of mcpAttachments) {
-      const processNode = nodesByKey.get(processKey)!;
-      edges.push(mcpEdge(processNode, mcpNode));
+    for (const { consumerKey, mcpNode } of mcpAttachments) {
+      const consumerNode = nodesByKey.get(consumerKey)!;
+      edges.push(mcpEdge(consumerNode, mcpNode));
     }
 
     // --- Pass 3: layout ------------------------------------------------------
@@ -1280,11 +1472,6 @@ export function compileFlowSpec(
         warn('invalid-error-strategy', `Node "${specNode.key}": errorStrategy "${String(specNode.errorStrategy)}" is not valid (fail-fast | collect-all); using collect-all.`, specNode.key);
       }
     }
-    // Result presentation mode (issue #359): round-trip only the explicit 'separate'
-    // ('joined' is the default and stays implicit).
-    if (specNode.resultPresentation === 'separate') {
-      properties.resultPresentation = 'separate';
-    }
   }
 }
 
@@ -1312,12 +1499,13 @@ export function flowToSpec(flow: Flow): FlowSpec {
   const mcpById = new Map<string, FlowNode>();
   for (const n of nodes) if (n.type === 'mcp') mcpById.set(n.id, n);
 
-  // process node id → server refs, reconstructed from the MCP edges leaving it.
-  const serversByProcess = new Map<string, FlowSpecServerRef[]>();
+  // Tool-consumer node id → server refs, independent of authored edge direction.
+  const serversByConsumer = new Map<string, FlowSpecServerRef[]>();
   for (const e of edges) {
     if ((e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp') continue;
-    const mcp = mcpById.get(e.target);
+    const mcp = mcpById.get(e.target) ?? mcpById.get(e.source);
     if (!mcp) continue;
+    const consumerId = mcp.id === e.target ? e.source : e.target;
     const props = (mcp.data?.properties ?? {}) as Record<string, unknown>;
     const name =
       typeof props.boundServer === 'string' && props.boundServer ? props.boundServer : mcp.data?.label;
@@ -1325,16 +1513,16 @@ export function flowToSpec(flow: Flow): FlowSpec {
     const tools = Array.isArray(props.enabledTools)
       ? (props.enabledTools.filter((t): t is string => typeof t === 'string' && !!t))
       : undefined;
-    const list = serversByProcess.get(e.source) ?? [];
+    const list = serversByConsumer.get(consumerId) ?? [];
     list.push({ name, ...(tools ? { tools } : {}) });
-    serversByProcess.set(e.source, list);
+    serversByConsumer.set(consumerId, list);
   }
 
   const specNodes: FlowSpecNode[] = [];
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') continue;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') continue;
     const props = (node.data?.properties ?? {}) as Record<string, any>;
     const specNode: FlowSpecNode = {
       key: node.id,
@@ -1364,7 +1552,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
-      const servers = serversByProcess.get(node.id);
+      const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
       // Parallel fan-out (issue #102) takes precedence over the single-child target.
@@ -1411,6 +1599,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (props.allowCallerFanout === true) specNode.allowCallerFanout = true;
+      if (props.sessionScope === 'per-run' || props.sessionScope === 'per-key') specNode.sessionScope = props.sessionScope;
+      if (typeof props.sessionKey === 'string' && props.sessionKey.trim()) specNode.sessionKey = props.sessionKey.trim();
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
@@ -1429,6 +1619,12 @@ export function flowToSpec(flow: Flow): FlowSpec {
       // Issue #117: round-trip topic/payload so AI-Improve never drops signal nodes.
       if (typeof props.topic === 'string' && props.topic) specNode.topic = props.topic;
       if (typeof props.payloadTemplate === 'string' && props.payloadTemplate) specNode.payloadTemplate = props.payloadTemplate;
+    } else if (type === 'static') {
+      // Issue #358/#380: round-trip entries so AI-Improve never drops static nodes.
+      if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
+      if (props.injectOnce === true) specNode.injectOnce = true;
+      const servers = serversByConsumer.get(node.id);
+      if (servers && servers.length > 0) specNode.servers = servers;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
@@ -1496,7 +1692,7 @@ function layout(
   flowNodes: FlowNode[],
   nodesByKey: Map<string, FlowNode>,
   edges: Edge[],
-  mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }>,
+  mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }>,
   positions?: Record<string, { x: number; y: number }>
 ): void {
   const controlAdj = new Map<string, string[]>();
@@ -1554,10 +1750,10 @@ function layout(
 
   // MCP nodes: to the right of their process node, stacked.
   const mcpCounters = new Map<string, number>();
-  for (const { processKey, mcpNode } of mcpAttachments) {
-    const processNode = nodesByKey.get(processKey)!;
-    const idx = mcpCounters.get(processKey) ?? 0;
-    mcpCounters.set(processKey, idx + 1);
+  for (const { consumerKey, mcpNode } of mcpAttachments) {
+    const processNode = nodesByKey.get(consumerKey)!;
+    const idx = mcpCounters.get(consumerKey) ?? 0;
+    mcpCounters.set(consumerKey, idx + 1);
     mcpNode.position = {
       x: processNode.position.x + MCP_X_OFFSET,
       y: processNode.position.y + idx * MCP_Y_SPACING,

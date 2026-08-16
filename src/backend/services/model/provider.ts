@@ -50,7 +50,9 @@ function discoverProviderMetadata(model: any): Partial<NormalizedModel> {
  * Maps each URL pattern to its corresponding provider
  */
 export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
-  if (baseUrl.includes('openrouter.ai')) {
+  if (/\.openai\.azure\.(?:com|us)(?:[/:]|$)|\.cognitiveservices\.azure\.(?:com|us)(?:[/:]|$)/i.test(baseUrl)) {
+    return 'azure';
+  } else if (baseUrl.includes('openrouter.ai')) {
     return 'openrouter';
   } else if (baseUrl.includes('requesty.ai')) {
     return 'requesty';
@@ -238,6 +240,13 @@ export async function fetchModelsFromProvider(
   log.debug(`fetchModelsFromProvider: Fetching models for provider: ${provider}`);
   
   try {
+    // Azure's inference/data-plane endpoint is deployment-scoped and does not
+    // expose the resource's deployment catalogue. Listing deployments belongs
+    // to Azure's management plane, so the UI keeps the deployment field free-text.
+    if (provider === 'azure') {
+      return [];
+    }
+
     // Only OpenRouter has a special endpoint for fetching models
     if (provider === 'openrouter') {
       return await fetchOpenRouterModels();

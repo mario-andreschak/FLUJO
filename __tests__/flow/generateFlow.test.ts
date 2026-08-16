@@ -367,14 +367,14 @@ describe('generateFlow — marketplace tools', () => {
     const withoutInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
       (t: { function: { name: string } }) => t.function.name
     );
-    expect(withoutInstall).toEqual(['search_mcp_marketplace']);
+    expect(withoutInstall).toEqual(['find_mcp_server']);
 
     createCompletionMock.mockClear();
     await generateFlow({ description: 'x', modelId: 'model-gen', allowInstall: true });
     const withInstall = (createCompletionMock.mock.calls[0][0].tools ?? []).map(
       (t: { function: { name: string } }) => t.function.name
     );
-    expect(withInstall).toEqual(['search_mcp_marketplace', 'install_mcp_server']);
+    expect(withInstall).toEqual(['find_mcp_server', 'install_mcp_server']);
   });
 
   it('search → install → spec: executes the tools, reports installs, and re-gathers context', async () => {
@@ -402,7 +402,7 @@ describe('generateFlow — marketplace tools', () => {
     }));
 
     createCompletionMock
-      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(toolCallCompletion('find_mcp_server', { query: 'voice' }))
       .mockResolvedValueOnce(toolCallCompletion('install_mcp_server', { name: 'io.github.acme/voice' }, 'call_2'))
       .mockResolvedValueOnce(completionWith(JSON.stringify(specWithNewServer)));
 
@@ -440,7 +440,7 @@ describe('generateFlow — marketplace tools', () => {
   it('withdraws tools after the turn budget and demands the spec', async () => {
     createCompletionMock.mockImplementation(async (input: { tools?: unknown[] }) => {
       if (input.tools && input.tools.length > 0) {
-        return toolCallCompletion('search_mcp_marketplace', { query: 'loop' });
+        return toolCallCompletion('find_mcp_server', { query: 'loop' });
       }
       return completionWith(JSON.stringify(goodSpec));
     });
@@ -453,7 +453,7 @@ describe('generateFlow — marketplace tools', () => {
   it('a search failure is fed to the model as an error result, not thrown', async () => {
     searchRegistryMock.mockRejectedValue(new Error('registry down'));
     createCompletionMock
-      .mockResolvedValueOnce(toolCallCompletion('search_mcp_marketplace', { query: 'voice' }))
+      .mockResolvedValueOnce(toolCallCompletion('find_mcp_server', { query: 'voice' }))
       .mockResolvedValueOnce(completionWith(JSON.stringify(goodSpec)));
     const result = await generateFlow({ description: 'x', modelId: 'model-gen' });
     expect(result.success).toBe(true);
@@ -510,6 +510,10 @@ describe('generateFlow — multi-level (issue #94)', () => {
     const child = result.flows.find((f) => f.flow.id !== result.rootFlowId)!.flow;
     const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.subflowId).toBe(child.id);
+    expect(sub.data.properties).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
     expect(result.validation.errorCount).toBe(0);
     // Two model turns: the root, then the child generation.
     expect(createCompletionMock).toHaveBeenCalledTimes(2);

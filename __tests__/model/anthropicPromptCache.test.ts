@@ -285,6 +285,7 @@ describe('AnthropicAdapter usage mapping with cache buckets', () => {
     expect(completion.usage?.completion_tokens).toBe(5);
     expect(completion.usage?.total_tokens).toBe(1015);
     expect(completion.usage?.prompt_tokens_details?.cached_tokens).toBe(900);
+    expect(completion.usage?.prompt_tokens_details?.cache_write_tokens).toBe(100);
   });
 
   test('omits prompt_tokens_details when the endpoint reports no cache buckets at all', async () => {
@@ -315,5 +316,6 @@ describe('AnthropicAdapter usage mapping with cache buckets', () => {
     });
 
     expect(completion.usage?.prompt_tokens_details?.cached_tokens).toBe(0);
+    expect(completion.usage?.prompt_tokens_details?.cache_write_tokens).toBe(10);
   });
 });

@@ -1,5 +1,10 @@
 import { createLogger } from '@/utils/logger';
 import {
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
+import {
   writeRunResource,
   readRunResource,
   readRunResourceBounded,
@@ -8,6 +13,7 @@ import {
 } from '@/backend/services/runResources';
 import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { executeNativeReadResource } from './mcpResourceTools';
 
 /**
@@ -135,7 +141,7 @@ export function buildRunResourceTools(
   }];
 }
 
-export interface RunResourceToolContext {
+export interface RunResourceToolContext extends FlowDurableMutationContext {
   /** Owning conversation — run resources are scoped to it. Absent ⇒ refused. */
   conversationId?: string;
   /** Whether this is an ephemeral (subflow-child) run — those never persist resources. */
@@ -180,35 +186,38 @@ export async function executeRunResourceTool(
   const content = typeof args?.content === 'string' ? args.content : '';
 
   try {
-    const written = await writeRunResource({
-      conversationId: ctx.conversationId,
-      name,
-      mimeType: 'text/markdown',
-      kind: 'text',
-      data: { text: content },
-      producedBy: {
+    return await commitFlowDurableMutation(ctx, async () => {
+      const written = await writeRunResource({
+        conversationId: ctx.conversationId!,
+        name,
+        mimeType: 'text/markdown',
+        kind: 'text',
+        data: { text: content },
+        producedBy: {
+          source: 'capture',
+          nodeId: ctx.node?.nodeId,
+          nodeName: ctx.node?.nodeName,
+        },
+      });
+      if ('skipped' in written) {
+        log.warn('write_resource skipped by store cap', { name, reason: written.skipped });
+        return { success: false, error: `Artifact not stored (${written.skipped}).` };
+      }
+      ctx.emit?.({
+        type: 'resource:write',
+        node: ctx.node,
+        server: 'flujo',
+        uri: written.uri,
+        name,
+        mimeType: written.mimeType,
+        size: written.size,
         source: 'capture',
-        nodeId: ctx.node?.nodeId,
-        nodeName: ctx.node?.nodeName,
-      },
+      });
+      log.info('write_resource stored run artifact', { name, uri: written.uri, size: written.size });
+      return { success: true, data: { written: true, name, uri: written.uri, size: written.size } };
     });
-    if ('skipped' in written) {
-      log.warn('write_resource skipped by store cap', { name, reason: written.skipped });
-      return { success: false, error: `Artifact not stored (${written.skipped}).` };
-    }
-    ctx.emit?.({
-      type: 'resource:write',
-      node: ctx.node,
-      server: 'flujo',
-      uri: written.uri,
-      name,
-      mimeType: written.mimeType,
-      size: written.size,
-      source: 'capture',
-    });
-    log.info('write_resource stored run artifact', { name, uri: written.uri, size: written.size });
-    return { success: true, data: { written: true, name, uri: written.uri, size: written.size } };
   } catch (error) {
+    rethrowFlowExecutionAuthorityError(error);
     log.error('write_resource failed', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -232,7 +241,13 @@ async function executeReadResource(
   }
   const parsed = parseRunResourceUri(uri);
   if (!parsed) {
-    // Not a flujo://run/ URI — try native MCP server dispatch if mcpNodes are available.
+    // The run-resource scheme is reserved for FLUJO. Malformed values must
+    // fail here rather than falling through to native MCP advertisement, which
+    // would produce the misleading "no server advertises this resource" error.
+    if (uri.startsWith(RUN_RESOURCE_SCHEME)) {
+      return { success: false, error: `Invalid run-resource URI: ${uri}` };
+    }
+    // Non-FLUJO URIs may be served by a native MCP server.
     if (ctx.mcpNodes && ctx.mcpNodes.length > 0) {
       return executeNativeReadResource(uri, {
         conversationId: ctx.conversationId,
@@ -241,6 +256,8 @@ async function executeReadResource(
         mcpNodes: ctx.mcpNodes,
         emit: ctx.emit,
         node: ctx.node,
+        executionAuthority: ctx.executionAuthority,
+        personaAttribution: ctx.personaAttribution,
       });
     }
     return { success: false, error: `Not a run-resource URI: ${uri}` };
@@ -250,58 +267,61 @@ async function executeReadResource(
   }
 
   try {
-    const maxChars = typeof args?.max_chars === 'number' && Number.isFinite(args.max_chars)
-      ? Math.floor(args.max_chars)
-      : undefined;
-    const expectedSha256 = typeof args?.expected_sha256 === 'string'
-      ? args.expected_sha256.trim()
-      : undefined;
-    const access = { at: Date.now(), source: 'tool-read' as const, nodeId: ctx.node?.nodeId };
-    const bounded = maxChars !== undefined || expectedSha256
-      ? await readRunResourceBounded(uri, { maxChars, expectedSha256, access })
-      : null;
-    const read = bounded ? null : await readRunResource(uri, access);
-    if (!bounded && !read) {
-      return { success: false, error: `Run resource not found: ${uri}` };
-    }
-    const entry = bounded?.entry ?? read!.entry;
-    const contents = read?.contents;
-    ctx.emit?.({
-      type: 'resource:read',
-      node: ctx.node,
-      server: 'flujo',
-      uri: entry.uri,
-      name: entry.name,
-      mimeType: entry.mimeType,
-      size: entry.size,
-      source: 'tool-read',
-    });
-    // Prefer text content; for binary/link kinds return a compact note rather
-    // than re-inlining base64 (which would defeat the point of the marker).
-    const textParts = (contents?.contents ?? [])
-      .map((c) => (typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
-      .filter((t) => t.length > 0);
-    const content = bounded?.content ?? (textParts.length > 0
-      ? textParts.join('\n')
-      : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`);
-    const localPath = entry.kind !== 'text' && entry.kind !== 'link'
-      ? await getRunResourceLocalPath(entry.uri)
-      : null;
-    log.info('read_resource served run resource', { uri: entry.uri, size: entry.size });
-    return {
-      success: true,
-      data: {
+    return await commitFlowDurableMutation(ctx, async () => {
+      const maxChars = typeof args?.max_chars === 'number' && Number.isFinite(args.max_chars)
+        ? Math.floor(args.max_chars)
+        : undefined;
+      const expectedSha256 = typeof args?.expected_sha256 === 'string'
+        ? args.expected_sha256.trim()
+        : undefined;
+      const access = { at: Date.now(), source: 'tool-read' as const, nodeId: ctx.node?.nodeId };
+      const bounded = maxChars !== undefined || expectedSha256
+        ? await readRunResourceBounded(uri, { maxChars, expectedSha256, access })
+        : null;
+      const read = bounded ? null : await readRunResource(uri, access);
+      if (!bounded && !read) {
+        return { success: false, error: `Run resource not found: ${uri}` };
+      }
+      const entry = bounded?.entry ?? read!.entry;
+      const contents = read?.contents;
+      ctx.emit?.({
+        type: 'resource:read',
+        node: ctx.node,
+        server: 'flujo',
         uri: entry.uri,
         name: entry.name,
         mimeType: entry.mimeType,
-        content,
-        truncated: bounded?.truncated ?? false,
-        sha256: entry.sha256,
-        verification: bounded?.verification,
-        ...(localPath ? { localPath } : {}),
-      },
-    };
+        size: entry.size,
+        source: 'tool-read',
+      });
+      // Prefer text content; for binary/link kinds return a compact note rather
+      // than re-inlining base64 (which would defeat the point of the marker).
+      const textParts = (contents?.contents ?? [])
+        .map((c) => (typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
+        .filter((t) => t.length > 0);
+      const content = bounded?.content ?? (textParts.length > 0
+        ? textParts.join('\n')
+        : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`);
+      const localPath = entry.kind !== 'text' && entry.kind !== 'link'
+        ? await getRunResourceLocalPath(entry.uri)
+        : null;
+      log.info('read_resource served run resource', { uri: entry.uri, size: entry.size });
+      return {
+        success: true,
+        data: {
+          uri: entry.uri,
+          name: entry.name,
+          mimeType: entry.mimeType,
+          content,
+          truncated: bounded?.truncated ?? false,
+          sha256: entry.sha256,
+          verification: bounded?.verification,
+          ...(localPath ? { localPath } : {}),
+        },
+      };
+    });
   } catch (error) {
+    rethrowFlowExecutionAuthorityError(error);
     log.error('read_resource failed', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }

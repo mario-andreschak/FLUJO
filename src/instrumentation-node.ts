@@ -8,28 +8,37 @@
  * runs in the Node.js runtime.
  */
 import { createLogger } from '@/utils/logger';
-import { ensureBackendInitialized } from '@/backend/init';
-import { startSandboxServer } from '@/backend/mcpApps/sandboxServer';
+import { ensureWorkspaceLayoutReady } from '@/backend/services/workspace/migration';
 
 const log = createLogger('instrumentation');
 
-log.info('Server startup: initializing backend (storage + MCP servers)');
+export async function initializeNodeRuntime(): Promise<void> {
+  log.info('Server startup: preparing workspace layout');
 
-// MCP Apps (#97): bring up the separate-origin sandbox proxy listener so
-// interactive apps can render in a foreign-origin iframe. Never blocks startup
-// and never throws — if the port is taken or binding fails, apps just won't
-// render and the rest of FLUJO is unaffected.
-try {
-  startSandboxServer();
-} catch (error) {
-  log.error('Failed to start MCP Apps sandbox proxy', error);
+  // Start the barrier immediately, but do not make Next's instrumentation hook
+  // await a potentially long first-run inventory. In Next 16 the hook can be
+  // evaluated lazily by the first request; awaiting here makes the TCP listener
+  // accept connections while returning no bytes until every legacy file has
+  // been hashed. The shell and the installation-wide readiness endpoint may be
+  // served during migration; every data-bearing route still awaits this exact
+  // promise through withWorkspaceContext().
+  const layoutPreparation = ensureWorkspaceLayoutReady();
+
+  void layoutPreparation.then(async () => {
+    // MCP Apps (#97): bring up the separate-origin sandbox proxy listener only
+    // after the storage barrier. If its port is unavailable, the main app stays
+    // usable and reports the sandbox error normally.
+    try {
+      const { startSandboxServer } = await import('@/backend/mcpApps/sandboxServer');
+      startSandboxServer();
+    } catch (error) {
+      log.error('Failed to start MCP Apps sandbox proxy', error);
+    }
+
+    // Enumerating all workspaces ensures inactive workspaces still arm
+    // automations; slow MCP connections do not hold Next's readiness gate open.
+    const { ensureAllWorkspacesInitialized } = await import('@/backend/init');
+    await ensureAllWorkspacesInitialized();
+    log.info('Server startup: all workspace initialization complete');
+  }).catch(error => log.error('Server startup: workspace initialization failed', error));
 }
-
-// Fire-and-forget: we deliberately do NOT await this. MCP servers can take
-// several seconds (and retry with backoff) to connect, and blocking the
-// server's "ready" on every one of them would make startup feel frozen.
-// getServerStatus() reports each as "connecting" until it settles, and the
-// MCP page polls and refreshes its cards automatically.
-ensureBackendInitialized()
-  .then(() => log.info('Server startup: backend initialization complete'))
-  .catch(error => log.error('Server startup: backend initialization failed', error));

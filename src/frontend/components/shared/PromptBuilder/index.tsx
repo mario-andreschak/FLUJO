@@ -281,6 +281,7 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
               value={value}
               onChange={onChange}
               suggestions={pickerSuggestions}
+              enhancedHitlist
               placeholder={t('promptBuilder.placeholder')}
               bare
               minRows={4}

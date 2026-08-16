@@ -65,6 +65,22 @@ describe('filesystem media detection (#365)', () => {
     });
   });
 
+  it('magic-detects extensionless PNG files above the large-text threshold', async () => {
+    const pngData = Buffer.alloc(100_001);
+    pngData.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const filePath = path.join(testDir, 'extensionless-media');
+    await fsp.writeFile(filePath, pngData);
+
+    const result = await filesystemCallTool('read_file', { path: filePath });
+
+    expect(result.isError).toBeUndefined();
+    expect(getMediaContent(result)).toMatchObject({
+      type: 'image',
+      mimeType: 'image/png',
+    });
+    expect(getStructured(result)).toMatchObject({ size: pngData.length });
+  });
+
   it('detects and returns JPEG images as image media content', async () => {
     // JPEG magic bytes: FF D8 FF
     const jpegData = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
@@ -209,7 +225,7 @@ describe('filesystem media detection (#365)', () => {
     const result = await filesystemCallTool('read_file', { path: filePath, pattern: 'foo' });
 
     expect(result.isError).toBe(true);
-    expect((result as any).content[0].text).toMatch(/binary/i);
+    expect((result as any).content[0].text).toMatch(/media, not text/i);
   });
 
   it('rejects line range reads on media files', async () => {

@@ -172,7 +172,6 @@ async function parseReadmeConfig(repoPath: string, repoName: string): Promise<Co
       args: [],
       env: {},
       disabled: false,
-      autoApprove: [],
       rootPath: repoPath,
       _buildCommand: '',
       _installCommand: '',

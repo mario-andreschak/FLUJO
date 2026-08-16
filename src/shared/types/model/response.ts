@@ -80,6 +80,16 @@ export interface ModelTestAttempt {
   };
 }
 
+/** Which adapter/endpoint the flow engine will actually use for this model. */
+export interface ModelAdapterRoute {
+  /** 'openai' | 'openai-responses' | 'azure' | 'anthropic' | 'gemini' | 'claude-cli' | 'codex-cli' | 'openrouter-media' */
+  adapterId: string;
+  /** '/chat/completions' | '/images' | '/videos' | 'native SDK' | 'local CLI' | '/responses' */
+  endpoint: string;
+  reason: string;
+  outputModalities?: string[];
+}
+
 /**
  * Verbose result of a direct (no flow engine) model connectivity test, used by
  * the "Test" button on the Models page. Runs the request through the hardened
@@ -97,6 +107,10 @@ export interface ModelTestResult {
   axios: ModelTestAttempt;
   /** Human-readable summary of what the two attempts imply. */
   diagnosis: string;
+  /** Optional: adapter the execution engine resolves for this model. */
+  adapterRoute?: ModelAdapterRoute;
+  /** Optional: result of exercising exactly the resolved adapter. */
+  adapter?: ModelTestAttempt;
 }
 
 /**

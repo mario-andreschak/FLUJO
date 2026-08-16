@@ -19,7 +19,6 @@ import {
   DialogActions,
   DialogContent,
   DialogContentText,
-  DialogTitle,
   FormControl,
   FormControlLabel,
   InputLabel,
@@ -28,6 +27,7 @@ import {
   TextField,
 } from '@mui/material';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { Flow } from '@/frontend/types/flow/flow';
 import { Model } from '@/shared/types/model';
 import { flowService } from '@/frontend/services/flow';
@@ -138,7 +138,7 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('flows.improve.title')}</DialogTitle>
+      <DialogHeaderActions title={t('flows.improve.title')} onClose={handleClose} />
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
           {t('flows.improve.description')}

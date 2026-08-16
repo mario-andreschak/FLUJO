@@ -7,11 +7,18 @@ import { FlujoFunctionToolCall } from '@/shared/types/openai';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { FEATURES } from '@/config/features';
+import { mcpService } from '@/backend/services/mcp';
+import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import type { ModelMediaPart } from '@/shared/types/model/media';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  executePersonaMemoryMaintenanceCommit,
+} from '../handlers/personaMemoryGateway';
 
 const log = createLogger('backend/flow/execution/nodes/StaticNode');
 
 /**
- * Static node (issue #358) — a deterministic, non-LLM, pass-through node that
+ * Static node (issue #358) — a non-LLM, pass-through node that
  * INJECTS pre-authored entries into the conversation when execution traverses
  * it, then hands off to its first successor unchanged.
  *
@@ -23,17 +30,21 @@ const log = createLogger('backend/flow/execution/nodes/StaticNode');
  *
  * Entry kinds:
  *  - `message`  → one message with the authored role/content.
- *  - `toolCall` → TWO messages: a synthetic `assistant` turn carrying a
- *    `tool_calls` entry, immediately followed by the matching `role: 'tool'`
- *    result with the same `tool_call_id`. Well-formed pairing is mandatory,
- *    otherwise provider adapters reject the history — invalid `argumentsJson`
- *    therefore fails loudly at execution time.
+ *  - `toolCall` → executes the connected MCP tool when `executionMode` is
+ *    `real`, or uses the authored deterministic result for `mock`/legacy
+ *    entries. It then appends a paired assistant tool-call and tool-result
+ *    message. Well-formed pairing is mandatory, otherwise provider adapters
+ *    reject the history — invalid `argumentsJson` therefore fails loudly.
  *
  * Text fields support `${var:NAME}` (run scratchpad, Tier 2c) and `${res:NAME}`
  * (run resources, Tier 3), resolved in the same order as ProcessNode.
  *
- * Re-entry: by default the node appends on every traversal; with
- * `injectOnce: true` it injects only once per run (tracked on sharedState).
+ * Re-entry (issue #381): by default the node appends on every traversal; with
+ * `injectOnce: true` it injects only once per **logical run**. The dedupe key is
+ * `(sharedState.logicalRunId, nodeId)`, stored in `sharedState.staticInjected`, so
+ * an approval/debug resume of the same run does not re-inject while a new user turn
+ * (new logical run) does. Subflow runs carry their own SharedState and therefore
+ * their own markers. See docs/features/flows/static-node.md#re-entry-semantics.
  */
 export class StaticNode extends BaseNode {
   async prep(
@@ -71,8 +82,11 @@ export class StaticNode extends BaseNode {
       });
     }
 
-    const state = sharedState as SharedState & { staticInjected?: Record<string, boolean> };
-    const alreadyInjected = state.staticInjected?.[nodeId] === true;
+    // "Once" means once per logical run (one user turn), not once per conversation:
+    // the marker stores the run that injected, so a persisted map from an earlier turn
+    // can never suppress this run's injection.
+    const runId = sharedState.logicalRunId ?? 'no-run';
+    const alreadyInjected = sharedState.staticInjected?.[nodeId] === runId;
 
     if (prepResult.injectOnce && alreadyInjected) {
       log.info('injectOnce: skipping repeat injection', { nodeId });
@@ -86,15 +100,40 @@ export class StaticNode extends BaseNode {
           resolveRunVars(value ?? '', sharedState.variables),
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
-          { nodeId }
+          { nodeId },
+          sharedState,
         );
 
       const messages: FlujoChatMessage[] = [];
       for (const entry of prepResult.entries) {
         if (entry.kind === 'message') {
+          let content = await resolve(entry.content);
+          const media: ModelMediaPart[] = [];
+          for (const attachment of entry.attachments ?? []) {
+            if (
+              attachment.type === 'document'
+              && typeof attachment.content === 'string'
+              && !attachment.content.startsWith('data:')
+            ) {
+              const documentText = await resolve(attachment.content);
+              content += `${content ? '\n\n' : ''}[DOCUMENT${attachment.originalName ? `: ${attachment.originalName}` : ''}]\n${documentText}`;
+              continue;
+            }
+
+            const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(attachment.content ?? '');
+            if (!match) continue;
+            media.push({
+              type: attachment.type === 'document' ? 'file' : attachment.type,
+              mimeType: attachment.mimeType || match[1],
+              data: match[2],
+              name: attachment.originalName,
+              transcript: attachment.transcript,
+            });
+          }
           messages.push({
             role: entry.role,
-            content: await resolve(entry.content),
+            content,
+            ...(media.length > 0 ? { media } : {}),
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
@@ -122,17 +161,59 @@ export class StaticNode extends BaseNode {
             function: { name: toolName, arguments: argumentsJson },
           };
 
+          const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
+          const serverName = (entry.serverName ?? '').trim();
+          let resultContent = executionMode === 'mock' ? await resolve(entry.result ?? '') : '';
+
+          if (executionMode === 'real') {
+            if (!serverName) {
+              throw new Error(`Static node ${nodeId}: real tool call "${toolName}" requires an MCP server.`);
+            }
+            const args = JSON.parse(argumentsJson) as Record<string, unknown>;
+            const callResult = serverName === PERSONA_MEMORY_GATEWAY_SERVER
+              ? await executePersonaMemoryMaintenanceCommit(toolName, args, {
+                  variables: sharedState.variables,
+                  conversationId: sharedState.conversationId,
+                  executionAuthority: sharedState.executionAuthority,
+                  personaAttribution: sharedState.personaAttribution,
+                })
+              : await (async () => {
+                  const binding = node_params?.properties?.mcpNodes?.find(
+                    (candidate) => candidate.properties?.boundServer === serverName,
+                  );
+                  if (!binding || !binding.properties.enabledTools?.includes(toolName)) {
+                    throw new Error(
+                      `Static node ${nodeId}: real tool call "${toolName}" is not enabled on its connected MCP server "${serverName}".`,
+                    );
+                  }
+                  return mcpService.callTool(
+                    serverName,
+                    toolName,
+                    args,
+                    binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+                    undefined,
+                    nodeId,
+                  );
+                })();
+            resultContent = callResult.success
+              ? JSON.stringify(callResult.data ?? null)
+              : `Error: ${callResult.error || `Tool ${toolName} failed`}`;
+          }
+
           messages.push({
             role: 'assistant',
             content: '',
             tool_calls: [toolCall],
+            ...(serverName ? {
+              mcpToolCalls: { [toolCallId]: { serverName, toolName } },
+            } : {}),
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
           messages.push({
             role: 'tool',
             tool_call_id: toolCallId,
-            content: await resolve(entry.result ?? ''),
+            content: resultContent,
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
@@ -143,7 +224,14 @@ export class StaticNode extends BaseNode {
       }
 
       sharedState.messages.push(...messages);
-      state.staticInjected = { ...(state.staticInjected ?? {}), [nodeId]: true };
+      // Drop markers left by earlier logical runs while writing this one, so the map
+      // cannot grow unbounded over a long conversation.
+      const markers: Record<string, string> = {};
+      for (const [id, marker] of Object.entries(sharedState.staticInjected ?? {})) {
+        if (marker === runId) markers[id] = marker;
+      }
+      markers[nodeId] = runId;
+      sharedState.staticInjected = markers;
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
     }
 
