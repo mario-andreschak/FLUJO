@@ -20,9 +20,9 @@ const log = createLogger('backend/services/enduringAgents/memorySettings');
 // Cache: workspace-local (workspaceCacheKey) + global Map
 const SETTINGS_TTL_MS = 60_000; // 1 minute
 declare global {
-  var __flujo_memory_settings_cache: Map<string, { value: MemorySettings; at: number }> | undefined;
+  var __flujo_memory_settings_cache: Map<string, { value: Required<MemorySettings>; at: number }> | undefined;
 }
-const settingsCache: Map<string, { value: MemorySettings; at: number }> =
+const settingsCache: Map<string, { value: Required<MemorySettings>; at: number }> =
   global.__flujo_memory_settings_cache ??
   (global.__flujo_memory_settings_cache = new Map());
 
@@ -31,14 +31,14 @@ const settingsCache: Map<string, { value: MemorySettings; at: number }> =
  * Merges stored settings with defaults, returning a complete settings object.
  * @returns Merged MemorySettings with all fields populated
  */
-export async function getMemorySettings(): Promise<MemorySettings> {
+export async function getMemorySettings(): Promise<Required<MemorySettings>> {
   const settingsKey = workspaceCacheKey('memory-settings');
   const cached = settingsCache.get(settingsKey);
   if (cached && Date.now() - cached.at < SETTINGS_TTL_MS) {
     return cached.value;
   }
 
-  let value: MemorySettings;
+  let value: Required<MemorySettings>;
   try {
     const stored = await loadItem<Partial<MemorySettings>>(
       StorageKey.MEMORY_SETTINGS,

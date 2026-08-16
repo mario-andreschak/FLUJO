@@ -39,7 +39,7 @@ export class EmbeddingProvider {
     }
 
     // Resolve and decrypt the API key
-    const apiKey = await resolveAndDecryptApiKey(model);
+    const apiKey = await resolveAndDecryptApiKey(model.ApiKey);
     if (!apiKey) {
       throw new Error(`No API key configured for embedding model '${model.name}'`);
     }

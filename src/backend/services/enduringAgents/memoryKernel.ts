@@ -188,13 +188,11 @@ async function reinforceMemoryItem(
   // Monotonically bump confidence and importance
   const confidence = Math.min(
     1,
-    Math.max(survivor.confidence, incomingSourceRefs[0]?.confidence ?? survivor.confidence) +
-      MEMORY_DEDUP_SETTINGS.confidenceReinforcementStep,
+    survivor.confidence + MEMORY_DEDUP_SETTINGS.confidenceReinforcementStep,
   );
   const importance = Math.min(
     1,
-    Math.max(survivor.importance, incomingSourceRefs[0]?.importance ?? survivor.importance) +
-      MEMORY_DEDUP_SETTINGS.importanceReinforcementStep,
+    survivor.importance + MEMORY_DEDUP_SETTINGS.importanceReinforcementStep,
   );
 
   // Union sourceRefs, deduplicated, capped at maxSourceRefsPerItem (preserving oldest)
@@ -222,9 +220,9 @@ function requireOwnedMemory(item: MemoryItem | null, personaId: string, requeste
   return item;
 }
 
-function assertActivationPolicy(
+export function assertActivationPolicy(
   trust: MemoryTrust,
-  status: 'candidate' | 'active',
+  status: MemoryStatus,
   options: MemoryMutationOptions,
   sourceKinds: readonly string[],
 ): void {

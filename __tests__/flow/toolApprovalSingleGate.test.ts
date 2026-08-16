@@ -92,7 +92,7 @@ describe('Tool Approval Single Gate (#438)', () => {
       // Both undefined; approval decision should not try to evaluate or filter
       const res = await applyApprovalDecision(state, 'call_1', 'reject');
       expect(res.outcome).toBe('ready');
-      expect(state.messages.find(m => m.tool_call_id === 'call_1')?.content).toBe('tool denied');
+      expect(state.messages.find(m => (m as { tool_call_id?: string }).tool_call_id === 'call_1')?.content).toBe('tool denied');
     });
   });
 
@@ -113,7 +113,7 @@ describe('Tool Approval Single Gate (#438)', () => {
 
       expect(res.outcome).toBe('ready');
       expect(processToolCallsMock).not.toHaveBeenCalled();
-      expect(state.messages.find(m => m.tool_call_id === 'call_1')?.content).toBe('tool denied');
+      expect(state.messages.find(m => (m as { tool_call_id?: string }).tool_call_id === 'call_1')?.content).toBe('tool denied');
       expect(state.status).toBe('running');
     });
 
@@ -124,7 +124,7 @@ describe('Tool Approval Single Gate (#438)', () => {
       const res1 = await applyApprovalDecision(state, 'call_1', 'reject');
       expect(res1.outcome).toBe('awaiting');
       expect(processToolCallsMock).not.toHaveBeenCalled();
-      expect(state.messages.find(m => m.tool_call_id === 'call_1')?.content).toBe('tool denied');
+      expect(state.messages.find(m => (m as { tool_call_id?: string }).tool_call_id === 'call_1')?.content).toBe('tool denied');
       expect(state.pendingToolCalls!.length).toBe(1);
       expect(state.pendingToolCalls![0].id).toBe('call_2');
       expect(state.status).toBe('awaiting_tool_approval');

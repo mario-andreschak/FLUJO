@@ -219,10 +219,11 @@ describe('Memory Ranking (Issue #450)', () => {
     const now = 1000000;
 
     const baseItem = (overrides: Partial<MemoryItem> = {}): MemoryItem => ({
+      schemaVersion: 1,
       id: 'mem-1',
       personaId: 'persona-1',
-      kind: 'learned_fact',
-      scope: 'general',
+      kind: 'semantic',
+      scope: 'persona',
       status: 'active',
       content: 'The release branch is stable',
       confidence: 0.8,
@@ -325,7 +326,8 @@ describe('Memory Ranking (Issue #450)', () => {
     it('has sensible defaults', () => {
       expect(MEMORY_RANKING_WEIGHTS.recencyHalfLifeDays).toBe(90);
       expect(MEMORY_RANKING_WEIGHTS.recencyFloor).toBe(0.15);
-      expect(MEMORY_RANKING_WEIGHTS.nearDuplicateThreshold).toBeUndefined(); // in MEMORY_DEDUP_SETTINGS
+      // nearDuplicateThreshold lives in MEMORY_DEDUP_SETTINGS, not in the ranking weights
+      expect('nearDuplicateThreshold' in MEMORY_RANKING_WEIGHTS).toBe(false);
       expect(MEMORY_RANKING_WEIGHTS.coreBonus).toBe(2);
       expect(MEMORY_RANKING_WEIGHTS.coreExemptFromDecay).toBe(true);
     });

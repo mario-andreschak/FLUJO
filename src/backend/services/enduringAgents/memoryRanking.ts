@@ -5,7 +5,7 @@
  * All functions here are pure (no side effects, no time inside — time is a parameter).
  */
 
-import type { MemoryItem, MemoryTrust } from '@shared/types/enduringAgent/enduringAgent';
+import type { MemoryItem, MemoryTrust } from '@/shared/types/enduringAgent';
 
 /**
  * Ranking weights for memory recall. These control the lexical score, recency decay, trust weighting,
@@ -81,7 +81,7 @@ export function normaliseMemoryContent(content: string): string {
  * Generate character n-grams (shingles) from a normalised string.
  * Character trigrams (size=3) are robust to word reordering and whitespace changes.
  */
-export function contentShingles(normalised: string, size = MEMORY_DEDUP_SETTINGS.shingleSize): Set<string> {
+export function contentShingles(normalised: string, size: number = MEMORY_DEDUP_SETTINGS.shingleSize): Set<string> {
   const shingles = new Set<string>();
   if (normalised.length < size) {
     // If string is shorter than shingle size, use the whole thing

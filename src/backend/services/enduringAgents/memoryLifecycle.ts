@@ -8,19 +8,15 @@
 import { createLogger } from '@/utils/logger';
 import {
   type MemoryItem,
-  type MemoryTrust,
-  PersonaDomainConflictError,
 } from '@/shared/types/enduringAgent';
 import { FEATURES } from '@/config/features';
 import type { MemorySettings } from '@/shared/types/memorySettings';
 import { getMemorySettings } from './memorySettings';
 import { getMemoryItem, listMemoryItems, saveMemoryItem, getPersona } from './store';
-import {
-  assertActivationPolicy,
-  assertPersonaMayChangeMemory,
-} from './memoryKernel';
+import { assertActivationPolicy } from './memoryKernel';
 import {
   PersonaDomainBusyError,
+  PersonaDomainConflictError,
   withPersonaDomainMutation,
   type PersonaDomainMutationOptions,
 } from './domainMutation';
@@ -154,7 +150,7 @@ export async function promoteMemoryCandidate(
  * - model_inference requires corroborationCount >= threshold
  * - explicit_user / verified_tool can always promote if other criteria met
  */
-function assessAutoPromotionEligibility(item: MemoryItem, settings: MemorySettings): boolean {
+function assessAutoPromotionEligibility(item: MemoryItem, settings: Required<MemorySettings>): boolean {
   switch (item.trust) {
     case 'external_untrusted':
       // Exhaustive switch ensures compile error if a new trust level is added without consideration
@@ -217,7 +213,7 @@ export async function sweepMemoryCandidates(personaId?: string, now = Date.now()
 async function sweepPersonaMemoryCandidates(
   personaId: string,
   now: number,
-  settings: MemorySettings,
+  settings: Required<MemorySettings>,
   stats: SweepStatistics,
 ): Promise<void> {
   try {
