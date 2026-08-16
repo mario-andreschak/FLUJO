@@ -10,7 +10,7 @@ import { z } from 'zod';
 import type { CreateMemoryEmbeddingInput, MemoryEmbedding, EmbeddingValidityResult } from '@/shared/types/enduringAgent';
 import { MemoryEmbeddingSchema } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
-import { saveItem, loadItem, deleteItem } from '@/utils/storage/backend';
+import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/services/enduringAgents/memoryEmbeddingStore');
@@ -30,7 +30,7 @@ async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding
     const storageKey = `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}`;
     const embeddings = await loadItem<MemoryEmbedding[]>(storageKey as any, []);
     return embeddings.filter((e) => MemoryEmbeddingSchema.safeParse(e).success);
-  } catch (error) {
+  } catch (error: unknown) {
     log.warn(`Failed to load embeddings for persona ${personaId}:`, error);
     return [];
   }
@@ -43,7 +43,7 @@ async function savePersonaEmbeddings(personaId: string, embeddings: MemoryEmbedd
   try {
     const storageKey = `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}`;
     await saveItem(storageKey as any, embeddings);
-  } catch (error) {
+  } catch (error: unknown) {
     log.error(`Failed to save embeddings for persona ${personaId}:`, error);
     throw error;
   }
@@ -159,11 +159,11 @@ export async function deletePersonaEmbeddings(personaId: string): Promise<number
     const count = embeddings.length;
 
     if (count > 0) {
-      await deleteItem(storageKey as any);
+      await clearItem(storageKey as any);
     }
 
     return count;
-  } catch (error) {
+  } catch (error: unknown) {
     log.error(`Failed to delete all embeddings for persona ${personaId}:`, error);
     throw error;
   }
