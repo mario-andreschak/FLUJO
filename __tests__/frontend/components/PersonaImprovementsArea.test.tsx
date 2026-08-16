@@ -2,6 +2,8 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type {
+  BehaviorOutcomeMetric,
+  BehaviorOutcomeVerdict,
   BehaviorProposal,
   BehaviorProposalStatus,
 } from '@/shared/types/enduringAgent';
@@ -97,6 +99,53 @@ function proposal(
   };
 }
 
+function outcome(
+  verdict: BehaviorOutcomeVerdict,
+  overrides: Partial<BehaviorOutcomeMetric> = {},
+): BehaviorOutcomeMetric {
+  const window = {
+    samples: 0,
+    succeeded: 0,
+    partial: 0,
+    blocked: 0,
+    failed: 0,
+    unknown: 0,
+    errored: 0,
+    cancelled: 0,
+    successRate: 0,
+    windowStartedAt: 10,
+    windowEndedAt: 20,
+  };
+  return {
+    schemaVersion: 1,
+    id: 'outcome_proposal_research',
+    personaId: 'jim',
+    behaviorId: 'behavior_research',
+    slotKey: 'research',
+    proposalId: 'proposal_research',
+    baseBehaviorRevisionId: 'revision_base',
+    baseContentHash: 'c'.repeat(64),
+    activatedRevisionId: 'revision_candidate',
+    activatedContentHash: 'd'.repeat(64),
+    detectorVersion: 'behavior-outcome-v1',
+    policy: {
+      minSamples: 10,
+      regressionDelta: 0.15,
+      improvementDelta: 0.05,
+      baselineLookbackMs: 1_000,
+      observationWindowMs: 1_000,
+    },
+    baseline: { ...window, samples: 10, succeeded: 9, successRate: 0.9 },
+    observed: { ...window, samples: 10, succeeded: 2, successRate: 0.2 },
+    verdict,
+    countedActivityIds: [],
+    activatedAt: 12,
+    createdAt: 12,
+    updatedAt: 13,
+    ...overrides,
+  };
+}
+
 describe('PersonaImprovementsArea', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -167,6 +216,46 @@ describe('PersonaImprovementsArea', () => {
     expect(screen.getByText(
       'Improvement undone. Future work will use the earlier Behavior.',
     )).toBeInTheDocument();
+  });
+
+  it('shows measured before and after results with the detector verdict', async () => {
+    improvementsMock.mockResolvedValue([{
+      ...proposal('activated'),
+      outcome: outcome('regressed'),
+    }]);
+
+    render(<PersonaImprovementsArea detail={detail} />);
+
+    expect(await screen.findByText('Results since this change')).toBeInTheDocument();
+    expect(screen.getByText('Before: 90% went well (10 finished runs)')).toBeInTheDocument();
+    expect(screen.getByText('Since: 20% went well (10 finished runs)')).toBeInTheDocument();
+    expect(screen.getByText('Difference: -70%')).toBeInTheDocument();
+    expect(screen.getByText('Working worse')).toBeInTheDocument();
+  });
+
+  it('explains an automatic revert on the card that was reverted', async () => {
+    improvementsMock.mockResolvedValue([{
+      ...proposal('rolled_back'),
+      outcome: outcome('rolled_back', {
+        verdictReason: 'Success rate moved from 90.0% (n=10) to 20.0% (n=10).',
+        autoRollbackAt: 20,
+      }),
+    }]);
+
+    render(<PersonaImprovementsArea detail={detail} />);
+
+    expect(await screen.findByText('Undone automatically')).toBeInTheDocument();
+    expect(screen.getByText(/FLUJO undid this improvement automatically/)).toBeInTheDocument();
+    expect(screen.getByText(/Success rate moved from 90\.0% \(n=10\)/)).toBeInTheDocument();
+  });
+
+  it('renders a proposal without measurements exactly as before', async () => {
+    improvementsMock.mockResolvedValue([proposal('activated')]);
+
+    render(<PersonaImprovementsArea detail={detail} />);
+
+    expect(await screen.findByText('In use')).toBeInTheDocument();
+    expect(screen.queryByText('Results since this change')).not.toBeInTheDocument();
   });
 
   it('saves an activated improvement as a reusable Role version after confirmation', async () => {

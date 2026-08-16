@@ -6,6 +6,7 @@ import type {
   AssignPersonaWorkItemResult,
   BehaviorBinding,
   BehaviorProposal,
+  BehaviorProposalWithOutcome,
   BehaviorRevision,
   CopyPersonaFlowInput,
   CopyPersonaFlowResult,
@@ -414,7 +415,7 @@ class PersonasService {
     ), 'POST', input);
   }
 
-  improvements(personaId: string): Promise<BehaviorProposal[]> {
+  improvements(personaId: string): Promise<BehaviorProposalWithOutcome[]> {
     return parse(fetch(withWorkspaceUrl(personaPath(personaId, '/improvements'))));
   }
 

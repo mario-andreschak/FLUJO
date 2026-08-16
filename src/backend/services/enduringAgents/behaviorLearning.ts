@@ -18,6 +18,7 @@ import {
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import type { Flow } from '@/shared/types/flow';
+import { createLogger } from '@/utils/logger';
 import {
   assertSafeCollectionId,
   listCollectionItemEntriesStrict,
@@ -51,6 +52,8 @@ import {
   listBehaviorRevisions,
   listRoleVersions,
 } from './store';
+
+const log = createLogger('backend/services/enduringAgents/behaviorLearning');
 
 const BEHAVIOR_PROPOSAL_COLLECTION = ENDURING_AGENT_COLLECTIONS.behaviorProposals;
 
@@ -862,7 +865,7 @@ export async function activateBehaviorProposal(proposalId: string): Promise<Beha
     }
   }
   const now = Date.now();
-  return mutateProposal(proposal.id, (current) => {
+  const activated = await mutateProposal(proposal.id, (current) => {
     if (current.status === 'activated') return current;
     if (current.status !== 'approved') {
       throw new BehaviorProposalConflictError(
@@ -886,11 +889,35 @@ export async function activateBehaviorProposal(proposalId: string): Promise<Beha
       updatedAt: now,
     };
   });
+  // Outcome measurement is observability, never part of the activation
+  // contract. A failure here degrades to "no metric", which simply means the
+  // regression detector never fires for this proposal (issue #455).
+  try {
+    const { snapshotBehaviorOutcomeBaseline } = await import('./behaviorOutcome');
+    await snapshotBehaviorOutcomeBaseline(activated);
+  } catch (error) {
+    log.warn(
+      'Failed to snapshot the outcome baseline for Behavior proposal '
+      + JSON.stringify(activated.id) + ':',
+      error,
+    );
+  }
+  return activated;
+}
+
+export interface RollbackBehaviorProposalOptions {
+  /**
+   * Audit action recorded for this revert. Defaults to the human
+   * `rolled_back`; the outcome detector passes `auto_rolled_back` so the UI
+   * never has to parse actor strings to explain an automatic revert.
+   */
+  auditAction?: 'rolled_back' | 'auto_rolled_back';
 }
 
 export async function rollbackBehaviorProposal(
   proposalId: string,
   input: ApproveBehaviorProposalInput,
+  options: RollbackBehaviorProposalOptions = {},
 ): Promise<BehaviorProposal> {
   const proposal = await loadProposal(proposalId);
   if (!proposal) throw new BehaviorProposalNotFoundError(proposalId);
@@ -924,9 +951,13 @@ export async function rollbackBehaviorProposal(
       rollbackRevisionId: current.baseBehaviorRevisionId,
       auditTrail: [
         ...current.auditTrail,
-        auditEvent('rolled_back', input.actor, input.reason, now, {
-          revisionId: current.baseBehaviorRevisionId,
-        }),
+        auditEvent(
+          options.auditAction ?? 'rolled_back',
+          input.actor,
+          input.reason,
+          now,
+          { revisionId: current.baseBehaviorRevisionId },
+        ),
       ],
       updatedAt: now,
     };

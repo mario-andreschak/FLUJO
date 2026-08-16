@@ -74,4 +74,19 @@ export const FEATURES = {
 
   /** Enable retention/compaction of Persona mailbox, activities, dispatches, and lease history (issue #453). */
   ENABLE_PERSONA_RUNTIME_RETENTION: false,
+
+  /**
+   * Record baseline/observed outcome metrics for activated Behavior proposals
+   * (issue #455). Recording only; the detector still computes and stores a
+   * verdict so a regression can be observed in shadow mode before anyone
+   * allows FLUJO to act on it.
+   */
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS: false,
+
+  /**
+   * Permit the outcome detector to automatically revert a regressed proposal
+   * through the existing compare-and-swap rollback (issue #455). Deliberately
+   * independent of recording, and additionally gated on Persona autonomy.
+   */
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: false,
 };

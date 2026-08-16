@@ -3,6 +3,7 @@ import type { ZodType } from 'zod';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
   BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
+  BEHAVIOR_OUTCOME_METRIC_SCHEMA_VERSION,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
   PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
@@ -108,6 +109,8 @@ export function enduringAgentRecordSchemaVersion(recordKind: string): number {
       return BEHAVIOR_BINDING_SCHEMA_VERSION;
     case 'BehaviorMaintenanceRun':
       return BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION;
+    case 'BehaviorOutcomeMetric':
+      return BEHAVIOR_OUTCOME_METRIC_SCHEMA_VERSION;
     case 'PersonaActivity':
       return PERSONA_ACTIVITY_SCHEMA_VERSION;
     default:

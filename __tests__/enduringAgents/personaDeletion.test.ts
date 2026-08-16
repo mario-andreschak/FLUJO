@@ -17,18 +17,22 @@ import {
   getPersonaDeletionTombstone,
   getRoleVersion,
   listBehaviorBindings,
+  listBehaviorOutcomeMetrics,
   listBehaviorRevisions,
   listMemoryItems,
   listPersonaActivities,
   listPersonaLeaseRecords,
   listPersonaMailboxItems,
   listPersonaWorkItems,
+  saveBehaviorOutcomeMetric,
   savePersonaDeletionTombstone,
 } from '@/backend/services/enduringAgents/store';
 import { personaDeletionTombstoneId } from '@/backend/services/enduringAgents/ids';
 import { getPersonaHome, inspectPersonaHome } from '@/backend/services/enduringAgents/namespaces';
 import {
+  BEHAVIOR_OUTCOME_METRIC_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
+  type BehaviorOutcomeMetric,
   type PersonaDeletionArchivePolicy,
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
@@ -383,6 +387,51 @@ async function seedMeetingAndSchedulerAttribution(personaId: string, suffix: str
   };
 }
 
+/** Minimal valid outcome metric (issue #455); references are not resolved on write. */
+function behaviorOutcomeMetricFixture(personaId: string): BehaviorOutcomeMetric {
+  const at = Date.now();
+  const window = {
+    samples: 0,
+    succeeded: 0,
+    partial: 0,
+    blocked: 0,
+    failed: 0,
+    unknown: 0,
+    errored: 0,
+    cancelled: 0,
+    successRate: 0,
+    windowStartedAt: at,
+    windowEndedAt: at,
+  };
+  return {
+    schemaVersion: BEHAVIOR_OUTCOME_METRIC_SCHEMA_VERSION,
+    id: `outcome_${personaId}`,
+    personaId,
+    behaviorId: `behavior_${personaId}`,
+    slotKey: 'primary',
+    proposalId: `proposal_${personaId}`,
+    baseBehaviorRevisionId: 'br_outcome_base',
+    baseContentHash: 'a'.repeat(64),
+    activatedRevisionId: 'br_outcome_candidate',
+    activatedContentHash: 'b'.repeat(64),
+    detectorVersion: 'behavior-outcome-v1',
+    policy: {
+      minSamples: 10,
+      regressionDelta: 0.15,
+      improvementDelta: 0.05,
+      baselineLookbackMs: 1_000,
+      observationWindowMs: 1_000,
+    },
+    baseline: { ...window },
+    observed: { ...window },
+    verdict: 'pending',
+    countedActivityIds: [],
+    activatedAt: at,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
 describe('Persona deletion policy', () => {
   it('previews every owned category without deleting shared Role or MCP configuration', async () => {
     await runWithWorkspace(freshWorkspace(), async () => {
@@ -477,6 +526,7 @@ describe('Persona deletion policy', () => {
         initialMemories: [{ content: 'A private fact.' }],
       });
       const personaId = bundle.persona.id;
+      await saveBehaviorOutcomeMetric(behaviorOutcomeMetricFixture(personaId));
       await enqueuePersonaMailboxItem({
         personaId,
         idempotencyKey: 'active-assignment',
@@ -487,6 +537,7 @@ describe('Persona deletion policy', () => {
       expect(claim).not.toBeNull();
       const preview = await previewPersonaDeletion(personaId);
       expect(preview.activeLease).toBe(true);
+      expect(preview.counts.behaviorOutcomeMetrics).toBe(1);
 
       const tombstone = await deletePersona(personaId, confirmation(preview.previewToken));
       expect(tombstone).toMatchObject({
@@ -504,6 +555,7 @@ describe('Persona deletion policy', () => {
       expect(await listPersonaActivities(personaId)).toEqual([]);
       expect(await listPersonaMailboxItems(personaId)).toEqual([]);
       expect(await listPersonaLeaseRecords(personaId)).toEqual([]);
+      expect(await listBehaviorOutcomeMetrics(personaId)).toEqual([]);
       expect(await readPersonaRuntimeEvents(personaId)).toEqual([]);
       expect(await inspectPersonaHome(personaId)).toEqual({
         exists: false,

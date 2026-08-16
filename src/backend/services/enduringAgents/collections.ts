@@ -12,6 +12,8 @@ export const ENDURING_AGENT_COLLECTIONS = Object.freeze({
   behaviorRevisions: 'behavior-revisions',
   behaviorProposals: 'persona-behavior-proposals',
   behaviorMaintenanceRuns: 'persona-behavior-maintenance-runs',
+  /** Baseline/observed outcome measurements for activated Behavior proposals. */
+  behaviorOutcomeMetrics: 'persona-behavior-outcome-metrics',
   appGrants: 'persona-app-grants',
   activities: 'persona-activities',
   workItems: 'persona-work-items',

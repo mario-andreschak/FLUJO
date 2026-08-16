@@ -33,7 +33,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { personasService, type PersonaDetail } from '@/frontend/services/personas';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
-import type { BehaviorProposal, BehaviorProposalStatus } from '@/shared/types/enduringAgent';
+import type {
+  BehaviorOutcomeMetric,
+  BehaviorOutcomeVerdict,
+  BehaviorProposal,
+  BehaviorProposalStatus,
+  BehaviorProposalWithOutcome,
+} from '@/shared/types/enduringAgent';
 
 const STATUS_COLOR: Record<BehaviorProposalStatus, 'default' | 'success' | 'warning' | 'error' | 'info'> = {
   validation_failed: 'warning',
@@ -44,6 +50,26 @@ const STATUS_COLOR: Record<BehaviorProposalStatus, 'default' | 'success' | 'warn
   rolled_back: 'default',
 };
 
+const OUTCOME_COLOR: Record<BehaviorOutcomeVerdict, 'default' | 'success' | 'warning' | 'info'> = {
+  pending: 'info',
+  insufficient_samples: 'info',
+  improved: 'success',
+  stable: 'default',
+  regressed: 'warning',
+  rolled_back: 'warning',
+};
+
+/** Plain percentages keep the card readable; the exact rates live in the record. */
+function ratePercent(rate: number): string {
+  return `${Math.round(rate * 1000) / 10}%`;
+}
+
+function deltaPercent(outcome: BehaviorOutcomeMetric): string {
+  const delta = outcome.observed.successRate - outcome.baseline.successRate;
+  const rounded = Math.round(delta * 1000) / 10;
+  return `${rounded > 0 ? '+' : ''}${rounded}%`;
+}
+
 function sourceLabel(kind: string, t: ReturnType<typeof useI18n>['t']): string {
   if (kind === 'user_statement') return t('personas.improvements.source.you');
   if (kind === 'tool_result') return t('personas.improvements.source.app');
@@ -53,7 +79,7 @@ function sourceLabel(kind: string, t: ReturnType<typeof useI18n>['t']): string {
 
 export default function PersonaImprovementsArea({ detail }: { detail: PersonaDetail }) {
   const { t, formatDate } = useI18n();
-  const [proposals, setProposals] = useState<BehaviorProposal[]>([]);
+  const [proposals, setProposals] = useState<BehaviorProposalWithOutcome[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +103,10 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
 
   const replace = (updated: BehaviorProposal) => {
     setProposals((current) => current.map((proposal) => (
-      proposal.id === updated.id ? updated : proposal
+      // Action endpoints return the proposal only; keep the measured outcome.
+      proposal.id === updated.id
+        ? { ...updated, ...(proposal.outcome ? { outcome: proposal.outcome } : {}) }
+        : proposal
     )));
   };
 
@@ -232,6 +261,54 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                           ))}
                         </Stack>
                       </Box>
+                       {proposal.outcome && (
+                         <Box>
+                           <Typography variant="subtitle2">
+                             {t('personas.improvements.outcome.title')}
+                           </Typography>
+                           <Stack
+                             direction={{ xs: 'column', sm: 'row' }}
+                             spacing={{ xs: 0.25, sm: 2 }}
+                             sx={{ mt: 0.5 }}
+                           >
+                             <Typography variant="body2" color="text.secondary">
+                               {t('personas.improvements.outcome.before', {
+                                 rate: ratePercent(proposal.outcome.baseline.successRate),
+                                 count: proposal.outcome.baseline.samples,
+                               })}
+                             </Typography>
+                             <Typography variant="body2" color="text.secondary">
+                               {t('personas.improvements.outcome.after', {
+                                 rate: ratePercent(proposal.outcome.observed.successRate),
+                                 count: proposal.outcome.observed.samples,
+                               })}
+                             </Typography>
+                             <Typography variant="body2" color="text.secondary">
+                               {t('personas.improvements.outcome.delta', {
+                                 delta: deltaPercent(proposal.outcome),
+                               })}
+                             </Typography>
+                           </Stack>
+                           <Chip
+                             size="small"
+                             sx={{ mt: 0.75 }}
+                             variant="outlined"
+                             color={OUTCOME_COLOR[proposal.outcome.verdict]}
+                             label={t(
+                               `personas.improvements.outcome.status.${proposal.outcome.verdict}`,
+                             )}
+                           />
+                         </Box>
+                       )}
+                       {proposal.outcome?.verdict === 'rolled_back' && (
+                         <Alert severity="warning">
+                           {`${t('personas.improvements.outcome.rolledBack')}${
+                             proposal.outcome.verdictReason
+                               ? ` ${proposal.outcome.verdictReason}`
+                               : ''
+                           }`}
+                         </Alert>
+                       )}
                        {proposal.validation.issues.length > 0 && (
                         <Alert severity="warning">
                           {proposal.validation.issues.map((issue) => issue.message).join(' ')}

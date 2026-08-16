@@ -94,6 +94,7 @@ import {
   admitBehaviorMaintenanceRun,
   reconcileBehaviorMaintenanceRuns,
 } from './behaviorMaintenance';
+import { recordBehaviorOutcomeSampleSafely } from './behaviorOutcome';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   createPersonaActivitySnapshot,
@@ -2019,6 +2020,17 @@ export class PersonaFlowDispatcher {
     } catch (error) {
       log.warn(`Deferred Task lifecycle synchronization for Activity ${activity.id}:`, error);
     }
+    await this.recordBehaviorOutcome(activity);
+  }
+
+  /**
+   * Outcome measurement for an activated Behavior proposal (issue #455). The
+   * rollout gate defaults off, making this a no-write call. Recording is
+   * idempotent per Activity and must never fail a dispatch, so it is deferred
+   * rather than taken inside the runtime lock.
+   */
+  private async recordBehaviorOutcome(activity: PersonaActivity): Promise<void> {
+    await this.inWorkspace(() => recordBehaviorOutcomeSampleSafely(activity));
   }
 
   private async synchronizeAssignedWorkItemWithinRuntimeLock(
@@ -2253,6 +2265,8 @@ export class PersonaFlowDispatcher {
       }
       if (!assignmentSynchronized) {
         await this.synchronizeAssignedWorkItem(completion.activity);
+      } else {
+        await this.recordBehaviorOutcome(completion.activity);
       }
       try {
         // The rollout gate defaults off, making this a no-write call. When

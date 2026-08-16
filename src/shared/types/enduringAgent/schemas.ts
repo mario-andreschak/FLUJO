@@ -1613,6 +1613,7 @@ export const PersonaDeletionCountsSchema = z.object({
   // Additive defaults preserve already-written deletion tombstones from earlier phases.
   behaviorProposals: z.number().int().nonnegative().default(0),
   behaviorMaintenanceRuns: z.number().int().nonnegative().default(0),
+  behaviorOutcomeMetrics: z.number().int().nonnegative().default(0),
   appGrants: z.number().int().nonnegative().default(0),
   memoryItems: z.number().int().nonnegative(),
   memoryEmbeddings: z.number().int().nonnegative().default(0),

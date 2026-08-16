@@ -1179,6 +1179,7 @@ export interface PersonaDeletionCounts {
   behaviorRevisions: number;
   behaviorProposals: number;
   behaviorMaintenanceRuns: number;
+  behaviorOutcomeMetrics: number;
   appGrants: number;
   memoryItems: number;
   memoryEmbeddings: number;

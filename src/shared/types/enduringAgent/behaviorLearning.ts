@@ -50,6 +50,8 @@ export const BEHAVIOR_PROPOSAL_AUDIT_ACTIONS = [
   'rejected',
   'activated',
   'rolled_back',
+  /** Reverted by the outcome-metric regression detector, not by a person (#455). */
+  'auto_rolled_back',
   'promoted_to_role',
 ] as const;
 export type BehaviorProposalAuditAction =

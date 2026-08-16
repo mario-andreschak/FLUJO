@@ -3,6 +3,7 @@ import type { ZodType } from 'zod';
 import {
   BehaviorBindingSchema,
   BehaviorMaintenanceRunSchema,
+  BehaviorOutcomeMetricSchema,
   BehaviorRevisionSchema,
   MemoryItemSchema,
   PersonaAppGrantSchema,
@@ -16,6 +17,7 @@ import {
   RoleVersionSchema,
   type BehaviorBinding,
   type BehaviorMaintenanceRun,
+  type BehaviorOutcomeMetric,
   type BehaviorRevision,
   type MemoryItem,
   type Persona,
@@ -1139,6 +1141,100 @@ export async function saveBehaviorMaintenanceRun(
     recordKind: 'BehaviorMaintenanceRun',
     schema: BehaviorMaintenanceRunSchema,
     value: record,
+  });
+}
+
+export function getBehaviorOutcomeMetric(id: string): Promise<BehaviorOutcomeMetric | null> {
+  return getRecord({
+    collection: ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics,
+    id,
+    recordKind: 'BehaviorOutcomeMetric',
+    schema: BehaviorOutcomeMetricSchema,
+  });
+}
+
+export async function listBehaviorOutcomeMetrics(
+  personaId?: string,
+): Promise<BehaviorOutcomeMetric[]> {
+  if (personaId !== undefined) assertSafeCollectionId(personaId);
+  const records = await listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics,
+    recordKind: 'BehaviorOutcomeMetric',
+    schema: BehaviorOutcomeMetricSchema,
+  });
+  return personaId === undefined
+    ? records
+    : records.filter((record) => record.personaId === personaId);
+}
+
+/** Create or replace one outcome metric. Ownership and identity are immutable. */
+export function saveBehaviorOutcomeMetric(
+  value: BehaviorOutcomeMetric,
+): Promise<BehaviorOutcomeMetric> {
+  const record = parseRecord('BehaviorOutcomeMetric', BehaviorOutcomeMetricSchema, value);
+  return recordMutation(
+    ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics,
+    record.id,
+    async () => {
+      const existing = await getBehaviorOutcomeMetric(record.id);
+      if (existing) {
+        if (
+          existing.personaId !== record.personaId
+          || existing.proposalId !== record.proposalId
+          || existing.createdAt !== record.createdAt
+        ) {
+          throw new Error(
+            `BehaviorOutcomeMetric ${JSON.stringify(record.id)} changed immutable ownership.`,
+          );
+        }
+        if (record.updatedAt < existing.updatedAt) {
+          throw new Error(
+            `BehaviorOutcomeMetric ${JSON.stringify(record.id)} updatedAt moved backwards.`,
+          );
+        }
+      }
+      await saveCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics,
+        record.id,
+        record,
+      );
+      return record;
+    },
+  );
+}
+
+/**
+ * Serialize read-modify-write on one outcome metric so concurrent terminal
+ * Activities cannot lose counter increments. Returning null from `mutate`
+ * means "no change" and leaves the stored record untouched.
+ */
+export function mutateBehaviorOutcomeMetric(
+  id: string,
+  mutate: (
+    current: BehaviorOutcomeMetric,
+  ) => BehaviorOutcomeMetric | null | Promise<BehaviorOutcomeMetric | null>,
+): Promise<BehaviorOutcomeMetric | null> {
+  assertSafeCollectionId(id);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics, id, async () => {
+    const current = await getBehaviorOutcomeMetric(id);
+    if (!current) return null;
+    const mutated = await mutate(current);
+    if (!mutated) return current;
+    const record = parseRecord('BehaviorOutcomeMetric', BehaviorOutcomeMetricSchema, mutated);
+    if (
+      record.id !== current.id
+      || record.personaId !== current.personaId
+      || record.proposalId !== current.proposalId
+      || record.createdAt !== current.createdAt
+    ) {
+      throw new Error('A BehaviorOutcomeMetric update cannot change its identity or owner.');
+    }
+    await saveCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.behaviorOutcomeMetrics,
+      record.id,
+      record,
+    );
+    return record;
   });
 }
 

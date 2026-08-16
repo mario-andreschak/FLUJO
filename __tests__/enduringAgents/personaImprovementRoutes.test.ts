@@ -34,6 +34,7 @@ import {
   type CreateBehaviorProposalInput,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+import { FEATURES } from '@/config/features';
 import {
   getBehaviorBinding,
   getBehaviorRevision,
@@ -172,6 +173,61 @@ describe('Persona Improvements routes', () => {
       expect(response.status).toBe(200);
       expect((await response.json()).map((proposal: { id: string }) => proposal.id))
         .toEqual([jimProposal.id]);
+    });
+  });
+
+  it('attaches the recorded outcome metric to each improvement it has one for', async () => {
+    const original = FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS;
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
+    try {
+      await inFreshWorkspace(async () => {
+        const setup = await setupPersona('Jim measured improvement');
+        const measured = await createProposal(setup);
+        await applyImprovement(
+          request(
+            `/v1/personas/${setup.bundle.persona.id}/improvements/${measured.id}/apply`,
+            'POST',
+          ),
+          proposalContext(setup.bundle.persona.id, measured.id),
+        );
+
+        const response = await listImprovements(
+          request(`/v1/personas/${setup.bundle.persona.id}/improvements`),
+          personaContext(setup.bundle.persona.id),
+        );
+
+        expect(response.status).toBe(200);
+        const payload = await response.json();
+        expect(payload).toHaveLength(1);
+        expect(payload[0]).toMatchObject({
+          id: measured.id,
+          status: 'activated',
+          outcome: {
+            proposalId: measured.id,
+            verdict: 'pending',
+            baseBehaviorRevisionId: setup.baseRevision.id,
+          },
+        });
+      });
+    } finally {
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = original;
+    }
+  });
+
+  it('omits the outcome field for improvements that were never measured', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona('Jim unmeasured improvement');
+      const proposal = await createProposal(setup);
+
+      const response = await listImprovements(
+        request(`/v1/personas/${setup.bundle.persona.id}/improvements`),
+        personaContext(setup.bundle.persona.id),
+      );
+
+      const payload = await response.json();
+      expect(payload).toHaveLength(1);
+      expect(payload[0].id).toBe(proposal.id);
+      expect(payload[0].outcome).toBeUndefined();
     });
   });
 
