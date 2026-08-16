@@ -297,9 +297,9 @@ export async function readPersonaRuntimeSnapshot(
   const recentLimit = Number.isSafeInteger(requestedLimit)
     ? Math.max(0, Math.min(200, requestedLimit))
     : 50;
-  const allEvents = recentLimit === 0
+  const recentEvents = recentLimit === 0
     ? []
-    : await readPersonaRuntimeEvents(personaId);
+    : await readPersonaRuntimeEvents(personaId, { tail: recentLimit });
   const detectedStuckIndicators = [
     ...new Set(deriveStuckObservations(bundle, Date.now()).map(({ indicator }) => indicator)),
   ].sort();
@@ -314,9 +314,7 @@ export async function readPersonaRuntimeSnapshot(
         changed: false,
         remainingStuck: projection.stuck,
       },
-      recentEvents: recentLimit === 0
-        ? []
-        : allEvents.slice(-recentLimit).map(sanitizeEvent),
+      recentEvents: recentEvents.map(sanitizeEvent),
     },
   };
 }

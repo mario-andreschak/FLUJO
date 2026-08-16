@@ -114,9 +114,9 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
   return {
     recordKind: 'PersonaFlowDispatchRecord',
     isEligible: (dispatch) => {
-      const terminal = dispatch.state === 'settled'
-        || dispatch.state === 'failed'
-        || dispatch.state === 'error';
+      const terminal = dispatch.state === 'completed'
+        || dispatch.state === 'error'
+        || dispatch.state === 'cancelled';
       return terminal && dispatch.compactedAt === undefined;
     },
     timestampOf: (dispatch) => dispatch.completedAt ?? dispatch.updatedAt,

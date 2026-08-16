@@ -167,6 +167,10 @@ async function execute(command) {
         return enduringAgents.listPersonaRuntimeBundle(command.personaId);
       case 'reconcile':
         return enduringAgents.inspectAndReconcilePersonaRuntime(command.personaId);
+      case 'appendEvent':
+        return enduringAgents.appendPersonaRuntimeEvent(command.personaId, command.event);
+      case 'readEvents':
+        return enduringAgents.readPersonaRuntimeEvents(command.personaId);
       case 'shutdown':
         return { shuttingDown: true };
       default:

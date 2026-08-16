@@ -50,6 +50,8 @@ export type PersonaProcessCommand =
   | { type: 'complete'; fence: PersonaLeaseFence }
   | { type: 'assertFence'; fence: PersonaLeaseFence }
   | { type: 'inspect'; personaId: string }
+  | { type: 'appendEvent'; personaId: string; event: Record<string, unknown> }
+  | { type: 'readEvents'; personaId: string }
   | { type: 'shutdown' };
 
 interface WireSuccess {

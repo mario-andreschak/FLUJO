@@ -390,4 +390,56 @@ describe('Persona continuity across OS process boundaries', () => {
       expect.objectContaining({ summary: input.summary }),
     ]);
   });
+
+  it('interleaves cross-process runtime event appends into one gap-free, duplicate-free log', async () => {
+    const first = await start();
+    const second = await start();
+    const personaId = 'persona_event_interleaving';
+    const processes = [first, second];
+    const total = 12;
+
+    for (let index = 0; index < total; index += 1) {
+      const child = processes[index % processes.length];
+      const result = await child.request<{
+        appended: boolean;
+        event: { seq: number; eventId: string };
+      }>({
+        type: 'appendEvent',
+        personaId,
+        event: {
+          eventId: `interleaved:${index}`,
+          type: 'activity:completed',
+          activityId: `activity_${index}`,
+        },
+      });
+      // Each process must observe the other process's appends: the sequence
+      // is strictly increasing and gap-free across both writers.
+      expect(result).toMatchObject({
+        appended: true,
+        event: { seq: index, eventId: `interleaved:${index}` },
+      });
+    }
+
+    // An idempotent retry from the process that did NOT write the original
+    // must return the durable event instead of appending a duplicate.
+    const retry = await second.request<{ appended: boolean; event: { seq: number } }>({
+      type: 'appendEvent',
+      personaId,
+      event: {
+        eventId: 'interleaved:0',
+        type: 'activity:completed',
+        activityId: 'activity_retry_ignored',
+      },
+    });
+    expect(retry).toMatchObject({ appended: false, event: { seq: 0 } });
+
+    const events = await first.request<Array<{ seq: number; eventId: string }>>({
+      type: 'readEvents',
+      personaId,
+    });
+    expect(events.map(({ seq }) => seq)).toEqual(
+      Array.from({ length: total }, (_, index) => index),
+    );
+    expect(new Set(events.map(({ eventId }) => eventId)).size).toBe(total);
+  });
 });

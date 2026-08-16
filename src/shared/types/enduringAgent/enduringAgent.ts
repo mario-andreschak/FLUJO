@@ -718,6 +718,8 @@ export interface PersonaActivity {
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
+  /** Bulky detail was removed while identity/audit fields were retained (issue #453). */
+  compactedAt?: number;
 }
 
 export interface CreatePersonaActivityInput {
@@ -1113,6 +1115,10 @@ export interface PersonaMailboxItem {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  /** Bulky detail was removed while identity/audit fields were retained (issue #453). */
+  compactedAt?: number;
+  /** SHA-256 digest preserving idempotency semantics after compaction blanked detail. */
+  admissionDigest?: string;
 }
 
 export interface CreatePersonaMailboxItemInput {
@@ -1147,6 +1153,8 @@ export interface PersonaLease {
   renewedAt: number;
   expiresAt: number;
   releasedAt?: number;
+  /** Archived lease compacted by the retention sweep (issue #453). */
+  compactedAt?: number;
 }
 
 export interface CreatePersonaLeaseInput {

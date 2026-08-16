@@ -27,8 +27,8 @@ export interface RetentionPolicy<T> {
   /** Produce the compacted form; MUST preserve id and audit identity. */
   compact: (record: T, compactedAt: number) => T;
   
-  /** Persist one compacted record (schema-validating save). */
-  save: (record: T) => Promise<void>;
+  /** Persist one compacted record (schema-validating save); the return value is ignored. */
+  save: (record: T) => Promise<unknown>;
   
   /** Optional cap on number of writes per sweep to avoid blocking locks. */
   maxWritesPerSweep?: number;
@@ -50,14 +50,14 @@ export interface RetentionResult {
  * 2. Sort newest-first by timestampOf, tie-broken by descending id (stable, deterministic).
  * 3. Take those where !isCompacted (uncompacted records only).
  * 4. For each at 0-based rank: compact iff timestampOf(record) < now - retentionMs OR rank >= detailedLimit.
- * 5. compactedAt = Math.max(now, record.updatedAt) (monotonic, never regresses).
+ * 5. compactedAt = Math.max(now, timestampOf(record)) (monotonic, never regresses).
  *
  * @param records The already-fetched records (should have been listed within an active lock).
  * @param policy The retention/compaction policy for this collection kind.
  * @param now Current time in milliseconds.
  * @returns {compacted: count, remaining: count}.
  */
-export async function applyRetention<T extends { id: string; updatedAt: number }>(
+export async function applyRetention<T extends { id: string }>(
   records: readonly T[],
   policy: RetentionPolicy<T>,
   now: number = Date.now(),
@@ -91,7 +91,7 @@ export async function applyRetention<T extends { id: string; updatedAt: number }
       continue;
     }
 
-    const compactedAt = Math.max(now, record.updatedAt);
+    const compactedAt = Math.max(now, policy.timestampOf(record));
     const compactedRecord = policy.compact(record, compactedAt);
     await policy.save(compactedRecord);
     compacted += 1;
