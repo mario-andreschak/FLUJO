@@ -702,7 +702,21 @@ export default function PersonaSettings({
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {deleteBusy && !deletePreview && <CircularProgress size={24} />}
-            {deleteError && <Alert severity="error">{deleteError}</Alert>}
+            {deleteError && (
+              <Alert
+                severity="error"
+                action={(
+                  <Button
+                    onClick={() => void refreshDeletionPreview()}
+                    disabled={deleteBusy}
+                  >
+                    {t('personas.retry')}
+                  </Button>
+                )}
+              >
+                {deleteError}
+              </Alert>
+            )}
             {deletePreview && (
               <>
                 {deletePreview.activeLease && (

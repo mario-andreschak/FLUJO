@@ -339,7 +339,9 @@ it('shows runtime evidence and refreshes after recovery', async () => {
 
   expect(await screen.findByText('Saved work needs attention.')).toBeInTheDocument();
   expect(screen.getByText('expired_lease')).toBeInTheDocument();
-  expect(screen.getByText(/Lease: expired/)).toBeInTheDocument();
+  expect(screen.getByText('Status: stalled. 0 task(s) ready, 0 waiting.')).toBeInTheDocument();
+  expect(screen.queryByText(/Lease: expired/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Mailbox:/)).not.toBeInTheDocument();
   expect(screen.getByText(/Reconciliation attempted: yes/)).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Repair and continue' }));

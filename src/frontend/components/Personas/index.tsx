@@ -95,6 +95,16 @@ const PERSONA_OUTCOME_KEYS = {
   needs_attention: 'personas.outcome.needs_attention',
 } satisfies Record<PersonaPresentationOutcome, TranslationKey>;
 
+const PERSONA_LEASE_STATUS_KEYS = {
+  none: 'personas.now.leaseStatus.none',
+  active: 'personas.now.leaseStatus.active',
+  released: 'personas.now.leaseStatus.released',
+  expired: 'personas.now.leaseStatus.expired',
+} satisfies Record<
+  PersonaDetail['runtime']['projection']['leaseStatus'],
+  TranslationKey
+>;
+
 function humanize(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -518,7 +528,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
               ))}
               <Typography variant="body2">
                 {t('personas.now.runtimeState', {
-                  lease: runtime.projection.leaseStatus,
+                  status: t(PERSONA_LEASE_STATUS_KEYS[runtime.projection.leaseStatus]),
                   queued: runtime.projection.mailbox.queued,
                   ready: runtime.projection.mailbox.ready,
                 })}

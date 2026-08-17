@@ -1,9 +1,10 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const optionsMock = jest.fn();
 const updateMock = jest.fn();
+const deletionPreviewMock = jest.fn();
 
 jest.mock('@/frontend/services/personas/settings', () => ({
   personaSettingsService: {
@@ -12,7 +13,7 @@ jest.mock('@/frontend/services/personas/settings', () => ({
     get: jest.fn(),
     exportPreview: jest.fn(),
     exportConfiguration: jest.fn(),
-    deletionPreview: jest.fn(),
+    deletionPreview: (...args: unknown[]) => deletionPreviewMock(...args),
     delete: jest.fn(),
   },
 }));
@@ -120,6 +121,72 @@ describe('PersonaSettings editing', () => {
         expectedUpdatedAt: 20,
       }),
     ));
+  });
+
+  it('retries a failed deletion preview and keeps confirmation disabled until it loads', async () => {
+    deletionPreviewMock
+      .mockRejectedValueOnce(new Error('Preview temporarily unavailable'))
+      .mockResolvedValueOnce({
+        personaId: 'persona_picture',
+        workspaceId: 'workspace_1',
+        generatedAt: 30,
+        previewToken: 'preview_1',
+        counts: {
+          behaviorBindings: 0,
+          behaviorRevisions: 0,
+          behaviorProposals: 0,
+          behaviorMaintenanceRuns: 0,
+          behaviorOutcomeMetrics: 0,
+          appGrants: 0,
+          memoryItems: 2,
+          memoryEmbeddings: 0,
+          workItems: 1,
+          liveActivities: 0,
+          archivedActivities: 0,
+          openMailboxItems: 0,
+          archivedMailboxItems: 0,
+          leaseRecords: 0,
+          coreMemoryItems: 0,
+          homeFiles: 3,
+          homeBytes: 10,
+        },
+        activeLease: false,
+        homeExists: true,
+        referencedArchiveEvidence: {
+          activities: 0,
+          mailboxItems: 0,
+          futureCrossSystemAttributionPolicy: 'anonymize_or_minimal_tombstone',
+        },
+        externalSharedResources: { mcpConfigNames: [], action: 'retained' },
+        backupPolicy: {
+          action: 'retained_until_workspace_backup_expiry',
+          immediatePurgeSupported: false,
+        },
+      });
+
+    render(
+      <PersonaSettings
+        detail={detail}
+        onRefresh={jest.fn().mockResolvedValue(undefined)}
+        onDeleted={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Persona' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Preview temporarily unavailable')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Delete Persona' })).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(deletionPreviewMock).toHaveBeenCalledTimes(2));
+    expect(await within(dialog).findByText(/2 memories, 1 work items/)).toBeInTheDocument();
+    const confirmButton = within(dialog).getByRole('button', { name: 'Delete Persona' });
+    expect(confirmButton).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('Type DELETE to confirm'), {
+      target: { value: 'DELETE' },
+    });
+    expect(confirmButton).toBeEnabled();
   });
 
   it('keeps an unavailable saved Role visible until another Role is chosen', async () => {
