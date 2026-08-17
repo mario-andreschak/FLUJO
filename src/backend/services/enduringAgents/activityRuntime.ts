@@ -48,6 +48,7 @@ import {
 } from './personaActivitySnapshot';
 import { resolvePersonaCoreRevision } from './personaCoreResolver';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
+import { getPersonaRuntimeClock } from './runtimeClock';
 import {
   type PersonaRuntimeLock,
   withPersonaRuntimeLock,
@@ -72,6 +73,8 @@ import {
   RawPersonaRuntimeEventSchema,
   type RawPersonaRuntimeEvent,
 } from './runtimeEvents';
+
+const runtimeClock = getPersonaRuntimeClock();
 
 const log = createLogger('backend/services/enduringAgents/activityRuntime');
 
@@ -926,7 +929,7 @@ async function reconcileTerminalLease(
   reconciledAt?: number,
 ): Promise<void> {
   const now = Math.max(
-    reconciledAt ?? Date.now(),
+    reconciledAt ?? runtimeClock.now(),
     activity.completedAt ?? activity.updatedAt,
     lease.renewedAt,
   );
@@ -972,7 +975,7 @@ async function reconcileWaitingLease(
       `Waiting Activity ${JSON.stringify(activity.id)} has no claimed mailbox item.`,
     );
   }
-  const now = Math.max(reconciledAt ?? Date.now(), activity.updatedAt, lease.renewedAt);
+  const now = Math.max(reconciledAt ?? runtimeClock.now(), activity.updatedAt, lease.renewedAt);
 
   if (activity.leaseId === lease.id) {
     // Yield persisted the Activity first and crashed before releasing the head.
@@ -1009,7 +1012,7 @@ async function expireActiveLease(
   items: PersonaMailboxItem[],
   expiredAt?: number,
 ): Promise<void> {
-  const now = Math.max(expiredAt ?? Date.now(), lease.renewedAt);
+  const now = Math.max(expiredAt ?? runtimeClock.now(), lease.renewedAt);
   const activity = await getPersonaActivity(lease.activityId);
   if (!activity || activity.personaId !== persona.id) {
     await projectPersonaLifecycle(lock, persona.id, 'error', now);
@@ -1180,7 +1183,7 @@ async function acquireLeaseForActivity(
           `Lease acquisition ${JSON.stringify(id)} has conflicting durable history.`,
         );
       }
-      if (orphan.status === 'active' && orphan.expiresAt > Date.now()) {
+      if (orphan.status === 'active' && orphan.expiresAt > runtimeClock.now()) {
         return saveLeaseHead(lock, orphan);
       }
       // An orphaned/terminal acquisition still consumed its token. Advance the
@@ -1194,7 +1197,7 @@ async function acquireLeaseForActivity(
     }
 
     const acquiredAt = Math.max(
-      Date.now(),
+      runtimeClock.now(),
       activity.createdAt,
       activity.updatedAt,
       durableTimestamp,
@@ -1223,7 +1226,7 @@ async function repairActiveClaim(
   item: PersonaMailboxItem,
   activity: PersonaActivity,
 ): Promise<PersonaActivityClaim> {
-  const now = Math.max(Date.now(), activity.updatedAt, item.updatedAt, lease.acquiredAt);
+  const now = Math.max(runtimeClock.now(), activity.updatedAt, item.updatedAt, lease.acquiredAt);
   let repairedActivity = activity;
   if (activity.status === 'queued' || activity.status === 'waiting') {
     repairedActivity = await saveActivity(lock, {
@@ -1329,7 +1332,7 @@ async function claimQueuedItem(
   }
   const ensured = await ensureQueuedActivity(lock, item, behaviorId, revision);
   if (isTerminalActivity(ensured.activity)) {
-    await terminalMailboxProjection(lock, item, ensured.activity, Date.now());
+    await terminalMailboxProjection(lock, item, ensured.activity, runtimeClock.now());
     return null;
   }
 
@@ -1368,7 +1371,7 @@ async function resolvePersonaRoutingState(
       await reconcileWaitingLease(lock, persona, head, activity, items);
     } else {
       const item = findMailboxForActivity(persona.id, items, activity.id);
-      if (item?.status === 'queued' || head.expiresAt <= Date.now()) {
+      if (item?.status === 'queued' || head.expiresAt <= runtimeClock.now()) {
         await expireActiveLease(lock, persona, head, items);
       } else if (!item || item.status !== 'claimed' || item.claimedActivityId !== activity.id) {
         throw new PersonaRuntimeCorruptionError(
@@ -1468,7 +1471,7 @@ async function repairInterruptionRequest(
     activity.interruptionRequestedByMailboxItemId === item.id
     && activity.interruptionRequestedAt !== undefined
   ) return;
-  const now = Math.max(Date.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
+  const now = Math.max(runtimeClock.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
   await saveActivity(lock, {
     ...activity,
     interruptionRequestedAt: now,
@@ -1559,7 +1562,7 @@ async function admitPersonaMailboxItem(
     (maximum, item) => Math.max(maximum, item.sequence),
     0,
   ) + 1;
-  const now = Date.now();
+  const now = runtimeClock.now();
   const routingState = route ? await resolvePersonaRoutingState(lock, persona) : null;
   const seenTargetIds = new Set<string>();
   const relatedCandidates = routingState
@@ -1735,7 +1738,7 @@ export async function reprioritizePersonaMailboxItemWithinRuntimeLock(
   const updated = await saveMailboxItem(lock, {
     ...item,
     priority: input.priority,
-    updatedAt: Math.max(Date.now(), item.updatedAt + 1),
+    updatedAt: Math.max(runtimeClock.now(), item.updatedAt + 1),
   });
   return { item: updated, changed: true };
 }
@@ -1795,7 +1798,7 @@ export async function movePersonaMailboxItemWithinRuntimeLock(
       'Persona mailbox sequence space is exhausted.',
     );
   }
-  const now = Math.max(Date.now(), target.updatedAt + 1, neighbor.updatedAt + 1);
+  const now = Math.max(runtimeClock.now(), target.updatedAt + 1, neighbor.updatedAt + 1);
   const parked = await saveMailboxItem(lock, {
     ...target,
     sequence: temporarySequence,
@@ -1841,7 +1844,7 @@ export async function cancelPersonaMailboxItem(value: unknown): Promise<PersonaM
         (await getPersonaLease(input.personaId))!,
       );
     }
-    const now = Math.max(Date.now(), item.updatedAt, activity?.updatedAt ?? 0);
+    const now = Math.max(runtimeClock.now(), item.updatedAt, activity?.updatedAt ?? 0);
     const activityCancelled = Boolean(activity && !isTerminalActivity(activity));
     if (activityCancelled && activity) {
       await saveActivity(lock, {
@@ -1929,7 +1932,7 @@ export async function claimNextPersonaActivity(
           await expireActiveLease(lock, persona, head, items);
           continue;
         }
-        if (head.expiresAt <= Date.now()) {
+        if (head.expiresAt <= runtimeClock.now()) {
           await expireActiveLease(lock, persona, head, items);
           continue;
         }
@@ -2011,7 +2014,7 @@ export async function claimNextPersonaActivity(
             && item.status === 'queued'
             && item.interruptedActivityId === resumable.activity.id,
         );
-        const pendingInterrupt = sortEligibleMailboxItems(targetedInterrupts, Date.now())[0];
+        const pendingInterrupt = sortEligibleMailboxItems(targetedInterrupts, runtimeClock.now())[0];
         if (pendingInterrupt) {
           if (
             input.expectedMailboxItemId !== undefined
@@ -2033,10 +2036,10 @@ export async function claimNextPersonaActivity(
         return claimQueuedItem(lock, persona, acquisitionInput, resumable.item, head);
       }
 
-      const next = sortEligibleMailboxItems(items, Date.now())[0];
+      const next = sortEligibleMailboxItems(items, runtimeClock.now())[0];
       if (!next) {
         if (persona.lifecycleState === 'busy' || persona.lifecycleState === 'waiting') {
-          await projectPersonaLifecycle(lock, persona.id, 'idle', Date.now());
+          await projectPersonaLifecycle(lock, persona.id, 'idle', runtimeClock.now());
         }
         return null;
       }
@@ -2148,7 +2151,7 @@ async function requireActiveRunnableLease(
 ): Promise<{ persona: Persona; lease: PersonaLease; activity: PersonaActivity }> {
   const persona = await requireReadyPersona(fence.personaId);
   const lease = await requireCurrentLease(lock, persona.id, fence);
-  if (lease.status !== 'active' || lease.expiresAt <= Date.now()) {
+  if (lease.status !== 'active' || lease.expiresAt <= runtimeClock.now()) {
     if (lease.status === 'active') {
       await expireActiveLease(lock, persona, lease, await listPersonaMailboxItems(persona.id));
     }
@@ -2256,7 +2259,7 @@ export async function acknowledgePersonaActivityDelivery(
     }
     if (item.deliveryStatus === 'delivered') return item;
 
-    const deliveredAt = Math.max(Date.now(), item.updatedAt, item.completedAt ?? item.createdAt);
+    const deliveredAt = Math.max(runtimeClock.now(), item.updatedAt, item.completedAt ?? item.createdAt);
     return saveMailboxItem(lock, {
       ...item,
       deliveryStatus: 'delivered',
@@ -2296,7 +2299,7 @@ export async function rejectPersonaActivityDelivery(
         `Mailbox delivery ${JSON.stringify(item.id)} is not rejectable by the fenced Activity.`,
       );
     }
-    const now = Math.max(Date.now(), item.updatedAt, item.completedAt ?? item.createdAt);
+    const now = Math.max(runtimeClock.now(), item.updatedAt, item.completedAt ?? item.createdAt);
     return saveMailboxItem(lock, {
       ...item,
       status: 'rejected',
@@ -2322,7 +2325,7 @@ export async function updatePersonaActivityReferences(
     UpdatePersonaActivityReferencesInput;
   return withPersonaRuntimeLock(input.personaId, async (lock) => {
     const { activity } = await requireActiveRunnableLease(lock, input);
-    const now = Math.max(Date.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
+    const now = Math.max(runtimeClock.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
     return saveActivity(lock, {
       ...activity,
       ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
@@ -2386,7 +2389,7 @@ export async function persistPersonaActivitySnapshot(
       return activity;
     }
 
-    const now = Math.max(Date.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
+    const now = Math.max(runtimeClock.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
     return saveActivity(lock, {
       ...activity,
       coreFlowId: input.coreFlowId,
@@ -2408,7 +2411,7 @@ export async function renewPersonaActivityLease(value: unknown): Promise<Persona
   const renewed = await withPersonaRuntimeLock(input.personaId, async (lock) => {
     const persona = await requireReadyPersona(input.personaId);
     const lease = await requireCurrentLease(lock, persona.id, input);
-    if (lease.status !== 'active' || lease.expiresAt <= Date.now()) {
+    if (lease.status !== 'active' || lease.expiresAt <= runtimeClock.now()) {
       if (lease.status === 'active') {
         await expireActiveLease(lock, persona, lease, await listPersonaMailboxItems(persona.id));
       }
@@ -2419,7 +2422,7 @@ export async function renewPersonaActivityLease(value: unknown): Promise<Persona
     }
     await requireRunnableActivityForLease(lock, persona, lease);
 
-    const renewedAt = Math.max(Date.now(), lease.renewedAt);
+    const renewedAt = Math.max(runtimeClock.now(), lease.renewedAt);
     return saveLeaseHead(lock, {
       ...lease,
       renewedAt,
@@ -2481,7 +2484,7 @@ async function releasePersonaActivityLeaseWithinLock(
     await requireDurableInterruptionRequest(persona, activity);
   }
   if (lease.status === 'released') return lease;
-  if (lease.status !== 'active' || lease.expiresAt <= Date.now()) {
+  if (lease.status !== 'active' || lease.expiresAt <= runtimeClock.now()) {
     if (lease.status === 'active') {
       await expireActiveLease(lock, persona, lease, await listPersonaMailboxItems(persona.id));
     }
@@ -2491,7 +2494,7 @@ async function releasePersonaActivityLeaseWithinLock(
     );
   }
 
-  const now = Math.max(Date.now(), lease.renewedAt, activity.updatedAt);
+  const now = Math.max(runtimeClock.now(), lease.renewedAt, activity.updatedAt);
   if (isTerminalActivity(activity)) {
     await reconcileTerminalLease(
       lock,
@@ -2698,7 +2701,7 @@ export async function completePersonaActivityWithinRuntimeLock(
       };
     }
 
-    if (lease.status !== 'active' || lease.expiresAt <= Date.now()) {
+    if (lease.status !== 'active' || lease.expiresAt <= runtimeClock.now()) {
       if (lease.status === 'active') await expireActiveLease(lock, persona, lease, items);
       throw new PersonaLeaseLostError(
         persona.id,
@@ -2713,7 +2716,7 @@ export async function completePersonaActivityWithinRuntimeLock(
       );
     }
 
-    const now = Math.max(Date.now(), activity.updatedAt, lease.renewedAt);
+    const now = Math.max(runtimeClock.now(), activity.updatedAt, lease.renewedAt);
     const status = input.status ?? 'completed';
     // A steer/coalesce can be admitted after the worker's last delivery poll
     // but before this terminal transition acquires the Persona lock. Atomically
@@ -3120,7 +3123,7 @@ export async function recoverPersonaRuntime(
       if (
         mismatchedClaims.length === 0
         && existingHead?.status === 'active'
-        && existingHead.expiresAt > Date.now()
+        && existingHead.expiresAt > runtimeClock.now()
       ) {
         throw new PersonaRuntimeRecoveryConflictError(
           persona.id,
@@ -3128,7 +3131,7 @@ export async function recoverPersonaRuntime(
         );
       }
       const runtimeUpdatedAt = Math.max(
-        Date.now(),
+        runtimeClock.now(),
         persona.updatedAt + 1,
         (existingHead?.renewedAt ?? 0) + 1,
         ...items.map((item) => item.updatedAt + 1),
@@ -3164,7 +3167,7 @@ export async function recoverPersonaRuntime(
     }
     let head = await reconcilePersonaLeaseHead(lock, persona.id);
     if (head?.status === 'active') {
-      if (head.expiresAt > Date.now()) {
+      if (head.expiresAt > runtimeClock.now()) {
         throw new PersonaRuntimeRecoveryConflictError(
           persona.id,
           `Persona ${JSON.stringify(persona.id)} still has a live Activity lease.`,
@@ -3408,7 +3411,7 @@ export async function quiescePersonaForDeletionWithinRuntimeLock(
   await lock.assertOwned();
   let persona = await getPersona(personaId);
   if (!persona) throw new PersonaRuntimeNotFoundError('Persona', personaId);
-  const disabledAt = Math.max(Date.now(), persona.updatedAt);
+  const disabledAt = Math.max(runtimeClock.now(), persona.updatedAt);
   if (persona.lifecycleState !== 'disabled') {
     persona = await updatePersonaWithinRuntimeLock({
       ...persona,
@@ -3423,7 +3426,7 @@ export async function quiescePersonaForDeletionWithinRuntimeLock(
   ]);
   const head = await reconcilePersonaLeaseHead(lock, personaId);
   const now = Math.max(
-    Date.now(),
+    runtimeClock.now(),
     persona.updatedAt,
     ...activities.map((activity) => activity.updatedAt),
     ...items.map((item) => item.updatedAt),
@@ -3487,7 +3490,7 @@ export async function listPersonaRuntimeBundle(
         const item = findMailboxForActivity(persona.id, items, activity.id);
         if (!item) {
           await expireActiveLease(lock, persona, head, items);
-        } else if (item.status === 'queued' || head.expiresAt <= Date.now()) {
+        } else if (item.status === 'queued' || head.expiresAt <= runtimeClock.now()) {
           await expireActiveLease(lock, persona, head, items);
         } else {
           // A live claimed acquisition is authoritative. Repair lagging

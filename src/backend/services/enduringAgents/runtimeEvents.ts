@@ -17,7 +17,10 @@ import {
   workspaceCacheKey,
 } from '@/utils/workspace';
 
+import { getPersonaRuntimeClock } from './runtimeClock';
 import { withPersonaRuntimeLock } from './runtimeLock';
+
+const runtimeClock = getPersonaRuntimeClock();
 
 const log = createLogger('backend/services/enduringAgents/runtimeEvents');
 
@@ -667,7 +670,7 @@ export async function appendPersonaRuntimeEvent(
         workspaceId: getCurrentWorkspace(),
         personaId,
         seq: state.nextSeq,
-        timestamp: Date.now(),
+        timestamp: runtimeClock.now(),
       });
       let bytesWritten: number;
       try {

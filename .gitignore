@@ -197,3 +197,6 @@ jest-results-isolated.json
 /workspaces
 /mcp-servers
 .tmp-sandbox-harness/sandbox.html
+
+# Persona endurance test artifacts
+soak-artifacts/

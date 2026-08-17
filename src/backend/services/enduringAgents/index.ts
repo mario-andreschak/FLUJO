@@ -29,3 +29,5 @@ export * from './roleAdmin';
 export * from './runtimeEvents';
 export * from './runtimeObservability';
 export * from './store';
+
+export * from './runtimeClock';

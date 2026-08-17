@@ -2,16 +2,18 @@ import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { performance } from 'perf_hooks';
 import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
 import { stableEnduringAgentId } from './ids';
+import { getPersonaRuntimeClock } from './runtimeClock';
 import {
   ensureWorkspaceDirs,
   getCurrentWorkspace,
   getWorkspaceDbDir,
 } from '@/utils/workspace';
+
+const runtimeClock = getPersonaRuntimeClock();
 
 const LOCK_ROOT_SEGMENTS = ['.runtime-locks', 'enduring-agents'] as const;
 const LOCK_ACQUIRE_TIMEOUT_MS = 15_000;
@@ -142,7 +144,7 @@ export class PersonaRuntimeLockLostError extends Error {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return runtimeClock.sleep(ms);
 }
 
 async function ensureRuntimeLockRoot(): Promise<string> {
@@ -407,11 +409,11 @@ export async function initializePersonaRuntimeLockProcessIdentity(): Promise<voi
 async function getProcessBirthMarker(pid: number): Promise<string | null> {
   if (pid === process.pid) return getOwnProcessBirthMarkerV2();
   const cached = processBirthCache.get(pid);
-  if (cached && performance.now() - cached.checkedAt < PROCESS_BIRTH_CACHE_TTL_MS) {
+  if (cached && runtimeClock.monotonicNow() - cached.checkedAt < PROCESS_BIRTH_CACHE_TTL_MS) {
     return cached.marker;
   }
   const marker = await queryProcessBirthMarker(pid);
-  processBirthCache.set(pid, { checkedAt: performance.now(), marker });
+  processBirthCache.set(pid, { checkedAt: runtimeClock.monotonicNow(), marker });
   return marker;
 }
 
@@ -465,7 +467,7 @@ async function isOwnerProcessAlive(
     if (current?.startsWith('dead:')) {
       current = await queryProcessBirthMarker(owner.pid);
       processBirthCache.set(owner.pid, {
-        checkedAt: performance.now(),
+        checkedAt: runtimeClock.monotonicNow(),
         marker: current,
       });
     }
@@ -481,7 +483,7 @@ async function isOwnerProcessAlive(
     // cached match is safe but a cached mismatch is not.
     currentBirthMarker = await queryProcessBirthMarker(owner.pid);
     processBirthCache.set(owner.pid, {
-      checkedAt: performance.now(),
+      checkedAt: runtimeClock.monotonicNow(),
       marker: currentBirthMarker,
     });
   }
@@ -534,7 +536,7 @@ async function installCandidateLockWithRetry(
   lockPath: string,
   owner: LockOwnerRecord,
 ): Promise<boolean> {
-  const startedAt = performance.now();
+  const startedAt = runtimeClock.monotonicNow();
   while (true) {
     try {
       return await installCandidateLock(lockRoot, lockPath, owner);
@@ -542,7 +544,7 @@ async function installCandidateLockWithRetry(
       const code = (error as NodeJS.ErrnoException).code;
       if (
         !['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '')
-        || performance.now() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS
+        || runtimeClock.monotonicNow() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS
       ) throw error;
       await delay(LOCK_RETRY_MS);
     }
@@ -551,7 +553,7 @@ async function installCandidateLockWithRetry(
 
 function backgroundDelay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
+    const timer = runtimeClock.setTimer(resolve, ms);
     timer.unref();
   });
 }
@@ -601,7 +603,7 @@ async function withRecoveryIntent<T>(
     pid: process.pid,
     ...(processBirthMarkerV2 ? { processBirthMarkerV2 } : {}),
     workspace: getCurrentWorkspace(),
-    acquiredAt: Date.now(),
+    acquiredAt: runtimeClock.now(),
     targetOwnerId: target.ownerId,
     targetProcessInstanceId: target.processInstanceId,
     targetPid: target.pid,
@@ -714,10 +716,10 @@ async function acquireFilesystemLock(personaId: string): Promise<{
     pid: process.pid,
     ...(processBirthMarkerV2 ? { processBirthMarkerV2 } : {}),
     workspace: getCurrentWorkspace(),
-    acquiredAt: Date.now(),
+    acquiredAt: runtimeClock.now(),
   };
   ACTIVE_OWNER_IDS.add(owner.ownerId);
-  const acquireStartedAt = performance.now();
+  const acquireStartedAt = runtimeClock.monotonicNow();
   let canonicalInstalled = false;
 
   try {
@@ -740,7 +742,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
           await cleanupAbandonmentMarker(abandonmentMarkerPath(lockPath, recovery.ownerId));
         }));
       if (liveRecoveries.length > 0) {
-        if (performance.now() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+        if (runtimeClock.monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
           throw new PersonaRuntimeLockTimeoutError(personaId);
         }
         await delay(LOCK_RETRY_MS);
@@ -808,7 +810,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         });
         continue;
       }
-      if (performance.now() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+      if (runtimeClock.monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
         throw new PersonaRuntimeLockTimeoutError(personaId);
       }
       await delay(LOCK_RETRY_MS);

@@ -122,6 +122,7 @@ import {
   type MemoryMaintenancePlan,
   type MemoryMaintenanceResult,
 } from './memoryMaintenance';
+import { getPersonaRuntimeClock, type PersonaRuntimeTimer } from './runtimeClock';
 import {
   withPersonaRuntimeLock,
   type PersonaRuntimeLock,
@@ -133,6 +134,8 @@ import {
   getPersonaMailboxItem,
   getRoleVersion,
 } from './store';
+
+const runtimeClock = getPersonaRuntimeClock();
 
 const log = createLogger('backend/services/enduringAgents/personaDispatcher');
 
@@ -779,7 +782,7 @@ function dispatchError(code: string, error: unknown, fallback: string): PersonaF
   return {
     code,
     message: sanitizeText(error, MAX_ERROR_TEXT, fallback),
-    at: Date.now(),
+    at: runtimeClock.now(),
   };
 }
 
@@ -788,7 +791,7 @@ function leaseLostDispatchError(): PersonaFlowDispatchError {
     code: 'LEASE_LOST',
     // Never persist the runtime error: it can contain an opaque lease id.
     message: 'Persona execution authority was lost; uncertain work was not replayed.',
-    at: Date.now(),
+    at: runtimeClock.now(),
   };
 }
 
@@ -905,7 +908,7 @@ async function appendPersonaConversationMessage(
   state.executionAuthority = executionAuthority;
   upsertMessageById(state.messages, message);
   state.lastResponse = typeof message.content === 'string' ? message.content : state.lastResponse;
-  state.updatedAt = Math.max(Date.now(), state.updatedAt ?? 0);
+  state.updatedAt = Math.max(runtimeClock.now(), state.updatedAt ?? 0);
   await appendRawForState(state, [{ type: 'message', message }]);
   await persistConversationState(
     `conversations/${conversationId}` as Parameters<typeof persistConversationState>[0],
@@ -1104,7 +1107,7 @@ export class PersonaFlowDispatcher {
   private readonly heartbeatIntervalMs: number;
   private readonly dependencies: PersonaFlowDispatcherDependencies;
   private readonly pumps = new Map<string, PumpControl>();
-  private readonly wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly wakeTimers = new Map<string, PersonaRuntimeTimer>();
   private readonly quiescedPersonas = new Set<string>();
   private readonly waiters = new Map<string, Set<() => void>>();
   private readonly deliveryChains = new Map<string, Promise<void>>();
@@ -1253,11 +1256,11 @@ export class PersonaFlowDispatcher {
     }
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: PersonaRuntimeTimer | undefined;
       const finish = (error?: unknown) => {
         if (settled) return;
         settled = true;
-        if (timer) clearTimeout(timer);
+        if (timer) timer.clear();
         options.signal?.removeEventListener('abort', abort);
         if (error !== undefined) reject(error);
         else resolve();
@@ -1265,11 +1268,11 @@ export class PersonaFlowDispatcher {
       const abort = () => finish(options.signal?.reason ?? new Error('Persona resume wait aborted.'));
       options.signal?.addEventListener('abort', abort, { once: true });
       if (options.timeoutMs !== undefined) {
-        timer = setTimeout(
+        timer = runtimeClock.setTimer(
           () => finish(new PersonaFlowDispatchTimeoutError(dispatchId)),
           options.timeoutMs,
         );
-        timer.unref?.();
+        timer.unref();
       }
       promise.then(() => finish(), finish);
     });
@@ -1294,7 +1297,7 @@ export class PersonaFlowDispatcher {
         if (!current.flowInput) {
           throw new PersonaFlowDispatchCorruptionError(current.id, 'Dispatch has no resumable Flow input.');
         }
-        const requestedAt = Math.max(Date.now(), current.updatedAt + 1);
+        const requestedAt = Math.max(runtimeClock.now(), current.updatedAt + 1);
         const flowInput = cloneSerializableFlowInput({
           ...current.flowInput,
           ...(input.flowInputPatch ?? {}),
@@ -1351,7 +1354,7 @@ export class PersonaFlowDispatcher {
         }
         if (isTerminalDispatch(current.state)) return current;
         const requestedAt = current.cancellationRequestedAt
-          ?? Math.max(Date.now(), current.updatedAt + 1);
+          ?? Math.max(runtimeClock.now(), current.updatedAt + 1);
         return this.save({
           ...current,
           ...(current.state === 'waiting'
@@ -1366,7 +1369,7 @@ export class PersonaFlowDispatcher {
           resumePreparationRequired: false,
           resumeSettledAt: requestedAt,
           lastError: undefined,
-          updatedAt: Math.max(Date.now(), current.updatedAt, requestedAt),
+          updatedAt: Math.max(runtimeClock.now(), current.updatedAt, requestedAt),
         });
       },
     ));
@@ -1442,7 +1445,7 @@ export class PersonaFlowDispatcher {
         updated.push(await this.save({
           ...current,
           admission: { ...current.admission, priority: input.priority },
-          updatedAt: Math.max(Date.now(), current.updatedAt + 1, mailbox.item.updatedAt),
+          updatedAt: Math.max(runtimeClock.now(), current.updatedAt + 1, mailbox.item.updatedAt),
         }));
       }
       return updated;
@@ -1528,7 +1531,7 @@ export class PersonaFlowDispatcher {
       const enterDeliveryWaiting = coalesced
         && latest.state === 'queued'
         && !latest.cancellationRequestedAt;
-      const now = Math.max(Date.now(), latest.updatedAt, routed.item.updatedAt);
+      const now = Math.max(runtimeClock.now(), latest.updatedAt, routed.item.updatedAt);
       return this.save({
         ...latest,
         state: enterDeliveryWaiting ? 'waiting' : latest.state,
@@ -1565,7 +1568,7 @@ export class PersonaFlowDispatcher {
         return this.save({
           ...current,
           lastError: dispatchError('ROUTING_FAILED', error, 'Mailbox routing failed.'),
-          updatedAt: Math.max(Date.now(), current.updatedAt),
+          updatedAt: Math.max(runtimeClock.now(), current.updatedAt),
         });
       }));
       throw error;
@@ -1627,7 +1630,7 @@ export class PersonaFlowDispatcher {
           }
           return existing;
         }
-        const now = Date.now();
+        const now = runtimeClock.now();
         return this.save({
           schemaVersion: PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
           id,
@@ -1674,15 +1677,15 @@ export class PersonaFlowDispatcher {
   private scheduleWake(personaId: string, at: number): void {
     if (this.quiescedPersonas.has(personaId)) return;
     const existing = this.wakeTimers.get(personaId);
-    if (existing) clearTimeout(existing);
-    const delay = Math.max(1, Math.min(at - Date.now() + 5, 0x7fffffff));
-    const timer = setTimeout(() => {
+    if (existing) existing.clear();
+    const delay = Math.max(1, Math.min(at - runtimeClock.now() + 5, 0x7fffffff));
+    const timer = runtimeClock.setTimer(() => {
       this.wakeTimers.delete(personaId);
       void this.pump(personaId).catch((error) => {
         log.error(`Deferred Persona Flow pump failed for ${personaId}:`, error);
       });
     }, delay);
-    timer.unref?.();
+    timer.unref();
     this.wakeTimers.set(personaId, timer);
   }
 
@@ -1810,7 +1813,7 @@ export class PersonaFlowDispatcher {
     await withPersonaRuntimeLock(dispatch.personaId, async (lock) => {
       const latest = (await this.get(dispatch.id)) ?? dispatch;
       if (isTerminalDispatch(latest.state)) return;
-      const now = Math.max(Date.now(), latest.updatedAt, item.updatedAt);
+      const now = Math.max(runtimeClock.now(), latest.updatedAt, item.updatedAt);
       if (latest.cancellationRequestedAt) {
         await this.save({
           ...latest,
@@ -1943,12 +1946,12 @@ export class PersonaFlowDispatcher {
     let leaseLost = false;
     let interruption = false;
     let cancellation = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: PersonaRuntimeTimer | undefined;
     let inFlight: Promise<void> | undefined;
 
     const schedule = () => {
       if (stopped) return;
-      timer = setTimeout(() => {
+      timer = runtimeClock.setTimer(() => {
         if (stopped) return;
         inFlight = this.inWorkspace(async () => {
           try {
@@ -1982,7 +1985,7 @@ export class PersonaFlowDispatcher {
           }
         });
       }, this.heartbeatIntervalMs);
-      timer.unref?.();
+      timer.unref();
     };
     schedule();
 
@@ -1992,7 +1995,7 @@ export class PersonaFlowDispatcher {
       cancelled: () => cancellation,
       stop: async () => {
         stopped = true;
-        if (timer) clearTimeout(timer);
+        if (timer) timer.clear();
         if (inFlight) await inFlight;
       },
     };
@@ -2058,7 +2061,7 @@ export class PersonaFlowDispatcher {
     await lock.assertOwned();
     const latest = (await this.get(record.id).catch(() => null)) ?? record;
     if (isTerminalDispatch(latest.state) || latest.cancellationRequestedAt) return latest;
-    const now = Math.max(Date.now(), latest.updatedAt);
+    const now = Math.max(runtimeClock.now(), latest.updatedAt);
     return this.save({
       ...latest,
       state: 'error',
@@ -2107,7 +2110,7 @@ export class PersonaFlowDispatcher {
       });
     }
     const existing = await this.get(id).catch(() => null);
-    const now = Date.now();
+    const now = runtimeClock.now();
     await this.save({
       schemaVersion: PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
       id,
@@ -2195,7 +2198,7 @@ export class PersonaFlowDispatcher {
           status: effectiveStatus,
           outcome: requested.outcome,
           activityId: fence.activityId,
-          decidedAt: Date.now(),
+          decidedAt: runtimeClock.now(),
         });
         completion = await this.dependencies.completePersonaActivityWithinRuntimeLock({
           ...fence,
@@ -2210,7 +2213,7 @@ export class PersonaFlowDispatcher {
           lock,
         );
         const now = Math.max(
-          Date.now(),
+          runtimeClock.now(),
           latest.updatedAt,
           completion.activity.updatedAt,
           completion.activity.completedAt ?? 0,
@@ -2318,7 +2321,7 @@ export class PersonaFlowDispatcher {
           }
           await this.dependencies.yieldPersonaActivityForInterruptionWithinRuntimeLock(fence, lock);
           yielded = true;
-          const now = Math.max(Date.now(), latest.updatedAt);
+          const now = Math.max(runtimeClock.now(), latest.updatedAt);
           return this.save({
             ...latest,
             state: 'waiting',
@@ -2609,8 +2612,8 @@ export class PersonaFlowDispatcher {
         ),
         error: undefined,
         lastError: undefined,
-        startedAt: latest.startedAt ?? Date.now(),
-        updatedAt: Math.max(Date.now(), latest.updatedAt),
+        startedAt: latest.startedAt ?? runtimeClock.now(),
+        updatedAt: Math.max(runtimeClock.now(), latest.updatedAt),
         completedAt: undefined,
       }),
       { control, abortController },
@@ -2788,7 +2791,7 @@ export class PersonaFlowDispatcher {
             cancellation = latest;
             return latest;
           }
-          const now = Math.max(Date.now(), latest.updatedAt);
+          const now = Math.max(runtimeClock.now(), latest.updatedAt);
           return this.save({
             ...latest,
             state: 'waiting',
@@ -2845,7 +2848,7 @@ export class PersonaFlowDispatcher {
                 cancellation = latest;
                 return latest;
               }
-              const now = Math.max(Date.now(), latest.updatedAt);
+              const now = Math.max(runtimeClock.now(), latest.updatedAt);
               return this.save({
                 ...latest,
                 state: 'waiting',
@@ -2876,7 +2879,7 @@ export class PersonaFlowDispatcher {
             waitingReason: undefined,
             resumePreparationRequired: false,
             lastError: undefined,
-            updatedAt: Math.max(Date.now(), latest.updatedAt),
+            updatedAt: Math.max(runtimeClock.now(), latest.updatedAt),
           }),
         );
         record = preparedRunningTransition.record;
@@ -2921,7 +2924,7 @@ export class PersonaFlowDispatcher {
               concurrentCancellation = latest;
               return latest;
             }
-            const now = Math.max(Date.now(), latest.updatedAt);
+            const now = Math.max(runtimeClock.now(), latest.updatedAt);
             return this.save({
               ...latest,
               state: 'waiting',
@@ -3032,7 +3035,7 @@ export class PersonaFlowDispatcher {
             id: `memory_maintenance_result_${record.id}`,
             role: 'assistant',
             content: renderMemoryMaintenanceConversationMessage(maintenanceResult!),
-            timestamp: Date.now(),
+            timestamp: runtimeClock.now(),
             ...(result.sharedState.currentNodeId
               ? { processNodeId: result.sharedState.currentNodeId }
               : {}),
@@ -3103,7 +3106,7 @@ export class PersonaFlowDispatcher {
             cancellation = latest;
             return latest;
           }
-          const now = Math.max(Date.now(), latest.updatedAt);
+          const now = Math.max(runtimeClock.now(), latest.updatedAt);
           return this.save({
             ...latest,
             state: 'waiting',
@@ -3333,14 +3336,14 @@ export class PersonaFlowDispatcher {
             ...current,
             state: 'waiting',
             waitingReason,
-            updatedAt: Math.max(Date.now(), current.updatedAt, activity.updatedAt),
+            updatedAt: Math.max(runtimeClock.now(), current.updatedAt, activity.updatedAt),
           });
         }
         return current;
       }
       if (activity.status === 'error') {
         if (current.cancellationRequestedAt) {
-          const now = Math.max(Date.now(), current.updatedAt, activity.updatedAt);
+          const now = Math.max(runtimeClock.now(), current.updatedAt, activity.updatedAt);
           return this.save({
             ...current,
             state: 'error',
@@ -3368,7 +3371,7 @@ export class PersonaFlowDispatcher {
         );
       }
       if (activity.status === 'cancelled') {
-        const now = Math.max(Date.now(), current.updatedAt, activity.updatedAt);
+        const now = Math.max(runtimeClock.now(), current.updatedAt, activity.updatedAt);
         return this.save({
           ...current,
           state: 'cancelled',
@@ -3380,7 +3383,7 @@ export class PersonaFlowDispatcher {
         });
       }
       if (activity.status === 'completed') {
-        const now = Math.max(Date.now(), current.updatedAt, activity.updatedAt);
+        const now = Math.max(runtimeClock.now(), current.updatedAt, activity.updatedAt);
         const revisionId = current.behaviorRevisionId ?? activity.behaviorRevisionId;
         return this.save({
           ...current,
@@ -3455,7 +3458,7 @@ export class PersonaFlowDispatcher {
           const expiresAt = typeof error === 'object' && error !== null && 'expiresAt' in error
             && typeof error.expiresAt === 'number'
             ? error.expiresAt
-            : Date.now() + this.leaseTtlMs;
+            : runtimeClock.now() + this.leaseTtlMs;
           this.scheduleWake(personaId, expiresAt);
           return;
         }
@@ -3505,7 +3508,7 @@ export class PersonaFlowDispatcher {
     options: WaitForPersonaFlowDispatchOptions = {},
   ): Promise<PersonaFlowDispatchRecord> {
     assertSafeCollectionId(dispatchId);
-    const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
+    const deadline = options.timeoutMs === undefined ? undefined : runtimeClock.now() + options.timeoutMs;
     if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 0)) {
       throw new TypeError('timeoutMs must be a non-negative finite number.');
     }
@@ -3514,7 +3517,7 @@ export class PersonaFlowDispatcher {
       const record = await this.get(dispatchId);
       if (!record) throw new Error(`Persona Flow dispatch ${JSON.stringify(dispatchId)} not found.`);
       if (isTerminalDispatch(record.state)) return record;
-      const remaining = deadline === undefined ? 1_000 : deadline - Date.now();
+      const remaining = deadline === undefined ? 1_000 : deadline - runtimeClock.now();
       if (remaining <= 0) throw new PersonaFlowDispatchTimeoutError(dispatchId);
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -3522,7 +3525,7 @@ export class PersonaFlowDispatcher {
         const done = () => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          timer.clear();
           options.signal?.removeEventListener('abort', aborted);
           listeners.delete(done);
           if (listeners.size === 0) this.waiters.delete(dispatchId);
@@ -3531,15 +3534,15 @@ export class PersonaFlowDispatcher {
         const aborted = () => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          timer.clear();
           listeners.delete(done);
           if (listeners.size === 0) this.waiters.delete(dispatchId);
           reject(options.signal?.reason ?? new Error('Dispatch wait aborted.'));
         };
         listeners.add(done);
         this.waiters.set(dispatchId, listeners);
-        const timer = setTimeout(done, Math.min(remaining, 1_000));
-        timer.unref?.();
+        const timer = runtimeClock.setTimer(done, Math.min(remaining, 1_000));
+        timer.unref();
         options.signal?.addEventListener('abort', aborted, { once: true });
       });
     }
@@ -3594,7 +3597,7 @@ export class PersonaFlowDispatcher {
     this.quiescedPersonas.add(personaId);
     const timer = this.wakeTimers.get(personaId);
     if (timer) {
-      clearTimeout(timer);
+      timer.clear();
       this.wakeTimers.delete(personaId);
     }
     const control = this.pumps.get(personaId);

@@ -45,6 +45,7 @@ export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
 export const ISOLATED_TEST_FILES = [
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',
   '__tests__/enduringAgents/activityRuntime.test.ts',
+  '__tests__/enduringAgents/soak/personaSoak.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
 ];

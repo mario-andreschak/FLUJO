@@ -85,6 +85,23 @@ export default defineConfig([
     },
   },
   {
+    files: [
+      'src/backend/services/enduringAgents/activityRuntime.ts',
+      'src/backend/services/enduringAgents/personaDispatcher.ts',
+      'src/backend/services/enduringAgents/runtimeEvents.ts',
+      'src/backend/services/enduringAgents/runtimeLock.ts',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: 'Use the Persona runtime clock seam.' },
+        { selector: "CallExpression[callee.object.name='performance'][callee.property.name='now']", message: 'Use the Persona runtime clock seam.' },
+        { selector: "CallExpression[callee.name='setTimeout']", message: 'Use the Persona runtime clock seam.' },
+        { selector: "CallExpression[callee.name='setInterval']", message: 'Use the Persona runtime clock seam.' },
+      ],
+    },
+  },
+  {
     // CommonJS bootstrap scripts and subprocess fixtures must run before any
     // ESM/Jest resolution exists, so require() is the only option there.
     files: ['**/*.cjs', 'scripts/**/*.js'],
