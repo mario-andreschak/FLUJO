@@ -10,12 +10,12 @@ import {
   reconcileBehaviorMaintenanceRuns,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
 import { getBehaviorProposal } from '@/backend/services/enduringAgents/behaviorLearning';
-import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   getBehaviorRevision,
   getBehaviorMaintenanceRun,
   listBehaviorMaintenanceRuns,
   saveBehaviorMaintenanceRun,
+  savePersonaActivity,
 } from '@/backend/services/enduringAgents/store';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
@@ -23,7 +23,6 @@ import {
   type PersonaActivity,
   type PersonaActivityOutcomeResolution,
 } from '@/shared/types/enduringAgent';
-import { saveCollectionItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
 type MutableMaintenanceFeatures = {
@@ -99,7 +98,7 @@ function activity(input: {
 }
 
 async function persistActivity(value: PersonaActivity): Promise<void> {
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, value.id, value);
+  await savePersonaActivity(value);
 }
 
 describe('Behavior maintenance lifecycle', () => {

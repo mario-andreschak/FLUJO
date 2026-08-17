@@ -1,345 +1,235 @@
-/**
- * Per-Persona index sidecars to eliminate full-collection scans.
- * Issue #449: https://github.com/mario-andreschak/FLUJO/issues/449
- *
- * Instead of partitioning directories (which would require threading personaId
- * through ~50 call sites), we maintain a persisted index per collection:
- *
- *   db/persona-memories.index.json  → MemoryItemIndexEntry[]
- *   db/persona-mailbox.index.json   → PersonaMailboxItemIndexEntry[]
- *
- * Each entry stores (id, personaId, status, updatedAt) to filter which records
- * to load without scanning the entire collection.
- *
- * Index is lazy-rebuilt on first read if missing (backward-compatible).
- * Incremental updates happen within recordMutation() for saveMemoryItem(), etc.
- */
-
 import { promises as fs } from 'fs';
 import path from 'path';
 
-import type { MemoryItem, PersonaMailboxItem } from '@/shared/types/enduringAgent';
+import type {
+  MemoryItem,
+  PersonaActivity,
+  PersonaMailboxItem,
+  PersonaWorkItem,
+} from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
+import { listCollectionItems, runInWriteChain, writeFileAtomic } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
-import {
-  listCollectionItems,
-  runInWriteChain,
-  writeFileAtomic,
-} from '@/utils/storage/backend';
+
+import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import { invalidatePersonaRecordCache } from './personaRecordCache';
 
 const log = createLogger('backend/services/enduringAgents/indexing');
 
-/**
- * Index entry format: minimal metadata to filter records without loading them.
- * Keyed by (id) to enable O(1) update on save.
- */
-export interface MemoryItemIndexEntry {
+export interface BasePersonaIndexEntry {
   id: string;
   personaId: string;
-  /** Presence-tracking for quick active-item filtering. */
-  status?: 'active' | 'archived' | 'deleted';
   updatedAt: number;
+  status?: string;
+  kind?: string;
 }
-
-export interface PersonaMailboxItemIndexEntry {
-  id: string;
-  personaId: string;
-  /** Presence-tracking for quick unprocessed-item filtering. */
-  status?: 'pending' | 'completed' | 'abandoned';
-  updatedAt: number;
+export interface MemoryItemIndexEntry extends BasePersonaIndexEntry {
+  scope?: string;
+  trust?: string;
+  validFrom?: number | null;
+  validUntil?: number | null;
+  importance?: number;
+  confidence?: number;
 }
-
-export type IndexEntry = MemoryItemIndexEntry | PersonaMailboxItemIndexEntry;
-
-/**
- * Index container; versioned so schema changes don't corrupt on-disk files.
- */
-interface IndexFile<T extends IndexEntry> {
-  version: 1;
+export interface PersonaMailboxItemIndexEntry extends BasePersonaIndexEntry {
+  priority?: string;
+  notBefore?: number | null;
+}
+export type PersonaActivityIndexEntry = BasePersonaIndexEntry;
+export interface PersonaWorkItemIndexEntry extends BasePersonaIndexEntry {
+  priority?: string;
+  deadline?: number | null;
+}
+export type IndexEntry = MemoryItemIndexEntry | PersonaMailboxItemIndexEntry
+  | PersonaActivityIndexEntry | PersonaWorkItemIndexEntry;
+export interface IndexFile<T extends IndexEntry> {
+  version: 2;
+  built: true;
+  revision: number;
   generatedAt: number;
   entries: T[];
 }
 
-/**
- * Paths to index files.
- */
-function dbDir(): string {
-  return path.join(getWorkspaceDataDir(), 'db');
+type IndexedRecord = MemoryItem | PersonaMailboxItem | PersonaActivity | PersonaWorkItem;
+type IndexedCollection = typeof ENDURING_AGENT_COLLECTIONS.memoryItems
+  | typeof ENDURING_AGENT_COLLECTIONS.mailboxItems
+  | typeof ENDURING_AGENT_COLLECTIONS.activities
+  | typeof ENDURING_AGENT_COLLECTIONS.workItems;
+
+type Config<T extends IndexEntry = IndexEntry> = {
+  collection: IndexedCollection;
+  filename: string;
+  chainKey: string;
+  buildEntry: (value: unknown) => T | null;
+};
+
+function dbDir(): string { return path.join(getWorkspaceDataDir(), 'db'); }
+
+function objectEntry(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+function common(value: unknown): BasePersonaIndexEntry | null {
+  const item = objectEntry(value);
+  if (!item || typeof item.id !== 'string' || typeof item.personaId !== 'string') return null;
+  return {
+    id: item.id,
+    personaId: item.personaId,
+    updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : 0,
+    ...(typeof item.status === 'string' ? { status: item.status } : {}),
+    ...(typeof item.kind === 'string' ? { kind: item.kind } : {}),
+  };
+}
+function memoryEntry(value: unknown): MemoryItemIndexEntry | null {
+  const base = common(value); const item = objectEntry(value);
+  if (!base || !item) return null;
+  return {
+    ...base,
+    ...(typeof item.scope === 'string' ? { scope: item.scope } : {}),
+    ...(typeof item.trust === 'string' ? { trust: item.trust } : {}),
+    ...(typeof item.validFrom === 'number' || item.validFrom === null ? { validFrom: item.validFrom } : {}),
+    ...(typeof item.validUntil === 'number' || item.validUntil === null ? { validUntil: item.validUntil } : {}),
+    ...(typeof item.importance === 'number' ? { importance: item.importance } : {}),
+    ...(typeof item.confidence === 'number' ? { confidence: item.confidence } : {}),
+  };
+}
+function mailboxEntry(value: unknown): PersonaMailboxItemIndexEntry | null {
+  const base = common(value); const item = objectEntry(value);
+  if (!base || !item) return null;
+  return {
+    ...base,
+    ...(typeof item.priority === 'string' ? { priority: item.priority } : {}),
+    ...(typeof item.notBefore === 'number' || item.notBefore === null ? { notBefore: item.notBefore } : {}),
+  };
+}
+function activityEntry(value: unknown): PersonaActivityIndexEntry | null { return common(value); }
+function workItemEntry(value: unknown): PersonaWorkItemIndexEntry | null {
+  const base = common(value); const item = objectEntry(value);
+  if (!base || !item) return null;
+  return {
+    ...base,
+    ...(typeof item.priority === 'string' ? { priority: item.priority } : {}),
+    ...(typeof item.deadline === 'number' || item.deadline === null ? { deadline: item.deadline } : {}),
+  };
 }
 
-function memoryIndexPath(): string {
-  return path.join(dbDir(), 'persona-memories.index.json');
-}
+const CONFIGS: Record<IndexedCollection, Config> = {
+  [ENDURING_AGENT_COLLECTIONS.memoryItems]: {
+    collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
+    filename: 'persona-memories.index.json', chainKey: 'memory-index', buildEntry: memoryEntry,
+  },
+  [ENDURING_AGENT_COLLECTIONS.mailboxItems]: {
+    collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+    filename: 'persona-mailbox.index.json', chainKey: 'mailbox-index', buildEntry: mailboxEntry,
+  },
+  [ENDURING_AGENT_COLLECTIONS.activities]: {
+    collection: ENDURING_AGENT_COLLECTIONS.activities,
+    filename: 'persona-activities.index.json', chainKey: 'activity-index', buildEntry: activityEntry,
+  },
+  [ENDURING_AGENT_COLLECTIONS.workItems]: {
+    collection: ENDURING_AGENT_COLLECTIONS.workItems,
+    filename: 'persona-work-items.index.json', chainKey: 'work-item-index', buildEntry: workItemEntry,
+  },
+};
 
-function mailboxIndexPath(): string {
-  return path.join(dbDir(), 'persona-mailbox.index.json');
-}
-
-/**
- * Load index from disk, or empty array if not yet built.
- */
-async function loadIndex<T extends IndexEntry>(
-  indexPath: string,
-): Promise<IndexFile<T>> {
+function indexPath(config: Config): string { return path.join(dbDir(), config.filename); }
+async function loadIndex<T extends IndexEntry>(config: Config<T>): Promise<IndexFile<T> | null> {
   try {
-    const content = await fs.readFile(indexPath, 'utf-8');
-    const data = JSON.parse(content);
-    if (typeof data !== 'object' || Array.isArray(data)) {
-      throw new Error(`Invalid index file at ${indexPath}`);
-    }
-    if (!('version' in data) || data.version !== 1) {
-      throw new Error(`Unsupported index version at ${indexPath}`);
-    }
+    const data = JSON.parse(await fs.readFile(indexPath(config), 'utf-8')) as Partial<IndexFile<T>>;
+    if (data.version !== 2 || data.built !== true || !Number.isSafeInteger(data.revision)
+      || !Array.isArray(data.entries)) return null;
     return data as IndexFile<T>;
   } catch (error) {
-    // File doesn't exist or is malformed - return empty index
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return { version: 1, generatedAt: Date.now(), entries: [] };
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      log.warn(`Could not load ${config.collection} index; rebuilding.`, error);
     }
-    log.warn(`Could not load index from ${indexPath}, rebuilding`, error);
-    return { version: 1, generatedAt: Date.now(), entries: [] };
+    return null;
   }
 }
-
-/**
- * Build index from scratch by scanning entire collection.
- * Called once on startup or first read if index is missing.
- */
-async function rebuildIndex<T extends IndexEntry>(
-  collection: string,
-  indexPath: string,
-  buildEntry: (item: unknown) => T | null,
-  chainKey: string,
-): Promise<IndexFile<T>> {
-  return runInWriteChain(chainKey, async () => {
-    // Re-check within the write chain; another request may have built it.
-    const existing = await loadIndex<T>(indexPath);
-    if (existing.entries.length > 0) {
-      return existing;
-    }
-
-    log.info(`Rebuilding index for collection ${collection}`);
-    const items = await listCollectionItems<unknown>(collection);
-    const entries: T[] = [];
-
-    for (const item of items) {
-      try {
-        const entry = buildEntry(item);
-        if (entry) {
-          entries.push(entry);
-        }
-      } catch (error) {
-        // Silently skip items that fail to parse during index rebuild.
-        // The normal read path will isolate the bad item with better logging.
-        log.debug(`Skipping item during index rebuild`, error);
-      }
-    }
-
-    const index: IndexFile<T> = {
-      version: 1,
-      generatedAt: Date.now(),
-      entries: entries.sort((a, b) => a.id.localeCompare(b.id)),
-    };
-
-    // Write directly: this already runs inside the chain for `chainKey`, and
-    // runInWriteChain is NOT re-entrant — going through saveIndex here would
-    // queue behind the very task making the call and deadlock it forever.
-    await writeIndex(indexPath, index);
-    return index;
+async function writeIndex<T extends IndexEntry>(config: Config<T>, index: IndexFile<T>): Promise<void> {
+  await writeFileAtomic(indexPath(config), JSON.stringify(index, null, 2));
+}
+async function buildIndex<T extends IndexEntry>(config: Config<T>, revision: number): Promise<IndexFile<T>> {
+  const values = await listCollectionItems<unknown>(config.collection);
+  const entries = values.map(config.buildEntry).filter((entry): entry is T => entry !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return { version: 2, built: true, revision, generatedAt: Date.now(), entries };
+}
+async function getIndex<T extends IndexEntry>(config: Config<T>): Promise<IndexFile<T>> {
+  const loaded = await loadIndex(config);
+  if (loaded) return loaded;
+  return runInWriteChain(config.chainKey, async () => {
+    const current = await loadIndex(config);
+    if (current) return current;
+    const rebuilt = await buildIndex(config, 1);
+    await writeIndex(config, rebuilt);
+    return rebuilt;
   });
 }
 
-/** Persist index to disk atomically. Callers must hold the index write chain. */
-async function writeIndex<T extends IndexEntry>(
-  indexPath: string,
-  index: IndexFile<T>,
-): Promise<void> {
-  await writeFileAtomic(indexPath, JSON.stringify(index, null, 2));
+export const getMemoryIndex = (): Promise<IndexFile<MemoryItemIndexEntry>> =>
+  getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.memoryItems] as Config<MemoryItemIndexEntry>);
+export const getMailboxIndex = (): Promise<IndexFile<PersonaMailboxItemIndexEntry>> =>
+  getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.mailboxItems] as Config<PersonaMailboxItemIndexEntry>);
+export const getActivityIndex = (): Promise<IndexFile<PersonaActivityIndexEntry>> =>
+  getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.activities] as Config<PersonaActivityIndexEntry>);
+export const getWorkItemIndex = (): Promise<IndexFile<PersonaWorkItemIndexEntry>> =>
+  getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.workItems] as Config<PersonaWorkItemIndexEntry>);
+
+export async function syncIndexEntry(collection: IndexedCollection, record: IndexedRecord): Promise<void> {
+  const config = CONFIGS[collection];
+  await runInWriteChain(config.chainKey, async () => {
+    const current = await loadIndex(config) ?? await buildIndex(config, 0);
+    const entry = config.buildEntry(record);
+    if (!entry) throw new Error(`Cannot index ${collection} record.`);
+    current.entries = current.entries.filter((candidate) => candidate.id !== entry.id);
+    current.entries.push(entry);
+    current.entries.sort((a, b) => a.id.localeCompare(b.id));
+    current.revision += 1;
+    current.generatedAt = Date.now();
+    await writeIndex(config, current);
+  });
+  invalidatePersonaRecordCache(collection, record.personaId);
 }
 
-/**
- * Persist index to disk atomically within a write chain.
- * Called after rebuild or incremental update.
- */
-async function saveIndex<T extends IndexEntry>(
-  indexPath: string,
-  index: IndexFile<T>,
-  chainKey: string,
-): Promise<void> {
-  return runInWriteChain(chainKey, () => writeIndex(indexPath, index));
+export async function removeIndexEntry(collection: IndexedCollection, id: string): Promise<void> {
+  const config = CONFIGS[collection];
+  let personaId: string | undefined;
+  await runInWriteChain(config.chainKey, async () => {
+    const current = await loadIndex(config) ?? await buildIndex(config, 0);
+    personaId = current.entries.find((entry) => entry.id === id)?.personaId;
+    const entries = current.entries.filter((entry) => entry.id !== id);
+    if (entries.length === current.entries.length) return;
+    current.entries = entries;
+    current.revision += 1;
+    current.generatedAt = Date.now();
+    await writeIndex(config, current);
+  });
+  if (personaId) invalidatePersonaRecordCache(collection, personaId);
 }
 
-/**
- * Get or rebuild memory index.
- */
-export async function getMemoryIndex(): Promise<IndexFile<MemoryItemIndexEntry>> {
-  const indexPath = memoryIndexPath();
-  const existing = await loadIndex<MemoryItemIndexEntry>(indexPath);
-
-  // If index is populated, return it.
-  if (existing.entries.length > 0) {
-    return existing;
-  }
-
-  // Rebuild on first read if empty.
-  return rebuildIndex<MemoryItemIndexEntry>(
-    'persona-memories',
-    indexPath,
-    (item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        return null;
-      }
-      const obj = item as Record<string, unknown>;
-      const id = obj.id;
-      const personaId = obj.personaId;
-      const status = obj.status;
-      const updatedAt = obj.updatedAt;
-
-      if (typeof id !== 'string' || typeof personaId !== 'string') {
-        return null;
-      }
-
-      return {
-        id,
-        personaId,
-        ...(status ? { status: status as 'active' | 'archived' | 'deleted' } : {}),
-        updatedAt: typeof updatedAt === 'number' ? updatedAt : Date.now(),
-      };
-    },
-    'memory-index',
-  );
+export async function removePersonaIndexEntries(personaId: string): Promise<void> {
+  await Promise.all(Object.values(CONFIGS).map(async (config) => {
+    await runInWriteChain(config.chainKey, async () => {
+      const current = await loadIndex(config) ?? await buildIndex(config, 0);
+      const entries = current.entries.filter((entry) => entry.personaId !== personaId);
+      if (entries.length === current.entries.length) return;
+      current.entries = entries;
+      current.revision += 1;
+      current.generatedAt = Date.now();
+      await writeIndex(config, current);
+    });
+    invalidatePersonaRecordCache(config.collection, personaId);
+  }));
 }
 
-/**
- * Get or rebuild mailbox index.
- */
-export async function getMailboxIndex(): Promise<IndexFile<PersonaMailboxItemIndexEntry>> {
-  const indexPath = mailboxIndexPath();
-  const existing = await loadIndex<PersonaMailboxItemIndexEntry>(indexPath);
-
-  // If index is populated, return it.
-  if (existing.entries.length > 0) {
-    return existing;
-  }
-
-  // Rebuild on first read if empty.
-  return rebuildIndex<PersonaMailboxItemIndexEntry>(
-    'persona-mailbox',
-    indexPath,
-    (item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        return null;
-      }
-      const obj = item as Record<string, unknown>;
-      const id = obj.id;
-      const personaId = obj.personaId;
-      const status = obj.status;
-      const updatedAt = obj.updatedAt;
-
-      if (typeof id !== 'string' || typeof personaId !== 'string') {
-        return null;
-      }
-
-      return {
-        id,
-        personaId,
-        ...(status ? { status: status as 'pending' | 'completed' | 'abandoned' } : {}),
-        updatedAt: typeof updatedAt === 'number' ? updatedAt : Date.now(),
-      };
-    },
-    'mailbox-index',
-  );
-}
-
-/**
- * Update an index entry after a record is saved.
- * Called incrementally within recordMutation() to keep index in sync.
- */
-export async function updateMemoryIndex(
-  item: MemoryItem,
-): Promise<void> {
-  const indexPath = memoryIndexPath();
-  const index = await getMemoryIndex();
-
-  // Find or create entry.
-  let entry = index.entries.find((e) => e.id === item.id);
-  if (!entry) {
-    entry = {
-      id: item.id,
-      personaId: item.personaId,
-      status: item.status as 'active' | 'archived' | 'deleted' | undefined,
-      updatedAt: item.updatedAt,
-    };
-    index.entries.push(entry);
-  } else {
-    // Update existing entry.
-    entry.personaId = item.personaId;
-    entry.status = item.status as 'active' | 'archived' | 'deleted' | undefined;
-    entry.updatedAt = item.updatedAt;
-  }
-
-  // Keep sorted by id.
-  index.entries.sort((a, b) => a.id.localeCompare(b.id));
-  index.generatedAt = Date.now();
-
-  await saveIndex(indexPath, index, 'memory-index');
-}
-
-/**
- * Update an index entry after a mailbox item is saved.
- */
-export async function updateMailboxIndex(
-  item: PersonaMailboxItem,
-): Promise<void> {
-  const indexPath = mailboxIndexPath();
-  const index = await getMailboxIndex();
-
-  // Find or create entry.
-  let entry = index.entries.find((e) => e.id === item.id);
-  if (!entry) {
-    entry = {
-      id: item.id,
-      personaId: item.personaId,
-      status: item.status as 'pending' | 'completed' | 'abandoned' | undefined,
-      updatedAt: item.updatedAt,
-    };
-    index.entries.push(entry);
-  } else {
-    // Update existing entry.
-    entry.personaId = item.personaId;
-    entry.status = item.status as 'pending' | 'completed' | 'abandoned' | undefined;
-    entry.updatedAt = item.updatedAt;
-  }
-
-  // Keep sorted by id.
-  index.entries.sort((a, b) => a.id.localeCompare(b.id));
-  index.generatedAt = Date.now();
-
-  await saveIndex(indexPath, index, 'mailbox-index');
-}
-
-/**
- * Remove an entry from an index (e.g., on deletion).
- */
-export async function removeMemoryIndexEntry(id: string): Promise<void> {
-  const indexPath = memoryIndexPath();
-  const index = await getMemoryIndex();
-
-  index.entries = index.entries.filter((e) => e.id !== id);
-  index.generatedAt = Date.now();
-
-  await saveIndex(indexPath, index, 'memory-index');
-}
-
-/**
- * Remove an entry from mailbox index.
- */
-export async function removeMailboxIndexEntry(id: string): Promise<void> {
-  const indexPath = mailboxIndexPath();
-  const index = await getMailboxIndex();
-
-  index.entries = index.entries.filter((e) => e.id !== id);
-  index.generatedAt = Date.now();
-
-  await saveIndex(indexPath, index, 'mailbox-index');
-}
+// Compatibility exports for callers introduced in earlier phases.
+export const updateMemoryIndex = (item: MemoryItem): Promise<void> =>
+  syncIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, item);
+export const updateMailboxIndex = (item: PersonaMailboxItem): Promise<void> =>
+  syncIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, item);
+export const removeMemoryIndexEntry = (id: string): Promise<void> =>
+  removeIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, id);
+export const removeMailboxIndexEntry = (id: string): Promise<void> =>
+  removeIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, id);

@@ -51,13 +51,15 @@ import {
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
+  type BasePersonaIndexEntry,
+  getActivityIndex,
   getMailboxIndex,
   getMemoryIndex,
-  removeMailboxIndexEntry,
-  removeMemoryIndexEntry,
-  updateMailboxIndex,
-  updateMemoryIndex,
+  getWorkItemIndex,
+  removeIndexEntry,
+  syncIndexEntry,
 } from './indexing';
+import { loadPersonaRecords } from './personaRecordCache';
 import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
 import {
   UnsupportedEnduringAgentSchemaError,
@@ -177,6 +179,100 @@ function recordMutation<T>(
   // This is deliberately a logical key, not a captured filesystem path.
   // runInWriteChain qualifies it with the active workspace on every call.
   return runInWriteChain(`enduring-agent:${collection}/${id}`, task);
+}
+
+export interface PersonaRecordQueryOptions {
+  ids?: string[];
+  statuses?: string[];
+  kinds?: string[];
+  scopes?: string[];
+  trust?: string[];
+  priorities?: string[];
+  validAt?: number;
+  updatedSince?: number;
+  dueBefore?: number;
+  limit?: number;
+  offset?: number;
+}
+
+type QueryableIndexEntry = BasePersonaIndexEntry & {
+  scope?: string;
+  trust?: string;
+  priority?: string;
+  validFrom?: number | null;
+  validUntil?: number | null;
+  deadline?: number | null;
+};
+
+function selectPersonaIndexEntries<T extends QueryableIndexEntry>(
+  entries: T[],
+  personaId: string,
+  options: PersonaRecordQueryOptions,
+): T[] {
+  const offset = options.offset ?? 0;
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
+  if (!Number.isSafeInteger(offset) || offset < 0
+    || (!(limit === Number.POSITIVE_INFINITY) && (!Number.isSafeInteger(limit) || limit < 0))) {
+    throw new Error('Persona record offset and limit must be non-negative integers.');
+  }
+  const selected = entries.filter((entry) => entry.personaId === personaId
+    && (!options.ids || options.ids.includes(entry.id))
+    && (!options.statuses || (entry.status !== undefined && options.statuses.includes(entry.status)))
+    && (!options.kinds || (entry.kind !== undefined && options.kinds.includes(entry.kind)))
+    && (!options.scopes || (entry.scope !== undefined && options.scopes.includes(entry.scope)))
+    && (!options.trust || (entry.trust !== undefined && options.trust.includes(entry.trust)))
+    && (!options.priorities || (entry.priority !== undefined
+      && options.priorities.includes(entry.priority)))
+    && (options.updatedSince === undefined || entry.updatedAt >= options.updatedSince)
+    && (options.dueBefore === undefined || (entry.deadline !== undefined
+      && entry.deadline !== null && entry.deadline <= options.dueBefore))
+    && (options.validAt === undefined
+      || ((entry.validFrom === undefined || entry.validFrom === null || entry.validFrom <= options.validAt)
+        && (entry.validUntil === undefined || entry.validUntil === null
+          || entry.validUntil >= options.validAt))));
+  selected.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
+  return selected.slice(offset, offset + limit);
+}
+
+async function listIndexedPersonaRecords<T extends IdentifiedRecord>(options: {
+  personaId: string;
+  query?: PersonaRecordQueryOptions;
+  collection: string;
+  recordKind: string;
+  schema: ZodType<T>;
+  index: { revision: number; entries: QueryableIndexEntry[] };
+  tolerant?: boolean;
+}): Promise<T[]> {
+  const entries = selectPersonaIndexEntries(
+    options.index.entries,
+    options.personaId,
+    options.query ?? {},
+  );
+  const records = await loadPersonaRecords<T>({
+    collection: options.collection,
+    personaId: options.personaId,
+    revision: options.index.revision,
+    entries,
+    load: async (id) => {
+      try {
+        const record = await getRecord({
+          collection: options.collection,
+          id,
+          recordKind: options.recordKind,
+          schema: options.schema,
+        });
+        if (record && (record as T & { personaId?: string }).personaId !== options.personaId) {
+          throw new Error(`${options.recordKind} ${id} belongs to another Persona.`);
+        }
+        return record;
+      } catch (error) {
+        if (!options.tolerant || error instanceof UnsupportedEnduringAgentSchemaError) throw error;
+        log.warn(`Skipping invalid ${options.recordKind} ${id} while listing.`, error);
+        return null;
+      }
+    },
+  });
+  return records.filter((record): record is T => record !== null);
 }
 
 /**
@@ -1247,14 +1343,17 @@ export function getPersonaActivity(id: string): Promise<PersonaActivity | null> 
   });
 }
 
-export async function listPersonaActivities(personaId: string): Promise<PersonaActivity[]> {
+export async function listPersonaActivities(
+  personaId: string,
+  options?: PersonaRecordQueryOptions,
+): Promise<PersonaActivity[]> {
   assertSafeCollectionId(personaId);
-  const records = await listRecords({
+  return listIndexedPersonaRecords({
+    personaId, query: options,
     collection: ENDURING_AGENT_COLLECTIONS.activities,
-    recordKind: 'PersonaActivity',
-    schema: PersonaActivitySchema,
+    recordKind: 'PersonaActivity', schema: PersonaActivitySchema,
+    index: await getActivityIndex(),
   });
-  return records.filter((record) => record.personaId === personaId);
 }
 
 export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {
@@ -1270,6 +1369,7 @@ export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActi
       }
     }
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record.id, record);
+    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.activities, record);
     return record;
   });
 }
@@ -1283,14 +1383,17 @@ export function getPersonaWorkItem(id: string): Promise<PersonaWorkItem | null> 
   });
 }
 
-export async function listPersonaWorkItems(personaId: string): Promise<PersonaWorkItem[]> {
+export async function listPersonaWorkItems(
+  personaId: string,
+  options?: PersonaRecordQueryOptions,
+): Promise<PersonaWorkItem[]> {
   assertSafeCollectionId(personaId);
-  const records = await listRecords({
+  return listIndexedPersonaRecords({
+    personaId, query: options,
     collection: ENDURING_AGENT_COLLECTIONS.workItems,
-    recordKind: 'PersonaWorkItem',
-    schema: PersonaWorkItemSchema,
+    recordKind: 'PersonaWorkItem', schema: PersonaWorkItemSchema,
+    index: await getWorkItemIndex(),
   });
-  return records.filter((record) => record.personaId === personaId);
 }
 
 export function getPersonaAppGrant(id: string): Promise<PersonaAppGrant | null> {
@@ -1408,6 +1511,7 @@ export function savePersonaWorkItem(value: PersonaWorkItem): Promise<PersonaWork
     }
     await assertValidWorkItemReferences(record);
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, record.id, record);
+    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.workItems, record);
     return record;
   });
 }
@@ -1484,9 +1588,10 @@ export function activateBehaviorBindingRevision(options: {
 
 export function deletePersonaWorkItemRecord(id: string): Promise<void> {
   assertSafeCollectionId(id);
-  return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, () => (
-    deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id)
-  ));
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, async () => {
+    await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id);
+    await removeIndexEntry(ENDURING_AGENT_COLLECTIONS.workItems, id);
+  });
 }
 
 export function getMemoryItem(id: string): Promise<MemoryItem | null> {
@@ -1498,30 +1603,17 @@ export function getMemoryItem(id: string): Promise<MemoryItem | null> {
   });
 }
 
-export async function listMemoryItems(personaId: string): Promise<MemoryItem[]> {
+export async function listMemoryItems(
+  personaId: string,
+  options?: PersonaRecordQueryOptions,
+): Promise<MemoryItem[]> {
   assertSafeCollectionId(personaId);
-  // Phase 3 (Issue #449): Use per-Persona index instead of full-collection scan.
-  // Index is lazy-built on first read if missing (backward-compatible).
-  const index = await getMemoryIndex();
-  const entries = index.entries.filter((e) => e.personaId === personaId);
-
-  // Load only the records for this Persona (keyed by index entry id).
-  const itemIds = new Set(entries.map((e) => e.id));
-  const records = await Promise.all(
-    Array.from(itemIds).map((id) =>
-      getRecord({
-        collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
-        id,
-        recordKind: 'MemoryItem',
-        schema: MemoryItemSchema,
-      }),
-    ),
-  );
-
-  // Filter out any null results (deleted items) and sort by id for consistency.
-  return records
-    .filter((record): record is MemoryItem => record !== null)
-    .sort((a, b) => a.id.localeCompare(b.id));
+  return listIndexedPersonaRecords({
+    personaId, query: options,
+    collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
+    recordKind: 'MemoryItem', schema: MemoryItemSchema,
+    index: await getMemoryIndex(), tolerant: true,
+  });
 }
 
 export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
@@ -1543,7 +1635,7 @@ export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> 
   // this left its record permanently invisible to every listing as soon as any
   // other memory had populated the index — e.g. a Persona's factory-seeded
   // memories vanishing because an earlier Persona's memory built the index first.
-  await updateMemoryIndex(created);
+  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, created);
   return created;
 }
 
@@ -1587,8 +1679,7 @@ export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
     }
     await assertValidMemoryReferences(record);
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, record);
-    // Phase 2 (Issue #449): Update index sidecar after successful save.
-    await updateMemoryIndex(record);
+    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
     return record;
   });
 }
@@ -1602,30 +1693,17 @@ export function getPersonaMailboxItem(id: string): Promise<PersonaMailboxItem | 
   });
 }
 
-export async function listPersonaMailboxItems(personaId: string): Promise<PersonaMailboxItem[]> {
+export async function listPersonaMailboxItems(
+  personaId: string,
+  options?: PersonaRecordQueryOptions,
+): Promise<PersonaMailboxItem[]> {
   assertSafeCollectionId(personaId);
-  // Phase 3 (Issue #449): Use per-Persona index instead of full-collection scan.
-  // Index is lazy-built on first read if missing (backward-compatible).
-  const index = await getMailboxIndex();
-  const entries = index.entries.filter((e) => e.personaId === personaId);
-
-  // Load only the records for this Persona (keyed by index entry id).
-  const itemIds = new Set(entries.map((e) => e.id));
-  const records = await Promise.all(
-    Array.from(itemIds).map((id) =>
-      getRecord({
-        collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
-        id,
-        recordKind: 'PersonaMailboxItem',
-        schema: PersonaMailboxItemSchema,
-      }),
-    ),
-  );
-
-  // Filter out any null results (deleted items) and sort by id for consistency.
-  return records
-    .filter((record): record is PersonaMailboxItem => record !== null)
-    .sort((a, b) => a.id.localeCompare(b.id));
+  return listIndexedPersonaRecords({
+    personaId, query: options,
+    collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+    recordKind: 'PersonaMailboxItem', schema: PersonaMailboxItemSchema,
+    index: await getMailboxIndex(),
+  });
 }
 
 export function savePersonaMailboxItem(value: PersonaMailboxItem): Promise<PersonaMailboxItem> {
@@ -1641,6 +1719,7 @@ export function savePersonaMailboxItem(value: PersonaMailboxItem): Promise<Perso
       }
     }
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, record);
+    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
     return record;
   });
 }

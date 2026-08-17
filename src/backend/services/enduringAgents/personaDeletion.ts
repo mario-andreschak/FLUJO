@@ -38,6 +38,7 @@ import {
 import { listBehaviorProposals } from './behaviorLearning';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import { removePersonaIndexEntries } from './indexing';
 import { personaDeletionTombstoneId } from './ids';
 import { deletePersonaHome, inspectPersonaHome } from './namespaces';
 import { listPersonaFlowDispatches } from './personaDispatcher';
@@ -419,6 +420,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     deletePersonaHome(personaId),
     deletePersonaEmbeddings(personaId),
   ]);
+  await removePersonaIndexEntries(personaId);
 }
 
 export async function deletePersona(

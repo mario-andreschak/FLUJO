@@ -11,11 +11,11 @@ import {
   admitBehaviorMaintenanceRun,
   executeBehaviorMaintenanceRun,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
-import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   getBehaviorBinding,
   getBehaviorRevision,
   listBehaviorMaintenanceRuns,
+  savePersonaActivity,
 } from '@/backend/services/enduringAgents/store';
 import { FEATURES } from '@/config/features';
 import {
@@ -23,7 +23,6 @@ import {
   type PersonaActivityOutcomeResolution,
   type PersonaAutonomyLevel,
 } from '@/shared/types/enduringAgent';
-import { saveCollectionItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
 import { createPersonaFromRole } from './fixtures/personaFactory';
@@ -108,7 +107,7 @@ function activity(input: {
 }
 
 async function persistActivity(value: PersonaActivity): Promise<void> {
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, value.id, value);
+  await savePersonaActivity(value);
 }
 
 /**

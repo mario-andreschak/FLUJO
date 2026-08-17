@@ -685,8 +685,15 @@ export async function queryPersonaWorkItems(
 ): Promise<PersonaWorkItem[]> {
   EnduringAgentIdSchema.parse(personaId);
   const parsed = WorkItemListQuerySchema.parse(query) as PersonaWorkItemListQuery;
-  const records = await listStoredPersonaWorkItems(personaId);
-  const byId = new Map(records.map((item) => [item.id, item]));
+  const records = await listStoredPersonaWorkItems(personaId, {
+    statuses: parsed.statuses,
+    priorities: parsed.priorities,
+    dueBefore: parsed.dueBefore,
+  });
+  const dependencyRecords = parsed.includeBlockedByDependencies === false
+    ? await listStoredPersonaWorkItems(personaId)
+    : records;
+  const byId = new Map(dependencyRecords.map((item) => [item.id, item]));
   return records.filter((item) => (
     (!parsed.statuses?.length || parsed.statuses.includes(item.status))
     && (!parsed.priorities?.length || parsed.priorities.includes(item.priority))

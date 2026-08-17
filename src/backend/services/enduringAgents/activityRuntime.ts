@@ -41,7 +41,7 @@ import { createLogger } from '@/utils/logger';
 import { canonicalJson } from './behaviorRevisions';
 import { resolveEffectiveBehaviorRevision } from './behaviorFlowResolver';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { updateMailboxIndex } from './indexing';
+import { syncIndexEntry } from './indexing';
 import {
   hashPersonaInstructionContext,
   type PersonaActivitySnapshot,
@@ -514,6 +514,7 @@ async function saveActivity(
   const record = PersonaActivitySchema.parse(value) as PersonaActivity;
   await lock.assertOwned();
   await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record.id, record);
+  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.activities, record);
   return record;
 }
 
@@ -524,8 +525,7 @@ async function saveMailboxItem(
   const record = PersonaMailboxItemSchema.parse(value) as PersonaMailboxItem;
   await lock.assertOwned();
   await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, record);
-  // Phase 2 (Issue #449): Update index sidecar after successful save.
-  await updateMailboxIndex(record);
+  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
   return record;
 }
 
