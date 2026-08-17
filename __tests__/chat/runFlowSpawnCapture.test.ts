@@ -26,6 +26,7 @@ const EDGE = `${START}->${WORKER}`;
 // Configured per test: the tool_calls the start step's assistant turn carries.
 let assistantToolCalls: any[] = [];
 let targetType: string | undefined;
+let mixedBatch = false;
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const S = 'aaaaaaaa-start';
@@ -52,6 +53,10 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
             timestamp: 1,
             processNodeId: S,
           });
+          if (mixedBatch) {
+            sharedState.handoffRequested = { edgeId: E, targetNodeId: W };
+            return { sharedState, action: 'TOOL_CALL' };
+          }
           return { sharedState, action: E };
         }
         sharedState.lastResponse = 'joined results';
@@ -92,8 +97,24 @@ jest.mock('@/backend/execution/flow/validateFlowForRun', () => ({
   validateFlowForRun: jest.fn(async () => ({ issues: [], errorCount: 0, warningCount: 0, isRunnable: true })),
 }));
 
+jest.mock('@/backend/execution/flow/handlers/ModelHandler', () => ({
+  ModelHandler: {
+    processToolCalls: jest.fn(async ({ toolCalls }: any) => ({
+      success: true,
+      value: {
+        toolCallMessages: toolCalls.map((call: any) => ({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: `result:${call.id}`,
+        })),
+      },
+    })),
+  },
+}));
+
 import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -108,6 +129,8 @@ beforeEach(() => {
   conversationStates.clear();
   assistantToolCalls = [];
   targetType = undefined;
+  mixedBatch = false;
+  jest.clearAllMocks();
 });
 
 describe('runFlow handoff capture — queued Subflow jobs', () => {
@@ -248,6 +271,34 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
       targetNodeId: WORKER,
       tasks: [''],
     });
+  });
+
+  it('executes ordinary calls before committing a handoff from the same assistant turn', async () => {
+    mixedBatch = true;
+    assistantToolCalls = [
+      { id: 'ordinary-1', type: 'function', function: { name: 'mcp_read_issue', arguments: '{}' } },
+      spawnCall('handoff-1', 'continue after reading'),
+      { id: 'ordinary-2', type: 'function', function: { name: 'mcp_read_comments', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({
+      flowId: 'flow-1',
+      prompt: 'go',
+      mode: 'conversation',
+      flujo: true,
+      requireApproval: false,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(ModelHandler.processToolCalls).toHaveBeenCalledTimes(1);
+    expect((ModelHandler.processToolCalls as jest.Mock).mock.calls[0][0].toolCalls.map((call: any) => call.id))
+      .toEqual(['ordinary-1', 'ordinary-2']);
+
+    const resultIds = result.messages
+      .filter((message: any) => message.role === 'tool')
+      .map((message: any) => message.tool_call_id);
+    expect(resultIds).toEqual(['ordinary-1', 'ordinary-2', 'handoff-1']);
+    expect(result.sharedState.currentNodeId).toBe(WORKER);
   });
 
   it('keeps caller session keys aligned with their queued Subflow tasks', async () => {

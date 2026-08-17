@@ -89,6 +89,32 @@ import {
 
 const log = createLogger('backend/execution/flow/runFlow');
 
+const isHandoffToolCall = (call: OpenAI.ChatCompletionMessageFunctionToolCall): boolean =>
+  call.function.name === 'handoff' || call.function.name.startsWith('handoff_to_');
+
+/** Find the assistant batch which owns a staged handoff. Tool/approval results
+ * may already follow it, so callers must not assume it is the last message. */
+function findStagedHandoffAssistant(state: SharedState): FlujoChatMessage | undefined {
+  return [...state.messages].reverse().find((message) =>
+    message.role === 'assistant'
+    && requireFunctionToolCalls(message.tool_calls).some(isHandoffToolCall),
+  );
+}
+
+function unansweredOrdinaryCalls(
+  state: SharedState,
+  assistant: FlujoChatMessage,
+): OpenAI.ChatCompletionMessageFunctionToolCall[] {
+  const answeredIds = new Set(
+    state.messages
+      .filter((message) => message.role === 'tool' && !!(message as { tool_call_id?: string }).tool_call_id)
+      .map((message) => (message as { tool_call_id: string }).tool_call_id),
+  );
+  return requireFunctionToolCalls(assistant.tool_calls).filter(
+    (call) => !isHandoffToolCall(call) && !answeredIds.has(call.id),
+  );
+}
+
 // --- Add getFlowByName to flowService if it doesn't exist ---
 // (Moved here from chatCompletionService: flow-name resolution now lives in the
 // keystone, since the OpenAI route is a thin adapter on top of runFlow.)
@@ -2065,6 +2091,31 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           log.info(`[Debug Resume] Applying pending action "${currentAction}" for conv ${effectiveConvId}.`);
         }
 
+        // Resume a mixed ordinary-tools + handoff batch after an approval,
+        // debugger pause, or process restart. Execute only unanswered ordinary
+        // calls; once none remain, commit the staged edge without another model
+        // turn. Approval/debug pending lists retain precedence while parked.
+        if (
+          !actionReadyFromDebugPause
+          && sharedState.handoffRequested
+          && !sharedState.debugPendingToolCalls?.length
+          && sharedState.status !== 'awaiting_tool_approval'
+        ) {
+          const stagedAssistant = findStagedHandoffAssistant(sharedState);
+          if (stagedAssistant) {
+            const unanswered = unansweredOrdinaryCalls(sharedState, stagedAssistant);
+            currentAction = unanswered.length > 0
+              ? TOOL_CALL_ACTION
+              : sharedState.handoffRequested.edgeId;
+            actionReadyFromDebugPause = true;
+            log.info('[Staged Handoff] Resuming mixed tool batch', {
+              conversationId: effectiveConvId,
+              unansweredOrdinaryCalls: unanswered.length,
+              nextAction: currentAction,
+            });
+          }
+        }
+
         // Debug step granularity: execute tool calls a previous step paused before.
         if (!actionReadyFromDebugPause && sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
           const pendingCalls = sharedState.debugPendingToolCalls;
@@ -2304,7 +2355,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           && (singleStep || attachRequested || !!toolBreakpointName)
         ) {
           const attached = attachRequested ? consumeAttachRequest() : false;
-          const pendingCalls = currentAction === TOOL_CALL_ACTION ? producedToolCalls : undefined;
+          const pendingCalls = currentAction === TOOL_CALL_ACTION
+            ? requireFunctionToolCalls(producedToolCalls).filter((call) => !isHandoffToolCall(call))
+            : undefined;
           const debugHandoff = ![
             ERROR_ACTION,
             FINAL_RESPONSE_ACTION,
@@ -2468,9 +2521,18 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         if (currentAction === TOOL_CALL_ACTION) {
           log.info(`[Action Handling] Step ${internalIterations}: Handling TOOL_CALL_ACTION for conv ${effectiveConvId}`);
           log.info(`Tool call action received at step ${internalIterations} for conv ${effectiveConvId}`);
-          const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+          // In a staged handoff, approvals or prior tool results may follow the
+          // owning assistant turn. Locate that turn explicitly and execute only
+          // unanswered ordinary calls; handoff tools are control flow, never MCP
+          // work for ModelHandler.
+          const lastAssistantMsg = sharedState.handoffRequested
+            ? findStagedHandoffAssistant(sharedState)
+            : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
+          const ordinaryToolCalls = lastAssistantMsg
+            ? unansweredOrdinaryCalls(sharedState, lastAssistantMsg)
+            : [];
 
-          if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
+          if (lastAssistantMsg?.role === 'assistant' && ordinaryToolCalls.length > 0) {
             if (flujo) {
               // --- Graceful landing at the agentic-turn cap (issue #253) ---
               // The R/R tool loop is where per-node maxTurns is actually enforced
@@ -2479,7 +2541,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               // tools — answer the pending calls synthetically and force one
               // final text-only summary turn so the run "lands the plane".
               const capNodeId = sharedState.currentNodeId;
-              if (capNodeId && !sharedState.forceSummaryTurn) {
+              // A mixed batch has already selected a successor. Its ordinary
+              // calls are part of that committed operation and must not be
+              // discarded by the source node's agentic-turn landing cap.
+              if (capNodeId && !sharedState.forceSummaryTurn && !sharedState.handoffRequested) {
                 const turns = (nodeTurnCounts.get(capNodeId) ?? 0) + 1;
                 nodeTurnCounts.set(capNodeId, turns);
                 const cap = sharedState.turnBudgets?.[capNodeId] ?? DEFAULT_AGENTIC_MAX_TURNS;
@@ -2488,7 +2553,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   const nowTs = Date.now();
                   // Answer every still-pending tool call synthetically so the
                   // transcript stays well-formed (unanswered tool_calls 400).
-                  const cappedToolResults: FlujoChatMessage[] = lastAssistantMsg.tool_calls.map((tc) => ({
+                  const cappedToolResults: FlujoChatMessage[] = ordinaryToolCalls.map((tc) => ({
                     id: crypto.randomUUID(),
                     role: 'tool',
                     tool_call_id: tc.id,
@@ -2526,11 +2591,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 if (sharedState.onApprovalRequired === 'fail') {
                   // Headless fail-fast (#115): approval was explicitly required,
                   // but this run has no interactive approver. Execute nothing.
-                  const firstCall = lastAssistantMsg.tool_calls[0];
+                  const firstCall = ordinaryToolCalls[0];
                   const toolName = firstCall?.function.name ?? 'unknown';
                   log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
                   sharedState.status = 'error';
-                  sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                  sharedState.pendingToolCalls = ordinaryToolCalls;
                   sharedState.lastResponse = {
                     success: false,
                     error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
@@ -2546,7 +2611,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
                 log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
                 sharedState.status = 'awaiting_tool_approval';
-                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
+                sharedState.pendingToolCalls = ordinaryToolCalls;
                 sharedState.lastResponse = undefined;
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
@@ -2563,12 +2628,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 } catch (error) {
                   log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
                 }
-                emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
+                emit({ type: 'run:awaiting_approval', pendingToolCalls: ordinaryToolCalls });
                 break;
               } else {
-                log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
+                log.info(`[flujo=true, requireApproval=false] Processing ${ordinaryToolCalls.length} tools internally for conv ${effectiveConvId}`);
                 const toolProcessingResult = await processToolCallsRecoverably({
-                  toolCalls: lastAssistantMsg.tool_calls, toolNameMap: sharedState.toolNameMap, emit,
+                  toolCalls: ordinaryToolCalls, toolNameMap: sharedState.toolNameMap, emit,
                   conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
                   runId: logicalRunId,
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
@@ -2594,7 +2659,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 sharedState.messages.push(...toolResultMessagesWithTimestamp);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
-                await commitToolCheckpoint(storageKey, sharedState, lastAssistantMsg.tool_calls, 'completed', recoveryEmit);
+                await commitToolCheckpoint(storageKey, sharedState, ordinaryToolCalls, 'completed', recoveryEmit);
                 if (isMeetingTurnSilent(sharedState.meetingTurn)) {
                   sharedState.status = 'completed';
                   currentAction = FINAL_RESPONSE_ACTION;
@@ -2605,20 +2670,25 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   operation: 'tool',
                   phase: 'after',
                   nodeId: sharedState.currentNodeId,
-                  toolCalls: lastAssistantMsg.tool_calls,
-                  ...(toolNodeIdsFor(lastAssistantMsg.tool_calls)
-                    ? { toolNodeIds: toolNodeIdsFor(lastAssistantMsg.tool_calls) }
+                  toolCalls: ordinaryToolCalls,
+                  ...(toolNodeIdsFor(ordinaryToolCalls)
+                    ? { toolNodeIds: toolNodeIdsFor(ordinaryToolCalls) }
                     : {}),
                   nextOperation: 'model',
                 });
                 if (attachedAfterTool) break;
-                log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
-                continue;
+                if (sharedState.handoffRequested) {
+                  currentAction = sharedState.handoffRequested.edgeId;
+                  log.info(`[Staged Handoff] Ordinary tools completed; committing edge ${currentAction}.`);
+                } else {
+                  log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
+                  continue;
+                }
               }
             } else {
               // --- flujo=false: Handle internal vs external tools ---
               log.info(`[flujo=false] Tool call action received for conv ${effectiveConvId}. Checking tool types.`);
-              const allToolCalls = requireFunctionToolCalls(lastAssistantMsg.tool_calls);
+              const allToolCalls = ordinaryToolCalls;
               const internalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
               const externalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
 
@@ -2723,11 +2793,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             // each iteration), so its lifecycle is managed here instead.
             sharedState.handoffInput = undefined;
 
-            const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+            // Ordinary tool results may now sit after the assistant batch. Keep
+            // the handoff bound to the turn that originally selected this edge.
+            const lastAssistantMsg = sharedState.handoffRequested
+              ? findStagedHandoffAssistant(sharedState)
+              : [...sharedState.messages].reverse().find((message) => message.role === 'assistant');
             const handoffCallsForBoundary = lastAssistantMsg?.role === 'assistant'
-              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(call =>
-                  call.function.name === 'handoff' || call.function.name.startsWith('handoff_to_'),
-                )
+              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(isHandoffToolCall)
               : undefined;
 
             if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {

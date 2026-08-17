@@ -33,7 +33,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
@@ -122,7 +122,7 @@ export function _resolveCommandTimeoutMsForTests(value: unknown): number | undef
   return resolveCommandTimeoutMs(value);
 }
 
-type ShellKind = 'default' | 'pwsh' | 'bash' | 'cmd';
+type ShellKind = 'default' | 'pwsh' | 'powershell' | 'bash' | 'cmd';
 type EffectiveShell = 'pwsh' | 'powershell' | 'bash' | 'cmd' | 'sh';
 
 export interface BashToolProgress {
@@ -256,12 +256,57 @@ function resolveBashExecutable(): string | null {
   return cachedBashPath;
 }
 
+function windowsStorePwshCandidates(programFiles: string): string[] {
+  const windowsApps = path.join(programFiles, 'WindowsApps');
+  const packagePattern = /^Microsoft\.PowerShell_[^_]+_[^_]+__8wekyb3d8bbwe$/i;
+  const packageNames: string[] = [];
+
+  try {
+    packageNames.push(...fs.readdirSync(windowsApps, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && packagePattern.test(entry.name))
+      .map((entry) => entry.name));
+  } catch {
+    // WindowsApps is normally protected, even though executables in a known
+    // package directory remain runnable. Discover per-user packages below.
+  }
+
+  try {
+    const systemRoot = getEnvCaseInsensitive('SystemRoot') ?? getEnvCaseInsensitive('windir');
+    const regExe = systemRoot ? path.join(systemRoot, 'System32', 'reg.exe') : 'reg.exe';
+    const packageRepository = String.raw`HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages`;
+    const result = spawnSync(regExe, [
+      'query', packageRepository,
+      '/f', 'Microsoft.PowerShell_*__8wekyb3d8bbwe',
+      '/k', '/s',
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3_000,
+    });
+    if (result.status === 0 && result.stdout) {
+      const matches = result.stdout.match(/Microsoft\.PowerShell_[^_\\\s]+_[^_\\\s]+__8wekyb3d8bbwe/gi);
+      if (matches) packageNames.push(...matches);
+    }
+  } catch {
+    // Registry discovery is best-effort; MSI locations below remain available.
+  }
+
+  return [...new Set(packageNames)]
+    .sort((a, b) => {
+      const aVersion = a.split('_')[1] ?? '';
+      const bVersion = b.split('_')[1] ?? '';
+      return bVersion.localeCompare(aVersion, undefined, { numeric: true, sensitivity: 'base' });
+    })
+    .map((packageName) => path.join(windowsApps, packageName, 'pwsh.exe'));
+}
+
 function windowsPwshCandidates(): string[] {
   const localAppData = getEnvCaseInsensitive('LocalAppData');
   const programFiles = getEnvCaseInsensitive('ProgramFiles');
   return [
     ...(localAppData ? [path.join(localAppData, 'Microsoft', 'WindowsApps', 'pwsh.exe')] : []),
     ...(programFiles ? [
+      ...windowsStorePwshCandidates(programFiles),
       path.join(programFiles, 'PowerShell', '7', 'pwsh.exe'),
       path.join(programFiles, 'PowerShell', '7-preview', 'pwsh.exe'),
     ] : []),
@@ -430,6 +475,10 @@ interface BashSession {
   child: ChildProcess;
   output: string;
   truncated: boolean;
+  /** Output accumulated since the most recent wait result, for output="delta". */
+  waitOutput: string;
+  waitOutputTruncated: boolean;
+  waitOutputLimit: number;
   /** Characters that arrived on stderr (logging volume, not failure).  */
   stderrChars?: number;
   running: boolean;
@@ -1081,6 +1130,12 @@ interface SpawnPlan {
  * explicitly requested shell is reported before any user command is executed.
  */
 function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
+  if (shell === 'powershell') {
+    const resolved = resolveWindowsPowerShellExecutable();
+    return resolved
+      ? { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'powershell' }
+      : { file: '', args: [], useShell: false, effectiveShell: 'powershell', unavailableShell: 'powershell' };
+  }
   if (shell === 'pwsh') {
     const resolved = resolvePwshExecutable();
     if (resolved) {
@@ -1179,7 +1234,7 @@ function safeRequestedShellValue(input: unknown): unknown {
 
 function validateShell(input: unknown): ShellValidation {
   if (input === undefined) return { valid: true, shell: 'default' };
-  if (input === 'default' || input === 'pwsh' || input === 'bash' || input === 'cmd') {
+  if (input === 'default' || input === 'pwsh' || input === 'powershell' || input === 'bash' || input === 'cmd') {
     return { valid: true, shell: input };
   }
   return { valid: false, requestedShell: safeRequestedShellValue(input) };
@@ -1187,7 +1242,7 @@ function validateShell(input: unknown): ShellValidation {
 
 function invalidShellResult(requestedShell: unknown): CallToolResult {
   return textResult({
-    error: 'Invalid shell request. Expected one of: "default", "pwsh", "bash", or "cmd".',
+    error: 'Invalid shell request. Expected one of: "default", "pwsh", "powershell", "bash", or "cmd".',
     requestedShell,
   }, true);
 }
@@ -1484,6 +1539,12 @@ interface PtySpawnPlan {
 
 /** Resolve an interactive shell executable without wrapping a command string. */
 function buildPtySpawn(shell: ShellKind): PtySpawnPlan {
+  if (shell === 'powershell') {
+    const file = resolveWindowsPowerShellExecutable();
+    return file
+      ? { file, args: ['-NoLogo'], effectiveShell: 'powershell' }
+      : { file: '', args: [], effectiveShell: 'powershell', unavailableShell: 'powershell' };
+  }
   if (shell === 'pwsh') {
     const file = resolvePwshExecutable();
     return file
@@ -1608,8 +1669,8 @@ function createCommandProgressReporter(context?: BashExecutionContext, heartbeat
 export function bashToolDefinitions(): Tool[] {
   const shellProp = {
     type: 'string',
-    enum: ['default', 'pwsh', 'bash', 'cmd'],
-    description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Use "pwsh", "bash", or "cmd" for explicit syntax; unavailable explicit shells return an error.',
+    enum: ['default', 'pwsh', 'powershell', 'bash', 'cmd'],
+    description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Use "pwsh" (PowerShell 7), "powershell" (Windows PowerShell 5.1), "bash", or "cmd" for explicit syntax; unavailable explicit shells return an error.',
   };
   const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve from the FLUJO data directory; configured roots still apply.' };
   const envProp = {
@@ -1777,6 +1838,12 @@ export function bashToolDefinitions(): Tool[] {
             type: 'number',
             description:
               'Max seconds to wait (default 60; -1 waits until completion or cancellation; positive values are capped at 12 hours by default).',
+          },
+          output: {
+            type: 'string',
+            enum: ['delta', 'full', 'none'],
+            description:
+              'Output returned in the result: "delta" includes only output since the previous wait result, "full" includes all retained output (default), and "none" omits the output field. Every wait advances the delta boundary.',
           },
         },
         required: ['sessionId'],
@@ -2206,6 +2273,9 @@ async function startTool(
     child,
     output: '',
     truncated: false,
+    waitOutput: '',
+    waitOutputTruncated: false,
+    waitOutputLimit: maxOutputChars,
     running: true,
     exitCode: null,
     startedAt: Date.now(),
@@ -2219,24 +2289,33 @@ async function startTool(
     (v, t) => { session.output = v; session.truncated = t || session.truncated; },
     maxOutputChars,
   );
+  const appendSessionOutput = (chunk: string) => {
+    append(chunk);
+    if (!chunk) return;
+    session.waitOutput += chunk;
+    if (session.waitOutput.length > session.waitOutputLimit) {
+      session.waitOutput = session.waitOutput.slice(-session.waitOutputLimit);
+      session.waitOutputTruncated = true;
+    }
+  };
   const spool = createOutputSpool(outputFilePath);
   const decodeStdout = createStreamDecoder(encodingMode);
   const decodeStderr = createStreamDecoder(encodingMode);
   child.stdout?.on('data', (d: Buffer) => {
     const chunk = decodeStdout(d);
     touchSession(session);
-    append(chunk);
+    appendSessionOutput(chunk);
     spool.write(chunk);
   });
   child.stderr?.on('data', (d: Buffer) => {
     const chunk = decodeStderr(d);
     session.stderrChars = (session.stderrChars ?? 0) + chunk.length;
     touchSession(session);
-    append(chunk);
+    appendSessionOutput(chunk);
     spool.write(chunk);
   });
   child.on('error', (err: Error) => {
-    append(`\n${err.message}`);
+    appendSessionOutput(`\n${err.message}`);
     session.running = false;
     session.endedAt = Date.now();
     scheduleReap(session);
@@ -2293,7 +2372,29 @@ async function waitTool(
   const id = String(args?.sessionId ?? '');
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
+  const outputMode = args.output === undefined ? 'full' : args.output;
+  if (outputMode !== 'delta' && outputMode !== 'full' && outputMode !== 'none') {
+    return textResult({
+      error: 'Invalid wait output mode. Expected one of: "delta", "full", or "none".',
+      requestedOutput: args.output,
+    }, true);
+  }
   const timeoutMs = resolveCommandTimeoutMs(args.timeout);
+  const waitSnapshot = (extra: Record<string, unknown>): Record<string, unknown> => {
+    const delta = session.waitOutput;
+    const deltaTruncated = session.waitOutputTruncated;
+    session.waitOutput = '';
+    session.waitOutputTruncated = false;
+    const base = snapshot(session, extra);
+    if (outputMode === 'none') {
+      delete base.output;
+      return { ...base, outputMode };
+    }
+    if (outputMode === 'delta') {
+      return { ...base, output: delta, outputMode, deltaTruncated };
+    }
+    return { ...base, outputMode };
+  };
   const timing = (
     outcome: 'completed' | 'timedOut' | 'cancelled',
     waitedMs: number,
@@ -2318,9 +2419,9 @@ async function waitTool(
       ...(outcome === 'cancelled' ? { cancelled: true } : {}),
     };
   };
-  if (!session.running) return textResult(snapshot(session, timing('completed', 0)));
+  if (!session.running) return textResult(waitSnapshot(timing('completed', 0)));
   if (context?.signal?.aborted) {
-    return textResult(snapshot(session, timing('cancelled', 0)), true);
+    return textResult(waitSnapshot(timing('cancelled', 0)), true);
   }
 
   const startedAt = Date.now();
@@ -2364,7 +2465,7 @@ async function waitTool(
     poll();
   });
   return textResult(
-    snapshot(session, timing(outcome.kind, outcome.waitedMs)),
+    waitSnapshot(timing(outcome.kind, outcome.waitedMs)),
     outcome.kind === 'cancelled',
   );
 }

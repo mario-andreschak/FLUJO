@@ -616,7 +616,10 @@ export function repairDanglingToolCalls(
   const intentionallyPending =
     (state.status === 'paused_debug'
       && (!!state.debugPendingAction || !!state.debugPendingToolCalls?.length))
-    || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length);
+    || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length)
+    // A mixed tool batch keeps its handoff unanswered until all ordinary calls
+    // finish. runFlow resumes this persisted staged operation deterministically.
+    || !!state.handoffRequested;
   if (intentionallyPending) return [];
 
   const messages = state.messages ?? [];

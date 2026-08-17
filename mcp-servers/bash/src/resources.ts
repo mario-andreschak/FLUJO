@@ -100,7 +100,7 @@ const BASH_TERMINAL_APP_HTML = `<!doctype html>
 </head>
 <body>
   <div id="toolbar">
-    <select id="shell" aria-label="Shell"><option value="default">Automatic</option><option value="pwsh">PowerShell</option><option value="bash">Bash</option><option value="cmd">cmd</option></select>
+    <select id="shell" aria-label="Shell"><option value="default">Automatic</option><option value="pwsh">PowerShell 7</option><option value="powershell">Windows PowerShell 5.1</option><option value="bash">Bash</option><option value="cmd">cmd</option></select>
     <input id="cwd" aria-label="Working directory" value="." title="Working directory" />
     <button id="new" type="button">New</button>
     <button id="copy" type="button" title="Copy selection">Copy</button>

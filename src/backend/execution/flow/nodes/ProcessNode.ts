@@ -1711,28 +1711,29 @@ export class ProcessNode extends BaseNode {
     const nonHandoffToolCalls = execResult.toolCalls?.filter(
       tc => tc.name !== 'handoff' && !tc.name.startsWith('handoff_to_'),
     );
-    const mustProcessMaintenanceProposal = Boolean(
-      sharedState.executionAuthority?.proposePersonaMemoryMaintenance
-      && nonHandoffToolCalls?.some((call) => call.name === 'remember'),
-    );
-    if (handoffRequested && sharedState.handoffRequested && !mustProcessMaintenanceProposal) {
-      const edgeId = sharedState.handoffRequested.edgeId;
-      log.info(`Handoff requested via tool call, returning edge ID: ${edgeId}`);
-      // The service layer will clear sharedState.handoffRequested after transition
-      return edgeId; // Return the edgeId as the action for handoff
+    // A mixed response is a staged operation: execute every ordinary call,
+    // then commit the already-selected handoff. Keeping handoffRequested in
+    // SharedState makes approvals, debugger pauses, and process restarts able
+    // to resume without asking the model to choose the route again.
+    if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
+      log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION', {
+        stagedHandoff: handoffRequested && !!sharedState.handoffRequested,
+      });
+      return TOOL_CALL_ACTION;
     }
 
-    // If no handoff, check for other tool calls (excluding handoff tools already processed)
-    if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
-      log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION');
-      return TOOL_CALL_ACTION; // Return tool call action
+    if (handoffRequested && sharedState.handoffRequested) {
+      const edgeId = sharedState.handoffRequested.edgeId;
+      log.info(`Handoff-only turn detected, returning edge ID: ${edgeId}`);
+      // The service layer will clear sharedState.handoffRequested after transition.
+      return edgeId;
     }
 
     // --- Tier 2b: deterministic conditioned routing -------------------------
     // GATED: only runs when this node has at least one conditioned outgoing edge.
     // A node whose edges are all bare is byte-for-byte unchanged (model-decided
-    // handoff above; terminate on plain text below). Precedence: a model handoff
-    // tool call (handled above at :673) always wins; conditions decide otherwise.
+    // handoff above; terminate on plain text below). Precedence: a handoff-only
+    // model turn wins; mixed turns finish their ordinary tools first.
     const edgeConditions = node_params?.edgeConditions;
     if (edgeConditions && Object.keys(edgeConditions).length > 0) {
       const ordered = this.orderedControlEdges(node_params);

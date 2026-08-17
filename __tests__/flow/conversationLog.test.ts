@@ -649,6 +649,15 @@ describe('repairDanglingToolCalls (issue #256)', () => {
     expect(approvalState.messages).toHaveLength(1);
   });
 
+  it('does not repair a persisted handoff staged behind ordinary tools', () => {
+    const state = makeState('conv-repair-staged-handoff');
+    state.messages = [asstToolCall('a1', ['ordinary_1', 'handoff_1'])];
+    state.handoffRequested = { edgeId: 'edge-worker', targetNodeId: 'worker' };
+
+    expect(repairDanglingToolCalls(state)).toEqual([]);
+    expect(state.messages).toHaveLength(1);
+  });
+
   it('folds synthesized results into the projection via appendRawForState', async () => {
     const convId = 'conv-repair-projection';
     const state = makeState(convId);

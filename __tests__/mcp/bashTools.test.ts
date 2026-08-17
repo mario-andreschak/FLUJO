@@ -81,9 +81,12 @@ function mockNeverClosingChild(): void {
   mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
 }
 
-async function withResolvedPwsh(run: (executable: string) => Promise<void>): Promise<void> {
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-pwsh-'));
-  const executable = path.join(tempDir, isWin ? 'pwsh.EXE' : 'pwsh');
+async function withResolvedPowerShell(
+  commandName: 'pwsh' | 'powershell',
+  run: (executable: string) => Promise<void>,
+): Promise<void> {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `flujo-${commandName}-`));
+  const executable = path.join(tempDir, isWin ? `${commandName}.EXE` : commandName);
   const originalPath = process.env.PATH;
   const originalWinPath = process.env.Path;
   const originalPathExt = process.env.PATHEXT;
@@ -102,6 +105,10 @@ async function withResolvedPwsh(run: (executable: string) => Promise<void>): Pro
     _resetBashShellCacheForTests();
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function withResolvedPwsh(run: (executable: string) => Promise<void>): Promise<void> {
+  return withResolvedPowerShell('pwsh', run);
 }
 
 beforeEach(async () => {
@@ -138,10 +145,14 @@ describe('bash tool definitions', () => {
     const run = tools.find((tool) => tool.name === 'run');
     expect(run?.description).toContain('Run one command to completion');
     expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({
-      enum: ['default', 'pwsh', 'bash', 'cmd'],
+      enum: ['default', 'pwsh', 'powershell', 'bash', 'cmd'],
     }));
     expect(run?.inputSchema.properties?.timeout).toEqual(expect.objectContaining({
       description: expect.stringContaining('-1 disables it'),
+    }));
+    const wait = tools.find((tool) => tool.name === 'wait');
+    expect(wait?.inputSchema.properties?.output).toEqual(expect.objectContaining({
+      enum: ['delta', 'full', 'none'],
     }));
     expect(tools.find((tool) => tool.name === 'sleep')?.inputSchema).toEqual(expect.objectContaining({
       required: ['seconds'],
@@ -199,6 +210,26 @@ describe('bash run (foreground)', () => {
 });
 
 describe('bash shell selection (issues #225, #327)', () => {
+  it('runs an explicit Windows PowerShell request directly', async () => {
+    await withResolvedPowerShell('powershell', async (executable) => {
+      mockCompletedChild('powershell-foreground-marker');
+      const command = "Write-Output 'powershell-foreground-marker'";
+      const r = await bashCallTool('run', { command, shell: 'powershell' });
+
+      expect(r.isError).toBeUndefined();
+      expect(parse(r)).toEqual(expect.objectContaining({
+        shell: 'powershell',
+        exitCode: 0,
+        output: 'powershell-foreground-marker',
+      }));
+      expect(mockedSpawn).toHaveBeenCalledWith(
+        executable,
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
+        expect.objectContaining({ shell: false })
+      );
+    });
+  });
+
   it('runs an explicit foreground pwsh request directly with PowerShell arguments', async () => {
     await withResolvedPwsh(async (executable) => {
       mockCompletedChild('pwsh-foreground-marker');
@@ -683,6 +714,46 @@ describe('bash background sessions', () => {
     const ids = (list.sessions as Array<{ sessionId: string }>).map((s) => s.sessionId);
     expect(ids).toContain(start.sessionId);
   }, 20000);
+
+  it('supports full, delta, and no-output wait results', async () => {
+    mockCompletedChild('wait-output-marker');
+    const started = parse(await bashCallTool('start', { command: 'wait-output' }));
+    const sessionId = started.sessionId as string;
+
+    const delta = parse(await bashCallTool('wait', { sessionId, timeout: 10, output: 'delta' }));
+    expect(delta).toEqual(expect.objectContaining({
+      output: 'wait-output-marker',
+      outputMode: 'delta',
+      deltaTruncated: false,
+    }));
+
+    const nextDelta = parse(await bashCallTool('wait', { sessionId, output: 'delta' }));
+    expect(nextDelta.output).toBe('');
+
+    const full = parse(await bashCallTool('wait', { sessionId, output: 'full' }));
+    expect(full).toEqual(expect.objectContaining({
+      output: 'wait-output-marker',
+      outputMode: 'full',
+    }));
+
+    const none = parse(await bashCallTool('wait', { sessionId, output: 'none' }));
+    expect(none.outputMode).toBe('none');
+    expect(none).not.toHaveProperty('output');
+  });
+
+  it('rejects an invalid wait output mode', async () => {
+    mockCompletedChild('invalid-mode-marker');
+    const started = parse(await bashCallTool('start', { command: 'invalid-mode' }));
+    const result = await bashCallTool('wait', {
+      sessionId: started.sessionId as string,
+      output: 'recent',
+    });
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual(expect.objectContaining({
+      error: expect.stringContaining('Invalid wait output mode'),
+      requestedOutput: 'recent',
+    }));
+  });
 
   it('streams background output while wait observes the session', async () => {
     mockCompletedChild('background-progress-marker');
