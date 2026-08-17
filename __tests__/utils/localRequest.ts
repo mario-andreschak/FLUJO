@@ -38,7 +38,6 @@ export interface LocalRequestOptions {
  * Returns `any` so it can stand in for `NextRequest`/`Request` in the existing
  * (already `as any`-cast) handler-unit fixtures without type friction.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function makeLocalRequest(options: LocalRequestOptions = {}): any {
   const {
     body,

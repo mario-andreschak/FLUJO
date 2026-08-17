@@ -137,7 +137,6 @@ async function pollResumedRecord(
       diagnostic: 'process-restart-resumed',
     });
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (record.expiresAt !== undefined && Date.now() >= record.expiresAt) {
         await patchRemoteTaskRecord(record.recordId, {

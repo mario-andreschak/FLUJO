@@ -71,6 +71,7 @@ export function useEntityDeepLink({
     if (consume) {
       router.replace(replacePath ?? window.location.pathname);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentionally keyed on `ready` only; react-hooks/exhaustive-deps is off
+    // project-wide, so no disable directive is needed here.
   }, [ready]);
 }

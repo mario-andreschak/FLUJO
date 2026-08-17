@@ -16,7 +16,6 @@ const makeDeps = () => {
     saveState: jest.fn(async (patch: Partial<PlannedExecutionState>) => {
       state = { ...state, ...patch };
     }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onFire: jest.fn(async (_payload: any) => ({ status: 'completed' as const })),
     onError: jest.fn(),
   };

@@ -473,15 +473,10 @@ interface TerminalSession {
 // Process-global so all Next.js module-graph instances share one session table
 // (same rationale as __mcp_clients in index.ts) and the exit-cleanup runs once.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_bash_sessions: Map<string, BashSession> | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_terminal_sessions: Map<string, TerminalSession> | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_bash_foreground_children: Set<ChildProcess> | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_bash_cleanup_registered: boolean | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_bash_sweep_timer: NodeJS.Timeout | undefined;
 }
 
@@ -1600,17 +1595,12 @@ function createCommandProgressReporter(context?: BashExecutionContext, heartbeat
       stopped = true;
       clearInterval(heartbeat);
       flush();
-      let timer: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          chain,
-          new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, 1_000);
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      // The tool result must not overtake its final progress notification.
+      // `chain` already catches reporter failures, so awaiting it cannot turn a
+      // notification failure into a hung command. The previous one-second
+      // escape hatch let the client tear down its progress handler first,
+      // intermittently dropping the final output chunk (issue #457).
+      await chain;
     },
   };
 }
@@ -2407,16 +2397,15 @@ async function sleepTool(
   progress.push(`[sleeping for ${seconds}s]`);
   const outcome = await new Promise<{ slept: boolean; elapsedMs: number }>((resolve) => {
     let settled = false;
-    let timer: NodeJS.Timeout | undefined;
     const finish = (slept: boolean) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       context?.signal?.removeEventListener('abort', onAbort);
       resolve({ slept, elapsedMs: Date.now() - startedAt });
     };
     const onAbort = () => finish(false);
-    timer = setTimeout(() => finish(true), requestedMs);
+    const timer = setTimeout(() => finish(true), requestedMs);
     if (context?.signal?.aborted) onAbort();
     else context?.signal?.addEventListener('abort', onAbort, { once: true });
   });

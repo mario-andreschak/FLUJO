@@ -69,6 +69,63 @@ interface WireFailure {
 type WireResponse = WireSuccess | WireFailure;
 type ExitResult = { code: number | null; signal: NodeJS.Signals | null };
 
+/**
+ * How long a freshly spawned Persona child gets to print its `ready` line
+ * (issue #457).
+ *
+ * The child transpiles the whole enduringAgents dependency graph on startup,
+ * so the budget is dominated by machine speed, not by product behaviour. It
+ * used to be a bare `10_000` literal, which turned every slow CI runner into a
+ * "flaky test". Keep it explicit, generous, and overridable per environment.
+ */
+export const READINESS_TIMEOUT_MS = Number(
+  process.env.FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS ?? 60_000,
+);
+
+/**
+ * Every child this module has spawned and not yet reaped. A readiness timeout
+ * used to leak the child: `startPersonaProcess` threw before returning a
+ * client, so the test's afterEach never saw it and the orphan kept burning CPU
+ * for the rest of the run — making every subsequent test slower and more
+ * likely to time out in turn.
+ */
+const liveChildren = new Set<ChildProcess>();
+let sweeperInstalled = false;
+
+function trackChild(child: ChildProcess): void {
+  liveChildren.add(child);
+  child.once('exit', () => liveChildren.delete(child));
+  if (sweeperInstalled) return;
+  sweeperInstalled = true;
+  process.once('exit', () => {
+    for (const orphan of liveChildren) {
+      try {
+        orphan.kill('SIGKILL');
+      } catch {
+        // Best effort: the process is already exiting.
+      }
+    }
+    liveChildren.clear();
+  });
+}
+
+/** Kill anything still running. Safe to call from an afterAll hook. */
+export function killOrphanedPersonaChildren(): number {
+  let killed = 0;
+  for (const orphan of [...liveChildren]) {
+    if (orphan.exitCode === null && orphan.signalCode === null) {
+      try {
+        orphan.kill('SIGKILL');
+        killed += 1;
+      } catch {
+        // Already gone.
+      }
+    }
+    liveChildren.delete(orphan);
+  }
+  return killed;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, description: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   return Promise.race([
@@ -76,7 +133,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, description: str
       if (timer) clearTimeout(timer);
     }),
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Timed out waiting for ${description}.`)), timeoutMs);
+      // The budget is part of the message: withTimeout is shared by readiness,
+      // reply and exit waits, so without it every timeout looks identical in a
+      // CI log.
+      timer = setTimeout(
+        () => reject(new Error(`Timed out waiting for ${description} after ${timeoutMs} ms.`)),
+        timeoutMs,
+      );
       timer.unref();
     }),
   ]);
@@ -135,6 +198,8 @@ export async function startPersonaProcess(
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  trackChild(child);
+  const spawnedAt = Date.now();
   const exited = exitWaiter(child);
   const pending = new Map<number, {
     resolve: (value: unknown) => void;
@@ -193,13 +258,31 @@ export async function startPersonaProcess(
     pending.clear();
   });
 
-  await withTimeout(ready, 10_000, 'Persona child readiness');
-
   const waitForExit = (timeoutMs = 5_000) => withTimeout(
     exited,
     timeoutMs,
     `Persona child ${child.pid} to exit`,
   );
+
+  try {
+    await withTimeout(ready, READINESS_TIMEOUT_MS, `Persona child ${child.pid} readiness`);
+  } catch (error) {
+    // Never leave the child behind: nothing else holds a reference to it yet.
+    lines.close();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await waitForExit(2_000).catch(() => undefined);
+    liveChildren.delete(child);
+    const elapsedMs = Date.now() - spawnedAt;
+    const tail = stderr.split(/\r?\n/).filter(Boolean).slice(-20).join('\n');
+    throw Object.assign(
+      new Error(
+        `Persona child ${child.pid} never became ready (elapsed ${elapsedMs} ms, budget ${READINESS_TIMEOUT_MS} ms; `
+        + 'override with FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS).'
+        + `${tail ? `\nChild stderr tail:\n${tail}` : '\nThe child produced no stderr output.'}`,
+      ),
+      { cause: error },
+    );
+  }
 
   const request = <T = unknown>(
     command: PersonaProcessCommand,

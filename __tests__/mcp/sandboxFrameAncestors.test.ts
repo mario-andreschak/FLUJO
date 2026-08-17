@@ -25,7 +25,6 @@ function loadSandboxModule(env: Record<string, string | undefined> = {}): Sandbo
       else process.env[key] = value;
     }
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       mod = require('@/backend/mcpApps/sandboxServer') as SandboxModule;
       // Touch the runtime state while the env is still in place.
       mod.getRegisteredSandboxHostOrigins();

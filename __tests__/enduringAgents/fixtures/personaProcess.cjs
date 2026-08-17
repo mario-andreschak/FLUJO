@@ -1,10 +1,64 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const ts = require('typescript');
 const Module = require('module');
+
+// ---------------------------------------------------------------------------
+// On-disk transpile cache (issue #457).
+//
+// This fixture re-transpiled the entire enduringAgents dependency graph from
+// scratch on every spawn, and the suite spawns eight children. That startup
+// cost — not any product behaviour — is what made the readiness wait time out
+// under CPU contention. Caching the emitted JavaScript by content hash makes
+// every spawn after the first one nearly free, and is shared across the whole
+// run (and across runs on the same machine).
+// ---------------------------------------------------------------------------
+const transpileCacheDir = process.env.FLUJO_PERSONA_TRANSPILE_CACHE_DIR
+  || path.join(os.tmpdir(), `flujo-persona-transpile-cache-ts${ts.version}`);
+let transpileCacheUsable = true;
+try {
+  fs.mkdirSync(transpileCacheDir, { recursive: true });
+} catch {
+  transpileCacheUsable = false;
+}
+
+function transpileCached(variant, filename, source, compilerOptions) {
+  if (!transpileCacheUsable) {
+    return ts.transpileModule(source, { compilerOptions, fileName: filename }).outputText;
+  }
+  const key = crypto
+    .createHash('sha1')
+    .update(variant)
+    .update('\0')
+    .update(source)
+    .digest('hex');
+  const cacheFile = path.join(transpileCacheDir, `${variant}-${key}.js`);
+  try {
+    return fs.readFileSync(cacheFile, 'utf8');
+  } catch {
+    // Cache miss: fall through and compile.
+  }
+  const outputText = ts.transpileModule(source, { compilerOptions, fileName: filename }).outputText;
+  // Write via a unique temp file so concurrent children can never observe a
+  // half-written cache entry.
+  const tempFile = `${cacheFile}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, outputText, 'utf8');
+    fs.renameSync(tempFile, cacheFile);
+  } catch {
+    try {
+      fs.rmSync(tempFile, { force: true });
+    } catch {
+      // The cache is an optimisation; never fail the child over it.
+    }
+  }
+  return outputText;
+}
 
 const repositoryRoot = process.cwd();
 const stdioOAuthDist = path.join(repositoryRoot, 'node_modules', 'mcp-stdio-oauth', 'dist');
@@ -31,26 +85,20 @@ require.extensions['.js'] = function transpileSelectedEsm(module, filename) {
   if (!filename.startsWith(stdioOAuthDist + path.sep)) {
     return originalJavaScriptLoader(module, filename);
   }
-  const outputText = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: {
-      allowJs: true,
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  }).outputText;
+  const outputText = transpileCached('js', filename, fs.readFileSync(filename, 'utf8'), {
+    allowJs: true,
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    esModuleInterop: true,
+  });
   module._compile(outputText, filename);
 };
 require.extensions['.ts'] = function transpileTypeScript(module, filename) {
-  const outputText = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  }).outputText;
+  const outputText = transpileCached('ts', filename, fs.readFileSync(filename, 'utf8'), {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    esModuleInterop: true,
+  });
   module._compile(outputText, filename);
 };
 
@@ -62,6 +110,12 @@ const enduringAgents = require(path.join(
   'src/backend/services/enduringAgents/index.ts',
 ));
 const { flowService } = require(path.join(repositoryRoot, 'src/backend/services/flow/index.ts'));
+const {
+  initializePersonaRuntimeLockProcessIdentity,
+} = require(path.join(
+  repositoryRoot,
+  'src/backend/services/enduringAgents/runtimeLock.ts',
+));
 const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
 const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
 const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
@@ -211,4 +265,28 @@ input.on('line', async (line) => {
   }
 });
 
-process.stdout.write(`${JSON.stringify({ type: 'ready', pid: process.pid })}\n`);
+async function announceReady() {
+  // Importing the graph is not sufficient readiness on Windows: Persona lock
+  // acquisition lazily launches PowerShell to establish the process birth
+  // marker. Retry transient startup probes *before* advertising readiness so
+  // the first lock-taking command does not race OS identity setup (issue #457).
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try {
+      await initializePersonaRuntimeLockProcessIdentity();
+      break;
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  process.stdout.write(`${JSON.stringify({ type: 'ready', pid: process.pid })}\n`);
+}
+
+void announceReady().catch((error) => {
+  process.stderr.write(`Persona child initialization failed: ${
+    error instanceof Error ? error.stack ?? error.message : String(error)
+  }\n`);
+  input.close();
+  process.exitCode = 1;
+});

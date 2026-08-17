@@ -1,0 +1,38 @@
+{
+  "$comment": [
+    "Published test-execution baseline (issue #457). scripts/verify-test-baseline.cjs",
+    "compares a `jest --json` run against these minimums and fails when fewer suites or",
+    "tests execute than recorded, which is how a test file that silently stopped running",
+    "(parse error, unmatched glob, skipped suite) is caught.",
+    "minSuites was measured with `jest --listTests --exclude-isolated-suites` on top of",
+    "commit b9379f75 (686 collected suites in total, minus the 4 isolated ones).",
+    "minTests is null until the first known-good full CI run records it with",
+    "`npm run verify:test-baseline -- --stage=ci --results=jest-results.json --update`.",
+    "`quarantined` lists suites that are known-red/flaky for reasons unrelated to #457;",
+    "they are reported as warnings instead of failures so the gate is usable from day one.",
+    "Removing an entry from `quarantined` is the way to make its suite blocking again."
+  ],
+  "stages": {
+    "ci": {
+      "description": "npm run test:ci — both Jest projects, isolated process-boundary suites excluded.",
+      "minSuites": 682,
+      "minTests": null
+    },
+    "isolated": {
+      "description": "npm run test:isolated — child-process suites, serial, dedicated CI job.",
+      "minSuites": 4,
+      "minTests": null
+    }
+  },
+  "quarantined": [
+    "__tests__/chat/conversationContentSearch.test.ts",
+    "__tests__/mcp/browserCaptureRecording.test.ts",
+    "__tests__/mcp/browserAudioStream.test.ts",
+    "__tests__/workspace/routeCoverage.test.ts",
+    "__tests__/snapshot/ShadowRepoService.test.ts",
+    "__tests__/frontend/components/ExperimentalFeatures.test.tsx",
+    "__tests__/enduringAgents/activityRouting.test.ts",
+    "__tests__/enduringAgents/personaDispatcher.test.ts",
+    "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+  ]
+}

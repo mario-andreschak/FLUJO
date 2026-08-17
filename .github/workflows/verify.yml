@@ -1,0 +1,114 @@
+# Pull-request verification (issue #457).
+#
+# Before this workflow existed no CI job ran `npm test`, `tsc --noEmit` or
+# `eslint` on a pull request: two test files that could not even be parsed were
+# merged to main and stayed broken. These jobs are the gate that makes a
+# non-executing test file impossible to miss.
+#
+# Ask a maintainer to mark `typecheck`, `lint`, `test` and `test-isolated` as
+# required status checks in the branch protection rules for `main`.
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      # tsconfig.json includes __tests__/, so this also type-checks the suite.
+      # It stops after the first fatal syntax error, which is why the Jest run
+      # below (and __tests__/meta/parseAllTestFiles.test.ts) is the
+      # authoritative "everything parses" gate.
+      - run: npm run typecheck
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
+      - run: npm run lint:all
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      # Jest's own exit code is deliberately not the gate: the baseline script
+      # below is, because it distinguishes "a quarantined flake failed" from
+      # "a suite stopped executing". It still records the raw results.
+      - name: Run the suite
+        id: jest
+        continue-on-error: true
+        run: npm run test:ci
+      - name: Verify the published test baseline
+        run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
+      - name: Upload Jest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-results-ci
+          path: jest-results.json
+          if-no-files-found: warn
+
+  test-isolated:
+    name: test-isolated
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      # The child-process suites run serially on their own runner so they never
+      # compete with the main run's Jest workers for CPU.
+      - name: Run the process-boundary suites
+        id: jest
+        continue-on-error: true
+        env:
+          # Hosted runners are slower than a developer laptop; the harness
+          # honours this override instead of a hardcoded budget.
+          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
+        run: npm run test:isolated
+      - name: Verify the published test baseline
+        run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
+      - name: Upload Jest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-results-isolated
+          path: jest-results-isolated.json
+          if-no-files-found: warn

@@ -24,9 +24,7 @@ jest.setTimeout(60000);
 let tmpDir: string;
 
 function clearGlobalEncryptionState(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_server_dek = undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_encryption_sessions = undefined;
 }
 

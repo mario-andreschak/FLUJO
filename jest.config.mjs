@@ -3,9 +3,11 @@
 // host FLUJO repository's Next/Jest toolchain when their own install was absent.
 import nextJest from "./node_modules/next/jest.js";
 import {
+  isolatedTestPathIgnorePatterns,
   jsdomTestMatch,
   nodeTestMatch,
   nodeTestPathIgnorePatterns,
+  shouldExcludeIsolatedSuites,
 } from "./jest.testMatch.mjs";
 
 // next/jest wires up the SWC transform (so .ts/.tsx need no extra toolchain),
@@ -110,10 +112,20 @@ const jsdomProject = {
 async function buildConfig() {
   const node = await createJestConfig(nodeProject)();
   const jsdom = await createJestConfig(jsdomProject)();
+  // Issue #457: the CI "test" job hands the child-process suites to a separate
+  // serial job, so they neither flake under worker contention nor slow the
+  // main run. Local `npm test` is unaffected unless the switch is set.
+  const excludeIsolated = shouldExcludeIsolatedSuites();
   for (const project of [node, jsdom]) {
     project.transformIgnorePatterns = allowEsmOnlyPackages(
       project.transformIgnorePatterns,
     );
+    if (excludeIsolated) {
+      project.testPathIgnorePatterns = [
+        ...(project.testPathIgnorePatterns ?? []),
+        ...isolatedTestPathIgnorePatterns,
+      ];
+    }
   }
   return {
     projects: [node, jsdom],

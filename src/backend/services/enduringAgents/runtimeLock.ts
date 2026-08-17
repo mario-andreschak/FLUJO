@@ -392,6 +392,18 @@ async function getOwnProcessBirthMarkerV2(): Promise<string | null> {
   return marker;
 }
 
+/**
+ * Establish and cache this process's fail-closed birth identity before a
+ * readiness boundary is advertised (issue #457).
+ *
+ * Runtime locks still call the private lookup themselves. This initializer is
+ * intentionally narrow: subprocess bootstraps can make "ready" truthful
+ * without exposing the marker or weakening PID-reuse protection.
+ */
+export async function initializePersonaRuntimeLockProcessIdentity(): Promise<void> {
+  await getOwnProcessBirthMarkerV2();
+}
+
 async function getProcessBirthMarker(pid: number): Promise<string | null> {
   if (pid === process.pid) return getOwnProcessBirthMarkerV2();
   const cached = processBirthCache.get(pid);

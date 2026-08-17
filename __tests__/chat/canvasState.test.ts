@@ -64,7 +64,7 @@ describe('openCanvasApp', () => {
   });
 
   it('re-opening an existing key refreshes payload without duplicating', () => {
-    let s = open(emptyCanvasState, 'fs', 'ui://a', 1, { resultContent: 'v1' });
+    const s = open(emptyCanvasState, 'fs', 'ui://a', 1, { resultContent: 'v1' });
     const r = openCanvasApp(s, { serverName: 'fs', uri: 'ui://a', resultContent: 'v2' }, 5);
     expect(r.state.order).toEqual(['fs::ui://a']);
     expect(r.state.entries['fs::ui://a'].latestResultContent).toBe('v2');

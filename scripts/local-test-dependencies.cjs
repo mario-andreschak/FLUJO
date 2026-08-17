@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Node bootstrap script must run before ESM/Jest resolution. */
 const fs = require('node:fs');
 const path = require('node:path');
 

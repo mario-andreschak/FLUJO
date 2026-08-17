@@ -62,7 +62,7 @@ async function POST_handler(request: NextRequest) {
     // A second read after the authority check would leave a TOCTOU window in
     // which newly Persona-attributed state could enter a non-strict backup.
     let chatHistorySnapshot: unknown = null;
-    let conversationSnapshots: Record<string, unknown>[] = [];
+    const conversationSnapshots: Record<string, unknown>[] = [];
     if (selections.includes('chatHistory')) {
       const [historySnapshot, loadedConversations] = await Promise.all([
         loadItem<unknown>(StorageKey.CHAT_HISTORY, null),

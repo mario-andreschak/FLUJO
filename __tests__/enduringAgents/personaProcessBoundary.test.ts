@@ -6,6 +6,7 @@ import {
 } from './personaIngressMatrix';
 import {
   createPersonaProcessEnvironment,
+  killOrphanedPersonaChildren,
   removePersonaProcessEnvironment,
   restartPersonaProcess,
   startPersonaProcess,
@@ -15,7 +16,11 @@ import {
   type PersonaProcessEnvironment,
 } from './personaProcessBoundaryHarness';
 
-jest.setTimeout(60_000);
+// Several tests spawn two children in sequence, and each spawn has its own
+// readiness budget (READINESS_TIMEOUT_MS, 60 s by default). The per-test budget
+// has to be able to accommodate that, otherwise a slow runner fails the test
+// before the harness can report *why* the child was slow (issue #457).
+jest.setTimeout(180_000);
 
 interface CreatedPersona {
   persona: { id: string; roleVersionId: string };
@@ -90,6 +95,12 @@ describe('Persona continuity across OS process boundaries', () => {
     await Promise.all(clients.splice(0).map((client) => client.close().catch(() => undefined)));
     if (environment) await removePersonaProcessEnvironment(environment);
     environment = undefined;
+  });
+
+  afterAll(() => {
+    // Belt and braces: a suite abort (or a readiness failure the harness could
+    // not reap) must never leave a child process burning CPU.
+    killOrphanedPersonaChildren();
   });
 
   it('keeps the accepted ingress and negative-control matrix explicit', () => {

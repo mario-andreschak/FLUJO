@@ -179,7 +179,6 @@ describe('evaluateNewItems', () => {
 });
 
 describe('intervalMsToCron (legacy migration)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { intervalMsToCron } = require('@/utils/shared/cron');
   it.each([
     [5_000, '*/5 * * * * *'],

@@ -41,7 +41,6 @@ jest.mock('@/utils/paths', () => {
   return {
     ...actual,
     getDataDir: () =>
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       require('path').join(require('os').tmpdir(), 'flujo-cacheinvalidation-test'),
   };
 });

@@ -53,7 +53,6 @@ function loadSandboxModule(
   });
 
   jest.isolateModules(() => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     mod = require('@/backend/mcpApps/sandboxServer') as SandboxModule;
     // Initialize the isolated runtime while this test's env is active.
     mod.getRegisteredSandboxHostOrigins();

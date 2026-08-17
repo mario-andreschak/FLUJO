@@ -1,9 +1,13 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Node bootstrap script must run before ESM/Jest resolution. */
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { assertLocalTestDependencies } = require('./local-test-dependencies.cjs');
 
 const root = path.resolve(__dirname, '..');
+
+// Keep in sync with EXCLUDE_ISOLATED_SUITES_ENV in jest.testMatch.mjs. This
+// file is CommonJS and runs before any ESM resolution, so it cannot import it.
+const EXCLUDE_ISOLATED_SUITES_ENV = 'FLUJO_JEST_EXCLUDE_ISOLATED_SUITES';
+const EXCLUDE_ISOLATED_SUITES_FLAG = '--exclude-isolated-suites';
 
 function jestArgsFromNpm(argv, env) {
   const args = [...argv];
@@ -16,6 +20,27 @@ function jestArgsFromNpm(argv, env) {
     args.unshift('--runInBand');
   }
   return args;
+}
+
+/**
+ * Split runner-only flags out of the argv before Jest sees them (issue #457).
+ *
+ * `--exclude-isolated-suites` drops the child-process suites from the run.
+ * It is expressed as an environment variable for jest.config.mjs because npm
+ * scripts cannot portably set one inline on Windows, and as a flag here so the
+ * package.json script stays readable.
+ */
+function partitionRunnerFlags(argv) {
+  const jestArgs = [];
+  const env = {};
+  for (const arg of argv) {
+    if (arg === EXCLUDE_ISOLATED_SUITES_FLAG) {
+      env[EXCLUDE_ISOLATED_SUITES_ENV] = '1';
+      continue;
+    }
+    jestArgs.push(arg);
+  }
+  return { jestArgs, env };
 }
 
 function withoutForeignNodeModuleBins(value, localBin) {
@@ -40,13 +65,17 @@ function main() {
   }
 
   const localBin = path.join(dependencies.nodeModules, '.bin');
+  const { jestArgs, env: runnerEnv } = partitionRunnerFlags(
+    jestArgsFromNpm(process.argv.slice(2), process.env),
+  );
   const child = spawn(process.execPath, [
     dependencies.jestBin,
-    ...jestArgsFromNpm(process.argv.slice(2), process.env),
+    ...jestArgs,
   ], {
     cwd: root,
     env: {
       ...process.env,
+      ...runnerEnv,
       // Do not let a caller-provided NODE_PATH or npm-injected ancestor .bin
       // directory reintroduce the dependency leak this wrapper is preventing.
       NODE_PATH: '',
@@ -75,7 +104,10 @@ function main() {
 }
 
 module.exports = {
+  EXCLUDE_ISOLATED_SUITES_ENV,
+  EXCLUDE_ISOLATED_SUITES_FLAG,
   jestArgsFromNpm,
+  partitionRunnerFlags,
   withoutForeignNodeModuleBins,
 };
 

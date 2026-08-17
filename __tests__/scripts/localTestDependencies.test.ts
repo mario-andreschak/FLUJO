@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- exercise the CommonJS pre-Jest bootstrap modules directly. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

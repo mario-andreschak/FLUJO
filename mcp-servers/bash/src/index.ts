@@ -50,7 +50,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: bashToolD
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const meta = flujoMetaOf(request.params._meta);
   const progressToken = request.params._meta?.progressToken;
-  return bashCallTool(
+  const result = await bashCallTool(
     request.params.name,
     request.params.arguments ?? {},
     meta.callerNodeId,
@@ -72,6 +72,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         : {}),
     },
   );
+  if (progressToken !== undefined) {
+    await server.ping();
+  }
+  return result;
 });
 server.setRequestHandler(ListResourcesRequestSchema, async () => bashListResources());
 server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));

@@ -75,7 +75,7 @@ export function prepareModelInputMaterialization(
 export function finalizeModelInputMaterialization(
   args: FinalizeModelInputMaterializationArgs,
 ): ModelInputMaterialization {
-  let folded = args.folded.map(message => {
+  const folded = args.folded.map(message => {
     const replacement = message.id
       ? args.wireContentByMessageId?.get(message.id)
       : undefined;

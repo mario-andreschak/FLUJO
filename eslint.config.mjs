@@ -3,6 +3,14 @@ import nextVitals from 'eslint-config-next/core-web-vitals';
 import nextTypescript from 'eslint-config-next/typescript';
 
 export default defineConfig([
+  // Unused eslint-disable comments are an error, not a warning (issue #457):
+  // stale directives silently hide the day a rule starts mattering again, and
+  // the CI lint job runs with --max-warnings=0 anyway.
+  {
+    linterOptions: {
+      reportUnusedDisableDirectives: 'error',
+    },
+  },
   ...nextVitals,
   ...nextTypescript,
   globalIgnores([
@@ -65,6 +73,33 @@ export default defineConfig([
       'react-hooks/gating': 'off',
       'react/no-unescaped-entities': 'off',
       'prefer-const': 'warn',
+      // Duplicate-detection (issue #457). The Next/typescript-eslint presets
+      // leave both of these disabled: `no-dupe-keys` is only in
+      // eslint:recommended (never extended here) and `no-redeclare` is turned
+      // off by typescript-eslint's eslint-recommended layer in favour of
+      // ts(2451). A duplicated key in a jest.mock() factory and a duplicated
+      // `const` in a test file both shipped to main because nothing flagged
+      // them, so enable the TypeScript-aware equivalents explicitly.
+      'no-dupe-keys': 'error',
+      '@typescript-eslint/no-redeclare': 'error',
+    },
+  },
+  {
+    // CommonJS bootstrap scripts and subprocess fixtures must run before any
+    // ESM/Jest resolution exists, so require() is the only option there.
+    files: ['**/*.cjs', 'scripts/**/*.js'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
+    // Test files legitimately use require() for lazy/isolated module loading
+    // inside jest.mock factories, and inline mock components have no display
+    // name by design.
+    files: ['__tests__/**/*.{js,jsx,ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+      'react/display-name': 'off',
     },
   },
 ]);
