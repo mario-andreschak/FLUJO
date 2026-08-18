@@ -188,6 +188,89 @@ function Get-KnownInstallerPrerequisites {
     )
 }
 
+function Test-NodeVersion {
+    param(
+        [Parameter(Mandatory)] [string]$CommandName = 'node',
+        [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue },
+        [scriptblock]$VersionResolver = { param($Cmd) & $Cmd.Source --version 2>&1 },
+        [int]$MinMajor = 22,
+        [int]$MinMinor = 0
+    )
+
+    # Resolve the command
+    $cmd = & $CommandResolver $CommandName
+    if (-not $cmd) {
+        return [PSCustomObject]@{
+            Status = 'Missing'
+            Version = $null
+            ExitCode = $null
+            Message = "Command '$CommandName' not found"
+        }
+    }
+
+    # Invoke with --version, capture output and exit code
+    $output = & $VersionResolver $cmd
+    $exitCode = $LASTEXITCODE
+
+    # Distinguish missing command from command that failed
+    if ($exitCode -ne 0) {
+        if ([string]::IsNullOrWhiteSpace($output)) {
+            return [PSCustomObject]@{
+                Status = 'ProbeFailed'
+                Version = $null
+                ExitCode = $exitCode
+                Message = "Command '$CommandName' exited with code $exitCode and produced no output"
+            }
+        } else {
+            return [PSCustomObject]@{
+                Status = 'ProbeFailed'
+                Version = $null
+                ExitCode = $exitCode
+                Message = "Command '$CommandName' exited with code $exitCode"
+            }
+        }
+    }
+
+    # Normalize output - accept optional leading 'v'
+    $version = $output.Trim()
+    if ($version -match '^v(.+)$') {
+        $version = $matches[1]
+    }
+
+    # Require complete numeric version shape (major.minor.patch)
+    if (-not ($version -match '^[0-9]+\.[0-9]+\.[0-9]+$')) {
+        return [PSCustomObject]@{
+            Status = 'Malformed'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Version output '$version' is not a valid semantic version"
+        }
+    }
+
+    # Parse version components
+    $parts = $version.Split('.')
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    $patch = [int]$parts[2]
+
+    # Compare against minimum
+    if ($major -gt $MinMajor -or ($major -eq $MinMajor -and $minor -ge $MinMinor)) {
+        return [PSCustomObject]@{
+            Status = 'Supported'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Node.js $version meets minimum requirement (>= $MinMajor.$MinMinor)"
+        }
+    } else {
+        return [PSCustomObject]@{
+            Status = 'Outdated'
+            Version = $version
+            ExitCode = $exitCode
+            Message = "Node.js $version is below minimum requirement (>= $MinMajor.$MinMinor)"
+        }
+    }
+}
+
 function Get-UninstallPrerequisiteDecisions {
     param(
         [AllowNull()] [object]$Manifest,

@@ -29,9 +29,9 @@ set -euo pipefail
 
 REPO_URL='https://github.com/mario-andreschak/FLUJO/'
 BRANCH="${FLUJO_BRANCH:-main}"
-# Next.js 15 requires Node >= 18.18; distro repos often ship older.
-MIN_NODE_MAJOR=18
-MIN_NODE_MINOR=18
+# FLUJO requires Node >= 22.0.0 (see package.json#engines.node).
+MIN_NODE_MAJOR=22
+MIN_NODE_MINOR=0
 BIN_DIR="$HOME/.local/bin"
 MANIFEST_DIR="$HOME/.local/share/flujo-cli"
 
@@ -76,12 +76,19 @@ flag() {
 
 node_version_ok() {
   have node || return 1
-  local v major minor
+  local v major minor patch
   v="$(node -v 2>/dev/null)" || return 1
+  # Require successful command resolution and zero exit status
+  # Normalize only one optional leading 'v'
   v="${v#v}"
-  IFS=. read -r major minor _ <<EOF
+  # Require complete numeric version shape before arithmetic comparison
+  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    return 1
+  fi
+  IFS=. read -r major minor patch <<EOF
 $v
 EOF
+  # Compare numeric components without shell coercion of malformed values
   [ "${major:-0}" -gt "$MIN_NODE_MAJOR" ] 2>/dev/null && return 0
   [ "${major:-0}" -eq "$MIN_NODE_MAJOR" ] 2>/dev/null && [ "${minor:-0}" -ge "$MIN_NODE_MINOR" ] 2>/dev/null
 }

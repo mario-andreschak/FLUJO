@@ -138,3 +138,34 @@ jobs:
         with:
           files: installer/Output/flujo-setup.exe
           generate_release_notes: true
+
+  unix-installer-tests:
+    name: Unix installer validation (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run Unix installer Node.js version tests
+        run: |
+          chmod +x scripts/install.sh
+          bash tests/installer-unix.test.sh
+
+      - name: Verify package.json engine contract
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const engines = pkg.engines?.node;
+            if (!engines) throw new Error('engines.node not found in package.json');
+            const match = engines.match(/^>=(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) throw new Error('engines.node must be simple >=X.Y.Z form, got: ' + engines);
+            const [, major, minor, patch] = match;
+            if (major !== '22' || minor !== '0' || patch !== '0') {
+              throw new Error('Expected engines.node >=22.0.0, got: ' + engines);
+            }
+            console.log('package.json engines.node contract verified:', engines);
+          "

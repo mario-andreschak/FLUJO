@@ -380,6 +380,32 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
     $installOllama = ($ollamaAnswer -match '^\s*(y|yes)\s*$')
 }
 
+# ---------------------------------------------------------------------------
+# 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
+# ---------------------------------------------------------------------------
+Write-Step "Validating Node.js version (requires >= 22.0.0)"
+$nodeResult = Test-NodeVersion -MinMajor 22 -MinMinor 0
+switch ($nodeResult.Status) {
+    'Supported' {
+        Write-Ok "Node.js $($nodeResult.Version) meets minimum requirement (>= 22.0.0)"
+    }
+    'Missing' {
+        Write-Warn2 "Node.js not found; will install via winget."
+    }
+    'Outdated' {
+        Write-Warn2 "Node.js $($nodeResult.Version) is below minimum requirement (>= 22.0.0); will upgrade via winget."
+    }
+    'Malformed' {
+        throw "Node.js version probe returned malformed output: $($nodeResult.Message). The 'node' command exists but produced unexpected output. Uninstall or fix the existing Node installation and re-run."
+    }
+    'ProbeFailed' {
+        throw "Node.js version probe failed: $($nodeResult.Message). The 'node' command exists but failed to execute. Uninstall or fix the existing Node installation and re-run."
+    }
+    default {
+        throw "Unknown Node.js validation status: $($nodeResult.Status)"
+    }
+}
+
 # Last question: persist the script-execution policy for future terminals / on-
 # demand MCP server builds (with the user's consent). Skipped automatically if
 # scripts are already allowed. After this, the install runs without interruption.
@@ -398,6 +424,14 @@ $prereqResults = @(
     Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
     Install-Prereq -CommandName 'rg'     -WingetId 'BurntSushi.ripgrep.MSVC' -DisplayName 'ripgrep'
 )
+
+# Re-validate Node.js after prerequisite installation
+Write-Step "Re-validating Node.js version after prerequisite installation"
+$nodeResult = Test-NodeVersion -MinMajor 22 -MinMinor 0
+if ($nodeResult.Status -ne 'Supported') {
+    throw "Node.js validation failed after installation: $($nodeResult.Message). The installed Node.js ($($nodeResult.Version)) does not meet the minimum requirement (>= 22.0.0). This may indicate a stale PATH; try reopening your terminal and re-running the installer."
+}
+Write-Ok "Node.js $($nodeResult.Version) validated successfully (>= 22.0.0)"
 
 Update-SessionEnvironment
 

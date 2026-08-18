@@ -1,13 +1,12 @@
-BeforeAll {
-    . (Join-Path $PSScriptRoot '..\scripts\installer-functions.ps1')
-
-    $script:CorePrerequisites = @(
-        [PSCustomObject]@{ Command = 'git';  WingetId = 'Git.Git';       DisplayName = 'Git' }
-        [PSCustomObject]@{ Command = 'node'; WingetId = 'OpenJS.NodeJS'; DisplayName = 'Node.js' }
-    )
-}
-
 Describe 'Windows installer prerequisite planning' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '..\scripts\installer-functions.ps1')
+
+        $script:CorePrerequisites = @(
+            [PSCustomObject]@{ Command = 'git';  WingetId = 'Git.Git';       DisplayName = 'Git' }
+            [PSCustomObject]@{ Command = 'node'; WingetId = 'OpenJS.NodeJS'; DisplayName = 'Node.js' }
+        )
+    }
     It 'includes the ripgrep search accelerator in the managed prerequisite catalog' {
         $ripgrep = Get-KnownInstallerPrerequisites | Where-Object Command -eq 'rg'
         $ripgrep | Should -Not -BeNullOrEmpty
@@ -226,5 +225,89 @@ Describe 'Windows uninstaller prerequisite decisions' {
         $script:answerCalls | Should -Be 0
         $decisions[0].Present | Should -BeFalse
         $decisions[0].Remove | Should -BeFalse
+    }
+}
+
+Describe 'Windows installer Node.js version validation' {
+    BeforeAll {
+        # Mock command resolver that returns a fake command object
+        $script:mockCommand = [PSCustomObject]@{ Source = 'C:\\Program Files\\nodejs\\node.exe' }
+    }
+
+    It 'returns Supported for v22.0.0' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) 'v22.0.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Supported'
+        $result.Version | Should -Be '22.0.0'
+    }
+
+    It 'returns Supported for 22.0.0 (no leading v)' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '22.0.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Supported'
+        $result.Version | Should -Be '22.0.0'
+    }
+
+    It 'returns Supported for later 22.x releases' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '22.14.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Supported'
+        $result.Version | Should -Be '22.14.0'
+    }
+
+    It 'returns Supported for higher major versions' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '23.0.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Supported'
+        $result.Version | Should -Be '23.0.0'
+    }
+
+    It 'returns Outdated for Node 18.x' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '18.20.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Outdated'
+        $result.Version | Should -Be '18.20.0'
+    }
+
+    It 'returns Outdated for Node 20.x' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '20.18.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Outdated'
+        $result.Version | Should -Be '20.18.0'
+    }
+
+    It 'returns Missing when command not found' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $null } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Missing'
+        $result.Version | Should -BeNullOrEmpty
+    }
+
+    It 'returns Malformed for empty stdout' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Malformed'
+    }
+
+    It 'returns Malformed for partial version' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '22' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Malformed'
+    }
+
+    It 'returns Malformed for non-numeric components' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '22.0.x' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Malformed'
+    }
+
+    It 'returns Malformed for output with extra text' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) 'Node.js v22.0.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'Malformed'
+    }
+
+    It 'returns ProbeFailed for non-zero exit with empty output' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) { $LASTEXITCODE = 1; '' } } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'ProbeFailed'
+    }
+
+    It 'returns ProbeFailed for non-zero exit with apparently valid output' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) { $LASTEXITCODE = 1; '22.0.0' } } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Be 'ProbeFailed'
+    }
+
+    It 'never classifies unsupported Node as Keep' {
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) '18.20.0' } -MinMajor 22 -MinMinor 0
+        $result.Status | Should -Not -Be 'Keep'
     }
 }
