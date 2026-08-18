@@ -622,6 +622,8 @@ export const chatMessageRows = {
   'chainChat.zoomOut': ['Zoom out', 'Alejar', 'Verkleinern', 'Dézoomer', 'Riduci zoom', 'Diminuir zoom', '缩小'],
   'chainChat.zoomIn': ['Zoom in', 'Acercar', 'Vergrößern', 'Zoomer', 'Aumenta zoom', 'Aumentar zoom', '放大'],
   'chainChat.resetZoom': ['Reset zoom', 'Restablecer zoom', 'Zoom zurücksetzen', 'Réinitialiser le zoom', 'Reimposta zoom', 'Redefinir zoom', '重置缩放'],
+  'chainChat.fullscreen': ['Full screen', 'Pantalla completa', 'Vollbild', 'Plein écran', 'Schermo intero', 'Tela cheia', '全屏'],
+  'chainChat.exitFullscreen': ['Exit full screen', 'Salir de pantalla completa', 'Vollbild beenden', 'Quitter le plein écran', 'Esci da schermo intero', 'Sair da tela cheia', '退出全屏'],
   'chainChat.rootNode': ['Root', 'Raíz', 'Wurzel', 'Racine', 'Radice', 'Raiz', '根节点'],
   'chainChat.rootConversation': ['Main conversation', 'Conversación principal', 'Hauptunterhaltung', 'Conversation principale', 'Conversazione principale', 'Conversa principal', '主对话'],
   'chainChat.subflowNode': ['Subflow', 'Subflujo', 'Unterfluss', 'Sous-flux', 'Sottoflusso', 'Subfluxo', '子流程'],

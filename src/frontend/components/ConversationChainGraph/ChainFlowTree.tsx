@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Box, Chip, IconButton, Paper, Stack, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import CallSplitRoundedIcon from '@mui/icons-material/CallSplitRounded';
 import RemoveRoundedIcon from '@mui/icons-material/RemoveRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
+import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded';
+import FullscreenExitRoundedIcon from '@mui/icons-material/FullscreenExitRounded';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { ConversationChainNode } from '@/shared/types/conversationChain';
 import {
@@ -112,6 +114,7 @@ export default function ChainFlowTree({
   );
   const treeViewportRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [fullscreen, setFullscreen] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
   const previewNode = useMemo(
@@ -137,6 +140,22 @@ export default function ChainFlowTree({
     setPreviewAnchor(null);
     setPreviewId(null);
   };
+
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullscreen(false);
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fullscreen]);
 
   /** Preserve the content under the pointer/viewport centre while scaling. */
   const changeZoom = useCallback((requestedZoom: number, focalX?: number, focalY?: number) => {
@@ -185,14 +204,19 @@ export default function ChainFlowTree({
     <Box
       data-testid="chain-flow-tree"
       data-layout="top-down"
+      data-fullscreen={fullscreen ? 'true' : 'false'}
       role="region"
       aria-label={t('chainChat.treeLabel')}
       sx={{
-        position: 'relative',
-        minHeight: 430,
-        flex: 1,
+        position: fullscreen ? 'fixed' : 'relative',
+        inset: fullscreen ? 0 : undefined,
+        zIndex: fullscreen ? theme.zIndex.modal - 1 : undefined,
+        width: fullscreen ? '100vw' : undefined,
+        height: fullscreen ? '100dvh' : undefined,
+        minHeight: fullscreen ? 0 : 430,
+        flex: fullscreen ? undefined : 1,
         overflow: 'hidden',
-        bgcolor: 'transparent',
+        bgcolor: fullscreen ? 'background.default' : 'transparent',
         backgroundImage: `radial-gradient(circle at 50% 0%, ${alpha(theme.palette.primary.main, 0.065)}, transparent 29%)`,
         '& .chain-tree-roots, & ul': {
           display: 'flex',
@@ -355,6 +379,16 @@ export default function ChainFlowTree({
             onClick={() => changeZoom(1)}
           >
             <RestartAltRoundedIcon fontSize="small" />
+          </IconButton>
+          <IconButton
+            size="small"
+            aria-label={fullscreen ? t('chainChat.exitFullscreen') : t('chainChat.fullscreen')}
+            aria-pressed={fullscreen}
+            onClick={() => setFullscreen((current) => !current)}
+          >
+            {fullscreen
+              ? <FullscreenExitRoundedIcon fontSize="small" />
+              : <FullscreenRoundedIcon fontSize="small" />}
           </IconButton>
         </Stack>
       </Paper>
