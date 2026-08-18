@@ -846,8 +846,8 @@ export function compileFlowSpec(
         // A single-child Subflow can still produce multiple lanes when its
         // incoming Process queues repeated handoffs, so presentation belongs
         // to every Subflow node rather than only legacy fan-out shapes.
-        const resultPresentation = specNode.resultPresentation
-          ?? (options.newSubflowDefaults ? 'separate' : undefined);
+        // Per requirements: 'separate' is now the only/default behavior.
+        const resultPresentation = specNode.resultPresentation ?? 'separate';
         if (resultPresentation === 'separate') {
           properties.resultPresentation = 'separate';
         }

@@ -782,8 +782,8 @@ export class SubflowNode extends BaseNode {
       emit: sharedState.emit,
       nodeName: node_params?.properties?.name,
       // Result presentation mode for parallel subflows (issue #359):
-      // 'separate' or 'joined' (default 'joined' when absent for back-compat).
-      resultPresentation: node_params?.properties?.resultPresentation ?? 'joined',
+      // 'separate' or 'joined' (default 'separate' per new requirements).
+      resultPresentation: node_params?.properties?.resultPresentation ?? 'separate',
       sessionScope: node_params?.properties?.sessionScope,
       sessionKeyTemplate: node_params?.properties?.sessionKey,
       sessionInputMode: node_params?.properties?.sessionInputMode ?? 'resume',

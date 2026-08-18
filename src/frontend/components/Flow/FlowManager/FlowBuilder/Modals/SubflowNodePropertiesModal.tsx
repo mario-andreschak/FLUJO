@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -13,6 +13,7 @@ import {
   Alert,
   FormControlLabel,
   Switch,
+  Slider,
 } from '@mui/material';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
@@ -83,7 +84,7 @@ export const SubflowNodePropertiesModal = ({
       const existing = node.data.properties || {};
       // Issue #138: do NOT seed default values (previously `allowCallerPrompt`/
       // `saveConversation` were forced to `?? true` here). Seeding baked those
-      // defaults into stored data on ANY save — e.g. opening the modal to change
+      // defaults into stored data on ANY save â€” e.g. opening the modal to change
       // something unrelated and hitting Save silently wrote `saveConversation:
       // true`, flooding the sidebar. The canonical "absent => ON" default now
       // lives in ONE place on both layers: the checkbox display below renders
@@ -94,7 +95,7 @@ export const SubflowNodePropertiesModal = ({
         ...node.data,
         properties: { ...existing },
       });
-      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+      // Data-flow capture (issue #203). parseKvRef('') â†’ { scope:'folder', key:'' }.
       setCaptureVariable(existing.captureVariable || '');
       setCaptureResource(existing.captureResource || '');
       const kvParsed = parseKvRef(existing.captureKv || '');
@@ -167,6 +168,11 @@ export const SubflowNodePropertiesModal = ({
       const ckv = buildKvRef(captureKvScope, captureKvKey);
       if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
 
+      // Per requirements: 'separate' (Separate Messages per lane) is now the only/default behavior.
+      // Legacy 'joined' will be removed soon. When this modal is opened and saved,
+      // existing flows will be updated to 'separate'.
+      properties.resultPresentation = 'separate';
+
       onSave(node.id, { ...nodeData, properties });
       onClose();
     }
@@ -199,7 +205,7 @@ export const SubflowNodePropertiesModal = ({
     (Array.isArray(nodeData.properties?.spawnBriefs) && nodeData.properties.spawnBriefs.length > 0);
 
   // Back-compat: a flow saved before the explicit 'isolated' mode existed just
-  // has a promptTemplate and no inputMode — surface it as Isolated so the same
+  // has a promptTemplate and no inputMode â€” surface it as Isolated so the same
   // prompt keeps being sent (this mirrors SubflowNode.prep's runtime fallback).
   const promptTemplate = nodeData.properties?.promptTemplate || '';
   const inputMode: 'full-history' | 'latest-message' | 'isolated' =
@@ -382,18 +388,7 @@ export const SubflowNodePropertiesModal = ({
           />
         </Box>
 
-        {inputMode === 'isolated' && (
-          <TextField
-            fullWidth
-            label={t('flows.subflow.defaultPrompt')}
-            value={promptTemplate}
-            onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
-            margin="normal"
-            multiline
-            rows={3}
-            helperText={t('flows.subflow.defaultPromptHelp')}
-          />
-        )}
+        {/* Default prompt field hidden per requirements */
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.workersTitle')}
@@ -401,24 +396,21 @@ export const SubflowNodePropertiesModal = ({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           {t('flows.subflow.queueHelp')}
         </Typography>
-        <TextField
-          label={t('flows.subflow.maxCopies')}
-          type="number"
-          size="small"
-          sx={{ width: 240 }}
-          inputProps={{ min: 1 }}
-          value={typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : ''}
-          onChange={(e) => {
-            const raw = e.target.value;
-            if (raw === '') {
-              removeProperty('concurrencyLimit');
-            } else {
-              const n = Math.max(1, Math.floor(Number(raw)));
-              if (!Number.isNaN(n)) handlePropertyChange('concurrencyLimit', n);
-            }
-          }}
-          helperText={t('flows.subflow.defaultFour')}
-        />
+        <Box sx={{ width: 300 }}>
+          <Slider
+            value={typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : 4}
+            onChange={(_, value) => handlePropertyChange('concurrencyLimit', value)}
+            min={1}
+            max={16}
+            step={1}
+            marks={Array.from({ length: 16 }, (_, i) => i + 1).map((v) => ({ value: v, label: v.toString() }))}
+            valueLabelDisplay="auto"
+            aria-label={t('flows.subflow.maxCopies')}
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {t('flows.subflow.maxCopies')}: {typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : 4}
+          </Typography>
+        </Box>
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.outputTitle')}
@@ -442,32 +434,7 @@ export const SubflowNodePropertiesModal = ({
 
         {/* Issue #384 (deferred UI half of #359): how parallel lane results are
             presented in chat. Only takes effect when a run produces >1 lane. */}
-        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          {t('flows.subflow.resultPresentationTitle')}
-        </Typography>
-        <Box
-          role="radiogroup"
-          aria-label={t('flows.subflow.resultPresentationAria')}
-          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}
-        >
-          <OptionCard
-            selected={(nodeData.properties?.resultPresentation ?? 'joined') === 'separate'}
-            onClick={() => handlePropertyChange('resultPresentation', 'separate')}
-            icon={<ViewAgendaOutlinedIcon />}
-            title={t('flows.subflow.resultSeparate')}
-            description={t('flows.subflow.resultSeparateHelp')}
-          />
-          <OptionCard
-            selected={(nodeData.properties?.resultPresentation ?? 'joined') !== 'separate'}
-            onClick={() => handlePropertyChange('resultPresentation', 'joined')}
-            icon={<MergeTypeIcon />}
-            title={t('flows.subflow.resultJoined')}
-            description={t('flows.subflow.resultJoinedHelp')}
-          />
-        </Box>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {t('flows.subflow.resultPresentationHelp')}
-        </Typography>
+        {/* Parallel Results selection hidden per requirements - 'separate' is now the only/default behavior */}
 
         {/* Debugging (issue #125): persist each queued child conversation into
             the chat sidebar, linked to the parent run. */}
@@ -634,3 +601,11 @@ export const SubflowNodePropertiesModal = ({
 };
 
 export default SubflowNodePropertiesModal;
+
+
+
+
+
+
+
+
