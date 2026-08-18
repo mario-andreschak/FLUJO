@@ -391,24 +391,35 @@ export async function searchPersonaMemory(
   const terms = queryTerms(parsed.query);
   const asOf = parsed.asOf ?? Date.now();
   const defaultStatuses: MemoryStatus[] = ['active'];
-  return (await listMemoryItems(personaId)).filter((item) => (
-    (parsed.statuses ?? defaultStatuses).includes(item.status)
-    && (!parsed.kinds?.length || parsed.kinds.includes(item.kind))
-    && (!parsed.scopes?.length || parsed.scopes.includes(item.scope))
-    && (!parsed.trust?.length || parsed.trust.includes(item.trust))
-    && (!parsed.coreOnly || coreIds.has(item.id))
-    && (item.validFrom === undefined || item.validFrom <= asOf)
-    && (item.validUntil === undefined || item.validUntil >= asOf)
-    && (terms.length === 0 || terms.some((term) => item.content.toLocaleLowerCase().includes(term)))
+  const limit = parsed.limit ?? 50;
+  const items = await listMemoryItems(personaId, {
+    statuses: parsed.statuses ?? defaultStatuses,
+    kinds: parsed.kinds?.length ? parsed.kinds : undefined,
+    scopes: parsed.scopes?.length ? parsed.scopes : undefined,
+    trust: parsed.trust?.length ? parsed.trust : undefined,
+    validAt: asOf,
+    ids: parsed.coreOnly ? [...coreIds] : undefined,
+    // A term-free recall can be ranked entirely from index metadata, so only
+    // the records that can be returned need to be read. Content queries still
+    // load every metadata-qualified candidate for lexical matching.
+    ...(terms.length === 0 ? {
+      limit,
+      order: 'memory_relevance' as const,
+      coreIds: [...coreIds],
+    } : {}),
+  });
+  const results = items.filter((item) => (
+    terms.length === 0 || terms.some((term) => item.content.toLocaleLowerCase().includes(term))
   )).map((item) => ({
     item,
     core: coreIds.has(item.id),
     score: scoreMemoryCandidate({ item, terms, core: coreIds.has(item.id), asOf }),
-  })).sort((left, right) => (
+  }));
+  return terms.length === 0 ? results : results.sort((left, right) => (
     right.score - left.score
     || right.item.updatedAt - left.item.updatedAt
     || left.item.id.localeCompare(right.item.id)
-  )).slice(0, parsed.limit ?? 50);
+  )).slice(0, limit);
 }
 
 export async function correctMemory(
@@ -571,7 +582,7 @@ export async function pinMemoryToCore(
         updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
       });
     }
-    const byId = new Map((await listMemoryItems(personaId)).map((memory) => [memory.id, memory]));
+    const byId = new Map((await listMemoryItems(personaId, { ids })).map((memory) => [memory.id, memory]));
     return ids.map((id) => byId.get(id)).filter((memory): memory is MemoryItem => Boolean(memory));
   });
 }
@@ -592,7 +603,7 @@ export async function unpinMemoryFromCore(
         updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
       });
     }
-    const byId = new Map((await listMemoryItems(personaId)).map((memory) => [memory.id, memory]));
+    const byId = new Map((await listMemoryItems(personaId, { ids })).map((memory) => [memory.id, memory]));
     return ids.map((id) => byId.get(id)).filter((memory): memory is MemoryItem => Boolean(memory));
   });
 }
@@ -603,7 +614,7 @@ export async function getCoreMemory(personaId: string): Promise<MemoryItem[]> {
   const coreMemoryItemIds = persona.coreMemoryItemIds ?? [];
   if (coreMemoryItemIds.length === 0) return [];
 
-  const byId = new Map((await listMemoryItems(personaId)).map((memory) => [memory.id, memory]));
+  const byId = new Map((await listMemoryItems(personaId, { ids: coreMemoryItemIds })).map((memory) => [memory.id, memory]));
   return coreMemoryItemIds
     .map((id) => byId.get(id))
     .filter((item): item is MemoryItem => Boolean(item));

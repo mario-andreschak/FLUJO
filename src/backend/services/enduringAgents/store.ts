@@ -193,9 +193,13 @@ export interface PersonaRecordQueryOptions {
   dueBefore?: number;
   limit?: number;
   offset?: number;
+  order?: 'updated_at' | 'memory_relevance';
+  coreIds?: string[];
 }
 
 type QueryableIndexEntry = BasePersonaIndexEntry & {
+  importance?: number;
+  confidence?: number;
   scope?: string;
   trust?: string;
   priority?: string;
@@ -230,7 +234,16 @@ function selectPersonaIndexEntries<T extends QueryableIndexEntry>(
       || ((entry.validFrom === undefined || entry.validFrom === null || entry.validFrom <= options.validAt)
         && (entry.validUntil === undefined || entry.validUntil === null
           || entry.validUntil >= options.validAt))));
-  selected.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
+  const coreIds = new Set(options.coreIds ?? []);
+  selected.sort(options.order === 'memory_relevance'
+    ? (left, right) => (
+      (right.importance ?? 0) - (left.importance ?? 0)
+      || (right.confidence ?? 0) - (left.confidence ?? 0)
+      || Number(coreIds.has(right.id)) - Number(coreIds.has(left.id))
+      || right.updatedAt - left.updatedAt
+      || left.id.localeCompare(right.id)
+    )
+    : (left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
   return selected.slice(offset, offset + limit);
 }
 
