@@ -17,6 +17,7 @@
 const mockListServerResources = jest.fn();
 const mockListServerResourceTemplates = jest.fn();
 const mockReadResource = jest.fn();
+const mockCallTool = jest.fn();
 const mockWriteRunResource = jest.fn();
 const mockListRunResources = jest.fn();
 
@@ -25,6 +26,7 @@ jest.mock('@/backend/services/mcp', () => ({
     listServerResources: (...args: unknown[]) => mockListServerResources(...args),
     listServerResourceTemplates: (...args: unknown[]) => mockListServerResourceTemplates(...args),
     readResource: (...args: unknown[]) => mockReadResource(...args),
+    callTool: (...args: unknown[]) => mockCallTool(...args),
   },
 }));
 
@@ -58,9 +60,10 @@ import type { MCPNodeReference } from '@/backend/execution/flow/types';
 const mcpRef = (
   boundServer: string,
   enabledResources?: string[] | 'all',
+  enabledTools?: string[],
 ): MCPNodeReference => ({
   id: `mcp-${boundServer}`,
-  properties: { boundServer, enabledResources },
+  properties: { boundServer, enabledResources, enabledTools },
 });
 
 const sampleResource = (uri: string) => ({ uri, name: uri, description: '', mimeType: 'text/plain' });
@@ -307,6 +310,81 @@ describe('executeNativeReadResource', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('No bound MCP server');
+  });
+
+  it('falls back to filesystem/read_file for an unadvertised file URI', async () => {
+    mockListServerResources.mockResolvedValue({ resources: [] });
+    mockCallTool.mockResolvedValue({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: '{"content":"FILE BODY"}' }],
+        structuredContent: { content: 'FILE BODY' },
+      },
+    });
+
+    const fileUri = process.platform === 'win32'
+      ? 'file:///C:/workspace/notes.txt'
+      : 'file:///workspace/notes.txt';
+    const result = await executeNativeReadResource(fileUri, {
+      mcpNodes: [mcpRef('filesystem', 'all', ['read_file'])],
+      conversationId: 'conv-1',
+    });
+
+    expect(result).toMatchObject({ success: true, data: { content: 'FILE BODY', server: 'filesystem' } });
+    expect(mockCallTool).toHaveBeenCalledWith(
+      'filesystem',
+      'read_file',
+      { path: expect.stringContaining('workspace') },
+      undefined,
+      undefined,
+      'mcp-filesystem',
+      undefined,
+      'model',
+    );
+    expect(mockReadResource).not.toHaveBeenCalled();
+  });
+
+  it('falls back to filesystem/read_file for a direct file path', async () => {
+    const filePath = process.platform === 'win32'
+      ? 'C:\\workspace\\notes.txt'
+      : '/workspace/notes.txt';
+    mockListServerResources.mockResolvedValue({ resources: [] });
+    mockCallTool.mockResolvedValue({
+      success: true,
+      data: {
+        content: [{ type: 'text', text: 'fallback' }],
+        structuredContent: { content: 'PATH BODY' },
+      },
+    });
+
+    const result = await executeNativeReadResource(filePath, {
+      mcpNodes: [mcpRef('filesystem', [], ['read_file'])],
+      conversationId: 'conv-1',
+    });
+
+    expect(result).toMatchObject({ success: true, data: { content: 'PATH BODY' } });
+    expect(mockCallTool).toHaveBeenCalledWith(
+      'filesystem',
+      'read_file',
+      { path: filePath },
+      undefined,
+      undefined,
+      'mcp-filesystem',
+      undefined,
+      'model',
+    );
+  });
+
+  it('does not use the filesystem fallback when read_file is not enabled', async () => {
+    mockListServerResources.mockResolvedValue({ resources: [] });
+
+    const result = await executeNativeReadResource('file:///workspace/blocked.txt', {
+      mcpNodes: [mcpRef('filesystem', 'all', [])],
+      conversationId: 'conv-1',
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockCallTool).not.toHaveBeenCalled();
   });
 
   it('returns error when URI is blocked by enabledResources: []', async () => {

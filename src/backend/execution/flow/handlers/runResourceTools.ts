@@ -65,13 +65,13 @@ export function buildReadResourceTool(): ToolDefinition {
   return {
     name: READ_RESOURCE_TOOL_NAME,
     description:
-      'Read resource content by URI. Supports stored flujo://run/... resources and native MCP URIs from bound servers. Use list_mcp_resources to find native URIs. Large or binary native resources may return a flujo://run/... URI. Binary stored resources also return localPath for filesystem tools.',
+      'Read resource content by URI or file path. Supports stored flujo://run/... resources, native MCP URIs, and paths readable by a bound filesystem MCP. Use list_mcp_resources to find native URIs. Large or binary resources may return a flujo://run/... URI.',
     inputSchema: {
       type: 'object',
       properties: {
         uri: {
           type: 'string',
-          description: 'A flujo://run/... URI or native URI from list_mcp_resources.',
+          description: 'A flujo://run/... URI, native MCP URI, file:// URI, or filesystem path.',
         },
         max_chars: {
           type: 'integer',
