@@ -19,6 +19,8 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 
 [![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
 
+<img width="1336" height="888" alt="image" src="https://github.com/user-attachments/assets/51785a30-1908-4737-bfd1-07b631dc7b8e" />
+
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
 
 ## ⚡ Quick Install (recommended)
