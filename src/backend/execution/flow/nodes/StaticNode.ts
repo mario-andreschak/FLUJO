@@ -186,13 +186,18 @@ export class StaticNode extends BaseNode {
                       `Static node ${nodeId}: real tool call "${toolName}" is not enabled on its connected MCP server "${serverName}".`,
                     );
                   }
+                  // Register the connected MCP node's roots before dispatch, matching
+                  // Process-node tool preparation. This makes both roots/list and the
+                  // built-in filesystem/bash confinement see the authored overlay even
+                  // when a Static node is the first consumer to touch the server.
+                  mcpService.setNodeRoots(serverName, binding.id, binding.properties.roots);
                   return mcpService.callTool(
                     serverName,
                     toolName,
                     args,
                     binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
                     undefined,
-                    nodeId,
+                    binding.id,
                   );
                 })();
             resultContent = callResult.success
