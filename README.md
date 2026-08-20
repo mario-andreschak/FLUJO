@@ -18,10 +18,9 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 </div>
 
 [![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
-
-<img width="1336" height="888" alt="image" src="https://github.com/user-attachments/assets/51785a30-1908-4737-bfd1-07b631dc7b8e" />
-
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
+
+<img width="1336" height="839" alt="image" src="https://github.com/user-attachments/assets/7adb5b58-bffa-48dc-82f3-bf1ac585db55" />
 
 ## ⚡ Quick Install (recommended)
 
@@ -165,6 +164,14 @@ Run history is kept per trigger, with the full output of every run one click awa
 As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
 
 ![WhatsApp auto-reply demo](docs/images/readme/whatsapp-demo.png)
+
+### Meetings
+- Put multiple Agents into a shared conversation, so they can work on a task together
+
+<img width="1056" height="457" alt="image" src="https://github.com/user-attachments/assets/7a254708-f9ad-41d8-bd6e-808887295f93" />
+
+<img width="1798" height="982" alt="image" src="https://github.com/user-attachments/assets/b70cf527-743e-4a71-a9a1-8ba9c36a2bf0" />
+
 
 ### 🔄 External Tool Integration
 
