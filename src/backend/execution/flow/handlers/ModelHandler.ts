@@ -7,6 +7,7 @@ import {
   ToolCallProcessingResult
 } from '../types/modelHandler';
 import { ToolCallInfo } from '../types'; // Import ToolCallInfo
+import { classifyToolExitCode } from '../toolRepeatGuard';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
@@ -1555,6 +1556,7 @@ export class ModelHandler {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
+      temperatureOverride: input.temperatureOverride,
       requestToolApproval,
       onTranscriptMessage,
       consumeSteeringMessages,
@@ -1813,6 +1815,7 @@ export class ModelHandler {
       /** Effective per-completion output-token cap, already resolved by callModel
        *  (node override → model setting). Undefined ⇒ adapter default (#189). */
       maxTokens?: number;
+      temperatureOverride?: number;
       requestToolApproval?: (call: {
         id: string;
         name: string;
@@ -1918,12 +1921,13 @@ export class ModelHandler {
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
+      const configuredTemperature = opts?.temperatureOverride ?? model.temperature;
       const temperature = normalizeModelTemperature(
-        model.temperature,
+        configuredTemperature,
         model.provider,
         model.adapter,
         model.name,
-      ) ?? (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
+      ) ?? (configuredTemperature === undefined || configuredTemperature === '' ? 0.0 : undefined);
 
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
@@ -3181,7 +3185,7 @@ export class ModelHandler {
       // always the model's original tool_calls order — independent of completion
       // order. This keeps the prefix-cache fingerprint stable and a single-call
       // turn byte-identical to the old sequential path.
-      type ProcessedToolCall = { name: string; args: Record<string, unknown>; id: string; result: string };
+      type ProcessedToolCall = ToolCallInfo;
       const results: Array<FlujoChatMessage | null> = new Array(toolCalls.length).fill(null);
       const processed: Array<ProcessedToolCall | null> = new Array(toolCalls.length).fill(null);
       // A valid meeting_control(silent) is a terminal barrier inside this tool
@@ -4043,7 +4047,15 @@ export class ModelHandler {
             name,
             args,
             id,
-            result: resultContent
+            result: resultContent,
+            exitCode: (
+              !result.success
+              || Boolean(
+                result.data
+                && typeof result.data === 'object'
+                && (result.data as CallToolResult).isError === true,
+              )
+            ) ? 1 : 0,
           });
         } catch (error) {
           if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;
@@ -4093,12 +4105,19 @@ export class ModelHandler {
           // entry), so [0] is authoritative; ordering is by callIndex, never by
           // completion time.
           results[callIndex] = toolCallMessages[0] ?? null;
-          processed[callIndex] = processedToolCalls[0] ?? null;
+          const processedCall = processedToolCalls[0];
+          const message = toolCallMessages[0];
+          const content = typeof message?.content === 'string' ? message.content : '';
+          processed[callIndex] = processedCall
+            ? {
+                ...processedCall,
+                exitCode: processedCall.exitCode
+                  ?? classifyToolExitCode(content, Boolean(message?.ui?.isError)),
+              }
+            : null;
           if (runId) {
-            const message = toolCallMessages[0];
-            const content = typeof message?.content === 'string' ? message.content : '';
             const cancelled = Boolean(signal?.aborted || input.shouldAbort?.() || /\bcancel(?:led|ed|ation)\b/i.test(content));
-            const failed = Boolean(message?.ui?.isError || /^Error:/i.test(content));
+            const failed = processed[callIndex]?.exitCode === 1;
             const kind = name.startsWith('handoff_to_') || name === 'handoff'
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)

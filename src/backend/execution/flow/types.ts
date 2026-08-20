@@ -963,6 +963,10 @@ export interface PersonaActivityMutationContext {
 
 // Shared state (minimized)
 export interface SharedState {
+    /** Run-scoped repeated tool-call/result counters. */
+    toolRepeatGuard?: import('./toolRepeatGuard').ToolRepeatGuardState;
+    /** Consumed by the next Process-node model turn only. */
+    temperatureOverrideOnce?: number;
     /**
      * Runtime-only execution fence. `persistConversationState` strips this
      * field and asserts it immediately before every attributed state write.
@@ -1538,6 +1542,8 @@ export interface ToolCallInfo {
     args: Record<string, unknown>;
     id: string;
     result: string;
+    /** Normalized tool outcome used by the repeated-call escape hatch. */
+    exitCode?: 0 | 1;
 }
 
 // Error details
@@ -1618,6 +1624,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     executionAuthority?: FlowExecutionAuthority;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
     personaAttribution?: PersonaAttribution;
+    /** One logical model-turn override armed by the repeated-tool guard. */
+    temperatureOverride?: number;
 }
 
 // FinishNode prep result

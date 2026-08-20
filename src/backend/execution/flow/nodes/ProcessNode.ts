@@ -713,6 +713,9 @@ export class ProcessNode extends BaseNode {
     permissionRules: structuredClone(sharedState.permissionRules ?? []),
     executionAuthority: sharedState.executionAuthority,
     personaAttribution: sharedState.personaAttribution,
+    ...(sharedState.temperatureOverrideOnce !== undefined
+      ? { temperatureOverride: sharedState.temperatureOverrideOnce }
+      : {}),
   };
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
@@ -1162,6 +1165,7 @@ export class ProcessNode extends BaseNode {
             // ModelHandler resolves this against the bound model's maxTokens, then
             // lets the adapter apply its own default when both are unset.
             maxTokens: node_params?.properties?.maxTokens,
+            temperatureOverride: prepResult.temperatureOverride,
             // Thread the existing Process-node summarizing-compaction settings;
             // ModelHandler previously resolved them with `undefined` (#356).
             compactionMode: node_params?.properties?.compactionMode,
@@ -1572,6 +1576,12 @@ export class ProcessNode extends BaseNode {
   ): Promise<string> {
     // --- Log start of post method ---
     log.debug(`[ProcessNode ${node_params?.id}] post() method started.`);
+
+    // Consume only after execCore actually ran. Debug previews and before-model
+    // pauses may call prep(), but must not spend this one-turn override.
+    if (prepResult.temperatureOverride !== undefined) {
+      sharedState.temperatureOverrideOnce = undefined;
+    }
 
     log.info('post() started', {
       execResultSuccess: execResult.success,
