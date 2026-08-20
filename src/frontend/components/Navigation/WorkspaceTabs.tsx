@@ -5,6 +5,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -31,6 +32,7 @@ import {
   ExpandMoreRounded,
   LockOutlined,
   WorkspacesOutlined,
+  FolderOutlined,
 } from '@mui/icons-material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useWorkspaces } from '@/frontend/hooks/useWorkspaces';
@@ -39,6 +41,7 @@ import {
   isValidWorkspaceName,
   workspaceColor,
 } from '@/frontend/utils/workspaceSelection';
+import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 
 interface WorkspaceTabsProps {
   /** 'bar' = desktop navbar button, 'drawer' = compact/mobile full-width button. */
@@ -49,19 +52,21 @@ interface WorkspaceTabsProps {
 
 type EditorState =
   | { mode: 'create' }
-  | { mode: 'rename'; workspace: string }
+  | { mode: 'edit'; workspace: string; isDefault: boolean }
   | null;
 
 /** Workspace selector and lifecycle controls for the shared app navigation. */
 export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps) {
   const theme = useTheme();
   const { t } = useI18n();
-  const { workspaces, selected, select, create, rename, remove, loading } = useWorkspaces();
+  const { workspaces, selected, select, create, edit, remove, loading } = useWorkspaces();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
+  const [roots, setRoots] = useState<string[]>([]);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -84,10 +89,11 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
     setOperationError(null);
   };
 
-  const openRename = (workspace: string) => {
+  const openEdit = (workspace: string, isDefault: boolean, workspaceRoots: string[]) => {
     setAnchorEl(null);
-    setEditor({ mode: 'rename', workspace });
+    setEditor({ mode: 'edit', workspace, isDefault });
     setName(workspace);
+    setRoots(workspaceRoots);
     setNameTouched(false);
     setOperationError(null);
   };
@@ -102,7 +108,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
   const invalidName = nameTouched && !isValidWorkspaceName(normalizedName);
   const duplicateName = nameTouched && workspaces.some(workspace =>
     workspace.name.toLowerCase() === normalizedName.toLowerCase()
-    && (editor?.mode !== 'rename' || workspace.name !== editor.workspace),
+    && (editor?.mode !== 'edit' || workspace.name !== editor.workspace),
   );
 
   const handleEditorSubmit = async (event: React.FormEvent) => {
@@ -112,7 +118,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
     if (!editor || !isValidWorkspaceName(normalizedName)) return;
     if (workspaces.some(workspace =>
       workspace.name.toLowerCase() === normalizedName.toLowerCase()
-      && (editor.mode !== 'rename' || workspace.name !== editor.workspace)
+      && (editor.mode !== 'edit' || workspace.name !== editor.workspace)
     )) return;
 
     setSaving(true);
@@ -120,7 +126,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
       if (editor.mode === 'create') {
         await create(normalizedName);
       } else {
-        await rename(editor.workspace, normalizedName);
+        await edit(editor.workspace, normalizedName, roots);
       }
       setEditor(null);
     } catch (error) {
@@ -259,27 +265,20 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                 secondaryTypographyProps={{ fontSize: '0.7rem' }}
               />
               {isActive && <CheckRounded color="primary" fontSize="small" aria-hidden="true" />}
-              {isDefault ? (
-                <Tooltip title={t('nav.workspaces.default')}>
-                  <Box component="span" sx={{ display: 'inline-flex', p: 0.75, color: 'text.disabled' }}>
-                    <LockOutlined fontSize="small" aria-hidden="true" />
-                  </Box>
-                </Tooltip>
-              ) : (
-                <Stack direction="row" spacing={0.1}>
-                  <Tooltip title={t('nav.workspaces.rename', { workspace: workspace.name })}>
+              <Stack direction="row" spacing={0.1}>
+                  <Tooltip title={t('nav.workspaces.edit', { workspace: workspace.name })}>
                     <IconButton
                       size="small"
-                      aria-label={t('nav.workspaces.rename', { workspace: workspace.name })}
+                      aria-label={t('nav.workspaces.edit', { workspace: workspace.name })}
                       onClick={event => {
                         event.stopPropagation();
-                        openRename(workspace.name);
+                        openEdit(workspace.name, isDefault, workspace.roots ?? []);
                       }}
                     >
                       <DriveFileRenameOutlineRounded fontSize="small" />
                     </IconButton>
                   </Tooltip>
-                  <Tooltip title={t('nav.workspaces.delete', { workspace: workspace.name })}>
+                  {!isDefault && <Tooltip title={t('nav.workspaces.delete', { workspace: workspace.name })}>
                     <IconButton
                       size="small"
                       color="error"
@@ -293,9 +292,9 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                     >
                       <DeleteOutlineRounded fontSize="small" />
                     </IconButton>
-                  </Tooltip>
+                  </Tooltip>}
+                  {isDefault && <LockOutlined fontSize="small" color="disabled" sx={{ m: 0.75 }} />}
                 </Stack>
-              )}
             </MenuItem>
           );
         })}
@@ -308,11 +307,11 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
         </MenuItem>
       </Menu>
 
-      <Dialog open={Boolean(editor)} onClose={closeEditor} fullWidth maxWidth="xs">
+      <Dialog open={Boolean(editor)} onClose={closeEditor} fullWidth maxWidth={editor?.mode === 'edit' ? 'sm' : 'xs'}>
         <Box component="form" onSubmit={handleEditorSubmit}>
           <DialogTitle>
-            {editor?.mode === 'rename'
-              ? t('nav.workspaces.renameTitle')
+            {editor?.mode === 'edit'
+              ? t('nav.workspaces.editTitle')
               : t('nav.workspaces.createTitle')}
           </DialogTitle>
           <DialogContent>
@@ -326,6 +325,7 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
                 ? t('nav.workspaces.nameExists')
                 : t('nav.workspaces.nameHelp')}
               disabled={saving}
+              slotProps={{ input: { readOnly: editor?.mode === 'edit' && editor.isDefault } }}
               inputProps={{ maxLength: 64 }}
               onBlur={() => setNameTouched(true)}
               onChange={event => {
@@ -334,19 +334,53 @@ export function WorkspaceTabs({ variant = 'bar', onSwitch }: WorkspaceTabsProps)
               }}
               sx={{ mt: 1 }}
             />
+            {editor?.mode === 'edit' && (
+              <Box sx={{ mt: 2.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
+                  {t('nav.workspaces.folders')}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {t('nav.workspaces.foldersHelp')}
+                </Typography>
+                <Stack sx={{ mt: 1.2, border: 1, borderColor: 'divider', borderRadius: 1.5 }} divider={<Divider flexItem />}>
+                  {roots.map((root, index) => (
+                    <Box key={root} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1 }}>
+                      <FolderOutlined fontSize="small" color="action" />
+                      <Typography variant="body2" noWrap title={root} sx={{ flex: 1 }}>{root}</Typography>
+                      {index === 0 && <Chip size="small" variant="outlined" label={t('nav.workspaces.primaryFolder')} />}
+                      <Tooltip title={t('nav.workspaces.removeFolder')}>
+                        <IconButton size="small" aria-label={t('nav.workspaces.removeFolder')} onClick={() => setRoots(current => current.filter((_, i) => i !== index))}>
+                          <DeleteOutlineRounded fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  ))}
+                  <Button startIcon={<AddRounded />} onClick={() => setFolderPickerOpen(true)} sx={{ alignSelf: 'flex-start', m: 0.5 }}>
+                    {t('nav.workspaces.addFolder')}
+                  </Button>
+                </Stack>
+              </Box>
+            )}
             {operationError && <Alert severity="error" sx={{ mt: 2 }}>{operationError}</Alert>}
           </DialogContent>
           <DialogActions>
             <Button onClick={closeEditor} disabled={saving}>{t('common.cancel')}</Button>
             <Button type="submit" variant="contained" disabled={saving}>
               {saving && <CircularProgress size={16} color="inherit" sx={{ mr: 1 }} />}
-              {editor?.mode === 'rename'
-                ? t('nav.workspaces.renameAction')
+              {editor?.mode === 'edit'
+                ? t('nav.workspaces.saveAction')
                 : t('nav.workspaces.createAction')}
             </Button>
           </DialogActions>
         </Box>
       </Dialog>
+
+      <FolderPickerDialog
+        open={folderPickerOpen}
+        title={t('nav.workspaces.chooseFolder')}
+        onClose={() => setFolderPickerOpen(false)}
+        onSelect={folder => setRoots(current => current.includes(folder) ? current : [...current, folder])}
+      />
 
       <Dialog
         open={Boolean(deleteTarget)}

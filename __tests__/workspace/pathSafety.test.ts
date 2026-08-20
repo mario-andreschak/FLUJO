@@ -9,7 +9,9 @@ import {
   ensureWorkspaceDirs,
   isValidWorkspaceName,
   listWorkspaces,
+  loadWorkspaceRoots,
   renameWorkspace,
+  updateWorkspaceRoots,
   workspaceExists,
 } from '@/utils/workspace';
 
@@ -117,6 +119,22 @@ describe('workspace path safety', () => {
 
     await deleteWorkspace('planning');
     await expect(workspaceExists('planning')).resolves.toBe(false);
+  });
+
+  it('persists absolute workspace roots and carries them through a rename', async () => {
+    const first = path.join(dataRoot, 'projects', 'one');
+    const second = path.join(dataRoot, 'projects', 'two');
+    await createWorkspace('research');
+
+    const updated = await updateWorkspaceRoots('research', [first, second]);
+    expect(updated.roots).toEqual([first, second]);
+    await expect(loadWorkspaceRoots('research')).resolves.toEqual([first, second]);
+
+    const renamed = await renameWorkspace('research', 'planning');
+    expect(renamed.roots).toEqual([first, second]);
+    await expect(updateWorkspaceRoots('planning', ['relative/path'])).rejects.toMatchObject({
+      code: 'WORKSPACE_INVALID_ROOTS',
+    });
   });
 
   it('never renames, replaces, or deletes the default workspace', async () => {

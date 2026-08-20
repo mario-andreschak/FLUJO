@@ -336,12 +336,18 @@ export interface WorkspaceInfo {
   name: string;
   color: string;
   isDefault: boolean;
+  /** Backend filesystem folders automatically exposed to every MCP server. */
+  roots: string[];
 }
+
+const WORKSPACE_METADATA_FILE = '.workspace.json';
+const MAX_WORKSPACE_ROOTS = 64;
 
 export type WorkspaceMutationErrorCode =
   | 'WORKSPACE_ALREADY_EXISTS'
   | 'WORKSPACE_NOT_FOUND'
-  | 'DEFAULT_WORKSPACE_PROTECTED';
+  | 'DEFAULT_WORKSPACE_PROTECTED'
+  | 'WORKSPACE_INVALID_ROOTS';
 
 /** A user-actionable conflict raised by workspace management operations. */
 export class WorkspaceMutationError extends Error {
@@ -354,11 +360,58 @@ export class WorkspaceMutationError extends Error {
   }
 }
 
-function workspaceInfo(name: string): WorkspaceInfo {
+function normalizeWorkspaceRoots(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value.slice(0, MAX_WORKSPACE_ROOTS)) {
+    if (typeof entry !== 'string') continue;
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.length > 4096 || !path.isAbsolute(trimmed)) continue;
+    const normalized = path.normalize(trimmed);
+    const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push(normalized);
+  }
+  return roots;
+}
+
+/** Validate and normalize a workspace roots request without mutating storage. */
+export function assertWorkspaceRoots(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new WorkspaceMutationError('WORKSPACE_INVALID_ROOTS', 'Workspace folders must be a list.');
+  }
+  const normalized = normalizeWorkspaceRoots(value);
+  if (normalized.length !== value.length) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_INVALID_ROOTS',
+      'Workspace folders must be unique absolute filesystem paths.',
+    );
+  }
+  return normalized;
+}
+
+/** Read the workspace-level folders inherited by every MCP server at runtime. */
+export async function loadWorkspaceRoots(workspace?: string): Promise<string[]> {
+  const name = normalizeWorkspaceName(workspace ?? getCurrentWorkspace());
+  try {
+    const raw = await fs.readFile(path.join(getWorkspaceDir(name), WORKSPACE_METADATA_FILE), 'utf8');
+    const metadata = JSON.parse(raw) as { roots?: unknown };
+    return assertWorkspaceRoots(metadata?.roots ?? []);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function workspaceInfo(name: string): Promise<WorkspaceInfo> {
   return {
     name,
     color: workspaceColor(name),
     isDefault: name === DEFAULT_WORKSPACE,
+    roots: await loadWorkspaceRoots(name),
   };
 }
 
@@ -411,13 +464,13 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
     if (entry.isSymbolicLink()) continue;
   }
 
-  return [...names]
+  const sortedNames = [...names]
     .sort((a, b) => {
       if (a === DEFAULT_WORKSPACE) return -1;
       if (b === DEFAULT_WORKSPACE) return 1;
       return a.localeCompare(b);
-    })
-    .map(workspaceInfo);
+    });
+  return Promise.all(sortedNames.map(workspaceInfo));
 }
 
 /** Whether a (syntactically valid) workspace exists on disk. */
@@ -605,6 +658,29 @@ export async function renameWorkspace(
     throw error;
   }
   return workspaceInfo(next);
+}
+
+/** Persist folders inherited by all MCP connections in this workspace. */
+export async function updateWorkspaceRoots(
+  workspace: string,
+  roots: unknown,
+): Promise<WorkspaceInfo> {
+  const name = assertValidWorkspaceName(workspace);
+  const normalized = assertWorkspaceRoots(roots);
+  const dir = await resolveManagedWorkspace(name);
+  const target = path.join(dir, WORKSPACE_METADATA_FILE);
+  const temporary = path.join(dir, `${WORKSPACE_METADATA_FILE}.${process.pid}.${Date.now()}.tmp`);
+  await fs.writeFile(temporary, `${JSON.stringify({ roots: normalized }, null, 2)}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+  });
+  try {
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+  return workspaceInfo(name);
 }
 
 /** Permanently delete a non-default workspace and all of its owned data. */

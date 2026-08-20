@@ -1673,6 +1673,13 @@ export class MCPService {
     }
   }
 
+  /** Announce a workspace-level folders edit to every connected server here. */
+  notifyAllRootsChanged(): void {
+    for (const serverName of this.clients.keys()) {
+      this.notifyRootsChanged(serverName);
+    }
+  }
+
   /**
    * Disconnect from an MCP server
    */

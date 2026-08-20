@@ -13,10 +13,20 @@ const mockRenameWorkspace = jest.fn(async (_name: string, newName: string) => ({
   isDefault: false,
 }));
 const mockDeleteWorkspace = jest.fn(async (_name: string) => undefined);
+const mockUpdateWorkspaceRoots = jest.fn(async (name: string, roots: unknown) => ({
+  name,
+  color: '#2E9E5B',
+  isDefault: false,
+  roots,
+}));
 
 jest.mock('@/backend/services/workspace/layoutReadiness', () => ({
   getWorkspaceLayoutStatus: jest.fn(() => 'ready'),
   waitForWorkspaceLayoutReady: () => mockEnsureWorkspaceLayoutReady(),
+}));
+
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: { notifyAllRootsChanged: jest.fn() },
 }));
 
 jest.mock('@/utils/workspace', () => ({
@@ -25,15 +35,20 @@ jest.mock('@/utils/workspace', () => ({
   listWorkspaces: () => mockListWorkspaces(),
   createWorkspace: (name: string) => mockCreateWorkspace(name),
   renameWorkspace: (name: string, newName: string) => mockRenameWorkspace(name, newName),
+  updateWorkspaceRoots: (name: string, roots: unknown) => mockUpdateWorkspaceRoots(name, roots),
   deleteWorkspace: (name: string) => mockDeleteWorkspace(name),
 }));
 
 import { DELETE, GET, PATCH, POST } from '@/app/api/workspaces/route';
 import { getWorkspaceLayoutStatus } from '@/backend/services/workspace/layoutReadiness';
+import { mcpService } from '@/backend/services/mcp';
 import { WorkspaceMutationError } from '@/utils/workspace';
 
 const mockGetWorkspaceLayoutStatus = getWorkspaceLayoutStatus as jest.MockedFunction<
   typeof getWorkspaceLayoutStatus
+>;
+const mockNotifyAllRootsChanged = mcpService.notifyAllRootsChanged as jest.MockedFunction<
+  typeof mcpService.notifyAllRootsChanged
 >;
 
 describe('installation-wide workspace discovery route', () => {
@@ -108,6 +123,24 @@ describe('installation-wide workspace discovery route', () => {
     expect(deleteResponse.status).toBe(200);
     expect(mockRenameWorkspace).toHaveBeenCalledWith('research', 'planning');
     expect(mockDeleteWorkspace).toHaveBeenCalledWith('planning');
+  });
+
+  it('edits workspace roots and notifies connected MCP servers', async () => {
+    const response = await PATCH(new Request('http://localhost/api/workspaces', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        name: 'research',
+        newName: 'planning',
+        roots: ['/projects/one', '/projects/two'],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateWorkspaceRoots).toHaveBeenCalledWith(
+      'planning',
+      ['/projects/one', '/projects/two'],
+    );
+    expect(mockNotifyAllRootsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('reports the protected default workspace as forbidden', async () => {

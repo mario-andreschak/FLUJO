@@ -350,4 +350,5 @@ export interface WorkspaceInfo {
   name: string;
   color: string;
   isDefault: boolean;
+  roots: string[];
 }
