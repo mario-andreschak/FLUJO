@@ -94,6 +94,9 @@ describe('buildReadResourceTool (#168)', () => {
     expect(a).toEqual(b); // no per-run interpolation → prefix-cache stable
     expect(a.name).toBe(READ_RESOURCE_TOOL_NAME);
     expect(a.inputSchema).toMatchObject({ required: ['uri'] });
+    expect(a.description?.length).toBeLessThan(300);
+    expect(a.description).toContain('flujo://run/');
+    expect(a.description).toContain('native MCP');
   });
 });
 

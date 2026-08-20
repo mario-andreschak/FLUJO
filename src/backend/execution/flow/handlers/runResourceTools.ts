@@ -65,22 +65,13 @@ export function buildReadResourceTool(): ToolDefinition {
   return {
     name: READ_RESOURCE_TOOL_NAME,
     description:
-      'Read the FULL content of a resource by its URI. ' +
-      'Accepts two kinds of URI: ' +
-      '(1) flujo://run/<conversationId>/<id> — a run-resource marker left when a prior tool result was too ' +
-      'large to include inline; use this to retrieve its complete content. ' +
-      '(2) A native MCP resource URI from a bound server (e.g. file://, asana://, or any other scheme) — ' +
-      'fetched live from the server; large or binary content is auto-captured as a run resource and ' +
-      'returned as a flujo://run/... stub. Binary run resources also return a validated localPath for ' +
-      'same-host filesystem tools.',
+      'Read resource content by URI. Supports stored flujo://run/... resources and native MCP URIs from bound servers. Use list_mcp_resources to find native URIs. Large or binary native resources may return a flujo://run/... URI. Binary stored resources also return localPath for filesystem tools.',
     inputSchema: {
       type: 'object',
       properties: {
         uri: {
           type: 'string',
-          description:
-            'The URI to read. Either a flujo://run/... run-resource marker, or a native MCP resource URI ' +
-            'from a bound server (use list_mcp_resources to discover available URIs).',
+          description: 'A flujo://run/... URI or native URI from list_mcp_resources.',
         },
         max_chars: {
           type: 'integer',
