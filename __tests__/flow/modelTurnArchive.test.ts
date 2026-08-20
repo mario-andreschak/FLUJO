@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { z } from 'zod';
 import {
   _setModelTurnArchiveDirForTests,
   archiveModelDispatch,
@@ -133,5 +134,32 @@ describe('modelTurnArchive', () => {
     expect(snapshot?.media).toHaveLength(1);
     expect(snapshot?.media[0].encoding).toBe('base64');
     expect(JSON.stringify(snapshot?.sdkRequest)).not.toContain(Buffer.from('png').toString('base64'));
+  });
+
+  it('archives the JSON Schema projection of Zod SDK parameters, not Zod internals', async () => {
+    const entry = await archiveModelDispatch({
+      conversationId: 'conversation_zod',
+      nodeId: 'process_zod',
+      modelId: 'model_zod',
+      modelName: 'Claude',
+      adapter: 'claude-cli',
+      operation: 'query',
+      attempt: 1,
+      canonicalMessages: [],
+      genericWire: [],
+      sdkRequest: {
+        inputSchema: z.object({ query: z.string().describe('Search query') }),
+      },
+    });
+
+    const snapshot = await readModelTurnSnapshot('conversation_zod', entry.id);
+    expect(snapshot?.sdkRequest).toMatchObject({
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'Search query' } },
+        required: ['query'],
+      },
+    });
+    expect(JSON.stringify(snapshot?.sdkRequest)).not.toContain('_zod');
   });
 });

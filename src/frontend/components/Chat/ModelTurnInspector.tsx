@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -38,6 +38,199 @@ const bytes = (value: number): string => {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
+
+interface InvocationParameter {
+  name: string;
+  value: unknown;
+}
+
+interface InvocationView {
+  before?: string;
+  callee: string;
+  parameters: InvocationParameter[];
+  argumentSource: string;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+/**
+ * Describe the concrete adapter invocation without repeating diagnostics that
+ * happened to be stored beside its arguments. Older Codex archives included a
+ * `thread` diagnostic block, for example, although runStreamed only receives
+ * input and options.
+ */
+export function invocationView(snapshot: ModelTurnSnapshot): InvocationView {
+  const request = asRecord(snapshot.sdkRequest);
+  const operation = snapshot.entry.operation.replace(/\(stream\)$/, '');
+
+  if (snapshot.entry.adapter === 'codex-cli' && request) {
+    const parameters = [
+      { name: 'input', value: request.input },
+      { name: 'options', value: request.options },
+    ];
+    return {
+      callee: 'thread.runStreamed',
+      parameters,
+      argumentSource: 'input, options',
+    };
+  }
+
+  if (snapshot.entry.adapter === 'claude-cli' && request) {
+    return {
+      before: 'const prompt = promptStream();',
+      callee: 'query',
+      parameters: [
+        { name: 'prompt', value: request.prompt },
+        { name: 'options', value: request.options },
+      ],
+      argumentSource: '{ prompt, options }',
+    };
+  }
+
+  if (snapshot.entry.adapter === 'openrouter-media') {
+    return {
+      callee: 'fetch',
+      parameters: [{ name: 'request', value: snapshot.sdkRequest }],
+      argumentSource: 'url, { method: "POST", body: JSON.stringify(request) }',
+    };
+  }
+
+  const root = snapshot.entry.adapter === 'gemini'
+    ? 'ai'
+    : snapshot.entry.adapter === 'anthropic'
+      ? 'client'
+      : 'openai';
+  return {
+    callee: `${root}.${operation}`,
+    parameters: [{ name: 'request', value: snapshot.sdkRequest }],
+    argumentSource: 'request',
+  };
+}
+
+function CodeToken({
+  name,
+  selected,
+  onSelect,
+}: {
+  name: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={onSelect}
+      aria-label={`Inspect ${name}`}
+      aria-pressed={selected}
+      sx={{
+        appearance: 'none',
+        border: 0,
+        borderRadius: 0.75,
+        px: 0.35,
+        py: 0.1,
+        mx: 0.1,
+        color: selected ? 'primary.contrastText' : 'primary.light',
+        bgcolor: selected ? 'primary.main' : 'transparent',
+        font: 'inherit',
+        cursor: 'pointer',
+        '&:hover': { bgcolor: selected ? 'primary.dark' : 'action.selected' },
+        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+      }}
+    >
+      {name}
+    </Box>
+  );
+}
+
+function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnSnapshot }) {
+  const invocation = useMemo(() => invocationView(snapshot), [snapshot]);
+  const [selectedName, setSelectedName] = useState(invocation.parameters[0]?.name ?? 'request');
+  useEffect(() => {
+    setSelectedName(invocation.parameters[0]?.name ?? 'request');
+  }, [invocation]);
+  const selected = invocation.parameters.find(parameter => parameter.name === selectedName)
+    ?? invocation.parameters[0];
+
+  return (
+    <Paper variant="outlined" sx={{ overflow: 'hidden' }} data-testid="request-code-canvas">
+      <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'baseline', gap: 1, flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2">Adapter call</Typography>
+        <Typography variant="caption" color="text.secondary">
+          Click a parameter to inspect the value captured at dispatch.
+        </Typography>
+      </Box>
+      <Divider />
+      <Box
+        sx={{
+          p: 2,
+          overflowX: 'auto',
+          bgcolor: '#111827',
+          color: '#e5e7eb',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          fontSize: 13,
+          lineHeight: 1.8,
+          whiteSpace: 'pre',
+        }}
+      >
+        {invocation.before && <Box sx={{ color: '#9ca3af' }}>{invocation.before}</Box>}
+        <Box component="span" sx={{ color: '#c084fc' }}>const</Box>
+        {' response = '}
+        <Box component="span" sx={{ color: '#c084fc' }}>await</Box>
+        {` ${invocation.callee}(`}
+        {invocation.argumentSource === 'input, options' ? (
+          <>
+            <CodeToken name="input" selected={selectedName === 'input'} onSelect={() => setSelectedName('input')} />
+            {', '}
+            <CodeToken name="options" selected={selectedName === 'options'} onSelect={() => setSelectedName('options')} />
+          </>
+        ) : invocation.argumentSource === '{ prompt, options }' ? (
+          <>
+            {'{ '}
+            <CodeToken name="prompt" selected={selectedName === 'prompt'} onSelect={() => setSelectedName('prompt')} />
+            {', '}
+            <CodeToken name="options" selected={selectedName === 'options'} onSelect={() => setSelectedName('options')} />
+            {' }'}
+          </>
+        ) : invocation.argumentSource.includes('JSON.stringify') ? (
+          <>
+            {'url, { method: "POST", body: JSON.stringify('}
+            <CodeToken name="request" selected={selectedName === 'request'} onSelect={() => setSelectedName('request')} />
+            {') }'}
+          </>
+        ) : (
+          <CodeToken name="request" selected={selectedName === 'request'} onSelect={() => setSelectedName('request')} />
+        )}
+        {');'}
+      </Box>
+      <Box sx={{ px: 1.5, py: 0.9, bgcolor: 'action.hover', borderTop: 1, borderColor: 'divider' }}>
+        <Typography variant="caption" sx={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontWeight: 700 }}>
+          {selected?.name}
+        </Typography>
+      </Box>
+      <Box
+        component="pre"
+        data-testid="request-parameter-value"
+        sx={{
+          m: 0,
+          p: 1.5,
+          maxHeight: '55vh',
+          overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          fontSize: 12,
+          lineHeight: 1.55,
+        }}
+      >
+        {json(selected?.value)}
+      </Box>
+    </Paper>
+  );
+}
 
 function MessageList({
   messages,
@@ -236,29 +429,7 @@ export default function ModelTurnInspector({
               </Box>
             </Box>
           )}
-          <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-            <Box sx={{ px: 1.25, py: 0.75 }}>
-              <Typography variant="subtitle2">{entry.adapter} SDK parameters</Typography>
-            </Box>
-            <Divider />
-            <Box
-              component="pre"
-              sx={{
-                m: 0,
-                p: 1.5,
-                maxHeight: '65vh',
-                overflow: 'auto',
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-                bgcolor: 'action.hover',
-                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-                fontSize: 12,
-                lineHeight: 1.55,
-              }}
-            >
-              {json(snapshot.sdkRequest)}
-            </Box>
-          </Paper>
+          <RequestCodeCanvas snapshot={snapshot} />
         </Box>
       )}
     </Box>

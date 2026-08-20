@@ -197,6 +197,27 @@ async function sanitizeValue(
   if (typeof value !== 'object') return String(value);
   if (seen.has(value as object)) return '[circular]';
   seen.add(value as object);
+
+  // Zod schemas are sometimes legitimate inputs to an agent SDK (notably the
+  // Claude Agent SDK's in-process MCP tools). Object.entries(schema) exposes
+  // Zod's large private implementation graph, however, and that graph is not
+  // what the SDK serializes for the model. Zod 4 exposes the public JSON-Schema
+  // projection on each schema; archive that provider-facing representation.
+  const maybeZodSchema = value as { toJSONSchema?: () => unknown };
+  if (typeof maybeZodSchema.toJSONSchema === 'function') {
+    try {
+      return await sanitizeValue(
+        maybeZodSchema.toJSONSchema(),
+        parameterPath,
+        ctx,
+        parent,
+        key,
+        seen,
+      );
+    } catch {
+      return '[schema could not be serialized]';
+    }
+  }
   if (Array.isArray(value)) {
     const out = [];
     for (let i = 0; i < value.length; i++) {
