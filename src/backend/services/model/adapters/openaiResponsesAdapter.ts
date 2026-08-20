@@ -8,6 +8,12 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { parseDataUrl } from './messageUtils';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import {
+  buildProviderToolNameTranslation,
+  translateCompletionFromProvider,
+  translateMessagesForProvider,
+  translateToolsForProvider,
+} from './providerToolNames';
 
 const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter');
 
@@ -562,6 +568,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     conversationId,
     nodeId,
     promptCacheKey,
+    toolNameMap,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
       apiKey,
@@ -572,8 +579,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     const key = sessionKey(conversationId, nodeId);
     const carried = key ? reasoningBySession().get(key) : undefined;
 
-    const input = toResponsesInput(messages, carried);
-    const responsesTools = toResponsesTools(tools);
+    const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
+    const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
+    const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
     const wantsImage = (model.outputModalities ?? [])
       .some(modality => modality.toLowerCase() === 'image');
     const allTools: OpenAI.Responses.Tool[] = [
@@ -648,7 +656,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       throw new Error('OpenAI Responses API rejected every supported parameter combination');
     }
 
-    const { completion, reasoning, media } = fromResponse(response, model.name);
+    const translated = fromResponse(response, model.name);
+    const completion = translateCompletionFromProvider(translated.completion, toolNames);
+    const { reasoning, media } = translated;
 
     // Stash this turn's reasoning against its first tool call, so the next
     // iteration of the loop can hand it back. Nothing to carry when the turn made
@@ -679,6 +689,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     onModelDelta,
     onSdkRequest,
     onSdkRequestResult,
+    toolNameMap,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
       apiKey,
@@ -687,8 +698,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
     const key = sessionKey(conversationId, nodeId);
     const carried = key ? reasoningBySession().get(key) : undefined;
-    const input = toResponsesInput(messages, carried);
-    const responsesTools = toResponsesTools(tools);
+    const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
+    const input = toResponsesInput(translateMessagesForProvider(messages, toolNames), carried);
+    const responsesTools = toResponsesTools(translateToolsForProvider(tools, toolNames));
     const wantsImage = (model.outputModalities ?? [])
       .some(modality => modality.toLowerCase() === 'image');
     const allTools: OpenAI.Responses.Tool[] = [
@@ -805,7 +817,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       throw new Error('OpenAI Responses API rejected every supported parameter combination');
     }
 
-    const { completion, reasoning, media } = fromResponse(response, model.name);
+    const translated = fromResponse(response, model.name);
+    const completion = translateCompletionFromProvider(translated.completion, toolNames);
+    const { reasoning, media } = translated;
     for (const part of streamedMedia) {
       if (!media.some(existing =>
         existing.type === part.type &&
