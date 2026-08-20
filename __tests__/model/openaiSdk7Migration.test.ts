@@ -22,6 +22,18 @@ describe('OpenAI SDK 7 compatibility boundary', () => {
     expect(client.maxRetries).toBe(3);
     expect(client.timeout).toBe(1_234);
     expect(client.fetchOptions?.dispatcher).toBeInstanceOf(Agent);
+
+    // Undici defaults both values to 300 seconds. With SDK retries enabled,
+    // that silently capped a slow Ollama request at roughly 15 minutes despite
+    // FLUJO's five-hour SDK timeout.
+    const dispatcher = client.fetchOptions?.dispatcher as Agent;
+    const optionsSymbol = Object.getOwnPropertySymbols(dispatcher)
+      .find((symbol) => symbol.description === 'options');
+    expect(optionsSymbol).toBeDefined();
+    expect(Reflect.get(dispatcher, optionsSymbol!)).toMatchObject({
+      headersTimeout: 5 * 60 * 60 * 1000,
+      bodyTimeout: 5 * 60 * 60 * 1000,
+    });
   });
 
   it('accepts function tools and function tool calls', () => {

@@ -99,14 +99,20 @@ describe('empty stopped completion guard (#288)', () => {
       const result = await callModel('conv-empty');
 
       expect(result.success).toBe(false);
-      expect(createCompletionMock).toHaveBeenCalledTimes(4);
+      expect(createCompletionMock).toHaveBeenCalledTimes(7);
       expect(createCompletionMock.mock.calls[0][0].messages).toEqual(
         createCompletionMock.mock.calls[1][0].messages,
       );
       expect(createCompletionMock.mock.calls[1][0].messages).toEqual(
         createCompletionMock.mock.calls[2][0].messages,
       );
-      expect(createCompletionMock.mock.calls[3][0].messages.at(-1)).toEqual({
+      expect(createCompletionMock.mock.calls.map(([input]) => input.temperature)).toEqual([
+        0, 0, 0, 1, 0, 0, 0,
+      ]);
+      expect(createCompletionMock.mock.calls[5][0].messages).toEqual(
+        createCompletionMock.mock.calls[0][0].messages,
+      );
+      expect(createCompletionMock.mock.calls[6][0].messages.at(-1)).toEqual({
         role: 'user',
         content: 'Your previous response was empty. Please provide a complete response or make the appropriate tool call.',
       });
@@ -139,14 +145,17 @@ describe('empty stopped completion guard (#288)', () => {
       .mockResolvedValueOnce(completion(''))
       .mockResolvedValueOnce(completion(''))
       .mockResolvedValueOnce(completion(''))
+      .mockResolvedValueOnce(completion(''))
+      .mockResolvedValueOnce(completion(''))
+      .mockResolvedValueOnce(completion(''))
       .mockResolvedValueOnce(completion('Recovered after nudge.'));
     seedState('conv-recovered-synthetic');
 
     const result = await callModel('conv-recovered-synthetic');
 
     expect(result.success).toBe(true);
-    expect(createCompletionMock).toHaveBeenCalledTimes(4);
-    expect(createCompletionMock.mock.calls[3][0].messages.at(-1)).toEqual(expect.objectContaining({
+    expect(createCompletionMock).toHaveBeenCalledTimes(7);
+    expect(createCompletionMock.mock.calls[6][0].messages.at(-1)).toEqual(expect.objectContaining({
       role: 'user',
       content: expect.stringContaining('previous response was empty'),
     }));

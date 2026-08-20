@@ -146,7 +146,9 @@ import {
 } from '@/backend/services/statistics/metadata';
 
 const EMPTY_STOP_COMPLETION_REASON = 'empty_stop_completion';
-const EMPTY_STOP_IDENTICAL_RETRIES = 2;
+const EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE = 5;
+const EMPTY_STOP_TEMPERATURE_RETRY = 3;
+const EMPTY_STOP_RETRY_TEMPERATURE = 1 as const;
 const EMPTY_STOP_SYNTHETIC_USER_MESSAGE =
   'Your previous response was empty. Please provide a complete response or make the appropriate tool call.';
 
@@ -2456,7 +2458,8 @@ export class ModelHandler {
       // throws — a thrown SDK error is shaped into an error Result in-place.
       const attempt = async (
         attemptMessages: OpenAI.ChatCompletionMessageParam[],
-        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        attemptTemperature = temperature,
       ): Promise<Result<ModelCallResult>> => {
         // Start the cancellation watch just before the (possibly long) provider
         // call. A Stop pressed at any point during the call aborts it within
@@ -2630,7 +2633,7 @@ export class ModelHandler {
                 : undefined,
               messages: hydratedMessages,
               tools: attemptTools,
-              temperature,
+              temperature: attemptTemperature,
               // Effective output-token cap: node-level override → per-model default
               // (resolved in callModel, #189), falling back to the per-model value
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
@@ -2900,11 +2903,12 @@ export class ModelHandler {
        */
       const attemptWithLimitRetry = async (
         attemptMessages: OpenAI.ChatCompletionMessageParam[],
-        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        attemptTemperature = temperature,
       ): Promise<Result<ModelCallResult>> => {
         for (;;) {
           attemptProducedOutput = false;
-          const attemptResult = await attempt(attemptMessages, attemptTools);
+          const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
@@ -2970,19 +2974,25 @@ export class ModelHandler {
 
       // An empty `stop` is safe to replay: by definition it has no prose,
       // media, transcript activity, or tool call/side effect. Give the provider
-      // two identical retries first (preserving the exact prompt/cache prefix),
-      // then make one final attempt with an explicit user nudge so models that
-      // became stuck at an assistant boundary can recover. If all four attempts
-      // are empty, return the original normalized error shape.
+      // five retries first (preserving the exact prompt/cache prefix). After
+      // two retries, raise temperature to 1 for exactly the next attempt, then
+      // restore the configured temperature. If all five retries are empty,
+      // make one final attempt with an explicit user nudge so models that became
+      // stuck at an assistant boundary can recover. If that is empty too, return
+      // the original normalized error shape.
       if (!result.success && isEmptyStoppedCompletionError(result.error)) {
-        for (let retry = 1; retry <= EMPTY_STOP_IDENTICAL_RETRIES; retry++) {
+        for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
           if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
+          const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
+            ? EMPTY_STOP_RETRY_TEMPERATURE
+            : temperature;
           log.warn('Model returned an empty stopped completion; retrying the same request', {
             modelId,
             retry,
-            maxIdenticalRetries: EMPTY_STOP_IDENTICAL_RETRIES,
+            maxRetriesBeforeSyntheticMessage: EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE,
+            temperatureRaised: retry === EMPTY_STOP_TEMPERATURE_RETRY,
           });
-          result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
+          result = await attemptWithLimitRetry(apiMessages, sanitizedTools, retryTemperature);
           if (result.success || !isEmptyStoppedCompletionError(result.error)) break;
         }
 
