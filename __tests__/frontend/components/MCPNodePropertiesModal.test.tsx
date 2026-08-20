@@ -176,6 +176,28 @@ describe('MCPNodePropertiesModal', () => {
     );
   });
 
+  it('opens the server picker immediately and commits a quick-created MCP node on selection', async () => {
+    const quickNode = {
+      ...node,
+      id: 'mcp-quick',
+      data: { ...node.data, label: 'MCP Node', properties: {} },
+    };
+    const onQuickServerSelect = jest.fn().mockResolvedValue(undefined);
+    const onClose = jest.fn();
+    renderModal({
+      node: quickNode,
+      onClose,
+      serverPickerInitiallyOpen: true,
+      onQuickServerSelect,
+    });
+
+    const picker = screen.getByRole('dialog', { name: 'Connect to an MCP server' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'Server card search' }));
+
+    await waitFor(() => expect(onQuickServerSelect).toHaveBeenCalledWith(quickNode, 'search'));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
   it('replaces inline server cards with a subflow-style picker on compact screens', () => {
     const previousMatchMedia = window.matchMedia;
     Object.defineProperty(window, 'matchMedia', {

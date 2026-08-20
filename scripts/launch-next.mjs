@@ -25,9 +25,16 @@ import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import nextEnv from '@next/env';
 import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
 
 const require = createRequire(import.meta.url);
+const { loadEnvConfig } = nextEnv;
+
+/** Load standard Next.js dotenv files before FLUJO reads launcher-level values. */
+export function loadLaunchEnvironment(directory, dev = false) {
+  return loadEnvConfig(directory, dev);
+}
 
 /**
  * Return a copy of `baseEnv` with FLUJO's child-process settings applied:
@@ -82,15 +89,28 @@ function portFromNextArgs(args) {
   return inline?.slice('--port='.length) || process.env.FLUJO_PORT || '4200';
 }
 
+function withPort(args) {
+  const hasPort = args.some((arg, index) =>
+    arg === '--port'
+    || arg === '-p'
+    || arg.startsWith('--port=')
+    || (index > 0 && (args[index - 1] === '--port' || args[index - 1] === '-p')),
+  );
+  return hasPort ? [...args] : [...args, '-p', portFromNextArgs(args)];
+}
+
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
 function launchNext(passthroughArgs) {
+  const runtimeEnvDirectory = process.env.FLUJO_CONTAINER ? '/app/data' : process.cwd();
+  process.env.FLUJO_RUNTIME_ENV_DIR = runtimeEnvDirectory;
+  loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
   const baseEnv = {
     ...process.env,
     FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
     FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
   };
   const env = applyExposureRuntimeEnv(buildLaunchEnv(baseEnv), process.cwd());
-  const nextArgs = withExposureHostname(passthroughArgs, env);
+  const nextArgs = withExposureHostname(withPort(passthroughArgs), env);
 
   const tlsSummary = [
     env.NODE_OPTIONS ? `NODE_OPTIONS="${env.NODE_OPTIONS}"` : null,

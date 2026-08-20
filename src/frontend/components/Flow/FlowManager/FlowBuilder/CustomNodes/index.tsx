@@ -259,8 +259,8 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
   }, []);
 
-  // Selection opens the inspector; it must not also pin the transient
-  // add-and-connect controls around the node.
+  // Selection opens the inspector and pins the add-and-connect controls. This
+  // keeps the common "select, then continue building" gesture to one click.
   useEffect(() => {
     if (!selected) return;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -269,6 +269,8 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
     hideTimerRef.current = null;
     setHoverReady(false);
   }, [selected]);
+
+  const quickConnectVisible = !!selected || hoverReady;
 
   const startHoverReveal = () => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -597,7 +599,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
           );
 
           if ((nodeType === 'process' || nodeType === 'static') && quickConnect.anchor) {
-            if (!hoverReady) return null;
+            if (!quickConnectVisible) return null;
             return (
               <Box
                 key={quickConnect.handleId}
@@ -620,7 +622,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             <NodeToolbar
               key={quickConnect.handleId}
               nodeId={id}
-              isVisible={hoverReady}
+              isVisible={quickConnectVisible}
               position={Position[quickConnect.side.charAt(0).toUpperCase() + quickConnect.side.slice(1) as keyof typeof Position]}
               align={quickConnect.align ?? 'center'}
               offset={10}

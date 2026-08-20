@@ -388,7 +388,7 @@ export const SubflowNodePropertiesModal = ({
           />
         </Box>
 
-        {/* Default prompt field hidden per requirements */
+        {/* Default prompt field hidden per requirements */}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.workersTitle')}

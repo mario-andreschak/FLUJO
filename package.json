@@ -40,8 +40,8 @@
     "next.config.mjs"
   ],
   "scripts": {
-    "dev": "node scripts/launch-next.mjs dev --webpack -p 4200",
-    "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
+    "dev": "node scripts/launch-next.mjs dev --webpack",
+    "turbo": "node scripts/launch-next.mjs dev --turbopack",
     "build": "npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack",
     "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",
     "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
@@ -53,7 +53,7 @@
 
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
     "smoke:mcp-artifacts": "node scripts/smoke-mcp-artifacts.mjs",
-    "start": "node scripts/launch-next.mjs start -p 4200",
+    "start": "node scripts/launch-next.mjs start",
     "demo:migration-ui": "node scripts/migration-landscape-demo.mjs",
     "check:parallel-mcp:no-oauth": "node scripts/check-parallel-mcp-no-oauth.mjs",
     "lint": "eslint src",
