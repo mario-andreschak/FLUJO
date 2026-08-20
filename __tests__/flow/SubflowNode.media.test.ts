@@ -72,6 +72,40 @@ beforeEach(() => {
 });
 
 describe('SubflowNode media output promotion', () => {
+  it('passes the latest previous assistant result upward when a nested child finishes empty', async () => {
+    runFlowMock.mockResolvedValue({
+      status: 'completed',
+      outputText: '',
+      messages: [
+        { role: 'user', content: 'Handle this issue.', id: 'u1', timestamp: 1 },
+        { role: 'assistant', content: 'Result returned from C.', id: 'a1', timestamp: 2 },
+        {
+          role: 'assistant',
+          content: 'Handing off to Finish.',
+          id: 'a2',
+          timestamp: 3,
+          tool_calls: [{
+            id: 'handoff-1',
+            type: 'function',
+            function: { name: 'handoff_to_finish', arguments: '{}' },
+          }],
+        },
+      ],
+    });
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'nested-flow', inputMode: 'isolated' });
+    const shared = makeShared();
+
+    const prep = await node.prep(shared, params);
+    const exec = await node.execCore(prep);
+    await node.post(prep, exec, shared, params);
+
+    expect(exec.outputText).toBe('Result returned from C.');
+    expect(shared.lastResponse).toBe('Result returned from C.');
+    expect((shared.messages.at(-1) as FlujoChatMessage).content).toContain('Result returned from C.');
+    expect((shared.messages.at(-1) as FlujoChatMessage).content).not.toContain('with no output');
+  });
+
   it('turns a media-only child response into a completed parent artifact result', async () => {
     const childUri = 'flujo://run/child-conv/clip-1';
     runFlowMock.mockResolvedValue({
@@ -132,6 +166,7 @@ describe('SubflowNode media output promotion', () => {
       inputMode: 'isolated',
       spawnBriefs: ['first', 'second'],
       concurrencyLimit: 2,
+      resultPresentation: 'joined',
     });
     const shared = makeShared();
 

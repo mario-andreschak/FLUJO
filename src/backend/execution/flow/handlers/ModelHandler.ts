@@ -144,6 +144,17 @@ import {
   statisticsPayloadMetadata,
 } from '@/backend/services/statistics/metadata';
 
+const EMPTY_STOP_COMPLETION_REASON = 'empty_stop_completion';
+const EMPTY_STOP_IDENTICAL_RETRIES = 2;
+const EMPTY_STOP_SYNTHETIC_USER_MESSAGE =
+  'Your previous response was empty. Please provide a complete response or make the appropriate tool call.';
+
+function isEmptyStoppedCompletionError(error: ExecutionError): boolean {
+  return error.type === 'model'
+    && error.code === 'api_error'
+    && error.details?.reason === EMPTY_STOP_COMPLETION_REASON;
+}
+
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
 );
@@ -2805,7 +2816,7 @@ export class ModelHandler {
                 'Model reported completion (finish_reason "stop") but returned an empty message with no media or tool calls.',
                 modelId,
                 undefined,
-                { rawResponse: chatCompletion }
+                { reason: EMPTY_STOP_COMPLETION_REASON, rawResponse: chatCompletion }
               )
             };
           }
@@ -2952,6 +2963,47 @@ export class ModelHandler {
       };
 
       let result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
+
+      // An empty `stop` is safe to replay: by definition it has no prose,
+      // media, transcript activity, or tool call/side effect. Give the provider
+      // two identical retries first (preserving the exact prompt/cache prefix),
+      // then make one final attempt with an explicit user nudge so models that
+      // became stuck at an assistant boundary can recover. If all four attempts
+      // are empty, return the original normalized error shape.
+      if (!result.success && isEmptyStoppedCompletionError(result.error)) {
+        for (let retry = 1; retry <= EMPTY_STOP_IDENTICAL_RETRIES; retry++) {
+          if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
+          log.warn('Model returned an empty stopped completion; retrying the same request', {
+            modelId,
+            retry,
+            maxIdenticalRetries: EMPTY_STOP_IDENTICAL_RETRIES,
+          });
+          result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
+          if (result.success || !isEmptyStoppedCompletionError(result.error)) break;
+        }
+
+        if (
+          !result.success
+          && isEmptyStoppedCompletionError(result.error)
+          && !abortController.signal.aborted
+          && !opts?.shouldAbort?.()
+          && !attemptProducedOutput
+        ) {
+          const syntheticRetryMessages: OpenAI.ChatCompletionMessageParam[] = [
+            ...apiMessages,
+            { role: 'user', content: EMPTY_STOP_SYNTHETIC_USER_MESSAGE },
+          ];
+          log.warn('Model repeatedly returned an empty stopped completion; retrying once with a synthetic user message', {
+            modelId,
+          });
+          try {
+            opts?.onFinalWire?.(syntheticRetryMessages, visualDiagnostic, modelInputForArchive);
+          } catch (error) {
+            log.warn('Final-wire observer failed during empty-completion retry; continuing retry', { error });
+          }
+          result = await attemptWithLimitRetry(syntheticRetryMessages, sanitizedTools);
+        }
+      }
 
       // Context-length overflow recovery. A single unexpectedly-large tool
       // result in the RECENT tail (a big search dump, a file read) can blow the
