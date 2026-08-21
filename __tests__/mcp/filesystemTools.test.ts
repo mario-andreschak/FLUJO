@@ -31,6 +31,7 @@ import { loadServerRoots } from '@/backend/services/mcp/config';
 import {
   filesystemToolDefinitions,
   filesystemCallTool,
+  _normalizeSlashDrivePathForTests,
   _setRipgrepExecutableForTests,
 } from '@/backend/services/mcp/internal/filesystemTools';
 import {
@@ -139,11 +140,15 @@ describe('filesystem tool definitions', () => {
     ]);
   });
 
-  it('advertises the read_file batch request form', () => {
+  it('advertises the read_file batch request and regex contract', () => {
     const definition = filesystemToolDefinitions().find((tool) => tool.name === 'read_file');
     const paths = definition?.inputSchema.properties?.paths as Record<string, unknown>;
+    const pattern = definition?.inputSchema.properties?.pattern as Record<string, unknown>;
     expect(paths).toMatchObject({ type: 'array', minItems: 1, maxItems: 25 });
     expect(definition?.inputSchema.required).toBeUndefined();
+    expect(definition?.description).toMatch(/case-insensitive regular expression/i);
+    expect(pattern.description).toMatch(/4096 characters/i);
+    expect(pattern.description).toMatch(/exact value "\*" is reserved/i);
   });
 
   it('advertises accurate read and destructive-write annotations', () => {
@@ -171,6 +176,36 @@ describe('filesystem tool definitions', () => {
   });
 });
 
+describe('Windows slash-drive path normalization', () => {
+  it.each([
+    ['/c/path/file.txt', String.raw`C:\path\file.txt`],
+    ['/C/path/file.txt', String.raw`C:\path\file.txt`],
+    ['/c', 'C:\\'],
+    ['/c/', 'C:\\'],
+  ])('normalizes %s on Windows', (input, expected) => {
+    expect(_normalizeSlashDrivePathForTests(input, 'win32')).toBe(expected);
+  });
+
+  it.each([
+    '/foo/bar',
+    '//server/share/file.txt',
+    String.raw`C:\already\native.txt`,
+    'c/relative/path.txt',
+    '/cc/not-a-drive.txt',
+  ])('does not rewrite non-drive input %s', (input) => {
+    expect(_normalizeSlashDrivePathForTests(input, 'win32')).toBe(input);
+  });
+
+  it('does not rewrite slash-drive paths on non-Windows platforms', () => {
+    expect(_normalizeSlashDrivePathForTests('/c/path/file.txt', 'linux')).toBe('/c/path/file.txt');
+  });
+
+  it('leaves dot segments for the centralized resolver to canonicalize', () => {
+    expect(_normalizeSlashDrivePathForTests('/c/one/../two.txt', 'win32'))
+      .toBe(String.raw`C:\one\..\two.txt`);
+  });
+});
+
 describe('filesystem operations', () => {
   let dir: string;
   beforeEach(async () => {
@@ -191,6 +226,33 @@ describe('filesystem operations', () => {
     const out = parse(await filesystemCallTool('read_file', { path: p }));
     expect(out.totalLines as number).toBeGreaterThanOrEqual(3);
     expect(out.content as string).toContain('line2');
+  });
+
+  it('uses slash-drive paths across the centralized resolver without widening roots', async () => {
+    if (process.platform !== 'win32') return;
+
+    const target = path.join(dir, 'slash-drive.txt');
+    await fsp.writeFile(target, 'slash-drive content');
+    const asSlashDrive = (nativePath: string): string => nativePath
+      .replace(/^([A-Za-z]):/, (_whole, drive: string) => `/${drive.toLowerCase()}`)
+      .replace(/\\/g, '/');
+    const slashTarget = asSlashDrive(target);
+    const slashRoot = asSlashDrive(dir);
+
+    expect(parse(await filesystemCallTool('read_file', { path: slashTarget })).content)
+      .toBe('slash-drive content');
+    const batch = parse(await filesystemCallTool('read_file', { paths: [slashTarget, slashTarget] }));
+    expect((batch.files as Array<Record<string, unknown>>).map((file) => file.path))
+      .toEqual([target, target]);
+    expect(parse(await filesystemCallTool('get_file_info', {
+      path: `${slashRoot}/nested/../slash-drive.txt`,
+    })).isFile).toBe(true);
+
+    const escaped = await filesystemCallTool('get_file_info', {
+      path: `${slashRoot}/../outside.txt`,
+    });
+    expect(escaped.isError).toBe(true);
+    expect(text(escaped)).toMatch(/outside the configured filesystem roots/i);
   });
 
   it('reads a specific line range', async () => {
@@ -712,6 +774,80 @@ describe('filesystem #287 enhancements', () => {
     expect(out.content as string).toContain('1235: THE_NEEDLE_HERE');
     // The excerpt is a small window, not the ~28 KB whole file.
     expect((out.content as string).length).toBeLessThan(5000);
+  });
+
+  it('read_file: regex supports anchors, alternation, classes, quantifiers, and case-insensitivity', async () => {
+    const p = path.join(dir, 'regex.txt');
+    await fsp.writeFile(p, ['zero', 'Alpha12', 'item-AbC', 'alpha1', 'tail'].join('\n'));
+
+    const out = parse(await filesystemCallTool('read_file', {
+      path: p,
+      pattern: '^(alpha\\d{2}|item-[a-c]{3})$',
+    }));
+    expect(out.matches).toEqual([
+      { line: 2, text: 'Alpha12' },
+      { line: 3, text: 'item-AbC' },
+    ]);
+    expect(typeof out.contentHash).toBe('string');
+  });
+
+  it('read_file: regex metacharacters are active and can be escaped for literal intent', async () => {
+    const p = path.join(dir, 'regex-literal.txt');
+    await fsp.writeFile(p, ['a.b', 'axb', 'other'].join('\n'));
+
+    const wildcard = parse(await filesystemCallTool('read_file', { path: p, pattern: '^a.b$' }));
+    expect((wildcard.matches as unknown[])).toHaveLength(2);
+    const literal = parse(await filesystemCallTool('read_file', { path: p, pattern: '^a\\.b$' }));
+    expect(literal.matches).toEqual([{ line: 1, text: 'a.b' }]);
+  });
+
+  it('read_file: regex preserves context, disjoint separators, no-match behavior, and match caps', async () => {
+    const p = path.join(dir, 'regex-context.txt');
+    const lines = Array.from({ length: 12 }, (_, i) => ([2, 9].includes(i) ? 'HIT' : `line ${i + 1}`));
+    await fsp.writeFile(p, lines.join('\n'));
+
+    const out = parse(await filesystemCallTool('read_file', { path: p, pattern: '^hit$' }));
+    expect(out.matches).toEqual([{ line: 3, text: 'HIT' }, { line: 10, text: 'HIT' }]);
+    expect(out.content as string).toContain('…');
+    expect(out.content as string).toContain('1: line 1');
+    expect(out.content as string).toContain('12: line 12');
+
+    const none = parse(await filesystemCallTool('read_file', { path: p, pattern: '^absent$' }));
+    expect(none.matches).toEqual([]);
+    expect(none.content).toMatch(/no lines matched/i);
+
+    const many = path.join(dir, 'regex-many.txt');
+    await fsp.writeFile(many, Array.from({ length: 205 }, () => 'match').join('\n'));
+    const capped = parse(await filesystemCallTool('read_file', { path: many, pattern: '^match$' }));
+    expect(capped.matches).toHaveLength(200);
+    expect(capped.truncated).toBe(true);
+    expect((capped.content as string).length).toBeLessThanOrEqual(200_000);
+  });
+
+  it('read_file: invalid and over-limit regexes return bounded tool errors, including in batches', async () => {
+    const first = path.join(dir, 'regex-error-a.txt');
+    const second = path.join(dir, 'regex-error-b.txt');
+    await Promise.all([fsp.writeFile(first, 'a'), fsp.writeFile(second, 'b')]);
+
+    const invalid = await filesystemCallTool('read_file', { path: first, pattern: '[' });
+    expect(invalid.isError).toBe(true);
+    expect(parse(invalid).error).toMatch(/invalid regular expression/i);
+
+    const overLimit = await filesystemCallTool('read_file', {
+      path: first,
+      pattern: 'a'.repeat(4_097),
+    });
+    expect(overLimit.isError).toBe(true);
+    expect(parse(overLimit).error).toMatch(/4096-character limit/i);
+
+    const batch = parse(await filesystemCallTool('read_file', {
+      paths: [first, second],
+      pattern: '[',
+    }));
+    expect(batch.files).toEqual([
+      expect.objectContaining({ requestedPath: first, error: expect.stringMatching(/invalid regular expression/i) }),
+      expect.objectContaining({ requestedPath: second, error: expect.stringMatching(/invalid regular expression/i) }),
+    ]);
   });
 
   it('read_file: small files and explicit ranges are unaffected by the guard', async () => {

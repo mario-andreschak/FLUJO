@@ -21,7 +21,7 @@
  * clients); errors are returned as `isError: true` results rather than thrown.
  */
 import path from 'node:path';
-import { promises as fs, createReadStream } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import readline from 'node:readline';
@@ -92,6 +92,8 @@ const SEARCH_CONCURRENCY = 16;
 const READ_PATTERN_CONTEXT = 2;
 /** #287: cap on matches returned by a single `read_file` pattern grep. */
 const MAX_READ_PATTERN_MATCHES = 200;
+/** #487: bound caller-controlled regular expressions before compiling them. */
+const MAX_READ_PATTERN_LENGTH = 4_096;
 
 type SearchMatch = { path: string; line?: number; text?: string };
 
@@ -147,6 +149,23 @@ function errorResult(message: string): CallToolResult {
 }
 
 /**
+ * Translate the slash-drive form some models emit into a native Windows path.
+ * Keep the platform injectable so the narrow conversion can be verified on any
+ * host; all canonicalization and confinement still happen in resolvePath().
+ */
+export function _normalizeSlashDrivePathForTests(
+  raw: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const match = /^\/([A-Za-z])(?:\/|$)/.exec(raw);
+  if (platform !== 'win32' || !match) return raw;
+
+  const driveRoot = `${match[1].toUpperCase()}:\\`;
+  const remainder = raw.slice(match[0].length).split('/').join(path.win32.sep);
+  return remainder ? `${driveRoot}${remainder}` : driveRoot;
+}
+
+/**
  * Resolve a user-supplied path against the data dir (for relative paths) and
  * enforce the effective confinement roots. An empty roots array blocks all access.
  * Throws on a confinement violation so callers surface a precise error.
@@ -154,8 +173,11 @@ function errorResult(message: string): CallToolResult {
 async function resolvePath(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('Provide "path".');
+  const normalized = _normalizeSlashDrivePathForTests(raw);
   const dataDir = getDataDir();
-  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
+  const resolved = path.isAbsolute(normalized)
+    ? path.resolve(normalized)
+    : path.resolve(dataDir, normalized);
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
@@ -170,7 +192,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'read_file',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        `Read text or media files. Use "path" for one file or "paths" for up to 25; do not use both. For text, "from"/"to" select lines and "pattern" finds text. Files over ${LARGE_FILE_BYTES / 1000} KB need a line range or pattern; use pattern "*" to read all. Media limit: ${MAX_MEDIA_BYTES / (1024 * 1024)} MB. Use the returned contentHash as expectedHash when editing.`,
+        `Read text or media files. Use "path" for one file or "paths" for up to 25; do not use both. For text, "from"/"to" select lines and "pattern" is a case-insensitive regular expression. Regex metacharacters have their usual meaning and must be escaped for literal matching; invalid expressions or expressions over ${MAX_READ_PATTERN_LENGTH} characters return an error. Files over ${LARGE_FILE_BYTES / 1000} KB need a line range or pattern; the exact pattern "*" is a reserved sentinel that reads the whole file. Media limit: ${MAX_MEDIA_BYTES / (1024 * 1024)} MB. Use the returned contentHash as expectedHash when editing.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -184,7 +206,7 @@ export function filesystemToolDefinitions(): Tool[] {
           },
           from: { type: 'number', description: 'Optional 1-based first line to return (inclusive).' },
           to: { type: 'number', description: 'Optional 1-based last line to return (inclusive).' },
-          pattern: { type: 'string', description: 'Case-insensitive substring to grep for. Required to read a large file whole without a "from"/"to" range; matching lines (plus context) are returned instead of the full body. Use "*" to read the whole large file anyway.' },
+          pattern: { type: 'string', description: `Case-insensitive regular expression, limited to ${MAX_READ_PATTERN_LENGTH} characters. Regex metacharacters have their usual meaning; escape them for a literal match. Invalid or over-limit expressions return a tool error. Required to read a large file whole without a "from"/"to" range; matching lines plus context are returned instead of the full body. The exact value "*" is reserved to read the whole file.` },
         },
       },
       outputSchema: {
@@ -574,42 +596,30 @@ function mediaResult(
   return result;
 }
 
-/**
- * Stream a file line-by-line and collect the lines that contain `needle`
- * (case-insensitive substring). Streaming means a match can be found without
- * buffering the whole file. Stops early once `max` matches are collected.
- */
-async function grepFileLines(
-  filePath: string,
-  needle: string,
-  max: number
-): Promise<{ matches: Array<{ line: number; text: string }>; truncated: boolean }> {
-  const lower = needle.toLowerCase();
-  const matches: Array<{ line: number; text: string }> = [];
-  let truncated = false;
-  const stream = createReadStream(filePath, { encoding: 'utf8' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let lineNo = 0;
-  try {
-    for await (const line of rl) {
-      lineNo++;
-      if (line.toLowerCase().includes(lower)) {
-        matches.push({ line: lineNo, text: line.slice(0, 400) });
-        if (matches.length >= max) { truncated = true; break; }
-      }
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
+function compileReadPattern(pattern: string): RegExp | undefined {
+  if (!pattern || pattern === '*') return undefined;
+  if (pattern.length > MAX_READ_PATTERN_LENGTH) {
+    throw new Error(
+      `Invalid regular expression: pattern exceeds the ${MAX_READ_PATTERN_LENGTH}-character limit.`
+    );
   }
-  return { matches, truncated };
+  try {
+    return new RegExp(pattern, 'i');
+  } catch (err) {
+    const detail = err instanceof Error
+      ? err.message.replace(/^Invalid regular expression:\s*/i, '')
+      : 'the pattern could not be compiled.';
+    throw new Error(`Invalid regular expression: ${detail}`);
+  }
 }
 
 async function readSingleFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
   const filePath = await resolvePath(args.path, roots);
 
   const hasRange = typeof args.from === 'number' || typeof args.to === 'number';
-  const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : '';
+  const suppliedPattern = typeof args.pattern === 'string' ? args.pattern : '';
+  const pattern = suppliedPattern.trim() ? suppliedPattern : '';
+  const patternRegex = compileReadPattern(pattern);
 
   // #287: guard whole-file reads of large files. Stat first so we never buffer a
   // huge file just to reject it. An explicit line range or a `pattern` opts out.
@@ -690,10 +700,12 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
     const content = buf.toString('utf8');
     const lines = splitLines(content);
     const totalLines = lines.length;
-    const lower = pattern.toLowerCase();
     const matches: Array<{ line: number; text: string }> = [];
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(lower)) {
+      // The current expression has no stateful flags, but resetting lastIndex
+      // keeps this safe if flags change later.
+      patternRegex!.lastIndex = 0;
+      if (patternRegex!.test(lines[i])) {
         matches.push({ line: i + 1, text: lines[i].slice(0, 400) });
         if (matches.length >= MAX_READ_PATTERN_MATCHES) break;
       }
