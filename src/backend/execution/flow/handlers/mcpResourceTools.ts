@@ -25,6 +25,8 @@ import { listRunResources, writeRunResource } from '@/backend/services/runResour
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { MCPResource, MCPResourceTemplate, MCPReadResourceResult } from '@/shared/types/mcp';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { fileURLToPath } from 'node:url';
 import {
   assertFlowExecutionCurrent,
   commitFlowDurableMutation,
@@ -74,6 +76,55 @@ function filterTemplatesByEnabledResources(
   if (enabledResources === undefined || enabledResources === 'all') return templates;
   const allowed = new Set(enabledResources);
   return templates.filter((t) => allowed.has(t.uriTemplate));
+}
+
+/**
+ * Turn a filesystem-shaped read_resource argument into the path expected by
+ * the filesystem MCP's read_file tool. Bare values without a URI scheme are
+ * treated as paths so relative paths keep the filesystem server's own root
+ * resolution semantics.
+ */
+function filesystemPathFromResourceInput(uri: string): string | null {
+  if (uri.toLowerCase().startsWith('file://')) {
+    try {
+      return fileURLToPath(uri);
+    } catch {
+      return null;
+    }
+  }
+
+  // A drive letter is a path, not a URI scheme. Other explicit schemes stay
+  // on the native resource path and must never be reinterpreted as files.
+  if (/^[a-zA-Z]:[\\/]/.test(uri)) return uri;
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(uri)) return null;
+  return uri;
+}
+
+/** Adapt filesystem/read_file's CallToolResult to resources/read content. */
+function filesystemToolResultContents(result: CallToolResult): MCPReadResourceResult['contents'] {
+  const structured = (result as CallToolResult & {
+    structuredContent?: Record<string, unknown>;
+  }).structuredContent;
+  const content = Array.isArray(result.content) ? result.content : [];
+  const binary = content
+    .filter((item) => {
+      const type = (item as { type?: unknown }).type;
+      return (type === 'image' || type === 'audio' || type === 'video')
+        && typeof (item as { data?: unknown }).data === 'string';
+    })
+    .map((item) => ({
+      blob: (item as { data: string }).data,
+      mimeType: (item as { mimeType?: string }).mimeType,
+    }));
+
+  if (binary.length > 0) return binary as MCPReadResourceResult['contents'];
+  if (typeof structured?.content === 'string') {
+    return [{ text: structured.content, mimeType: 'text/plain' }] as MCPReadResourceResult['contents'];
+  }
+  const textContents = content
+    .filter((item) => (item as { type?: unknown }).type === 'text')
+    .map((item) => ({ text: (item as { text: string }).text, mimeType: 'text/plain' }));
+  return textContents as MCPReadResourceResult['contents'];
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +403,7 @@ export async function executeNativeReadResource(
   //    Re-list on demand to ensure freshness.
   let owningServer: string | undefined;
   let owningNodeId: string | undefined;
-  let ownerEnabledResources: string[] | 'all' | undefined;
+  let filesystemFallback: { path: string; timeout?: number } | undefined;
 
   for (const mcpNode of ctx.mcpNodes) {
     const { boundServer, enabledResources } = mcpNode.properties;
@@ -373,7 +424,6 @@ export async function executeNativeReadResource(
       if (found) {
         owningServer = boundServer;
         owningNodeId = mcpNode.id;
-        ownerEnabledResources = enabledResources;
         break;
       }
       // Also check templates (URI might be a resolved template URI — we allow it
@@ -382,6 +432,23 @@ export async function executeNativeReadResource(
       // refuse with an appropriate error if the URI is invalid.
     } catch {
       // listing failure — try next node
+    }
+  }
+
+  // An unlisted file URI (or a direct path) can still be resolved by a bound
+  // filesystem MCP. Gate this on read_file being enabled for the node: this is
+  // a tool fallback, not a bypass around the flow's configured capabilities.
+  if (!owningServer) {
+    const filePath = filesystemPathFromResourceInput(uri);
+    const filesystemNode = filePath === null
+      ? undefined
+      : ctx.mcpNodes.find((mcpNode) =>
+          mcpNode.properties.boundServer === 'filesystem'
+          && (mcpNode.properties.enabledTools ?? []).includes('read_file'));
+    if (filesystemNode && filePath !== null) {
+      owningServer = 'filesystem';
+      owningNodeId = filesystemNode.id;
+      filesystemFallback = { path: filePath, timeout: filesystemNode.properties.toolTimeout };
     }
   }
 
@@ -399,7 +466,37 @@ export async function executeNativeReadResource(
   try {
     await assertFlowExecutionCurrent(ctx);
     await ctx.executionAuthority?.authorizePersonaCoreMcp?.(owningServer, owningNodeId);
-    readResult = await mcpService.readResource(owningServer, uri) as typeof readResult;
+    if (filesystemFallback) {
+      const toolResult = await mcpService.callTool(
+        owningServer,
+        'read_file',
+        { path: filesystemFallback.path },
+        filesystemFallback.timeout,
+        undefined,
+        owningNodeId,
+        undefined,
+        'model',
+      );
+      const data = toolResult.data as CallToolResult | undefined;
+      if (!toolResult.success || !data || data.isError) {
+        const detail = data?.content
+          ?.filter((item) => (item as { type?: unknown }).type === 'text')
+          .map((item) => (item as { text: string }).text)
+          .join('\n');
+        readResult = {
+          success: false,
+          error: toolResult.error ?? detail ?? `Failed to read file ${filesystemFallback.path}`,
+          statusCode: toolResult.statusCode,
+        };
+      } else {
+        readResult = {
+          success: true,
+          data: { contents: filesystemToolResultContents(data) } as MCPReadResourceResult,
+        };
+      }
+    } else {
+      readResult = await mcpService.readResource(owningServer, uri) as typeof readResult;
+    }
     // Resource reads can block on a remote server.  Reject a late response
     // before it is captured, emitted, or returned into a stale transcript.
     await assertFlowExecutionCurrent(ctx);

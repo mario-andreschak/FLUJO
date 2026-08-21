@@ -139,14 +139,16 @@ describe('FlowBuilder CustomNodes', () => {
     jest.useRealTimers();
   });
 
-  it('does not pin quick-connect controls open when a node is selected', () => {
+  it('pins quick-connect controls open when a node is selected', () => {
     renderNode(ProcessNode, {
       label: 'Summarizer',
       type: 'process',
       properties: {},
     }, {}, true);
 
-    expect(screen.queryByRole('button', { name: /of Summarizer/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /bottom of Summarizer/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /left of Summarizer/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /right of Summarizer/i })).toHaveLength(2);
   });
 
   it('does not offer add-and-connect controls from MCP nodes', () => {

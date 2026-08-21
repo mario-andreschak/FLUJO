@@ -164,16 +164,13 @@ async function resolvePath(input: unknown, roots: string[]): Promise<string> {
 }
 
 export function filesystemToolDefinitions(): Tool[] {
-  const pathProp = { type: 'string', description: 'File or directory path. Relative paths resolve against the FLUJO data directory; absolute paths are used as-is.' };
+  const pathProp = { type: 'string', description: 'File or directory path. Relative paths start at the FLUJO data directory.' };
   return [
     {
       name: 'read_file',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. ' +
-        `Media files (images, audio, video) are detected automatically and returned as MCP media content items; read them with "path" alone ("pattern"/"from"/"to" do not apply to binary media, and the large-file rule below is waived for them, up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB). FLUJO persists the bytes as a run resource and re-attaches them to the conversation as a real media input, so a model that accepts that modality perceives the file directly; a model that does not receives the run-resource URI and can still pass it to other tools. ` +
-        `For large NON-MEDIA files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
-        'Single text reads return { path, from, to, totalLines, content, truncated, contentHash, matches? } unchanged; media reads return { path, mediaType, mimeType, size, encoding } alongside the media item. Batch reads return { files }, with one ordered success or { requestedPath, path?, error } record per input; individual failures do not discard successful reads. Batch output is limited to 1,000,000 serialized characters. Pass contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
+        `Read text or media files. Use "path" for one file or "paths" for up to 25; do not use both. For text, "from"/"to" select lines and "pattern" finds text. Files over ${LARGE_FILE_BYTES / 1000} KB need a line range or pattern; use pattern "*" to read all. Media limit: ${MAX_MEDIA_BYTES / (1024 * 1024)} MB. Use the returned contentHash as expectedHash when editing.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -220,7 +217,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'write_file',
       annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description:
-        'Create or write a text file (parent directories are created). "mode": "overwrite" (default) replaces the whole file, or a line range when "startLine"/"endLine" (1-based inclusive) are given; "append" adds content at the end; "insert" inserts content before "startLine". Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the write if the file changed on disk since it was read (TOCTOU guard); ignored for a whole-file overwrite. Returns { path, bytesWritten, mode, ... }.',
+        'Write a text file and create missing parent directories. Modes: overwrite (default), append, or insert before startLine. For a range overwrite, give startLine and endLine. Use expectedHash from read_file to reject changes to a stale file; it is ignored for whole-file overwrite.',
       // #216: feed the docked diff canvas (ui://devcanvas/diff) so successive
       // writes update one persistent tab. See internal/filesystemResources.ts.
       _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
@@ -254,7 +251,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'edit_file',
       annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description:
-        'Edit a text file two ways (mutually exclusive): (1) "edits": [{ oldText, newText, startLine?, endLine? }] literal find/replace — each replaces the unique occurrence of oldText. startLine/endLine are an optional disambiguation HINT (if exactly one match starts in that range it wins); a wrong/missing range still works as long as oldText is unique in the file. Include enough surrounding context to make oldText unique. Or (2) "diff": a unified diff string ("@@ -a,b +c,d @@" hunks) applied atomically — hunks are relocated to where their context actually matches, so slightly-off @@ line numbers still apply, and CRLF files are handled. Fails with no partial write only when text is missing/ambiguous or a hunk context is not found. Optionally pass "expectedHash" (the contentHash from a prior read_file) to reject the edit if the file changed on disk since it was read (TOCTOU guard). Returns { path, editsApplied|applied, diff:{added,removed} }.',
+        'Edit a text file with either "edits" or "diff"; do not use both. Each oldText must match once, so include enough context to make it unique. A unified diff is applied atomically. Use expectedHash from read_file to reject edits to a stale file.',
       // #216: also feed the docked diff canvas so edits show live in the canvas.
       _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
       inputSchema: {
@@ -301,7 +298,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'list_dir',
       annotations: READ_ONLY_ANNOTATIONS,
-      description: 'List the entries of a directory. Returns { path, entries: [{ name, type, size }] } where type is "file" | "directory" | "other".',
+      description: 'List a directory. Each entry includes name, type, and size.',
       inputSchema: {
         type: 'object',
         properties: { path: pathProp },
@@ -327,7 +324,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'file_browser_ui',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Open an interactive file browser in the chat so the USER can pick a file. This returns IMMEDIATELY without a selection — the browser is shown to the user and the file they choose arrives afterwards as a follow-up user message (e.g. "Selected file: <path>"). After calling this tool you MUST stop and wait for that message; do not guess a path or continue until the user has selected.',
+        'Ask the user to pick a file in an interactive browser. This returns before they choose. After calling it, STOP and wait for a follow-up user message containing the selected path.',
       // MCP Apps (#97): this tool exists solely to surface the file-browser app
       // (ui://filesystem/browser). See internal/filesystemResources.ts.
       _meta: { ui: { resourceUri: 'ui://filesystem/browser' } },
@@ -342,7 +339,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'dir_tree',
       annotations: READ_ONLY_ANNOTATIONS,
-      description: 'Return a recursive, depth-limited directory tree as nested JSON. Returns { path, depth, tree }.',
+      description: 'List a directory tree recursively, limited by depth.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -366,7 +363,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'search',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Search a directory tree. Match file/dir NAMES against "namePattern" (substring, case-insensitive) and/or file CONTENT against "content" (substring, case-insensitive). Content search DOES look inside every text file, returning each matching line with its 1-based line number; likely-binary and very large files are skipped for speed. Returns { matches: [{ path, line?, text? }], truncated }.',
+        'Search a directory tree by namePattern and/or text content. Matching is case-insensitive. Content matches include line numbers. Binary and very large files are skipped.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -395,7 +392,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'get_file_info',
       annotations: READ_ONLY_ANNOTATIONS,
-      description: 'Stat a path. Returns { path, type, size, isFile, isDirectory, createdAt, modifiedAt }.',
+      description: 'Get a path\'s type, size, and creation and modification times.',
       inputSchema: {
         type: 'object',
         properties: { path: pathProp },
@@ -418,7 +415,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'create_directory',
       annotations: WRITE_ANNOTATIONS,
-      description: 'Create a directory (recursively). Succeeds if it already exists. Returns { path, created }.',
+      description: 'Create a directory and any missing parents. Succeeds if it exists.',
       inputSchema: {
         type: 'object',
         properties: { path: pathProp },
@@ -433,7 +430,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'move',
       annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
-      description: 'Move or rename a file/directory from "source" to "destination". Returns { source, destination }.',
+      description: 'Move or rename a file or directory.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -451,7 +448,7 @@ export function filesystemToolDefinitions(): Tool[] {
     {
       name: 'delete',
       annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
-      description: 'Delete a file or directory. Pass "recursive": true to remove a non-empty directory. Returns { path, deleted }.',
+      description: 'Delete a file or directory. Set recursive to true for a non-empty directory.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -470,12 +467,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'get_allowed_directories',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Returns the list of directories that this filesystem MCP server is ' +
-        'currently allowed to access. The list is the merged result of ' +
-        'server-level roots (configured via FLUJO MCP settings), MCP-node-level ' +
-        'roots (set in the FlowBuilder), and the FLUJO_FS_ROOTS environment ' +
-        'variable ceiling. When no roots are configured at all, returns the FLUJO ' +
-        'data directory as the default (so the file browser is usable out of the box).',
+        'List the directories this server is allowed to access.',
       inputSchema: {
         type: 'object',
         properties: {},

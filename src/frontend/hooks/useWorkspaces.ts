@@ -31,11 +31,12 @@ export function useWorkspaces(): {
   select: (workspace: string) => void;
   create: (workspace: string) => Promise<void>;
   rename: (workspace: string, newName: string) => Promise<void>;
+  edit: (workspace: string, newName: string, roots: string[]) => Promise<void>;
   remove: (workspace: string) => Promise<void>;
   loading: boolean;
 } {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([
-    { name: DEFAULT_WORKSPACE, color: workspaceColor(DEFAULT_WORKSPACE), isDefault: true },
+    { name: DEFAULT_WORKSPACE, color: workspaceColor(DEFAULT_WORKSPACE), isDefault: true, roots: [] },
   ]);
   const [selected, setSelected] = useState<string>(() => getSelectedWorkspace());
   const [loading, setLoading] = useState(true);
@@ -95,7 +96,7 @@ export function useWorkspaces(): {
 
   const mutate = useCallback(async (
     method: 'POST' | 'PATCH' | 'DELETE',
-    body: Record<string, string>,
+    body: Record<string, unknown>,
   ): Promise<{ workspace?: WorkspaceInfo; workspaces: WorkspaceInfo[] }> => {
     const response = await fetch('/api/workspaces', {
       method,
@@ -131,11 +132,21 @@ export function useWorkspaces(): {
     if (wasSelected) select(result.workspace?.name ?? newName);
   }, [mutate, select]);
 
+  const edit = useCallback(async (workspace: string, newName: string, roots: string[]) => {
+    const wasSelected = getSelectedWorkspace() === workspace;
+    const result = await mutate('PATCH', {
+      name: workspace,
+      newName,
+      roots,
+    });
+    if (wasSelected && newName !== workspace) select(result.workspace?.name ?? newName);
+  }, [mutate, select]);
+
   const remove = useCallback(async (workspace: string) => {
     const wasSelected = getSelectedWorkspace() === workspace;
     await mutate('DELETE', { name: workspace });
     if (wasSelected) select(DEFAULT_WORKSPACE);
   }, [mutate, select]);
 
-  return { workspaces, selected, select, create, rename, remove, loading };
+  return { workspaces, selected, select, create, rename, edit, remove, loading };
 }

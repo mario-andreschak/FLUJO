@@ -7,6 +7,7 @@ import {
   ToolCallProcessingResult
 } from '../types/modelHandler';
 import { ToolCallInfo } from '../types'; // Import ToolCallInfo
+import { classifyToolExitCode } from '../toolRepeatGuard';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path for FlujoChatMessage
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
@@ -143,6 +144,19 @@ import {
   statisticsCacheOutcomeFromUsage,
   statisticsPayloadMetadata,
 } from '@/backend/services/statistics/metadata';
+
+const EMPTY_STOP_COMPLETION_REASON = 'empty_stop_completion';
+const EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE = 5;
+const EMPTY_STOP_TEMPERATURE_RETRY = 3;
+const EMPTY_STOP_RETRY_TEMPERATURE = 1 as const;
+const EMPTY_STOP_SYNTHETIC_USER_MESSAGE =
+  'Your previous response was empty. Please provide a complete response or make the appropriate tool call.';
+
+function isEmptyStoppedCompletionError(error: ExecutionError): boolean {
+  return error.type === 'model'
+    && error.code === 'api_error'
+    && error.details?.reason === EMPTY_STOP_COMPLETION_REASON;
+}
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
@@ -1544,6 +1558,7 @@ export class ModelHandler {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
+      temperatureOverride: input.temperatureOverride,
       requestToolApproval,
       onTranscriptMessage,
       consumeSteeringMessages,
@@ -1802,6 +1817,7 @@ export class ModelHandler {
       /** Effective per-completion output-token cap, already resolved by callModel
        *  (node override → model setting). Undefined ⇒ adapter default (#189). */
       maxTokens?: number;
+      temperatureOverride?: number;
       requestToolApproval?: (call: {
         id: string;
         name: string;
@@ -1907,12 +1923,13 @@ export class ModelHandler {
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
+      const configuredTemperature = opts?.temperatureOverride ?? model.temperature;
       const temperature = normalizeModelTemperature(
-        model.temperature,
+        configuredTemperature,
         model.provider,
         model.adapter,
         model.name,
-      ) ?? (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
+      ) ?? (configuredTemperature === undefined || configuredTemperature === '' ? 0.0 : undefined);
 
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
@@ -2441,7 +2458,8 @@ export class ModelHandler {
       // throws — a thrown SDK error is shaped into an error Result in-place.
       const attempt = async (
         attemptMessages: OpenAI.ChatCompletionMessageParam[],
-        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        attemptTemperature = temperature,
       ): Promise<Result<ModelCallResult>> => {
         // Start the cancellation watch just before the (possibly long) provider
         // call. A Stop pressed at any point during the call aborts it within
@@ -2615,7 +2633,7 @@ export class ModelHandler {
                 : undefined,
               messages: hydratedMessages,
               tools: attemptTools,
-              temperature,
+              temperature: attemptTemperature,
               // Effective output-token cap: node-level override → per-model default
               // (resolved in callModel, #189), falling back to the per-model value
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
@@ -2805,7 +2823,7 @@ export class ModelHandler {
                 'Model reported completion (finish_reason "stop") but returned an empty message with no media or tool calls.',
                 modelId,
                 undefined,
-                { rawResponse: chatCompletion }
+                { reason: EMPTY_STOP_COMPLETION_REASON, rawResponse: chatCompletion }
               )
             };
           }
@@ -2885,11 +2903,12 @@ export class ModelHandler {
        */
       const attemptWithLimitRetry = async (
         attemptMessages: OpenAI.ChatCompletionMessageParam[],
-        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        attemptTemperature = temperature,
       ): Promise<Result<ModelCallResult>> => {
         for (;;) {
           attemptProducedOutput = false;
-          const attemptResult = await attempt(attemptMessages, attemptTools);
+          const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
@@ -2952,6 +2971,53 @@ export class ModelHandler {
       };
 
       let result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
+
+      // An empty `stop` is safe to replay: by definition it has no prose,
+      // media, transcript activity, or tool call/side effect. Give the provider
+      // five retries first (preserving the exact prompt/cache prefix). After
+      // two retries, raise temperature to 1 for exactly the next attempt, then
+      // restore the configured temperature. If all five retries are empty,
+      // make one final attempt with an explicit user nudge so models that became
+      // stuck at an assistant boundary can recover. If that is empty too, return
+      // the original normalized error shape.
+      if (!result.success && isEmptyStoppedCompletionError(result.error)) {
+        for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
+          if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
+          const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
+            ? EMPTY_STOP_RETRY_TEMPERATURE
+            : temperature;
+          log.warn('Model returned an empty stopped completion; retrying the same request', {
+            modelId,
+            retry,
+            maxRetriesBeforeSyntheticMessage: EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE,
+            temperatureRaised: retry === EMPTY_STOP_TEMPERATURE_RETRY,
+          });
+          result = await attemptWithLimitRetry(apiMessages, sanitizedTools, retryTemperature);
+          if (result.success || !isEmptyStoppedCompletionError(result.error)) break;
+        }
+
+        if (
+          !result.success
+          && isEmptyStoppedCompletionError(result.error)
+          && !abortController.signal.aborted
+          && !opts?.shouldAbort?.()
+          && !attemptProducedOutput
+        ) {
+          const syntheticRetryMessages: OpenAI.ChatCompletionMessageParam[] = [
+            ...apiMessages,
+            { role: 'user', content: EMPTY_STOP_SYNTHETIC_USER_MESSAGE },
+          ];
+          log.warn('Model repeatedly returned an empty stopped completion; retrying once with a synthetic user message', {
+            modelId,
+          });
+          try {
+            opts?.onFinalWire?.(syntheticRetryMessages, visualDiagnostic, modelInputForArchive);
+          } catch (error) {
+            log.warn('Final-wire observer failed during empty-completion retry; continuing retry', { error });
+          }
+          result = await attemptWithLimitRetry(syntheticRetryMessages, sanitizedTools);
+        }
+      }
 
       // Context-length overflow recovery. A single unexpectedly-large tool
       // result in the RECENT tail (a big search dump, a file read) can blow the
@@ -3129,7 +3195,7 @@ export class ModelHandler {
       // always the model's original tool_calls order — independent of completion
       // order. This keeps the prefix-cache fingerprint stable and a single-call
       // turn byte-identical to the old sequential path.
-      type ProcessedToolCall = { name: string; args: Record<string, unknown>; id: string; result: string };
+      type ProcessedToolCall = ToolCallInfo;
       const results: Array<FlujoChatMessage | null> = new Array(toolCalls.length).fill(null);
       const processed: Array<ProcessedToolCall | null> = new Array(toolCalls.length).fill(null);
       // A valid meeting_control(silent) is a terminal barrier inside this tool
@@ -3991,7 +4057,15 @@ export class ModelHandler {
             name,
             args,
             id,
-            result: resultContent
+            result: resultContent,
+            exitCode: (
+              !result.success
+              || Boolean(
+                result.data
+                && typeof result.data === 'object'
+                && (result.data as CallToolResult).isError === true,
+              )
+            ) ? 1 : 0,
           });
         } catch (error) {
           if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;
@@ -4041,12 +4115,19 @@ export class ModelHandler {
           // entry), so [0] is authoritative; ordering is by callIndex, never by
           // completion time.
           results[callIndex] = toolCallMessages[0] ?? null;
-          processed[callIndex] = processedToolCalls[0] ?? null;
+          const processedCall = processedToolCalls[0];
+          const message = toolCallMessages[0];
+          const content = typeof message?.content === 'string' ? message.content : '';
+          processed[callIndex] = processedCall
+            ? {
+                ...processedCall,
+                exitCode: processedCall.exitCode
+                  ?? classifyToolExitCode(content, Boolean(message?.ui?.isError)),
+              }
+            : null;
           if (runId) {
-            const message = toolCallMessages[0];
-            const content = typeof message?.content === 'string' ? message.content : '';
             const cancelled = Boolean(signal?.aborted || input.shouldAbort?.() || /\bcancel(?:led|ed|ation)\b/i.test(content));
-            const failed = Boolean(message?.ui?.isError || /^Error:/i.test(content));
+            const failed = processed[callIndex]?.exitCode === 1;
             const kind = name.startsWith('handoff_to_') || name === 'handoff'
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)

@@ -23,7 +23,7 @@ jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
 }));
 
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: jest.fn() },
+  mcpService: { callTool: jest.fn(), setNodeRoots: jest.fn() },
 }));
 
 function makeState(overrides: Partial<SharedState> = {}): SharedState {
@@ -114,20 +114,30 @@ describe('StaticNode', () => {
       }],
       mcpNodes: [{
         id: 'mcp-files',
-        properties: { boundServer: 'files', enabledTools: ['read_file'], toolTimeout: 42 },
+        properties: {
+          boundServer: 'files',
+          enabledTools: ['read_file'],
+          toolTimeout: 42,
+          roots: ['/workspace/static'],
+        },
       }],
     });
     const state = makeState();
 
     await run(node, state, p);
 
+    expect(mcpService.setNodeRoots).toHaveBeenCalledWith(
+      'files',
+      'mcp-files',
+      ['/workspace/static'],
+    );
     expect(mcpService.callTool).toHaveBeenCalledWith(
       'files',
       'read_file',
       { path: 'a.txt' },
       42,
       undefined,
-      'stat',
+      'mcp-files',
     );
     expect(state.messages).toHaveLength(2);
     expect((state.messages[0] as any).mcpToolCalls).toEqual({

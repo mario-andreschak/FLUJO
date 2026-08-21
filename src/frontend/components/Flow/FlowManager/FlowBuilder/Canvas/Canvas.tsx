@@ -56,7 +56,7 @@ import { CanvasProps, EditNodeEventDetail, NodeSelectionModalProps } from './typ
 import { useCanvasEvents } from './hooks/useCanvasEvents';
 import { validateConnection, isConnectionAllowed, createEdgeFromConnection, getReplacedEdgeIds, canConvertToBidirectional } from './utils/edgeUtils';
 import { validTargetTypesFor, defaultTargetHandleFor } from './utils/connectionRules';
-import { shouldOpenNodePicker } from './utils/nodePickerGate';
+import { directConfigurationTargetFor, shouldOpenNodePicker } from './utils/nodePickerGate';
 import { findNodeById } from './utils/nodeUtils';
 import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
@@ -128,6 +128,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   // Valid target node types come from the shared connection rules, so the
   // picker always agrees with validateConnection.
   const validNodeTypes = validTargetTypesFor(sourceNodeType, sourceHandleId);
+  const directConfigurationTarget = directConfigurationTargetFor(sourceNodeType, sourceHandleId);
 
   // Log the validation for debugging
   log.debug(`NodeSelectionModal: Source node type: ${sourceNodeType}, Source handle ID: ${sourceHandleId}`);
@@ -213,7 +214,9 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
     }
   };
 
-  if (!open || !position) return null;
+  // A one-item MCP/Resource choice is consumed by Canvas and routed directly
+  // to that node's specialized picker; never flash the redundant type picker.
+  if (!open || !position || directConfigurationTarget) return null;
 
   return (
     <Portal>
@@ -385,6 +388,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onEditNode,
     onCreateNode,
     onSelectNode,
+    onConfigureNode,
     onConvertProcessToSubflow,
     onEditEdge,
   } = props;
@@ -924,8 +928,17 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       // Close the modal; this also discards the consumed connection source.
       setNodeSelectionModal({ open: false, position: null });
 
-      // The persistent inspector follows selection; no blocking editor opens.
-      onSelectNode?.(newNode);
+      const directConfigurationTarget = directConfigurationTargetFor(
+        nodeSelectionModal.sourceNodeType,
+        nodeSelectionModal.sourceHandleId,
+      );
+      if (directConfigurationTarget === nodeType) {
+        onConfigureNode?.(newNode);
+      } else {
+        // The persistent inspector follows ordinary additions; only singleton
+        // attachment targets open a blocking configuration picker.
+        onSelectNode?.(newNode);
+      }
     },
     [
       nodeSelectionModal,
@@ -936,8 +949,21 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       onEdgesChange,
       onCreateNode,
       onSelectNode,
+      onConfigureNode,
     ]
   );
+
+  // MCP and Resource connection handles have only one valid target. Consume
+  // that deterministic choice immediately, for both drag-to-pane and the
+  // floating quick-connect buttons.
+  useEffect(() => {
+    if (!nodeSelectionModal.open || !nodeSelectionModal.position) return;
+    const target = directConfigurationTargetFor(
+      nodeSelectionModal.sourceNodeType,
+      nodeSelectionModal.sourceHandleId,
+    );
+    if (target) handleNodeTypeSelection(target, nodeSelectionModal.position);
+  }, [handleNodeTypeSelection, nodeSelectionModal]);
 
   // Close the node selection modal, abandoning the pending connection.
   const handleCloseNodeSelectionModal = useCallback(() => {

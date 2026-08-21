@@ -10,7 +10,16 @@ export { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider'
  * module-wide Undici dispatcher so client construction stays cheap while
  * `pipelining: 0` sends `Connection: close` and prevents stale socket reuse.
  */
-const openAITransport = new Agent({ pipelining: 0 });
+const openAITransport = new Agent({
+  pipelining: 0,
+  // Undici otherwise applies its own 300-second header/body inactivity
+  // timeouts. The OpenAI SDK retries those failures twice by default, turning
+  // one slow local-model request into a misleading ~15-minute timeout even
+  // though the SDK-level request ceiling below is five hours. Keep every
+  // transport layer on the same budget so the SDK timeout remains authoritative.
+  headersTimeout: LLM_REQUEST_TIMEOUT_MS,
+  bodyTimeout: LLM_REQUEST_TIMEOUT_MS,
+});
 
 // The SDK's Fetch alias is expressed in terms of the DOM Request type while
 // Undici adds Node-only fields such as `duplex`. The runtime signatures are

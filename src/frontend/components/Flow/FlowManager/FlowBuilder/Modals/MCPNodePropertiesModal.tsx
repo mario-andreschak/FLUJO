@@ -51,6 +51,10 @@ interface MCPNodePropertiesModalProps {
   onClose: () => void;
   onSave: (nodeId: string, data: any) => void;
   authoringMode?: FlowAuthoringMode;
+  /** Open the server card picker immediately for a quick-created MCP node. */
+  serverPickerInitiallyOpen?: boolean;
+  /** Quick-create selection commits immediately instead of revealing settings. */
+  onQuickServerSelect?: (node: FlowNode, serverName: string) => void | Promise<void>;
 }
 
 type CompactTab = 'server' | 'tools' | 'settings';
@@ -62,6 +66,8 @@ export const MCPNodePropertiesModal = ({
   onClose,
   onSave,
   authoringMode = 'advanced',
+  serverPickerInitiallyOpen = false,
+  onQuickServerSelect,
 }: MCPNodePropertiesModalProps) => {
   const { t } = useI18n();
   const theme = useTheme();
@@ -105,9 +111,9 @@ export const MCPNodePropertiesModal = ({
     const hasServer = !!node.data.properties?.boundServer;
     setActiveCompactTab(hasServer ? 'tools' : 'server');
     setActiveDesktopTab('tools');
-    setServerPickerOpen(false);
+    setServerPickerOpen(serverPickerInitiallyOpen && !hasServer);
     setInitializeToolsForServer(null);
-  }, [node, open]);
+  }, [node, open, serverPickerInitiallyOpen]);
 
   // A newly selected server starts with all of its tools enabled, matching the
   // existing add-and-connect flow. An explicitly saved empty list is left alone
@@ -178,6 +184,11 @@ export const MCPNodePropertiesModal = ({
 
   const handleServerSelect = (serverName: string) => {
     logger.debug(`Server selected: ${serverName}`);
+    if (node && onQuickServerSelect) {
+      setServerPickerOpen(false);
+      void Promise.resolve(onQuickServerSelect(node, serverName)).then(onClose);
+      return;
+    }
     setServerPickerOpen(false);
     setNodeData((previous) => {
       if (!previous || previous.properties?.boundServer === serverName) return previous;
@@ -565,7 +576,7 @@ export const MCPNodePropertiesModal = ({
 
       <CardPickerDialog
         open={serverPickerOpen}
-        onClose={() => setServerPickerOpen(false)}
+        onClose={onQuickServerSelect ? onClose : () => setServerPickerOpen(false)}
         fullScreen={isPhoneLayout}
         maxWidth="md"
         title={t('flows.mcpNode.bind')}

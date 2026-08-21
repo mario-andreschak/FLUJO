@@ -2,13 +2,13 @@
 
 # FLUJO
 
-### Build AI workflows visually. Run them your way.
+### Build private AI agents visually. Run them your way.
 
-**Turn your models and MCP tools into AI workflows you can chat with, automate, and call from other apps.**
+**Connect your AIs and apps, build an agent, then talk to it, automate it, or call it from other software.**
 
-FLUJO is open-source and local-first: connect models, tools, and reusable subflows with drag and drop; debug every step in chat; trigger runs on schedules or events; and serve flows through OpenAI-compatible and MCP endpoints — while your keys and data stay under your control.
+FLUJO is open-source and local-first. Start with the guided setup, build agents as simple step-by-step recipes or expert visual flows, inspect every run, and expose the same agents through OpenAI-compatible and MCP endpoints — while your keys and data stay under your control.
 
-**Visual flows** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
+**Simple + visual builders** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
 
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
@@ -18,8 +18,9 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 </div>
 
 [![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
-
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
+
+<img width="1336" height="839" alt="image" src="https://github.com/user-attachments/assets/7adb5b58-bffa-48dc-82f3-bf1ac585db55" />
 
 ## ⚡ Quick Install (recommended)
 
@@ -54,36 +55,41 @@ Prefer to set it up manually? See [Getting Started](#-getting-started). To remov
 
 ![FLUJO Overview](docs/images/readme/home.png)
 
+<p align="center"><em>The FLUJO home screen: connect once, then use your private AI workspace.</em></p>
+
 FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.io/Pocket-Flow-Framework/) and built with Cline, Claude Code, and a lot of love.
 
 ## 🌟 Key Features
 
-### 🔑 Secure Environment & API Key Management
+### 🔐 Local-first Security & Workspace Controls
 
+- **Local-first by default**: keep FLUJO on localhost, allow devices on your private network, or configure it for a public deployment
 - **Encrypted at rest**: API keys and other secrets are encrypted in local storage, with an optional custom encryption password for extra protection
 - **Never sent to the browser**: secrets stay server-side — the frontend only ever sees a masked placeholder, even in your own DevTools
-- **Global variables, bound anywhere**: define a key once (e.g. `openrouter_key`) and bind it into any model or MCP server config instead of pasting it repeatedly
-- **Backup & restore** your encrypted store from the Settings page
+- **Reusable global variables**: define a key once and bind it into any AI or connected-app configuration instead of pasting it repeatedly
+- **Backup & restore** your encrypted workspace from Settings
 
-![Settings — Global Environment Variables](docs/images/readme/settings.png)
+![Settings — Network Access](docs/images/readme/settings.png)
 
-### 🤖 Model Management
+### 🤖 AI Setup
 
-- **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
+- **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, Codex, and local models via Ollama
+- **Guided or expert setup**: choose a gentle walkthrough, a faster guided path, or the complete configuration form
 - **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
-- **Per-model system prompts** and tunable parameters, reused across any flow
+- **Reusable connections**: organize configured AIs into folders, mark favorites, and reuse them across agents and conversations
 
-![Model Configuration](docs/images/readme/models.png)
-![Model Configuration Modal](docs/images/readme/model-edit.png)
+![AI Setup — Configured AI Connections](docs/images/readme/models.png)
+![AI Setup — Guided Connection Wizard](docs/images/readme/model-edit.png)
 
-### 🔌 MCP Server Integration
+### 🔌 Connected Apps (MCP)
 
-- **Install from anywhere**: the **Marketplace** tab searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and installs with one click; **Spotlight** curates servers verified to work well with FLUJO; or install manually from a GitHub repo / local folder
+- **Guided connection**: let FLUJO research an app, choose from curated options, or enter a remote URL, GitHub repository, or local command yourself
+- **Install from anywhere**: search the official [MCP Registry](https://registry.modelcontextprotocol.io), use curated servers verified with FLUJO, or install manually from a GitHub repo / local folder
 - **Full MCP capability support**: tools, resources, prompts, roots (workspace folders), and sampling (let a server borrow one of your models under a trust policy you control)
 - **Tool inspection & testing**: browse and call a server's tools, resources, and prompts straight from its detail view
 - **FLUJO as an MCP proxy**: re-expose any server you've configured in FLUJO to other MCP clients (Claude Desktop, Cursor, Cline, …) over Streamable HTTP — configure a server once, use it everywhere
 
-![MCP Marketplace](docs/images/readme/mcp-marketplace.png)
+![Connected Apps — Guided Setup](docs/images/readme/mcp-marketplace.png)
 
 Configuring a server is a guided, three-step form (define it → install & build → define how to run it) with a one-click connection test before you save:
 
@@ -93,15 +99,16 @@ Every connected server gets a detail view to browse and test its tools, resource
 
 ![MCP Tool Tester](docs/images/readme/mcp-tool-tester.png)
 
-### 🔄 Visual Flow Builder
+### 🧩 Agent Builder
 
-- **Drag-and-drop orchestration**: connect Start, Process (LLM), MCP, Subflow, and Finish nodes into a graph
+- **Simple mode**: build an agent like a recipe, one plain-language step at a time, without touching a diagram
+- **Expert visual mode**: connect Start, AI, connected-app, subflow, and Finish nodes in a drag-and-drop graph
 - **Branching & handoff**: let a model hand off to another node/agent based on the conversation, build loops, or fan out into multiple specialists
 - **Subflows**: call another flow as a single step, with its own isolated state — reuse a flow like a function
 - **Per-node tool & prompt scoping**: decide exactly which tools, resources, and system-prompt fragments each node can see
 
-![Flow Builder](docs/images/readme/flow-builder.png)
-![Branching prompt configuration](docs/images/readme/flow-branching-config.png)
+![Agent Builder — Simple Setup](docs/images/readme/flow-builder.png)
+![Agent Builder — Expert Visual Mode](docs/images/readme/flow-branching-config.png)
 
 #### Branching & handoff
 
@@ -123,20 +130,21 @@ Combine multiple handoffs and loops to build an orchestrator, or drop in a **Sub
 ![Orchestration](https://github.com/user-attachments/assets/0a3abfe9-8e83-49ea-a8da-bede3bed31e3)
 ![Subflow configuration](docs/images/readme/flow-subflow-config.png)
 
-### 💬 Chat Interface
+### 💬 Talk
 
-- **Live execution view**: watch a run progress node-by-node in real time, with token usage and a context-window meter per conversation
+- **One place to talk to every agent**: select an agent and start a conversation from the Talk page
+- **Live execution view**: watch a run progress step-by-step in real time, with token usage and a context-window meter per conversation
 - **Visual debugger**: set breakpoints, step through a run node-by-node, and inspect state before/after each step
 - **Human-in-the-loop tool approval**: optionally require approval before any tool call executes, for any provider (including Claude Subscription's agentic tool use)
 - **File & audio attachments**, message editing, and conversation branching
 
-![Chat Interface](docs/images/readme/chat-handoff.png)
+![Talk Interface](docs/images/readme/chat-handoff.png)
 
 Step through a run node-by-node with the visual debugger, inspecting prep/exec state at every stop:
 
 ![Visual Debugger](docs/images/readme/chat-debugger.png)
 
-### ⏱️ Automation — Triggers
+### ⏱️ Automations — Triggers
 
 Run your flows automatically — on a schedule or when something happens — without opening the chat. FLUJO just needs to be running for triggers to fire.
 
@@ -147,7 +155,7 @@ Run your flows automatically — on a schedule or when something happens — wit
 - **URL watch**: fire when a fetched page's content changes
 
 ![Automation Triggers](docs/images/readme/planned-executions.png)
-![New Automation Trigger](docs/images/readme/planned-execution-new.png)
+![New Automation Trigger — Schedule, Webhook, File, Tool, Website, or Flow](docs/images/readme/planned-execution-new.png)
 
 Run history is kept per trigger, with the full output of every run one click away:
 
@@ -156,6 +164,14 @@ Run history is kept per trigger, with the full output of every run one click awa
 As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn FLUJO into an autonomous auto-responder:
 
 ![WhatsApp auto-reply demo](docs/images/readme/whatsapp-demo.png)
+
+### Meetings
+- Put multiple Agents into a shared conversation, so they can work on a task together
+
+<img width="1056" height="457" alt="image" src="https://github.com/user-attachments/assets/7a254708-f9ad-41d8-bd6e-808887295f93" />
+
+<img width="1798" height="982" alt="image" src="https://github.com/user-attachments/assets/b70cf527-743e-4a71-a9a1-8ba9c36a2bf0" />
+
 
 ### 🔄 External Tool Integration
 
@@ -168,7 +184,7 @@ As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn F
 
 A searchable `/docs` page inside the app documents every REST endpoint FLUJO exposes (chat, conversations, models, flows, MCP, planned executions, env/encryption, backups) — useful when integrating FLUJO into your own tooling.
 
-![API Documentation](docs/images/readme/docs.png)
+![Built-in API Documentation](docs/images/readme/docs.png)
 
 ## 🚀 Getting Started
 
@@ -389,52 +405,48 @@ once writes the manifest for future uninstalls. See
 
 ## 📖 Usage
 
-### Setting up often used API keys
+### Saving API keys and shared values
 
-1. Navigate to Settings
-2. Save your API Keys globally to secure them
+1. Open **More → Settings → Global variables**
+2. Save the API key or shared value once
+3. Bind that variable when configuring an AI or connected app
 
-![Settings — Global Environment Variables](docs/images/readme/settings.png)
+### Connecting AI
 
-### Setting Up Models
+1. Open **AI Setup**
+2. Click **Connect AI**
+3. Choose the gentle guide, the faster guided path, or the expert form
+4. Select a provider, enter its credentials, and save the connection
 
-1. Navigate to the Models page
-2. Click "Add Model" to create a new model configuration
-3. Configure your model with name, provider, API key, and system prompt
-4. Save your configuration
+### Connecting Apps and MCP Servers
 
-### Managing MCP Servers
+1. Open **Connected Apps**
+2. Click **Connect App**
+3. Let AI help, browse curated apps, or provide a remote URL, GitHub repository, or local command
+4. Configure any required environment variables and test the connection
+5. Open the connected app to browse and test its tools, resources, and prompts
 
-1. Go to the MCP page
-2. Click "Add Server"
-3. Pick a tab: **Spotlight** (curated, one click), **Marketplace** (search the official MCP Registry), **GitHub** (install from a repo), **Local Server**, **Remote**, or **Reference Servers**
-4. Configure server settings and environment variables
-5. Start and manage your server, or open its card to browse/test its tools, resources, and prompts
+### Building Agents
 
-### Creating Workflows
-
-1. Visit the Flows page
-2. Click "Create Flow" to start a new workflow
-3. Add processing nodes and connect them
-4. Configure each node with models and tools
-5. Save your flow
-
-![Flow Dashboard](docs/images/readme/flows-dashboard.png)
+1. Open **Agents** and create an agent
+2. Stay in **Simple** mode to add plain-language steps, or switch to **Expert** for the visual graph
+3. Connect an AI, apps, or other agents to each step
+4. Check the agent, save it, and click **Try it**
 
 For branching, loops, and subflows, see [Orchestration & Subflows](#orchestration--subflows) above.
 
-### Automating Flows (Automation)
+### Automating Agents
 
-1. Go to **Automation > Triggers**
+1. Go to **More → Automations → Triggers**
 2. Click "Add trigger" and choose a trigger: Schedule, Webhook, File Watch, MCP Tool Polling, or URL Watch
-3. Pick the flow to run and configure the trigger-specific options
-4. Save — FLUJO fires the trigger and runs the flow in the background while it's running, and shows the run history on the Triggers page
+3. Pick the agent or flow to run and configure the trigger-specific options
+4. Save — FLUJO runs it in the background while the app is open and keeps the run history on the Triggers page
 
-### Using the Chat Interface
+### Talking to an Agent
 
-1. Go to the Chat page
-2. Select a flow to interact with
-3. Start chatting with your configured workflow — enable "Execute in Debugger" or "Require Tool Approvals" from the input bar if you want more control over the run
+1. Open **Talk**
+2. Select an agent
+3. Start chatting — enable the debugger or tool approvals from the input bar when you want more control over the run
 
 ## 📄 License
 

@@ -43,6 +43,8 @@ export interface ModelCallInput {
    * then lets the adapter apply its own default (no numeric system default).
    */
   maxTokens?: number;
+  /** Optional override for this logical model turn only. */
+  temperatureOverride?: number;
   /** Existing Process-node summarizing-compaction overrides (#248). */
   compactionMode?: 'auto' | 'off';
   compactionKeepTokens?: number;

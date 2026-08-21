@@ -8,6 +8,12 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import type { Model } from '@/shared/types/model';
+import {
+  buildProviderToolNameTranslation,
+  translateCompletionFromProvider,
+  translateMessagesForProvider,
+  translateToolsForProvider,
+} from './providerToolNames';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -137,12 +143,16 @@ export class OpenAiAdapter implements CompletionAdapter {
     onSdkRequestResult,
     promptCacheKey,
     promptCacheMode,
+    toolNameMap,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = this.createClient(model, apiKey);
+    const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
+    const providerMessages = translateMessagesForProvider(messages, toolNames);
+    const providerTools = translateToolsForProvider(tools, toolNames);
 
     const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
       model: model.name,
-      messages,
+      messages: providerMessages,
       temperature,
     };
     if (model.reasoningEffort) {
@@ -154,8 +164,8 @@ export class OpenAiAdapter implements CompletionAdapter {
     if (typeof maxTokens === 'number') {
       requestParams.max_tokens = maxTokens;
     }
-    if (tools && tools.length > 0) {
-      requestParams.tools = tools;
+    if (providerTools && providerTools.length > 0) {
+      requestParams.tools = providerTools;
     }
     applyRequestedOutputModalities(
       requestParams as unknown as Record<string, unknown>,
@@ -228,9 +238,10 @@ export class OpenAiAdapter implements CompletionAdapter {
     while (true) {
       try {
         const completion = await send(useCacheKey, useCacheControls);
+        const canonicalCompletion = translateCompletionFromProvider(completion, toolNames);
         return {
-          completion,
-          media: extractAssistantMedia(completion.choices?.[0]?.message),
+          completion: canonicalCompletion,
+          media: extractAssistantMedia(canonicalCompletion.choices?.[0]?.message),
         };
       } catch (error) {
         // Negotiate the two cache capabilities independently. An endpoint may
@@ -274,18 +285,22 @@ export class OpenAiAdapter implements CompletionAdapter {
     onModelDelta,
     onSdkRequest,
     onSdkRequestResult,
+    toolNameMap,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = this.createClient(model, apiKey);
+    const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
+    const providerMessages = translateMessagesForProvider(messages, toolNames);
+    const providerTools = translateToolsForProvider(tools, toolNames);
     const requestParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
       model: model.name,
-      messages,
+      messages: providerMessages,
       temperature,
       stream: true,
       ...(model.reasoningEffort
         ? { reasoning_effort: model.reasoningEffort as 'low' | 'medium' | 'high' }
         : {}),
       ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
-      ...(tools?.length ? { tools } : {}),
+      ...(providerTools?.length ? { tools: providerTools } : {}),
       ...(['openai', 'openrouter'].includes(model.provider ?? 'openai')
         ? { stream_options: { include_usage: true } }
         : {}),
@@ -427,27 +442,28 @@ export class OpenAiAdapter implements CompletionAdapter {
         });
       }
 
+      const completion = translateCompletionFromProvider({
+        id: completionId,
+        object: 'chat.completion',
+        created,
+        model: responseModel,
+        choices: [{
+          index: 0,
+          finish_reason: finishReason,
+          logprobs: null,
+          message: {
+            role: 'assistant',
+            content: content || null,
+            refusal: null,
+            ...(calls.length ? { tool_calls: calls } : {}),
+          },
+        }],
+        ...(usage ? { usage } : {}),
+      }, toolNames);
       return {
         liveMessageId,
         media,
-        completion: {
-          id: completionId,
-          object: 'chat.completion',
-          created,
-          model: responseModel,
-          choices: [{
-            index: 0,
-            finish_reason: finishReason,
-            logprobs: null,
-            message: {
-              role: 'assistant',
-              content: content || null,
-              refusal: null,
-              ...(calls.length ? { tool_calls: calls } : {}),
-            },
-          }],
-          ...(usage ? { usage } : {}),
-        },
+        completion,
       };
     };
 

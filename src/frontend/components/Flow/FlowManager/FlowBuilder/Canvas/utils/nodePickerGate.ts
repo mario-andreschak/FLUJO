@@ -14,7 +14,23 @@
  * can be unit-tested without a live ReactFlow/DOM, and so the brittle detection
  * lives in exactly one place.
  */
-import { isMcpHandle } from './connectionRules';
+import type { NodeType } from '@/frontend/types/flow/flow';
+import { isMcpHandle, validTargetTypesFor } from './connectionRules';
+
+/**
+ * MCP and Resource handles each have exactly one meaningful node type. Sending
+ * those gestures through a one-item type picker only adds a redundant click;
+ * return the specialized type so the canvas can create it and open its real
+ * configuration picker directly.
+ */
+export function directConfigurationTargetFor(
+  sourceType?: NodeType,
+  sourceHandleId?: string | null,
+): 'mcp' | 'resource' | null {
+  const targets = validTargetTypesFor(sourceType, sourceHandleId);
+  if (targets.length !== 1) return null;
+  return targets[0] === 'mcp' || targets[0] === 'resource' ? targets[0] : null;
+}
 
 export interface NodePickerGateArgs {
   /** `connectionState.fromNode?.type` — the source node's type. */

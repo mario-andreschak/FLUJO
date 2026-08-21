@@ -189,6 +189,21 @@ function messageText(content: unknown): string {
   return '';
 }
 
+/** Recover the latest meaningful assistant result when a child terminates on
+ * an empty handoff/Finish turn. This is what lets A <- B <- C propagate C's
+ * completed result even when B only routes to Finish after receiving it. */
+function latestAssistantText(messages: FlujoChatMessage[] | undefined): string {
+  if (!messages) return '';
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== 'assistant') continue;
+    if (message.tool_calls?.length) continue;
+    const text = messageText(message.content).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 function buildMediaArtifactSummary(media: ModelMediaPart[]): string {
   if (media.length === 0) return '';
   const lines = media.map((part, index) => {
@@ -782,8 +797,8 @@ export class SubflowNode extends BaseNode {
       emit: sharedState.emit,
       nodeName: node_params?.properties?.name,
       // Result presentation mode for parallel subflows (issue #359):
-      // 'separate' or 'joined' (default 'joined' when absent for back-compat).
-      resultPresentation: node_params?.properties?.resultPresentation ?? 'joined',
+      // 'separate' or 'joined' (default 'separate' per new requirements).
+      resultPresentation: node_params?.properties?.resultPresentation ?? 'separate',
       sessionScope: node_params?.properties?.sessionScope,
       sessionKeyTemplate: node_params?.properties?.sessionKey,
       sessionInputMode: node_params?.properties?.sessionInputMode ?? 'resume',
@@ -1738,6 +1753,14 @@ export async function runSubflowLanes(
         const cancelled = Boolean(
           r.sharedState?.isCancelled || r.sharedState?.recovery?.classification === 'cancelled',
         );
+        // A nested worker can finish by handing off without writing new prose.
+        // runFlow then legitimately reports an empty outputText even though an
+        // earlier child result is present in its transcript. Carry that latest
+        // assistant result upward. Do not replace media-only completions: their
+        // artifact payload is already promoted separately by post().
+        const upwardOutputText = r.outputText?.trim()
+          ? r.outputText
+          : (r.outputMedia?.length ? r.outputText : latestAssistantText(r.messages));
         results[i] =
           r.status === 'error'
             ? {
@@ -1754,7 +1777,7 @@ export async function runSubflowLanes(
                 subflowId: lane.subflowId,
                 subflowName: lane.subflowName,
                 success: true,
-                outputText: r.outputText,
+                outputText: upwardOutputText,
                 outputMedia: r.outputMedia,
                 laneTitle: lane.laneTitle,
                 laneId: lane.laneId,
@@ -1763,7 +1786,7 @@ export async function runSubflowLanes(
               };
         if (durableLane) {
           durableLane.status = r.status === 'error' ? (cancelled ? 'cancelled' : 'error') : 'completed';
-          durableLane.outputText = r.status === 'error' ? undefined : r.outputText;
+          durableLane.outputText = r.status === 'error' ? undefined : upwardOutputText;
           durableLane.outputMedia = r.status === 'error' ? undefined : r.outputMedia;
           durableLane.error = r.status === 'error' ? (r.error?.message || 'Subflow execution failed') : undefined;
           durableLane.updatedAt = Date.now();

@@ -86,6 +86,10 @@ import {
   matchToolBreakpoint,
   nodeBreakpoints,
 } from '@/utils/shared/debugBreakpoints';
+import {
+  applyToolRepeatGuard,
+  TOOL_REPEAT_TEMPERATURE,
+} from '@/backend/execution/flow/toolRepeatGuard';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -1161,6 +1165,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // Subflow sessions are scoped to one logical parent run. Old handles stay in
     // their saved child conversations but must not leak into a later user turn.
     sharedState.subflowSessions = undefined;
+    sharedState.toolRepeatGuard = undefined;
+    sharedState.temperatureOverrideOnce = undefined;
     sharedState.logicalRunId = input.runId ?? crypto.randomUUID();
     sharedState.statisticsRunStartedAt = Date.now();
     sharedState.statisticsRunStarted = false;
@@ -1171,6 +1177,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
+  sharedState.toolRepeatGuard ??= { logicalRunId, entries: [] };
+  if (sharedState.toolRepeatGuard.logicalRunId !== logicalRunId) {
+    sharedState.toolRepeatGuard = { logicalRunId, entries: [] };
+  }
   sharedState.debugResumeAfterDetach = false;
   sharedState.statisticsRunStartedAt ??= Date.now();
   initializeRecovery(sharedState, logicalRunId);
@@ -1653,6 +1663,29 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
       });
       accumulateUsage(msg);
+    }
+  };
+
+  const applyRepeatGuard = (processedCalls: readonly import('./types').ToolCallInfo[] | undefined) => {
+    const guardState = sharedState.toolRepeatGuard
+      ?? { logicalRunId, entries: [] };
+    sharedState.toolRepeatGuard = guardState;
+    const decision = applyToolRepeatGuard(guardState, processedCalls);
+    if (decision.raiseTemperature) {
+      sharedState.temperatureOverrideOnce = TOOL_REPEAT_TEMPERATURE;
+      log.info(`Repeated-tool guard raised the next model turn temperature for ${effectiveConvId}.`);
+    }
+    for (const content of decision.hints) {
+      sharedState.messages.push({
+        id: crypto.randomUUID(),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        processNodeId: sharedState.currentNodeId,
+        // Synthetic control-plane guidance must survive latest-message and
+        // isolated input scoping so it reaches the very next model turn.
+        injected: true,
+      } as FlujoChatMessage);
     }
   };
 
@@ -2176,6 +2209,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             processNodeId: sharedState.currentNodeId,
           }));
           sharedState.messages.push(...toolResultMessages);
+          applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
           FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
           emitNewMessages();
           await commitToolCheckpoint(storageKey, sharedState, callsToExecute, 'completed', recoveryEmit);
@@ -2657,6 +2691,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   processNodeId: sharedState.currentNodeId,
                 }));
                 sharedState.messages.push(...toolResultMessagesWithTimestamp);
+                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
                 await commitToolCheckpoint(storageKey, sharedState, ordinaryToolCalls, 'completed', recoveryEmit);
@@ -2728,6 +2763,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   processNodeId: sharedState.currentNodeId,
                 }));
                 sharedState.messages.push(...internalToolResultMessagesWithTimestamp);
+                applyRepeatGuard(toolProcessingResult.value.processedToolCalls);
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
                 await commitToolCheckpoint(storageKey, sharedState, internalTools, 'completed', recoveryEmit);

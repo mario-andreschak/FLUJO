@@ -11,6 +11,14 @@ A workspace is a **logical namespace inside the existing data root**, not a
 second installation. There is still one FLUJO process, one application install
 and one `FLUJO_DATA_DIR`.
 
+Each workspace can also own a list of backend filesystem folders. Use **Edit
+workspace** in the workspace menu to add or remove them. The list is stored in
+`.workspace.json` inside the managed workspace directory and is inherited by
+every MCP server at runtime through `roots/list`; individual server and flow-node
+roots remain additive. Editing the list does not rewrite server configuration or
+restart processes: connected servers receive `notifications/roots/list_changed`
+and the next roots request resolves the current workspace list.
+
 ## On-disk layout
 
 ```text

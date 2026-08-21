@@ -31,6 +31,8 @@ export interface CanvasProps {
   ) => FlowNode | null;
   /** Select a node in the parent-owned graph without opening full settings. */
   onSelectNode?: (node: FlowNode) => void;
+  /** Open the specialized picker for an attachment created from its only valid handle. */
+  onConfigureNode?: (node: FlowNode) => void;
   /** Open the non-mutating Process -> Subflow conversion workflow. */
   onConvertProcessToSubflow?: (node: FlowNode) => void;
   /** Open the edge-properties editor (Tier 2b condition) for a flow-control edge. */

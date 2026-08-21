@@ -5,6 +5,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
+import { applyToolRepeatGuard, TOOL_REPEAT_TEMPERATURE } from './toolRepeatGuard';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -112,6 +113,30 @@ export async function applyApprovalDecision(
       );
       sharedState.messages.push(...toolResultMessages);
       appendedMessages.push(...toolResultMessages);
+      const logicalRunId = sharedState.logicalRunId ?? 'approval-resume';
+      const guardState = sharedState.toolRepeatGuard?.logicalRunId === logicalRunId
+        ? sharedState.toolRepeatGuard
+        : { logicalRunId, entries: [] };
+      sharedState.toolRepeatGuard = guardState;
+      const repeatDecision = applyToolRepeatGuard(
+        guardState,
+        toolProcessingResult.value.processedToolCalls,
+      );
+      if (repeatDecision.raiseTemperature) {
+        sharedState.temperatureOverrideOnce = TOOL_REPEAT_TEMPERATURE;
+      }
+      for (const content of repeatDecision.hints) {
+        const hint: FlujoChatMessage = {
+          role: 'user',
+          content,
+          id: uuidv4(),
+          timestamp: Date.now(),
+          processNodeId: sharedState.currentNodeId,
+          injected: true,
+        };
+        sharedState.messages.push(hint);
+        appendedMessages.push(hint);
+      }
       sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
     }
   } else {

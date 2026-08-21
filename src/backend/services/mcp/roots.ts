@@ -12,6 +12,7 @@ import {
   DEFAULT_WORKSPACE,
   getCurrentWorkspace,
   getWorkspaceDataDir,
+  loadWorkspaceRoots,
   workspaceCacheKey,
 } from '@/utils/workspace';
 
@@ -236,10 +237,14 @@ async function resolveRootEntry(entry: string): Promise<Root | null> {
  * working folder. Reading everything live — not from a frozen snapshot — is what lets
  * roots changes take effect without a reconnect.
  */
-export async function resolveServerRoots(config: MCPServerConfig): Promise<Root[]> {
+export async function resolveServerRoots(
+  config: MCPServerConfig,
+  inheritedWorkspaceRoots?: string[],
+): Promise<Root[]> {
+  const workspaceRoots = inheritedWorkspaceRoots ?? await loadWorkspaceRoots();
   const raw = (config as { roots?: unknown }).roots;
   const serverRoots = Array.isArray(raw) ? raw : [];
-  const entries = [...serverRoots, ...getNodeRoots(config.name)];
+  const entries = [...workspaceRoots, ...serverRoots, ...getNodeRoots(config.name)];
 
   const out: Root[] = [];
   const seen = new Set<string>();
@@ -292,9 +297,14 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
  */
 export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
   return bindToCurrentWorkspace(async () => {
-    const restricted = await loadMcpRootsRestriction();
-    const roots = restricted
-      ? await resolveServerRoots(await freshestConfig(config))
+    const [restricted, workspaceRoots] = await Promise.all([
+      loadMcpRootsRestriction(),
+      loadWorkspaceRoots(),
+    ]);
+    // Choosing workspace folders is itself an explicit scope. Preserve the
+    // legacy unrestricted-host behavior only while no workspace scope exists.
+    const roots = restricted || workspaceRoots.length > 0
+      ? await resolveServerRoots(await freshestConfig(config), workspaceRoots)
       : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };

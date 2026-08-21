@@ -23,11 +23,20 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import nextEnv from '@next/env';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Package root is the parent of bin/ — where package.json and the built .next live.
 const packageRoot = path.resolve(__dirname, '..');
+
+// The package installation is read-only. Load the standard Next.js dotenv
+// stack from the stable writable bootstrap directory before reading port/data
+// settings, so launcher-level variables work exactly like server-level ones.
+const bootstrapRoot = path.join(os.homedir(), '.flujo');
+fs.mkdirSync(bootstrapRoot, { recursive: true });
+process.env.FLUJO_RUNTIME_ENV_DIR = bootstrapRoot;
+nextEnv.loadEnvConfig(bootstrapRoot, false);
 
 // --- args -----------------------------------------------------------------
 const argv = process.argv.slice(2);

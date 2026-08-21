@@ -4,11 +4,15 @@ import {
   DEFAULT_WORKSPACE,
   InvalidWorkspaceNameError,
   WorkspaceMutationError,
+  assertWorkspaceRoots,
   createWorkspace,
   deleteWorkspace,
   listWorkspaces,
   renameWorkspace,
+  runWithWorkspace,
+  updateWorkspaceRoots,
 } from '@/utils/workspace';
+import { mcpService } from '@/backend/services/mcp';
 import {
   getWorkspaceLayoutStatus,
   waitForWorkspaceLayoutReady,
@@ -61,7 +65,9 @@ function mutationErrorResponse(error: unknown, action: string): NextResponse {
     );
   }
   if (error instanceof WorkspaceMutationError) {
-    const status = error.code === 'WORKSPACE_NOT_FOUND'
+    const status = error.code === 'WORKSPACE_INVALID_ROOTS'
+      ? 400
+      : error.code === 'WORKSPACE_NOT_FOUND'
       ? 404
       : error.code === 'DEFAULT_WORKSPACE_PROTECTED'
         ? 403
@@ -137,10 +143,27 @@ export async function PATCH(request: Request) {
     );
   }
   try {
-    const workspace = await renameWorkspace(body.name as string, body.newName as string);
+    const currentName = body.name as string;
+    const newName = body.newName as string;
+    if (Object.prototype.hasOwnProperty.call(body, 'roots')) assertWorkspaceRoots(body.roots);
+    const renamed = currentName === newName
+      ? (await listWorkspaces()).find(workspace => workspace.name === currentName)
+      : await renameWorkspace(currentName, newName);
+    if (!renamed) {
+      throw new WorkspaceMutationError(
+        'WORKSPACE_NOT_FOUND',
+        `Workspace ${JSON.stringify(currentName)} does not exist.`,
+      );
+    }
+    const workspace = Object.prototype.hasOwnProperty.call(body, 'roots')
+      ? await updateWorkspaceRoots(renamed.name, body.roots)
+      : renamed;
+    if (Object.prototype.hasOwnProperty.call(body, 'roots')) {
+      runWithWorkspace(workspace.name, () => mcpService.notifyAllRootsChanged());
+    }
     return NextResponse.json({ workspace, workspaces: await listWorkspaces() });
   } catch (error) {
-    return mutationErrorResponse(error, 'rename');
+    return mutationErrorResponse(error, 'edit');
   }
 }
 

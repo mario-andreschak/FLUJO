@@ -12,8 +12,15 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 }));
 
 import path from 'path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import { pathToFileURL } from 'url';
-import { getWorkspaceDataDir } from '@/utils/workspace';
+import {
+  DEFAULT_WORKSPACE,
+  ensureWorkspaceDirs,
+  getWorkspaceDataDir,
+  updateWorkspaceRoots,
+} from '@/utils/workspace';
 import {
   normalizeRootUri,
   resolveServerRoots,
@@ -106,5 +113,28 @@ describe('opt-in roots confinement', () => {
     const roots = unrestrictedHostRoots();
     expect(roots.length).toBeGreaterThan(0);
     expect(roots.every((root) => root.uri.startsWith('file://'))).toBe(true);
+  });
+
+  it('inherits workspace folders for every server at runtime', async () => {
+    const previous = process.env.FLUJO_DATA_DIR;
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-workspace-roots-'));
+    process.env.FLUJO_DATA_DIR = dataRoot;
+    try {
+      const projectA = path.join(dataRoot, 'projects', 'a');
+      const projectB = path.join(dataRoot, 'projects', 'b');
+      await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+      await updateWorkspaceRoots(DEFAULT_WORKSPACE, [projectA, projectB]);
+
+      const roots = await resolveServerRoots(cfg(['/server-only']));
+      expect(roots.map(root => root.uri)).toEqual([
+        pathToFileURL(projectA).href,
+        pathToFileURL(projectB).href,
+        pathToFileURL('/server-only').href,
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.FLUJO_DATA_DIR;
+      else process.env.FLUJO_DATA_DIR = previous;
+      await fs.rm(dataRoot, { recursive: true, force: true });
+    }
   });
 });

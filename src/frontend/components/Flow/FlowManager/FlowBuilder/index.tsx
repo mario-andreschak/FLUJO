@@ -357,6 +357,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // Modal states
   const [processModalOpen, setProcessModalOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [quickMcpServerPicker, setQuickMcpServerPicker] = useState(false);
   const [startModalOpen, setStartModalOpen] = useState(false);
   const [finishModalOpen, setFinishModalOpen] = useState(false);
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
@@ -1939,6 +1940,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const openNodeProperties = useCallback((node: FlowNode, mode: 'create' | 'edit' = 'edit') => {
     log.debug('Opening properties for node:', node);
     setNodeToEdit(node);
+    setQuickMcpServerPicker(false);
     if (node.data.type === 'process') {
       setProcessNodeModalMode(mode);
     }
@@ -1961,6 +1963,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setTriggerModalOpen(true);
     } else {
       setProcessModalOpen(true);
+    }
+  }, []);
+
+  const configureQuickCreatedAttachment = useCallback((node: FlowNode) => {
+    setNodeToEdit(node);
+    if (node.data.type === 'mcp') {
+      setQuickMcpServerPicker(true);
+      setMcpModalOpen(true);
+    } else if (node.data.type === 'resource') {
+      setResourceModalOpen(true);
     }
   }, []);
 
@@ -2379,6 +2391,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 reactFlowWrapper={reactFlowWrapper}
                 onEditNode={openNodeProperties}
                 onCreateNode={handleCreateNode}
+                onConfigureNode={configureQuickCreatedAttachment}
                 onConvertProcessToSubflow={initialFlow ? node => setConversionProcessId(node.id) : undefined}
                 onEditEdge={(edge) => setEditingEdge(edge)}
               />
@@ -2503,9 +2516,17 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       <MCPNodePropertiesModal 
         open={mcpModalOpen}
         node={nodeToEdit}
-        onClose={() => setMcpModalOpen(false)}
+        onClose={() => {
+          setMcpModalOpen(false);
+          setQuickMcpServerPicker(false);
+        }}
         onSave={handleNodeUpdate}
         authoringMode={authoringMode}
+        serverPickerInitiallyOpen={quickMcpServerPicker}
+        onQuickServerSelect={quickMcpServerPicker ? async (node, serverName) => {
+          await handleSelectMcpNodeServer(node, serverName);
+          setQuickMcpServerPicker(false);
+        } : undefined}
       />
       
       <StartNodePropertiesModal
