@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
+import { flowService } from '@/backend/services/flow';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import {
   BehaviorProposalSchema,
@@ -39,6 +40,8 @@ import {
   type MemoryMutationOptions,
   rememberMemory,
 } from './memoryKernel';
+import { authoredCoreFlowRef } from './personaComposition';
+import { PersonaCoreResolutionError } from './personaCoreResolver';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
   activateBehaviorBindingRevision,
@@ -789,7 +792,7 @@ export function rejectBehaviorProposal(
   });
 }
 
-async function revisionForProposal(proposal: BehaviorProposal) {
+async function revisionForProposal(proposal: BehaviorProposal, persona: Persona) {
   const existing = (await listBehaviorRevisions(proposal.personaId)).find(
     (revision) => revision.behaviorId === proposal.behaviorId
       && revision.source.kind === 'persona_override'
@@ -809,6 +812,32 @@ async function revisionForProposal(proposal: BehaviorProposal) {
       'Proposal candidate Flow no longer matches its audit hash.',
     );
   }
+
+  let authoredFlowProvenance: {
+    flowRef: string;
+    contentHash: string;
+    updatedAt?: number;
+  } | undefined;
+  if (proposal.slotKey === 'primary') {
+    const flowRef = authoredCoreFlowRef(persona);
+    if (flowRef) {
+      const authoredFlow = await flowService.getFlow(flowRef);
+      if (!authoredFlow) {
+        throw new PersonaCoreResolutionError(
+          `Persona Core Flow ${JSON.stringify(flowRef)} no longer exists.`,
+        );
+      }
+      const authoredSnapshot = snapshotBehaviorFlow(authoredFlow);
+      authoredFlowProvenance = {
+        flowRef,
+        contentHash: hashBehaviorFlow(authoredSnapshot),
+        ...(authoredFlow.updatedAt !== undefined
+          ? { updatedAt: authoredFlow.updatedAt }
+          : {}),
+      };
+    }
+  }
+
   return createBehaviorRevision(BehaviorRevisionSchema.parse({
     schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
     id: behaviorRevisionId({
@@ -830,6 +859,7 @@ async function revisionForProposal(proposal: BehaviorProposal) {
         proposal.id,
         ...proposal.evidenceRefs.map((ref) => ref.id),
       ],
+      ...(authoredFlowProvenance ? { authoredFlowProvenance } : {}),
     },
     createdAt: proposal.createdAt,
   }));
@@ -846,7 +876,7 @@ export async function activateBehaviorProposal(proposalId: string): Promise<Beha
   }
   const persona = requirePersona(await getPersona(proposal.personaId), proposal.personaId);
   assertCanPropose(persona);
-  const revision = await revisionForProposal(proposal);
+  const revision = await revisionForProposal(proposal, persona);
   const binding = await getBehaviorBinding(proposal.behaviorId);
   if (!binding || binding.personaId !== proposal.personaId) {
     throw new BehaviorProposalConflictError('Behavior binding is missing or foreign.');

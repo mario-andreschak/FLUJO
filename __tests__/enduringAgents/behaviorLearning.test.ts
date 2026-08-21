@@ -12,9 +12,13 @@ import {
   previewPersonaDeletion,
   rollbackBehaviorProposal,
   suggestBehaviorInstructionImprovement,
+  updatePersonaComposition,
   type BehaviorProposalCompileResult,
   type CreateBehaviorProposalInput,
 } from '@/backend/services/enduringAgents';
+import { hashBehaviorFlow } from '@/backend/services/enduringAgents/behaviorRevisions';
+import { authoredCoreFlowRef } from '@/backend/services/enduringAgents/personaComposition';
+import { flowService } from '@/backend/services/flow';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getBehaviorBinding,
@@ -313,6 +317,13 @@ describe('Behavior proposal activation and rollback', () => {
       });
       expect(approved.status).toBe('approved');
 
+      const authoredFlowRef = authoredCoreFlowRef(setup.bundle.persona);
+      const authoredFlow = authoredFlowRef
+        ? await flowService.getFlow(authoredFlowRef)
+        : null;
+      expect(authoredFlow).not.toBeNull();
+      const expectedAuthoredHash = hashBehaviorFlow(authoredFlow!);
+
       const [activatedA, activatedB] = await Promise.all([
         activateBehaviorProposal(proposal.id),
         activateBehaviorProposal(proposal.id),
@@ -336,6 +347,10 @@ describe('Behavior proposal activation and rollback', () => {
           kind: 'persona_override',
           parentRevisionId: setup.baseRevision.id,
           evidenceRefs: expect.arrayContaining([proposal.id, 'activity_verified_failure']),
+          authoredFlowProvenance: {
+            flowRef: authoredFlowRef,
+            contentHash: expectedAuthoredHash,
+          },
         },
       });
       expect(processNode(revision!.flowSnapshot).data.properties?.promptTemplate)
@@ -359,6 +374,22 @@ describe('Behavior proposal activation and rollback', () => {
         reason: 'Idempotent retry.',
       })).toEqual(rolledBack);
       expect(await listBehaviorRevisions(setup.bundle.persona.id)).toHaveLength(3);
+    });
+  });
+
+  it('omits provenance when the Persona has no authored Core reference', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      await updatePersonaComposition(setup.bundle.persona.id, {
+        expectedUpdatedAt: setup.bundle.persona.updatedAt,
+        coreFlowRef: null,
+      });
+      const proposal = await approvedProposal(setup);
+      const activated = await activateBehaviorProposal(proposal.id);
+      const revision = await getBehaviorRevision(activated.activatedRevisionId!);
+
+      expect(revision?.source.kind).toBe('persona_override');
+      expect(revision?.source).not.toHaveProperty('authoredFlowProvenance');
     });
   });
 

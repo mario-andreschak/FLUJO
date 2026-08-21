@@ -11,6 +11,7 @@ import {
   hashBehaviorFlow,
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
+import { authoredCoreFlowRef } from './personaComposition';
 import {
   activateBehaviorBindingRevision,
   createBehaviorRevision,
@@ -27,6 +28,52 @@ export class PersonaCoreResolutionError extends Error {
     super(message);
     this.name = 'PersonaCoreResolutionError';
   }
+}
+
+function hasMatchingAcceptedRollbackBaseline(
+  active: BehaviorRevision,
+  revisions: BehaviorRevision[],
+  coreFlowRef: string,
+  contentHash: string,
+): boolean {
+  return revisions.some((revision) => {
+    if (
+      revision.source.kind !== 'persona_override'
+      || revision.source.parentRevisionId !== active.id
+      || !revision.source.evidenceRefs?.length
+    ) {
+      return false;
+    }
+    const provenance = revision.source.authoredFlowProvenance;
+    return provenance?.flowRef === coreFlowRef
+      && provenance.contentHash === contentHash;
+  });
+}
+
+function classifyLegacyOverride(
+  active: BehaviorRevision,
+  revisions: BehaviorRevision[],
+): 'authored-derived' | 'accepted' | 'ambiguous' {
+  if (active.source.kind !== 'persona_override') return 'ambiguous';
+  if (active.source.sourceFlowRef) return 'authored-derived';
+
+  const revisionsById = new Map(revisions.map((revision) => [revision.id, revision]));
+  const visited = new Set<string>();
+  let cursor: BehaviorRevision | undefined = active;
+  while (cursor && !visited.has(cursor.id)) {
+    visited.add(cursor.id);
+    if (
+      cursor.source.kind === 'persona_override'
+      && cursor.source.evidenceRefs?.length
+    ) {
+      return 'accepted';
+    }
+    const parentRevisionId: string | undefined = cursor.source.kind === 'persona_override'
+      ? cursor.source.parentRevisionId
+      : undefined;
+    cursor = parentRevisionId ? revisionsById.get(parentRevisionId) : undefined;
+  }
+  return 'ambiguous';
 }
 
 /**
@@ -65,12 +112,7 @@ export async function resolvePersonaCoreRevision(
       );
     }
 
-    const coreBinding = persona.composition?.coreBinding;
-    const coreFlowRef = coreBinding
-      ? (coreBinding.mode === 'shared'
-        ? coreBinding.sharedFlowRef
-        : coreBinding.personaFlowRef)
-      : persona.composition?.coreFlowRef;
+    const coreFlowRef = authoredCoreFlowRef(persona);
     if (!coreFlowRef) return active;
 
     const authoredFlow = await flowService.getFlow(coreFlowRef);
@@ -91,6 +133,36 @@ export async function resolvePersonaCoreRevision(
     const revisions = (await listBehaviorRevisions(persona.id)).filter(
       (revision) => revision.behaviorId === binding.id,
     );
+
+    if (
+      hasMatchingAcceptedRollbackBaseline(active, revisions, coreFlowRef, contentHash)
+    ) {
+      // Rollback intentionally selected the accepted revision's immutable
+      // parent while the authored baseline remains exactly as it was at
+      // activation. A later authored reference/hash change bypasses this guard.
+      return active;
+    }
+
+    if (active.source.kind === 'persona_override') {
+      const provenance = active.source.authoredFlowProvenance;
+      if (
+        provenance
+        && provenance.flowRef === coreFlowRef
+        && provenance.contentHash === contentHash
+      ) {
+        return active;
+      }
+
+      if (
+        !provenance
+        && classifyLegacyOverride(active, revisions) !== 'authored-derived'
+      ) {
+        // Accepted and ambiguous legacy overrides are preserved. A mismatch
+        // alone cannot prove that authored content changed after activation.
+        return active;
+      }
+    }
+
     const ordinal = revisions.reduce(
       (maximum, revision) => Math.max(maximum, revision.revision),
       0,

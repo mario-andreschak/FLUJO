@@ -500,6 +500,12 @@ export type BehaviorRevisionSource =
       workspaceId?: string;
       selectedFlowRef?: string;
       flowVersionId?: string;
+      /** Authored Core baseline captured when an accepted Primary override activates. */
+      authoredFlowProvenance?: {
+        flowRef: string;
+        contentHash: string;
+        updatedAt?: number;
+      };
     }
   | {
       kind: 'import';

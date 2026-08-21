@@ -6,6 +6,10 @@ import {
   roleTemplateMatchesBehaviorFlow,
   snapshotBehaviorFlow,
 } from '@/backend/services/enduringAgents/behaviorRevisions';
+import {
+  BEHAVIOR_REVISION_SCHEMA_VERSION,
+  BehaviorRevisionSchema,
+} from '@/shared/types/enduringAgent';
 import type { Flow } from '@/shared/types/flow';
 
 function behaviorFlow(): Flow {
@@ -297,6 +301,50 @@ describe('roleTemplateMatchesBehaviorFlow', () => {
     node(changed, 'researcher').data.properties!.boundModel = 'model-other';
 
     expect(roleTemplateMatchesBehaviorFlow(template, changed)).toBe(false);
+  });
+});
+
+describe('BehaviorRevision authored Flow provenance', () => {
+  function revisionSource(source: Record<string, unknown>) {
+    const flowSnapshot = snapshotBehaviorFlow(behaviorFlow());
+    return {
+      schemaVersion: BEHAVIOR_REVISION_SCHEMA_VERSION,
+      id: 'br_schema_provenance',
+      behaviorId: 'behavior_schema_provenance',
+      personaId: 'persona_schema_provenance',
+      slotKey: 'primary',
+      revision: 2,
+      contentHash: hashBehaviorFlow(flowSnapshot),
+      flowSnapshot,
+      source,
+      createdAt: 1_700_000_000_000,
+    };
+  }
+
+  it('accepts valid provenance and remains compatible without it', () => {
+    const provenance = {
+      flowRef: 'authored_core_flow',
+      contentHash: 'a'.repeat(64),
+      updatedAt: 1_700_000_100_000,
+    };
+    expect(BehaviorRevisionSchema.parse(revisionSource({
+      kind: 'persona_override',
+      authoredFlowProvenance: provenance,
+    })).source).toMatchObject({ authoredFlowProvenance: provenance });
+    expect(BehaviorRevisionSchema.parse(revisionSource({
+      kind: 'persona_override',
+      parentRevisionId: 'br_parent',
+    })).source).not.toHaveProperty('authoredFlowProvenance');
+  });
+
+  it.each([
+    ['an invalid content hash', { flowRef: 'authored_core_flow', contentHash: 'invalid' }],
+    ['an empty Flow reference', { flowRef: '', contentHash: 'a'.repeat(64) }],
+  ])('rejects provenance with %s', (_label, authoredFlowProvenance) => {
+    expect(() => BehaviorRevisionSchema.parse(revisionSource({
+      kind: 'persona_override',
+      authoredFlowProvenance,
+    }))).toThrow();
   });
 });
 

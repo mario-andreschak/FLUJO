@@ -64,6 +64,16 @@ function effectiveFlowRef(binding: PersonaFlowBinding): string {
   return binding.mode === 'shared' ? binding.sharedFlowRef : binding.personaFlowRef;
 }
 
+/** Resolve the Persona's authored Core Flow using the canonical binding precedence. */
+export function authoredCoreFlowRef(
+  persona: Pick<Persona, 'composition'>,
+): string | undefined {
+  const binding = persona.composition?.coreBinding;
+  return binding
+    ? effectiveFlowRef(binding)
+    : persona.composition?.coreFlowRef;
+}
+
 async function projectFlowCard(
   personaId: string,
   binding: PersonaFlowBinding,

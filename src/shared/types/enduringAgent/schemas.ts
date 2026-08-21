@@ -623,6 +623,11 @@ export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
     workspaceId: NonEmptyText(256).optional(),
     selectedFlowRef: WorkspaceFlowRefSchema.optional(),
     flowVersionId: NonEmptyText(128).optional(),
+    authoredFlowProvenance: z.object({
+      flowRef: WorkspaceFlowRefSchema,
+      contentHash: z.string().regex(SHA256_PATTERN),
+      updatedAt: TimestampSchema.optional(),
+    }).strict().optional(),
   }).strict(),
   z.object({
     kind: z.literal('import'),
