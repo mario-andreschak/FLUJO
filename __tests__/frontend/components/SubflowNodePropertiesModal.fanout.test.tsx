@@ -42,7 +42,7 @@ const renderModal = (properties: Record<string, any>) => {
 };
 
 const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-const concurrencyField = () => screen.getByRole('spinbutton', { name: 'Maximum simultaneous children' });
+const concurrencyField = () => screen.getByRole('slider', { name: 'Maximum simultaneous children' });
 
 describe('SubflowNodePropertiesModal — queued execution', () => {
   it('shows one concurrency control and removes the old execution-shape editors', async () => {
@@ -78,22 +78,31 @@ describe('SubflowNodePropertiesModal — queued execution', () => {
     expect(saved.data.properties.concurrencyLimit).toBe(7);
   });
 
-  it('removes concurrencyLimit when the field is cleared so runtime default 4 applies', async () => {
-    const saved = renderModal({ subflowId: 'child-1', concurrencyLimit: 2 });
-    await screen.findByText('Execution');
-
-    fireEvent.change(concurrencyField(), { target: { value: '' } });
-    save();
-
-    expect(saved.data.properties).toEqual({ subflowId: 'child-1' });
-  });
-
-  it('does not seed execution defaults on an unrelated save', async () => {
+  it('shows runtime default 4 without seeding concurrencyLimit on an unrelated save', async () => {
     const saved = renderModal({ subflowId: 'child-1' });
     await screen.findByText('Execution');
+
+    expect(concurrencyField()).toHaveAttribute('aria-valuenow', '4');
+    expect(concurrencyField()).toHaveAttribute('aria-valuemin', '1');
+    expect(concurrencyField()).toHaveAttribute('aria-valuemax', '16');
     save();
 
-    expect(saved.data.properties).toEqual({ subflowId: 'child-1' });
+    expect(saved.data.properties).toEqual({
+      subflowId: 'child-1',
+      resultPresentation: 'separate',
+    });
+  });
+
+  it('preserves an existing simultaneous-child limit on an unrelated save', async () => {
+    const saved = renderModal({ subflowId: 'child-1', concurrencyLimit: 2 });
+    await screen.findByText('Execution');
+    save();
+
+    expect(saved.data.properties).toEqual({
+      subflowId: 'child-1',
+      concurrencyLimit: 2,
+      resultPresentation: 'separate',
+    });
   });
 
   it('shows but preserves legacy saved-flow settings for compatibility', async () => {

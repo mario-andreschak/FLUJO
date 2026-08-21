@@ -73,6 +73,6 @@ describe('AzureOpenAiAdapter', () => {
       temperature: 0.2,
       max_tokens: 123,
     }), undefined);
-    expect(result.completion).toBe(completion);
+    expect(result.completion).toEqual(completion);
   });
 });

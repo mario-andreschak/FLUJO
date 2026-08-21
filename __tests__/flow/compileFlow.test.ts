@@ -181,7 +181,7 @@ describe('compileSpec service', () => {
       expect(saveFlowMock).not.toHaveBeenCalled();
     });
 
-    it('does not retrofit new Subflow defaults onto an existing definition', async () => {
+    it('applies separate results without retrofitting the opt-in session default', async () => {
       loadFlowsMock.mockResolvedValue([
         { id: 'flow-1', name: 'wired_flow', nodes: [], edges: [] },
         { id: 'child-flow', name: 'Child', nodes: [], edges: [] },
@@ -201,7 +201,7 @@ describe('compileSpec service', () => {
       expect(result.success).toBe(true);
       if (!result.success) return;
       const properties = result.flow.nodes.find((node) => node.type === 'subflow')!.data.properties!;
-      expect(properties).not.toHaveProperty('resultPresentation');
+      expect(properties.resultPresentation).toBe('separate');
       expect(properties).not.toHaveProperty('sessionScope');
     });
   });

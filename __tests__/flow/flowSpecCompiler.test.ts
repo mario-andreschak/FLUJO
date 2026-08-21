@@ -128,6 +128,7 @@ describe('compileFlowSpec — happy path', () => {
       subflowId: 'flow-1',
       inputMode: 'latest-message',
       outputMode: 'final-only',
+      resultPresentation: 'separate',
     });
   });
 
@@ -454,10 +455,10 @@ describe('compileFlowSpec — subflow resolution', () => {
     });
   });
 
-  it('applies the new Subflow defaults only when the authoring surface opts in', () => {
+  it('always defaults Subflow results to separate while session defaults remain opt-in', () => {
     const legacy = compileFlowSpec(subflowSpec('flow-1'), context).flow!
       .nodes.find((node) => node.type === 'subflow')!.data.properties!;
-    expect(legacy).not.toHaveProperty('resultPresentation');
+    expect(legacy.resultPresentation).toBe('separate');
     expect(legacy).not.toHaveProperty('sessionScope');
 
     const authored = compileFlowSpec(subflowSpec('flow-1'), context, {

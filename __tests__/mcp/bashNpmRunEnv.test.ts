@@ -20,6 +20,7 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
 jest.mock('node:child_process', () => {
   const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
@@ -32,14 +33,17 @@ jest.mock('@/backend/services/mcp/config', () => ({
 
 import { loadServerRoots } from '@/backend/services/mcp/config';
 import {
-  bashCallTool,
+  bashCallTool as uncheckedBashCallTool,
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
 } from '@/backend/services/mcp/internal/bashTools';
 
 const mockedRoots = loadServerRoots as jest.Mock;
+const bashCallTool = (...args: Parameters<typeof uncheckedBashCallTool>) =>
+  requireRealShellResult(uncheckedBashCallTool(...args));
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
 const itOnWindows = process.platform === 'win32' ? it : it.skip;
+const itOnWindowsWithRealShell = process.platform === 'win32' ? itWithRealShell : it.skip;
 
 function parse(result: CallToolResult): Record<string, unknown> {
   return JSON.parse((result.content[0] as { text: string }).text);
@@ -149,7 +153,7 @@ describe('bash MCP server hands children a launchable Windows environment', () =
     expect(childEnv[comSpec[0]!]).toBe(chosen);
   });
 
-  itOnWindows('runs a real `npm run` script end to end', async () => {
+  itOnWindowsWithRealShell('runs a real `npm run` script end to end', async () => {
     await fsp.writeFile(
       path.join(tempRoot, 'package.json'),
       JSON.stringify({

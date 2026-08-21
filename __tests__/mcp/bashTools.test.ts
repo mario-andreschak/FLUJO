@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
 jest.mock('node:child_process', () => {
   const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
@@ -23,7 +24,7 @@ jest.mock('@/backend/services/mcp/config', () => ({
 import { loadServerRoots } from '@/backend/services/mcp/config';
 import {
   bashToolDefinitions,
-  bashCallTool,
+  bashCallTool as uncheckedBashCallTool,
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
   _resolveCommandTimeoutMsForTests,
@@ -32,6 +33,8 @@ import {
 } from '@/backend/services/mcp/internal/bashTools';
 
 const mockedRoots = loadServerRoots as jest.Mock;
+const bashCallTool = (...args: Parameters<typeof uncheckedBashCallTool>) =>
+  requireRealShellResult(uncheckedBashCallTool(...args));
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -167,7 +170,7 @@ describe('bash tool definitions', () => {
 });
 
 describe('bash run (foreground)', () => {
-  it('runs a command and returns its output + exit code', async () => {
+  itWithRealShell('runs a command and returns its output + exit code', async () => {
     const r = await bashCallTool('run', { command: 'echo hello-bash' });
     expect(r.isError).toBeUndefined();
     const out = parse(r);
@@ -175,7 +178,7 @@ describe('bash run (foreground)', () => {
     expect(out.exitCode).toBe(0);
   });
 
-  it('reports a non-zero exit as an error result', async () => {
+  itWithRealShell('reports a non-zero exit as an error result', async () => {
     const r = await bashCallTool('run', { command: 'exit 3' });
     expect(r.isError).toBe(true);
     expect(parse(r).exitCode).toBe(3);
@@ -187,7 +190,7 @@ describe('bash run (foreground)', () => {
     expect(text(r)).toContain('command');
   });
 
-  it('kills a command that exceeds the timeout', async () => {
+  itWithRealShell('kills a command that exceeds the timeout', async () => {
     // NOTE: no `> NUL` here — that is cmd redirection syntax and fails instantly
     // under PowerShell (exactly the dialect trap issue #364 is about).
     const command = isWin ? 'ping -n 6 127.0.0.1' : 'sleep 5';
@@ -196,12 +199,12 @@ describe('bash run (foreground)', () => {
     expect(text(r)).toContain('timedOut');
   }, 20000);
 
-  it('normalizes CRLF to LF when requested', async () => {
+  itWithRealShell('normalizes CRLF to LF when requested', async () => {
     const r = await bashCallTool('run', { command: 'echo hi', normalizeNewlines: true });
     expect(text(r)).not.toContain('\r');
   });
 
-  it('makes the ripgrep bundled with the Codex dependency available on PATH', async () => {
+  itWithRealShell('makes the ripgrep bundled with the Codex dependency available on PATH', async () => {
     const r = await bashCallTool('run', { command: 'rg --version' });
     expect(r.isError).toBeUndefined();
     expect(parse(r).output as string).toMatch(/^ripgrep \d+/);
@@ -304,7 +307,7 @@ describe('bash shell selection (issues #225, #327)', () => {
     expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
-  it('resolves "bash" to a real bash executable exposing unix utilities, when one is installed', async () => {
+  itWithRealShell('resolves "bash" to a real bash executable exposing unix utilities, when one is installed', async () => {
     const r = await bashCallTool('run', { command: 'echo bash-test | grep -q bash-test && echo found', shell: 'bash' });
     const out = parse(r);
     if (r.isError) return; // No bash install found on this machine at all — nothing to assert.
@@ -695,7 +698,7 @@ describe('bash background sessions', () => {
     expect(listed.sessions).toHaveLength(3);
   });
 
-  it('starts a session, waits for it, and reads the result', async () => {
+  itWithRealShell('starts a session, waits for it, and reads the result', async () => {
     const start = parse(await bashCallTool('start', { command: 'echo bg-done' }));
     expect(start.sessionId).toBeTruthy();
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
@@ -789,7 +792,7 @@ describe('bash background sessions', () => {
     expect(waited.hint).toBeUndefined();
   });
 
-  it('kills a long-running background session', async () => {
+  itWithRealShell('kills a long-running background session', async () => {
     const command = isWin ? 'ping -n 30 127.0.0.1 > NUL' : 'sleep 30';
     const start = parse(await bashCallTool('start', { command }));
     const killed = parse(await bashCallTool('kill', { sessionId: start.sessionId as string }));
@@ -818,7 +821,7 @@ describe('bash background sessions', () => {
     }));
   });
 
-  it('isolates session visibility and controls by host-derived owner scope', async () => {
+  itWithRealShell('isolates session visibility and controls by host-derived owner scope', async () => {
     const ownerA = 'conversation:alpha';
     const ownerB = 'conversation:beta';
     const started = parse(await bashCallTool('start', { command: 'echo scoped' }, undefined, ownerA));

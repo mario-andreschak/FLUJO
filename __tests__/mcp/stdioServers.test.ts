@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
 jest.setTimeout(30_000);
 
@@ -70,7 +71,7 @@ describe('standalone stdio MCP packages', () => {
     }
   });
 
-  it('serves bash tools from an independent child process', async () => {
+  it('serves bash tool schemas and fixed-duration sleep from an independent child process', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-bash-'));
     const client = await connectPackage('bash', { FLUJO_BASH_ROOTS: root, FLUJO_DATA_DIR: root }, [root]);
     try {
@@ -87,13 +88,23 @@ describe('standalone stdio MCP packages', () => {
         slept: true,
         requestedSeconds: 0.02,
       }));
+    } finally {
+      await client.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  itWithRealShell('executes bash commands from an independent child process', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-bash-'));
+    const client = await connectPackage('bash', { FLUJO_BASH_ROOTS: root, FLUJO_DATA_DIR: root }, [root]);
+    try {
       const quickCommand = process.platform === 'win32'
         ? "Write-Output 'wait-finished'"
         : "printf 'wait-finished\\n'";
-      const started = await client.callTool({
+      const started = await requireRealShellResult(client.callTool({
         name: 'start',
         arguments: { command: quickCommand, cwd: root },
-      });
+      }));
       const startText = (started as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0]?.text;
       expect(typeof startText).toBe('string');
       const sessionId = (JSON.parse(String(startText)) as { sessionId?: string }).sessionId;
@@ -116,7 +127,7 @@ describe('standalone stdio MCP packages', () => {
       const command = process.platform === 'win32'
         ? "Write-Output 'progress-one'; Start-Sleep -Milliseconds 150; Write-Output 'progress-two'"
         : "printf 'progress-one\\n'; sleep 0.15; printf 'progress-two\\n'";
-      const called = await client.callTool(
+      const called = await requireRealShellResult(client.callTool(
         { name: 'run', arguments: { command, cwd: root, timeout: 10 } },
         undefined,
         {
@@ -126,15 +137,15 @@ describe('standalone stdio MCP packages', () => {
             if (progress.message) progressMessages.push(progress.message);
           },
         },
-      );
+      ));
       expect(called.isError).not.toBe(true);
       expect(progressMessages.join('')).toContain('progress-one');
       expect(progressMessages.join('')).toContain('progress-two');
 
-      const runtime = await client.callTool({
+      const runtime = await requireRealShellResult(client.callTool({
         name: 'run',
         arguments: { command: 'node --version', cwd: root, timeout: 10 },
-      });
+      }));
       expect(runtime.isError).not.toBe(true);
       const runtimeContent = (runtime as { content?: Array<{ type?: string; text?: unknown }> }).content;
       const runtimeText = runtimeContent?.[0]?.text;

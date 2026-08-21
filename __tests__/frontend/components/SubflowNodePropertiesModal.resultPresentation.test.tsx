@@ -35,21 +35,21 @@ const renderModal = (properties: Record<string, unknown>, authoringMode: 'advanc
 };
 
 describe('SubflowNodePropertiesModal result presentation', () => {
-  it('shows joined for legacy nodes and separate for explicitly configured nodes', async () => {
+  it('does not render the removed result-presentation selector', async () => {
     renderModal({});
-    expect(await screen.findByRole('radio', { name: /one combined message/i })).toHaveAttribute('aria-checked', 'true');
+    await screen.findByText('Execution');
 
-    renderModal({ resultPresentation: 'separate' });
-    expect(await screen.findByRole('radio', { name: /separate messages per lane/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('radio', { name: /one combined message/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /separate messages per lane/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Parallel results')).not.toBeInTheDocument();
   });
 
-  it.each(['separate', 'joined'] as const)('saves an explicit %s result presentation', async (resultPresentation) => {
-    const saved = renderModal({});
-    const cardName = resultPresentation === 'separate' ? /separate messages per lane/i : /one combined message/i;
-    fireEvent.click(await screen.findByRole('radio', { name: cardName }));
+  it.each(['separate', 'joined'] as const)('normalizes saved %s result presentation to separate', async (resultPresentation) => {
+    const saved = renderModal({ resultPresentation });
+    await screen.findByText('Execution');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(saved.data.properties.resultPresentation).toBe(resultPresentation);
+    expect(saved.data.properties.resultPresentation).toBe('separate');
   });
 
   it('does not render the control in guided mode', () => {

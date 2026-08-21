@@ -12,15 +12,21 @@ import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerRoots: jest.fn(),
 }));
 
 import { loadServerRoots } from '@/backend/services/mcp/config';
-import { bashCallTool, _resetBashSessionsForTests } from '@/backend/services/mcp/internal/bashTools';
+import {
+  bashCallTool as uncheckedBashCallTool,
+  _resetBashSessionsForTests,
+} from '@/backend/services/mcp/internal/bashTools';
 
 const mockedRoots = loadServerRoots as jest.Mock;
+const bashCallTool = (...args: Parameters<typeof uncheckedBashCallTool>) =>
+  requireRealShellResult(uncheckedBashCallTool(...args));
 
 function text(r: CallToolResult): string {
   return (r.content[0] as { text: string }).text;
@@ -54,7 +60,7 @@ describe('bash cwd confinement (issue #175)', () => {
     if (prevBashEnv === undefined) delete process.env.FLUJO_BASH_ROOTS; else process.env.FLUJO_BASH_ROOTS = prevBashEnv;
   });
 
-  it('allows a cwd inside the persisted roots and rejects one outside', async () => {
+  itWithRealShell('allows a cwd inside the persisted roots and rejects one outside', async () => {
     mockedRoots.mockResolvedValue([dir]);
 
     const inside = await bashCallTool('run', { command: 'echo confinement-ok', cwd: dir });
@@ -80,7 +86,7 @@ describe('bash cwd confinement (issue #175)', () => {
     expect(text(r)).toMatch(/outside/i);
   });
 
-  it('keeps FLUJO_BASH_ROOTS as a hard ceiling over persisted roots', async () => {
+  itWithRealShell('keeps FLUJO_BASH_ROOTS as a hard ceiling over persisted roots', async () => {
     process.env.FLUJO_BASH_ROOTS = dir;
     const otherRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-bashother-'));
     try {
@@ -130,13 +136,13 @@ describe('bash env scrubbing (issue #175)', () => {
     if (prevWorkspace === undefined) delete process.env.FLUJO_WORKSPACE; else process.env.FLUJO_WORKSPACE = prevWorkspace;
   });
 
-  it('does NOT leak a secret env var to spawned commands by default', async () => {
+  itWithRealShell('does NOT leak a secret env var to spawned commands by default', async () => {
     const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };
     expect(payload.output ?? '').not.toContain(SECRET);
   });
 
-  it('passes the non-secret FLUJO root and workspace markers by default', async () => {
+  itWithRealShell('passes the non-secret FLUJO root and workspace markers by default', async () => {
     const [parentResult, workspaceResult] = await Promise.all([
       bashCallTool('run', { command: ECHO_PARENT_DATA_DIR, cwd: dir }),
       bashCallTool('run', { command: ECHO_WORKSPACE, cwd: dir }),
@@ -147,7 +153,7 @@ describe('bash env scrubbing (issue #175)', () => {
     expect(workspacePayload.output ?? '').toContain('bash-owner');
   });
 
-  it('restores full env inheritance when FLUJO_BASH_INHERIT_ENV is set', async () => {
+  itWithRealShell('restores full env inheritance when FLUJO_BASH_INHERIT_ENV is set', async () => {
     process.env.FLUJO_BASH_INHERIT_ENV = '1';
     const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };

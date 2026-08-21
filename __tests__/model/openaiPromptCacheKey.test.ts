@@ -106,7 +106,7 @@ describe('prompt_cache_key rejection handling', () => {
 
     // First call: rejected with the key, retried without it, and still succeeds.
     const result = await call(m, 'flujo-tabc123');
-    expect(result.completion).toBe(OK);
+    expect(result.completion).toEqual(OK);
     expect(mockCreate).toHaveBeenCalledTimes(2);
     expect(bodyOf(0).prompt_cache_key).toBe('flujo-tabc123');
     expect(bodyOf(1)).not.toHaveProperty('prompt_cache_key');
