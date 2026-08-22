@@ -821,14 +821,14 @@ export async function listCollectionItemEntriesStrict<T>(
 }
 
 /**
- * Like listCollectionItems, but also returns each file's last-modified time
- * (mtimeMs, epoch ms). Used to backfill server-managed timestamps for legacy
+ * Like listCollectionItems, but also returns the storage id, file size, and
+ * last-modified time (mtimeMs, epoch ms). Used to backfill server-managed timestamps for legacy
  * items that predate them (e.g. flows without createdAt/updatedAt — #108),
  * mirroring how the conversations route derives times from file stats.
  */
 export async function listCollectionItemsWithStats<T>(
   collection: string,
-): Promise<Array<{ item: T; mtimeMs: number }>> {
+): Promise<Array<{ id: string; item: T; mtimeMs: number; sizeBytes: number }>> {
   const dirPath = getCollectionDir(collection);
   let entries: string[];
   try {
@@ -840,7 +840,7 @@ export async function listCollectionItemsWithStats<T>(
     throw error;
   }
 
-  const results: Array<{ item: T; mtimeMs: number }> = [];
+  const results: Array<{ id: string; item: T; mtimeMs: number; sizeBytes: number }> = [];
   for (const entry of entries) {
     if (!entry.endsWith('.json')) continue;
     if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) continue;
@@ -854,7 +854,12 @@ export async function listCollectionItemsWithStats<T>(
         log.warn(`Collection item file ${filePath} is empty; skipping.`);
         continue;
       }
-      results.push({ item: JSON.parse(content) as T, mtimeMs: stats.mtimeMs });
+      results.push({
+        id: entry.slice(0, -'.json'.length),
+        item: JSON.parse(content) as T,
+        mtimeMs: stats.mtimeMs,
+        sizeBytes: stats.size,
+      });
     } catch (error) {
       log.error(`Failed to read collection item ${filePath}; skipping.`, error);
     }

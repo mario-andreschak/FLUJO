@@ -29,6 +29,7 @@ export * from './recordMigrations';
 export * from './roleAdmin';
 export * from './runtimeEvents';
 export * from './runtimeObservability';
+export * from './runtimeStorageStats';
 export * from './store';
 
 export * from './runtimeClock';

@@ -13,7 +13,11 @@ import {
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
-import { loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
+import {
+  listCollectionItemsWithStats,
+  loadCollectionItem,
+  saveCollectionItem,
+} from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
 function completedDispatch(): PersonaFlowDispatchRecord {
@@ -80,7 +84,7 @@ describe('Persona runtime compaction', () => {
     const original = completedDispatch();
     const now = original.completedAt! + getFlowDispatchRetentionPolicy().retentionMs + 1;
 
-    const { result, stored } = await runWithWorkspace(workspaceId, async () => {
+    const { result, stored, metadata } = await runWithWorkspace(workspaceId, async () => {
       await saveCollectionItem(
         ENDURING_AGENT_COLLECTIONS.flowDispatches,
         original.id,
@@ -94,11 +98,21 @@ describe('Persona runtime compaction', () => {
         original.id,
         null,
       );
-      return { result, stored };
+      const metadata = await listCollectionItemsWithStats<unknown>(
+        ENDURING_AGENT_COLLECTIONS.flowDispatches,
+      );
+      return { result, stored, metadata };
     });
 
     expect(result.compacted).toBe(1);
     expect(result.remaining).toBe(0);
+    expect(metadata).toEqual([
+      expect.objectContaining({
+        id: original.id,
+        mtimeMs: expect.any(Number),
+        sizeBytes: expect.any(Number),
+      }),
+    ]);
     const parsed = PersonaFlowDispatchRecordSchema.parse(stored);
     expect(parsed.compactedAt).toBe(now);
     expect(parsed.flowInput).toBeUndefined();

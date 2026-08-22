@@ -17,6 +17,7 @@ import type {
   RoutePersonaMailboxResult,
 } from '@/backend/services/enduringAgents/activityRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import type { PersonaStorageStats } from '@/backend/services/enduringAgents/runtimeStorageStats';
 import {
   getBehaviorMaintenanceRun,
   saveBehaviorMaintenanceRun,
@@ -532,6 +533,19 @@ function makeHarness(
   const getPersonaMailboxItem = jest.fn(async (id: string) => mailboxItems.get(id) ?? null);
   const readConversationLog = jest.fn(async () => undefined);
   const appendConversationMessage = jest.fn(async () => undefined);
+  const getPersonaStorageStats = jest.fn(async (id: string): Promise<PersonaStorageStats> => ({
+    personaId: id,
+    retentionEnabled: FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION,
+    collectedAt: Date.now(),
+    kinds: {
+      mailboxItems: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
+      activities: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
+      flowDispatches: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
+      leaseHistory: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
+    },
+    totals: { records: 0, compacted: 0, uncompacted: 0, approxBytes: 0 },
+  }));
+  const observePersonaRuntimeCompaction = jest.fn(async () => {});
   const compactPersonaMailboxItems = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
   const compactPersonaActivities = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
   const compactPersonaFlowDispatches = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
@@ -571,6 +585,8 @@ function makeHarness(
     projectPersonaCoreAppsIntoFlow,
     readConversationLog,
     appendConversationMessage,
+    getPersonaStorageStats,
+    observePersonaRuntimeCompaction,
     compactPersonaMailboxItems,
     compactPersonaActivities,
     compactPersonaFlowDispatches,
@@ -663,6 +679,8 @@ describe('Persona Flow dispatcher', () => {
     );
 
     expect(submission.dispatch.state).toBe('completed');
+    expect(harness.dependencies.getPersonaStorageStats).not.toHaveBeenCalled();
+    expect(harness.dependencies.observePersonaRuntimeCompaction).not.toHaveBeenCalled();
     expect(harness.dependencies.compactPersonaMailboxItems).not.toHaveBeenCalled();
     expect(harness.dependencies.compactPersonaActivities).not.toHaveBeenCalled();
     expect(harness.dependencies.compactPersonaFlowDispatches).not.toHaveBeenCalled();
@@ -672,6 +690,19 @@ describe('Persona Flow dispatcher', () => {
   it('isolates retention failures and supplies every sweep the same Persona and cutoff', async () => {
     FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
     const harness = makeHarness(workspace('retention-enabled'));
+    const baseline = await harness.dependencies.getPersonaStorageStats('persona_test');
+    (harness.dependencies.getPersonaStorageStats as jest.Mock)
+      .mockClear()
+      .mockResolvedValueOnce({
+        ...baseline,
+        collectedAt: 1,
+        totals: { records: 4, compacted: 0, uncompacted: 4, approxBytes: 4_000 },
+      })
+      .mockResolvedValueOnce({
+        ...baseline,
+        collectedAt: 2,
+        totals: { records: 4, compacted: 4, uncompacted: 0, approxBytes: 800 },
+      });
     const failingCompactors = [
       ['mailbox', harness.dependencies.compactPersonaMailboxItems],
       ['activities', harness.dependencies.compactPersonaActivities],
@@ -706,6 +737,21 @@ describe('Persona Flow dispatcher', () => {
     }
     const cutoffs = compactors.map((compactor) => compactor.mock.calls[0][1]);
     expect(new Set(cutoffs)).toHaveProperty('size', 1);
+    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenCalledTimes(2);
+    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenNthCalledWith(1, 'persona_test');
+    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenNthCalledWith(2, 'persona_test');
+    expect(harness.dependencies.observePersonaRuntimeCompaction).toHaveBeenCalledWith({
+      before: expect.objectContaining({
+        collectedAt: 1,
+        totals: expect.objectContaining({ uncompacted: 4, approxBytes: 4_000 }),
+      }),
+      compactors: {},
+      failures: ['mailboxItems', 'activities', 'flowDispatches', 'leaseHistory'],
+      after: expect.objectContaining({
+        collectedAt: 2,
+        totals: expect.objectContaining({ compacted: 4, approxBytes: 800 }),
+      }),
+    });
   });
 
   it('invokes runtime retention for errored and cancelled terminal Activities', async () => {
