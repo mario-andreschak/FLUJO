@@ -38,8 +38,10 @@ import {
   listCollectionItemEntriesStrict,
   listCollectionItems,
   loadCollectionItem,
+  loadShardedCollectionItem,
   runInWriteChain,
   saveCollectionItem,
+  type PersonaShardedCollection,
 } from '@/utils/storage/backend';
 
 import {
@@ -101,13 +103,22 @@ async function getRecord<T extends IdentifiedRecord>(options: {
   id: string;
   recordKind: string;
   schema: ZodType<T>;
+  personaId?: string;
 }): Promise<T | null> {
   assertSafeCollectionId(options.id);
-  const value = await loadCollectionItem<unknown | null>(
-    options.collection,
-    options.id,
-    null,
-  );
+  if (options.personaId) assertSafeCollectionId(options.personaId);
+  const value = options.personaId
+    ? await loadShardedCollectionItem<unknown | null>(
+        options.collection as PersonaShardedCollection,
+        options.personaId,
+        options.id,
+        null,
+      )
+    : await loadCollectionItem<unknown | null>(
+        options.collection,
+        options.id,
+        null,
+      );
   if (value === null) return null;
 
   const record = parseRecord(options.recordKind, options.schema, value);
@@ -115,6 +126,14 @@ async function getRecord<T extends IdentifiedRecord>(options: {
     throw new Error(
       `${options.recordKind} storage id ${JSON.stringify(options.id)} does not match `
       + `record id ${JSON.stringify(record.id)}.`,
+    );
+  }
+  if (
+    options.personaId
+    && (record as T & { personaId?: string }).personaId !== options.personaId
+  ) {
+    throw new Error(
+      `${options.recordKind} ${JSON.stringify(options.id)} belongs to another Persona.`,
     );
   }
   return record;
@@ -273,6 +292,7 @@ async function listIndexedPersonaRecords<T extends IdentifiedRecord>(options: {
           id,
           recordKind: options.recordKind,
           schema: options.schema,
+          personaId: options.personaId,
         });
         if (record && (record as T & { personaId?: string }).personaId !== options.personaId) {
           throw new Error(`${options.recordKind} ${id} belongs to another Persona.`);
@@ -329,6 +349,7 @@ async function createOrReturnIdenticalRecord<T extends IdentifiedRecord>(options
   value: T;
   immutable: boolean;
   validateReferences: (record: T) => Promise<void>;
+  personaId?: string;
   persist?: (record: T) => Promise<void>;
 }): Promise<T> {
   const record = parseRecord(options.recordKind, options.schema, options.value);
@@ -340,6 +361,7 @@ async function createOrReturnIdenticalRecord<T extends IdentifiedRecord>(options
       id: record.id,
       recordKind: options.recordKind,
       schema: options.schema,
+      personaId: options.personaId,
     });
     if (existing) {
       if (canonicalJson(existing) === canonicalJson(record)) return existing;
@@ -848,7 +870,7 @@ async function assertValidCoreMemoryItems(persona: Persona): Promise<void> {
     // This is intentionally a lock-free point read. createPersona/updatePersona
     // already hold the Persona mutation key; acquiring a Memory mutation key
     // here would invert createMemoryItem's Memory -> Persona reference check.
-    const memory = await getMemoryItem(memoryItemId);
+    const memory = await getMemoryItem(persona.id, memoryItemId);
     if (!memory) {
       throw new Error(
         `Persona ${JSON.stringify(persona.id)} core memory references missing MemoryItem `
@@ -1352,9 +1374,13 @@ export function mutateBehaviorOutcomeMetric(
   });
 }
 
-export function getPersonaActivity(id: string): Promise<PersonaActivity | null> {
+export function getPersonaActivity(
+  personaId: string,
+  id: string,
+): Promise<PersonaActivity | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.activities,
+    personaId,
     id,
     recordKind: 'PersonaActivity',
     schema: PersonaActivitySchema,
@@ -1377,7 +1403,7 @@ export async function listPersonaActivities(
 export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {
   const record = parseRecord('PersonaActivity', PersonaActivitySchema, value);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.activities, record.id, async () => {
-    const existing = await getPersonaActivity(record.id);
+    const existing = await getPersonaActivity(record.personaId, record.id);
     if (existing) {
       if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
         throw new Error('PersonaActivity changed immutable ownership.');
@@ -1391,9 +1417,13 @@ export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActi
   });
 }
 
-export function getPersonaWorkItem(id: string): Promise<PersonaWorkItem | null> {
+export function getPersonaWorkItem(
+  personaId: string,
+  id: string,
+): Promise<PersonaWorkItem | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.workItems,
+    personaId,
     id,
     recordKind: 'PersonaWorkItem',
     schema: PersonaWorkItemSchema,
@@ -1487,7 +1517,7 @@ export function deletePersonaAppGrantRecord(id: string): Promise<void> {
 async function assertValidWorkItemReferences(record: PersonaWorkItem): Promise<void> {
   await requireWritablePersona(record.personaId, `PersonaWorkItem ${JSON.stringify(record.id)}`);
   if (record.createdByActivityId) {
-    const activity = await getPersonaActivity(record.createdByActivityId);
+    const activity = await getPersonaActivity(record.personaId, record.createdByActivityId);
     if (!activity || activity.personaId !== record.personaId) {
       throw new Error(
         `PersonaWorkItem ${JSON.stringify(record.id)} references a missing or foreign Activity.`,
@@ -1503,7 +1533,7 @@ async function assertValidWorkItemReferences(record: PersonaWorkItem): Promise<v
     }
   }
   for (const dependencyId of record.dependencyIds) {
-    const dependency = await getPersonaWorkItem(dependencyId);
+    const dependency = await getPersonaWorkItem(record.personaId, dependencyId);
     if (!dependency || dependency.personaId !== record.personaId) {
       throw new Error(
         `PersonaWorkItem ${JSON.stringify(record.id)} references a missing or foreign dependency `
@@ -1517,7 +1547,7 @@ async function assertValidWorkItemReferences(record: PersonaWorkItem): Promise<v
 export function savePersonaWorkItem(value: PersonaWorkItem): Promise<PersonaWorkItem> {
   const record = parseRecord('PersonaWorkItem', PersonaWorkItemSchema, value);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, record.id, async () => {
-    const existing = await getPersonaWorkItem(record.id);
+    const existing = await getPersonaWorkItem(record.personaId, record.id);
     if (existing) {
       if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
         throw new Error(`PersonaWorkItem ${JSON.stringify(record.id)} changed immutable ownership.`);
@@ -1602,16 +1632,18 @@ export function activateBehaviorBindingRevision(options: {
   });
 }
 
-export function deletePersonaWorkItemRecord(id: string): Promise<void> {
+export function deletePersonaWorkItemRecord(personaId: string, id: string): Promise<void> {
+  assertSafeCollectionId(personaId);
   assertSafeCollectionId(id);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, async () => {
-    await deleteIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id);
+    await deleteIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, personaId, id);
   });
 }
 
-export function getMemoryItem(id: string): Promise<MemoryItem | null> {
+export function getMemoryItem(personaId: string, id: string): Promise<MemoryItem | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
+    personaId,
     id,
     recordKind: 'MemoryItem',
     schema: MemoryItemSchema,
@@ -1638,6 +1670,7 @@ export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> 
     schema: MemoryItemSchema,
     value: record,
     immutable: false,
+    personaId: record.personaId,
     validateReferences: async (candidate) => {
       await requireWritablePersona(
         candidate.personaId,
@@ -1658,7 +1691,7 @@ async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
     ...(record.supersedes ?? []),
     ...(record.conflictsWith ?? []),
   ]) {
-    const related = await getMemoryItem(relatedId);
+    const related = await getMemoryItem(record.personaId, relatedId);
     if (!related || related.personaId !== record.personaId) {
       throw new Error(
         `MemoryItem ${JSON.stringify(record.id)} references missing or foreign MemoryItem `
@@ -1681,7 +1714,7 @@ export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
     : value;
   const record = parseRecord('MemoryItem', MemoryItemSchema, normalized);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, async () => {
-    const existing = await getMemoryItem(record.id);
+    const existing = await getMemoryItem(record.personaId, record.id);
     if (existing) {
       if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
         throw new Error(`MemoryItem ${JSON.stringify(record.id)} changed immutable ownership.`);
@@ -1696,9 +1729,13 @@ export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
   });
 }
 
-export function getPersonaMailboxItem(id: string): Promise<PersonaMailboxItem | null> {
+export function getPersonaMailboxItem(
+  personaId: string,
+  id: string,
+): Promise<PersonaMailboxItem | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+    personaId,
     id,
     recordKind: 'PersonaMailboxItem',
     schema: PersonaMailboxItemSchema,
@@ -1721,7 +1758,7 @@ export async function listPersonaMailboxItems(
 export function savePersonaMailboxItem(value: PersonaMailboxItem): Promise<PersonaMailboxItem> {
   const record = parseRecord('PersonaMailboxItem', PersonaMailboxItemSchema, value);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, async () => {
-    const existing = await getPersonaMailboxItem(record.id);
+    const existing = await getPersonaMailboxItem(record.personaId, record.id);
     if (existing) {
       if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
         throw new Error('PersonaMailboxItem changed immutable ownership.');

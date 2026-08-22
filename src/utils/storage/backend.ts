@@ -269,6 +269,379 @@ const getCollectionDir = (collection: string) => path.join(storageDir(), collect
 const getCollectionItemPath = (collection: string, id: string) =>
   path.join(getCollectionDir(collection), `${id}.json`);
 
+export const PERSONA_SHARDED_COLLECTIONS = [
+  'persona-memories',
+  'persona-mailbox',
+  'persona-work-items',
+  'persona-activities',
+] as const;
+export type PersonaShardedCollection = typeof PERSONA_SHARDED_COLLECTIONS[number];
+const PERSONA_SHARDED_COLLECTION_SET = new Set<string>(PERSONA_SHARDED_COLLECTIONS);
+
+function assertPersonaShardedCollection(collection: string): asserts collection is PersonaShardedCollection {
+  if (!PERSONA_SHARDED_COLLECTION_SET.has(collection)) {
+    throw new Error(`Unsupported Persona-sharded collection: ${JSON.stringify(collection)}`);
+  }
+}
+
+function assertContainedPath(parentPath: string, childPath: string): void {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Persona shard path escapes its collection: ${childPath}`);
+  }
+}
+
+export function getLegacyCollectionItemPath(
+  collection: PersonaShardedCollection,
+  recordId: string,
+): string {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(recordId);
+  return getCollectionItemPath(collection, recordId);
+}
+
+export function getShardedCollectionItemPath(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+): string {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  const collectionDir = getCollectionDir(collection);
+  const itemPath = path.join(collectionDir, personaId, `${recordId}.json`);
+  assertContainedPath(collectionDir, itemPath);
+  return itemPath;
+}
+
+async function lstatOrNull(filePath: string): Promise<import('fs').Stats | null> {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function assertLinkFreeDirectory(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  create: boolean,
+): Promise<string | null> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  const collectionDir = getCollectionDir(collection);
+  const shardDir = path.join(collectionDir, personaId);
+  assertContainedPath(collectionDir, shardDir);
+
+  if (create) await fs.mkdir(collectionDir, { recursive: true });
+  const collectionStats = await lstatOrNull(collectionDir);
+  if (!collectionStats) return null;
+  if (!collectionStats.isDirectory() || collectionStats.isSymbolicLink()) {
+    throw new Error(`Persona collection path is not a link-free directory: ${collectionDir}`);
+  }
+
+  if (create) {
+    try {
+      await fs.mkdir(shardDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+  const shardStats = await lstatOrNull(shardDir);
+  if (!shardStats) return null;
+  if (!shardStats.isDirectory() || shardStats.isSymbolicLink()) {
+    throw new Error(`Persona shard is not a link-free directory: ${shardDir}`);
+  }
+
+  const [canonicalCollection, canonicalShard] = await Promise.all([
+    fs.realpath(collectionDir),
+    fs.realpath(shardDir),
+  ]);
+  assertContainedPath(canonicalCollection, canonicalShard);
+  return shardDir;
+}
+
+async function readTextOrNull(filePath: string): Promise<string | null> {
+  const stats = await lstatOrNull(filePath);
+  if (!stats) return null;
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
+  }
+  return fs.readFile(filePath, 'utf8');
+}
+
+function parsePersonaShardRecord<T>(
+  content: string,
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+): T {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch (error) {
+    throw new Error(
+      `Invalid JSON in Persona record ${JSON.stringify(`${collection}/${personaId}/${recordId}`)}: `
+      + (error as Error).message,
+    );
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Persona record ${JSON.stringify(recordId)} is not an object.`);
+  }
+  const candidate = value as { id?: unknown; personaId?: unknown };
+  if (candidate.id !== recordId || candidate.personaId !== personaId) {
+    throw new Error(
+      `Persona record ${JSON.stringify(recordId)} does not match requested Persona `
+      + `${JSON.stringify(personaId)}.`,
+    );
+  }
+  return value as T;
+}
+
+export class PersonaShardCollisionError extends Error {
+  readonly code = 'PERSONA_SHARD_COLLISION' as const;
+
+  constructor(
+    readonly collection: PersonaShardedCollection,
+    readonly personaId: string,
+    readonly recordId: string,
+  ) {
+    super(
+      `Conflicting flat and sharded copies exist for `
+      + `${JSON.stringify(`${collection}/${personaId}/${recordId}`)}.`,
+    );
+    this.name = 'PersonaShardCollisionError';
+  }
+}
+
+export async function loadShardedCollectionItem<T>(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+  defaultValue: T,
+): Promise<T> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+  const shardedPath = getShardedCollectionItemPath(collection, personaId, recordId);
+  const legacyPath = getLegacyCollectionItemPath(collection, recordId);
+  const [sharded, legacy] = await Promise.all([
+    shardDir ? readTextOrNull(shardedPath) : Promise.resolve(null),
+    readTextOrNull(legacyPath),
+  ]);
+  if (sharded !== null && legacy !== null && sharded !== legacy) {
+    throw new PersonaShardCollisionError(collection, personaId, recordId);
+  }
+  const content = sharded ?? legacy;
+  return content === null
+    ? defaultValue
+    : parsePersonaShardRecord<T>(content, collection, personaId, recordId);
+}
+
+export async function saveShardedCollectionItem<T extends { id: string; personaId: string }>(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+  value: T,
+): Promise<void> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  if (value.id !== recordId || value.personaId !== personaId) {
+    throw new Error('Persona-sharded save identity does not match its destination.');
+  }
+  const shardedPath = getShardedCollectionItemPath(collection, personaId, recordId);
+  const legacyPath = getLegacyCollectionItemPath(collection, recordId);
+  await runInWriteChain(`persona-shard/${collection}/${personaId}/${recordId}`, async () => {
+    await assertLinkFreeDirectory(collection, personaId, true);
+    const legacy = await readTextOrNull(legacyPath);
+    if (legacy !== null) {
+      parsePersonaShardRecord(legacy, collection, personaId, recordId);
+    }
+    await writeFileAtomic(shardedPath, JSON.stringify(value, null, 2));
+    try {
+      await fs.unlink(legacyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  });
+}
+
+export async function deleteShardedCollectionItem(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+): Promise<void> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  const shardedPath = getShardedCollectionItemPath(collection, personaId, recordId);
+  const legacyPath = getLegacyCollectionItemPath(collection, recordId);
+  await runInWriteChain(`persona-shard/${collection}/${personaId}/${recordId}`, async () => {
+    const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+    const [sharded, legacy] = await Promise.all([
+      shardDir ? readTextOrNull(shardedPath) : Promise.resolve(null),
+      readTextOrNull(legacyPath),
+    ]);
+    if (sharded !== null) parsePersonaShardRecord(sharded, collection, personaId, recordId);
+    if (legacy !== null) parsePersonaShardRecord(legacy, collection, personaId, recordId);
+    await Promise.all([shardedPath, legacyPath].map(async (filePath) => {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }));
+  });
+}
+
+async function readPersonaShardDirectory<T>(
+  collection: PersonaShardedCollection,
+  personaId: string,
+): Promise<T[]> {
+  const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+  if (!shardDir) return [];
+  const entries = (await fs.readdir(shardDir)).sort();
+  const values: T[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json') || entry.includes('.tmp.') || entry.includes('.corrupted.')) continue;
+    const recordId = entry.slice(0, -'.json'.length);
+    assertSafeCollectionId(recordId);
+    const filePath = path.join(shardDir, entry);
+    const stats = await fs.lstat(filePath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(`Persona shard item is not a regular link-free file: ${filePath}`);
+    }
+    const content = await fs.readFile(filePath, 'utf8');
+    values.push(parsePersonaShardRecord<T>(content, collection, personaId, recordId));
+  }
+  return values;
+}
+
+export function listShardedCollectionItems<T>(
+  collection: PersonaShardedCollection,
+  personaId: string,
+): Promise<T[]> {
+  return readPersonaShardDirectory<T>(collection, personaId);
+}
+
+export async function listAllShardedCollectionItems<T>(
+  collection: PersonaShardedCollection,
+): Promise<T[]> {
+  assertPersonaShardedCollection(collection);
+  const collectionDir = getCollectionDir(collection);
+  const stats = await lstatOrNull(collectionDir);
+  if (!stats) return [];
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`Persona collection path is not a link-free directory: ${collectionDir}`);
+  }
+  const entries = (await fs.readdir(collectionDir, { withFileTypes: true }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const byId = new Map<string, { content: string; value: T }>();
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Persona collection contains a symbolic link: ${entry.name}`);
+    }
+    if (entry.isDirectory()) {
+      assertSafeCollectionId(entry.name);
+      const values = await readPersonaShardDirectory<T>(collection, entry.name);
+      for (const value of values) {
+        const record = value as { id: string };
+        const content = JSON.stringify(value);
+        const existing = byId.get(record.id);
+        if (existing && existing.content !== content) {
+          throw new PersonaShardCollisionError(collection, entry.name, record.id);
+        }
+        byId.set(record.id, { content, value });
+      }
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name.includes('.tmp.')
+      || entry.name.includes('.corrupted.') || entry.name.endsWith('.bak')) continue;
+    const recordId = entry.name.slice(0, -'.json'.length);
+    assertSafeCollectionId(recordId);
+    const content = await fs.readFile(path.join(collectionDir, entry.name), 'utf8');
+    const parsed = JSON.parse(content) as { personaId?: unknown };
+    if (typeof parsed.personaId !== 'string') {
+      throw new Error(`Flat Persona record ${JSON.stringify(recordId)} has no owner.`);
+    }
+    assertSafeCollectionId(parsed.personaId);
+    const value = parsePersonaShardRecord<T>(
+      content,
+      collection,
+      parsed.personaId,
+      recordId,
+    );
+    const canonical = JSON.stringify(value);
+    const existing = byId.get(recordId);
+    if (existing && existing.content !== canonical) {
+      throw new PersonaShardCollisionError(collection, parsed.personaId, recordId);
+    }
+    byId.set(recordId, { content: canonical, value });
+  }
+  return [...byId.values()].map(({ value }) => value);
+}
+
+export async function migrateLegacyCollectionItem(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+): Promise<'migrated' | 'already-migrated' | 'missing'> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  const shardedPath = getShardedCollectionItemPath(collection, personaId, recordId);
+  const legacyPath = getLegacyCollectionItemPath(collection, recordId);
+  return runInWriteChain(
+    `persona-shard/${collection}/${personaId}/${recordId}`,
+    async () => {
+      const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+      const [sharded, legacy] = await Promise.all([
+        shardDir ? readTextOrNull(shardedPath) : Promise.resolve(null),
+        readTextOrNull(legacyPath),
+      ]);
+      if (sharded !== null) parsePersonaShardRecord(sharded, collection, personaId, recordId);
+      if (legacy !== null) parsePersonaShardRecord(legacy, collection, personaId, recordId);
+      if (sharded !== null && legacy !== null && sharded !== legacy) {
+        throw new PersonaShardCollisionError(collection, personaId, recordId);
+      }
+      if (legacy === null) return sharded === null ? 'missing' : 'already-migrated';
+      if (sharded === null) {
+        await assertLinkFreeDirectory(collection, personaId, true);
+        await writeFileAtomic(shardedPath, legacy);
+        if (await readTextOrNull(shardedPath) !== legacy) {
+          throw new Error(`Could not verify migrated Persona record ${JSON.stringify(recordId)}.`);
+        }
+      }
+      await fs.unlink(legacyPath);
+      return 'migrated';
+    },
+  );
+}
+
+export async function deletePersonaCollectionShard(
+  collection: PersonaShardedCollection,
+  personaId: string,
+): Promise<void> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  await runInWriteChain(`persona-shard/${collection}/${personaId}`, async () => {
+    const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+    if (!shardDir) return;
+    const entries = await fs.readdir(shardDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(
+          `Persona shard contains a non-regular or linked entry: ${path.join(shardDir, entry.name)}`,
+        );
+      }
+    }
+    await fs.rm(shardDir, { recursive: true });
+  });
+}
+
 // Run a task serialized behind any in-flight write for the same chain key, so
 // concurrent saves/deletes of the SAME item can't interleave their
 // temp-file/rename/unlink steps. Different keys still run concurrently.

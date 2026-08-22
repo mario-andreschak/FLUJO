@@ -17,6 +17,7 @@ import {
   sweepMemoryCandidates,
 } from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
+import { migrateEnduringAgentDirectoryShards } from '@/backend/services/enduringAgents/directoryShardingMigration';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
 import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
@@ -366,6 +367,16 @@ function startSecretDependentServices(): Promise<void> {
   const existing = getMemo('secret');
   if (!existing) {
     const promise = (async () => {
+      try {
+        // Persona storage must be fully relocated after unlock and before any
+        // reconciliation, dispatcher, or other runtime writer can start.
+        await migrateEnduringAgentDirectoryShards();
+      } catch (error) {
+        log.error('Failed to migrate Persona record directory shards:', error);
+        setMemo('secret', undefined);
+        throw error;
+      }
+
       log.info('Initializing MCP servers');
       try {
         // Issue #346: provisioning must finish before the enabled-server sweep.

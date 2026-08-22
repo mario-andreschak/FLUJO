@@ -27,7 +27,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const { personaId, workItemId } = await params;
   if (!validIds(personaId, workItemId)) return NextResponse.json({ error: 'WorkItem not found.' }, { status: 404 });
   try {
-    const item = await getPersonaWorkItem(workItemId);
+    const item = await getPersonaWorkItem(personaId, workItemId);
     return item?.personaId === personaId
       ? NextResponse.json(item)
       : NextResponse.json({ error: 'WorkItem not found.' }, { status: 404 });

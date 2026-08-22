@@ -59,7 +59,7 @@ export async function promoteMemoryCandidate(
       return null;
     }
 
-    const item = await getMemoryItem(memoryId);
+    const item = await getMemoryItem(personaId, memoryId);
     if (!item || item.personaId !== personaId) {
       return null;
     }

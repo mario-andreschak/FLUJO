@@ -810,7 +810,7 @@ describe('enduring-agent Activity runtime', () => {
 
       const released = await releasePersonaActivityLease(fence(first));
       expect(released.status).toBe('released');
-      expect((await getPersonaActivity(first.activity.id))?.status).toBe('waiting');
+      expect((await getPersonaActivity(first.activity.personaId, first.activity.id))?.status).toBe('waiting');
 
       const recovered = await claim(persona.id);
       expect(recovered.recovered).toBe(true);
@@ -852,7 +852,7 @@ describe('enduring-agent Activity runtime', () => {
       await enqueuePersonaMailboxItem(assignment(persona.id, 'waiting-resume-prefix'));
       const first = await claim(persona.id);
       await releasePersonaActivityLease(fence(first));
-      const waiting = (await getPersonaActivity(first.activity.id))!;
+      const waiting = (await getPersonaActivity(first.activity.personaId, first.activity.id))!;
       const abandonedResume = await claim(persona.id);
 
       // New head persisted, but the waiting Activity was never repointed to it.
@@ -911,7 +911,7 @@ describe('enduring-agent Activity runtime', () => {
       nowSpy.mockReturnValue(12_500);
       await expect(assertPersonaActivityLease(fence(active)))
         .rejects.toBeInstanceOf(PersonaLeaseLostError);
-      expect(await getPersonaActivity(active.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(active.activity.personaId, active.activity.id)).toMatchObject({
         status: 'error',
         error: expect.stringMatching(/automatic replay was suppressed/i),
       });
@@ -1193,7 +1193,7 @@ describe('enduring-agent Activity runtime', () => {
 
       await expect(claimNextPersonaActivity({ personaId: persona.id, ttlMs: 10_000 }))
         .rejects.toThrow(/invalid json/i);
-      expect((await getPersonaMailboxItem(admitted.item.id))?.status).toBe('queued');
+      expect((await getPersonaMailboxItem(admitted.item.personaId, admitted.item.id))?.status).toBe('queued');
     });
   });
 
@@ -1281,7 +1281,7 @@ describe('enduring-agent Activity runtime', () => {
 
       const next = await claim(persona.id);
       expect(next.mailboxItem.summary).toBe('Assignment continues');
-      expect((await getPersonaMailboxItem(active.mailboxItem.id))?.status).toBe('rejected');
+      expect((await getPersonaMailboxItem(active.mailboxItem.personaId, active.mailboxItem.id))?.status).toBe('rejected');
       expect((await getPersona(persona.id))?.lifecycleState).toBe('busy');
     });
   });
@@ -1304,7 +1304,7 @@ describe('enduring-agent Activity runtime', () => {
       await expect(claimNextPersonaActivity({ personaId: persona.id, ttlMs: 1_000 }))
         .rejects.toBeInstanceOf(PersonaRuntimeUnavailableError);
       expect((await getPersona(persona.id))?.lifecycleState).toBe('disabled');
-      expect((await getPersonaMailboxItem(queued.item.id))?.status).toBe('queued');
+      expect((await getPersonaMailboxItem(queued.item.personaId, queued.item.id))?.status).toBe('queued');
     });
   });
 

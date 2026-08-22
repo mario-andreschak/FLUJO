@@ -256,8 +256,8 @@ describe('issue #415 phase 4 WorkItems', () => {
       await expect(synchronizeAssignedWorkItemFromActivity(
         terminalActivity(explicitlyBlocked.id, 'completed', 'succeeded'),
       )).resolves.toEqual(blockedByModel);
-      expect(await getPersonaWorkItem(explicitlyCompleted.id)).toEqual(completedByModel);
-      expect(await getPersonaWorkItem(explicitlyBlocked.id)).toEqual(blockedByModel);
+      expect(await getPersonaWorkItem(explicitlyCompleted.personaId, explicitlyCompleted.id)).toEqual(completedByModel);
+      expect(await getPersonaWorkItem(explicitlyBlocked.personaId, explicitlyBlocked.id)).toEqual(blockedByModel);
     });
   });
 });
@@ -287,10 +287,10 @@ describe('issue #415 phase 4 MemoryKernel', () => {
       expect((await searchPersonaMemory(persona.id, { query: 'release stable' }))[0].item.id)
         .toBe(memory.id);
 
-      const beforeUnpin = await getMemoryItem(memory.id);
+      const beforeUnpin = await getMemoryItem(memory.personaId, memory.id);
       await unpinMemoryFromCore(persona.id, memory.id);
       expect(await getCoreMemory(persona.id)).toEqual([]);
-      expect(await getMemoryItem(memory.id)).toEqual(beforeUnpin);
+      expect(await getMemoryItem(memory.personaId, memory.id)).toEqual(beforeUnpin);
       await pinMemoryToCore(persona.id, memory.id);
 
       const correction = await correctMemory(persona.id, memory.id, {
@@ -300,7 +300,7 @@ describe('issue #415 phase 4 MemoryKernel', () => {
         sourceRefs: [{ kind: 'user_statement', id: 'user-message-2' }],
       });
       expect(correction).toMatchObject({ status: 'active', trust: 'explicit_user' });
-      expect((await getMemoryItem(memory.id))?.status).toBe('superseded');
+      expect((await getMemoryItem(memory.personaId, memory.id))?.status).toBe('superseded');
       expect((await getCoreMemory(persona.id)).map((item) => item.id)).toEqual([correction.id]);
 
       const forgotten = await forgetMemory(persona.id, correction.id);

@@ -250,7 +250,7 @@ export async function diagnoseBehaviorMaintenanceRun(
   run: BehaviorMaintenanceRun,
 ): Promise<BehaviorMaintenanceDiagnosis> {
   const activities = (await Promise.all(
-    run.sourceActivityIds.map((id) => getPersonaActivity(id)),
+    run.sourceActivityIds.map((id) => getPersonaActivity(run.personaId, id)),
   )).filter((activity): activity is PersonaActivity => activity !== null);
 
   if (activities.length !== run.sourceActivityIds.length || activities.some((item) => !item.outcome)) {

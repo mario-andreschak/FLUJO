@@ -127,7 +127,10 @@ describe('meeting Persona reservation against the durable runtime', () => {
         participantId: 'living',
         personaId: persona.id,
       });
-      expect(await getPersonaActivity(reservations[0].claim.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(
+        reservations[0].claim.activity.personaId,
+        reservations[0].claim.activity.id,
+      )).toMatchObject({
         status: 'running',
         meetingId: 'meeting_runtime',
         conversationId: 'conversation_living',
@@ -142,7 +145,10 @@ describe('meeting Persona reservation against the durable runtime', () => {
       });
       await completeMeetingPersonaReservations(reservations, 'completed');
 
-      expect(await getPersonaActivity(reservations[0].claim.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(
+        reservations[0].claim.activity.personaId,
+        reservations[0].claim.activity.id,
+      )).toMatchObject({
         status: 'completed',
         outcomeRef: 'meeting:meeting_runtime',
       });
@@ -219,10 +225,16 @@ describe('meeting Persona reservation against the durable runtime', () => {
         const resumedReservation = resumedReservations[0];
         expect(resumedReservation.attemptId).not.toBe(initialReservation.attemptId);
         expect(resumedReservation.mailboxItemId).not.toBe(initialReservation.mailboxItemId);
-        expect(await getPersonaActivity(initialReservation.claim.activity.id)).toMatchObject({
+        expect(await getPersonaActivity(
+          initialReservation.claim.activity.personaId,
+          initialReservation.claim.activity.id,
+        )).toMatchObject({
           status: 'error',
         });
-        expect(await getPersonaActivity(resumedReservation.claim.activity.id)).toMatchObject({
+        expect(await getPersonaActivity(
+          resumedReservation.claim.activity.personaId,
+          resumedReservation.claim.activity.id,
+        )).toMatchObject({
           status: 'running',
           meetingId: 'meeting_runtime',
         });

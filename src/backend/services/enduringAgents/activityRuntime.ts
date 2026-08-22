@@ -1011,7 +1011,7 @@ async function expireActiveLease(
   expiredAt?: number,
 ): Promise<void> {
   const now = Math.max(expiredAt ?? runtimeClock.now(), lease.renewedAt);
-  const activity = await getPersonaActivity(lease.activityId);
+  const activity = await getPersonaActivity(persona.id, lease.activityId);
   if (!activity || activity.personaId !== persona.id) {
     await projectPersonaLifecycle(lock, persona.id, 'error', now);
     await saveLeaseHead(lock, { ...lease, status: 'expired', releasedAt: undefined });
@@ -1113,7 +1113,7 @@ async function ensureQueuedActivity(
   revision: BehaviorRevision,
 ): Promise<{ activity: PersonaActivity; created: boolean }> {
   const id = activityIdForMailbox(item.id);
-  const existing = await getPersonaActivity(id);
+  const existing = await getPersonaActivity(item.personaId, id);
   if (existing) {
     if (
       existing.personaId !== item.personaId
@@ -1299,7 +1299,7 @@ async function claimQueuedItem(
   }
   const slotKey = item.behaviorSlotKey ?? defaultBehaviorSlot(item.kind);
   const activityId = activityIdForMailbox(item.id);
-  const pinnedActivity = await getPersonaActivity(activityId);
+  const pinnedActivity = await getPersonaActivity(persona.id, activityId);
   let behaviorId: string;
   let revision: BehaviorRevision;
   if (pinnedActivity) {
@@ -1360,7 +1360,7 @@ async function resolvePersonaRoutingState(
   let active: RoutablePersonaActivity | null = null;
 
   if (head?.status === 'active') {
-    const activity = await getPersonaActivity(head.activityId);
+    const activity = await getPersonaActivity(persona.id, head.activityId);
     if (!activity || activity.personaId !== persona.id) {
       await expireActiveLease(lock, persona, head, items);
     } else if (isTerminalActivity(activity)) {
@@ -1390,7 +1390,7 @@ async function resolvePersonaRoutingState(
   const waiting: RoutablePersonaActivity[] = [];
   for (const item of items.filter((candidate) => candidate.status === 'claimed')) {
     if (active?.mailboxItem.id === item.id) continue;
-    const activity = await getPersonaActivity(activityIdForMailbox(item.id));
+    const activity = await getPersonaActivity(persona.id, activityIdForMailbox(item.id));
     if (!activity || activity.personaId !== persona.id || item.claimedActivityId !== activity.id) {
       throw new PersonaRuntimeCorruptionError(
         persona.id,
@@ -1451,7 +1451,7 @@ async function repairInterruptionRequest(
     || item.routingDecision !== 'interrupt'
     || !item.interruptedActivityId
   ) return;
-  const activity = await getPersonaActivity(item.interruptedActivityId);
+  const activity = await getPersonaActivity(item.personaId, item.interruptedActivityId);
   if (!activity || activity.personaId !== item.personaId) {
     throw new PersonaRuntimeCorruptionError(
       item.personaId,
@@ -1518,7 +1518,7 @@ async function admitPersonaMailboxItem(
     notBefore: input.notBefore ?? null,
   };
 
-  const existing = await getPersonaMailboxItem(id);
+  const existing = await getPersonaMailboxItem(input.personaId, id);
   if (existing) {
     if (canonicalJson(mailboxAdmission(existing)) !== canonicalJson(requestedAdmission)) {
       throw new PersonaMailboxConflictError(
@@ -1726,7 +1726,7 @@ export async function reprioritizePersonaMailboxItemWithinRuntimeLock(
     value,
   ) as ReprioritizePersonaMailboxItemInput;
   await lock.assertOwned();
-  const item = await getPersonaMailboxItem(input.mailboxItemId);
+  const item = await getPersonaMailboxItem(input.personaId, input.mailboxItemId);
   if (!item || item.personaId !== input.personaId) {
     throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
   }
@@ -1825,7 +1825,7 @@ export async function cancelPersonaMailboxItem(value: unknown): Promise<PersonaM
   const result = await withPersonaRuntimeLock(input.personaId, async (lock) => {
     const persona = await getPersona(input.personaId);
     if (!persona) throw new PersonaRuntimeNotFoundError('Persona', input.personaId);
-    const item = await getPersonaMailboxItem(input.mailboxItemId);
+    const item = await getPersonaMailboxItem(input.personaId, input.mailboxItemId);
     if (!item || item.personaId !== input.personaId) {
       throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
     }
@@ -1835,7 +1835,7 @@ export async function cancelPersonaMailboxItem(value: unknown): Promise<PersonaM
       || item.status === 'rejected'
     ) return { item, changed: false, cancelledActivityId: undefined as string | undefined };
 
-    const activity = await getPersonaActivity(activityIdForMailbox(item.id));
+    const activity = await getPersonaActivity(input.personaId, activityIdForMailbox(item.id));
     if (activity?.status === 'running') {
       throw new PersonaBusyError(
         input.personaId,
@@ -1909,7 +1909,7 @@ export async function claimNextPersonaActivity(
       const items = await listPersonaMailboxItems(persona.id);
       const head = await reconcilePersonaLeaseHead(lock, persona.id);
       if (head?.status === 'active') {
-        const activity = await getPersonaActivity(head.activityId);
+        const activity = await getPersonaActivity(persona.id, head.activityId);
         if (!activity || activity.personaId !== persona.id) {
           await expireActiveLease(lock, persona, head, items);
           continue;
@@ -1958,7 +1958,7 @@ export async function claimNextPersonaActivity(
       const claimed = items.filter((item) => item.status === 'claimed');
       const waitingClaims: Array<{ item: PersonaMailboxItem; activity: PersonaActivity }> = [];
       for (const item of claimed) {
-        const activity = await getPersonaActivity(activityIdForMailbox(item.id));
+        const activity = await getPersonaActivity(persona.id, activityIdForMailbox(item.id));
         if (!activity || activity.personaId !== persona.id || activity.status !== 'waiting') {
           throw new PersonaRuntimeCorruptionError(
             persona.id,
@@ -2100,7 +2100,7 @@ async function requireRunnableActivityForLease(
   persona: Persona,
   lease: PersonaLease,
 ): Promise<PersonaActivity> {
-  const activity = await getPersonaActivity(lease.activityId);
+  const activity = await getPersonaActivity(persona.id, lease.activityId);
   if (!activity || activity.personaId !== persona.id) {
     throw new PersonaRuntimeCorruptionError(
       persona.id,
@@ -2239,7 +2239,7 @@ export async function acknowledgePersonaActivityDelivery(
     AcknowledgePersonaActivityDeliveryInput;
   return withPersonaRuntimeLock(input.personaId, async (lock) => {
     await requireActiveRunnableLease(lock, input);
-    const item = await getPersonaMailboxItem(input.mailboxItemId);
+    const item = await getPersonaMailboxItem(input.personaId, input.mailboxItemId);
     if (!item) {
       throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
     }
@@ -2281,7 +2281,7 @@ export async function rejectPersonaActivityDelivery(
     RejectPersonaActivityDeliveryInput;
   return withPersonaRuntimeLock(input.personaId, async (lock) => {
     await requireActiveRunnableLease(lock, input);
-    const item = await getPersonaMailboxItem(input.mailboxItemId);
+    const item = await getPersonaMailboxItem(input.personaId, input.mailboxItemId);
     if (!item) {
       throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
     }
@@ -2449,7 +2449,7 @@ async function requireDurableInterruptionRequest(
       `Persona Activity ${JSON.stringify(activity.id)} has no pending interruption request.`,
     );
   }
-  const item = await getPersonaMailboxItem(activity.interruptionRequestedByMailboxItemId);
+  const item = await getPersonaMailboxItem(persona.id, activity.interruptionRequestedByMailboxItemId);
   if (
     !item
     || item.personaId !== persona.id
@@ -2471,7 +2471,7 @@ async function releasePersonaActivityLeaseWithinLock(
   lease: PersonaLease,
   requireInterruption: boolean,
 ): Promise<PersonaLease> {
-  const activity = await getPersonaActivity(lease.activityId);
+  const activity = await getPersonaActivity(persona.id, lease.activityId);
   if (!activity || activity.personaId !== persona.id) {
     throw new PersonaRuntimeCorruptionError(
       persona.id,
@@ -2671,7 +2671,7 @@ export async function completePersonaActivityWithinRuntimeLock(
   await lock.assertOwned();
     const persona = await requireReadyPersona(input.personaId);
     const lease = await requireCurrentLease(lock, persona.id, input);
-    const activity = await getPersonaActivity(input.activityId);
+    const activity = await getPersonaActivity(input.personaId, input.activityId);
     if (!activity || activity.personaId !== persona.id) {
       throw new PersonaRuntimeNotFoundError('PersonaActivity', input.activityId);
     }
@@ -2694,7 +2694,7 @@ export async function completePersonaActivityWithinRuntimeLock(
       await reconcileTerminalLease(lock, persona, lease, activity, items);
       return {
         activity,
-        mailboxItem: (await getPersonaMailboxItem(item.id))!,
+        mailboxItem: (await getPersonaMailboxItem(persona.id, item.id))!,
         lease: (await getPersonaLease(persona.id))!,
       };
     }
@@ -2922,7 +2922,7 @@ async function applyRuntimeRecoveryReceiptPlan(
   }
   const { result } = receipt;
   for (const activityId of result.closedActivityIds) {
-    const activity = await getPersonaActivity(activityId);
+    const activity = await getPersonaActivity(result.personaId, activityId);
     if (!activity || activity.personaId !== result.personaId) {
       throw new PersonaRuntimeCorruptionError(
         result.personaId,
@@ -2952,7 +2952,7 @@ async function applyRuntimeRecoveryReceiptPlan(
   }
 
   for (const mailboxItemId of result.rejectedMailboxItemIds) {
-    const item = await getPersonaMailboxItem(mailboxItemId);
+    const item = await getPersonaMailboxItem(result.personaId, mailboxItemId);
     if (!item || item.personaId !== result.personaId) {
       throw new PersonaRuntimeCorruptionError(
         result.personaId,
@@ -2977,7 +2977,7 @@ async function applyRuntimeRecoveryReceiptPlan(
   }
 
   for (const mailboxItemId of result.requeuedMailboxItemIds) {
-    const item = await getPersonaMailboxItem(mailboxItemId);
+    const item = await getPersonaMailboxItem(result.personaId, mailboxItemId);
     if (!item || item.personaId !== result.personaId) {
       throw new PersonaRuntimeCorruptionError(
         result.personaId,
@@ -3477,7 +3477,7 @@ export async function listPersonaRuntimeBundle(
     const items = await listPersonaMailboxItems(personaId);
     const head = await reconcilePersonaLeaseHead(lock, personaId);
     if (head?.status === 'active') {
-      const activity = await getPersonaActivity(head.activityId);
+      const activity = await getPersonaActivity(personaId, head.activityId);
       if (!activity || activity.personaId !== persona.id) {
         await expireActiveLease(lock, persona, head, items);
       } else if (isTerminalActivity(activity)) {
@@ -3498,7 +3498,7 @@ export async function listPersonaRuntimeBundle(
         }
       }
     } else if (head?.status === 'released') {
-      const activity = await getPersonaActivity(head.activityId);
+      const activity = await getPersonaActivity(personaId, head.activityId);
       if (activity && activity.personaId === persona.id && isTerminalActivity(activity)) {
         await reconcileTerminalLease(lock, persona, head, activity, items);
       }

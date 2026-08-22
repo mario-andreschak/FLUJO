@@ -956,8 +956,8 @@ export interface PersonaFlowDispatcherDependencies {
   getPersona: (id: string) => Promise<Persona | null>;
   getRoleVersion: (id: string) => Promise<RoleVersion | null>;
   getBehaviorRevision: (id: string) => Promise<BehaviorRevision | null>;
-  getPersonaActivity: (id: string) => Promise<PersonaActivity | null>;
-  getPersonaMailboxItem: (id: string) => Promise<PersonaMailboxItem | null>;
+  getPersonaActivity: (personaId: string, id: string) => Promise<PersonaActivity | null>;
+  getPersonaMailboxItem: (personaId: string, id: string) => Promise<PersonaMailboxItem | null>;
   getCoreMemory: (personaId: string) => Promise<MemoryItem[]>;
   snapshotPersonaCoreAppRefs: typeof snapshotPersonaCoreAppRefs;
   projectPersonaCoreAppsIntoFlow: typeof projectPersonaCoreAppsIntoFlow;
@@ -1472,7 +1472,7 @@ export class PersonaFlowDispatcher {
       for (const record of matching) {
         const current = (await this.get(record.id)) ?? record;
         if (current.state !== 'queued' || !current.mailboxItemId) continue;
-        const mailbox = await this.dependencies.getPersonaMailboxItem(current.mailboxItemId);
+        const mailbox = await this.dependencies.getPersonaMailboxItem(input.personaId, current.mailboxItemId);
         if (!mailbox || mailbox.personaId !== input.personaId || mailbox.status !== 'queued') continue;
         const result = await this.dependencies.movePersonaMailboxItemWithinRuntimeLock({
           personaId: input.personaId,
@@ -1828,7 +1828,7 @@ export class PersonaFlowDispatcher {
       }
       const targetId = latest.targetActivityId;
       const target = targetId
-        ? await this.dependencies.getPersonaActivity(targetId)
+        ? await this.dependencies.getPersonaActivity(latest.personaId, targetId)
         : null;
       const revisionId = target?.behaviorRevisionId;
       if (
@@ -1901,7 +1901,7 @@ export class PersonaFlowDispatcher {
             'Related input acknowledgement crossed an Activity boundary.',
           );
         }
-        const item = await this.dependencies.getPersonaMailboxItem(dispatch.mailboxItemId);
+        const item = await this.dependencies.getPersonaMailboxItem(fence.personaId, dispatch.mailboxItemId);
         if (
           !item
           || item.personaId !== fence.personaId
@@ -1928,6 +1928,7 @@ export class PersonaFlowDispatcher {
 
   private async interruptionRequested(fence: PersonaLeaseFence): Promise<boolean> {
     const activity = await this.inWorkspace(() => this.dependencies.getPersonaActivity(
+      fence.personaId,
       fence.activityId,
     ));
     return Boolean(
@@ -3215,7 +3216,7 @@ export class PersonaFlowDispatcher {
       || !record.targetActivityId
     ) return record;
     const item = await this.inWorkspace(() => (
-      this.dependencies.getPersonaMailboxItem(record.mailboxItemId!)
+      this.dependencies.getPersonaMailboxItem(record.personaId, record.mailboxItemId!)
     ));
     if (!item) return record;
     if (item.personaId !== record.personaId || item.payloadRef !== record.id) {
@@ -3229,7 +3230,7 @@ export class PersonaFlowDispatcher {
       );
     }
     const target = await this.inWorkspace(() => (
-      this.dependencies.getPersonaActivity(record.targetActivityId!)
+      this.dependencies.getPersonaActivity(record.personaId, record.targetActivityId!)
     ));
     const conversationId = target?.conversationId ?? record.flowInput?.conversationId;
     if (item.deliveryStatus === 'delivered') {
@@ -3289,7 +3290,7 @@ export class PersonaFlowDispatcher {
     if (isTerminalDispatch(record.state)) {
       if (record.activityId) {
         const activity = await this.inWorkspace(() => (
-          this.dependencies.getPersonaActivity(record.activityId!)
+          this.dependencies.getPersonaActivity(record.personaId, record.activityId!)
         ));
         if (activity) await this.synchronizeAssignedWorkItem(activity);
       }
@@ -3311,7 +3312,7 @@ export class PersonaFlowDispatcher {
       // mailbox boundary to project.
       if (current.state === 'waiting' && current.waitingReason === 'delivery') return current;
       if (!current.activityId) return current;
-      const activity = await this.dependencies.getPersonaActivity(current.activityId);
+      const activity = await this.dependencies.getPersonaActivity(current.personaId, current.activityId);
       if (!activity || activity.personaId !== current.personaId) {
         if (current.state === 'running' && !current.cancellationRequestedAt) {
           return this.saveTerminalErrorWithinRuntimeLock(
@@ -3414,7 +3415,7 @@ export class PersonaFlowDispatcher {
     ));
     if (reconciled.activityId) {
       const activity = await this.inWorkspace(() => (
-        this.dependencies.getPersonaActivity(reconciled.activityId!)
+        this.dependencies.getPersonaActivity(reconciled.personaId, reconciled.activityId!)
       ));
       if (activity) await this.synchronizeAssignedWorkItem(activity);
     }
@@ -3563,7 +3564,7 @@ export class PersonaFlowDispatcher {
       record = await this.reconcileRecord(record);
       if (isTerminalDispatch(record.state) && record.activityId) {
         try {
-          const sourceActivity = await this.inWorkspace(() => getPersonaActivity(record.activityId!));
+          const sourceActivity = await this.inWorkspace(() => getPersonaActivity(record.personaId, record.activityId!));
           if (sourceActivity) {
             await this.inWorkspace(() => admitBehaviorMaintenanceRun(sourceActivity));
           }

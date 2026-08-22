@@ -104,7 +104,7 @@ describe('Persona Task work controls', () => {
       const dispatch = activeDispatch(personaId, task.id);
       listPersonaFlowDispatchesMock.mockResolvedValue([dispatch]);
       cancelPersonaFlowDispatchByIdMock.mockImplementationOnce(async () => {
-        expect((await getPersonaWorkItem(task.id))?.status).toBe(expectedStatus);
+        expect((await getPersonaWorkItem(task.personaId, task.id))?.status).toBe(expectedStatus);
         await synchronizeAssignedWorkItemFromActivity(
           terminalAssignment(personaId, task.id, 'cancelled'),
         );
@@ -119,7 +119,7 @@ describe('Persona Task work controls', () => {
         dispatchId: dispatch.id,
         reason: expect.stringContaining(action === 'pause' ? 'paused' : 'stopped'),
       }, { waitForCompletion: true });
-      expect((await getPersonaWorkItem(task.id))?.status).toBe(expectedStatus);
+      expect((await getPersonaWorkItem(task.personaId, task.id))?.status).toBe(expectedStatus);
     });
   });
 
@@ -143,7 +143,7 @@ describe('Persona Task work controls', () => {
       await synchronizeAssignedWorkItemFromActivity(
         terminalAssignment(personaId, task.id, 'error'),
       );
-      const failed = await getPersonaWorkItem(task.id);
+      const failed = await getPersonaWorkItem(task.personaId, task.id);
       expect(failed).toMatchObject({ status: 'blocked' });
       expect(failed!.updatedAt).toBeGreaterThan(blocked.updatedAt);
 
@@ -169,7 +169,7 @@ describe('Persona Task work controls', () => {
       await expect(controlPersonaWorkItem(personaId, dependent.id, 'retry'))
         .rejects.toThrow('Finish this Task’s blockers');
       expect(submitPersonaFlowDispatchMock).not.toHaveBeenCalled();
-      expect((await getPersonaWorkItem(dependent.id))?.status).toBe('blocked');
+      expect((await getPersonaWorkItem(dependent.personaId, dependent.id))?.status).toBe('blocked');
     });
   });
 
@@ -228,7 +228,7 @@ describe('Persona Task work controls', () => {
         .rejects.toThrow('Use Stop');
       await expect(deletePersonaWorkItem(personaId, task.id))
         .rejects.toThrow('Stop it before deleting');
-      expect(await getPersonaWorkItem(task.id)).toMatchObject({ status: 'open' });
+      expect(await getPersonaWorkItem(task.personaId, task.id)).toMatchObject({ status: 'open' });
     });
   });
 });

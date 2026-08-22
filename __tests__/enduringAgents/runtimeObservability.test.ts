@@ -393,7 +393,7 @@ describe('Persona runtime observability', () => {
         fencingToken: foreignClaim!.lease.fencingToken,
         status: 'completed',
       });
-      const foreignBeforeRecovery = await getPersonaActivity(foreignClaim!.activity.id);
+      const foreignBeforeRecovery = await getPersonaActivity(foreignClaim!.activity.personaId, foreignClaim!.activity.id);
 
       await enqueuePersonaMailboxItem({
         personaId: persona.id,
@@ -404,6 +404,7 @@ describe('Persona runtime observability', () => {
       const victimClaim = await claimNextPersonaActivity({ personaId: persona.id, ttlMs: 60_000 });
       expect(victimClaim).not.toBeNull();
       const victimMailboxBeforeRecovery = await getPersonaMailboxItem(
+        victimClaim!.mailboxItem.personaId,
         victimClaim!.mailboxItem.id,
       );
       expect(victimMailboxBeforeRecovery?.status).toBe('claimed');
@@ -432,13 +433,13 @@ describe('Persona runtime observability', () => {
         lifecycleState: 'error',
         rejectedMailboxItemIds: [victimClaim!.mailboxItem.id],
       });
-      expect(await getPersonaMailboxItem(victimClaim!.mailboxItem.id)).toMatchObject({
+      expect(await getPersonaMailboxItem(victimClaim!.mailboxItem.personaId, victimClaim!.mailboxItem.id)).toMatchObject({
         status: 'rejected',
       });
-      expect((await getPersonaMailboxItem(victimClaim!.mailboxItem.id))?.claimedActivityId)
+      expect((await getPersonaMailboxItem(victimClaim!.mailboxItem.personaId, victimClaim!.mailboxItem.id))?.claimedActivityId)
         .toBeUndefined();
-      expect(await getPersonaActivity(foreignClaim!.activity.id)).toEqual(foreignBeforeRecovery);
-      expect(await getPersonaActivity(victimClaim!.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(foreignClaim!.activity.personaId, foreignClaim!.activity.id)).toEqual(foreignBeforeRecovery);
+      expect(await getPersonaActivity(victimClaim!.activity.personaId, victimClaim!.activity.id)).toMatchObject({
         id: victimClaim!.activity.id,
         status: 'running',
       });
@@ -479,11 +480,11 @@ describe('Persona runtime observability', () => {
       })).rejects.toThrow();
       _setPersonaRuntimeEventLogRootForTests(tempRoot);
 
-      expect(await getPersonaActivity(claim!.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(claim!.activity.personaId, claim!.activity.id)).toMatchObject({
         status: 'error',
         error: 'Administrative runtime recovery closed uncertain work; automatic replay was suppressed.',
       });
-      expect(await getPersonaMailboxItem(claim!.mailboxItem.id)).toMatchObject({
+      expect(await getPersonaMailboxItem(claim!.mailboxItem.personaId, claim!.mailboxItem.id)).toMatchObject({
         status: 'rejected',
       });
       expect((await getPersona(persona.id))?.lifecycleState).toBe('idle');

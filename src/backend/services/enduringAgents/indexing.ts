@@ -9,10 +9,10 @@ import type {
 } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
 import {
-  deleteCollectionItem,
-  listCollectionItems,
+  deleteShardedCollectionItem,
+  listAllShardedCollectionItems,
   runInWriteChain,
-  saveCollectionItem,
+  saveShardedCollectionItem,
   writeFileAtomic,
 } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
@@ -277,7 +277,7 @@ async function buildIndex<T extends IndexEntry>(
   config: Config<T>,
   revision: number,
 ): Promise<PersonaRecordIndex<T>> {
-  const values = await listCollectionItems<unknown>(config.collection);
+  const values = await listAllShardedCollectionItems<unknown>(config.collection);
   const entries = sortedEntries(values
     .map(config.buildEntry)
     .filter((entry): entry is T => entry !== null));
@@ -341,9 +341,11 @@ async function mutateIndex<T extends IndexEntry>(
       sourceCount: current.sourceCount,
       dirty: true,
     };
+    // Validate and calculate the index transition before touching the record.
+    // Ownership conflicts must fail closed without creating a second shard.
+    const entries = sortedEntries(mutateEntries(current.entries));
     await writeGeneration(config, dirty);
     await mutateRecord();
-    const entries = sortedEntries(mutateEntries(current.entries));
     const next: PersonaRecordIndex<T> = {
       recordKind: 'PersonaRecordIndex',
       schemaVersion: PERSONA_RECORD_INDEX_SCHEMA_VERSION,
@@ -373,8 +375,16 @@ export async function saveIndexedCollectionItem(
   try {
     await mutateIndex(
       config,
-      () => saveCollectionItem(collection, record.id, record),
-      entries => [...entries.filter(candidate => candidate.id !== entry.id), entry],
+      () => saveShardedCollectionItem(collection, record.personaId, record.id, record),
+      entries => {
+        const indexedOwner = entries.find(candidate => candidate.id === entry.id)?.personaId;
+        if (indexedOwner && indexedOwner !== record.personaId) {
+          throw new Error(
+            `Indexed ${collection} record ${JSON.stringify(record.id)} belongs to another Persona.`,
+          );
+        }
+        return [...entries.filter(candidate => candidate.id !== entry.id), entry];
+      },
     );
   } finally {
     // A record may have committed before a later index write failed. The dirty
@@ -385,21 +395,26 @@ export async function saveIndexedCollectionItem(
 
 export async function deleteIndexedCollectionItem(
   collection: IndexedCollection,
+  personaId: string,
   id: string,
 ): Promise<void> {
   const config = CONFIGS[collection];
-  let personaId: string | undefined;
   try {
     await mutateIndex(
       config,
-      () => deleteCollectionItem(collection, id),
+      () => deleteShardedCollectionItem(collection, personaId, id),
       entries => {
-        personaId = entries.find(entry => entry.id === id)?.personaId;
+        const indexedOwner = entries.find(entry => entry.id === id)?.personaId;
+        if (indexedOwner && indexedOwner !== personaId) {
+          throw new Error(
+            `Indexed ${collection} record ${JSON.stringify(id)} belongs to another Persona.`,
+          );
+        }
         return entries.filter(entry => entry.id !== id);
       },
     );
   } finally {
-    if (personaId) invalidatePersonaRecordCache(collection, personaId);
+    invalidatePersonaRecordCache(collection, personaId);
   }
 }
 

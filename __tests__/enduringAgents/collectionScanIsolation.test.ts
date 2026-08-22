@@ -22,7 +22,7 @@ function inFreshWorkspace<T>(task: () => T | Promise<T>): Promise<T> {
   workspaceSequence += 1;
   return runWithWorkspace(
     `collection-scan-isolation-${process.pid}-${workspaceSequence}`,
-    task,
+    async () => await task(),
   );
 }
 

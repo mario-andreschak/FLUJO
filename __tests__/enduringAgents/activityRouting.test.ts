@@ -282,7 +282,7 @@ describe('enduring-agent Activity routing', () => {
       });
       expect(recovered?.mailboxItem).not.toHaveProperty('targetActivityId');
       expect(recovered?.mailboxItem).not.toHaveProperty('deliveryStatus');
-      expect(await getPersonaActivity(active!.activity.id)).toMatchObject({ status: 'error' });
+      expect(await getPersonaActivity(active!.activity.personaId, active!.activity.id)).toMatchObject({ status: 'error' });
     });
   });
 
@@ -350,7 +350,7 @@ describe('enduring-agent Activity routing', () => {
           interruptedActivityId: original.activity.id,
         },
       });
-      expect(await getPersonaActivity(original.activity.id)).toMatchObject({
+      expect(await getPersonaActivity(original.activity.personaId, original.activity.id)).toMatchObject({
         status: 'running',
         leaseId: original.lease.id,
         interruptionRequestedByMailboxItemId: urgent.item.id,
@@ -368,7 +368,7 @@ describe('enduring-agent Activity routing', () => {
       const urgentClaim = await claim(persona.id);
       expect(urgentClaim.mailboxItem.id).toBe(urgent.item.id);
       expect(urgentClaim.activity.id).not.toBe(original.activity.id);
-      expect(await getPersonaActivity(original.activity.id)).toMatchObject({ status: 'waiting' });
+      expect(await getPersonaActivity(original.activity.personaId, original.activity.id)).toMatchObject({ status: 'waiting' });
       await completePersonaActivity(fence(urgentClaim));
 
       const resumed = await claim(persona.id);
@@ -380,7 +380,7 @@ describe('enduring-agent Activity routing', () => {
         decision: 'duplicate',
         item: { id: urgent.item.id, status: 'completed' },
       });
-      expect((await getPersonaActivity(original.activity.id))?.interruptionRequestedAt)
+      expect((await getPersonaActivity(original.activity.personaId, original.activity.id))?.interruptionRequestedAt)
         .toBeUndefined();
     });
   });
@@ -399,7 +399,7 @@ describe('enduring-agent Activity routing', () => {
 
       await expect(claimNextPersonaActivity({ personaId: persona.id, ttlMs: 10_000 }))
         .resolves.toBeNull();
-      expect(await getPersonaActivity(original.activity.id)).toMatchObject({ status: 'waiting' });
+      expect(await getPersonaActivity(original.activity.personaId, original.activity.id)).toMatchObject({ status: 'waiting' });
 
       nowSpy.mockReturnValue(101_000);
       const urgentClaim = await claim(persona.id);
@@ -492,7 +492,7 @@ describe('enduring-agent Activity routing', () => {
         ...fence(active),
         runId: 'run_stale',
       })).rejects.toBeInstanceOf(PersonaLeaseLostError);
-      expect(await getPersonaMailboxItem(active.mailboxItem.id)).toMatchObject({
+      expect(await getPersonaMailboxItem(active.mailboxItem.personaId, active.mailboxItem.id)).toMatchObject({
         status: 'completed',
       });
     });

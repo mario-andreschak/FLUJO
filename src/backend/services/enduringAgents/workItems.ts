@@ -147,7 +147,7 @@ export async function createPersonaWorkItem(
   return withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
     const now = Date.now();
     const id = parsed.id ?? randomEnduringAgentId('work');
-    const existing = await getPersonaWorkItem(id);
+    const existing = await getPersonaWorkItem(parsed.personaId, id);
     if (existing) throw new PersonaDomainConflictError(`WorkItem ${JSON.stringify(id)} already exists.`);
     if (parsed.createdByActivityId && activity && parsed.createdByActivityId !== activity.id) {
       throw new PersonaDomainConflictError('A Flow cannot attribute a WorkItem to another Activity.');
@@ -190,7 +190,7 @@ export async function updatePersonaWorkItem(
   EnduringAgentIdSchema.parse(workItemId);
   const parsed = UpdatePersonaWorkItemInputSchema.parse(patch) as UpdatePersonaWorkItemInput;
   const updated = await withPersonaDomainMutation(personaId, options, async () => {
-    const existing = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== existing.updatedAt) {
       throw new PersonaDomainConflictError('WorkItem changed since it was inspected.');
     }
@@ -310,10 +310,10 @@ export async function assignPersonaWorkItem(
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
   const parsed = AssignPersonaWorkItemInputSchema.parse(input) as AssignPersonaWorkItemInput;
-  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
   let workItem: PersonaWorkItem | undefined;
   const validateAdmission = async (): Promise<void> => {
-    const current = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     const records = await listStoredPersonaWorkItems(personaId);
     assertAssignableWorkItem(current, records, parsed.expectedUpdatedAt);
     workItem = current;
@@ -409,7 +409,7 @@ async function persistWorkItemControlStatus(
 ): Promise<PersonaWorkItem> {
   return withPersonaRuntimeLock(personaId, async (lock) => {
     await lock.assertOwned();
-    const existing = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     if (existing.status === status) return existing;
     if (existing.status === 'completed' || existing.status === 'cancelled') {
       throw new PersonaDomainConflictError(
@@ -461,7 +461,7 @@ export async function controlPersonaWorkItem(
     throw new TypeError('Unknown Task control.');
   }
 
-  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
   const activeDispatches = await listActiveWorkItemDispatches(personaId, workItemId);
 
   if (action === 'move_earlier' || action === 'move_later') {
@@ -506,7 +506,7 @@ export async function controlPersonaWorkItem(
           : 'This Task was stopped from the Persona desk.',
       }, { waitForCompletion: true })
     )));
-    const workItem = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const workItem = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     return { action, workItem };
   }
 
@@ -575,7 +575,7 @@ function isTerminalWorkItemAssignment(activity: PersonaActivity): boolean {
 async function synchronizeAssignedWorkItemRecord(
   activity: PersonaActivity,
 ): Promise<PersonaWorkItem | null> {
-  const existing = await getPersonaWorkItem(activity.source.sourceId!);
+  const existing = await getPersonaWorkItem(activity.personaId, activity.source.sourceId!);
   if (!existing || existing.personaId !== activity.personaId) return null;
   if (
     existing.status === 'completed'
@@ -634,7 +634,7 @@ export async function synchronizeAssignedWorkItemFromActivity(
   activity: PersonaActivity,
 ): Promise<PersonaWorkItem | null> {
   if (!isTerminalWorkItemAssignment(activity)) return null;
-  const inspected = await getPersonaWorkItem(activity.source.sourceId!);
+  const inspected = await getPersonaWorkItem(activity.personaId, activity.source.sourceId!);
   if (!inspected || inspected.personaId !== activity.personaId) return null;
   return withPersonaDomainMutation(activity.personaId, {}, async () => (
     synchronizeAssignedWorkItemRecord(activity)
@@ -659,7 +659,7 @@ export async function deletePersonaWorkItem(
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
   await withPersonaDomainMutation(personaId, options, async () => {
-    requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     if ((await listActiveWorkItemDispatches(personaId, workItemId)).length > 0) {
       throw new PersonaDomainConflictError(
         'This Task is still active. Stop it before deleting it.',
@@ -675,7 +675,7 @@ export async function deletePersonaWorkItem(
         `WorkItem is still a dependency of ${JSON.stringify(dependent.id)}.`,
       );
     }
-    await deletePersonaWorkItemRecord(workItemId);
+    await deletePersonaWorkItemRecord(personaId, workItemId);
   });
 }
 
@@ -725,7 +725,7 @@ export async function promoteRunTodoToWorkItem(
     if (liveActivity && parsed.activityId && parsed.activityId !== liveActivity.id) {
       throw new PersonaDomainConflictError('A live Activity cannot promote another Activity\'s todo.');
     }
-    const activity = liveActivity ?? await getPersonaActivity(activityId);
+    const activity = liveActivity ?? await getPersonaActivity(personaId, activityId);
     if (!activity || activity.personaId !== personaId || !activity.conversationId) {
       throw new PersonaDomainNotFoundError('PersonaActivity', activityId);
     }
@@ -741,7 +741,7 @@ export async function promoteRunTodoToWorkItem(
       activityId: activity.id,
       todoId: todo.id,
     });
-    const existing = await getPersonaWorkItem(id);
+    const existing = await getPersonaWorkItem(personaId, id);
     if (existing) return requireOwnedWorkItem(existing, personaId);
 
     const now = Date.now();

@@ -21,7 +21,7 @@ function inFreshWorkspace<T>(task: () => T | Promise<T>): Promise<T> {
   workspaceSequence += 1;
   return runWithWorkspace(
     `persona-record-index-${process.pid}-${workspaceSequence}`,
-    task,
+    async () => await task(),
   );
 }
 
@@ -91,6 +91,7 @@ describe('PersonaRecordIndex lifecycle', () => {
 
       await deleteIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.memoryItems,
+        'persona_a',
         'memory_a',
       );
       const deleted = await getMemoryIndex();

@@ -150,7 +150,7 @@ async function requireApps(appRefs: readonly string[]): Promise<void> {
 
 async function requireMemories(persona: Persona, memoryRefs: readonly string[]): Promise<void> {
   for (const memoryRef of memoryRefs) {
-    const memory = await getMemoryItem(memoryRef);
+    const memory = await getMemoryItem(persona.id, memoryRef);
     // Missing and foreign references intentionally share one boundary error.
     if (!memory || memory.personaId !== persona.id) missing('MemoryItem', memoryRef);
     if (memory.status !== 'active') {

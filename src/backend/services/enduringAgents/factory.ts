@@ -391,7 +391,7 @@ async function materializeInitialMemories(
     memoryIds.push(id);
     // Do not resurrect a memory that a user corrected/forgot after factory
     // completion. Presence proves this deterministic input was materialized.
-    if (await getMemoryItem(id)) continue;
+    if (await getMemoryItem(persona.id, id)) continue;
     const memory: MemoryItem = MemoryItemSchema.parse({
       schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
       id,

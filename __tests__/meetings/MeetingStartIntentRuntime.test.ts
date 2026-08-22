@@ -156,7 +156,7 @@ describe('durable Persona meeting start intent', () => {
         );
         expect(firstItems).toHaveLength(1);
         expect(firstItems[0].status).toBe('claimed');
-        const firstActivity = await getPersonaActivity(firstItems[0].claimedActivityId!);
+        const firstActivity = await getPersonaActivity(persona.id, firstItems[0].claimedActivityId!);
         const firstLease = await getPersonaLease(persona.id);
         expect(firstActivity?.status).toBe('running');
         expect(firstLease?.activityId).toBe(firstActivity?.id);
@@ -182,9 +182,9 @@ describe('durable Persona meeting start intent', () => {
           );
           expect(allItems).toHaveLength(2);
           expect(new Set(allItems.map((item) => item.id)).size).toBe(2);
-          expect(await getPersonaActivity(firstActivity!.id)).toMatchObject({ status: 'error' });
+          expect(await getPersonaActivity(persona.id, firstActivity!.id)).toMatchObject({ status: 'error' });
           const successor = allItems.find((item) => item.id !== firstItems[0].id)!;
-          expect(await getPersonaActivity(successor.claimedActivityId!)).toMatchObject({
+          expect(await getPersonaActivity(persona.id, successor.claimedActivityId!)).toMatchObject({
             status: 'completed',
             meetingId,
           });

@@ -288,7 +288,7 @@ async function createMemoryWithinMutation(
     createdAt: now,
     updatedAt: now,
   }) as MemoryItem;
-  const existing = await getMemoryItem(record.id);
+  const existing = await getMemoryItem(record.personaId, record.id);
   if (existing) {
     const sameSemanticValue = existing.personaId === record.personaId
       && existing.kind === record.kind
@@ -362,7 +362,7 @@ export async function rememberMemory(
 export async function getPersonaMemory(personaId: string, memoryId: string): Promise<MemoryItem> {
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(memoryId);
-  return requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+  return requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
 }
 
 function queryTerms(query: string | undefined): string[] {
@@ -433,7 +433,7 @@ export async function correctMemory(
   const parsed = CorrectMemoryInputSchema.parse(input) as CorrectMemoryInput;
   return withPersonaDomainMutation(personaId, options, async ({ persona, activity, updatePersona }) => {
     assertPersonaMayChangeMemory(persona, options);
-    const original = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+    const original = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     if (original.status === 'forgotten') {
       throw new PersonaDomainConflictError('Forgotten memory cannot be corrected in place.');
     }
@@ -489,7 +489,7 @@ export async function activateMemory(
     throw new PersonaDomainConflictError('A model-run tool cannot review and activate memory.');
   }
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
-    const item = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+    const item = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     if (item.status === 'active') return item;
     if (item.status !== 'candidate') {
       throw new PersonaDomainConflictError('Only a candidate MemoryItem can be activated.');
@@ -513,7 +513,7 @@ export async function activateMemory(
         });
       }
       for (const id of supersededIds) {
-        const prior = await getMemoryItem(id);
+        const prior = await getMemoryItem(personaId, id);
         if (prior?.personaId === personaId && prior.status !== 'forgotten') {
           await saveMemoryItem({
             ...prior,
@@ -534,7 +534,7 @@ export async function forgetMemory(
 ): Promise<MemoryItem> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
     assertPersonaMayChangeMemory(persona, options);
-    const item = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+    const item = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     if (item.status === 'forgotten') return item;
     if (persona.coreMemoryItemIds?.includes(item.id)) {
       await updatePersona({
@@ -558,7 +558,7 @@ export async function pinMemoryToCore(
 ): Promise<MemoryItem[]> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
     assertPersonaMayChangeMemory(persona, options);
-    const item = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+    const item = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     if (item.status !== 'active' || (item.trust !== 'explicit_user' && item.trust !== 'verified_tool')) {
       throw new PersonaDomainConflictError('Core memory requires active explicit-user or verified-tool trust.');
     }
@@ -594,7 +594,7 @@ export async function unpinMemoryFromCore(
 ): Promise<MemoryItem[]> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
     assertPersonaMayChangeMemory(persona, options);
-    requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
+    requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     const ids = (persona.coreMemoryItemIds ?? []).filter((id) => id !== memoryId);
     if (ids.length !== (persona.coreMemoryItemIds ?? []).length) {
       await updatePersona({
