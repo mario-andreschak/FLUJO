@@ -4,6 +4,88 @@
  * This file contains feature flags that can be used to enable or disable
  * specific features of the application.
  */
+
+export type PersonaRuntimeRetentionMode = 'disabled' | 'shadow' | 'active';
+
+export interface PersonaRuntimeRetentionConfig {
+  mode: PersonaRuntimeRetentionMode;
+  rolloutBasisPoints: number;
+  cohortVersion: string;
+  /** Deployment-managed explicit deny list. No behavioral field implies criticality. */
+  criticalPersonaIds: readonly string[];
+}
+
+export const PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG:
+  PersonaRuntimeRetentionConfig = Object.freeze({
+    mode: 'disabled',
+    rolloutBasisPoints: 0,
+    cohortVersion: 'persona-runtime-retention-v1',
+    criticalPersonaIds: Object.freeze([]),
+  });
+
+const PERSONA_RUNTIME_RETENTION_MODES = new Set<PersonaRuntimeRetentionMode>([
+  'disabled',
+  'shadow',
+  'active',
+]);
+const PERSONA_RUNTIME_RETENTION_COHORT_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const PERSONA_RUNTIME_RETENTION_PERSONA_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export function validatePersonaRuntimeRetentionConfig(
+  value: PersonaRuntimeRetentionConfig,
+): PersonaRuntimeRetentionConfig | null {
+  if (!PERSONA_RUNTIME_RETENTION_MODES.has(value.mode)) return null;
+  if (
+    !Number.isSafeInteger(value.rolloutBasisPoints)
+    || value.rolloutBasisPoints < 0
+    || value.rolloutBasisPoints > 10_000
+  ) {
+    return null;
+  }
+  if (!PERSONA_RUNTIME_RETENTION_COHORT_VERSION_PATTERN.test(value.cohortVersion)) {
+    return null;
+  }
+  const criticalPersonaIds = [...new Set(value.criticalPersonaIds)];
+  if (criticalPersonaIds.some(
+    (id) => !PERSONA_RUNTIME_RETENTION_PERSONA_ID_PATTERN.test(id),
+  )) {
+    return null;
+  }
+  return {
+    mode: value.mode,
+    rolloutBasisPoints: value.rolloutBasisPoints,
+    cohortVersion: value.cohortVersion,
+    criticalPersonaIds,
+  };
+}
+
+/**
+ * Read the deployment rollout contract. Any malformed value fails closed to the
+ * disabled default; values are never clamped or inferred from Persona behavior.
+ */
+export function readPersonaRuntimeRetentionConfig(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): PersonaRuntimeRetentionConfig {
+  const mode = env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE ?? 'disabled';
+  const basisPointsText = env.FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS ?? '0';
+  const cohortVersion = env.FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION
+    ?? PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.cohortVersion;
+  const criticalText = env.FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS ?? '';
+
+  if (!/^\d+$/.test(basisPointsText)) {
+    return { ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG };
+  }
+  const candidate = validatePersonaRuntimeRetentionConfig({
+    mode: mode as PersonaRuntimeRetentionMode,
+    rolloutBasisPoints: Number(basisPointsText),
+    cohortVersion,
+    criticalPersonaIds: criticalText === ''
+      ? []
+      : criticalText.split(',').map((id) => id.trim()),
+  });
+  return candidate ?? { ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG };
+}
+
 export const FEATURES = {
   /**
    * Controls the application's logging level

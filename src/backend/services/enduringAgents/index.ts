@@ -22,6 +22,8 @@ export * from './personaDispatcher';
 export * from './personaDrafts';
 export * from './personaActivitySnapshot';
 export * from './personaPresentation';
+export * from './personaRuntimeRetentionCohort';
+export * from './personaRuntimeRetentionRollout';
 export * from './personaAdmin';
 export * from './personaComposition';
 export * from './personaAppGrants';

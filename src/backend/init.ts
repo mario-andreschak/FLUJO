@@ -16,6 +16,7 @@ import {
   listPersonas,
   pruneWorkspacePersonaLeaseHistories,
   reconcilePersonaRoleBehaviors,
+  runPersonaRuntimeRetentionSweep,
   startPersonaFlowDispatcher,
   sweepMemoryCandidates,
 } from '@/backend/services/enduringAgents';
@@ -62,6 +63,8 @@ declare global {
   var __flujo_memory_lifecycle_cron: Cron | undefined;
   // Default-off, irreversible Persona lease-history pruning sweep (issue #478).
   var __flujo_persona_lease_history_pruning_cron: Cron | undefined;
+  // Staged Persona soft-retention sweep (issue #481); the runner fails closed.
+  var __flujo_persona_runtime_retention_cron: Cron | undefined;
   // Hourly stored-memory duplicate backfill (issue #465).
   var __flujo_memory_backfill_cron: Cron | undefined;
   var __flujo_memory_backfill_in_flight: Promise<void> | undefined;
@@ -251,6 +254,23 @@ function armRetentionSweep(): void {
       },
     );
     log.info('Armed Persona lease-history pruning sweep (hourly)');
+  }
+  // Persona runtime soft retention (issue #481) is armed unconditionally so a
+  // deployment can move between disabled, shadow, and active without restarting.
+  // The runner checks the emergency flag/config before any Persona storage read,
+  // prevents overlap per workspace, and re-authorizes every active write.
+  if (!global.__flujo_persona_runtime_retention_cron) {
+    global.__flujo_persona_runtime_retention_cron = new Cron(
+      '47 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona runtime retention',
+          () => runPersonaRuntimeRetentionSweep(),
+        );
+      },
+    );
+    log.info('Armed Persona runtime retention sweep (hourly)');
   }
   // Historical memory deduplication (issue #465). The process-local promise
   // prevents hot-reload callbacks from overlapping, while the workspace lock
