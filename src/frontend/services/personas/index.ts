@@ -14,6 +14,8 @@ import type {
   CreatePersonaInput,
   CreatePersonaWorkItemInput,
   DeletePersonaCreationDraftInput,
+  ConflictResolutionAudit,
+  MemoryConflictResolutionAction,
   MemoryItem,
   Persona,
   PersonaActivity,
@@ -139,10 +141,44 @@ export interface PromotePersonaImprovementResult {
 
 export type PersonaBundle = Omit<PersonaDetail, 'runtime' | 'presentation'>;
 
+export interface MemoryConflictSummary {
+  id: string;
+  content: string;
+  kind: MemoryItem['kind'];
+  scope: MemoryItem['scope'];
+  status: MemoryItem['status'];
+  trust: MemoryItem['trust'];
+  confidence: number;
+  importance: number;
+  updatedAt: number;
+}
+
 export interface MemorySearchResult {
   item: MemoryItem;
   score: number;
   core: boolean;
+  conflicts?: MemoryConflictSummary[];
+}
+
+export interface PersonaMemoryQuery {
+  query?: string;
+  statuses?: MemoryItem['status'][];
+  order?: 'review';
+  limit?: number;
+}
+
+export interface ResolvePersonaMemoryConflictInput {
+  counterpartId: string;
+  action: MemoryConflictResolutionAction;
+  reason: string;
+  resolutionId?: string;
+}
+
+export interface ResolvePersonaMemoryConflictResult {
+  resolutionId: string;
+  audit: ConflictResolutionAudit;
+  left: MemoryItem;
+  right: MemoryItem;
 }
 
 export interface PersonaMemoryAvailabilityInput {
@@ -278,12 +314,18 @@ class PersonasService {
     return jsonRequest('/v1/chat/conversations', 'POST', input);
   }
 
-  memories(personaId: string, query?: string): Promise<MemorySearchResult[]> {
+  memories(
+    personaId: string,
+    query?: string | PersonaMemoryQuery,
+  ): Promise<MemorySearchResult[]> {
+    const options: PersonaMemoryQuery = typeof query === 'string' ? { query } : query ?? {};
+    const statuses = options.statuses ?? ['candidate', 'active', 'superseded', 'forgotten'];
     const params = new URLSearchParams({
-      status: 'candidate,active,superseded,forgotten',
-      limit: '200',
+      status: statuses.join(','),
+      limit: String(options.limit ?? (options.order === 'review' ? 20 : 200)),
     });
-    if (query?.trim()) params.set('q', query.trim());
+    if (options.query?.trim()) params.set('q', options.query.trim());
+    if (options.order) params.set('order', options.order);
     return parse(fetch(withWorkspaceUrl(`${personaPath(personaId, '/memories')}?${params}`)));
   }
 
@@ -351,6 +393,17 @@ class PersonasService {
       personaId,
       `/memories/${encodeURIComponent(memoryId)}`,
     ), 'DELETE');
+  }
+
+  resolveMemoryConflict(
+    personaId: string,
+    memoryId: string,
+    input: ResolvePersonaMemoryConflictInput,
+  ): Promise<ResolvePersonaMemoryConflictResult> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/memories/${encodeURIComponent(memoryId)}/resolve-conflict`,
+    ), 'POST', input);
   }
 
   pinMemory(personaId: string, memoryId: string, pin: boolean): Promise<MemoryItem[]> {

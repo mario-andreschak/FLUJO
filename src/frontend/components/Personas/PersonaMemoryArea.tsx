@@ -5,6 +5,7 @@ import {
   HistoryRounded,
   MemoryRounded,
   PushPinRounded,
+  WarningAmberRounded,
 } from '@mui/icons-material';
 import {
   Alert,
@@ -13,12 +14,14 @@ import {
   Card,
   CardActions,
   CardContent,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
+  LinearProgress,
   Paper,
   Stack,
   TextField,
@@ -27,11 +30,13 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
+import { FEATURES } from '@/config/features';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import {
   PersonasApiError,
   personasService,
+  type MemorySearchResult,
   type PersonaDetail,
 } from '@/frontend/services/personas';
 import type { MemoryItem } from '@/shared/types/enduringAgent';
@@ -41,6 +46,17 @@ type OptimisticMemory = {
   status?: MemoryItem['status'];
   core?: boolean;
 };
+type BulkReviewState = {
+  operation: 'approve' | 'forget';
+  completed: number;
+  total: number;
+  failedIds: string[];
+};
+type BulkReviewSummary = { succeeded: number; failed: number; skipped: number };
+type ConflictPair = { memory: MemoryItem; counterpart: MemoryItem };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const REVIEW_LIMIT = 20;
 
 const BUCKETS: MemoryBucket[] = [
   'important',
@@ -96,6 +112,20 @@ function dateInputValue(timestamp: number | undefined): string {
   return `${year}-${month}-${day}`;
 }
 
+function expiryMessage(
+  expiresAt: number | undefined,
+  now: number,
+): { key: TranslationKey; values?: { days: number } } | null {
+  if (expiresAt === undefined) return null;
+  const remaining = expiresAt - now;
+  if (remaining <= 0) return { key: 'personas.memory.expired' };
+  if (remaining <= DAY_MS) return { key: 'personas.memory.expiresToday' };
+  return {
+    key: 'personas.memory.expiresInDays',
+    values: { days: Math.ceil(remaining / DAY_MS) },
+  };
+}
+
 function availabilityTimestamp(
   value: string,
   original: number | undefined,
@@ -135,6 +165,12 @@ export default function PersonaMemoryArea({
   const [historyOpen, setHistoryOpen] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<Record<string, OptimisticMemory>>({});
+  const [reviewResults, setReviewResults] = useState<MemorySearchResult[] | null>(null);
+  const [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]);
+  const [bulkReview, setBulkReview] = useState<BulkReviewState | null>(null);
+  const [bulkSummary, setBulkSummary] = useState<BulkReviewSummary | null>(null);
+  const [conflictPair, setConflictPair] = useState<ConflictPair | null>(null);
+  const [conflictReason, setConflictReason] = useState('');
   const [memoryError, setMemoryError] = useState<{
     message: string;
     code?: string;
@@ -147,25 +183,65 @@ export default function PersonaMemoryArea({
     if (latest && latest.updatedAt !== correction.updatedAt) setCorrection(latest);
   }, [correction, detail.memoryItems]);
 
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => personasService.memories(detail.persona.id, {
+      statuses: ['candidate'],
+      order: 'review',
+      limit: REVIEW_LIMIT,
+    })).then((results) => {
+      if (active) setReviewResults(results);
+    }).catch(() => {
+      if (active) setReviewResults(null);
+    });
+    return () => { active = false; };
+  }, [detail.persona.id, detail.memoryItems]);
+
   const coreIds = useMemo(
     () => new Set(detail.persona.coreMemoryItemIds ?? []),
     [detail.persona.coreMemoryItemIds],
   );
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  const reviewRank = useMemo(() => new Map(
+    (reviewResults ?? []).map((result, index) => [result.item.id, index]),
+  ), [reviewResults]);
+  const detailById = useMemo(
+    () => new Map(detail.memoryItems.map(memory => [memory.id, memory])),
+    [detail.memoryItems],
+  );
   const memories = useMemo(() => detail.memoryItems
     .map((memory) => ({
-      ...memory,
+      ...(reviewResults?.find(result => result.item.id === memory.id)?.item ?? memory),
       status: optimistic[memory.id]?.status ?? memory.status,
     }))
     .filter((memory) => (
       memory.status !== 'superseded'
+      && (memory.status !== 'candidate' || reviewResults === null || reviewRank.has(memory.id))
       && (!normalizedQuery || memory.content.toLocaleLowerCase().includes(normalizedQuery))
     ))
-    .sort((left, right) => right.updatedAt - left.updatedAt), [
+    .sort((left, right) => {
+      if (left.status === 'candidate' && right.status === 'candidate') {
+        return (reviewRank.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+          - (reviewRank.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+      }
+      return right.updatedAt - left.updatedAt;
+    }), [
       detail.memoryItems,
       normalizedQuery,
       optimistic,
+      reviewRank,
+      reviewResults,
     ]);
+
+  const visibleReviewIds = useMemo(
+    () => memories.filter(memory => memory.status === 'candidate').map(memory => memory.id),
+    [memories],
+  );
+
+  useEffect(() => {
+    const visible = new Set(visibleReviewIds);
+    setSelectedReviewIds(current => current.filter(id => visible.has(id)));
+  }, [visibleReviewIds]);
 
   const isPending = busy || pendingKey !== null;
   const addValidFrom = availabilityTimestamp(addValidFromDate, undefined, 'start');
@@ -237,6 +313,90 @@ export default function PersonaMemoryArea({
       setPendingKey(null);
     }
   };
+
+  const runBulkReview = async (operation: 'approve' | 'forget') => {
+    if (bulkReview || pendingKey !== null || selectedReviewIds.length === 0) return;
+    const visible = new Set(visibleReviewIds);
+    const ids = selectedReviewIds.filter(id => visible.has(id));
+    const skipped = selectedReviewIds.length - ids.length;
+    if (ids.length === 0) return;
+    const failedIds: string[] = [];
+    const succeededIds: string[] = [];
+    setPendingKey(`bulk:${operation}`);
+    setMemoryError(null);
+    setBulkSummary(null);
+    setBulkReview({ operation, completed: 0, total: ids.length, failedIds: [] });
+    for (let index = 0; index < ids.length; index += 1) {
+      const memoryId = ids[index];
+      try {
+        if (operation === 'approve') {
+          await personasService.activateMemory(detail.persona.id, memoryId);
+          setOptimistic(current => ({
+            ...current,
+            [memoryId]: { status: 'active' },
+          }));
+        } else {
+          await personasService.forgetMemory(detail.persona.id, memoryId);
+          setOptimistic(current => ({
+            ...current,
+            [memoryId]: { status: 'forgotten', core: false },
+          }));
+        }
+        succeededIds.push(memoryId);
+        setSelectedReviewIds(current => current.filter(id => id !== memoryId));
+      } catch {
+        failedIds.push(memoryId);
+      }
+      setBulkReview({
+        operation,
+        completed: index + 1,
+        total: ids.length,
+        failedIds: [...failedIds],
+      });
+    }
+    await refresh().catch(() => undefined);
+    succeededIds.forEach(clearOptimistic);
+    setSelectedReviewIds(failedIds);
+    setBulkSummary({ succeeded: succeededIds.length, failed: failedIds.length, skipped });
+    setBulkReview(null);
+    setPendingKey(null);
+  };
+
+  const resolveConflict = async (
+    action: 'keep_left' | 'keep_right' | 'keep_both',
+  ) => {
+    if (!conflictPair || !conflictReason.trim()) return;
+    const succeeded = await runMutation(
+      `resolve:${conflictPair.memory.id}:${conflictPair.counterpart.id}`,
+      () => personasService.resolveMemoryConflict(
+        detail.persona.id,
+        conflictPair.memory.id,
+        {
+          counterpartId: conflictPair.counterpart.id,
+          action,
+          reason: conflictReason.trim(),
+          resolutionId: `memory_resolution_${uuidv4().replaceAll('-', '')}`,
+        },
+      ),
+    );
+    if (succeeded) {
+      setConflictPair(null);
+      setConflictReason('');
+    }
+  };
+
+  const safeConflictCounterparts = (memory: MemoryItem): MemoryItem[] => (
+    FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
+      ? (memory.conflictsWith ?? [])
+        .map(id => detailById.get(id))
+        .filter((candidate): candidate is MemoryItem => (
+          candidate !== undefined
+          && candidate.id !== memory.id
+          && candidate.personaId === memory.personaId
+          && candidate.status !== 'superseded'
+        ))
+      : []
+  );
 
   const openAdd = () => {
     setAddRequestId(`memory_${uuidv4().replaceAll('-', '')}`);
@@ -319,7 +479,31 @@ export default function PersonaMemoryArea({
           </Alert>
         )}
 
-        {pendingKey && (
+        {bulkReview && (
+          <Box role="status" aria-live="polite">
+            <Typography color="text.secondary" sx={{ mb: 0.75 }}>
+              {t('personas.memory.bulkProgress', {
+                completed: bulkReview.completed,
+                total: bulkReview.total,
+              })}
+            </Typography>
+            <LinearProgress
+              variant="determinate"
+              value={(bulkReview.completed / bulkReview.total) * 100}
+            />
+          </Box>
+        )}
+
+        {bulkSummary && (
+          <Alert
+            severity={bulkSummary.failed > 0 ? 'warning' : 'success'}
+            onClose={() => setBulkSummary(null)}
+          >
+            {t('personas.memory.bulkSummary', bulkSummary)}
+          </Alert>
+        )}
+
+        {pendingKey && !bulkReview && (
           <Typography role="status" aria-live="polite" color="text.secondary">
             {t('personas.memory.saving')}
           </Typography>
@@ -345,6 +529,37 @@ export default function PersonaMemoryArea({
                   >
                     {bucketLabel(bucket)} · {items.length}
                   </Typography>
+                  {bucket === 'needsReview' && items.length > 0 && (
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 0.75 }}>
+                      <Button
+                        size="small"
+                        disabled={isPending}
+                        onClick={() => setSelectedReviewIds(
+                          selectedReviewIds.length === items.length ? [] : items.map(item => item.id),
+                        )}
+                      >
+                        {selectedReviewIds.length === items.length
+                          ? t('personas.memory.clearSelection')
+                          : t('personas.memory.selectAll')}
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        disabled={isPending || selectedReviewIds.length === 0}
+                        onClick={() => void runBulkReview('approve')}
+                      >
+                        {t('personas.memory.approveSelected', { count: selectedReviewIds.length })}
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        disabled={isPending || selectedReviewIds.length === 0}
+                        onClick={() => void runBulkReview('forget')}
+                      >
+                        {t('personas.memory.forgetSelected', { count: selectedReviewIds.length })}
+                      </Button>
+                    </Stack>
+                  )}
                   {items.length === 0 ? (
                     <Typography color="text.secondary" sx={{ mt: 0.5 }}>
                       {bucket === 'needsReview'
@@ -360,6 +575,10 @@ export default function PersonaMemoryArea({
                           && (memory.trust === 'explicit_user' || memory.trust === 'verified_tool');
                         const disclosureId = `memory-provenance-${memory.id}`;
                         const disclosureOpen = provenanceOpen === memory.id;
+                        const conflicts = safeConflictCounterparts(memory);
+                        const expiry = memory.status === 'candidate'
+                          ? expiryMessage(memory.expiresAt, Date.now())
+                          : null;
                         return (
                           <Card
                             key={memory.id}
@@ -378,25 +597,87 @@ export default function PersonaMemoryArea({
                                 alignItems={{ xs: 'flex-start', sm: 'flex-start' }}
                                 gap={1}
                               >
-                                <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                                  {memory.content}
-                                </Typography>
-                                <Chip
-                                  size="small"
-                                  color={memory.status === 'candidate'
-                                    ? 'warning'
-                                    : core
-                                      ? 'primary'
-                                      : memory.status === 'forgotten'
-                                        ? 'default'
-                                        : 'success'}
-                                  icon={core ? <PushPinRounded /> : undefined}
-                                  label={bucketLabel(memoryBucket(memory, core) ?? 'remembered')}
-                                />
+                                <Stack direction="row" spacing={0.5} alignItems="flex-start" flex={1}>
+                                  {memory.status === 'candidate' && (
+                                    <Checkbox
+                                      checked={selectedReviewIds.includes(memory.id)}
+                                      disabled={isPending}
+                                      inputProps={{
+                                        'aria-label': t('personas.memory.selectCandidate', {
+                                          memory: memory.content,
+                                        }),
+                                      }}
+                                      onChange={(event) => setSelectedReviewIds(current => (
+                                        event.target.checked
+                                          ? [...new Set([...current, memory.id])]
+                                          : current.filter(id => id !== memory.id)
+                                      ))}
+                                    />
+                                  )}
+                                  <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                                    {memory.content}
+                                  </Typography>
+                                </Stack>
+                                <Stack direction="row" spacing={0.75} flexWrap="wrap" justifyContent="flex-end">
+                                  {conflicts.length > 0 && (
+                                    <Chip
+                                      size="small"
+                                      color="warning"
+                                      icon={<WarningAmberRounded />}
+                                      label={t('personas.memory.conflicts', { count: conflicts.length })}
+                                    />
+                                  )}
+                                  <Chip
+                                    size="small"
+                                    color={memory.status === 'candidate'
+                                      ? 'warning'
+                                      : core
+                                        ? 'primary'
+                                        : memory.status === 'forgotten'
+                                          ? 'default'
+                                          : 'success'}
+                                    icon={core ? <PushPinRounded /> : undefined}
+                                    label={bucketLabel(memoryBucket(memory, core) ?? 'remembered')}
+                                  />
+                                </Stack>
                               </Stack>
                               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                                 {t(actorKey(memory))}
                               </Typography>
+                              {expiry && (
+                                <Typography variant="body2" color="warning.main" sx={{ mt: 0.5 }}>
+                                  {t(expiry.key, expiry.values)}
+                                </Typography>
+                              )}
+                              {conflicts.length > 0 && (
+                                <Stack spacing={0.75} sx={{ mt: 1 }}>
+                                  {conflicts.map(counterpart => (
+                                    <Stack
+                                      key={counterpart.id}
+                                      direction={{ xs: 'column', sm: 'row' }}
+                                      spacing={1}
+                                      alignItems={{ xs: 'flex-start', sm: 'center' }}
+                                      sx={{ p: 1, borderRadius: 2, bgcolor: 'warning.light' }}
+                                    >
+                                      <Typography variant="body2" flex={1}>
+                                        {t('personas.memory.conflictsWith', {
+                                          content: counterpart.content,
+                                        })}
+                                      </Typography>
+                                      <Button
+                                        size="small"
+                                        disabled={isPending}
+                                        onClick={() => {
+                                          setConflictPair({ memory, counterpart });
+                                          setConflictReason('');
+                                        }}
+                                      >
+                                        {t('personas.memory.resolveConflict')}
+                                      </Button>
+                                    </Stack>
+                                  ))}
+                                </Stack>
+                              )}
                               {(memory.validFrom !== undefined || memory.validUntil !== undefined) && (
                                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                                   {memory.validFrom !== undefined && memory.validUntil !== undefined
@@ -562,6 +843,69 @@ export default function PersonaMemoryArea({
           </Stack>
         )}
       </Stack>
+
+      <Dialog
+        open={Boolean(conflictPair)}
+        onClose={() => !isPending && setConflictPair(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>{t('personas.memory.resolveConflictTitle')}</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Typography>{t('personas.memory.resolveConflictHelp')}</Typography>
+            {conflictPair && (
+              <>
+                <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('personas.memory.thisMemory')}
+                  </Typography>
+                  <Typography>{conflictPair.memory.content}</Typography>
+                </Box>
+                <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('personas.memory.otherMemory')}
+                  </Typography>
+                  <Typography>{conflictPair.counterpart.content}</Typography>
+                </Box>
+              </>
+            )}
+            <TextField
+              autoFocus
+              fullWidth
+              multiline
+              minRows={2}
+              label={t('personas.memory.resolutionReason')}
+              value={conflictReason}
+              onChange={event => setConflictReason(event.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ flexWrap: 'wrap' }}>
+          <Button onClick={() => setConflictPair(null)} disabled={isPending}>
+            {t('personas.action.cancel')}
+          </Button>
+          <Button
+            disabled={isPending || !conflictReason.trim()}
+            onClick={() => void resolveConflict('keep_both')}
+          >
+            {t('personas.memory.keepBoth')}
+          </Button>
+          <Button
+            disabled={isPending || !conflictReason.trim()}
+            onClick={() => void resolveConflict('keep_right')}
+          >
+            {t('personas.memory.keepOther')}
+          </Button>
+          <Button
+            variant="contained"
+            disabled={isPending || !conflictReason.trim()}
+            onClick={() => void resolveConflict('keep_left')}
+          >
+            {t('personas.memory.keepThis')}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={addOpen} onClose={() => !isPending && setAddOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>{t('personas.memory.addTitle')}</DialogTitle>

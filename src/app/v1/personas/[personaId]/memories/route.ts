@@ -32,7 +32,22 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
   }
   try {
-    const limit = request.nextUrl.searchParams.get('limit');
+    const rawLimit = request.nextUrl.searchParams.get('limit');
+    const rawOrder = request.nextUrl.searchParams.get('order');
+    if (rawOrder !== null && rawOrder !== 'review') {
+      return NextResponse.json({ error: 'Invalid memory order.' }, { status: 400 });
+    }
+    if (rawLimit !== null && !/^[1-9]\\d*$/.test(rawLimit)) {
+      return NextResponse.json({ error: 'Memory limit must be an integer from 1 to 200.' }, {
+        status: 400,
+      });
+    }
+    const limit = rawLimit === null ? undefined : Number(rawLimit);
+    if (limit !== undefined && (limit < 1 || limit > 200)) {
+      return NextResponse.json({ error: 'Memory limit must be an integer from 1 to 200.' }, {
+        status: 400,
+      });
+    }
     const statuses = listParam(request.nextUrl.searchParams.get('status'), MEMORY_STATUSES)
       ?? [...MEMORY_STATUSES];
     return NextResponse.json(await searchPersonaMemory(personaId, {
@@ -42,7 +57,8 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
       statuses,
       trust: listParam(request.nextUrl.searchParams.get('trust'), MEMORY_TRUST_LEVELS),
       coreOnly: request.nextUrl.searchParams.get('coreOnly') === 'true',
-      ...(limit ? { limit: Number(limit) } : {}),
+      ...(rawOrder === 'review' ? { order: rawOrder } : {}),
+      ...(limit !== undefined ? { limit } : rawOrder === 'review' ? { limit: 20 } : {}),
     }));
   } catch (error) {
     const response = personaDomainErrorResponse(error); if (response) return response;

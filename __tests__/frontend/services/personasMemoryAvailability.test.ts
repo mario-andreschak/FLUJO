@@ -72,4 +72,40 @@ describe('personasService memory availability', () => {
     expect(requestBody()).not.toHaveProperty('validFrom');
     expect(requestBody()).not.toHaveProperty('validUntil');
   });
+
+  it('serializes backwards-compatible string searches and typed review options', async () => {
+    await personasService.memories(memory.personaId, ' release window ');
+    let requestUrl = new URL(String(fetchMock.mock.calls.at(-1)?.[0]), 'http://localhost');
+    expect(requestUrl.searchParams.get('q')).toBe('release window');
+    expect(requestUrl.searchParams.get('limit')).toBe('200');
+
+    await personasService.memories(memory.personaId, {
+      statuses: ['candidate'],
+      order: 'review',
+      limit: 20,
+    });
+    requestUrl = new URL(String(fetchMock.mock.calls.at(-1)?.[0]), 'http://localhost');
+    expect(requestUrl.searchParams.get('status')).toBe('candidate');
+    expect(requestUrl.searchParams.get('order')).toBe('review');
+    expect(requestUrl.searchParams.get('limit')).toBe('20');
+  });
+
+  it('posts the authoritative conflict resolution contract', async () => {
+    await personasService.resolveMemoryConflict(memory.personaId, memory.id, {
+      counterpartId: 'memory_counterpart',
+      action: 'keep_left',
+      reason: 'The user-confirmed release window is authoritative.',
+      resolutionId: 'memory_resolution_test',
+    });
+
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
+      '/memories/memory_release/resolve-conflict',
+    );
+    expect(requestBody()).toEqual({
+      counterpartId: 'memory_counterpart',
+      action: 'keep_left',
+      reason: 'The user-confirmed release window is authoritative.',
+      resolutionId: 'memory_resolution_test',
+    });
+  });
 });

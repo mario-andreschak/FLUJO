@@ -56,6 +56,10 @@ import {
   selectNearDuplicateCandidate,
 } from './memoryRanking';
 import { lexicalRelationScorer } from './memorySimilarity';
+import {
+  compareMemoryReviewCandidates,
+  memoryReviewScore,
+} from './memoryReviewRanking';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
   getMemoryItem,
@@ -75,6 +79,7 @@ const MemorySearchQuerySchema = z.object({
   trust: z.array(z.enum(MEMORY_TRUST_LEVELS)).optional(),
   coreOnly: z.boolean().optional(),
   mode: z.enum(['lexical', 'hybrid']).optional(),
+  order: z.enum(['review']).optional(),
   asOf: z.number().int().nonnegative().optional(),
   limit: z.number().int().min(1).max(200).optional(),
 }).strict();
@@ -107,6 +112,8 @@ export interface MemorySearchQuery {
   coreOnly?: boolean;
   /** Internal comparison control. Omitted preserves workspace-configured behavior. */
   mode?: MemoryRecallMode;
+  /** Specialized unreviewed-candidate ordering. Omitted preserves recall ordering. */
+  order?: 'review';
   asOf?: number;
   limit?: number;
 }
@@ -680,69 +687,88 @@ export async function searchPersonaMemory(
   const coreIds = new Set(persona.coreMemoryItemIds ?? []);
   const terms = queryTerms(parsed.query);
   const asOf = parsed.asOf ?? Date.now();
+  const reviewOrder = parsed.order === 'review';
   const defaultStatuses: MemoryStatus[] = ['active'];
-  const limit = parsed.limit ?? 50;
+  const limit = parsed.limit ?? (reviewOrder ? 20 : 50);
   const itemLoadStartedAt = performance.now();
   const items = await listMemoryItems(personaId, {
-    statuses: parsed.statuses ?? defaultStatuses,
+    statuses: reviewOrder ? ['candidate'] : parsed.statuses ?? defaultStatuses,
     kinds: parsed.kinds?.length ? parsed.kinds : undefined,
     scopes: parsed.scopes?.length ? parsed.scopes : undefined,
     trust: parsed.trust?.length ? parsed.trust : undefined,
     validAt: asOf,
     ids: parsed.coreOnly ? [...coreIds] : undefined,
-    // A term-free recall can be ranked entirely from index metadata, so only
-    // the records that can be returned need to be read. Content queries still
-    // load every metadata-qualified candidate for lexical matching.
-    ...(terms.length === 0 ? {
+    // Review order must inspect the complete eligible candidate set before
+    // applying top-N. Recall can use the metadata index for term-free queries.
+    ...(!reviewOrder && terms.length === 0 ? {
       limit,
       order: 'memory_relevance' as const,
       coreIds: [...coreIds],
     } : {}),
   });
   recordSemanticRecallStage('item_load', performance.now() - itemLoadStartedAt);
-  const semantic = parsed.mode === 'lexical'
-    ? lexicalRecallContext()
-    : await prepareSemanticRecall(personaId, parsed.query, items);
   const rankStartedAt = performance.now();
-  const candidates = items.map((item) => {
-    const lexicalHit = terms.some(
-      (term) => item.content.toLocaleLowerCase().includes(term),
-    );
-    return {
-      item,
-      core: coreIds.has(item.id),
-      lexicalHit,
-      semantic: semantic.scores.get(item.id),
+  let ordered: MemorySearchResult[];
+  if (reviewOrder) {
+    ordered = items
+      .filter(item => (
+        item.status === 'candidate'
+        && item.reviewedAt === undefined
+        && (item.expiresAt === undefined || item.expiresAt > asOf)
+        && (terms.length === 0 || terms.some(
+          term => item.content.toLocaleLowerCase().includes(term)
+        ))
+      ))
+      .sort((left, right) => compareMemoryReviewCandidates(left, right, asOf))
+      .slice(0, limit)
+      .map(item => ({
+        item,
+        core: coreIds.has(item.id),
+        score: memoryReviewScore(item, asOf),
+      }));
+  } else {
+    const semantic = parsed.mode === 'lexical'
+      ? lexicalRecallContext()
+      : await prepareSemanticRecall(personaId, parsed.query, items);
+    const candidates = items.map((item) => {
+      const lexicalHit = terms.some(
+        term => item.content.toLocaleLowerCase().includes(term),
+      );
+      return {
+        item,
+        core: coreIds.has(item.id),
+        lexicalHit,
+        semantic: semantic.scores.get(item.id),
+      };
+    });
+    const eligible = candidates.filter(({ lexicalHit, semantic: semanticScore }) => (
+      terms.length === 0
+      || semanticCandidateEligible(lexicalHit, semanticScore, semantic.floor)
+    ));
+    recordSemanticRecallCandidates(candidates.length, eligible.length);
+    const rankingWeights = {
+      ...MEMORY_RANKING_WEIGHTS,
+      lexicalWeight: semantic.lexicalWeight,
+      semanticWeight: semantic.semanticWeight,
     };
-  });
-  const eligible = candidates.filter(({ lexicalHit, semantic: semanticScore }) => (
-    terms.length === 0
-    || semanticCandidateEligible(lexicalHit, semanticScore, semantic.floor)
-  ));
-  recordSemanticRecallCandidates(candidates.length, eligible.length);
-
-  const rankingWeights = {
-    ...MEMORY_RANKING_WEIGHTS,
-    lexicalWeight: semantic.lexicalWeight,
-    semanticWeight: semantic.semanticWeight,
-  };
-  const results = eligible.map(({ item, core, semantic: semanticScore }) => ({
-    item,
-    core,
-    score: scoreMemoryCandidate({
+    const results = eligible.map(({ item, core, semantic: semanticScore }) => ({
       item,
-      terms,
       core,
-      asOf,
-      semantic: semanticScore,
-      weights: rankingWeights,
-    }),
-  }));
-  const ordered = terms.length === 0 ? results : results.sort((left, right) => (
-    right.score - left.score
-    || right.item.updatedAt - left.item.updatedAt
-    || left.item.id.localeCompare(right.item.id)
-  )).slice(0, limit);
+      score: scoreMemoryCandidate({
+        item,
+        terms,
+        core,
+        asOf,
+        semantic: semanticScore,
+        weights: rankingWeights,
+      }),
+    }));
+    ordered = terms.length === 0 ? results : results.sort((left, right) => (
+      right.score - left.score
+      || right.item.updatedAt - left.item.updatedAt
+      || left.item.id.localeCompare(right.item.id)
+    )).slice(0, limit);
+  }
   recordSemanticRecallStage('filter_rank', performance.now() - rankStartedAt);
   if (!FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING) return ordered;
 

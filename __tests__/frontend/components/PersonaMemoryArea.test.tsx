@@ -144,4 +144,106 @@ describe('PersonaMemoryArea correction history', () => {
     ));
     expect(refresh).toHaveBeenCalledTimes(1);
   });
+
+  it('processes selected review candidates sequentially and keeps failures retryable', async () => {
+    const now = Date.now();
+    const candidates = ['one', 'two', 'three'].map((suffix, index): MemoryItem => ({
+      ...corrected,
+      id: `memory_${suffix}`,
+      status: 'candidate',
+      content: `Candidate ${suffix}`,
+      trust: 'model_inference',
+      sourceRefs: [{ kind: 'conversation', id: `conversation_${suffix}` }],
+      reviewedAt: undefined,
+      expiresAt: now + (index + 1) * 24 * 60 * 60 * 1000,
+    }));
+    const reviewDetail = {
+      ...detail,
+      memoryItems: candidates,
+    } as PersonaDetail;
+    jest.spyOn(personasService, 'memories').mockResolvedValue(candidates.map((item, index) => ({
+      item,
+      score: 1 - index / 10,
+      core: false,
+    })));
+    let concurrent = 0;
+    let maximumConcurrent = 0;
+    const calls: string[] = [];
+    jest.spyOn(personasService, 'activateMemory').mockImplementation(async (_personaId, memoryId) => {
+      concurrent += 1;
+      maximumConcurrent = Math.max(maximumConcurrent, concurrent);
+      calls.push(memoryId);
+      await Promise.resolve();
+      concurrent -= 1;
+      if (memoryId === 'memory_two') throw new Error('Review failed.');
+      return { ...candidates.find(item => item.id === memoryId)!, status: 'active' };
+    });
+
+    render(<PersonaMemoryArea detail={reviewDetail} busy={false} refresh={jest.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Select all shown' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve selected (3)' }));
+
+    expect(await screen.findByText(/2 succeeded, 1 failed, and 0 skipped/)).toBeInTheDocument();
+    expect(calls).toEqual(['memory_one', 'memory_two', 'memory_three']);
+    expect(maximumConcurrent).toBe(1);
+    expect(screen.getByLabelText('Select memory: Candidate two')).toBeChecked();
+  });
+
+  it('shows expiry and resolves a safe same-Persona conflict through the backend', async () => {
+    const counterpart: MemoryItem = {
+      ...corrected,
+      id: 'memory_counterpart',
+      content: 'The release is on Thursday.',
+    };
+    const candidate: MemoryItem = {
+      ...corrected,
+      id: 'memory_candidate',
+      status: 'candidate',
+      content: 'The release is on Friday.',
+      trust: 'model_inference',
+      sourceRefs: [{ kind: 'conversation', id: 'conversation_candidate' }],
+      conflictsWith: [counterpart.id],
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    };
+    const conflictDetail = { ...detail, memoryItems: [candidate, counterpart] } as PersonaDetail;
+    jest.spyOn(personasService, 'memories').mockResolvedValue([{
+      item: candidate,
+      score: 1,
+      core: false,
+    }]);
+    const resolve = jest.spyOn(personasService, 'resolveMemoryConflict').mockResolvedValue({
+      resolutionId: 'memory_resolution_ui',
+      audit: {
+        resolutionId: 'memory_resolution_ui',
+        memoryIds: [candidate.id, counterpart.id],
+        action: 'keep_left',
+        winnerId: candidate.id,
+        actor: 'user',
+        authority: 'manual_api',
+        reason: 'Friday was confirmed.',
+        resolvedAt: Date.now(),
+      },
+      left: candidate,
+      right: { ...counterpart, status: 'superseded' },
+    });
+
+    render(<PersonaMemoryArea detail={conflictDetail} busy={false} refresh={jest.fn()} />);
+    expect(await screen.findByText('Expires today.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve conflict' }));
+    const dialog = screen.getByRole('dialog', { name: 'Resolve memory conflict' });
+    fireEvent.change(within(dialog).getByLabelText('Reason for this decision'), {
+      target: { value: 'Friday was confirmed.' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep this memory' }));
+
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith(
+      'persona_history',
+      candidate.id,
+      expect.objectContaining({
+        counterpartId: counterpart.id,
+        action: 'keep_left',
+        reason: 'Friday was confirmed.',
+      }),
+    ));
+  });
 });

@@ -7,6 +7,7 @@
 import {
   activateMemory,
   getPersonaMemory,
+  searchPersonaMemory,
   storeMemoryCandidate,
 } from '@/backend/services/enduringAgents/memoryKernel';
 import {
@@ -101,6 +102,50 @@ describe('memory candidate lifecycle', () => {
     });
   });
 
+  describe('review query', () => {
+    it('returns only unreviewed, unexpired candidates in confidence-recency order', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const asOf = Date.UTC(2027, 1, 1);
+        jest.useFakeTimers();
+        try {
+          await setMemorySettings({ candidateExpiryDays: 60 });
+          jest.setSystemTime(asOf - 30 * DAY_MS);
+          const olderHighConfidence = await storeMemoryCandidate(userCandidate(personaId, {
+            content: 'older_high_confidence_review_candidate',
+            confidence: 1,
+          }));
+          jest.setSystemTime(asOf);
+          const fresh = await storeMemoryCandidate(userCandidate(personaId, {
+            content: 'fresh_review_candidate',
+            confidence: 0.6,
+          }));
+          const reviewed = await storeMemoryCandidate(userCandidate(personaId, {
+            content: 'already_reviewed_candidate',
+          }));
+          await activateMemory(personaId, reviewed.id);
+          await setMemorySettings({ candidateExpiryDays: 1 });
+          jest.setSystemTime(asOf - 2 * DAY_MS);
+          await storeMemoryCandidate(userCandidate(personaId, {
+            content: 'expired_review_candidate',
+          }));
+
+          const results = await searchPersonaMemory(personaId, {
+            order: 'review',
+            statuses: ['active', 'candidate', 'forgotten'],
+            asOf,
+          });
+
+          expect(results.map(result => result.item.id)).toEqual([
+            fresh.id,
+            olderHighConfidence.id,
+          ]);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+  });
+
   describe('sweep', () => {
     it('expires an untouched candidate once its stamp has passed', async () => {
       await inFreshWorkspace(async (personaId) => {
@@ -161,6 +206,54 @@ describe('memory candidate lifecycle', () => {
         expect(activated.status).toBe('active');
         expect(activated.reviewedAt).toBeDefined();
         expect(activated.reviewedAt!).toBeGreaterThanOrEqual(before);
+      });
+    });
+  });
+
+  describe('28-day steady state', () => {
+    it('keeps sustained unreviewed growth bounded while preserving reviewed memories', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const start = Date.UTC(2027, 0, 1);
+        let unresolvedConflictId = '';
+        jest.useFakeTimers();
+        try {
+          await setMemorySettings({ candidateExpiryDays: 7 });
+          for (let day = 0; day < 28; day += 1) {
+            const now = start + day * DAY_MS;
+            jest.setSystemTime(now);
+            const approved = await storeMemoryCandidate(userCandidate(personaId, {
+              content: `human_${day.toString(36).repeat(20)}`,
+              sourceRefs: [{ kind: 'user_statement', id: `approved-${day}`, observedAt: now }],
+            }));
+            await activateMemory(personaId, approved.id);
+            const pending = await storeMemoryCandidate(userCandidate(personaId, {
+              content: `pending_${(day + 100).toString(36).repeat(20)}`,
+              sourceRefs: [{ kind: 'user_statement', id: `pending-${day}`, observedAt: now }],
+              ...(day === 27 ? { conflictsWith: [approved.id] } : {}),
+            }));
+            if (day === 27) unresolvedConflictId = pending.id;
+            await sweepMemoryCandidates(personaId, now);
+          }
+
+          const asOf = start + 27 * DAY_MS;
+          const candidates = await searchPersonaMemory(personaId, {
+            statuses: ['candidate'],
+            asOf,
+            limit: 200,
+          });
+          const active = await searchPersonaMemory(personaId, {
+            statuses: ['active'],
+            asOf,
+            limit: 200,
+          });
+          expect(candidates.length).toBeLessThanOrEqual(7);
+          expect(active).toHaveLength(28);
+          const unresolved = await getPersonaMemory(personaId, unresolvedConflictId);
+          expect(unresolved.status).toBe('candidate');
+          expect(unresolved.conflictsWith).toHaveLength(1);
+        } finally {
+          jest.useRealTimers();
+        }
       });
     });
   });
