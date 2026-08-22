@@ -1,9 +1,23 @@
+import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
+import {
+  claimNextPersonaActivity,
+  commitPersonaActivityMutation,
+  commitWithPersonaActivityLease,
+  completePersonaActivity,
+  routePersonaMailboxItem,
+  type PersonaActivityClaim,
+  type PersonaLeaseFence,
+} from '@/backend/services/enduringAgents';
 import {
   getPersonaMemory,
   storeMemoryCandidate,
 } from '@/backend/services/enduringAgents/memoryKernel';
 import { MEMORY_DEDUP_SETTINGS } from '@/backend/services/enduringAgents/memoryRanking';
-import { listMemoryItems } from '@/backend/services/enduringAgents/store';
+import {
+  getMemoryItem,
+  getPersona,
+  listMemoryItems,
+} from '@/backend/services/enduringAgents/store';
 import type { CreateMemoryItemInput } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
 
@@ -27,6 +41,44 @@ function inFreshWorkspace<T>(
   );
 }
 
+function fenceForClaim(claim: PersonaActivityClaim): PersonaLeaseFence {
+  return {
+    workspaceId: claim.lease.workspaceId,
+    personaId: claim.lease.personaId,
+    activityId: claim.activity.id,
+    leaseId: claim.lease.id,
+    holderId: claim.lease.holderId,
+    fencingToken: claim.lease.fencingToken,
+  };
+}
+
+function authorityFor(fence: PersonaLeaseFence): FlowExecutionAuthority {
+  return {
+    signal: new AbortController().signal,
+    assertCurrent: async () => {
+      await commitWithPersonaActivityLease(fence, async () => undefined);
+    },
+    commitWhileCurrent: (task) => commitWithPersonaActivityLease(fence, task),
+    commitPersonaMutation: (task) => commitPersonaActivityMutation(fence, task),
+  };
+}
+
+async function claimAssignment(
+  personaId: string,
+  key: string,
+): Promise<PersonaActivityClaim> {
+  await routePersonaMailboxItem({
+    personaId,
+    idempotencyKey: key,
+    kind: 'assignment',
+    source: { kind: 'assignment', sourceId: key, idempotencyKey: key },
+    summary: key,
+  });
+  const claim = await claimNextPersonaActivity({ personaId, ttlMs: 30_000 });
+  if (!claim) throw new Error('Expected a Persona Activity claim.');
+  return claim;
+}
+
 function memoryInput(
   personaId: string,
   overrides: Partial<CreateMemoryItemInput> = {},
@@ -46,7 +98,7 @@ function memoryInput(
   } as CreateMemoryItemInput;
 }
 
-describe('memory-kernel near-duplicate persistence (issue #467)', () => {
+describe('memory-kernel near-duplicate persistence (issues #467 and #468)', () => {
   it('reinforces the active survivor and does not persist a sibling', async () => {
     await inFreshWorkspace(async (personaId) => {
       const survivor = await storeMemoryCandidate(memoryInput(personaId, {
@@ -79,6 +131,75 @@ describe('memory-kernel near-duplicate persistence (issue #467)', () => {
       await expect(
         getPersonaMemory(personaId, 'memory-incoming'),
       ).rejects.toThrow();
+    });
+  });
+
+  it('keeps deduplication and indexes stable across idle and active-Activity writes', async () => {
+    await inFreshWorkspace(async (personaId) => {
+      const initialPersona = await getPersona(personaId);
+      expect(initialPersona).toMatchObject({
+        lifecycleState: 'idle',
+        provisioningState: 'ready',
+      });
+      const initialCoreMemoryItemIds = initialPersona?.coreMemoryItemIds ?? [];
+
+      const survivor = await storeMemoryCandidate(memoryInput(personaId, {
+        id: 'memory-authority-survivor',
+        status: 'active',
+      }));
+      const idleIncoming = await storeMemoryCandidate(memoryInput(personaId, {
+        id: 'memory-idle-incoming',
+        sourceRefs: [
+          { kind: 'user_statement', id: 'idle-write', observedAt: 2 },
+        ],
+      }));
+
+      expect(idleIncoming.id).toBe(survivor.id);
+      expect(await getMemoryItem(personaId, survivor.id)).toMatchObject({
+        id: survivor.id,
+        status: 'active',
+      });
+      expect(await getMemoryItem(personaId, 'memory-idle-incoming')).toBeUndefined();
+      expect(await listMemoryItems(personaId)).toHaveLength(1);
+      expect(await getPersona(personaId)).toMatchObject({
+        lifecycleState: 'idle',
+        coreMemoryItemIds: initialCoreMemoryItemIds,
+      });
+
+      const claim = await claimAssignment(personaId, 'memory-authority-activity');
+      const fence = fenceForClaim(claim);
+      try {
+        const activeIncoming = await storeMemoryCandidate(memoryInput(personaId, {
+          id: 'memory-active-incoming',
+          sourceRefs: [
+            { kind: 'user_statement', id: 'active-write', observedAt: 3 },
+          ],
+        }), { executionAuthority: authorityFor(fence) });
+
+        expect(activeIncoming).toMatchObject({
+          id: survivor.id,
+          status: 'active',
+        });
+        expect(await getMemoryItem(personaId, 'memory-active-incoming')).toBeUndefined();
+        expect(await getPersonaMemory(personaId, survivor.id)).toMatchObject({
+          id: survivor.id,
+          status: 'active',
+        });
+        const persisted = await listMemoryItems(personaId);
+        expect(persisted).toHaveLength(1);
+        expect(persisted[0].id).toBe(survivor.id);
+        expect(await getPersona(personaId)).toMatchObject({
+          lifecycleState: 'busy',
+          coreMemoryItemIds: initialCoreMemoryItemIds,
+        });
+      } finally {
+        await completePersonaActivity({ ...fence, status: 'completed' });
+      }
+
+      expect(await getPersona(personaId)).toMatchObject({
+        lifecycleState: 'idle',
+        coreMemoryItemIds: initialCoreMemoryItemIds,
+      });
     });
   });
 
