@@ -52,12 +52,12 @@ import {
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   type BasePersonaIndexEntry,
+  deleteIndexedCollectionItem,
   getActivityIndex,
   getMailboxIndex,
   getMemoryIndex,
   getWorkItemIndex,
-  removeIndexEntry,
-  syncIndexEntry,
+  saveIndexedCollectionItem,
 } from './indexing';
 import { loadPersonaRecords } from './personaRecordCache';
 import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
@@ -329,6 +329,7 @@ async function createOrReturnIdenticalRecord<T extends IdentifiedRecord>(options
   value: T;
   immutable: boolean;
   validateReferences: (record: T) => Promise<void>;
+  persist?: (record: T) => Promise<void>;
 }): Promise<T> {
   const record = parseRecord(options.recordKind, options.schema, options.value);
   assertSafeCollectionId(record.id);
@@ -349,7 +350,11 @@ async function createOrReturnIdenticalRecord<T extends IdentifiedRecord>(options
     }
 
     await options.validateReferences(record);
-    await saveCollectionItem(options.collection, record.id, record);
+    if (options.persist) {
+      await options.persist(record);
+    } else {
+      await saveCollectionItem(options.collection, record.id, record);
+    }
     return record;
   });
 }
@@ -1381,8 +1386,7 @@ export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActi
         throw new Error('PersonaActivity updatedAt moved backwards.');
       }
     }
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record.id, record);
-    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.activities, record);
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record);
     return record;
   });
 }
@@ -1523,8 +1527,7 @@ export function savePersonaWorkItem(value: PersonaWorkItem): Promise<PersonaWork
       }
     }
     await assertValidWorkItemReferences(record);
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, record.id, record);
-    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.workItems, record);
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, record);
     return record;
   });
 }
@@ -1602,8 +1605,7 @@ export function activateBehaviorBindingRevision(options: {
 export function deletePersonaWorkItemRecord(id: string): Promise<void> {
   assertSafeCollectionId(id);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, async () => {
-    await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id);
-    await removeIndexEntry(ENDURING_AGENT_COLLECTIONS.workItems, id);
+    await deleteIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id);
   });
 }
 
@@ -1642,13 +1644,11 @@ export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> 
         `MemoryItem ${JSON.stringify(candidate.id)}`,
       );
     },
+    persist: candidate => saveIndexedCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.memoryItems,
+      candidate,
+    ),
   });
-  // The index sidecar (#449) is what listMemoryItems reads, and it is only
-  // rebuilt from the collection while it is still empty. A create that skipped
-  // this left its record permanently invisible to every listing as soon as any
-  // other memory had populated the index — e.g. a Persona's factory-seeded
-  // memories vanishing because an earlier Persona's memory built the index first.
-  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, created);
   return created;
 }
 
@@ -1691,8 +1691,7 @@ export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
       }
     }
     await assertValidMemoryReferences(record);
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, record);
-    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
     return record;
   });
 }
@@ -1731,8 +1730,7 @@ export function savePersonaMailboxItem(value: PersonaMailboxItem): Promise<Perso
         throw new Error('PersonaMailboxItem updatedAt moved backwards.');
       }
     }
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, record);
-    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
     return record;
   });
 }

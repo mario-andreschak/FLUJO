@@ -1,5 +1,9 @@
+import { z } from 'zod';
+
 import {
   PERSONA_ACTIVITY_RECORD_MIGRATIONS,
+  PERSONA_RECORD_INDEX_RECORD_MIGRATIONS,
+  PERSONA_RECORD_INDEX_SCHEMA_VERSION,
   enduringAgentRecordMigrations,
   enduringAgentRecordSchemaVersion,
   migrateAndParseRecord,
@@ -91,5 +95,67 @@ describe('PersonaActivity record migrations', () => {
       outcome: { resolution: 'partial', decisionSource: 'engine' },
     });
     expect(PERSONA_ACTIVITY_RECORD_MIGRATIONS).toHaveLength(1);
+  });
+});
+
+const PersonaRecordIndexTestSchema = z.object({
+  recordKind: z.literal('PersonaRecordIndex'),
+  schemaVersion: z.literal(PERSONA_RECORD_INDEX_SCHEMA_VERSION),
+  collection: z.literal('persona-memories'),
+  revision: z.number().int().nonnegative(),
+  sourceRevision: z.number().int().nonnegative(),
+  sourceCount: z.number().int().nonnegative(),
+  generatedAt: z.number().int().nonnegative(),
+  entries: z.array(z.object({
+    id: z.string(),
+    personaId: z.string(),
+    updatedAt: z.number().int().nonnegative(),
+  }).passthrough()),
+}).strict();
+
+describe('PersonaRecordIndex migrations', () => {
+  it('migrates v1 deterministically and registers exactly one transition', () => {
+    const migrated = migrateAndParseRecord({
+      recordKind: 'PersonaRecordIndex',
+      value: {
+        schemaVersion: 1,
+        version: 1,
+        built: true,
+        collection: 'persona-memories',
+        revision: 7,
+        entries: [
+          { id: 'memory_b', personaId: 'persona_a', updatedAt: 20 },
+          { id: 'memory_a', personaId: 'persona_a', updatedAt: 10 },
+        ],
+      },
+      currentVersion: enduringAgentRecordSchemaVersion('PersonaRecordIndex'),
+      migrations: enduringAgentRecordMigrations('PersonaRecordIndex'),
+      schema: PersonaRecordIndexTestSchema,
+    });
+
+    expect(migrated).toMatchObject({
+      recordKind: 'PersonaRecordIndex',
+      schemaVersion: PERSONA_RECORD_INDEX_SCHEMA_VERSION,
+      revision: 7,
+      sourceRevision: 7,
+      sourceCount: 2,
+      generatedAt: 20,
+    });
+    expect(migrated.entries.map(entry => entry.id)).toEqual(['memory_a', 'memory_b']);
+    expect(PERSONA_RECORD_INDEX_RECORD_MIGRATIONS).toHaveLength(1);
+  });
+
+  it('rejects future index versions', () => {
+    expect(() => migrateAndParseRecord({
+      recordKind: 'PersonaRecordIndex',
+      value: {
+        schemaVersion: PERSONA_RECORD_INDEX_SCHEMA_VERSION + 1,
+        collection: 'persona-memories',
+        entries: [],
+      },
+      currentVersion: enduringAgentRecordSchemaVersion('PersonaRecordIndex'),
+      migrations: enduringAgentRecordMigrations('PersonaRecordIndex'),
+      schema: PersonaRecordIndexTestSchema,
+    })).toThrow(/Unsupported PersonaRecordIndex schema version/);
   });
 });

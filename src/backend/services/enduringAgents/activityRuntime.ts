@@ -41,7 +41,7 @@ import { createLogger } from '@/utils/logger';
 import { canonicalJson } from './behaviorRevisions';
 import { resolveEffectiveBehaviorRevision } from './behaviorFlowResolver';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { syncIndexEntry } from './indexing';
+import { saveIndexedCollectionItem } from './indexing';
 import {
   hashPersonaInstructionContext,
   type PersonaActivitySnapshot,
@@ -513,8 +513,7 @@ async function saveActivity(
 ): Promise<PersonaActivity> {
   const record = PersonaActivitySchema.parse(value) as PersonaActivity;
   await lock.assertOwned();
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record.id, record);
-  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.activities, record);
+  await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record);
   return record;
 }
 
@@ -524,8 +523,7 @@ async function saveMailboxItem(
 ): Promise<PersonaMailboxItem> {
   const record = PersonaMailboxItemSchema.parse(value) as PersonaMailboxItem;
   await lock.assertOwned();
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, record);
-  await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
+  await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record);
   return record;
 }
 

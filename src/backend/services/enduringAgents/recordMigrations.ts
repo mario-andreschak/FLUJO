@@ -21,6 +21,8 @@ export interface RecordMigration {
   migrate: (record: Record<string, unknown>) => Record<string, unknown>;
 }
 
+export const PERSONA_RECORD_INDEX_SCHEMA_VERSION = 2;
+
 function migrationTo(to: number): readonly RecordMigration[] {
   return [{
     from: 1,
@@ -55,6 +57,49 @@ export const ROLE_VERSION_RECORD_MIGRATIONS: readonly RecordMigration[] = [
   },
 ];
 export const PERSONA_RECORD_MIGRATIONS = migrationTo(PERSONA_SCHEMA_VERSION);
+export const PERSONA_RECORD_INDEX_RECORD_MIGRATIONS: readonly RecordMigration[] = [{
+  from: 1,
+  to: PERSONA_RECORD_INDEX_SCHEMA_VERSION,
+  migrate: (record) => {
+    const {
+      version: _legacyVersion,
+      built: _legacyBuilt,
+      entries: rawEntries,
+      ...rest
+    } = record;
+    const entries = Array.isArray(rawEntries)
+      ? [...rawEntries].sort((left, right) => {
+        const leftId = left && typeof left === 'object' && !Array.isArray(left)
+          ? String((left as Record<string, unknown>).id ?? '')
+          : '';
+        const rightId = right && typeof right === 'object' && !Array.isArray(right)
+          ? String((right as Record<string, unknown>).id ?? '')
+          : '';
+        return leftId.localeCompare(rightId);
+      })
+      : [];
+    const generatedAt = entries.reduce((latest, entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return latest;
+      const updatedAt = (entry as Record<string, unknown>).updatedAt;
+      return typeof updatedAt === 'number' && Number.isSafeInteger(updatedAt)
+        ? Math.max(latest, updatedAt)
+        : latest;
+    }, 0);
+    const revision = Number.isSafeInteger(record.revision)
+      ? record.revision as number
+      : 0;
+    return {
+      ...rest,
+      recordKind: 'PersonaRecordIndex',
+      schemaVersion: PERSONA_RECORD_INDEX_SCHEMA_VERSION,
+      revision,
+      sourceRevision: revision,
+      sourceCount: entries.length,
+      generatedAt,
+      entries,
+    };
+  },
+}];
 export const BEHAVIOR_REVISION_RECORD_MIGRATIONS =
   migrationTo(BEHAVIOR_REVISION_SCHEMA_VERSION);
 export const BEHAVIOR_BINDING_RECORD_MIGRATIONS =
@@ -103,6 +148,8 @@ export function enduringAgentRecordSchemaVersion(recordKind: string): number {
       return ROLE_VERSION_SCHEMA_VERSION;
     case 'Persona':
       return PERSONA_SCHEMA_VERSION;
+    case 'PersonaRecordIndex':
+      return PERSONA_RECORD_INDEX_SCHEMA_VERSION;
     case 'BehaviorRevision':
       return BEHAVIOR_REVISION_SCHEMA_VERSION;
     case 'BehaviorBinding':
@@ -126,6 +173,8 @@ export function enduringAgentRecordMigrations(recordKind: string): readonly Reco
       return ROLE_VERSION_RECORD_MIGRATIONS;
     case 'Persona':
       return PERSONA_RECORD_MIGRATIONS;
+    case 'PersonaRecordIndex':
+      return PERSONA_RECORD_INDEX_RECORD_MIGRATIONS;
     case 'BehaviorRevision':
       return BEHAVIOR_REVISION_RECORD_MIGRATIONS;
     case 'BehaviorBinding':

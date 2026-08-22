@@ -38,7 +38,7 @@ import {
 import { listBehaviorProposals } from './behaviorLearning';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { removePersonaIndexEntries } from './indexing';
+import { deleteIndexedCollectionItem } from './indexing';
 import { personaDeletionTombstoneId } from './ids';
 import { deletePersonaHome, inspectPersonaHome } from './namespaces';
 import { listPersonaFlowDispatches } from './personaDispatcher';
@@ -390,19 +390,19 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
       ENDURING_AGENT_COLLECTIONS.appGrants,
       item.id,
     )),
-    ...memoryItems.map((item) => deleteCollectionItem(
+    ...memoryItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.memoryItems,
       item.id,
     )),
-    ...workItems.map((item) => deleteCollectionItem(
+    ...workItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.workItems,
       item.id,
     )),
-    ...activities.map((item) => deleteCollectionItem(
+    ...activities.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.activities,
       item.id,
     )),
-    ...mailboxItems.map((item) => deleteCollectionItem(
+    ...mailboxItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.mailboxItems,
       item.id,
     )),
@@ -420,7 +420,6 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     deletePersonaHome(personaId),
     deletePersonaEmbeddings(personaId),
   ]);
-  await removePersonaIndexEntries(personaId);
 }
 
 export async function deletePersona(
