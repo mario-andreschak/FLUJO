@@ -10,6 +10,7 @@ describe('FlowBuilder node creation', () => {
   it('defaults new subflow nodes to separate parallel result messages', () => {
     const node = flowService.createNode('subflow', { x: 10, y: 20 });
 
+    expect(node.data.label).toBe('Subflow Node');
     expect(node.data.properties).toEqual({
       resultPresentation: 'separate',
       sessionScope: 'per-key',

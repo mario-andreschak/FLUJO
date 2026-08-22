@@ -97,16 +97,19 @@ function followupText(content: unknown): string {
 }
 
 /**
- * Resolve the human-readable name of a finished sub-agent for transcript framing (#403).
- * Uses explicit precedence to avoid falling back to placeholder strings.
- * Returns undefined (not a placeholder) when nothing resolves, so callers can choose
- * a name-less header form.
+ * Resolve the human-readable identity of a finished sub-agent for transcript framing (#403).
+ *
+ * `laneName` is a caller-resolved, highest-priority per-lane identity; it is not
+ * necessarily the lane title. Joined presentation omits it, giving the approved
+ * node label -> child-flow name -> legacy name order. Candidates are trimmed and
+ * blank values are ignored. Undefined lets callers render the unquoted fallback
+ * phrase `the sub-agent`.
  */
 export function resolveSubAgentDisplayName(args: {
-  laneName?: string;        // lane.subflowName ?? lane.laneTitle (per-lane only)
-  nodeLabel?: string;       // node_params?.label
-  subflowName?: string;     // prepResult.subflowName
-  legacyName?: string;      // node_params?.properties?.name
+  laneName?: string;
+  nodeLabel?: string;
+  subflowName?: string;
+  legacyName?: string;
 }): string | undefined {
   const pick = (v?: string) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
   return pick(args.laneName)
@@ -1260,16 +1263,18 @@ export class SubflowNode extends BaseNode {
         const laneSummary = buildMediaArtifactSummary(promotedLaneMedia);
         const laneResultText = [laneText, laneSummary].filter(part => part.trim().length > 0).join('\n\n');
 
-        // Frame each lane with attribution to preserve the finished sub-task signal.
-        const laneName = lane.laneTitle || `Lane ${laneIndex + 1}`;
+        // Separate presentation uses the child-flow name as the lane identity,
+        // falling back to the lane title. A distinct lane title remains visible
+        // once as a suffix so task attribution is not lost.
+        const lanePresentationTitle = lane.laneTitle?.trim() || `Lane ${laneIndex + 1}`;
+        const laneIdentity = lane.subflowName?.trim() || lane.laneTitle?.trim();
         const subAgentName = resolveSubAgentDisplayName({
-          laneName: lane?.subflowName || lane?.laneTitle,
+          laneName: laneIdentity,
           nodeLabel: node_params?.label,
           subflowName: prepResult.subflowName,
           legacyName: node_params?.properties?.name,
         });
-        // Suppress duplicate lane suffix if the resolved name equals the lane name
-        const laneSuffix = subAgentName === laneName ? '' : ` (${laneName})`;
+        const laneSuffix = subAgentName === lanePresentationTitle ? '' : ` (${lanePresentationTitle})`;
         const who = subAgentName ? `sub-agent "${subAgentName}"` : 'the sub-agent';
         const framedLaneContent =
           laneResultText.trim().length > 0
@@ -1310,6 +1315,9 @@ export class SubflowNode extends BaseNode {
       // `resultText` is kept for lastResponse and every capture path below so the
       // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
       // or the run's returned outputText.
+      // Joined presentation has no lane identity: the authored node label
+      // intentionally wins over the referenced child-flow name, followed by the
+      // legacy persisted name. The resolver trims and skips blank candidates.
       const subAgentName = resolveSubAgentDisplayName({
         nodeLabel: node_params?.label,
         subflowName: prepResult.subflowName,
