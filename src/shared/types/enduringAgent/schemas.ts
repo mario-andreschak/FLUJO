@@ -1186,6 +1186,13 @@ export const AssignPersonaWorkItemInputSchema = z.object({
   idempotencyKey: NonEmptyText(512),
 }).strict();
 
+export const MemoryBackfillMergeSchema = z.object({
+  version: z.literal(1),
+  memberIds: z.array(EnduringAgentIdSchema).min(2).max(100_000)
+    .refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique.'),
+  mergedAt: TimestampSchema,
+}).strict();
+
 export const MemoryItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
@@ -1208,6 +1215,10 @@ export const MemoryItemSchema = z.object({
   lastCorroboratedAt: TimestampSchema.optional(),
   expiresAt: TimestampSchema.optional(),
   lifecycleReason: z.enum(['expired', 'auto_promoted']).optional(),
+  /** Durable issue #465 retry marker on the selected survivor. */
+  backfillMerge: MemoryBackfillMergeSchema.optional(),
+  /** Audit relationship on a sibling retired by issue #465. */
+  backfillMergedInto: EnduringAgentIdSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict().superRefine((record, ctx) => {
@@ -1241,6 +1252,34 @@ export const MemoryItemSchema = z.object({
       code: 'custom',
       message: 'A MemoryItem cannot conflict with itself.',
       path: ['conflictsWith'],
+    });
+  }
+  if (record.backfillMerge && !record.backfillMerge.memberIds.includes(record.id)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A backfill survivor marker must include its own MemoryItem ID.',
+      path: ['backfillMerge', 'memberIds'],
+    });
+  }
+  if (record.backfillMergedInto === record.id) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A MemoryItem cannot be backfill-merged into itself.',
+      path: ['backfillMergedInto'],
+    });
+  }
+  if (record.backfillMerge && record.backfillMergedInto) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A MemoryItem cannot be both a backfill survivor and a retired sibling.',
+      path: ['backfillMergedInto'],
+    });
+  }
+  if (record.backfillMergedInto && record.status !== 'forgotten') {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only forgotten MemoryItems may reference a backfill survivor.',
+      path: ['backfillMergedInto'],
     });
   }
   if (record.expiresAt !== undefined && record.status !== 'candidate') {

@@ -1687,10 +1687,12 @@ export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> 
 
 async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
   await requireWritablePersona(record.personaId, `MemoryItem ${JSON.stringify(record.id)}`);
-  for (const relatedId of [
+  for (const relatedId of new Set([
     ...(record.supersedes ?? []),
     ...(record.conflictsWith ?? []),
-  ]) {
+    ...(record.backfillMerge?.memberIds ?? []),
+    ...(record.backfillMergedInto ? [record.backfillMergedInto] : []),
+  ])) {
     const related = await getMemoryItem(record.personaId, relatedId);
     if (!related || related.personaId !== record.personaId) {
       throw new Error(

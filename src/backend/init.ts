@@ -10,6 +10,7 @@ import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/
 import { createLogger } from '@/utils/logger';
 import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
 import {
+  backfillStoredMemoryDuplicates,
   inspectAndReconcilePersonaRuntime,
   listPersonas,
   reconcilePersonaRoleBehaviors,
@@ -18,6 +19,7 @@ import {
 } from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { migrateEnduringAgentDirectoryShards } from '@/backend/services/enduringAgents/directoryShardingMigration';
+import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
 import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
@@ -56,6 +58,9 @@ declare global {
   var __flujo_snapshot_cleanup_cron: Cron | undefined;
   // Hourly memory candidate lifecycle sweep (issue #452): expiry, auto-promotion, and conflict repair.
   var __flujo_memory_lifecycle_cron: Cron | undefined;
+  // Hourly stored-memory duplicate backfill (issue #465).
+  var __flujo_memory_backfill_cron: Cron | undefined;
+  var __flujo_memory_backfill_in_flight: Promise<void> | undefined;
   // Workspaces (#406): per-workspace copies of the two memos above, for every
   // workspace OTHER than the default. The default workspace keeps using the
   // original globals, so existing callers and tests are untouched.
@@ -223,6 +228,28 @@ function armRetentionSweep(): void {
       void sweepEveryWorkspace('memory candidate lifecycle', () => sweepMemoryCandidates());
     });
     log.info('Armed memory candidate lifecycle sweep (hourly)');
+  }
+  // Historical memory deduplication (issue #465). The process-local promise
+  // prevents hot-reload callbacks from overlapping, while the workspace lock
+  // serializes separate local processes sharing the same workspace storage.
+  if (!global.__flujo_memory_backfill_cron) {
+    global.__flujo_memory_backfill_cron = new Cron('17 * * * *', { unref: true }, () => {
+      if (global.__flujo_memory_backfill_in_flight) return;
+      const sweep = sweepEveryWorkspace(
+        'stored memory duplicate backfill',
+        () => withWorkspaceRuntimeLock(
+          'memory-backfill-v1',
+          () => backfillStoredMemoryDuplicates(),
+        ),
+      ).finally(() => {
+        if (global.__flujo_memory_backfill_in_flight === sweep) {
+          global.__flujo_memory_backfill_in_flight = undefined;
+        }
+      });
+      global.__flujo_memory_backfill_in_flight = sweep;
+      void sweep;
+    });
+    log.info('Armed stored memory duplicate backfill (hourly)');
   }
 }
 

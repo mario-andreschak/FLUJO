@@ -27,6 +27,7 @@ import {
   withPersonaDomainMutation,
 } from './domainMutation';
 import { randomEnduringAgentId } from './ids';
+import { buildReinforcedMemoryItem } from './memoryDeduplication';
 import { getMemorySettings } from './memorySettings';
 import {
   contentShingles,
@@ -156,63 +157,6 @@ async function findNearDuplicateCandidate(
   return bestCandidate ? { candidate: bestCandidate, similarity: bestSimilarity } : null;
 }
 
-/**
- * Reinforce an existing memory item with new evidence (issue #450).
- * Bumps confidence/importance, upgrades trust if policy allows, extends sourceRefs.
- */
-async function reinforceMemoryItem(
-  survivor: MemoryItem,
-  incomingTrust: MemoryTrust,
-  incomingSourceRefs: MemoryItem['sourceRefs'],
-  now: number,
-  options: MemoryMutationOptions,
-): Promise<MemoryItem> {
-  // Determine upgraded trust: prefer higher trust if it passes policy
-  let upgradedTrust = survivor.trust;
-  const trustOrder: Record<MemoryTrust, number> = {
-    explicit_user: 4,
-    verified_tool: 3,
-    model_inference: 2,
-    external_untrusted: 1,
-  };
-  if (trustOrder[incomingTrust] > trustOrder[survivor.trust]) {
-    // Check if the survivor can hold the higher trust
-    try {
-      assertActivationPolicy(incomingTrust, survivor.status, options, []);
-      upgradedTrust = incomingTrust;
-    } catch {
-      // Keep existing trust if policy forbids the upgrade
-    }
-  }
-
-  // Monotonically bump confidence and importance
-  const confidence = Math.min(
-    1,
-    survivor.confidence + MEMORY_DEDUP_SETTINGS.confidenceReinforcementStep,
-  );
-  const importance = Math.min(
-    1,
-    survivor.importance + MEMORY_DEDUP_SETTINGS.importanceReinforcementStep,
-  );
-
-  // Union sourceRefs, deduplicated, capped at maxSourceRefsPerItem (preserving oldest)
-  const allRefs = [...survivor.sourceRefs, ...incomingSourceRefs];
-  const mergedRefs = normalizeMemorySourceRefs(allRefs, { now });
-  const cappedRefs = mergedRefs.slice(0, MEMORY_DEDUP_SETTINGS.maxSourceRefsPerItem);
-
-  // Mutate in place
-  const reinforced: MemoryItem = {
-    ...survivor,
-    confidence,
-    importance,
-    trust: upgradedTrust,
-    sourceRefs: cappedRefs,
-    updatedAt: Math.max(now, survivor.updatedAt + 1),
-  };
-
-  return saveMemoryItem(reinforced);
-}
-
 function requireOwnedMemory(item: MemoryItem | null, personaId: string, requestedId: string): MemoryItem {
   if (!item || item.personaId !== personaId) {
     throw new PersonaDomainNotFoundError('MemoryItem', requestedId);
@@ -318,7 +262,19 @@ async function createMemoryWithinMutation(
     if (nearDup) {
       const { candidate: survivor, similarity } = nearDup;
       // Reinforce the survivor instead of persisting a sibling
-      const reinforced = await reinforceMemoryItem(survivor, record.trust, record.sourceRefs, now, options);
+      const reinforced = await saveMemoryItem(buildReinforcedMemoryItem(survivor, {
+        now,
+        incomingTrust: record.trust,
+        incomingSourceRefs: record.sourceRefs,
+        canUpgradeTrust: (trust) => {
+          try {
+            assertActivationPolicy(trust, survivor.status, options, []);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }));
       log.debug('Dedup merged near-duplicate', {
         survivorId: survivor.id,
         similarity: similarity.toFixed(3),

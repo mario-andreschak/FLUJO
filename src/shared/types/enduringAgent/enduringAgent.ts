@@ -1040,6 +1040,14 @@ export interface MemoryItem {
   expiresAt?: number;
   /** Lifecycle reason for status transitions (e.g., 'expired', 'auto_promoted'). */
   lifecycleReason?: 'expired' | 'auto_promoted';
+  /** Durable issue #465 marker used to complete a partially retired component exactly once. */
+  backfillMerge?: {
+    version: 1;
+    memberIds: string[];
+    mergedAt: number;
+  };
+  /** Survivor relationship retained on a duplicate that the backfill retired. */
+  backfillMergedInto?: string;
   createdAt: number;
   updatedAt: number;
 }

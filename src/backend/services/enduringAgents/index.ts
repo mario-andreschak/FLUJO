@@ -9,6 +9,7 @@ export * from './activityRuntime';
 export * from './collections';
 export * from './factory';
 export * from './memoryKernel';
+export * from './memoryBackfill';
 export * from './memoryLifecycle';
 export * from './memoryMaintenance';
 export * from './workItems';
