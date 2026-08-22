@@ -1,8 +1,19 @@
 const mockEnsureWorkspaceLayoutReady = jest.fn(async () => undefined);
 const mockEnsureWorkspaceDirs = jest.fn(async (_workspace?: string) => undefined);
+const mockOpenSnapshotFolder = jest.fn(async () => undefined);
 
 jest.mock('@/backend/services/workspace/layoutReadiness', () => ({
   waitForWorkspaceLayoutReady: () => mockEnsureWorkspaceLayoutReady(),
+}));
+
+jest.mock('@/backend/services/snapshot/SnapshotStore', () => ({
+  snapshotStore: {
+    openFolder: () => mockOpenSnapshotFolder(),
+  },
+}));
+
+jest.mock('@/utils/encryption/lockGate', () => ({
+  assertUnlocked: jest.fn(async () => null),
 }));
 
 jest.mock('@/utils/workspace', () => {
@@ -15,12 +26,15 @@ jest.mock('@/utils/workspace', () => {
 });
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { POST as openSnapshotFolder } from '@/app/api/snapshots/open-folder/route';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { makeLocalRequest } from '../utils/localRequest';
 
 describe('withWorkspaceRoute compatibility', () => {
   beforeEach(() => {
     mockEnsureWorkspaceLayoutReady.mockReset().mockResolvedValue(undefined);
     mockEnsureWorkspaceDirs.mockReset().mockResolvedValue(undefined);
+    mockOpenSnapshotFolder.mockReset().mockResolvedValue(undefined);
   });
 
   it('normalizes a missing request before parsing and invoking the handler', async () => {
@@ -109,5 +123,20 @@ describe('withWorkspaceRoute compatibility', () => {
     await expect(response.text()).resolves.toBe('workspace data');
     expect(mockEnsureWorkspaceDirs).toHaveBeenCalledWith('research');
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects the requested workspace before opening its snapshot folder', async () => {
+    let openedWorkspace: string | undefined;
+    mockOpenSnapshotFolder.mockImplementationOnce(async () => {
+      openedWorkspace = getCurrentWorkspace();
+    });
+
+    const response = await openSnapshotFolder(makeLocalRequest({
+      url: 'http://localhost/api/snapshots/open-folder?workspace=research',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mockEnsureWorkspaceDirs).toHaveBeenCalledWith('research');
+    expect(openedWorkspace).toBe('research');
   });
 });

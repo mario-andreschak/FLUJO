@@ -20,6 +20,11 @@ import {
   withSnapshotStoreLease,
   type SnapshotOperationKind,
 } from './snapshotLock';
+import {
+  openSnapshotFolderAtRoot,
+  snapshotFolderAccessActivity,
+  snapshotFolderAccessSupported,
+} from './openSnapshotFolder';
 
 const log = createLogger('backend/services/snapshot/SnapshotStore');
 const REPOSITORY_ID = /^[a-f0-9]{16}$/i;
@@ -171,6 +176,10 @@ export class SnapshotStore {
     return snapshotRoot();
   }
 
+  async openFolder(): Promise<void> {
+    await openSnapshotFolderAtRoot(snapshotRoot());
+  }
+
   async policy(): Promise<SnapshotRetentionPolicy> {
     try {
       const saved = await loadItem<unknown>(StorageKey.SNAPSHOT_RETENTION_POLICY, undefined);
@@ -250,32 +259,46 @@ export class SnapshotStore {
   }
 
   async status(): Promise<SnapshotStatus> {
-    const activityBeforeInventory = snapshotOperationActivity(snapshotRoot());
+    const root = snapshotRoot();
+    const activityBeforeInventory = snapshotOperationActivity(root);
+    const folderAccessBeforeInventory = snapshotFolderAccessActivity(root);
     const [policy, usage, settings] = await Promise.all([
       this.policy(),
       this.usage(),
       loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined).catch(() => undefined),
     ]);
-    const activityAfterInventory = snapshotOperationActivity(snapshotRoot());
+    const activityAfterInventory = snapshotOperationActivity(root);
+    const folderAccessAfterInventory = snapshotFolderAccessActivity(root);
     const operationWasActive = (operation: SnapshotOperationKind): boolean => (
       activityBeforeInventory[operation] > 0 || activityAfterInventory[operation] > 0
     );
+    const capture = operationWasActive('capture');
+    const cleanup = operationWasActive('cleanup');
+    const revert = operationWasActive('revert');
+    const migration = operationWasActive('migration');
     const operatorDisabled = ['0', 'false', 'off'].includes(
       (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase(),
     ) || settings?.experimental?.snapshotsEnabled === false;
     const overBudget = policy.enabled && usage.onDiskBytes > policy.maxBytes;
     const activity: SnapshotActivity = {
-      capture: operationWasActive('capture'),
-      cleanup: operationWasActive('cleanup'),
-      revert: operationWasActive('revert'),
-      migration: operationWasActive('migration'),
+      capture,
+      cleanup,
+      revert,
+      migration,
+      storageBusy: capture || cleanup || revert || migration,
       operatorDisabled,
       captureSuspended: overBudget,
-      // TODO(#414): Implement "open folder" UI action and set localFolderAccess dynamically
-      // when a local folder access operation is in progress. Currently a placeholder.
-      localFolderAccess: false,
+      localFolderAccess: (
+        folderAccessBeforeInventory > 0 || folderAccessAfterInventory > 0
+      ),
     };
-    return { policy, usage, activity, overBudget };
+    return {
+      policy,
+      usage,
+      activity,
+      localFolderAccessSupported: snapshotFolderAccessSupported(),
+      overBudget,
+    };
   }
 
   /**

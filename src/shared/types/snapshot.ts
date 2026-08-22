@@ -53,24 +53,20 @@ export interface SnapshotActivity {
   cleanup: boolean;
   revert: boolean;
   migration: boolean;
+  /** A storage-mutating capture, cleanup, revert, or migration is active. */
+  storageBusy: boolean;
   operatorDisabled: boolean;
   /** New captures pause while retention cannot make the store safe. */
   captureSuspended: boolean;
   localFolderAccess: boolean;
 }
 
-export type SnapshotReferenceFailure =
-  | 'expired'
-  | 'missing-store'
-  | 'corrupt-store'
-  | 'invalid-root'
-  | 'invalid-path'
-  | 'temporarily-locked';
-
 export interface SnapshotStatus {
   policy: SnapshotRetentionPolicy;
   usage: SnapshotUsage;
   activity: SnapshotActivity;
+  /** Path-free capability flag for the server's current operating system. */
+  localFolderAccessSupported: boolean;
   overBudget: boolean;
 }
 

@@ -61,7 +61,6 @@ export type SubtreeOutcome =
   | 'moved'
   | 'copied'
   | 'already-migrated'
-  | 'recovered-identical'
   | 'reconciled'
   | 'skipped';
 
@@ -596,7 +595,7 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
   // Acquire snapshot store lease to coordinate with capture/cleanup operations
   // that may be in progress. This prevents concurrent mutations of the snapshot
   // store during migration (issue #414).
-  const snapshotRoots = [path.join(getDataDir(), 'snapshots')];
+  const snapshotRoots = [snapshotStore.rootPath()];
   return snapshotStore.withMigrationAccess(snapshotRoots, async () => {
     try {
     const errors: string[] = [];

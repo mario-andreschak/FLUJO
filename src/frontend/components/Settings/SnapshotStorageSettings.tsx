@@ -43,6 +43,7 @@ export default function SnapshotStorageSettings({
   const [draft, setDraft] = useState<SnapshotRetentionPolicy | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showRepositories, setShowRepositories] = useState(false);
@@ -110,6 +111,22 @@ export default function SnapshotStorageSettings({
     }
   };
 
+  const openSnapshotFolder = async () => {
+    setOpeningFolder(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/snapshots/open-folder', { method: 'POST' });
+      if (!response.ok) throw new Error();
+      setMessage('Snapshot folder opened.');
+    } catch {
+      setError('Unable to open the snapshot folder.');
+    } finally {
+      await refresh();
+      setOpeningFolder(false);
+    }
+  };
+
   const setPolicyNumber = (
     field: SnapshotPolicyNumberField,
     value: string,
@@ -132,7 +149,7 @@ export default function SnapshotStorageSettings({
   )).sort();
   const oldestCaptureAt = captureDates[0];
   const newestCaptureAt = captureDates[captureDates.length - 1];
-  const storageBusy = Boolean(
+  const storageBusy = status?.activity.storageBusy ?? Boolean(
     status?.activity.capture
     || status?.activity.cleanup
     || status?.activity.revert
@@ -176,7 +193,7 @@ export default function SnapshotStorageSettings({
               Snapshot storage is over its configured limit. New captures pause until cleanup reclaims enough space.
             </Alert>
           )}
-          {(status.activity.cleanup || status.activity.revert || status.activity.migration) && (
+          {storageBusy && (
             <Alert severity="info">Snapshot storage is busy; destructive actions are temporarily locked.</Alert>
           )}
           <Typography variant="body2">
@@ -188,6 +205,17 @@ export default function SnapshotStorageSettings({
               {oldestCaptureAt && newestCaptureAt ? ' · ' : ''}
               {newestCaptureAt ? `Newest ${new Date(newestCaptureAt).toLocaleString()}` : ''}
             </Typography>
+          )}
+          {status.localFolderAccessSupported && (
+            <Button
+              variant="outlined"
+              onClick={() => { void openSnapshotFolder(); }}
+              disabled={openingFolder || status.activity.localFolderAccess}
+            >
+              {openingFolder || status.activity.localFolderAccess
+                ? 'Opening snapshot folder…'
+                : 'Open snapshot folder'}
+            </Button>
           )}
           <Divider />
           <Typography variant="subtitle2">Retention</Typography>
@@ -236,7 +264,11 @@ export default function SnapshotStorageSettings({
           </Button>
           <Collapse in={showRepositories}>
             <Stack spacing={1}>
-              {repositorySummaries.map((repository) => (
+              {repositorySummaries.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  No snapshot repositories yet
+                </Typography>
+              ) : repositorySummaries.map((repository) => (
                 <Box key={repository.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
                   <Typography variant="body2">{repository.label} · {repository.health}</Typography>
                   <Typography variant="caption" color="text.secondary">

@@ -2,12 +2,15 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { v4 as uuid } from 'uuid';
-import simpleGit from 'simple-git';
 import {
   SnapshotStore,
   SnapshotStoreBusyError,
   _setSnapshotStoreDirForTests,
 } from '@/backend/services/snapshot/SnapshotStore';
+import {
+  _setSnapshotFolderLauncherForTests,
+  type SnapshotFolderLauncher,
+} from '@/backend/services/snapshot/openSnapshotFolder';
 import { DEFAULT_SNAPSHOT_RETENTION_POLICY } from '@/shared/types/snapshot';
 import { StorageKey } from '@/shared/types/storage';
 import { clearItem } from '@/utils/storage/backend';
@@ -28,6 +31,7 @@ describe('SnapshotStore', () => {
   });
 
   afterEach(async () => {
+    _setSnapshotFolderLauncherForTests(null);
     _setSnapshotStoreDirForTests(null);
     try {
       await fs.rm(testDir, { recursive: true, force: true });
@@ -88,6 +92,8 @@ describe('SnapshotStore', () => {
       expect(status.usage.onDiskBytes).toBe(0);
       expect(status.usage.logicalBytes).toBe(0);
       expect(status.activity.operatorDisabled).toBe(false);
+      expect(status.activity.storageBusy).toBe(false);
+      expect(status.activity.localFolderAccess).toBe(false);
     });
 
     it('tracks activity flags correctly', async () => {
@@ -97,6 +103,84 @@ describe('SnapshotStore', () => {
       expect(status.activity.migration).toBeDefined();
       expect(typeof status.activity.operatorDisabled).toBe('boolean');
       expect(typeof status.activity.captureSuspended).toBe('boolean');
+      expect(typeof status.activity.storageBusy).toBe('boolean');
+      expect(typeof status.localFolderAccessSupported).toBe('boolean');
+    });
+
+    it.each(['capture', 'cleanup', 'revert'] as const)(
+      'reports storageBusy while a %s lease overlaps inventory',
+      async (operationKind) => {
+        let releaseOperation!: () => void;
+        let markEntered!: () => void;
+        const blocked = new Promise<void>((resolve) => {
+          releaseOperation = resolve;
+        });
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+        const operation = store.withAccess(operationKind, async () => {
+          markEntered();
+          await blocked;
+        });
+        await entered;
+
+        const statusWhileActive = store.status();
+        releaseOperation();
+        await operation;
+
+        const activeStatus = await statusWhileActive;
+        expect(activeStatus.activity[operationKind]).toBe(true);
+        expect(activeStatus.activity.storageBusy).toBe(true);
+        expect((await store.status()).activity.storageBusy).toBe(false);
+      },
+    );
+
+    it('reports migration as storageBusy and excludes read-only inventory', async () => {
+      let releaseMigration!: () => void;
+      let markEntered!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        releaseMigration = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        markEntered = resolve;
+      });
+      const migration = store.withMigrationAccess([testDir], async () => {
+        markEntered();
+        await blocked;
+      });
+      await entered;
+
+      const statusWhileActive = store.status();
+      releaseMigration();
+      await migration;
+
+      expect((await statusWhileActive).activity.storageBusy).toBe(true);
+      const readStatus = await store.withAccess('read', () => store.status());
+      expect(readStatus.activity.storageBusy).toBe(false);
+    });
+
+    it('reports workspace-scoped local folder access while dispatch is pending', async () => {
+      let releaseLaunch!: () => void;
+      const launch = jest.fn(() => new Promise<void>((resolve) => {
+        releaseLaunch = resolve;
+      }));
+      _setSnapshotFolderLauncherForTests(
+        launch as unknown as SnapshotFolderLauncher,
+        'linux',
+      );
+
+      const opening = store.openFolder();
+      while (launch.mock.calls.length === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+
+      const activeStatus = await store.status();
+      expect(activeStatus.activity.localFolderAccess).toBe(true);
+      expect(activeStatus.localFolderAccessSupported).toBe(true);
+
+      releaseLaunch();
+      await opening;
+      expect((await store.status()).activity.localFolderAccess).toBe(false);
     });
   });
 
