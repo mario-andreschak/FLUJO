@@ -13,13 +13,13 @@ import {
   enqueueSteeringMessage,
   peekSteeringMessages,
 } from '@/backend/execution/flow/steeringInbox';
-import {
-  FLOW_INVOCATION_SOURCES,
-  type FlowExecutionAuthority,
-  type SharedState,
+import type {
+  FlowExecutionAuthority,
+  SharedState,
 } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { Flow } from '@/shared/types/flow';
+import { FEATURES } from '@/config/features';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
@@ -27,10 +27,8 @@ import {
 import {
   EnduringAgentIdSchema,
   MemorySourceRefSchema,
-  PERSONA_ACTIVITY_KINDS,
   PERSONA_ACTIVITY_BLOCKER_KINDS,
   PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS,
-  PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_PRIORITIES,
   PersonaInstructionContextSchema,
   type BehaviorMaintenanceRun,
@@ -96,6 +94,12 @@ import {
   reconcileBehaviorMaintenanceRuns,
 } from './behaviorMaintenance';
 import { recordBehaviorOutcomeSampleSafely } from './behaviorOutcome';
+import {
+  compactPersonaActivities,
+  compactPersonaFlowDispatches,
+  compactPersonaLeaseHistory,
+  compactPersonaMailboxItems,
+} from './compactRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   createPersonaActivitySnapshot,
@@ -109,6 +113,14 @@ import {
 } from './personaCoreApps';
 import { stableEnduringAgentId } from './ids';
 import { buildPersonaInstructionContext } from './personaInstructionContext';
+import {
+  DispatchAdmissionSchema,
+  DispatchOutcomeSchema,
+  PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
+  PERSONA_FLOW_DISPATCH_STATES,
+  PersonaFlowDispatchRecordSchema,
+  SerializableFlowRunInputSchema,
+} from './personaFlowDispatchSchema';
 import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
@@ -139,12 +151,12 @@ const runtimeClock = getPersonaRuntimeClock();
 
 const log = createLogger('backend/services/enduringAgents/personaDispatcher');
 
-/**
- * This is a private persistence contract. It deliberately does not reuse the
- * public enduring-agent schema version: a dispatcher envelope can evolve
- * without changing any public Persona record.
- */
-export const PERSONA_FLOW_DISPATCH_SCHEMA_VERSION = 1 as const;
+export {
+  PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
+  PERSONA_FLOW_DISPATCH_STATES,
+  PersonaFlowDispatchRecordSchema,
+} from './personaFlowDispatchSchema';
+
 export const DEFAULT_PERSONA_FLOW_LEASE_TTL_MS = 30_000;
 const MAX_OUTCOME_TEXT = 20_000;
 const MAX_ERROR_TEXT = 4_000;
@@ -204,18 +216,7 @@ export function semanticOutcomeFromDispatch(input: {
   }
 }
 
-export const PERSONA_FLOW_DISPATCH_STATES = [
-  'queued',
-  'running',
-  'waiting',
-  'completed',
-  'error',
-  'cancelled',
-] as const;
 export type PersonaFlowDispatchState = (typeof PERSONA_FLOW_DISPATCH_STATES)[number];
-
-type JsonPrimitive = string | number | boolean | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 /**
  * The only FlowRunInput fields allowed onto disk. Resolution and authority are
@@ -505,218 +506,6 @@ export class PersonaFlowDispatchStateError extends Error {
   }
 }
 
-function isPlainJsonValue(value: unknown, seen = new Set<object>()): value is JsonValue {
-  if (
-    value === null
-    || typeof value === 'string'
-    || typeof value === 'boolean'
-    || (typeof value === 'number' && Number.isFinite(value))
-  ) return true;
-  if (typeof value !== 'object') return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return value.every((item) => isPlainJsonValue(item, seen));
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return false;
-    return Object.values(value).every((item) => isPlainJsonValue(item, seen));
-  } finally {
-    seen.delete(value);
-  }
-}
-
-const JsonValueSchema = z.unknown().refine(isPlainJsonValue, {
-  message: 'Value must be plain JSON without cycles, undefined values, or non-finite numbers.',
-});
-
-const SerializableFlowRunInputSchema = z.object({
-  messages: z.array(JsonValueSchema).optional(),
-  mcpAppContexts: JsonValueSchema.optional(),
-  prompt: z.string().optional(),
-  processNodeId: z.string().trim().min(1).optional(),
-  variables: z.record(z.string(), JsonValueSchema).optional(),
-  mode: z.enum(['ephemeral', 'conversation']).optional(),
-  conversationId: EnduringAgentIdSchema.optional(),
-  runId: EnduringAgentIdSchema.optional(),
-  title: z.string().optional(),
-  flujo: z.boolean().optional(),
-  requireApproval: z.boolean().optional(),
-  debug: z.boolean().optional(),
-  continueDebug: z.boolean().optional(),
-  userTurn: z.boolean().optional(),
-  parentRunId: EnduringAgentIdSchema.optional(),
-  lane: JsonValueSchema.optional(),
-  depth: z.number().int().nonnegative().optional(),
-  source: z.enum(FLOW_INVOCATION_SOURCES),
-  plannedExecutionId: EnduringAgentIdSchema.optional(),
-  plannedExecutionName: z.string().optional(),
-  chainDepth: z.number().int().nonnegative().optional(),
-  onApprovalRequired: z.enum(['auto', 'fail', 'pause']).optional(),
-  meetingParticipant: JsonValueSchema.optional(),
-  meetingTurn: JsonValueSchema.optional(),
-}).strict().superRefine((input, ctx) => {
-  if (input.source === 'meeting' && (!input.meetingParticipant || !input.meetingTurn)) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'Meeting dispatches require meetingParticipant and meetingTurn.',
-    });
-  }
-});
-
-const DispatchAdmissionSchema = z.object({
-  kind: z.enum(PERSONA_ACTIVITY_KINDS),
-  priority: z.enum(PERSONA_PRIORITIES),
-  source: z.object({
-    kind: z.enum(PERSONA_ACTIVITY_SOURCE_KINDS),
-    sourceId: z.string().trim().min(1).max(512).optional(),
-  }).strict(),
-  behaviorSlotKey: z.string().trim().min(1).max(128).optional(),
-  relationKey: z.string().trim().min(1).max(512).optional(),
-  relatedAction: z.enum(['steer', 'coalesce']).optional(),
-  summary: z.string().trim().max(20_000).optional(),
-  notBefore: z.number().int().nonnegative().optional(),
-}).strict().superRefine((input, ctx) => {
-  if (input.relatedAction && !input.relationKey) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'relatedAction requires relationKey.',
-      path: ['relationKey'],
-    });
-  }
-});
-
-const DispatchErrorSchema = z.object({
-  code: z.string().trim().min(1).max(128),
-  message: z.string().trim().min(1).max(MAX_ERROR_TEXT),
-  at: z.number().int().nonnegative(),
-}).strict();
-
-const DispatchOutcomeSchema = z.object({
-  status: z.enum([
-    'completed',
-    'error',
-    'awaiting_tool_approval',
-    'paused_debug',
-    'running',
-    'capped',
-    'steered',
-    'coalesced',
-  ]),
-  conversationId: EnduringAgentIdSchema.optional(),
-  runId: EnduringAgentIdSchema.optional(),
-  outputText: z.string().max(MAX_OUTCOME_TEXT).optional(),
-  finalAction: z.string().max(512).optional(),
-  personaId: EnduringAgentIdSchema,
-  activityId: EnduringAgentIdSchema,
-  behaviorRevisionId: EnduringAgentIdSchema,
-}).strict();
-
-const PersonaFlowDispatchRecordSchema = z.object({
-  schemaVersion: z.literal(PERSONA_FLOW_DISPATCH_SCHEMA_VERSION),
-  id: EnduringAgentIdSchema,
-  workspaceId: z.string().trim().min(1).max(256),
-  personaId: EnduringAgentIdSchema,
-  idempotencyDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  requestHash: z.string().regex(/^[a-f0-9]{64}$/),
-  state: z.enum(PERSONA_FLOW_DISPATCH_STATES),
-  admission: DispatchAdmissionSchema,
-  flowInput: SerializableFlowRunInputSchema.optional(),
-  mailboxItemId: EnduringAgentIdSchema.optional(),
-  routingDecision: z.enum([
-    'duplicate',
-    'queued',
-    'steered',
-    'coalesced',
-    'interrupt_requested',
-  ]).optional(),
-  targetActivityId: EnduringAgentIdSchema.optional(),
-  activityId: EnduringAgentIdSchema.optional(),
-  behaviorRevisionId: EnduringAgentIdSchema.optional(),
-  instructionContext: PersonaInstructionContextSchema.optional(),
-  maintenancePlan: MemoryMaintenancePlanSchema.optional(),
-  maintenanceResult: MemoryMaintenanceResultSchema.optional(),
-  memoryCandidateLimit: z.number().int().min(0).max(3).optional(),
-  waitingReason: z.enum(['delivery', 'approval', 'debug', 'running', 'interrupted']).optional(),
-  cancellationRequestedAt: z.number().int().nonnegative().optional(),
-  cancellationReason: z.string().trim().min(1).max(512).optional(),
-  resumeRequestedAt: z.number().int().nonnegative().optional(),
-  resumeSettledAt: z.number().int().nonnegative().optional(),
-  resumeReason: z.enum(['approval', 'debug', 'manual']).optional(),
-  resumeFromWaitingReason: z.enum(['approval', 'debug', 'running', 'interrupted']).optional(),
-  resumePreparationRequired: z.boolean().optional(),
-  outcome: DispatchOutcomeSchema.optional(),
-  error: DispatchErrorSchema.optional(),
-  lastError: DispatchErrorSchema.optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  startedAt: z.number().int().nonnegative().optional(),
-  completedAt: z.number().int().nonnegative().optional(),
-}).strict().superRefine((record, ctx) => {
-  if (!record.flowInput && record.state !== 'error') {
-    ctx.addIssue({ code: 'custom', message: 'Only an error recovery record may omit flowInput.' });
-  }
-  if (record.state === 'running' && (!record.activityId || !record.behaviorRevisionId)) {
-    ctx.addIssue({ code: 'custom', message: 'A running dispatch requires Activity and revision ids.' });
-  }
-  if (record.instructionContext && (
-    record.instructionContext.personaId !== record.personaId
-    || record.instructionContext.activityId !== record.activityId
-    || record.instructionContext.behaviorRevisionId !== record.behaviorRevisionId
-  )) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'A frozen instruction context must match the dispatch attribution triple.',
-      path: ['instructionContext'],
-    });
-  }
-  if (record.maintenancePlan && (
-    record.admission.kind !== 'maintenance'
-    || record.admission.source.kind !== 'maintenance'
-    || record.admission.source.sourceId !== record.maintenancePlan.sourceActivityId
-  )) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'A maintenance evidence plan must match its maintenance Activity source.',
-      path: ['maintenancePlan'],
-    });
-  }
-  if (record.maintenanceResult && record.admission.kind !== 'maintenance') {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'Only a maintenance dispatch may carry a maintenance result.',
-      path: ['maintenanceResult'],
-    });
-  }
-  if (record.state === 'waiting' && !record.waitingReason) {
-    ctx.addIssue({ code: 'custom', message: 'A waiting dispatch requires waitingReason.' });
-  }
-  if (record.state !== 'waiting' && record.waitingReason) {
-    ctx.addIssue({ code: 'custom', message: 'Only a waiting dispatch may carry waitingReason.' });
-  }
-  if (record.state === 'error' && !record.error) {
-    ctx.addIssue({ code: 'custom', message: 'An errored dispatch requires a sanitized error.' });
-  }
-  if (record.state !== 'error' && record.error) {
-    ctx.addIssue({ code: 'custom', message: 'Only an errored dispatch may carry error.' });
-  }
-  if (
-    (record.state === 'completed' || record.state === 'error' || record.state === 'cancelled')
-    && record.completedAt === undefined
-  ) {
-    ctx.addIssue({ code: 'custom', message: 'A terminal dispatch requires completedAt.' });
-  }
-  if (
-    record.state !== 'completed'
-    && record.state !== 'error'
-    && record.state !== 'cancelled'
-    && record.completedAt !== undefined
-  ) {
-    ctx.addIssue({ code: 'custom', message: 'A non-terminal dispatch cannot carry completedAt.' });
-  }
-});
-
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -963,6 +752,10 @@ export interface PersonaFlowDispatcherDependencies {
   projectPersonaCoreAppsIntoFlow: typeof projectPersonaCoreAppsIntoFlow;
   readConversationLog: typeof readConversationLog;
   appendConversationMessage: typeof appendPersonaConversationMessage;
+  compactPersonaMailboxItems: typeof compactPersonaMailboxItems;
+  compactPersonaActivities: typeof compactPersonaActivities;
+  compactPersonaFlowDispatches: typeof compactPersonaFlowDispatches;
+  compactPersonaLeaseHistory: typeof compactPersonaLeaseHistory;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
 
@@ -1005,6 +798,10 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   projectPersonaCoreAppsIntoFlow,
   readConversationLog,
   appendConversationMessage: appendPersonaConversationMessage,
+  compactPersonaMailboxItems,
+  compactPersonaActivities,
+  compactPersonaFlowDispatches,
+  compactPersonaLeaseHistory,
   runFlow,
 };
 
@@ -2170,6 +1967,56 @@ export class PersonaFlowDispatcher {
     }
   }
 
+  private async compactRuntimeAfterTerminal(
+    activity: PersonaActivity,
+    dispatch: PersonaFlowDispatchRecord,
+  ): Promise<void> {
+    if (!FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION) return;
+
+    const personaId = activity.personaId;
+    if (dispatch.personaId !== personaId) {
+      log.warn(
+        `Skipped Persona runtime retention for Activity ${activity.id}: `
+        + `dispatch ${dispatch.id} belongs to a different Persona.`,
+      );
+      return;
+    }
+    const now = runtimeClock.now();
+    const context = `Persona ${personaId}, Activity ${activity.id}, dispatch ${dispatch.id}`;
+
+    try {
+      await this.inWorkspace(() => withPersonaRuntimeLock(personaId, async () => {
+        await this.dependencies.compactPersonaMailboxItems(personaId, now);
+      }));
+    } catch (error) {
+      log.warn(`Failed to compact mailbox items for ${context}:`, error);
+    }
+
+    try {
+      await this.inWorkspace(() => withPersonaRuntimeLock(personaId, async () => {
+        await this.dependencies.compactPersonaActivities(personaId, now);
+      }));
+    } catch (error) {
+      log.warn(`Failed to compact Activities for ${context}:`, error);
+    }
+
+    try {
+      await this.inWorkspace(() => withPersonaRuntimeLock(personaId, async () => {
+        await this.dependencies.compactPersonaFlowDispatches(personaId, now);
+      }));
+    } catch (error) {
+      log.warn(`Failed to compact Flow dispatches for ${context}:`, error);
+    }
+
+    try {
+      await this.inWorkspace(() => withPersonaRuntimeLock(personaId, async () => {
+        await this.dependencies.compactPersonaLeaseHistory(personaId, now);
+      }));
+    } catch (error) {
+      log.warn(`Failed to compact lease history for ${context}:`, error);
+    }
+  }
+
   private async commitTerminal(
     record: PersonaFlowDispatchRecord,
     fence: PersonaLeaseFence,
@@ -2273,6 +2120,10 @@ export class PersonaFlowDispatcher {
       } else {
         await this.recordBehaviorOutcome(completion.activity);
       }
+      // Retention is awaited for deterministic cutoff behavior, but every
+      // collection has its own post-authoritative lock and failure boundary.
+      await this.compactRuntimeAfterTerminal(completion.activity, terminal);
+
       let maintenanceRun: BehaviorMaintenanceRun | null = null;
       try {
         // The rollout gate defaults off, making this a no-write call. When

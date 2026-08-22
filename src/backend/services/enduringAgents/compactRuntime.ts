@@ -13,6 +13,10 @@ import type {
 import { BEHAVIOR_MAINTENANCE_RETENTION_MS, BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT } from './behaviorMaintenance';
 import { canonicalJson } from './behaviorRevisions';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
+import {
+  listPersonaFlowDispatchRecordsForRetention,
+  savePersonaFlowDispatchForRetention,
+} from './personaFlowDispatchRetention';
 import { applyRetention, type RetentionPolicy } from './retention';
 import {
   listPersonaActivities,
@@ -22,6 +26,8 @@ import {
   savePersonaMailboxItem,
   savePersonaLease,
 } from './store';
+
+export const PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP = 100;
 
 function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
@@ -46,6 +52,7 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
     isCompacted: (item) => item.compactedAt !== undefined,
     retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
     detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (item, compactedAt) => (
       {
         ...item,
@@ -85,6 +92,7 @@ export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
     isCompacted: (activity) => activity.compactedAt !== undefined,
     retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
     detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (activity, compactedAt) => (
       {
         ...activity,
@@ -123,6 +131,7 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
     isCompacted: (dispatch) => dispatch.compactedAt !== undefined,
     retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
     detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (dispatch, compactedAt) => (
       {
         ...dispatch,
@@ -142,12 +151,7 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
         compactedAt,
       } as unknown as PersonaFlowDispatchRecord
     ),
-    save: async () => {
-      // This would normally call savePersonaFlowDispatch, which doesn't exist yet.
-      // For now, this is a stub; the actual flow dispatch save function will be
-      // called from the dispatcher's postActivity handler.
-      throw new Error('Flow dispatch save not yet implemented for retention');
-    },
+    save: savePersonaFlowDispatchForRetention,
   };
 }
 
@@ -167,6 +171,7 @@ export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> 
     isCompacted: (lease) => lease.compactedAt !== undefined,
     retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
     detailedLimit: 1000, // Keep newest 1000 archived leases for audit.
+    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (lease, compactedAt) => (
       {
         ...lease,
@@ -179,7 +184,7 @@ export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> 
 
 /**
  * Compact mailbox items for a specific Persona.
- * Runs under the persona runtime lock and applies the retention policy.
+ * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
  */
 export async function compactPersonaMailboxItems(
   personaId: string,
@@ -192,6 +197,7 @@ export async function compactPersonaMailboxItems(
 
 /**
  * Compact activities for a specific Persona.
+ * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
  */
 export async function compactPersonaActivities(
   personaId: string,
@@ -203,7 +209,21 @@ export async function compactPersonaActivities(
 }
 
 /**
+ * Compact Flow dispatches for a specific Persona.
+ * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
+ */
+export async function compactPersonaFlowDispatches(
+  personaId: string,
+  now = Date.now(),
+): Promise<{ compacted: number; remaining: number }> {
+  const items = await listPersonaFlowDispatchRecordsForRetention(personaId);
+  const policy = getFlowDispatchRetentionPolicy();
+  return applyRetention(items, policy, now);
+}
+
+/**
  * Compact lease history for a specific Persona.
+ * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
  */
 export async function compactPersonaLeaseHistory(
   personaId: string,
@@ -224,12 +244,15 @@ export interface PersonaStorageStats {
     mailboxItemsCompacted: number;
     activities: number;
     activitiesCompacted: number;
+    flowDispatches: number;
+    flowDispatchesCompacted: number;
     leaseRecords: number;
     leaseRecordsArchived: number;
   };
   estimatedBytes: number;
   oldestMailboxItemCreatedAt?: number;
   oldestActivityCreatedAt?: number;
+  oldestFlowDispatchCreatedAt?: number;
   oldestLeaseCreatedAt?: number;
 }
 
@@ -237,19 +260,22 @@ export interface PersonaStorageStats {
  * Gather per-Persona storage stats for the dashboard and lane-11 observability.
  */
 export async function getPersonaStorageStats(personaId: string): Promise<PersonaStorageStats> {
-  const [mailboxItems, activities, leaseRecords] = await Promise.all([
+  const [mailboxItems, activities, flowDispatches, leaseRecords] = await Promise.all([
     listPersonaMailboxItems(personaId),
     listPersonaActivities(personaId),
+    listPersonaFlowDispatchRecordsForRetention(personaId),
     listPersonaLeaseRecords(personaId),
   ]);
 
   const mailboxItemsCompacted = mailboxItems.filter((i) => i.compactedAt !== undefined).length;
   const activitiesCompacted = activities.filter((a) => a.compactedAt !== undefined).length;
+  const flowDispatchesCompacted = flowDispatches.filter((d) => d.compactedAt !== undefined).length;
   const leaseRecordsArchived = leaseRecords.filter((l) => l.compactedAt !== undefined).length;
 
   // Rough byte estimate (not exact; for observability only).
   const estimatedBytes = mailboxItems.length * 500
     + activities.length * 2000
+    + flowDispatches.length * 2000
     + leaseRecords.length * 250;
 
   const oldestMailbox = mailboxItems.reduce(
@@ -258,6 +284,10 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
   );
   const oldestActivity = activities.reduce(
     (min, a) => (a.createdAt < min ? a.createdAt : min),
+    Infinity,
+  );
+  const oldestFlowDispatch = flowDispatches.reduce(
+    (min, dispatch) => (dispatch.createdAt < min ? dispatch.createdAt : min),
     Infinity,
   );
   const oldestLease = leaseRecords.reduce(
@@ -272,12 +302,15 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
       mailboxItemsCompacted,
       activities: activities.length,
       activitiesCompacted,
+      flowDispatches: flowDispatches.length,
+      flowDispatchesCompacted,
       leaseRecords: leaseRecords.length,
       leaseRecordsArchived,
     },
     estimatedBytes,
     oldestMailboxItemCreatedAt: oldestMailbox === Infinity ? undefined : oldestMailbox,
     oldestActivityCreatedAt: oldestActivity === Infinity ? undefined : oldestActivity,
+    oldestFlowDispatchCreatedAt: oldestFlowDispatch === Infinity ? undefined : oldestFlowDispatch,
     oldestLeaseCreatedAt: oldestLease === Infinity ? undefined : oldestLease,
   };
 }
