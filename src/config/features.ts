@@ -72,8 +72,14 @@ export const FEATURES = {
   /** Enable conflict detection and linking of contradictory memory facts (issue #452). */
   ENABLE_MEMORY_CONFLICT_SURFACING: true,
 
-  /** Enable retention/compaction of Persona mailbox, activities, dispatches, and lease history (issue #453). */
+  /** Enable soft retention/compaction of Persona mailbox, activities, and dispatches (issue #453). */
   ENABLE_PERSONA_RUNTIME_RETENTION: false,
+
+  /**
+   * Irreversibly delete verified dead Persona lease-history records (issue #478).
+   * Independent from soft runtime retention and deliberately OFF by default.
+   */
+  ENABLE_PERSONA_LEASE_HISTORY_PRUNING: false,
 
   /**
    * Record baseline/observed outcome metrics for activated Behavior proposals

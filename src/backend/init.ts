@@ -1,4 +1,5 @@
 import { Cron } from 'croner';
+import { FEATURES } from '@/config/features';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { sweepOldRunResources } from '@/backend/services/runResources';
@@ -13,6 +14,7 @@ import {
   backfillStoredMemoryDuplicates,
   inspectAndReconcilePersonaRuntime,
   listPersonas,
+  pruneWorkspacePersonaLeaseHistories,
   reconcilePersonaRoleBehaviors,
   startPersonaFlowDispatcher,
   sweepMemoryCandidates,
@@ -58,6 +60,8 @@ declare global {
   var __flujo_snapshot_cleanup_cron: Cron | undefined;
   // Hourly memory candidate lifecycle sweep (issue #452): expiry, auto-promotion, and conflict repair.
   var __flujo_memory_lifecycle_cron: Cron | undefined;
+  // Default-off, irreversible Persona lease-history pruning sweep (issue #478).
+  var __flujo_persona_lease_history_pruning_cron: Cron | undefined;
   // Hourly stored-memory duplicate backfill (issue #465).
   var __flujo_memory_backfill_cron: Cron | undefined;
   var __flujo_memory_backfill_in_flight: Promise<void> | undefined;
@@ -228,6 +232,25 @@ function armRetentionSweep(): void {
       void sweepEveryWorkspace('memory candidate lifecycle', () => sweepMemoryCandidates());
     });
     log.info('Armed memory candidate lifecycle sweep (hourly)');
+  }
+  // Lease-history pruning (issue #478) is deliberately armed only when its
+  // independent irreversible-deletion flag is enabled. The callback rechecks
+  // the flag inside the pruning service before every Persona deletion sweep.
+  if (
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING
+    && !global.__flujo_persona_lease_history_pruning_cron
+  ) {
+    global.__flujo_persona_lease_history_pruning_cron = new Cron(
+      '31 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona lease-history pruning',
+          () => pruneWorkspacePersonaLeaseHistories(),
+        );
+      },
+    );
+    log.info('Armed Persona lease-history pruning sweep (hourly)');
   }
   // Historical memory deduplication (issue #465). The process-local promise
   // prevents hot-reload callbacks from overlapping, while the workspace lock

@@ -97,7 +97,6 @@ import { recordBehaviorOutcomeSampleSafely } from './behaviorOutcome';
 import {
   compactPersonaActivities,
   compactPersonaFlowDispatches,
-  compactPersonaLeaseHistory,
   compactPersonaMailboxItems,
 } from './compactRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
@@ -763,7 +762,6 @@ export interface PersonaFlowDispatcherDependencies {
   compactPersonaMailboxItems: typeof compactPersonaMailboxItems;
   compactPersonaActivities: typeof compactPersonaActivities;
   compactPersonaFlowDispatches: typeof compactPersonaFlowDispatches;
-  compactPersonaLeaseHistory: typeof compactPersonaLeaseHistory;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
 
@@ -818,7 +816,6 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   compactPersonaMailboxItems,
   compactPersonaActivities,
   compactPersonaFlowDispatches,
-  compactPersonaLeaseHistory,
   runFlow,
 };
 
@@ -2049,17 +2046,9 @@ export class PersonaFlowDispatcher {
       log.warn(`Failed to compact Flow dispatches for ${context}:`, error);
     }
 
-    try {
-      observation.compactors.leaseHistory = await this.inWorkspace(
-        () => withPersonaRuntimeLock(
-          personaId,
-          () => this.dependencies.compactPersonaLeaseHistory(personaId, now),
-        ),
-      );
-    } catch (error) {
-      observation.failures.push('leaseHistory');
-      log.warn(`Failed to compact lease history for ${context}:`, error);
-    }
+    // Lease history is intentionally excluded: its small records gain nothing
+    // from soft compaction. Irreversible count pruning runs separately behind
+    // ENABLE_PERSONA_LEASE_HISTORY_PRUNING (issue #478).
 
     try {
       observation.after = await this.inWorkspace(

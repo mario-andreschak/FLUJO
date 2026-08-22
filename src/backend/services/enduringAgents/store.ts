@@ -1424,6 +1424,20 @@ export async function listPersonaActivities(
   });
 }
 
+/**
+ * Complete workspace-wide Activity scan used only by guarded lease-history pruning.
+ * Unlike the indexed query path, this fails closed on any malformed or mismatched
+ * storage entry so an incomplete reference view can never authorize deletion.
+ */
+export function listActivitiesStrictForLeasePruning(): Promise<PersonaActivity[]> {
+  return listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.activities,
+    recordKind: 'PersonaActivity',
+    schema: PersonaActivitySchema,
+    strict: true,
+  });
+}
+
 export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {
   const record = parseRecord('PersonaActivity', PersonaActivitySchema, value);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.activities, record.id, async () => {
@@ -1879,6 +1893,29 @@ export function savePersonaLease(value: PersonaLease): Promise<PersonaLease> {
     }
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, record);
     return record;
+  });
+}
+
+/**
+ * Narrow, retry-safe deletion primitive for guarded lease-history pruning.
+ * The caller supplies the exact record selected under the Persona runtime lock;
+ * disappearance or mutation before deletion is surfaced and stops the sweep.
+ */
+export function deletePersonaLeaseRecord(expected: PersonaLease): Promise<void> {
+  const record = parseRecord('PersonaLease', PersonaLeaseSchema, expected);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, async () => {
+    const current = await getPersonaLeaseRecord(record.id);
+    if (!current) {
+      throw new Error('PersonaLease disappeared before guarded pruning completed.');
+    }
+    if (
+      current.personaId !== record.personaId
+      || current.workspaceId !== getCurrentWorkspace()
+      || JSON.stringify(current) !== JSON.stringify(record)
+    ) {
+      throw new Error('PersonaLease changed before guarded pruning completed.');
+    }
+    await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id);
   });
 }
 

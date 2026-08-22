@@ -3,7 +3,6 @@ import {
   compactPersonaFlowDispatches,
   getActivityRetentionPolicy,
   getFlowDispatchRetentionPolicy,
-  getLeaseHistoryRetentionPolicy,
   getMailboxItemRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
 import {
@@ -127,12 +126,11 @@ describe('Persona runtime compaction', () => {
     })).toThrow();
   });
 
-  it('caps writes for every completion-triggered sweep', () => {
+  it('caps writes for every completion-triggered soft-retention sweep', () => {
     const policies = [
       getMailboxItemRetentionPolicy(),
       getActivityRetentionPolicy(),
       getFlowDispatchRetentionPolicy(),
-      getLeaseHistoryRetentionPolicy(),
     ];
     for (const policy of policies) {
       expect(policy.maxWritesPerSweep)

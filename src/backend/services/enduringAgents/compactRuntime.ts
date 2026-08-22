@@ -156,10 +156,10 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
 }
 
 /**
- * Compaction policy for lease history.
- * Archived (released/expired) leases older than retention window are removed from the
- * live collection. This is simpler than mailbox/activity/dispatch because leases
- * are all small (no bulky fields to blank) — compaction is purely count-reduction.
+ * Legacy lease-history soft-compaction policy retained for direct compatibility.
+ * It only records compactedAt and does not reduce record count. The runtime no
+ * longer invokes it; irreversible count pruning lives in leaseHistoryPruning.ts
+ * behind its own default-off feature flag (issue #478).
  */
 export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> {
   return {
@@ -222,7 +222,7 @@ export async function compactPersonaFlowDispatches(
 }
 
 /**
- * Compact lease history for a specific Persona.
+ * Legacy compatibility adapter. This does not prune records and is not scheduled.
  * Caller must hold the Persona runtime lock for the complete list/apply/save sweep.
  */
 export async function compactPersonaLeaseHistory(

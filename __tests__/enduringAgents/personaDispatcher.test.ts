@@ -549,7 +549,6 @@ function makeHarness(
   const compactPersonaMailboxItems = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
   const compactPersonaActivities = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
   const compactPersonaFlowDispatches = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
-  const compactPersonaLeaseHistory = jest.fn(async () => ({ compacted: 0, remaining: 0 }));
   const runFlow = jest.fn(async (input: FlowRunInput) => successfulResult(input));
 
   const dependencies: PersonaFlowDispatcherDependencies = {
@@ -590,7 +589,6 @@ function makeHarness(
     compactPersonaMailboxItems,
     compactPersonaActivities,
     compactPersonaFlowDispatches,
-    compactPersonaLeaseHistory,
     runFlow,
   };
   const dispatcher = new PersonaFlowDispatcher({
@@ -684,7 +682,6 @@ describe('Persona Flow dispatcher', () => {
     expect(harness.dependencies.compactPersonaMailboxItems).not.toHaveBeenCalled();
     expect(harness.dependencies.compactPersonaActivities).not.toHaveBeenCalled();
     expect(harness.dependencies.compactPersonaFlowDispatches).not.toHaveBeenCalled();
-    expect(harness.dependencies.compactPersonaLeaseHistory).not.toHaveBeenCalled();
   });
 
   it('isolates retention failures and supplies every sweep the same Persona and cutoff', async () => {
@@ -707,7 +704,6 @@ describe('Persona Flow dispatcher', () => {
       ['mailbox', harness.dependencies.compactPersonaMailboxItems],
       ['activities', harness.dependencies.compactPersonaActivities],
       ['dispatches', harness.dependencies.compactPersonaFlowDispatches],
-      ['leases', harness.dependencies.compactPersonaLeaseHistory],
     ] as const;
     for (const [label, compactor] of failingCompactors) {
       (compactor as jest.Mock).mockRejectedValueOnce(new Error(`${label} retention failed`));
@@ -729,7 +725,6 @@ describe('Persona Flow dispatcher', () => {
       harness.dependencies.compactPersonaMailboxItems,
       harness.dependencies.compactPersonaActivities,
       harness.dependencies.compactPersonaFlowDispatches,
-      harness.dependencies.compactPersonaLeaseHistory,
     ] as jest.Mock[];
     for (const compactor of compactors) {
       expect(compactor).toHaveBeenCalledTimes(1);
@@ -746,7 +741,7 @@ describe('Persona Flow dispatcher', () => {
         totals: expect.objectContaining({ uncompacted: 4, approxBytes: 4_000 }),
       }),
       compactors: {},
-      failures: ['mailboxItems', 'activities', 'flowDispatches', 'leaseHistory'],
+      failures: ['mailboxItems', 'activities', 'flowDispatches'],
       after: expect.objectContaining({
         collectedAt: 2,
         totals: expect.objectContaining({ compacted: 4, approxBytes: 800 }),

@@ -12,6 +12,7 @@ export * from './memoryKernel';
 export * from './memoryBackfill';
 export * from './memoryLifecycle';
 export * from './memoryMaintenance';
+export * from './leaseHistoryPruning';
 export * from './workItems';
 export * from './domainMutation';
 export * from './ids';
