@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  _getPersonaRuntimeEventLogPathsForTests,
   _setPersonaRuntimeEventLogRootForTests,
   appendPersonaRuntimeEvent,
   claimNextPersonaActivity,
@@ -29,6 +30,12 @@ let workspaceSequence = 0;
 function freshWorkspace(label: string): string {
   workspaceSequence += 1;
   return `runtime-observe-${label}-${process.pid}-${workspaceSequence}`;
+}
+
+function activeEventFile(personaId: string): string {
+  const file = _getPersonaRuntimeEventLogPathsForTests(personaId).activeSegment;
+  if (!file) throw new Error(`No active runtime-event segment for ${personaId}.`);
+  return file;
 }
 
 describe('Persona runtime observability', () => {
@@ -97,7 +104,7 @@ describe('Persona runtime observability', () => {
         activityId: 'activity_one',
         kind: 'assignment',
       });
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       await fs.appendFile(file, '{"truncated":', 'utf8');
       _setPersonaRuntimeEventLogRootForTests(tempRoot);
 
@@ -172,10 +179,7 @@ describe('Persona runtime observability', () => {
         activityId: 'activity_redacted',
         errorCode: 'provider_error',
       });
-      const serialized = await fs.readFile(
-        path.join(tempRoot, workspace, `${personaId}.jsonl`),
-        'utf8',
-      );
+      const serialized = await fs.readFile(activeEventFile(personaId), 'utf8');
       expect(serialized).not.toMatch(/holderId|leaseId|fencingToken|raw error message/);
       expect(JSON.parse(serialized)).toMatchObject({
         type: 'activity:errored',

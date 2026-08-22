@@ -19,6 +19,7 @@ import {
   runPersonaRuntimeRetentionSweep,
   startPersonaFlowDispatcher,
   sweepMemoryCandidates,
+  sweepPersonaRuntimeEventSegments,
 } from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { migrateEnduringAgentDirectoryShards } from '@/backend/services/enduringAgents/directoryShardingMigration';
@@ -65,6 +66,8 @@ declare global {
   var __flujo_persona_lease_history_pruning_cron: Cron | undefined;
   // Staged Persona soft-retention sweep (issue #481); the runner fails closed.
   var __flujo_persona_runtime_retention_cron: Cron | undefined;
+  // Closed Persona runtime-event segment retention (issue #482).
+  var __flujo_persona_runtime_event_retention_cron: Cron | undefined;
   // Hourly stored-memory duplicate backfill (issue #465).
   var __flujo_memory_backfill_cron: Cron | undefined;
   var __flujo_memory_backfill_in_flight: Promise<void> | undefined;
@@ -271,6 +274,21 @@ function armRetentionSweep(): void {
       },
     );
     log.info('Armed Persona runtime retention sweep (hourly)');
+  }
+  // Runtime-event segment retention (#482) is armed unconditionally. The
+  // validated retentionDays <= 0 default makes the sweep a read-free no-op.
+  if (!global.__flujo_persona_runtime_event_retention_cron) {
+    global.__flujo_persona_runtime_event_retention_cron = new Cron(
+      '53 * * * *',
+      { unref: true },
+      () => {
+        void sweepEveryWorkspace(
+          'Persona runtime event segment',
+          () => sweepPersonaRuntimeEventSegments(),
+        );
+      },
+    );
+    log.info('Armed Persona runtime event segment retention sweep (hourly)');
   }
   // Historical memory deduplication (issue #465). The process-local promise
   // prevents hot-reload callbacks from overlapping, while the workspace lock

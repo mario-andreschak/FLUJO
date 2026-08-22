@@ -9,7 +9,8 @@ import {
   PERSONA_LIFECYCLE_STATES,
   PERSONA_PRIORITIES,
 } from '@/shared/types/enduringAgent';
-import { assertSafeCollectionId } from '@/utils/storage/backend';
+import { readPersonaRuntimeEventLogConfig, type PersonaRuntimeEventLogConfig } from '@/config/features';
+import { assertSafeCollectionId, writeFileAtomic } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
 import {
   getCurrentWorkspace,
@@ -241,13 +242,33 @@ const NEWLINE_BYTE = 0x0a;
 const EMPTY_BUFFER = Buffer.alloc(0);
 // BigInt call form (not a literal) because the compile target predates ES2020.
 const UNKNOWN_FILE_IDENTITY = BigInt(-1);
+const RUNTIME_EVENT_MANIFEST_VERSION = 1 as const;
+const SEGMENT_NAME = /^segment-(\d{6})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Insertion-ordered index of the most recent eventIds, capped at the
- * idempotency window; evicts oldest-first. Stores the full event because the
- * append path returns the existing event on a duplicate. Memory bound is
- * approximately window-size × average event size.
- */
+const RuntimeEventSegmentSchema = z.object({
+  name: z.string().regex(SEGMENT_NAME),
+  firstSeq: z.number().int().nonnegative(),
+  lastSeq: z.number().int().min(-1),
+  eventCount: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  createdAt: TimestampSchema,
+  closedAt: TimestampSchema.optional(),
+}).strict();
+
+export const PersonaRuntimeEventManifestSchema = z.object({
+  version: z.literal(RUNTIME_EVENT_MANIFEST_VERSION),
+  workspaceId: z.string().min(1).max(256),
+  personaId: ReferenceSchema,
+  activeSegment: z.string().regex(SEGMENT_NAME),
+  nextSeq: z.number().int().nonnegative(),
+  segments: z.array(RuntimeEventSegmentSchema).min(1),
+}).strict();
+
+export type PersonaRuntimeEventManifest =
+  z.infer<typeof PersonaRuntimeEventManifestSchema>;
+type RuntimeEventSegment = PersonaRuntimeEventManifest['segments'][number];
+
 class RecentEventIdWindow {
   private readonly entries = new Map<string, PersonaRuntimeEvent>();
 
@@ -275,31 +296,22 @@ class RecentEventIdWindow {
 }
 
 interface PersonaRuntimeEventLogState {
+  manifest: PersonaRuntimeEventManifest;
+  manifestDev: bigint;
+  manifestIno: bigint;
+  manifestBytes: number;
+  activeSegmentName: string;
   nextSeq: number;
-  /** Bounded recent-eventId index; see RUNTIME_EVENT_IDEMPOTENCY_WINDOW. */
   recentEventIds: RecentEventIdWindow;
-  /** A crash may leave a partial final line without a newline terminator. */
   needsSeparator: boolean;
-  /** File identity this state was derived from; UNKNOWN_FILE_IDENTITY when the file did not exist yet. */
   dev: bigint;
   ino: bigint;
-  /** Byte offset of the end of the last complete (newline-terminated) line consumed. */
   parsedBytes: number;
-  /**
-   * Raw bytes after the last newline (a crash-partial final line). Kept as
-   * bytes — not a decoded string — so offset accounting stays exact even when
-   * a crash cut a multi-byte UTF-8 character in half.
-   */
   tailBytes: Buffer;
-  /** Diagnostics only — never used as the staleness oracle (coarse granularity). */
   mtimeMs: number;
+  activeEventCount: number;
 }
 
-/**
- * Per-Persona incremental log state, keyed identically to appendChains so
- * workspace and test-root scoping are inherited. Bounded LRU so a workspace
- * with many Personas cannot leak memory.
- */
 const logStates = new Map<string, PersonaRuntimeEventLogState>();
 
 function cacheLogState(key: string, state: PersonaRuntimeEventLogState): void {
@@ -312,13 +324,15 @@ function cacheLogState(key: string, state: PersonaRuntimeEventLogState): void {
   }
 }
 
-/** Deterministic work counters exposed for scaling tests (test seam). */
 export interface PersonaRuntimeEventLogWorkStats {
   fullRescans: number;
   tailReads: number;
   cacheHits: number;
   bytesParsed: number;
   linesParsed: number;
+  rotations: number;
+  migrations: number;
+  segmentsSkipped: number;
 }
 
 const logWorkStats: PersonaRuntimeEventLogWorkStats = {
@@ -327,9 +341,13 @@ const logWorkStats: PersonaRuntimeEventLogWorkStats = {
   cacheHits: 0,
   bytesParsed: 0,
   linesParsed: 0,
+  rotations: 0,
+  migrations: 0,
+  segmentsSkipped: 0,
 };
 
 let eventLogRootOverride: string | undefined;
+let eventLogConfigOverride: PersonaRuntimeEventLogConfig | undefined;
 
 function eventLogDir(): string {
   if (eventLogRootOverride) {
@@ -338,28 +356,55 @@ function eventLogDir(): string {
   return path.join(getWorkspaceDataDir(), 'db', 'persona-runtime-events');
 }
 
-function eventLogPath(personaId: string): string {
+function legacyEventLogPath(personaId: string): string {
   return path.join(eventLogDir(), `${personaId}.jsonl`);
+}
+
+function personaEventLogDir(personaId: string): string {
+  return path.join(eventLogDir(), personaId);
+}
+
+function manifestPath(personaId: string): string {
+  return path.join(personaEventLogDir(personaId), 'manifest.json');
+}
+
+function segmentPath(personaId: string, name: string): string {
+  if (!SEGMENT_NAME.test(name)) {
+    throw new Error(`Unsafe Persona runtime event segment name: ${JSON.stringify(name)}`);
+  }
+  return path.join(personaEventLogDir(personaId), name);
+}
+
+function trashPath(personaId: string, name: string): string {
+  if (!SEGMENT_NAME.test(name)) {
+    throw new Error(`Unsafe Persona runtime event segment name: ${JSON.stringify(name)}`);
+  }
+  return path.join(personaEventLogDir(personaId), `.trash-${name}`);
+}
+
+function segmentName(index: number): string {
+  if (!Number.isSafeInteger(index) || index < 1 || index > 999_999) {
+    throw new Error('Persona runtime event segment index is exhausted.');
+  }
+  return `segment-${String(index).padStart(6, '0')}.jsonl`;
+}
+
+function segmentIndex(name: string): number {
+  const match = SEGMENT_NAME.exec(name);
+  if (!match) throw new Error(`Invalid Persona runtime event segment: ${name}`);
+  return Number(match[1]);
 }
 
 function cacheKey(personaId: string): string {
   return workspaceCacheKey('persona-runtime-events', eventLogDir(), personaId);
 }
 
-// Event appends can originate after the authoritative Persona lock is released
-// (and from inspection/recovery in another process). Use a separate, stable
-// local-filesystem lock identity so observation writes are cross-process
-// serialized without ever recursively acquiring the Persona's runtime lock.
 function eventWriterLockId(personaId: string): string {
   const digest = createHash('sha256').update(personaId).digest('hex').slice(0, 40);
   return `runtime_events_${digest}`;
 }
 
 async function assertEventLogNotDeleting(personaId: string): Promise<void> {
-  // Loaded lazily to keep the event schema/store dependency one-way at module
-  // initialization. A deleting tombstone is published before state erasure,
-  // so checking it while holding the event-writer lock prevents a delayed
-  // observation from recreating the JSONL after Persona deletion removed it.
   const { getPersonaDeletionTombstone } = await import('./store');
   if (await getPersonaDeletionTombstone(personaId)) {
     throw new Error(`Persona ${JSON.stringify(personaId)} is deleting; runtime events are closed.`);
@@ -373,13 +418,6 @@ type ParsedLogLine =
   | { kind: 'skipped' }
   | { kind: 'event'; event: PersonaRuntimeEvent };
 
-/**
- * Validate one complete JSONL line. Duplicate-eventId suppression is the
- * caller's responsibility (different paths dedupe against different sets).
- * Skip semantics are identical to the historical parseEventLines: blank lines
- * are ignored silently; malformed JSON/Zod failures and persona/workspace
- * mismatches are skipped (and counted by the caller).
- */
 function parseLogLine(
   line: string,
   personaId: string,
@@ -393,30 +431,17 @@ function parseLogLine(
     }
     return { kind: 'event', event };
   } catch {
-    // A process may stop halfway through the final append. Complete earlier
-    // lines remain authoritative, and the next append inserts a separator.
     return { kind: 'skipped' };
   }
 }
 
 interface LogScanResult {
-  /** Raw bytes after the last newline (partial trailing line), empty when clean. */
   tailBytes: Buffer;
-  /** File byte offset just past the last complete line consumed. */
   endOffset: number;
-  /** Total bytes read from disk by this scan. */
   bytesRead: number;
+  stopped: boolean;
 }
 
-/**
- * Stream the log from byte offset `start` to EOF in fixed-size chunks,
- * splitting on newline BYTES (never decoding partial lines), and invoke
- * `onLine` for every complete line. `carry` must contain the raw bytes that
- * logically sit immediately before `start` (a previously observed partial
- * trailing line); it is prepended to the first line. Returning false from
- * `onLine` stops the scan early — tailBytes/endOffset are then meaningless
- * and must not be persisted. ENOENT is treated as an empty file.
- */
 async function scanLogLines(
   filePath: string,
   start: number,
@@ -428,7 +453,7 @@ async function scanLogLines(
     handle = await fs.open(filePath, 'r');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { tailBytes: carry, endOffset: start, bytesRead: 0 };
+      return { tailBytes: carry, endOffset: start, bytesRead: 0, stopped: false };
     }
     throw error;
   }
@@ -442,7 +467,6 @@ async function scanLogLines(
       if (readCount === 0) break;
       position += readCount;
       bytesRead += readCount;
-      // The chunk buffer is reused; always copy before retaining bytes.
       pending = pending.length === 0
         ? Buffer.from(chunk.subarray(0, readCount))
         : Buffer.concat([pending, chunk.subarray(0, readCount)]);
@@ -453,30 +477,25 @@ async function scanLogLines(
         const keepGoing = onLine(pending.subarray(lineStart, newlineAt).toString('utf8'));
         lineStart = newlineAt + 1;
         if (keepGoing === false) {
-          return { tailBytes: EMPTY_BUFFER, endOffset: start, bytesRead };
+          return {
+            tailBytes: EMPTY_BUFFER,
+            endOffset: start,
+            bytesRead,
+            stopped: true,
+          };
         }
       }
       if (lineStart > 0) pending = Buffer.from(pending.subarray(lineStart));
     }
-    // position - pending.length is exact even with a carry: the virtual stream
-    // is carry + file[start, position), and pending is its unconsumed suffix.
-    return { tailBytes: pending, endOffset: position - pending.length, bytesRead };
+    return {
+      tailBytes: pending,
+      endOffset: position - pending.length,
+      bytesRead,
+      stopped: false,
+    };
   } finally {
     await handle.close();
   }
-}
-
-function emptyLogState(): PersonaRuntimeEventLogState {
-  return {
-    nextSeq: 0,
-    recentEventIds: new RecentEventIdWindow(),
-    needsSeparator: false,
-    dev: UNKNOWN_FILE_IDENTITY,
-    ino: UNKNOWN_FILE_IDENTITY,
-    parsedBytes: 0,
-    tailBytes: EMPTY_BUFFER,
-    mtimeMs: 0,
-  };
 }
 
 function warnSkipped(skipped: number, personaId: string, workspaceId: string): void {
@@ -488,62 +507,437 @@ function warnSkipped(skipped: number, personaId: string, workspaceId: string): v
   }
 }
 
-/**
- * Bring the cached per-Persona log state in sync with the file on disk.
- * MUST only be called while holding the event-writer lock.
- *
- * Correctness argument: the JSONL is strictly append-only — it is only ever
- * extended with fs.appendFile and never rewritten in place — therefore
- * (dev, ino, size) is a sound change detector: an unchanged size on the same
- * inode proves no bytes were appended by any process, a grown size means
- * exactly the bytes in [parsedBytes + tailBytes.length, size) are new, and a
- * shrunk size or a different inode means the file was truncated/replaced and
- * forces a full rescan. mtimeMs is deliberately NOT used as the oracle (its
- * granularity can be as coarse as 1 s on some filesystems); it is stored for
- * diagnostics only. Because the check is derived from the filesystem while
- * the cross-process writer lock is held, a foreign append from another FLUJO
- * process can never be missed.
- */
+function assertManifestInvariants(
+  manifest: PersonaRuntimeEventManifest,
+  personaId: string,
+  workspaceId: string,
+): void {
+  if (manifest.personaId !== personaId || manifest.workspaceId !== workspaceId) {
+    throw new Error(`Persona runtime event manifest identity mismatch for ${personaId}.`);
+  }
+  const names = new Set<string>();
+  let priorLast: number | undefined;
+  for (let index = 0; index < manifest.segments.length; index += 1) {
+    const segment = manifest.segments[index];
+    if (names.has(segment.name)) {
+      throw new Error(`Duplicate Persona runtime event segment ${segment.name}.`);
+    }
+    names.add(segment.name);
+    if (index > 0 && segmentIndex(segment.name) <= segmentIndex(manifest.segments[index - 1].name)) {
+      throw new Error('Persona runtime event segments are not monotonically named.');
+    }
+    const empty = segment.eventCount === 0;
+    if (empty !== (segment.lastSeq === segment.firstSeq - 1)) {
+      throw new Error(`Invalid empty/range metadata for segment ${segment.name}.`);
+    }
+    if (!empty && segment.lastSeq < segment.firstSeq) {
+      throw new Error(`Invalid sequence range for segment ${segment.name}.`);
+    }
+    if (priorLast !== undefined && segment.firstSeq !== priorLast + 1) {
+      throw new Error('Persona runtime event segment sequence ranges are not contiguous.');
+    }
+    priorLast = segment.lastSeq;
+    const active = segment.name === manifest.activeSegment;
+    if (active !== (index === manifest.segments.length - 1)) {
+      throw new Error('Persona runtime event manifest must name its final segment active.');
+    }
+    if (active && segment.closedAt !== undefined) {
+      throw new Error('Persona runtime event active segment cannot be closed.');
+    }
+    if (!active && segment.closedAt === undefined) {
+      throw new Error(`Persona runtime event segment ${segment.name} is not closed.`);
+    }
+  }
+  const active = manifest.segments[manifest.segments.length - 1];
+  if (manifest.nextSeq < active.lastSeq + 1) {
+    throw new Error('Persona runtime event manifest nextSeq precedes durable metadata.');
+  }
+}
+
+async function statOrUndefined(filePath: string): Promise<BigIntStats | undefined> {
+  try {
+    return await fs.stat(filePath, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+async function writeManifest(
+  personaId: string,
+  manifest: PersonaRuntimeEventManifest,
+): Promise<{ dev: bigint; ino: bigint; bytes: number }> {
+  PersonaRuntimeEventManifestSchema.parse(manifest);
+  assertManifestInvariants(manifest, personaId, getCurrentWorkspace());
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  await writeFileAtomic(manifestPath(personaId), serialized);
+  const stat = await fs.stat(manifestPath(personaId), { bigint: true });
+  return { dev: stat.dev, ino: stat.ino, bytes: Number(stat.size) };
+}
+
+interface SegmentSummary {
+  firstSeq: number;
+  lastSeq: number;
+  eventCount: number;
+  nextSeq: number;
+  bytes: number;
+  tailBytes: Buffer;
+  endOffset: number;
+  recentEventIds: RecentEventIdWindow;
+}
+
+async function scanSegmentSummary(
+  personaId: string,
+  filePath: string,
+): Promise<SegmentSummary> {
+  const workspaceId = getCurrentWorkspace();
+  let firstSeq = -1;
+  let lastSeq = -1;
+  let eventCount = 0;
+  let nextSeq = 0;
+  let skipped = 0;
+  const recentEventIds = new RecentEventIdWindow();
+  const scan = await scanLogLines(filePath, 0, EMPTY_BUFFER, (line) => {
+    const parsed = parseLogLine(line, personaId, workspaceId);
+    if (parsed.kind === 'blank') return;
+    if (parsed.kind === 'skipped') {
+      skipped += 1;
+      return;
+    }
+    eventCount += 1;
+    firstSeq = firstSeq === -1 ? parsed.event.seq : Math.min(firstSeq, parsed.event.seq);
+    lastSeq = Math.max(lastSeq, parsed.event.seq);
+    nextSeq = Math.max(nextSeq, parsed.event.seq + 1);
+    recentEventIds.remember(parsed.event);
+  });
+  warnSkipped(skipped, personaId, workspaceId);
+  return {
+    firstSeq: firstSeq === -1 ? nextSeq : firstSeq,
+    lastSeq,
+    eventCount,
+    nextSeq,
+    bytes: scan.endOffset + scan.tailBytes.length,
+    tailBytes: scan.tailBytes,
+    endOffset: scan.endOffset,
+    recentEventIds,
+  };
+}
+
+async function reconcilePublishedFiles(
+  personaId: string,
+  manifest: PersonaRuntimeEventManifest,
+): Promise<void> {
+  const dir = personaEventLogDir(personaId);
+  for (const segment of manifest.segments) {
+    const filePath = segmentPath(personaId, segment.name);
+    if (!await statOrUndefined(filePath)) {
+      const trashed = trashPath(personaId, segment.name);
+      if (await statOrUndefined(trashed)) await fs.rename(trashed, filePath);
+    }
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Persona runtime event segment is not a regular link-free file: ${filePath}`);
+    }
+  }
+  const referenced = new Set(manifest.segments.map(segment => segment.name));
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    if (SEGMENT_NAME.test(entry.name) && !referenced.has(entry.name)) {
+      const orphan = path.join(dir, entry.name);
+      const stat = await fs.lstat(orphan);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 0) {
+        throw new Error(`Non-empty or unsafe orphan Persona runtime event segment: ${orphan}`);
+      }
+      await fs.unlink(orphan);
+      continue;
+    }
+    if (entry.name.startsWith('.trash-segment-') && entry.isFile()) {
+      await fs.unlink(path.join(dir, entry.name)).catch(() => undefined);
+    }
+  }
+}
+
+async function createInitialManifest(
+  personaId: string,
+): Promise<PersonaRuntimeEventManifest> {
+  const workspaceId = getCurrentWorkspace();
+  const dir = personaEventLogDir(personaId);
+  await fs.mkdir(dir, { recursive: true });
+  const firstName = segmentName(1);
+  const firstPath = segmentPath(personaId, firstName);
+  const legacyPath = legacyEventLogPath(personaId);
+  const [legacy, interrupted] = await Promise.all([
+    statOrUndefined(legacyPath),
+    statOrUndefined(firstPath),
+  ]);
+  if (legacy && interrupted) {
+    throw new Error(`Ambiguous Persona runtime event migration state for ${personaId}.`);
+  }
+  if (legacy) {
+    await fs.rename(legacyPath, firstPath);
+    logWorkStats.migrations += 1;
+  } else if (!interrupted) {
+    await fs.writeFile(firstPath, '', { flag: 'wx' });
+  }
+  const summary = await scanSegmentSummary(personaId, firstPath);
+  const stat = await fs.stat(firstPath);
+  const now = runtimeClock.now();
+  const firstSeq = summary.eventCount === 0 ? 0 : summary.firstSeq;
+  const initial: RuntimeEventSegment = {
+    name: firstName,
+    firstSeq,
+    lastSeq: summary.eventCount === 0 ? firstSeq - 1 : summary.lastSeq,
+    eventCount: summary.eventCount,
+    bytes: summary.bytes,
+    createdAt: Math.max(0, Math.floor(stat.birthtimeMs || stat.ctimeMs || now)),
+  };
+  const config = eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig();
+  const oversized = summary.eventCount > 0 && (
+    summary.bytes >= config.maxSegmentBytes
+    || summary.eventCount >= config.maxSegmentEvents
+  );
+  const segments: RuntimeEventSegment[] = [initial];
+  let activeSegment = firstName;
+  if (oversized) {
+    initial.closedAt = now;
+    activeSegment = segmentName(2);
+    const nextPath = segmentPath(personaId, activeSegment);
+    const interruptedNext = await statOrUndefined(nextPath);
+    if (interruptedNext) {
+      const stat = await fs.lstat(nextPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== 0) {
+        throw new Error(
+          `Unsafe interrupted Persona runtime event migration state for ${personaId}.`,
+        );
+      }
+    } else {
+      await fs.writeFile(nextPath, '', { flag: 'wx' });
+    }
+    segments.push({
+      name: activeSegment,
+      firstSeq: summary.nextSeq,
+      lastSeq: summary.nextSeq - 1,
+      eventCount: 0,
+      bytes: 0,
+      createdAt: now,
+    });
+  }
+  const manifest: PersonaRuntimeEventManifest = {
+    version: RUNTIME_EVENT_MANIFEST_VERSION,
+    workspaceId,
+    personaId,
+    activeSegment,
+    nextSeq: summary.nextSeq,
+    segments,
+  };
+  await writeManifest(personaId, manifest);
+  return manifest;
+}
+
+async function loadManifest(
+  personaId: string,
+): Promise<PersonaRuntimeEventManifest> {
+  const filePath = manifestPath(personaId);
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return createInitialManifest(personaId);
+    }
+    throw error;
+  }
+  let manifest: PersonaRuntimeEventManifest;
+  try {
+    manifest = PersonaRuntimeEventManifestSchema.parse(JSON.parse(content));
+  } catch (error) {
+    throw new Error(
+      `Invalid Persona runtime event manifest for ${personaId}: ${(error as Error).message}`,
+    );
+  }
+  assertManifestInvariants(manifest, personaId, getCurrentWorkspace());
+  await reconcilePublishedFiles(personaId, manifest);
+  return manifest;
+}
+
+function recentSegmentStart(manifest: PersonaRuntimeEventManifest): number {
+  let events = 0;
+  for (let index = manifest.segments.length - 1; index >= 0; index -= 1) {
+    events += manifest.segments[index].eventCount;
+    if (events >= idempotencyWindowLimit) return index;
+  }
+  return 0;
+}
+
+async function buildStateFromManifest(
+  personaId: string,
+  manifest: PersonaRuntimeEventManifest,
+): Promise<PersonaRuntimeEventLogState> {
+  logWorkStats.fullRescans += 1;
+  const workspaceId = getCurrentWorkspace();
+  const recentEventIds = new RecentEventIdWindow();
+  let nextSeq = manifest.nextSeq;
+  let activeScan: LogScanResult | undefined;
+  let activeEventCount = 0;
+  let activeFirstSeq = manifest.nextSeq;
+  let activeLastSeq = manifest.nextSeq - 1;
+  let activeSkipped = 0;
+  const startIndex = recentSegmentStart(manifest);
+  for (let index = startIndex; index < manifest.segments.length; index += 1) {
+    const segment = manifest.segments[index];
+    let count = 0;
+    let firstSeq = -1;
+    let lastSeq = -1;
+    const scan = await scanLogLines(
+      segmentPath(personaId, segment.name),
+      0,
+      EMPTY_BUFFER,
+      (line) => {
+        logWorkStats.linesParsed += 1;
+        const parsed = parseLogLine(line, personaId, workspaceId);
+        if (parsed.kind === 'blank') return;
+        if (parsed.kind === 'skipped') {
+          if (segment.name === manifest.activeSegment) activeSkipped += 1;
+          return;
+        }
+        count += 1;
+        firstSeq = firstSeq === -1 ? parsed.event.seq : Math.min(firstSeq, parsed.event.seq);
+        lastSeq = Math.max(lastSeq, parsed.event.seq);
+        nextSeq = Math.max(nextSeq, parsed.event.seq + 1);
+        recentEventIds.remember(parsed.event);
+      },
+    );
+    logWorkStats.bytesParsed += scan.bytesRead;
+    if (segment.name === manifest.activeSegment) {
+      activeScan = scan;
+      activeEventCount = count;
+      activeFirstSeq = count === 0 ? segment.firstSeq : firstSeq;
+      activeLastSeq = count === 0 ? activeFirstSeq - 1 : lastSeq;
+    }
+  }
+  warnSkipped(activeSkipped, personaId, workspaceId);
+  if (!activeScan) throw new Error('Persona runtime event active segment was not scanned.');
+  const activePath = segmentPath(personaId, manifest.activeSegment);
+  const activeStat = await fs.stat(activePath, { bigint: true });
+  const active = manifest.segments[manifest.segments.length - 1];
+  const activeBytes = activeScan.endOffset + activeScan.tailBytes.length;
+  const repaired: PersonaRuntimeEventManifest = {
+    ...manifest,
+    nextSeq,
+    segments: manifest.segments.map((segment, index) => index === manifest.segments.length - 1
+      ? {
+        ...segment,
+        firstSeq: activeFirstSeq,
+        lastSeq: activeLastSeq,
+        eventCount: activeEventCount,
+        bytes: activeBytes,
+      }
+      : segment),
+  };
+  const changed = JSON.stringify(repaired) !== JSON.stringify(manifest);
+  const manifestIdentity = changed
+    ? await writeManifest(personaId, repaired)
+    : await fs.stat(manifestPath(personaId), { bigint: true }).then(stat => ({
+      dev: stat.dev,
+      ino: stat.ino,
+      bytes: Number(stat.size),
+    }));
+  return {
+    manifest: repaired,
+    manifestDev: manifestIdentity.dev,
+    manifestIno: manifestIdentity.ino,
+    manifestBytes: manifestIdentity.bytes,
+    activeSegmentName: repaired.activeSegment,
+    nextSeq,
+    recentEventIds,
+    needsSeparator: activeScan.tailBytes.length > 0,
+    dev: activeStat.dev,
+    ino: activeStat.ino,
+    parsedBytes: activeScan.endOffset,
+    tailBytes: activeScan.tailBytes,
+    mtimeMs: Number(activeStat.mtimeMs),
+    activeEventCount,
+  };
+}
+
 async function syncState(personaId: string): Promise<PersonaRuntimeEventLogState> {
   const key = cacheKey(personaId);
-  const filePath = eventLogPath(personaId);
-  const workspaceId = getCurrentWorkspace();
-
-  let stat: BigIntStats | undefined;
-  try {
-    stat = await fs.stat(filePath, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-
-  if (!stat) {
-    const state = emptyLogState();
-    cacheLogState(key, state);
-    return state;
-  }
-
-  const size = Number(stat.size);
   const cached = RUNTIME_EVENT_INCREMENTAL_STATE ? logStates.get(key) : undefined;
-  if (cached && cached.dev === stat.dev && cached.ino === stat.ino) {
+  const diskManifest = await statOrUndefined(manifestPath(personaId));
+  let manifest: PersonaRuntimeEventManifest;
+  let manifestUnchanged = false;
+  if (
+    cached
+    && diskManifest
+    && cached.manifestDev === diskManifest.dev
+    && cached.manifestIno === diskManifest.ino
+    && cached.manifestBytes === Number(diskManifest.size)
+  ) {
+    manifest = cached.manifest;
+    manifestUnchanged = true;
+  } else {
+    manifest = await loadManifest(personaId);
+  }
+
+  const activePath = segmentPath(personaId, manifest.activeSegment);
+  const stat = await statOrUndefined(activePath);
+  if (!stat) {
+    throw new Error(`Missing active Persona runtime event segment ${manifest.activeSegment}.`);
+  }
+  const active = manifest.segments[manifest.segments.length - 1];
+  if (
+    !cached
+    && !diskManifest
+    && manifest.segments.length === 1
+    && active.eventCount === 0
+    && Number(stat.size) === 0
+  ) {
+    const manifestStat = await fs.stat(manifestPath(personaId), { bigint: true });
+    const initialState: PersonaRuntimeEventLogState = {
+      manifest,
+      manifestDev: manifestStat.dev,
+      manifestIno: manifestStat.ino,
+      manifestBytes: Number(manifestStat.size),
+      activeSegmentName: manifest.activeSegment,
+      nextSeq: manifest.nextSeq,
+      recentEventIds: new RecentEventIdWindow(),
+      needsSeparator: false,
+      dev: stat.dev,
+      ino: stat.ino,
+      parsedBytes: 0,
+      tailBytes: EMPTY_BUFFER,
+      mtimeMs: Number(stat.mtimeMs),
+      activeEventCount: 0,
+    };
+    cacheLogState(key, initialState);
+    return initialState;
+  }
+  if (
+    cached
+    && manifestUnchanged
+    && cached.activeSegmentName === manifest.activeSegment
+    && cached.dev === stat.dev
+    && cached.ino === stat.ino
+  ) {
+    const size = Number(stat.size);
     const knownBytes = cached.parsedBytes + cached.tailBytes.length;
     if (size === knownBytes) {
-      // O(1) hit: same inode, same length — nothing was appended by anyone.
       logWorkStats.cacheHits += 1;
       cached.mtimeMs = Number(stat.mtimeMs);
       cacheLogState(key, cached);
       return cached;
     }
     if (size > knownBytes) {
-      // Append-only growth: parse only the foreign delta.
       let skipped = 0;
-      const scan = await scanLogLines(filePath, knownBytes, cached.tailBytes, (line) => {
+      let appendedEvents = 0;
+      const scan = await scanLogLines(activePath, knownBytes, cached.tailBytes, (line) => {
         logWorkStats.linesParsed += 1;
-        const parsed = parseLogLine(line, personaId, workspaceId);
+        const parsed = parseLogLine(line, personaId, getCurrentWorkspace());
         if (parsed.kind === 'blank') return;
-        if (parsed.kind === 'skipped' || cached.recentEventIds.has(parsed.event.eventId)) {
+        if (parsed.kind === 'skipped') {
           skipped += 1;
           return;
         }
+        appendedEvents += 1;
         cached.recentEventIds.remember(parsed.event);
         cached.nextSeq = Math.max(cached.nextSeq, parsed.event.seq + 1);
       });
@@ -552,59 +946,20 @@ async function syncState(personaId: string): Promise<PersonaRuntimeEventLogState
       cached.parsedBytes = scan.endOffset;
       cached.tailBytes = scan.tailBytes;
       cached.needsSeparator = scan.tailBytes.length > 0;
+      cached.activeEventCount += appendedEvents;
       cached.mtimeMs = Number(stat.mtimeMs);
-      warnSkipped(skipped, personaId, workspaceId);
+      const active = cached.manifest.segments[cached.manifest.segments.length - 1];
+      active.eventCount = cached.activeEventCount;
+      active.bytes = size;
+      active.lastSeq = cached.nextSeq - 1;
+      cached.manifest.nextSeq = cached.nextSeq;
+      warnSkipped(skipped, personaId, getCurrentWorkspace());
       cacheLogState(key, cached);
       return cached;
     }
-    // size < knownBytes: truncated or replaced — fall through to a full rescan.
   }
 
-  // Full rescan (cache miss, incremental state disabled, inode change, or shrink).
-  logWorkStats.fullRescans += 1;
-  const seenIds = new Set<string>();
-  const window = new RecentEventIdWindow();
-  let nextSeq = 0;
-  let skipped = 0;
-  let duplicatesBeyondWindow = 0;
-  const scan = await scanLogLines(filePath, 0, EMPTY_BUFFER, (line) => {
-    logWorkStats.linesParsed += 1;
-    const parsed = parseLogLine(line, personaId, workspaceId);
-    if (parsed.kind === 'blank') return;
-    if (parsed.kind === 'skipped') {
-      skipped += 1;
-      return;
-    }
-    const { event } = parsed;
-    if (seenIds.has(event.eventId)) {
-      skipped += 1;
-      if (!window.has(event.eventId)) duplicatesBeyondWindow += 1;
-      return;
-    }
-    seenIds.add(event.eventId);
-    window.remember(event);
-    nextSeq = Math.max(nextSeq, event.seq + 1);
-  });
-  logWorkStats.bytesParsed += scan.bytesRead;
-  warnSkipped(skipped, personaId, workspaceId);
-  if (duplicatesBeyondWindow > 0) {
-    log.warn('Observed duplicate Persona runtime eventIds beyond the idempotency window.', {
-      personaId,
-      workspaceId,
-      duplicatesBeyondWindow,
-      window: idempotencyWindowLimit,
-    });
-  }
-  const state: PersonaRuntimeEventLogState = {
-    nextSeq,
-    recentEventIds: window,
-    needsSeparator: scan.tailBytes.length > 0,
-    dev: stat.dev,
-    ino: stat.ino,
-    parsedBytes: scan.endOffset,
-    tailBytes: scan.tailBytes,
-    mtimeMs: Number(stat.mtimeMs),
-  };
+  const state = await buildStateFromManifest(personaId, manifest);
   cacheLogState(key, state);
   return state;
 }
@@ -627,39 +982,83 @@ async function appendRecord(
   state: PersonaRuntimeEventLogState,
   event: PersonaRuntimeEvent,
 ): Promise<number> {
-  await fs.mkdir(eventLogDir(), { recursive: true });
   const record = `${state.needsSeparator ? '\n' : ''}${JSON.stringify(event)}\n`;
-  await fs.appendFile(eventLogPath(personaId), record, 'utf8');
-  // Byte length, not string length: workspace ids (and future fields) may
-  // contain multi-byte UTF-8, and offset accounting must be exact.
+  await fs.appendFile(segmentPath(personaId, state.activeSegmentName), record, 'utf8');
   return Buffer.byteLength(record, 'utf8');
+}
+
+async function rotateIfNeeded(
+  personaId: string,
+  state: PersonaRuntimeEventLogState,
+): Promise<void> {
+  const config = eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig();
+  const active = state.manifest.segments[state.manifest.segments.length - 1];
+  if (
+    state.activeEventCount === 0
+    || (
+      active.bytes < config.maxSegmentBytes
+      && state.activeEventCount < config.maxSegmentEvents
+    )
+  ) {
+    return;
+  }
+  const now = runtimeClock.now();
+  const newName = segmentName(segmentIndex(active.name) + 1);
+  const newPath = segmentPath(personaId, newName);
+  await fs.writeFile(newPath, '', { flag: 'wx' });
+  const nextManifest: PersonaRuntimeEventManifest = {
+    ...state.manifest,
+    activeSegment: newName,
+    nextSeq: state.nextSeq,
+    segments: [
+      ...state.manifest.segments.slice(0, -1),
+      { ...active, closedAt: now },
+      {
+        name: newName,
+        firstSeq: state.nextSeq,
+        lastSeq: state.nextSeq - 1,
+        eventCount: 0,
+        bytes: 0,
+        createdAt: now,
+      },
+    ],
+  };
+  let identity;
+  try {
+    identity = await writeManifest(personaId, nextManifest);
+  } catch (error) {
+    await fs.unlink(newPath).catch(() => undefined);
+    throw error;
+  }
+  state.manifest = nextManifest;
+  state.manifestDev = identity.dev;
+  state.manifestIno = identity.ino;
+  state.manifestBytes = identity.bytes;
+  state.activeSegmentName = newName;
+  state.activeEventCount = 0;
+  state.needsSeparator = false;
+  state.dev = UNKNOWN_FILE_IDENTITY;
+  state.ino = UNKNOWN_FILE_IDENTITY;
+  state.parsedBytes = 0;
+  state.tailBytes = EMPTY_BUFFER;
+  state.mtimeMs = now;
+  logWorkStats.rotations += 1;
 }
 
 export interface AppendPersonaRuntimeEventResult {
   event: PersonaRuntimeEvent;
-  /** False when eventId was already durable and the original was returned. */
   appended: boolean;
 }
 
-/**
- * Append one strictly validated, redacted runtime observation.
- *
- * The service stamps workspace, Persona, sequence, and time. Callers cannot add
- * free-form details or lease capabilities because every event variant is strict.
- */
 export async function appendPersonaRuntimeEvent(
   personaId: string,
   value: unknown,
 ): Promise<AppendPersonaRuntimeEventResult> {
   assertSafeCollectionId(personaId);
   const raw = RawPersonaRuntimeEventSchema.parse(value);
-
   return withPersonaRuntimeLock(eventWriterLockId(personaId), () =>
     enqueue(personaId, async () => {
       await assertEventLogNotDeleting(personaId);
-      // Re-derive freshness from the filesystem while holding the
-      // cross-process writer lock: syncState stats the file and parses at
-      // most the bytes appended by a foreign process since the last call.
       const state = await syncState(personaId);
       const existing = state.recentEventIds.get(raw.eventId);
       if (existing) return { event: existing, appended: false };
@@ -676,58 +1075,53 @@ export async function appendPersonaRuntimeEvent(
       try {
         bytesWritten = await appendRecord(personaId, state, event);
       } catch (error) {
-        // Some filesystems may reject after the full record reached disk.
-        // The cached state's write outcome is unknown — drop it, rescan, and
-        // accept the exact durable id so a retry cannot duplicate it.
         logStates.delete(cacheKey(personaId));
         try {
           const recovered = await syncState(personaId);
           const durable = recovered.recentEventIds.get(raw.eventId);
           if (durable) return { event: durable, appended: true };
         } catch {
-          // Preserve the append error; a later retry performs the same rescan.
+          // Preserve the append error; a retry will reconcile from disk.
         }
         throw error;
       }
-      // Advance the cache deterministically past what was just written. A
-      // crash fragment (tailBytes) was terminated by the separator newline
-      // and is now a complete — malformed, skipped — line.
       state.parsedBytes += state.tailBytes.length + bytesWritten;
       state.tailBytes = EMPTY_BUFFER;
       state.needsSeparator = false;
       state.nextSeq = event.seq + 1;
+      state.activeEventCount += 1;
       state.recentEventIds.remember(event);
+      const active = state.manifest.segments[state.manifest.segments.length - 1];
+      active.eventCount = state.activeEventCount;
+      active.bytes = state.parsedBytes;
+      active.lastSeq = event.seq;
+      state.manifest.nextSeq = state.nextSeq;
       if (state.dev === UNKNOWN_FILE_IDENTITY) {
-        // First append created the file: capture its identity once so the
-        // next syncState takes the O(1) hit path instead of a full rescan.
         try {
-          const created = await fs.stat(eventLogPath(personaId), { bigint: true });
+          const created = await fs.stat(
+            segmentPath(personaId, state.activeSegmentName),
+            { bigint: true },
+          );
           state.dev = created.dev;
           state.ino = created.ino;
           state.mtimeMs = Number(created.mtimeMs);
         } catch {
-          // The next syncState simply performs a full rescan.
+          // The next sync performs a full active-segment reconciliation.
         }
       }
+      await rotateIfNeeded(personaId, state);
+      cacheLogState(cacheKey(personaId), state);
       return { event, appended: true };
     })
   );
 }
 
 export interface ReadPersonaRuntimeEventsOptions {
-  /** Inclusive durable resume cursor. */
   fromSeq?: number;
-  /** Optional maximum count after filtering (the FIRST matches, as before). */
   limit?: number;
-  /**
-   * Return only the LAST `tail` events after filtering, collected with a
-   * bounded ring buffer during the stream (O(tail) memory). When combined
-   * with limit, limit is applied to the tail.
-   */
   tail?: number;
 }
 
-/** Read committed observations in durable append order (streaming; O(result) memory). */
 export async function readPersonaRuntimeEvents(
   personaId: string,
   options: ReadPersonaRuntimeEventsOptions = {},
@@ -744,42 +1138,53 @@ export async function readPersonaRuntimeEvents(
     ? options.tail
     : undefined;
   return withPersonaRuntimeLock(eventWriterLockId(personaId), async () => {
+    const state = await syncState(personaId);
     const workspaceId = getCurrentWorkspace();
     const events: PersonaRuntimeEvent[] = [];
     const seenIds = new Set<string>();
     let skipped = 0;
-    await scanLogLines(eventLogPath(personaId), 0, EMPTY_BUFFER, (line) => {
-      const parsed = parseLogLine(line, personaId, workspaceId);
-      if (parsed.kind === 'blank') return;
-      if (parsed.kind === 'skipped') {
-        skipped += 1;
-        return;
+    let done = false;
+    for (const segment of state.manifest.segments) {
+      if (segment.closedAt !== undefined && segment.lastSeq < fromSeq) {
+        logWorkStats.segmentsSkipped += 1;
+        continue;
       }
-      const { event } = parsed;
-      if (seenIds.has(event.eventId)) {
-        skipped += 1;
-        return;
-      }
-      seenIds.add(event.eventId);
-      if (event.seq < fromSeq) return;
-      if (tail !== undefined) {
-        events.push(event);
-        if (events.length > tail) events.shift();
-        return;
-      }
-      if (limit === undefined) {
-        events.push(event);
-        return;
-      }
-      if (events.length < limit) events.push(event);
-      if (events.length >= limit) return false;
-    });
+      await scanLogLines(segmentPath(personaId, segment.name), 0, EMPTY_BUFFER, (line) => {
+        const parsed = parseLogLine(line, personaId, workspaceId);
+        if (parsed.kind === 'blank') return;
+        if (parsed.kind === 'skipped') {
+          skipped += 1;
+          return;
+        }
+        const { event } = parsed;
+        if (seenIds.has(event.eventId)) {
+          skipped += 1;
+          return;
+        }
+        seenIds.add(event.eventId);
+        if (event.seq < fromSeq) return;
+        if (tail !== undefined) {
+          events.push(event);
+          if (events.length > tail) events.shift();
+          return;
+        }
+        if (limit === undefined) {
+          events.push(event);
+          return;
+        }
+        if (events.length < limit) events.push(event);
+        if (events.length >= limit) {
+          done = true;
+          return false;
+        }
+      });
+      if (done) break;
+    }
     warnSkipped(skipped, personaId, workspaceId);
     return tail !== undefined && limit !== undefined ? events.slice(0, limit) : events;
   });
 }
 
-/** Highest committed sequence, or -1 when no observations exist. */
 export async function latestPersonaRuntimeEventSequence(personaId: string): Promise<number> {
   assertSafeCollectionId(personaId);
   await flushPersonaRuntimeEvents(personaId);
@@ -789,21 +1194,20 @@ export async function latestPersonaRuntimeEventSequence(personaId: string): Prom
   );
 }
 
-/** Wait until appends already queued for this Persona settle. Never rejects. */
 export async function flushPersonaRuntimeEvents(personaId: string): Promise<void> {
   assertSafeCollectionId(personaId);
   const pending = appendChains.get(cacheKey(personaId));
   if (pending) await pending.then(() => undefined, () => undefined);
 }
 
-/** Delete one Persona's event log and reset its in-process state. */
 export async function deletePersonaRuntimeEvents(personaId: string): Promise<void> {
   assertSafeCollectionId(personaId);
   await withPersonaRuntimeLock(eventWriterLockId(personaId), () =>
     enqueue(personaId, async () => {
       logStates.delete(cacheKey(personaId));
+      await fs.rm(personaEventLogDir(personaId), { recursive: true, force: true });
       try {
-        await fs.unlink(eventLogPath(personaId));
+        await fs.unlink(legacyEventLogPath(personaId));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
@@ -811,7 +1215,110 @@ export async function deletePersonaRuntimeEvents(personaId: string): Promise<voi
   );
 }
 
-/** Workspace-preserving test seam; the override is a root, not a shared log directory. */
+export interface PersonaRuntimeEventRetentionResult {
+  personasExamined: number;
+  segmentsExamined: number;
+  segmentsRemoved: number;
+  segmentsDeferred: number;
+  errors: number;
+}
+
+export async function sweepPersonaRuntimeEventSegments(
+  config: PersonaRuntimeEventLogConfig =
+    eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig(),
+): Promise<PersonaRuntimeEventRetentionResult> {
+  const result: PersonaRuntimeEventRetentionResult = {
+    personasExamined: 0,
+    segmentsExamined: 0,
+    segmentsRemoved: 0,
+    segmentsDeferred: 0,
+    errors: 0,
+  };
+  if (config.retentionDays <= 0) return result;
+  let entries;
+  try {
+    entries = await fs.readdir(eventLogDir(), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return result;
+    throw error;
+  }
+  const cutoff = runtimeClock.now() - config.retentionDays * DAY_MS;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    try {
+      assertSafeCollectionId(entry.name);
+    } catch {
+      result.errors += 1;
+      continue;
+    }
+    const personaId = entry.name;
+    result.personasExamined += 1;
+    try {
+      await withPersonaRuntimeLock(eventWriterLockId(personaId), () =>
+        enqueue(personaId, async () => {
+          const state = await syncState(personaId);
+          const closed = state.manifest.segments.filter(segment => segment.closedAt !== undefined);
+          result.segmentsExamined += closed.length;
+          const protectedNames = new Set(
+            config.maxClosedSegments > 0
+              ? closed.slice(-config.maxClosedSegments).map(segment => segment.name)
+              : [],
+          );
+          const candidates = closed.filter(segment =>
+            (segment.closedAt ?? Number.MAX_SAFE_INTEGER) < cutoff
+            && !protectedNames.has(segment.name));
+          if (candidates.length === 0) return;
+          const renamed: Array<{ from: string; to: string }> = [];
+          try {
+            for (const segment of candidates) {
+              const from = segmentPath(personaId, segment.name);
+              const to = trashPath(personaId, segment.name);
+              try {
+                await fs.rename(from, to);
+                renamed.push({ from, to });
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+                result.segmentsDeferred += 1;
+              }
+            }
+            const removedNames = new Set(
+              renamed.map(item => path.basename(item.from)),
+            );
+            const nextManifest: PersonaRuntimeEventManifest = {
+              ...state.manifest,
+              segments: state.manifest.segments.filter(
+                segment => !removedNames.has(segment.name),
+              ),
+            };
+            const identity = await writeManifest(personaId, nextManifest);
+            state.manifest = nextManifest;
+            state.manifestDev = identity.dev;
+            state.manifestIno = identity.ino;
+            state.manifestBytes = identity.bytes;
+            for (const item of renamed) {
+              try {
+                await fs.unlink(item.to);
+                result.segmentsRemoved += 1;
+              } catch {
+                result.segmentsDeferred += 1;
+              }
+            }
+          } catch (error) {
+            for (const item of renamed.reverse()) {
+              await fs.rename(item.to, item.from).catch(() => undefined);
+            }
+            throw error;
+          }
+        })
+      );
+    } catch (error) {
+      result.errors += 1;
+      log.warn(`Persona runtime event retention failed for ${personaId}.`, error);
+    }
+  }
+  return result;
+}
+
 export function _setPersonaRuntimeEventLogRootForTests(
   root: string | undefined,
 ): string | undefined {
@@ -822,21 +1329,49 @@ export function _setPersonaRuntimeEventLogRootForTests(
   return previous;
 }
 
-/** Test seam: snapshot of the deterministic work counters. */
+export function _setPersonaRuntimeEventLogConfigForTests(
+  config: PersonaRuntimeEventLogConfig | undefined,
+): PersonaRuntimeEventLogConfig | undefined {
+  const previous = eventLogConfigOverride;
+  eventLogConfigOverride = config;
+  appendChains.clear();
+  logStates.clear();
+  return previous;
+}
+
+export function _getPersonaRuntimeEventLogPathsForTests(personaId: string): {
+  directory: string;
+  legacy: string;
+  manifest: string;
+  activeSegment: string | undefined;
+} {
+  assertSafeCollectionId(personaId);
+  const state = logStates.get(cacheKey(personaId));
+  return {
+    directory: personaEventLogDir(personaId),
+    legacy: legacyEventLogPath(personaId),
+    manifest: manifestPath(personaId),
+    activeSegment: state
+      ? segmentPath(personaId, state.activeSegmentName)
+      : undefined,
+  };
+}
+
 export function _getPersonaRuntimeEventLogStatsForTests(): PersonaRuntimeEventLogWorkStats {
   return { ...logWorkStats };
 }
 
-/** Test seam: reset the deterministic work counters. */
 export function _resetPersonaRuntimeEventLogStatsForTests(): void {
   logWorkStats.fullRescans = 0;
   logWorkStats.tailReads = 0;
   logWorkStats.cacheHits = 0;
   logWorkStats.bytesParsed = 0;
   logWorkStats.linesParsed = 0;
+  logWorkStats.rotations = 0;
+  logWorkStats.migrations = 0;
+  logWorkStats.segmentsSkipped = 0;
 }
 
-/** Test seam: shrink/restore the idempotency window. Returns the previous limit. */
 export function _setPersonaRuntimeEventIdempotencyWindowForTests(limit?: number): number {
   const previous = idempotencyWindowLimit;
   idempotencyWindowLimit = Number.isSafeInteger(limit) && (limit ?? 0) > 0
@@ -845,13 +1380,14 @@ export function _setPersonaRuntimeEventIdempotencyWindowForTests(limit?: number)
   return previous;
 }
 
-/** Test seam: inspect the cached incremental state for one Persona. */
 export function _getPersonaRuntimeEventLogStateForTests(personaId: string): {
   nextSeq: number;
   parsedBytes: number;
   tailBytesLength: number;
   windowSize: number;
   needsSeparator: boolean;
+  activeSegment: string;
+  segmentCount: number;
 } | undefined {
   const state = logStates.get(cacheKey(personaId));
   if (!state) return undefined;
@@ -861,5 +1397,7 @@ export function _getPersonaRuntimeEventLogStateForTests(personaId: string): {
     tailBytesLength: state.tailBytes.length,
     windowSize: state.recentEventIds.size,
     needsSeparator: state.needsSeparator,
+    activeSegment: state.activeSegmentName,
+    segmentCount: state.manifest.segments.length,
   };
 }

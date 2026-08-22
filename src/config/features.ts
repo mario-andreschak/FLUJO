@@ -7,6 +7,72 @@
 
 export type PersonaRuntimeRetentionMode = 'disabled' | 'shadow' | 'active';
 
+export interface PersonaRuntimeEventLogConfig {
+  maxSegmentBytes: number;
+  maxSegmentEvents: number;
+  /** Nonpositive values disable destructive closed-segment retention. */
+  retentionDays: number;
+  /** Newest closed segments protected from age-based retention. */
+  maxClosedSegments: number;
+}
+
+export const PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG:
+  PersonaRuntimeEventLogConfig = Object.freeze({
+    maxSegmentBytes: 8 * 1024 * 1024,
+    maxSegmentEvents: 20_000,
+    retentionDays: 0,
+    maxClosedSegments: 30,
+  });
+
+function parseSafeInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+): number | null {
+  if (value === undefined) return fallback;
+  if (!/^-?\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
+}
+
+/**
+ * Read the deployment-owned runtime event-log policy. Malformed input fails
+ * closed: rotation keeps its bounded defaults and retention is disabled.
+ */
+export function readPersonaRuntimeEventLogConfig(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): PersonaRuntimeEventLogConfig {
+  const maxSegmentBytes = parseSafeInteger(
+    env.FLUJO_PERSONA_RUNTIME_EVENT_SEGMENT_MAX_BYTES,
+    PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG.maxSegmentBytes,
+    1,
+  );
+  const maxSegmentEvents = parseSafeInteger(
+    env.FLUJO_PERSONA_RUNTIME_EVENT_SEGMENT_MAX_EVENTS,
+    PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG.maxSegmentEvents,
+    1,
+  );
+  const retentionDays = parseSafeInteger(
+    env.FLUJO_PERSONA_RUNTIME_EVENT_RETENTION_DAYS,
+    PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG.retentionDays,
+    0,
+  );
+  const maxClosedSegments = parseSafeInteger(
+    env.FLUJO_PERSONA_RUNTIME_EVENT_MAX_CLOSED_SEGMENTS,
+    PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG.maxClosedSegments,
+    0,
+  );
+  if (
+    maxSegmentBytes === null
+    || maxSegmentEvents === null
+    || retentionDays === null
+    || maxClosedSegments === null
+  ) {
+    return { ...PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG };
+  }
+  return { maxSegmentBytes, maxSegmentEvents, retentionDays, maxClosedSegments };
+}
+
 export interface PersonaRuntimeRetentionConfig {
   mode: PersonaRuntimeRetentionMode;
   rolloutBasisPoints: number;

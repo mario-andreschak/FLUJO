@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  _getPersonaRuntimeEventLogPathsForTests,
   _getPersonaRuntimeEventLogStatsForTests,
   _getPersonaRuntimeEventLogStateForTests,
   _resetPersonaRuntimeEventLogStatsForTests,
@@ -22,6 +23,12 @@ let workspaceSequence = 0;
 function freshWorkspace(label: string): string {
   workspaceSequence += 1;
   return `runtime-incr-${label}-${process.pid}-${workspaceSequence}`;
+}
+
+function activeEventFile(personaId: string): string {
+  const file = _getPersonaRuntimeEventLogPathsForTests(personaId).activeSegment;
+  if (!file) throw new Error(`No active runtime-event segment for ${personaId}.`);
+  return file;
 }
 
 function completedEvent(index: number, prefix = 'incr') {
@@ -103,7 +110,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       const personaId = 'persona_foreign';
       await appendPersonaRuntimeEvent(personaId, completedEvent(0));
 
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       const foreign = foreignLine(workspace, personaId, 1, 'foreign:1');
       await fs.appendFile(file, foreign, 'utf8');
 
@@ -130,7 +137,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       const personaId = 'persona_foreign_dup';
       await appendPersonaRuntimeEvent(personaId, completedEvent(0));
 
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       await fs.appendFile(file, foreignLine(workspace, personaId, 1, 'dup:1'), 'utf8');
 
       const retry = await appendPersonaRuntimeEvent(personaId, {
@@ -151,7 +158,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       for (let index = 0; index < 3; index += 1) {
         await appendPersonaRuntimeEvent(personaId, completedEvent(index));
       }
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       const lines = (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean);
       await fs.writeFile(file, `${lines[0]}\n`, 'utf8');
 
@@ -170,7 +177,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       await appendPersonaRuntimeEvent(personaId, completedEvent(0));
       await appendPersonaRuntimeEvent(personaId, completedEvent(1));
 
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       const original = await fs.readFile(file, 'utf8');
       // Same byte length, different content: only (dev, ino) can catch this.
       const replaced = original.replace('"seq":1', '"seq":7');
@@ -194,7 +201,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       expect(stateAfterFirst).toBeDefined();
       const parsedBeforeFragment = stateAfterFirst!.parsedBytes;
 
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       await fs.appendFile(file, '{"truncated":', 'utf8');
 
       const next = await appendPersonaRuntimeEvent(personaId, completedEvent(1));
@@ -221,7 +228,7 @@ describe('Persona runtime event log incremental state (#454)', () => {
       const personaId = 'persona_utf8';
       await appendPersonaRuntimeEvent(personaId, completedEvent(0));
 
-      const file = path.join(tempRoot, workspace, `${personaId}.jsonl`);
+      const file = activeEventFile(personaId);
       // A parseable but workspace-mismatched line with multi-byte UTF-8 content
       // (skipped), plus a malformed multi-byte fragment terminated later — the
       // cached offset must still equal the true on-disk byte size afterwards.
