@@ -45,19 +45,24 @@ async function GET_handler(
     if (notLocal) return notLocal;
   }
 
-  // Replay position: explicit ?fromSeq= wins; otherwise honor the browser's
-  // Last-Event-ID on auto-reconnect (resume just after the last seen event).
+  // Replay position: the browser's Last-Event-ID wins on auto-reconnect so an
+  // EventSource originally opened with ?fromSeq=0 does not replay the entire
+  // run after every transient network drop.
   const fromSeqParam = request.nextUrl.searchParams.get('fromSeq');
   const lastEventId = request.headers.get('last-event-id');
+  const activityOnlyReplay = (
+    request.nextUrl.searchParams.get('replay') === 'activity'
+    && lastEventId === null
+  );
   let fromSeq: number | null = null;
-  if (fromSeqParam !== null) {
-    fromSeq = parseInt(fromSeqParam, 10);
-  } else if (lastEventId !== null) {
+  if (lastEventId !== null) {
     const parsed = parseInt(lastEventId, 10);
     if (!Number.isNaN(parsed)) fromSeq = parsed + 1;
+  } else if (fromSeqParam !== null) {
+    fromSeq = parseInt(fromSeqParam, 10);
   }
 
-  log.info('Opening SSE event stream', { conversationId, fromSeq });
+  log.info('Opening SSE event stream', { conversationId, fromSeq, activityOnlyReplay });
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | null = null;
@@ -148,6 +153,19 @@ async function GET_handler(
         }
         for (const event of replay) {
           if (event.seq < replayFrom) continue;
+          if (activityOnlyReplay && (
+            event.type === 'model:start'
+            || event.type === 'model:dispatch'
+            || event.type === 'model:dispatch-result'
+            || event.type === 'model:delta'
+            || event.type === 'model:end'
+            || event.type === 'message'
+            || event.type === 'message:removed'
+            || event.type === 'node:snapshot'
+            || event.type === 'node:changed-files'
+            || event.type === 'tool:result'
+            || (event.type === 'resource:write' && Boolean(event.snapshot))
+          )) continue;
           send(event);
           if (closed) break;
         }

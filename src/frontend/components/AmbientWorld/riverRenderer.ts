@@ -47,8 +47,8 @@ interface RiverPalette {
 
 const WORLD_X_SCALE = 130;
 const TAU = Math.PI * 2;
-const MAX_CANVAS_PIXEL_RATIO = 1.6;
-const MAX_CANVAS_PIXELS = 5_000_000;
+const MAX_CANVAS_PIXEL_RATIO = 1.25;
+const MAX_CANVAS_PIXELS = 2_500_000;
 const WORLD_VIEW_CENTER_Y = 0.49;
 const POINTER_PARALLAX_Y = 8;
 const WORLD_FILL_MARGIN = 180;

@@ -801,6 +801,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Box>
         }
         sx={modern ? {
+          // Keep the 50-row hierarchy searchable and scrollable without paying
+          // layout/paint costs for cards far outside the sidebar viewport.
+          contentVisibility: 'auto',
+          contain: 'layout paint style',
+          containIntrinsicSize: '0 104px',
           position: 'relative',
           mb: 0.9,
           border: '1px solid',
@@ -848,6 +853,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           // one step further so it remains the pointer target over that button.
           '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
         } : {
+          contentVisibility: 'auto',
+          contain: 'layout paint style',
+          containIntrinsicSize: '0 88px',
           opacity: selected ? 1 : 0.7,
           '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
         }}

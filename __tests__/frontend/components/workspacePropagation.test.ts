@@ -58,9 +58,16 @@ describe('browser workspace propagation', () => {
       .toBe('http://localhost/flows?flow=flow-1&workspace=team-a');
 
     chatService.subscribeToEvents('conversation-1', { onEvent: () => undefined }, 7);
+    chatService.subscribeToEvents(
+      'conversation-2',
+      { onEvent: () => undefined },
+      0,
+      { activityOnly: true },
+    );
     chatService.subscribeToSidebarEvents({ onEvent: () => undefined });
     expect(FakeEventSource.urls).toEqual([
       '/v1/chat/conversations/conversation-1/events?fromSeq=7&workspace=team-a',
+      '/v1/chat/conversations/conversation-2/events?fromSeq=0&replay=activity&workspace=team-a',
       '/v1/chat/events?scope=sidebar&workspace=team-a',
     ]);
   });
