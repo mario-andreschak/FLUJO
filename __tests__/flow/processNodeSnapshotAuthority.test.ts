@@ -14,7 +14,7 @@ describe('ProcessNode immutable snapshot authority', () => {
     const flowSnapshot = {
       id: 'persona-private-flow',
       name: 'Pinned Persona Behavior',
-      permissionRules: [denyQuestion],
+      behaviorRules: [denyQuestion],
       nodes: [
         {
           id: 'start-1',
@@ -77,8 +77,8 @@ describe('ProcessNode immutable snapshot authority', () => {
       },
     });
 
-    expect(prepared.permissionRules).toEqual([denyQuestion]);
-    expect(state.permissionRules).toEqual([denyQuestion]);
+    expect(prepared.behaviorRules).toEqual([denyQuestion]);
+    expect(state.behaviorRules).toEqual([denyQuestion]);
     expect(prepared.availableTools?.some((tool) => tool.name === 'question')).toBe(false);
     expect(prepared.currentPrompt).toContain('Pinned Start instruction.');
     expect(prepared.currentPrompt).toContain('Pinned Model instruction.');

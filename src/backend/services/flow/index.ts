@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
+import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
 import { 
   FlowServiceResponse, 
   FlowOperationResponse, 
@@ -50,6 +51,10 @@ export interface MigrateMcpServerReferencesResponse extends FlowServiceResponse 
   failedFlowIds?: string[];
 }
 
+function canonicalizeFlow(value: unknown): Flow {
+  return FlowSnapshotSchema.parse(value);
+}
+
 /** Remove runtime/legacy data before a flow crosses the persistence boundary. */
 function stripNonPersistedProperties(flow: Flow): void {
   // Issue #339: unattended behavior is derived from the invocation source. A
@@ -96,6 +101,14 @@ function flowsMigrationByWorkspace(): Map<string, Promise<void>> {
 // was a single db/flows.json array, migrated on first access). StorageKey.FLOWS
 // ('flows') doubles as the collection directory name and the legacy file's key.
 const FLOWS_COLLECTION: string = StorageKey.FLOWS;
+const FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION = 'flow-behavior-rules-backups';
+
+export interface FlowBehaviorRulesMigrationResult {
+  migrated: number;
+  alreadyCanonical: number;
+  failed: number;
+  failedFlowIds: string[];
+}
 
 // Serialize a flow's *content* (everything except the server-managed
 // createdAt/updatedAt) for the version-archiving no-op check, so refreshing a
@@ -170,12 +183,13 @@ export class FlowService { // Add export keyword here
       // the next real save persists the values; files are not rewritten here.
       const raw = await listCollectionItemsWithStats<Flow>(FLOWS_COLLECTION);
       const flows = raw.map(({ item, mtimeMs }) => {
-        if (item.createdAt != null && item.updatedAt != null) return item;
+        const canonical = canonicalizeFlow(item);
+        if (canonical.createdAt != null && canonical.updatedAt != null) return canonical;
         const ts = Math.floor(mtimeMs);
         return {
-          ...item,
-          createdAt: item.createdAt ?? ts,
-          updatedAt: item.updatedAt ?? ts,
+          ...canonical,
+          createdAt: canonical.createdAt ?? ts,
+          updatedAt: canonical.updatedAt ?? ts,
         };
       });
       this.flowsCache = flows;
@@ -185,6 +199,57 @@ export class FlowService { // Add export keyword here
       log.error('Failed to load flows', error);
       return [];
     }
+  }
+
+  /**
+   * Explicit, idempotent #470 field migration. Originals are backed up once in
+   * db/flow-behavior-rules-backups before atomic collection writes replace
+   * legacy Flow records. Conflicting aliases are reported and never rewritten.
+   */
+  async migrateBehaviorRulesField(): Promise<FlowBehaviorRulesMigrationResult> {
+    await ensureFlowsMigrated();
+    const result: FlowBehaviorRulesMigrationResult = {
+      migrated: 0,
+      alreadyCanonical: 0,
+      failed: 0,
+      failedFlowIds: [],
+    };
+    const records = await listCollectionItemsWithStats<unknown>(FLOWS_COLLECTION);
+    for (const { item } of records) {
+      const raw = item as Record<string, unknown>;
+      const flowId = typeof raw?.id === 'string' ? raw.id : '<unknown>';
+      try {
+        const canonical = canonicalizeFlow(item);
+        if (!Object.prototype.hasOwnProperty.call(raw, 'permissionRules')) {
+          result.alreadyCanonical += 1;
+          continue;
+        }
+        assertSafeCollectionId(canonical.id);
+        const existingBackup = await loadCollectionItem<unknown | null>(
+          FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION,
+          canonical.id,
+          null,
+        );
+        if (!existingBackup) {
+          await saveCollectionItem(FLOW_BEHAVIOR_RULES_BACKUP_COLLECTION, canonical.id, {
+            flowId: canonical.id,
+            backedUpAt: Date.now(),
+            flow: item,
+          });
+        }
+        await saveCollectionItem(FLOWS_COLLECTION, canonical.id, canonical);
+        result.migrated += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.failedFlowIds.push(flowId);
+        log.warn('Flow Behavior-rule migration skipped one record', { flowId });
+      }
+    }
+    if (result.migrated > 0) {
+      this.flowsCache = null;
+      await this.invalidateExecutionCache();
+    }
+    return result;
   }
 
   /**
@@ -209,7 +274,8 @@ export class FlowService { // Add export keyword here
       await ensureFlowsMigrated();
       let flow: Flow | null = null;
       try {
-        flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+        const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+        flow = stored ? canonicalizeFlow(stored) : null;
       } catch (error) {
         // Unsafe id or an unreadable file: treat as not found rather than throw.
         log.debug(`getFlow: could not load flow ${flowId}`, error);
@@ -242,7 +308,8 @@ export class FlowService { // Add export keyword here
     try {
       assertSafeCollectionId(flowId);
       await ensureFlowsMigrated();
-      const flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      const flow = stored ? canonicalizeFlow(stored) : null;
       if (!flow || flow.id !== flowId) return null;
       return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
     } catch (error) {
@@ -276,6 +343,9 @@ export class FlowService { // Add export keyword here
       if (nameError) {
         throw new Error(`Invalid Flow display name (${nameError}).`);
       }
+      const canonical = canonicalizeFlow(flow);
+      delete (flow as Flow & { permissionRules?: unknown }).permissionRules;
+      Object.assign(flow, canonical);
       flow.name = flow.name.normalize('NFC').trim();
       // Validate the id before it is used as a file name (path-traversal guard).
       assertSafeCollectionId(flow.id);
@@ -291,7 +361,8 @@ export class FlowService { // Add export keyword here
       // a save must never fail because history could not be written.
       let previous: Flow | null = null;
       try {
-        previous = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flow.id, null);
+        const storedPrevious = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flow.id, null);
+        previous = storedPrevious ? canonicalizeFlow(storedPrevious) : null;
       } catch (error) {
         log.debug(`saveFlow: could not read previous definition of ${flow.id} for versioning`, error);
       }

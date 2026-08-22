@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 
-import type { BehaviorRevision } from '@/shared/types/enduringAgent';
+import { FlowSnapshotSchema, type BehaviorRevision } from '@/shared/types/enduringAgent';
 import type { Flow } from '@/shared/types/flow';
 import {
   assertSafeCollectionId,
@@ -71,11 +71,14 @@ export function behaviorCallPinId(input: {
 
 export async function getBehaviorCallPin(id: string): Promise<BehaviorCallPin | null> {
   assertSafeCollectionId(id);
-  return loadCollectionItem<BehaviorCallPin | null>(
+  const pin = await loadCollectionItem<BehaviorCallPin | null>(
     BEHAVIOR_CALL_PINS_COLLECTION,
     id,
     null,
   );
+  return pin
+    ? { ...pin, flowSnapshot: FlowSnapshotSchema.parse(pin.flowSnapshot) }
+    : null;
 }
 
 /**
@@ -131,7 +134,7 @@ export async function createBehaviorCallPin(input: {
       ? { flowVersionId: input.revision.source.flowVersionId }
       : {}),
     contentHash: input.revision.contentHash,
-    flowSnapshot: structuredClone(input.revision.flowSnapshot),
+    flowSnapshot: FlowSnapshotSchema.parse(structuredClone(input.revision.flowSnapshot)),
     status: 'running',
     createdAt: now,
     updatedAt: now,

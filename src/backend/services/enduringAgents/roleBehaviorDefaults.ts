@@ -42,7 +42,7 @@ function linearFlow(input: {
     id: input.id,
     name: input.name,
     description: input.description,
-    permissionRules: [],
+    behaviorRules: [],
     nodes: [
       {
         id: startId,

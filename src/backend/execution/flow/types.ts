@@ -1102,8 +1102,8 @@ export interface SharedState {
      */
     flowSnapshot?: Flow;
     /** Active policy is restored from the immutable Flow snapshot at boundaries. */
-    permissionRules?: Flow['permissionRules'];
-    savedPermissionRules?: Flow['permissionRules'];
+    behaviorRules?: Flow['behaviorRules'];
+    savedBehaviorRules?: Flow['behaviorRules'];
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
     /** Issue #383: normalized terminal error, kept in sync with `lastResponse`
@@ -1618,8 +1618,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
-    /** Immutable permission policy restored with the authoritative Flow snapshot. */
-    permissionRules?: Flow['permissionRules'];
+    /** Immutable Behavior policy restored with the authoritative Flow snapshot. */
+    behaviorRules?: Flow['behaviorRules'];
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

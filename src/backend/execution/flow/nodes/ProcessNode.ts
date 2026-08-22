@@ -424,9 +424,9 @@ export class ProcessNode extends BaseNode {
       throw new Error("Process node requires a bound model");
     }
 
-    // Immutable Persona behavior snapshots own the Flow permission boundary.
-    if (sharedState.flowSnapshot?.permissionRules) {
-      sharedState.permissionRules = sharedState.flowSnapshot.permissionRules;
+    // Immutable Persona behavior snapshots own the native-ability boundary.
+    if (sharedState.flowSnapshot) {
+      sharedState.behaviorRules = structuredClone(sharedState.flowSnapshot.behaviorRules ?? []);
     }
 
     // Use the promptRenderer to build the complete prompt
@@ -590,7 +590,7 @@ export class ProcessNode extends BaseNode {
             sharedState.executionAuthority.proposePersonaMemoryMaintenance,
           ),
         }).filter(
-          (tool) => !(sharedState.permissionRules ?? []).some((rule) => (
+          (tool) => !(sharedState.behaviorRules ?? []).some((rule) => (
             rule.effect === 'deny'
             && (rule.action === '*' || rule.action === tool.name)
             && (rule.resource === '*' || rule.resource === undefined)
@@ -622,7 +622,7 @@ export class ProcessNode extends BaseNode {
     // offered iff enabled, so flows that don't use it keep a byte-identical tool
     // set (preserving the #89 prefix-cache) and unattended flows can leave it
     // off entirely.
-    const questionDeniedBySnapshot = (sharedState.permissionRules ?? []).some(
+    const questionDeniedBySnapshot = (sharedState.behaviorRules ?? []).some(
       rule => rule.effect === 'deny'
         && rule.action === 'question'
         && (rule.resource === '*' || rule.resource === undefined),
@@ -710,7 +710,7 @@ export class ProcessNode extends BaseNode {
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
-    permissionRules: structuredClone(sharedState.permissionRules ?? []),
+    behaviorRules: structuredClone(sharedState.behaviorRules ?? []),
     executionAuthority: sharedState.executionAuthority,
     personaAttribution: sharedState.personaAttribution,
     ...(sharedState.temperatureOverrideOnce !== undefined

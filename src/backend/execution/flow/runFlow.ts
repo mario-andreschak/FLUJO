@@ -43,7 +43,7 @@ import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamesp
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
 import type { FlowService as FlowServiceType } from '@/backend/services/flow/index';
-import { Flow } from '@/shared/types/flow';
+import { Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
@@ -76,6 +76,7 @@ import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement'
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import {
+  FlowSnapshotSchema,
   PersonaInstructionContextSchema,
   type PersonaAttribution,
   type PersonaInstructionContext,
@@ -562,6 +563,39 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
  * survive, but no graph-derived capability, pending action, or resumable child
  * state from the prior Activity may cross into the newly pinned revision.
  */
+function normalizeRecoveredBehaviorRules(sharedState: SharedState): void {
+  const legacyState = sharedState as SharedState & {
+    permissionRules?: Flow['behaviorRules'];
+    savedPermissionRules?: Flow['behaviorRules'];
+  };
+  if (sharedState.flowSnapshot) {
+    sharedState.flowSnapshot = FlowSnapshotSchema.parse(sharedState.flowSnapshot);
+  }
+  const snapshotRules = sharedState.flowSnapshot?.behaviorRules;
+
+  const normalizedState = normalizeBehaviorRulesInput(legacyState);
+  sharedState.behaviorRules = structuredClone(
+    snapshotRules ?? normalizedState.behaviorRules ?? [],
+  );
+  delete legacyState.permissionRules;
+
+  const savedAliases: {
+    behaviorRules?: Flow['behaviorRules'];
+    permissionRules?: Flow['behaviorRules'];
+  } = {};
+  if (Object.prototype.hasOwnProperty.call(sharedState, 'savedBehaviorRules')) {
+    savedAliases.behaviorRules = sharedState.savedBehaviorRules;
+  }
+  if (Object.prototype.hasOwnProperty.call(legacyState, 'savedPermissionRules')) {
+    savedAliases.permissionRules = legacyState.savedPermissionRules;
+  }
+  const normalizedSaved = normalizeBehaviorRulesInput(savedAliases);
+  sharedState.savedBehaviorRules = structuredClone(
+    snapshotRules ?? normalizedSaved.behaviorRules ?? [],
+  );
+  delete legacyState.savedPermissionRules;
+}
+
 function installPersonaActivitySnapshot(
   sharedState: SharedState,
   flowDefinition: Flow,
@@ -572,8 +606,9 @@ function installPersonaActivitySnapshot(
     if (flowId) FlowExecutor.clearFlowCache(flowId);
   }
 
-  sharedState.flowSnapshot = structuredClone(flowDefinition);
-  sharedState.flowId = flowDefinition.id;
+  const canonicalFlow = normalizeBehaviorRulesInput(flowDefinition) as Flow;
+  sharedState.flowSnapshot = structuredClone(canonicalFlow);
+  sharedState.flowId = canonicalFlow.id;
   sharedState.currentNodeId = undefined;
 
   // Model/tool authority derived from the prior graph.
@@ -584,8 +619,8 @@ function installPersonaActivitySnapshot(
   sharedState.toolNameMap = undefined;
   // The successor Activity starts from the immutable Behavior policy, never
   // from stale graph-derived rules or an unguarded empty policy.
-  sharedState.permissionRules = structuredClone(flowDefinition.permissionRules ?? []);
-  sharedState.savedPermissionRules = structuredClone(flowDefinition.permissionRules ?? []);
+  sharedState.behaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
+  sharedState.savedBehaviorRules = structuredClone(canonicalFlow.behaviorRules ?? []);
   sharedState.frozenSystemPrompts = undefined;
   sharedState.codexSessions = undefined;
   sharedState.turnBudgets = undefined;
@@ -790,6 +825,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
     }
   }
+
+  if (loadedState) normalizeRecoveredBehaviorRules(loadedState);
 
   if (loadedState?.personaArchived) {
     throw new Error(

@@ -15,7 +15,12 @@ export interface FlowNode extends Node {
   selected?: boolean;
 }
 
-export interface PermissionRule {
+/**
+ * Backend-only policy embedded in immutable Persona/Enduring-Agent Behavior
+ * snapshots. It governs Persona-native abilities/questions during snapshot
+ * execution; it is not ChatInput tool approval and has no editor UI.
+ */
+export interface BehaviorRule {
   effect: 'allow' | 'deny';
   action: string;
   resource?: string;
@@ -64,8 +69,8 @@ export interface Flow {
     /** Provenance used for grouping and required/supplemental badges. */
     kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
   };
-  /** Immutable execution policy carried by authored Persona behavior snapshots. */
-  permissionRules?: PermissionRule[];
+  /** Immutable Persona-native ability policy; unrelated to ChatInput requireApproval. */
+  behaviorRules?: BehaviorRule[];
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

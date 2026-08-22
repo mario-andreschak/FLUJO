@@ -21,7 +21,7 @@ function behaviorFlow(): Flow {
     updatedAt: 1_700_000_100_000,
     folder: 'Enduring agents',
     favorite: true,
-    permissionRules: [
+    behaviorRules: [
       { action: 'search', resource: '*', effect: 'allow' },
     ],
     nodes: [
@@ -240,7 +240,7 @@ describe('hashBehaviorFlow', () => {
     [
       'permission rules',
       (flow: Flow) => {
-        flow.permissionRules = [
+        flow.behaviorRules = [
           { action: 'search', resource: '*', effect: 'deny' },
         ];
       },
@@ -288,7 +288,7 @@ describe('roleTemplateMatchesBehaviorFlow', () => {
     const template = behaviorFlow();
     delete node(template, 'researcher').data.properties!.boundModel;
     const materialized = bindDefaultModelToFlow(template, 'model-default');
-    materialized.permissionRules = [
+    materialized.behaviorRules = [
       { action: 'delete', resource: '*', effect: 'allow' },
     ];
 

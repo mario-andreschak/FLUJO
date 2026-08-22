@@ -958,8 +958,8 @@ describe('Persona execution authority', () => {
       }],
       armedSyntheticTools: ['read_resource'],
       toolNameMap: { old_tool: { server: 'old-server', tool: 'old_tool' } },
-      permissionRules: [{ action: 'old_tool', resource: '*', effect: 'allow' }],
-      savedPermissionRules: [{ action: 'old_tool', resource: '*', effect: 'allow' }],
+      behaviorRules: [{ action: 'old_tool', resource: '*', effect: 'allow' }],
+      savedBehaviorRules: [{ action: 'old_tool', resource: '*', effect: 'allow' }],
       handoffRequested: { edgeId: 'old-edge', targetNodeId: 'old-target' },
       handoffInput: { targetNodeId: 'old-target', prompt: 'stale handoff' },
       handoffNameMap: { handoff_to_old: 'old-target' },
@@ -1114,8 +1114,8 @@ describe('Persona execution authority', () => {
     ] as const) {
       expect(successor.sharedState[key]).toBeUndefined();
     }
-    expect(successor.sharedState.permissionRules).toEqual(successorBehavior.permissionRules ?? []);
-    expect(successor.sharedState.savedPermissionRules).toEqual(successorBehavior.permissionRules ?? []);
+    expect(successor.sharedState.behaviorRules).toEqual(successorBehavior.behaviorRules ?? []);
+    expect(successor.sharedState.savedBehaviorRules).toEqual(successorBehavior.behaviorRules ?? []);
     expect(successor.sharedState.variables).toEqual({ fresh: 'v2' });
     expect(successor.sharedState.breakpoints).toEqual([]);
     expect(successor.sharedState.revertOperations).toEqual(retainedRevertOperations);

@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 
-import type { Flow } from '@/shared/types/flow';
+import { normalizeBehaviorRulesInput, type Flow } from '@/shared/types/flow';
 
 export interface FlowExecutionSnapshot {
   workspaceId: string;
@@ -27,7 +27,8 @@ function canonicalJson(value: unknown): string {
 
 /** Hash the exact immutable Flow definition that will be handed to the engine. */
 export function hashFlowExecutionSnapshot(flow: Flow): string {
-  return createHash('sha256').update(canonicalJson(flow)).digest('hex');
+  const canonicalFlow = normalizeBehaviorRulesInput(flow);
+  return createHash('sha256').update(canonicalJson(canonicalFlow)).digest('hex');
 }
 
 /**
@@ -39,7 +40,7 @@ export function createFlowExecutionSnapshot(
   workspaceId: string,
   flow: Flow,
 ): FlowExecutionSnapshot {
-  const snapshot = structuredClone(flow);
+  const snapshot = structuredClone(normalizeBehaviorRulesInput(flow)) as Flow;
   const contentHash = hashFlowExecutionSnapshot(snapshot);
   return {
     workspaceId,

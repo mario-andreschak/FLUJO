@@ -48,6 +48,7 @@ import {
   behaviorRevisionId,
   canonicalJson,
   hashBehaviorFlow,
+  hashLegacyBehaviorFlow,
   roleTemplateMatchesBehaviorFlow,
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
@@ -104,6 +105,7 @@ async function getRecord<T extends IdentifiedRecord>(options: {
   recordKind: string;
   schema: ZodType<T>;
   personaId?: string;
+  validate?: (record: T, raw: unknown) => void;
 }): Promise<T | null> {
   assertSafeCollectionId(options.id);
   if (options.personaId) assertSafeCollectionId(options.personaId);
@@ -136,6 +138,7 @@ async function getRecord<T extends IdentifiedRecord>(options: {
       `${options.recordKind} ${JSON.stringify(options.id)} belongs to another Persona.`,
     );
   }
+  options.validate?.(record, value);
   return record;
 }
 
@@ -145,6 +148,7 @@ async function listRecords<T extends IdentifiedRecord>(options: {
   schema: ZodType<T>;
   /** Runtime authority scans fail closed instead of hiding malformed records. */
   strict?: boolean;
+  validate?: (record: T, raw: unknown) => void;
 }): Promise<T[]> {
   if (options.strict) {
     const entries = await listCollectionItemEntriesStrict<unknown>(options.collection);
@@ -156,6 +160,7 @@ async function listRecords<T extends IdentifiedRecord>(options: {
           + `record id ${JSON.stringify(record.id)}.`,
         );
       }
+      options.validate?.(record, item);
       return record;
     }).sort((left, right) => left.id.localeCompare(right.id));
   }
@@ -164,7 +169,9 @@ async function listRecords<T extends IdentifiedRecord>(options: {
   const records: T[] = [];
   values.forEach((value, index) => {
     try {
-      records.push(parseRecord(options.recordKind, options.schema, value));
+      const record = parseRecord(options.recordKind, options.schema, value);
+      options.validate?.(record, value);
+      records.push(record);
     } catch (error) {
       // A record from a newer schema is not ordinary bad data. Silently
       // omitting it would make an older build present an incomplete workspace
@@ -898,7 +905,10 @@ async function assertValidCoreMemoryItems(persona: Persona): Promise<void> {
   }
 }
 
-function assertBehaviorRevisionIntegrity(record: BehaviorRevision): void {
+function assertBehaviorRevisionIntegrity(
+  record: BehaviorRevision,
+  rawRecord: unknown = record,
+): void {
   const canonicalSnapshot = snapshotBehaviorFlow(record.flowSnapshot);
   if (canonicalJson(canonicalSnapshot) !== canonicalJson(record.flowSnapshot)) {
     throw new Error(
@@ -906,15 +916,28 @@ function assertBehaviorRevisionIntegrity(record: BehaviorRevision): void {
       + 'timestamps or derived attachment state.',
     );
   }
-  const contentHash = hashBehaviorFlow(record.flowSnapshot);
-  if (record.contentHash !== contentHash) {
+
+  const rawSnapshot = rawRecord
+    && typeof rawRecord === 'object'
+    && !Array.isArray(rawRecord)
+    && Object.prototype.hasOwnProperty.call(rawRecord, 'flowSnapshot')
+    ? (rawRecord as { flowSnapshot: unknown }).flowSnapshot
+    : record.flowSnapshot;
+  const usesLegacyHash = rawSnapshot
+    && typeof rawSnapshot === 'object'
+    && !Array.isArray(rawSnapshot)
+    && Object.prototype.hasOwnProperty.call(rawSnapshot, 'permissionRules');
+  const expectedContentHash = usesLegacyHash
+    ? hashLegacyBehaviorFlow(rawSnapshot)
+    : hashBehaviorFlow(record.flowSnapshot);
+  if (record.contentHash !== expectedContentHash) {
     throw new Error(`BehaviorRevision ${JSON.stringify(record.id)} content hash is invalid.`);
   }
   const expectedId = behaviorRevisionId({
     personaId: record.personaId,
     behaviorId: record.behaviorId,
     revision: record.revision,
-    contentHash,
+    contentHash: record.contentHash,
   });
   if (record.id !== expectedId) {
     throw new Error(`BehaviorRevision ${JSON.stringify(record.id)} content-addressed id is invalid.`);
@@ -927,8 +950,8 @@ export async function getBehaviorRevision(id: string): Promise<BehaviorRevision 
     id,
     recordKind: 'BehaviorRevision',
     schema: BehaviorRevisionSchema,
+    validate: assertBehaviorRevisionIntegrity,
   });
-  if (record) assertBehaviorRevisionIntegrity(record);
   return record;
 }
 
@@ -938,11 +961,12 @@ export async function listBehaviorRevisions(personaId?: string): Promise<Behavio
     collection: ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
     recordKind: 'BehaviorRevision',
     schema: BehaviorRevisionSchema,
+    strict: true,
+    validate: assertBehaviorRevisionIntegrity,
   });
   // Revision integrity participates in ownership and ordinal uniqueness. A
   // corrupt record must therefore fail the read closed; skipping it could let
   // a later writer reuse an owner/ordinal that is already present on disk.
-  records.forEach(assertBehaviorRevisionIntegrity);
   return personaId === undefined
     ? records
     : records.filter((record) => record.personaId === personaId);

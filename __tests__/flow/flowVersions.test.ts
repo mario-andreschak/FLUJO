@@ -27,6 +27,8 @@ jest.mock('@/utils/storage/backend', () => ({
     if (collections[c]) delete collections[c][id];
   }),
   listCollectionItems: jest.fn(async (c: string) => Object.values(collections[c] ?? {})),
+  listCollectionItemsWithStats: jest.fn(async (c: string) =>
+    Object.values(collections[c] ?? {}).map((item) => ({ item, mtimeMs: 1 }))),
   assertSafeCollectionId: jest.fn((id: string) => {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
       throw new Error(`Unsafe collection item id: ${JSON.stringify(id)}`);
@@ -92,6 +94,80 @@ describe('flow version history', () => {
     await svc.saveFlow(flowFixture('f1', 'one'));
     await svc.saveFlow(flowFixture('f1', 'one'));
     expect(await svc.listFlowVersions('f1')).toEqual([]);
+  });
+
+  it('canonicalizes a legacy-only save without creating alias-only history', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections.flows ??= {}).f1 = {
+      ...flowFixture('f1', 'one'),
+      permissionRules: rules,
+    };
+    const incoming = {
+      ...flowFixture('f1', 'one'),
+      behaviorRules: rules,
+    } as Flow;
+
+    const svc = new FlowService();
+    expect((await svc.saveFlow(incoming)).success).toBe(true);
+
+    expect(await svc.listFlowVersions('f1')).toEqual([]);
+    expect(collections.flows.f1).toMatchObject({ behaviorRules: rules });
+    expect(collections.flows.f1).not.toHaveProperty('permissionRules');
+  });
+
+  it('normalizes historical legacy version records on read', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections['flow-versions/f1'] ??= {}).legacy = {
+      versionId: 'legacy',
+      flowId: 'f1',
+      savedAt: 1,
+      flow: {
+        ...flowFixture('f1', 'one'),
+        permissionRules: rules,
+      },
+    };
+
+    const record = await new FlowService().getFlowVersion('f1', 'legacy');
+    expect(record?.flow.behaviorRules).toEqual(rules);
+    expect(record?.flow).not.toHaveProperty('permissionRules');
+  });
+
+  it('backs up and idempotently migrates legacy Behavior-rule fields', async () => {
+    const rules = [{ effect: 'deny', action: 'question', resource: '*' }];
+    (collections.flows ??= {}).legacy = {
+      ...flowFixture('legacy', 'legacy'),
+      permissionRules: rules,
+    };
+    collections.flows.canonical = {
+      ...flowFixture('canonical', 'canonical'),
+      behaviorRules: rules,
+    };
+    collections.flows.conflict = {
+      ...flowFixture('conflict', 'conflict'),
+      behaviorRules: rules,
+      permissionRules: [{ effect: 'allow', action: 'question', resource: '*' }],
+    };
+
+    const svc = new FlowService();
+    await expect(svc.migrateBehaviorRulesField()).resolves.toEqual({
+      migrated: 1,
+      alreadyCanonical: 1,
+      failed: 1,
+      failedFlowIds: ['conflict'],
+    });
+    expect(collections.flows.legacy).toMatchObject({ behaviorRules: rules });
+    expect(collections.flows.legacy).not.toHaveProperty('permissionRules');
+    expect(collections['flow-behavior-rules-backups'].legacy).toMatchObject({
+      flowId: 'legacy',
+      flow: { permissionRules: rules },
+    });
+
+    await expect(svc.migrateBehaviorRulesField()).resolves.toEqual({
+      migrated: 0,
+      alreadyCanonical: 2,
+      failed: 1,
+      failedFlowIds: ['conflict'],
+    });
   });
 
   it('lists versions newest first', async () => {

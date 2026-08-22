@@ -55,7 +55,7 @@ run as part of this design phase.
 | Approval API resume | `src/app/api/approvals/[id]/route.ts` | Boundary | Two false-default violations currently use `?? true` |
 | Scheduler policy mapping | `src/backend/services/scheduler/index.ts` | Headless transport behavior | Maps an explicit scheduler setting into gate and no-approver outcome |
 | Persona dispatcher | `src/backend/services/enduringAgents/personaDispatcher.ts` | Headless transport behavior | Carries explicit approval options into headless execution |
-| `Flow.permissionRules` / `SharedState.permissionRules` | `src/backend/execution/flow/nodes/ProcessNode.ts` | Capability snapshot | Filters Persona-native capabilities; must never approve, deny, or bypass ordinary calls |
+| `Flow.behaviorRules` / `SharedState.behaviorRules` | `src/backend/execution/flow/nodes/ProcessNode.ts` | Capability snapshot | Filters Persona-native capabilities; must never approve, deny, or bypass ordinary calls |
 | Removed allow/deny/ask and protected-path mechanisms | #438, commit `9c99e755` | Obsolete policy | Must not be reintroduced |
 
 Existing regression intent is captured by:
@@ -85,7 +85,7 @@ These decisions are normative once every required reviewer signs this document.
 | Mixed handoff/tool batches | Handoff calls are not approval subjects; staged ordering and unanswered-call handling remain intact | Approval must not expose internal control calls or reorder execution |
 | Rejection | Fixed model-visible `tool denied`; no free-text reason | Deterministic and minimizes sensitive disclosure |
 | Persistence failure | Do not present an unpersisted final checkbox state; restore the persisted state and show an actionable error | UI and server state must converge |
-| Snapshot boundary | Preserve `permissionRules` temporarily as capability snapshot data; rename in separately scoped cleanup | Renaming is useful but not required to define the gate |
+| Snapshot boundary | Preserve `behaviorRules` as backend-only capability snapshot data; accept legacy `permissionRules` only while reading old records | This vocabulary remains separate from the approval gate |
 | Alternate providers | All providers enter shared approval handling with identical semantics | Provider choice must not weaken or strengthen the gate |
 | Arguments | Show enough context for a decision, but do not add argument copies to telemetry, issue comments, or model rejection output | Supports informed decisions without widening data exposure |
 
@@ -289,7 +289,7 @@ Required corrections are expected in:
 
 The implementation issue must first verify every current site because line numbers
 and call structure may change. It must separate required contract fixes from the
-optional `permissionRules` rename. It must include rollback by reverting the
+legacy `permissionRules` compatibility window. It must include rollback by reverting the
 implementation commit(s); no data backfill is required for default-false records.
 It must not introduce another authorization-policy layer.
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Flow } from '@/shared/types/flow';
+import { normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
   BEHAVIOR_MAINTENANCE_ACTIONS,
@@ -89,7 +90,7 @@ const FlowNodeSchema = z.object({
   }).passthrough(),
 }).passthrough();
 
-export const PermissionRuleSchema = z.object({
+export const BehaviorRuleSchema = z.object({
   effect: z.enum(['allow', 'deny']),
   action: NonEmptyText(256),
   resource: z.string().trim().min(1).max(2_048).optional(),
@@ -102,7 +103,7 @@ const FlowEdgeSchema = z.object({
 }).passthrough();
 
 /** Structural Flow validation while preserving every authored extension field. */
-export const FlowSnapshotSchema = z.object({
+const FlowSnapshotInputSchema = z.object({
   id: z.string().min(1).max(256),
   name: NonEmptyText(500),
   description: z.string().max(100_000).optional(),
@@ -110,11 +111,31 @@ export const FlowSnapshotSchema = z.object({
   favorite: z.boolean().optional(),
   createdAt: TimestampSchema.optional(),
   updatedAt: TimestampSchema.optional(),
-  permissionRules: z.array(PermissionRuleSchema).max(10_000).optional(),
+  behaviorRules: z.array(BehaviorRuleSchema).max(10_000).optional(),
+  permissionRules: z.array(BehaviorRuleSchema).max(10_000).optional(),
   nodes: z.array(FlowNodeSchema).max(10_000),
   edges: z.array(FlowEdgeSchema).max(50_000),
   input: z.string().max(64).optional(),
-}).passthrough() as unknown as z.ZodType<Flow>;
+}).passthrough()
+  .superRefine((value, context) => {
+    try {
+      normalizeBehaviorRulesInput(value);
+    } catch (error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['behaviorRules'],
+        message: error instanceof Error ? error.message : 'Flow Behavior policy is ambiguous.',
+      });
+    }
+  })
+  .transform((value) => normalizeBehaviorRulesInput(value));
+
+export const FlowSnapshotSchema = FlowSnapshotInputSchema as unknown as z.ZodType<
+  Flow,
+  z.input<typeof FlowSnapshotInputSchema>
+>;
+export type FlowSnapshotInput = z.input<typeof FlowSnapshotSchema>;
+export type FlowSnapshot = z.output<typeof FlowSnapshotSchema>;
 
 export const PersonaAttributionSchema = z.object({
   personaId: EnduringAgentIdSchema,

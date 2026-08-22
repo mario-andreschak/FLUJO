@@ -1,6 +1,7 @@
 import {
   behaviorRevisionId,
   hashBehaviorFlow,
+  hashLegacyBehaviorFlow,
   UnsupportedEnduringAgentSchemaError,
 } from '@/backend/services/enduringAgents';
 import {
@@ -15,6 +16,7 @@ import {
   createPersona,
   createRoleVersion,
   getBehaviorBinding,
+  getBehaviorRevision,
   getPersona,
   listBehaviorRevisions,
   listPersonas,
@@ -254,7 +256,7 @@ describe('enduring-agent store ownership', () => {
         marker: 'content not present in template',
         source: original.source,
         mutateFlow: (flow) => {
-          flow.permissionRules = [{ action: 'unclaimed', resource: '*', effect: 'allow' }];
+          flow.behaviorRules = [{ action: 'unclaimed', resource: '*', effect: 'allow' }];
         },
       });
       await expect(createBehaviorRevision(falseTemplateClaim)).rejects.toThrow(
@@ -289,6 +291,62 @@ describe('enduring-agent store ownership', () => {
       );
 
       await expect(listBehaviorRevisions(jim.persona.id)).rejects.toThrow(
+        /content hash is invalid/i,
+      );
+    });
+  });
+
+  it('selects Behavior revision hash compatibility from the raw persisted key', async () => {
+    await inFreshWorkspace(async () => {
+      const jim = await createPersonaFromRole({
+        name: 'Jim',
+        idempotencyKey: 'revision-legacy-hash-mode',
+      });
+      const revision = jim.behaviorRevisions[0];
+      const { behaviorRules, ...legacySnapshotBase } = revision.flowSnapshot;
+      const legacyRules = behaviorRules ?? [];
+      const legacySnapshot = {
+        ...legacySnapshotBase,
+        permissionRules: legacyRules,
+      };
+      const legacyContentHash = hashLegacyBehaviorFlow(legacySnapshot);
+      const legacyId = behaviorRevisionId({
+        personaId: revision.personaId,
+        behaviorId: revision.behaviorId,
+        revision: revision.revision,
+        contentHash: legacyContentHash,
+      });
+
+      await saveCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
+        legacyId,
+        {
+          ...revision,
+          id: legacyId,
+          contentHash: legacyContentHash,
+          flowSnapshot: legacySnapshot,
+        },
+      );
+      const loadedLegacy = await getBehaviorRevision(legacyId);
+      expect(loadedLegacy?.flowSnapshot.behaviorRules).toEqual(legacyRules);
+      expect(loadedLegacy?.flowSnapshot).not.toHaveProperty('permissionRules');
+
+      const canonicalWithLegacyHashId = behaviorRevisionId({
+        personaId: revision.personaId,
+        behaviorId: revision.behaviorId,
+        revision: revision.revision,
+        contentHash: legacyContentHash,
+      });
+      await saveCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
+        canonicalWithLegacyHashId,
+        {
+          ...revision,
+          id: canonicalWithLegacyHashId,
+          contentHash: legacyContentHash,
+        },
+      );
+      await expect(getBehaviorRevision(canonicalWithLegacyHashId)).rejects.toThrow(
         /content hash is invalid/i,
       );
     });

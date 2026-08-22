@@ -34,9 +34,6 @@ const makeState = (pending: Array<{ id: string; name?: string }>): SharedState =
     createdAt: 1,
     updatedAt: 1,
     pendingToolCalls: pending.map(p => mkCall(p.id, p.name)),
-    // Verify that savedPermissionRules and permissionRules do NOT exist on the state
-    savedPermissionRules: undefined,
-    permissionRules: undefined,
   } as unknown as SharedState);
 
 beforeEach(() => {
@@ -77,14 +74,12 @@ describe('Tool Approval Single Gate (#438)', () => {
   describe('Contract: No permission rules or saved decisions', () => {
     it('state does not contain savedPermissionRules field', () => {
       const state = makeState([{ id: 'call_1' }]);
-      // The type of savedPermissionRules should be undefined, not an array
-      expect(state.savedPermissionRules).toBeUndefined();
+      expect('savedPermissionRules' in state).toBe(false);
     });
 
     it('state does not contain flow-level permissionRules field', () => {
       const state = makeState([{ id: 'call_1' }]);
-      // The type of permissionRules should be undefined, not an array
-      expect(state.permissionRules).toBeUndefined();
+      expect('permissionRules' in state).toBe(false);
     });
 
     it('approval decision handler does not consult saved or flow-level rules', async () => {

@@ -26,7 +26,7 @@ function testCoreFlow(): Flow {
   return {
     id: 'test_general_core',
     name: 'Test general Core',
-    permissionRules: [],
+    behaviorRules: [],
     nodes: [
       {
         id: 'test_core_start',

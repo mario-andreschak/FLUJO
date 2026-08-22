@@ -83,7 +83,7 @@ function exactToolsRoleVersion(): RoleVersion {
         flowTemplate: {
           id: 'exact_tools_template',
           name: 'Exact tools template',
-          permissionRules: [
+          behaviorRules: [
             { action: 'read_issue', resource: 'github-jim', effect: 'allow' },
           ],
           nodes: [
@@ -444,7 +444,7 @@ describe('createPersonaFromRole', () => {
         slotKey: 'primary',
         templateFlowId: 'exact_tools_template',
       });
-      expect(revision.flowSnapshot.permissionRules).toEqual([
+      expect(revision.flowSnapshot.behaviorRules).toEqual([
         { action: 'read_issue', resource: 'github-jim', effect: 'allow' },
       ]);
       expect(node(revision.flowSnapshot, 'github-jim').data.properties).toEqual({
@@ -464,7 +464,7 @@ describe('createPersonaFromRole', () => {
       const sourceMcp = node(sourceVersion.behaviorSlots[0].flowTemplate, 'github-jim');
       sourceMcp.data.properties!.boundServer = 'github-someone-else';
       sourceMcp.data.properties!.enabledTools = ['delete_repository'];
-      sourceVersion.behaviorSlots[0].flowTemplate.permissionRules = [];
+      sourceVersion.behaviorSlots[0].flowTemplate.behaviorRules = [];
 
       expect(await getBehaviorRevision(revision.id)).toMatchObject({
         contentHash: revision.contentHash,

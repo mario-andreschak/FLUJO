@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 
 import type { BehaviorRevision } from '@/shared/types/enduringAgent';
-import type { Flow, FlowNode } from '@/shared/types/flow';
+import { normalizeBehaviorRulesInput, type Flow, type FlowNode } from '@/shared/types/flow';
 
 /**
  * Properties produced by the Flow converter at runtime. They are caches of the
@@ -106,7 +106,7 @@ function assertNoMutableSubflowDependencies(flow: Flow): void {
 /**
  * Produce the complete, standalone Flow definition persisted by a Behavior
  * revision. The snapshot deliberately keeps authored MCP nodes, attachment
- * edges, boundServer/enabledTools, prompts, roots and permission rules. Persona
+ * edges, boundServer/enabledTools, prompts, roots and Behavior rules. Persona
  * state is never merged into it.
  */
 export function snapshotBehaviorFlow(flow: Flow): Flow {
@@ -127,7 +127,7 @@ export function snapshotBehaviorFlow(flow: Flow): Flow {
   // embeds the complete, immutable child-Flow closure in the revision.
   assertNoMutableSubflowDependencies(flow);
 
-  const snapshot = jsonClone(flow);
+  const snapshot = jsonClone(normalizeBehaviorRulesInput(flow)) as Flow;
   delete snapshot.createdAt;
   delete snapshot.updatedAt;
   snapshot.nodes = snapshot.nodes.map(stripDerivedProcessProperties);
@@ -171,6 +171,36 @@ export function canonicalJson(value: unknown): string {
 /** SHA-256 of execution-significant authored Flow content. */
 export function hashBehaviorFlow(flow: Flow): string {
   const snapshot = snapshotBehaviorFlow(flow);
+  return createHash('sha256')
+    .update(canonicalJson(executionSignificantFlow(snapshot)))
+    .digest('hex');
+}
+
+/**
+ * Historical hash projection retained only to verify pre-#470 immutable
+ * records. This deliberately snapshots the raw persisted representation: the
+ * physical legacy key is part of the historical content address.
+ */
+export function hashLegacyBehaviorFlow(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Legacy Behavior Flow is required');
+  }
+  const flow = value as Flow;
+  if (typeof flow.id !== 'string' || flow.id.length === 0) {
+    throw new Error('Legacy Behavior Flow id is required');
+  }
+  if (typeof flow.name !== 'string' || flow.name.trim().length === 0) {
+    throw new Error('Legacy Behavior Flow name is required');
+  }
+  if (!Array.isArray(flow.nodes) || !Array.isArray(flow.edges)) {
+    throw new Error('Legacy Behavior Flow must contain node and edge arrays');
+  }
+
+  assertNoMutableSubflowDependencies(flow);
+  const snapshot = jsonClone(flow);
+  delete snapshot.createdAt;
+  delete snapshot.updatedAt;
+  snapshot.nodes = snapshot.nodes.map(stripDerivedProcessProperties);
   return createHash('sha256')
     .update(canonicalJson(executionSignificantFlow(snapshot)))
     .digest('hex');
