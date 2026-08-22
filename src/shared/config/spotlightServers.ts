@@ -30,6 +30,8 @@ export interface SpotlightSource {
 export const SPOTLIGHT_SERVERS: (string | SpotlightSource)[] = [
   // Web search + page fetch (offers both a local npm package and a remote endpoint)
   'https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search',
+  // Web search + page fetch (remote)
+  'https://registry.modelcontextprotocol.io/v0.1/servers/ai.parallel%2Fsearch-mcp/versions',
   'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-abap-adt/versions',
   'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-audio-studio/versions',
   'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-vscode/versions',
