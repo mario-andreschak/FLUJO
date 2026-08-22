@@ -190,9 +190,16 @@ function Get-KnownInstallerPrerequisites {
 
 function Test-NodeVersion {
     param(
-        [Parameter(Mandatory)] [string]$CommandName = 'node',
+        [string]$CommandName = 'node',
         [scriptblock]$CommandResolver = { param($Name) Get-Command $Name -ErrorAction SilentlyContinue },
-        [scriptblock]$VersionResolver = { param($Cmd) & $Cmd.Source --version 2>&1 },
+        [scriptblock]$VersionResolver = {
+            param($Cmd)
+            $resolvedOutput = & $Cmd.Source --version 2>&1
+            [PSCustomObject]@{
+                Output   = $resolvedOutput
+                ExitCode = $LASTEXITCODE
+            }
+        },
         [int]$MinMajor = 22,
         [int]$MinMinor = 0
     )
@@ -209,8 +216,16 @@ function Test-NodeVersion {
     }
 
     # Invoke with --version, capture output and exit code
-    $output = & $VersionResolver $cmd
-    $exitCode = $LASTEXITCODE
+    $probeResult = & $VersionResolver $cmd
+    $probeProperties = if ($null -eq $probeResult) { @() } else { @($probeResult.PSObject.Properties.Name) }
+    if ($probeProperties -contains 'Output' -and $probeProperties -contains 'ExitCode') {
+        $output = $probeResult.Output
+        $exitCode = $probeResult.ExitCode
+    } else {
+        # Simple injected resolvers return only stdout and represent a successful probe.
+        $output = $probeResult
+        $exitCode = 0
+    }
 
     # Distinguish missing command from command that failed
     if ($exitCode -ne 0) {
