@@ -102,6 +102,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev
+      - name: Build the standalone MCP packages
+        run: npm run build:mcp
       # The child-process suites run serially on their own runner so they never
       # compete with the main run's Jest workers for CPU.
       - name: Run the process-boundary suites

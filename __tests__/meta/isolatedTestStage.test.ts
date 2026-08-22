@@ -29,6 +29,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
 };
+const verifyWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'verify.yml'), 'utf8');
 
 describe('isolated test stage', () => {
   it('lists only files that exist', () => {
@@ -45,6 +46,15 @@ describe('isolated test stage', () => {
     for (const file of ISOLATED_TEST_FILES) {
       expect(isolatedScript).toContain(file);
     }
+  });
+
+  it('builds standalone MCP artifacts before running the isolated suites', () => {
+    const isolatedJob = verifyWorkflow.slice(verifyWorkflow.indexOf('  test-isolated:'));
+    const buildIndex = isolatedJob.indexOf('run: npm run build:mcp');
+    const testIndex = isolatedJob.indexOf('run: npm run test:isolated');
+
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(testIndex).toBeGreaterThan(buildIndex);
   });
 
   it('excludes them from the main CI run', () => {
