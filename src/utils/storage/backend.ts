@@ -606,7 +606,15 @@ export async function listAllShardedCollectionItems<T>(
     const recordId = entry.name.slice(0, -'.json'.length);
     assertSafeCollectionId(recordId);
     const content = await fs.readFile(path.join(collectionDir, entry.name), 'utf8');
-    const parsed = JSON.parse(content) as { personaId?: unknown };
+    let parsed: { personaId?: unknown };
+    try {
+      parsed = JSON.parse(content) as { personaId?: unknown };
+    } catch (error) {
+      throw new Error(
+        `Invalid JSON in flat Persona record ${JSON.stringify(`${collection}/${recordId}`)}: `
+        + (error as Error).message,
+      );
+    }
     if (typeof parsed.personaId !== 'string') {
       throw new Error(`Flat Persona record ${JSON.stringify(recordId)} has no owner.`);
     }

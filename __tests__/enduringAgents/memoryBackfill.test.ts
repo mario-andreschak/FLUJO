@@ -62,7 +62,7 @@ describe('stored memory duplicate backfill (issue #465)', () => {
       id: 'persona-1',
       coreMemoryItemIds: [],
       updatedAt: NOW,
-    } as Persona;
+    } as unknown as Persona;
     records = new Map();
 
     listPersonasMock.mockResolvedValue([persona]);

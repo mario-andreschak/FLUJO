@@ -173,7 +173,7 @@ export function withWorkspaceRoute<
     // `{ json: async () => body }`) for the handler itself. Only workspace
     // parsing needs the normalized Fetch Request.
     const handlerRequest = request ?? normalizedRequest;
-    return withWorkspace(normalizedRequest, () =>
+    return withWorkspace((request ?? normalizedRequest) as Request, () =>
       Promise.resolve(
         (handler as unknown as (...a: unknown[]) => Promise<Response>)(handlerRequest, ...rest),
       ));

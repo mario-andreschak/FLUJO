@@ -115,14 +115,16 @@ export default function SnapshotStorageSettings({
     setOpeningFolder(true);
     setError(null);
     setMessage(null);
+    let failed = false;
     try {
       const response = await fetch('/api/snapshots/open-folder', { method: 'POST' });
       if (!response.ok) throw new Error();
       setMessage('Snapshot folder opened.');
     } catch {
-      setError('Unable to open the snapshot folder.');
+      failed = true;
     } finally {
       await refresh();
+      if (failed) setError('Unable to open the snapshot folder.');
       setOpeningFolder(false);
     }
   };

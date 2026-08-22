@@ -22,6 +22,10 @@ import {
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import {
+  deleteIndexedCollectionItem,
+  saveIndexedCollectionItem,
+} from '@/backend/services/enduringAgents/indexing';
 import { deleteCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
@@ -353,7 +357,11 @@ describe('Persona runtime observability', () => {
         kind: 'assignment',
         source: { kind: 'assignment', sourceId: 'later-work' },
       });
-      await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, uncertain.item.id);
+      await deleteIndexedCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.mailboxItems,
+        persona.id,
+        uncertain.item.id,
+      );
 
       nowSpy.mockReturnValue(21_000);
       await expect(inspectAndReconcilePersonaRuntime(persona.id))
@@ -413,9 +421,8 @@ describe('Persona runtime observability', () => {
       );
       expect(victimMailboxBeforeRecovery?.status).toBe('claimed');
       const personaBeforeRecovery = await getPersona(persona.id);
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.mailboxItems,
-        victimClaim!.mailboxItem.id,
         {
           ...victimMailboxBeforeRecovery!,
           claimedActivityId: foreignClaim!.activity.id,
@@ -467,7 +474,11 @@ describe('Persona runtime observability', () => {
       const claim = await claimNextPersonaActivity({ personaId: persona.id, ttlMs: 60_000 });
       expect(claim).not.toBeNull();
       await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, persona.id);
-      await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, claim!.lease.id);
+      await deleteIndexedCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.leaseHistory,
+        persona.id,
+        claim!.lease.id,
+      );
       const personaBeforeRecovery = await getPersona(persona.id);
       await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, persona.id, {
         ...personaBeforeRecovery!,

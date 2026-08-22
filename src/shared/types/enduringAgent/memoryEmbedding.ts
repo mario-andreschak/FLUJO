@@ -6,16 +6,18 @@
 
 import { z } from 'zod';
 
+import { EnduringAgentIdSchema } from './schemas';
+
 /**
  * A single embedding record for a memory item.
  * Tracks the model used, dimensions, and content digest to detect stale embeddings
  * when the model changes.
  */
 export const MemoryEmbeddingSchema = z.object({
-  /** UUID of the memory item this embedding is for. */
-  memoryId: z.string().uuid(),
-  /** UUID of the persona that owns this memory. */
-  personaId: z.string().uuid(),
+  /** Durable Enduring Agent id of the memory item this embedding is for. */
+  memoryId: EnduringAgentIdSchema,
+  /** Durable Enduring Agent id of the Persona that owns this memory. */
+  personaId: EnduringAgentIdSchema,
   /** Embedding model ID (e.g., 'text-embedding-3-small'). */
   modelId: z.string().min(1),
   /** Number of dimensions in the vector. Used to detect model swaps. */

@@ -26,6 +26,10 @@ import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
+  deleteIndexedCollectionItem,
+  saveIndexedCollectionItem,
+} from '@/backend/services/enduringAgents/indexing';
+import {
   _getPersonaRuntimeLockProcessBirthMarkerForTests,
   _isPersonaRuntimeLockOwnerAliveForTests,
   _queryWindowsProcessBirthMarkerForTests,
@@ -938,9 +942,8 @@ describe('enduring-agent Activity runtime', () => {
       const { persona } = await createJim('runtime-waiting-release-prefix-jim');
       await enqueuePersonaMailboxItem(assignment(persona.id, 'waiting-release-prefix'));
       const active = await claim(persona.id);
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        active.activity.id,
         PersonaActivitySchema.parse({
           ...active.activity,
           status: 'waiting',
@@ -966,9 +969,8 @@ describe('enduring-agent Activity runtime', () => {
       const abandonedResume = await claim(persona.id);
 
       // New head persisted, but the waiting Activity was never repointed to it.
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        waiting.id,
         waiting,
       );
       const inspected = (await listPersonaRuntimeBundle(persona.id))!;
@@ -996,7 +998,11 @@ describe('enduring-agent Activity runtime', () => {
       const active = await claim(persona.id);
       await releasePersonaActivityLease(fence(active));
       await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, persona.id);
-      await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, active.lease.id);
+      await deleteIndexedCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.leaseHistory,
+        persona.id,
+        active.lease.id,
+      );
 
       await expect(claimNextPersonaActivity({ personaId: persona.id, ttlMs: 10_000 }))
         .rejects.toThrow(/released lease provenance/i);
@@ -1072,9 +1078,8 @@ describe('enduring-agent Activity runtime', () => {
       await enqueuePersonaMailboxItem(assignment(persona.id, 'safe-to-requeue'));
       const abandoned = await claim(persona.id, 1_000);
 
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        abandoned.activity.id,
         PersonaActivitySchema.parse({
           ...abandoned.activity,
           status: 'queued',
@@ -1082,9 +1087,8 @@ describe('enduring-agent Activity runtime', () => {
           startedAt: undefined,
         }),
       );
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.mailboxItems,
-        abandoned.mailboxItem.id,
         PersonaMailboxItemSchema.parse({
           ...abandoned.mailboxItem,
           status: 'queued',
@@ -1203,9 +1207,8 @@ describe('enduring-agent Activity runtime', () => {
       const { persona } = await createJim('runtime-history-only-jim');
       await enqueuePersonaMailboxItem(assignment(persona.id, 'history-only'));
       const abandoned = await claim(persona.id, 1_000);
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        abandoned.activity.id,
         PersonaActivitySchema.parse({
           ...abandoned.activity,
           status: 'queued',
@@ -1213,9 +1216,8 @@ describe('enduring-agent Activity runtime', () => {
           startedAt: undefined,
         }),
       );
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.mailboxItems,
-        abandoned.mailboxItem.id,
         PersonaMailboxItemSchema.parse({
           ...abandoned.mailboxItem,
           status: 'queued',
@@ -1240,9 +1242,8 @@ describe('enduring-agent Activity runtime', () => {
 
       // Head + running Activity reached disk, but the mailbox claim marker and
       // lifecycle projection did not. The read path may not expose that prefix.
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.mailboxItems,
-        abandoned.mailboxItem.id,
         PersonaMailboxItemSchema.parse({
           ...abandoned.mailboxItem,
           status: 'queued',
@@ -1266,9 +1267,8 @@ describe('enduring-agent Activity runtime', () => {
 
       const resumed = await claim(persona.id);
       const terminalAt = Date.now();
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        resumed.activity.id,
         PersonaActivitySchema.parse({
           ...resumed.activity,
           status: 'completed',
@@ -1313,9 +1313,8 @@ describe('enduring-agent Activity runtime', () => {
       await enqueuePersonaMailboxItem(assignment(persona.id, 'terminal-fence'));
       const active = await claim(persona.id);
       const now = Date.now();
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        active.activity.id,
         PersonaActivitySchema.parse({
           ...active.activity,
           status: 'completed',
@@ -1329,9 +1328,8 @@ describe('enduring-agent Activity runtime', () => {
 
       await enqueuePersonaMailboxItem(assignment(persona.id, 'wrong-generation'));
       const next = await claim(persona.id);
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        next.activity.id,
         PersonaActivitySchema.parse({ ...next.activity, leaseId: 'lease_wrong_generation' }),
       );
       await expect(renewPersonaActivityLease({ ...fence(next), ttlMs: 10_000 }))
@@ -1353,9 +1351,8 @@ describe('enduring-agent Activity runtime', () => {
       }) as PersonaActivity;
       // Simulate a crash after the terminal Activity write but before mailbox,
       // lifecycle projection, and lease release.
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        terminal.id,
         terminal,
       );
 
@@ -1377,9 +1374,8 @@ describe('enduring-agent Activity runtime', () => {
       await enqueuePersonaMailboxItem(assignment(persona.id, 'continues'));
       const active = await claim(persona.id);
       const now = Date.now();
-      await saveCollectionItem(
+      await saveIndexedCollectionItem(
         ENDURING_AGENT_COLLECTIONS.activities,
-        active.activity.id,
         PersonaActivitySchema.parse({
           ...active.activity,
           status: 'error',

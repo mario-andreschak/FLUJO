@@ -337,7 +337,10 @@ export const PERSONA_CAPABILITY_MANIFEST = [
     name: 'Recover interrupted work',
     description: 'Keep durable work safe and offer a friendly repair action if it cannot resume automatically.',
     backendOperations: ['runtime.inspect', 'runtime.recover'],
-    backendEndpoints: ['POST /v1/personas/[personaId]/runtime-recovery'],
+    backendEndpoints: [
+      'POST /v1/personas/[personaId]/runtime-recovery',
+      'GET /v1/personas/[personaId]/storage-stats',
+    ],
     ui: {
       area: 'overview',
       label: 'Repair and continue',

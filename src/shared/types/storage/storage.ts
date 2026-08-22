@@ -73,7 +73,7 @@ export enum StorageKey {
   TELEMETRY_STATE = 'telemetry_state',
   /** Workspace-scoped retention policy for derived filesystem snapshots (#414). */
   SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy',
-  /** Memory embeddings sidecar collection (issue #451). Per-persona embeddings keyed as MEMORY_EMBEDDINGS:personaId. */
+  /** Memory embeddings sidecar collection (issue #451), keyed by safe Persona id. */
   MEMORY_EMBEDDINGS = 'memory_embeddings'
 }
 

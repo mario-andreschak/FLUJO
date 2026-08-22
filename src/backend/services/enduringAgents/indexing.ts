@@ -141,14 +141,17 @@ function mailboxEntry(value: unknown): PersonaMailboxItemIndexEntry | null {
 function activityEntry(value: unknown): PersonaActivityIndexEntry | null { return common(value); }
 function leaseEntry(value: unknown): PersonaLeaseIndexEntry | null {
   const item = objectEntry(value);
+  const updatedAt = typeof item?.renewedAt === 'number'
+    ? item.renewedAt
+    : item?.updatedAt;
   if (!item || typeof item.id !== 'string' || item.id.length === 0
     || typeof item.personaId !== 'string' || item.personaId.length === 0
-    || typeof item.renewedAt !== 'number' || !Number.isSafeInteger(item.renewedAt)
-    || item.renewedAt < 0) return null;
+    || typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt)
+    || updatedAt < 0) return null;
   return {
     id: item.id,
     personaId: item.personaId,
-    updatedAt: item.renewedAt,
+    updatedAt,
     ...(typeof item.status === 'string' ? { status: item.status } : {}),
   };
 }

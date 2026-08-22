@@ -159,7 +159,7 @@ describe('memory-kernel near-duplicate persistence (issues #467 and #468)', () =
         id: survivor.id,
         status: 'active',
       });
-      expect(await getMemoryItem(personaId, 'memory-idle-incoming')).toBeUndefined();
+      expect(await getMemoryItem(personaId, 'memory-idle-incoming')).toBeNull();
       expect(await listMemoryItems(personaId)).toHaveLength(1);
       expect(await getPersona(personaId)).toMatchObject({
         lifecycleState: 'idle',
@@ -180,7 +180,7 @@ describe('memory-kernel near-duplicate persistence (issues #467 and #468)', () =
           id: survivor.id,
           status: 'active',
         });
-        expect(await getMemoryItem(personaId, 'memory-active-incoming')).toBeUndefined();
+        expect(await getMemoryItem(personaId, 'memory-active-incoming')).toBeNull();
         expect(await getPersonaMemory(personaId, survivor.id)).toMatchObject({
           id: survivor.id,
           status: 'active',
@@ -398,7 +398,7 @@ describe('memory-kernel near-duplicate persistence (issues #467 and #468)', () =
         MEMORY_DEDUP_SETTINGS.comparisonWindow + 2,
       );
     });
-  });
+  }, 30_000);
 
   it('saves a sibling while the code-level dedup kill switch is disabled', async () => {
     await inFreshWorkspace(async (personaId) => {

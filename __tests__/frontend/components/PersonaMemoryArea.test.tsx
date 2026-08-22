@@ -179,7 +179,13 @@ describe('PersonaMemoryArea correction history', () => {
       return { ...candidates.find(item => item.id === memoryId)!, status: 'active' };
     });
 
-    render(<PersonaMemoryArea detail={reviewDetail} busy={false} refresh={jest.fn()} />);
+    render(
+      <PersonaMemoryArea
+        detail={reviewDetail}
+        busy={false}
+        refresh={jest.fn().mockResolvedValue(undefined)}
+      />,
+    );
     fireEvent.click(await screen.findByRole('button', { name: 'Select all shown' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve selected (3)' }));
 

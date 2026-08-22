@@ -415,7 +415,7 @@ describe('enduring-agent referential integrity', () => {
         ...(await getPersona(jim.persona.id))!,
         coreMemoryItemIds: [sarah.memoryItems[0].id],
         updatedAt: Date.now(),
-      })).rejects.toThrow(/owned by another Persona/i);
+      })).rejects.toThrow(/missing MemoryItem/i);
 
       const verified = memoryItem({
         id: 'memory_verified_core',

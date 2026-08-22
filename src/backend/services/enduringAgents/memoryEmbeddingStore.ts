@@ -15,10 +15,21 @@ import type {
 } from '@/shared/types/enduringAgent';
 import { MemoryEmbeddingSchema } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
-import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
+import {
+  clearItem,
+  deleteCollectionItem,
+  loadCollectionItem,
+  loadItem,
+  saveCollectionItem,
+} from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 
 const log = createLogger('backend/services/enduringAgents/memoryEmbeddingStore');
+const MEMORY_EMBEDDING_COLLECTION = StorageKey.MEMORY_EMBEDDINGS;
+
+function legacyEmbeddingStorageKey(personaId: string): StorageKey {
+  return `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}` as StorageKey;
+}
 
 /**
  * Compute SHA256 digest of text for change detection.
@@ -32,8 +43,14 @@ export function computeContentDigest(text: string): string {
  */
 async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding[]> {
   try {
-    const storageKey = `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}`;
-    const embeddings = await loadItem<MemoryEmbedding[]>(storageKey as any, []);
+    const stored = await loadCollectionItem<MemoryEmbedding[] | null>(
+      MEMORY_EMBEDDING_COLLECTION,
+      personaId,
+      null,
+    );
+    const embeddings = stored ?? (process.platform === 'win32'
+      ? []
+      : await loadItem<MemoryEmbedding[]>(legacyEmbeddingStorageKey(personaId), []));
     return embeddings.filter((e) => MemoryEmbeddingSchema.safeParse(e).success);
   } catch (error: unknown) {
     log.warn(`Failed to load embeddings for persona ${personaId}:`, error);
@@ -46,8 +63,7 @@ async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding
  */
 async function savePersonaEmbeddings(personaId: string, embeddings: MemoryEmbedding[]): Promise<void> {
   try {
-    const storageKey = `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}`;
-    await saveItem(storageKey as any, embeddings);
+    await saveCollectionItem(MEMORY_EMBEDDING_COLLECTION, personaId, embeddings);
   } catch (error: unknown) {
     log.error(`Failed to save embeddings for persona ${personaId}:`, error);
     throw error;
@@ -159,12 +175,14 @@ export async function deleteMemoryEmbedding(personaId: string, memoryId: string)
  */
 export async function deletePersonaEmbeddings(personaId: string): Promise<number> {
   try {
-    const storageKey = `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}`;
     const embeddings = await loadPersonaEmbeddings(personaId);
     const count = embeddings.length;
 
     if (count > 0) {
-      await clearItem(storageKey as any);
+      await deleteCollectionItem(MEMORY_EMBEDDING_COLLECTION, personaId);
+      if (process.platform !== 'win32') {
+        await clearItem(legacyEmbeddingStorageKey(personaId));
+      }
     }
 
     return count;

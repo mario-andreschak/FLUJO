@@ -17,6 +17,7 @@
 // harmless for the void-returning collaborators (they are awaited).
 const verifyStorageMock = jest.fn();
 const migrateWorkspaceLayoutMock = jest.fn();
+const migrateEnduringAgentDirectoryShardsMock = jest.fn();
 const migrateInternalMcpServersMock = jest.fn();
 const startEnabledServersMock = jest.fn();
 const refreshSpotlightMock = jest.fn();
@@ -35,6 +36,10 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 jest.mock('@/backend/services/workspace/migration', () => ({
   migrateWorkspaceLayout: (...a: unknown[]) => migrateWorkspaceLayoutMock(...a),
+}));
+jest.mock('@/backend/services/enduringAgents/directoryShardingMigration', () => ({
+  migrateEnduringAgentDirectoryShards: (...a: unknown[]) =>
+    migrateEnduringAgentDirectoryShardsMock(...a),
 }));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
@@ -86,6 +91,7 @@ describe('backend init startup gating (#78)', () => {
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
     migrateWorkspaceLayoutMock.mockResolvedValue(undefined);
+    migrateEnduringAgentDirectoryShardsMock.mockResolvedValue(undefined);
     ensureDefaultFlujoAgentMock.mockResolvedValue(undefined);
     listPersonasMock.mockResolvedValue([{ id: 'persona_startup' }]);
     reconcilePersonaRoleBehaviorsMock.mockResolvedValue(undefined);

@@ -121,8 +121,7 @@ export class MemoryQueryVectorCache {
 
     this.misses += 1;
     const generation = this.generation;
-    let created: Promise<readonly number[]>;
-    created = create()
+    const created: Promise<readonly number[]> = create()
       .then((vector) => {
         if (generation === this.generation) this.set(key, vector);
         return vector;

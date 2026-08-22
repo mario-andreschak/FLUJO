@@ -293,6 +293,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
     const friendlyAbilityLabels = [
       'Use existing memories',
       'Suggest things to remember',
+      'Resolve conflicting memories',
       'Suggest memory corrections',
       'Keep important memories always available',
       'Stop keeping a memory always available',
@@ -321,6 +322,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
         personaTools: [
           'remember',
           'recall',
+          'resolve_conflict',
           'correct',
           'forget',
           'pin',

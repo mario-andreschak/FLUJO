@@ -38,6 +38,7 @@ export function normalizePersonaAbilities(value: unknown): PersonaAbilityId[] {
 const MEMORY_ABILITIES = [
   { id: 'recall', label: 'flows.process.personaAbilities.recall' },
   { id: 'remember', label: 'flows.process.personaAbilities.remember' },
+  { id: 'resolve_conflict', label: 'flows.process.personaAbilities.resolveConflict' },
   { id: 'correct', label: 'flows.process.personaAbilities.correct' },
   { id: 'pin', label: 'flows.process.personaAbilities.pin' },
   { id: 'unpin', label: 'flows.process.personaAbilities.unpin' },

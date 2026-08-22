@@ -2,6 +2,7 @@ import {
   PersonaBusyError,
   PersonaLeaseLostError,
   PersonaMailboxConflictError,
+  PersonaRuntimeNotFoundError,
   PersonaRuntimeUnavailableError,
   acknowledgePersonaActivityDelivery,
   claimNextPersonaActivity,
@@ -309,7 +310,7 @@ describe('enduring-agent Activity routing', () => {
       await expect(acknowledgePersonaActivityDelivery({
         ...fence(first),
         mailboxItemId: routed.item.id,
-      })).rejects.toBeInstanceOf(PersonaLeaseLostError);
+      })).rejects.toBeInstanceOf(PersonaRuntimeNotFoundError);
       await expect(listPendingPersonaActivityDeliveries(fence(second)))
         .resolves.toEqual([routed.item]);
     });

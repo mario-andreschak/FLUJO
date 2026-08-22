@@ -63,6 +63,7 @@ import {
   getMemoryIndex,
   getWorkItemIndex,
   saveIndexedCollectionItem,
+  syncIndexEntry,
 } from './indexing';
 import { loadPersonaRecords } from './personaRecordCache';
 import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
@@ -1902,7 +1903,9 @@ export async function getPersonaLeaseRecord(id: string): Promise<PersonaLease | 
         + `${JSON.stringify(getCurrentWorkspace())}.`,
       );
     }
-    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
+    // The collision-aware scan established this as the unique durable owner;
+    // repair only the stale sidecar instead of attempting a second record write.
+    await syncIndexEntry(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
     return record;
   }
 

@@ -527,10 +527,12 @@ function makeHarness(
         } as BehaviorRevision
       : null
   ));
-  const getPersonaActivity = jest.fn(async (id: string) => (
+  const getPersonaActivity = jest.fn(async (_personaId: string, id: string) => (
     routedClaims.find((candidate) => candidate.activity.id === id)?.activity ?? null
   ));
-  const getPersonaMailboxItem = jest.fn(async (id: string) => mailboxItems.get(id) ?? null);
+  const getPersonaMailboxItem = jest.fn(async (_personaId: string, id: string) => (
+    mailboxItems.get(id) ?? null
+  ));
   const readConversationLog = jest.fn(async () => undefined);
   const appendConversationMessage = jest.fn(async () => undefined);
   const getPersonaStorageStats = jest.fn(async (id: string): Promise<PersonaStorageStats> => ({
@@ -713,6 +715,7 @@ describe('Persona Flow dispatcher', () => {
       dispatchInput('persona_test', 'retention-enabled'),
       { waitForCompletion: true, timeoutMs: 2_000 },
     );
+    await harness.dispatcher.pump('persona_test');
 
     expect(submission.dispatch.state).toBe('completed');
     const retry = await harness.dispatcher.submit(
@@ -762,6 +765,7 @@ describe('Persona Flow dispatcher', () => {
       dispatchInput('persona_test', 'retention-error'),
       { waitForCompletion: true, timeoutMs: 2_000 },
     );
+    await errored.dispatcher.pump('persona_test');
     expect(errorSubmission.dispatch.state).toBe('error');
     expect(errored.dependencies.compactPersonaFlowDispatches).toHaveBeenCalledTimes(1);
 
@@ -785,6 +789,7 @@ describe('Persona Flow dispatcher', () => {
       conversationId: waiting.flowInput!.conversationId,
       reason: 'verify terminal retention',
     }, { waitForCompletion: true, timeoutMs: 2_000 });
+    await cancelled.dispatcher.pump('persona_test');
     expect(cancellation.state).toBe('cancelled');
     expect(cancelled.dependencies.compactPersonaFlowDispatches).toHaveBeenCalledTimes(1);
   });

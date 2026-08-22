@@ -164,9 +164,11 @@ describe('Persona runtime event log incremental state (#454)', () => {
 
       _resetPersonaRuntimeEventLogStatsForTests();
       const next = await appendPersonaRuntimeEvent(personaId, completedEvent(9));
-      expect(next.event.seq).toBe(1);
+      // The manifest is the durable sequence authority. Truncating the active
+      // segment must not cause an already-issued sequence number to be reused.
+      expect(next.event.seq).toBe(3);
       expect(_getPersonaRuntimeEventLogStatsForTests().fullRescans).toBe(1);
-      expect((await readPersonaRuntimeEvents(personaId)).map(({ seq }) => seq)).toEqual([0, 1]);
+      expect((await readPersonaRuntimeEvents(personaId)).map(({ seq }) => seq)).toEqual([0, 3]);
     });
   });
 

@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
 import { FEATURES } from '@/config/features';
-import { modelService } from '@/backend/services/model';
-import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
 import { supportsEmbeddings } from '@/shared/types/model/embeddings';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
@@ -616,6 +614,12 @@ export async function prepareSemanticRecall(
     return semanticFallback('missing_model', settings.semanticFloor);
   }
 
+  // Loading the model service lazily keeps the Persona tool-definition graph
+  // independent from model adapters, which themselves load the Flow runtime.
+  const [{ modelService }, { getEmbeddingProvider }] = await Promise.all([
+    import('@/backend/services/model'),
+    import('@/backend/services/model/embeddings'),
+  ]);
   const model = await modelService.getModel(settings.semanticEmbeddingModelId);
   if (!model) return semanticFallback('model_not_found', settings.semanticFloor);
   if (!supportsEmbeddings(model.adapter)) {

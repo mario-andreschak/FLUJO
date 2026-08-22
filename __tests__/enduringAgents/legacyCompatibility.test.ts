@@ -159,6 +159,10 @@ describe('pre-Persona persistence compatibility', () => {
 
   it('parses and validates a legacy Flow while preserving its authored tool config exactly', () => {
     const fixture = jsonRoundTrip(legacyFlowFixture) as unknown as Flow;
+    const {
+      permissionRules: legacyRules,
+      ...canonicalFixture
+    } = fixture as Flow & { permissionRules?: Flow['behaviorRules'] };
     const parsed = FlowSnapshotSchema.parse(fixture);
     const validation = validateFlow(parsed, {
       models: [{ id: 'legacy-model', name: 'Legacy model' }],
@@ -168,7 +172,7 @@ describe('pre-Persona persistence compatibility', () => {
 
     expect(validation.isRunnable).toBe(true);
     expect(validation.errorCount).toBe(0);
-    expect(parsed).toEqual(fixture);
+    expect(parsed).toEqual({ ...canonicalFixture, behaviorRules: legacyRules });
 
     const expectedToolConfig = flowNodeProperties(fixture, 'filesystem-tools');
     expect(flowNodeProperties(parsed, 'filesystem-tools')).toEqual(expectedToolConfig);
@@ -176,7 +180,7 @@ describe('pre-Persona persistence compatibility', () => {
       .toEqual(expectedToolConfig);
 
     const roundTripped = FlowSnapshotSchema.parse(jsonRoundTrip(parsed));
-    expect(roundTripped).toEqual(fixture);
+    expect(roundTripped).toEqual(parsed);
     expectPersonaLess(roundTripped);
   });
 

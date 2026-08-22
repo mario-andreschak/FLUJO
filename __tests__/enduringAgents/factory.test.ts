@@ -196,17 +196,15 @@ describe('createPersonaFromRole', () => {
 
       for (const [index, testCase] of cases.entries()) {
         const base = buildTestRoleVersion();
-        const defaults = clone(base.defaults ?? {});
-        delete defaults.autonomyLevel;
-        if (testCase.roleDefault !== undefined) {
-          defaults.autonomyLevel = testCase.roleDefault;
-        }
+        const defaults = testCase.roleDefault === undefined
+          ? undefined
+          : { ...clone(base.defaults!), autonomyLevel: testCase.roleDefault };
         const version = 40 + index;
         const roleVersion = await createRoleVersion(RoleVersionSchema.parse({
           ...base,
           id: `rolever_test_general_v${version}`,
           version,
-          defaults,
+          ...(defaults === undefined ? { defaults: undefined } : { defaults }),
           createdAt: version,
         }));
 

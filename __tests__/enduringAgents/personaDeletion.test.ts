@@ -36,7 +36,7 @@ import {
   type BehaviorOutcomeMetric,
   type PersonaDeletionArchivePolicy,
 } from '@/shared/types/enduringAgent';
-import { getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
+import { getWorkspaceDataDir, getWorkspaceDbDir, runWithWorkspace } from '@/utils/workspace';
 import {
   loadCollectionItem,
   loadItem,
@@ -597,19 +597,22 @@ describe('Persona deletion policy', () => {
         initialMemories: [{ content: 'Unindexed private state.' }],
       });
       const dataDir = getWorkspaceDataDir();
-      const indexPath = path.join(dataDir, 'persona-memories.index.json');
-      const generationPath = path.join(dataDir, 'persona-memories.generation.json');
+      const dbDir = getWorkspaceDbDir();
+      const indexPath = path.join(dbDir, 'persona-memories.index.json');
+      const generationPath = path.join(dbDir, 'persona-memories.generation.json');
       const shardPath = path.join(
-        dataDir,
+        dbDir,
         ENDURING_AGENT_COLLECTIONS.memoryItems,
         persona.id,
       );
       const index = JSON.parse(await fs.readFile(indexPath, 'utf8')) as {
         entries: Array<{ personaId: string }>;
         sourceCount: number;
+        generatedAt: number;
       };
       index.entries = index.entries.filter(entry => entry.personaId !== persona.id);
       index.sourceCount = index.entries.length;
+      index.generatedAt = 0;
       await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
       const generation = JSON.parse(await fs.readFile(generationPath, 'utf8')) as {
         sourceCount: number;

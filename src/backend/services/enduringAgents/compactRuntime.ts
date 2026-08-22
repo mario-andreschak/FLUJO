@@ -266,5 +266,3 @@ export async function compactPersonaLeaseHistory(
 }
 
 // Backward-compatible direct-module exports; the implementation lives in the dedicated service.
-export { getPersonaStorageStats } from './runtimeStorageStats';
-export type { PersonaStorageKindStats, PersonaStorageStats } from './runtimeStorageStats';

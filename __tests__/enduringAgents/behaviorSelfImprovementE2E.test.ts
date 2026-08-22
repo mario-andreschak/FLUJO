@@ -36,6 +36,8 @@ import { createPersonaFromRole } from './fixtures/personaFactory';
 type MutableMaintenanceFeatures = {
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: boolean;
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: boolean;
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS: boolean;
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: boolean;
 };
 
 const maintenanceFeatures = FEATURES as unknown as MutableMaintenanceFeatures;
@@ -144,15 +146,19 @@ async function persistRepeatedLesson(
   return [first, second];
 }
 
-describe('Persona self-improvement with both rollout gates enabled', () => {
+describe('Persona self-improvement with the complete rollout gate enabled', () => {
   beforeEach(() => {
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = true;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
   });
 
   afterEach(() => {
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
   });
 
   it('drives the full chain from Activity outcomes to an activated Behavior revision', async () => {

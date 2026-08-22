@@ -7,12 +7,6 @@ import {
   type PersonaNativeAbilityId,
 } from '@/shared/types/enduringAgent';
 import {
-  createPersonaWorkItem,
-  promoteRunTodoToWorkItem,
-  suggestBehaviorInstructionImprovement,
-  updatePersonaWorkItem,
-} from '@/backend/services/enduringAgents';
-import {
   PERSONA_MEMORY_TOOL_DEFINITIONS,
   executePersonaMemoryGatewayTool,
   isPersonaMemoryToolName,
@@ -179,6 +173,9 @@ export async function executePersonaTool(
     }];
     switch (toolName) {
       case 'work_item_create': {
+        const { createPersonaWorkItem } = await import(
+          '@/backend/services/enduringAgents'
+        );
         const item = await createPersonaWorkItem({
           personaId: trusted.personaId,
           title: stringArg(args, 'title') ?? '',
@@ -192,6 +189,9 @@ export async function executePersonaTool(
         return { success: true, data: { created: true, item } };
       }
       case 'work_item_update': {
+        const { updatePersonaWorkItem } = await import(
+          '@/backend/services/enduringAgents'
+        );
         const item = await updatePersonaWorkItem(
           trusted.personaId,
           stringArg(args, 'work_item_id') ?? '',
@@ -218,6 +218,9 @@ export async function executePersonaTool(
         return { success: true, data: { updated: true, item } };
       }
       case 'work_item_complete': {
+        const { updatePersonaWorkItem } = await import(
+          '@/backend/services/enduringAgents'
+        );
         const item = await updatePersonaWorkItem(
           trusted.personaId,
           stringArg(args, 'work_item_id') ?? '',
@@ -232,6 +235,9 @@ export async function executePersonaTool(
         return { success: true, data: { completed: true, item } };
       }
       case 'work_item_promote_todo': {
+        const { promoteRunTodoToWorkItem } = await import(
+          '@/backend/services/enduringAgents'
+        );
         const item = await promoteRunTodoToWorkItem(trusted.personaId, {
           todoId: stringArg(args, 'todo_id') ?? '',
           ...(stringArg(args, 'title') ? { title: stringArg(args, 'title') } : {}),
@@ -242,6 +248,9 @@ export async function executePersonaTool(
         return { success: true, data: { promoted: true, item } };
       }
       case 'suggest_improvement': {
+        const { suggestBehaviorInstructionImprovement } = await import(
+          '@/backend/services/enduringAgents'
+        );
         await trusted.executionAuthority.assertCurrent();
         const proposal = await suggestBehaviorInstructionImprovement({
           personaId: trusted.personaId,
