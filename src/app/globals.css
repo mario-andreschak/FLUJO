@@ -217,7 +217,6 @@ body::before {
     radial-gradient(circle at 64% 26%, rgba(46, 207, 232, 0.16), transparent 22%),
     radial-gradient(circle at 78% 62%, rgba(244, 98, 177, 0.11), transparent 20%);
   transform: translate3d(0, 0, 0);
-  animation: ambient-drift 22s ease-in-out infinite alternate;
 }
 
 body::after {
@@ -459,15 +458,6 @@ a {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border-width: 0;
-}
-
-@keyframes ambient-drift {
-  from {
-    transform: translate3d(-2%, -1%, 0) scale(0.98);
-  }
-  to {
-    transform: translate3d(3%, 4%, 0) scale(1.08);
-  }
 }
 
 @keyframes loading-float {

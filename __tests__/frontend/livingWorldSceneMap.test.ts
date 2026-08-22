@@ -69,13 +69,13 @@ describe('Living Watershed scene map', () => {
 
 
 describe('Living Watershed viewport bounds', () => {
-  it('caps a high-resolution canvas to a five-megapixel backing store', () => {
+  it('caps a high-resolution canvas to a 2.5-megapixel backing store', () => {
     const ratio = canvasPixelRatioForViewport(3840, 2160, 2);
     const pixelCount = Math.floor(3840 * ratio) * Math.floor(2160 * ratio);
 
     expect(ratio).toBeLessThan(1);
-    expect(pixelCount).toBeLessThanOrEqual(5_000_000);
-    expect(canvasPixelRatioForViewport(1440, 900, 2)).toBe(1.6);
+    expect(pixelCount).toBeLessThanOrEqual(2_500_000);
+    expect(canvasPixelRatioForViewport(1440, 900, 2)).toBe(1.25);
   });
 
   it('extends terrain past the visible bottom of tall viewports', () => {

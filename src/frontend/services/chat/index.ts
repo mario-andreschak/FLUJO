@@ -56,6 +56,11 @@ export interface EventStreamHandlers {
   onError?: (err: Event) => void;
 }
 
+export interface EventReplayOptions {
+  /** Rebuild run controls/lanes without replaying the transcript payload. */
+  activityOnly?: boolean;
+}
+
 export interface RevertPreview {
   messageId: string;
   previewId: string;
@@ -644,12 +649,14 @@ class ChatService {
   subscribeToEvents(
     id: string,
     handlers: EventStreamHandlers,
-    fromSeq?: number
+    fromSeq?: number,
+    replayOptions?: EventReplayOptions,
   ): EventSource {
-    const url =
-      fromSeq !== undefined
-        ? `${BASE}/${encodeURIComponent(id)}/events?fromSeq=${fromSeq}`
-        : `${BASE}/${encodeURIComponent(id)}/events`;
+    const params = new URLSearchParams();
+    if (fromSeq !== undefined) params.set('fromSeq', String(fromSeq));
+    if (replayOptions?.activityOnly) params.set('replay', 'activity');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const url = `${BASE}/${encodeURIComponent(id)}/events${query}`;
     const es = new EventSource(withWorkspaceUrl(url));
     es.onopen = () => {
       log.debug('Execution event stream open', { conversationId: id });

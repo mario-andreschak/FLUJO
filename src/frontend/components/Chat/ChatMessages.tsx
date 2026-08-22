@@ -1052,6 +1052,12 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
     <Box
       data-ask-flujo-message-id={message.id}
       sx={{
+        // Markdown/tool timelines are expensive layout subtrees. Chromium can
+        // skip off-screen bubbles while retaining their scroll geometry and
+        // accessibility/search semantics.
+        contentVisibility: 'auto',
+        contain: 'layout paint style',
+        containIntrinsicSize: '0 140px',
         display: 'flex',
         flexDirection: 'column',
         alignItems: message.role === 'user' ? 'flex-end' : 'flex-start',

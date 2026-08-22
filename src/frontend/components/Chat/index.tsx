@@ -101,7 +101,7 @@ import {
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
 import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
-import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
+import type { ExecutionEvent, ModelDeltaEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import {
   LiveActivity,
@@ -130,6 +130,7 @@ import {
   latestMcpAppResultIdsByResource,
   observeNewMcpAppResultIds,
 } from './mcpAppProjection';
+import { applyModelDeltaBatch } from './modelDeltaBatch';
 import {
   readDismissedMcpAppKeys,
   writeMcpAppDismissed,
@@ -402,6 +403,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
 const SIDEBAR_PAGE_SIZE = 50;
+const MODEL_DELTA_COMMIT_INTERVAL_MS = 100;
 
 const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
 const isCancellationError = (err: unknown): boolean => {
@@ -894,6 +896,8 @@ const Chat: React.FC = () => {
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const pendingModelDeltasRef = useRef<ModelDeltaEvent[]>([]);
+  const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
   // composer); this ref lets it call the latest close/detach implementation.
   const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
@@ -1981,6 +1985,11 @@ const Chat: React.FC = () => {
 
   // --- Live execution event stream (SSE) ---
   const closeEventStream = useCallback(() => {
+    if (modelDeltaFlushTimerRef.current !== null) {
+      clearTimeout(modelDeltaFlushTimerRef.current);
+      modelDeltaFlushTimerRef.current = null;
+    }
+    pendingModelDeltasRef.current = [];
     if (eventSourceRef.current) {
       log.debug('Closing execution event stream');
       eventSourceRef.current.close();
@@ -2003,6 +2012,36 @@ const Chat: React.FC = () => {
     []
   );
 
+  const flushModelDeltas = useCallback(() => {
+    if (modelDeltaFlushTimerRef.current !== null) {
+      clearTimeout(modelDeltaFlushTimerRef.current);
+      modelDeltaFlushTimerRef.current = null;
+    }
+    const pending = pendingModelDeltasRef.current;
+    if (pending.length === 0) return;
+    pendingModelDeltasRef.current = [];
+
+    setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
+    setLiveStats(prev => ({
+      totalTokens: prev?.totalTokens ?? 0,
+      activeNode: prev?.activeNode ?? null,
+      startedAt: prev?.startedAt ?? Date.now(),
+      lastEventAt: Date.now(),
+    }));
+  }, []);
+
+  const enqueueModelDelta = useCallback((event: ModelDeltaEvent) => {
+    pendingModelDeltasRef.current.push(event);
+    if (modelDeltaFlushTimerRef.current !== null) return;
+    // Cap transcript reconciliation at 10 fps while preserving every byte of
+    // the streamed response. The final/non-delta event flushes synchronously,
+    // so this introduces no ordering gap at model or run completion.
+    modelDeltaFlushTimerRef.current = setTimeout(
+      flushModelDeltas,
+      MODEL_DELTA_COMMIT_INTERVAL_MS,
+    );
+  }, [flushModelDeltas]);
+
   // Apply a single execution event from the SSE stream to local UI state.
   const applyExecutionEvent = useCallback((event: ExecutionEvent) => {
     // Ordered dedupe: ignore anything we've already applied (e.g. replayed on
@@ -2011,6 +2050,14 @@ const Chat: React.FC = () => {
       if (event.seq <= lastSeqRef.current) return;
       lastSeqRef.current = event.seq;
     }
+
+    if (event.type === 'model:delta') {
+      enqueueModelDelta(event);
+      return;
+    }
+    // Preserve event order when a final message/model:end/run:done overtakes a
+    // scheduled delta paint in the same browser task.
+    flushModelDeltas();
 
     // Keep only graph-routing/activity events: token deltas and messages would
     // rebuild the canvas frame model on every streamed chunk without adding any
@@ -2144,65 +2191,6 @@ const Chat: React.FC = () => {
           if (key.endsWith(`:${event.dispatchId}`)) modelTurnDetailCacheRef.current.delete(key);
         }
         break;
-      case 'model:delta': {
-        touch({});
-        setDetailedConversation(prev => {
-          if (!prev || prev.id !== event.conversationId) return prev;
-
-          const existingIndex = prev.messages.findIndex(message => message.id === event.messageId);
-          const existing = existingIndex >= 0
-            ? prev.messages[existingIndex]
-            : ({
-                id: event.messageId,
-                role: 'assistant',
-                content: '',
-                timestamp: event.timestamp,
-                processNodeId: event.node?.nodeId,
-              } as ChatMessage);
-
-          if (existing.role !== 'assistant') return prev;
-
-          const toolCalls = [...(existing.tool_calls ?? [])];
-          const toolDelta = event.toolCallDelta;
-          if (toolDelta) {
-            const prior = toolCalls[toolDelta.index];
-            toolCalls[toolDelta.index] = {
-              id: toolDelta.id ?? prior?.id ?? `pending_${event.messageId}_${toolDelta.index}`,
-              type: 'function',
-              function: {
-                name: `${prior?.function.name ?? ''}${toolDelta.nameDelta ?? ''}`,
-                arguments: `${prior?.function.arguments ?? ''}${toolDelta.argumentsDelta ?? ''}`,
-              },
-            };
-          }
-
-          const draft = {
-            ...existing,
-            content: `${typeof existing.content === 'string' ? existing.content : ''}${event.delta ?? ''}`,
-            ...(event.mediaPart
-              ? {
-                  media: [
-                    ...(existing.media ?? []),
-                    ...(existing.media ?? []).some(part =>
-                      part.type === event.mediaPart?.type &&
-                      part.url === event.mediaPart?.url &&
-                      part.resourceUri === event.mediaPart?.resourceUri
-                    )
-                      ? []
-                      : [event.mediaPart],
-                  ],
-                }
-              : {}),
-            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-          } as ChatMessage;
-
-          const messages = [...prev.messages];
-          if (existingIndex >= 0) messages[existingIndex] = draft;
-          else messages.push(draft);
-          return { ...prev, messages };
-        });
-        break;
-      }
       case 'model:end':
         touch({});
         if (event.discard && event.messageId) {
@@ -2485,14 +2473,18 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus, markConversationStopped, t]);
+  }, [closeEventStream, enqueueModelDelta, fetchDetailedConversation, fetchConversations, flushModelDeltas, markConvRunning, patchConversationStatus, markConversationStopped, t]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
   // so the subscription exists before the server emits any events — otherwise a
   // fast run can finish before the stream attaches and the live view sees
   // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
-  const openEventStream = useCallback((conversationId: string, fromSeq?: number): Promise<void> => {
+  const openEventStream = useCallback((
+    conversationId: string,
+    fromSeq?: number,
+    replayOptions?: { activityOnly?: boolean },
+  ): Promise<void> => {
     closeEventStream();
     // Accept events at/after the replay position (fromSeq) or everything (-1).
     lastSeqRef.current = fromSeq !== undefined ? fromSeq - 1 : -1;
@@ -2511,7 +2503,8 @@ const Chat: React.FC = () => {
         eventSourceRef.current = chatService.subscribeToEvents(
           conversationId,
           { onEvent: applyExecutionEvent, onOpen: settle },
-          fromSeq
+          fromSeq,
+          replayOptions,
         );
         // Safety: never block the run for more than ~1.5s waiting to connect.
         setTimeout(settle, 1500);
@@ -2550,7 +2543,10 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setLiveStats(prev => prev ?? { totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
-    openEventStream(currentConversationId, 0); // replay buffered events from the start
+    // The conversation GET already supplied the transcript. Rebuild only the
+    // run controls/lanes/todos here; replaying every buffered message can push
+    // megabytes through React before the live tail even attaches.
+    openEventStream(currentConversationId, 0, { activityOnly: true });
   }, [currentConversationId, currentConversationSummary?.status, openEventStream]);
 
   // Delete conversation

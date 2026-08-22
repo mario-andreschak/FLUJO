@@ -23,6 +23,8 @@ interface CameraFlight {
 }
 const WORLD_SCENES = Object.values(RIVER_SCENES) as RiverScene[];
 const STILL_POINTER: RiverPointer = { x: 0, y: 0 };
+const FLIGHT_FRAME_INTERVAL_MS = 16;
+const AMBIENT_FRAME_INTERVAL_MS = 100;
 
 const clamp = (value: number, minimum: number, maximum: number) => (
   Math.min(maximum, Math.max(minimum, value))
@@ -212,7 +214,13 @@ export default function RiverWorld() {
         animationFrame = 0;
         return;
       }
-      const minimumFrameTime = flightRef.current ? 16 : 32;
+      // Camera travel stays fluid, while the decorative idle scene is capped
+      // at 10 fps. Painting a full-window canvas at display refresh speed while
+      // the user reads a chat wastes an entire renderer core for imperceptible
+      // background motion.
+      const minimumFrameTime = flightRef.current
+        ? FLIGHT_FRAME_INTERVAL_MS
+        : AMBIENT_FRAME_INTERVAL_MS;
       if (now - lastPaint >= minimumFrameTime) paint(now);
       animationFrame = window.requestAnimationFrame(tick);
     };

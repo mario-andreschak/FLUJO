@@ -81,7 +81,6 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 46%, rgba(83, 207, 216, 0.06));
   background-size: 115% 115%, 108% 108%, 100% 100%;
   filter: blur(24px) saturate(112%);
-  animation: living-watershed-caustics 24s ease-in-out infinite alternate;
 }
 
 :root.modern-theme.living-world-active .living-watershed__caustics {
@@ -103,7 +102,6 @@
   background-size: 270px 118px, 340px 190px;
   mix-blend-mode: screen;
   mask-image: linear-gradient(to bottom, transparent, #000 28%, #000 78%, transparent);
-  animation: living-watershed-caustics 18s linear infinite alternate;
 }
 
 :root.modern-theme.living-world-active .app-main {
@@ -446,15 +444,6 @@ html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Get
 @keyframes living-watershed-orbit {
   to {
     transform: rotate(1turn);
-  }
-}
-
-@keyframes living-watershed-caustics {
-  from {
-    transform: translate3d(-1.2%, -0.6%, 0) scale(1);
-  }
-  to {
-    transform: translate3d(1.4%, 1%, 0) scale(1.035);
   }
 }
 

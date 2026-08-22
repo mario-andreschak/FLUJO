@@ -1,12 +1,13 @@
-Describe 'Windows installer prerequisite planning' {
-    BeforeAll {
-        . (Join-Path $PSScriptRoot '..\scripts\installer-functions.ps1')
+BeforeAll {
+    . (Join-Path $PSScriptRoot '..\scripts\installer-functions.ps1')
 
-        $script:CorePrerequisites = @(
-            [PSCustomObject]@{ Command = 'git';  WingetId = 'Git.Git';       DisplayName = 'Git' }
-            [PSCustomObject]@{ Command = 'node'; WingetId = 'OpenJS.NodeJS'; DisplayName = 'Node.js' }
-        )
-    }
+    $script:CorePrerequisites = @(
+        [PSCustomObject]@{ Command = 'git';  WingetId = 'Git.Git';       DisplayName = 'Git' }
+        [PSCustomObject]@{ Command = 'node'; WingetId = 'OpenJS.NodeJS'; DisplayName = 'Node.js' }
+    )
+}
+
+Describe 'Windows installer prerequisite planning' {
     It 'includes the ripgrep search accelerator in the managed prerequisite catalog' {
         $ripgrep = Get-KnownInstallerPrerequisites | Where-Object Command -eq 'rg'
         $ripgrep | Should -Not -BeNullOrEmpty
@@ -297,12 +298,12 @@ Describe 'Windows installer Node.js version validation' {
     }
 
     It 'returns ProbeFailed for non-zero exit with empty output' {
-        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) { $LASTEXITCODE = 1; '' } } -MinMajor 22 -MinMinor 0
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) [PSCustomObject]@{ Output = ''; ExitCode = 1 } } -MinMajor 22 -MinMinor 0
         $result.Status | Should -Be 'ProbeFailed'
     }
 
     It 'returns ProbeFailed for non-zero exit with apparently valid output' {
-        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) { $LASTEXITCODE = 1; '22.0.0' } } -MinMajor 22 -MinMinor 0
+        $result = Test-NodeVersion -CommandResolver { param($Name) $script:mockCommand } -VersionResolver { param($Cmd) [PSCustomObject]@{ Output = '22.0.0'; ExitCode = 1 } } -MinMajor 22 -MinMinor 0
         $result.Status | Should -Be 'ProbeFailed'
     }
 

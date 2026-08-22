@@ -45,20 +45,34 @@ import path from 'path';
 const makeRequest = (
   conversationId: string,
   fromSeq: number | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: { activityOnly?: boolean; lastEventId?: number } = {},
 ): NextRequest =>
   ({
     nextUrl: new URL(
       `http://localhost/v1/chat/conversations/${conversationId}/events` +
-        (fromSeq !== undefined ? `?fromSeq=${fromSeq}` : '')
+        (fromSeq !== undefined || options.activityOnly
+          ? `?${new URLSearchParams({
+              ...(fromSeq !== undefined ? { fromSeq: String(fromSeq) } : {}),
+              ...(options.activityOnly ? { replay: 'activity' } : {}),
+            }).toString()}`
+          : '')
     ),
-    headers: new Headers(),
+    headers: new Headers(
+      options.lastEventId !== undefined
+        ? { 'last-event-id': String(options.lastEventId) }
+        : undefined,
+    ),
     signal,
   }) as unknown as NextRequest;
 
-const openStream = async (conversationId: string, fromSeq?: number) => {
+const openStream = async (
+  conversationId: string,
+  fromSeq?: number,
+  options?: { activityOnly?: boolean; lastEventId?: number },
+) => {
   const abort = new AbortController();
-  const res = await GET(makeRequest(conversationId, fromSeq, abort.signal), {
+  const res = await GET(makeRequest(conversationId, fromSeq, abort.signal, options), {
     params: Promise.resolve({ conversationId }),
   });
   const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -227,6 +241,47 @@ describe('events route SSE replay across runs', () => {
       const replay = await readEvents(reader, 2);
       expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
       expect(replay.closed).toBe(false);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('rebuilds live activity without replaying transcript payloads', async () => {
+    const conv = 'conv-events-activity-replay';
+    emit(conv, { type: 'run:start', flowId: 'f1' }); // seq 0
+    emit(conv, { type: 'model:delta', messageId: 'draft-1', delta: 'large chunk' }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'durable' } }); // seq 2
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 3
+
+    const { reader, abort } = await openStream(conv, 0, { activityOnly: true });
+    try {
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map((event) => event.seq)).toEqual([0, 3]);
+
+      // Filtering is initial-replay-only: new transcript events remain live.
+      emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'live' } }); // seq 4
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((event) => event.seq)).toEqual([4]);
+      expect(live.events[0].type).toBe('message');
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('prefers Last-Event-ID over the original fromSeq cursor on reconnect', async () => {
+    const conv = 'conv-events-last-id';
+    emit(conv, { type: 'run:start', flowId: 'f1' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'm1', role: 'assistant', content: 'a' } }); // seq 1
+    emit(conv, { type: 'message', message: { id: 'm2', role: 'assistant', content: 'b' } }); // seq 2
+    emit(conv, { type: 'node:enter', node: { nodeId: 'n1' } }); // seq 3
+
+    const { reader, abort } = await openStream(conv, 0, {
+      activityOnly: true,
+      lastEventId: 2,
+    });
+    try {
+      const replay = await readEvents(reader, 1);
+      expect(replay.events.map((event) => event.seq)).toEqual([3]);
     } finally {
       abort.abort();
     }
