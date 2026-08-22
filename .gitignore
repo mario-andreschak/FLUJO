@@ -185,6 +185,7 @@ jest-output.txt
 # Machine-readable Jest results consumed by scripts/verify-test-baseline.cjs (#457)
 jest-results.json
 jest-results-isolated.json
+memory-experiment-results.json
 
 # Claude Code local settings and worktrees
 .claude/settings.local.json

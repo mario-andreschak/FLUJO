@@ -74,6 +74,15 @@ jobs:
         run: npm run test:ci
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
+      - name: Run deterministic memory ranking experiment
+        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
+      - name: Upload memory experiment results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-experiment-results
+          path: memory-experiment-results.json
+          if-no-files-found: warn
       - name: Upload Jest results
         if: always()
         uses: actions/upload-artifact@v4

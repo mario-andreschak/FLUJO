@@ -59,6 +59,7 @@
     "lint": "eslint src",
     "lint:all": "eslint src __tests__ scripts --max-warnings=0",
     "test": "node scripts/run-local-jest.cjs",
+    "test:memory-experiment": "node scripts/run-memory-experiment.cjs",
     "test:ci": "node scripts/run-local-jest.cjs --ci --exclude-isolated-suites --json --outputFile=jest-results.json",
     "test:isolated": "node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --json --outputFile=jest-results-isolated.json __tests__/enduringAgents/personaProcessBoundary.test.ts __tests__/enduringAgents/activityRuntime.test.ts __tests__/enduringAgents/soak/personaSoak.test.ts __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts",
     "verify:test-baseline": "node scripts/verify-test-baseline.cjs",

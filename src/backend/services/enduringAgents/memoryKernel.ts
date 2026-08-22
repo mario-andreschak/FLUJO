@@ -30,12 +30,9 @@ import { randomEnduringAgentId } from './ids';
 import { buildReinforcedMemoryItem } from './memoryDeduplication';
 import { getMemorySettings } from './memorySettings';
 import {
-  contentShingles,
-  jaccardSimilarity,
   MEMORY_DEDUP_SETTINGS,
-  MEMORY_RANKING_WEIGHTS,
-  normaliseMemoryContent,
   scoreMemoryCandidate,
+  selectNearDuplicateCandidate,
 } from './memoryRanking';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
@@ -121,8 +118,7 @@ function stableSourceRefValue(memory: MemoryItem): string {
 }
 
 /**
- * Find a near-duplicate candidate via trigram Jaccard similarity (issue #450).
- * Returns the candidate with the highest similarity >= threshold, or null.
+ * Storage adapter for the pure selector used by production and experiments.
  */
 async function findNearDuplicateCandidate(
   personaId: string,
@@ -130,31 +126,11 @@ async function findNearDuplicateCandidate(
   scope: MemoryScope,
   content: string,
 ): Promise<{ candidate: MemoryItem; similarity: number } | null> {
-  const candidates = (await listMemoryItems(personaId))
-    .filter((item) => item.status === 'active' && item.kind === kind && item.scope === scope)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MEMORY_DEDUP_SETTINGS.comparisonWindow);
-
-  const incomingNormalised = normaliseMemoryContent(content);
-  const incomingShingles = contentShingles(incomingNormalised);
-
-  let bestCandidate: MemoryItem | null = null;
-  let bestSimilarity = 0;
-
-  for (const candidate of candidates) {
-    const candidateNormalised = normaliseMemoryContent(candidate.content);
-    const candidateShingles = contentShingles(candidateNormalised);
-    const similarity = jaccardSimilarity(incomingShingles, candidateShingles);
-
-    if (similarity >= MEMORY_DEDUP_SETTINGS.nearDuplicateThreshold) {
-      if (similarity > bestSimilarity) {
-        bestSimilarity = similarity;
-        bestCandidate = candidate;
-      }
-    }
-  }
-
-  return bestCandidate ? { candidate: bestCandidate, similarity: bestSimilarity } : null;
+  return selectNearDuplicateCandidate(
+    await listMemoryItems(personaId),
+    { kind, scope, content },
+    MEMORY_DEDUP_SETTINGS,
+  );
 }
 
 function requireOwnedMemory(item: MemoryItem | null, personaId: string, requestedId: string): MemoryItem {
@@ -323,16 +299,6 @@ export async function getPersonaMemory(personaId: string, memoryId: string): Pro
 
 function queryTerms(query: string | undefined): string[] {
   return [...new Set((query?.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []))];
-}
-
-function lexicalScore(item: MemoryItem, terms: readonly string[]): number {
-  const content = item.content.toLocaleLowerCase();
-  let score = item.importance * 0.25 + item.confidence * 0.15;
-  for (const term of terms) {
-    if (content === term) score += 4;
-    else if (content.includes(term)) score += 1;
-  }
-  return score;
 }
 
 export async function searchPersonaMemory(

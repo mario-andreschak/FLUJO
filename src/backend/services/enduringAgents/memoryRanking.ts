@@ -1,240 +1,246 @@
 /**
- * Ranking + near-duplicate weights for the persona memory kernel (issue #450).
- * Hybrid embedding + lexical scoring for semantic recall (issue #451).
- * Single source of truth: A/B experiments should fork THIS block, not scatter magic numbers.
- * All functions here are pure (no side effects, no time inside — time is a parameter).
+ * Ranking + near-duplicate weights for the persona memory kernel (issues #450 and #466).
+ * All functions are pure: experiment configuration and time are explicit inputs.
  */
 
-import type { MemoryItem, MemoryTrust } from '@/shared/types/enduringAgent';
+import type { MemoryTrust } from '@/shared/types/enduringAgent';
 
-/**
- * Ranking weights for memory recall. These control the lexical score, recency decay, trust weighting,
- * and length normalisation applied in `searchPersonaMemory`.
- */
+import type {
+  IncomingMemoryDedupCandidate,
+  MemoryDedupCandidate,
+  MemoryDedupSettings,
+  MemoryExperimentVariant,
+  MemoryRankingCandidate,
+  MemoryRankingWeights,
+} from './memoryExperimentTypes';
+
+/** Production ranking defaults. Experiments pass a complete fork explicitly. */
 export const MEMORY_RANKING_WEIGHTS = {
-  /** Base priors (unchanged from pre-#450). */
   importanceWeight: 0.25,
   confidenceWeight: 0.15,
-  /** Lexical match bonuses (unchanged). */
   exactContentMatchBonus: 4,
   termHitBonus: 1,
-  /** NEW: reward coverage of the query, not just one hit. */
   termCoverageBonus: 1.5,
-  /** NEW: dampen very long memories that trivially contain many terms. */
   lengthNormalisationChars: 280,
   lengthNormalisationFloor: 0.6,
-  /** NEW: recency decay (2 ** (-ageDays / halfLifeDays)). */
   recencyHalfLifeDays: 90,
   recencyFloor: 0.15,
-  /** NEW: trust weighting (multiplicative, applied after lexical). */
   trustWeights: {
     explicit_user: 1.3,
     verified_tool: 1.15,
     model_inference: 1.0,
     external_untrusted: 0.8,
   },
-  /** Core-pinned handling. */
   coreBonus: 2,
   coreExemptFromDecay: true,
-  // NEW: Hybrid embedding + lexical scoring (issue #451)
-  // These weights control the balance between lexical and semantic ranking.
-  // When embeddings are not configured, wSem = 0 and the formula collapses to pure lexical.
-  lexicalWeight: 0.6,  // wLex in the formula
-  semanticWeight: 0.4, // wSem in the formula
-} as const;
+  lexicalWeight: 0.6,
+  semanticWeight: 0.4,
+} as const satisfies MemoryRankingWeights;
 
-/**
- * Settings for near-duplicate detection on write (issue #450 acceptance criterion #1).
- */
+/** Production near-duplicate defaults. Experiments pass a complete fork explicitly. */
 export const MEMORY_DEDUP_SETTINGS = {
-  /** Kill-switch: set to false to disable dedup entirely without code changes. */
   enabled: true,
-  /** Character n-gram size for Jaccard similarity (trigrams are robust to word reordering). */
   shingleSize: 3,
-  /** Jaccard threshold above which two items are considered near-duplicates (0–1). */
   nearDuplicateThreshold: 0.82,
-  /** Only compare against the N most recently updated same-kind/scope active items. */
   comparisonWindow: 200,
-  /** Reinforcement caps. */
   confidenceReinforcementStep: 0.05,
   importanceReinforcementStep: 0.02,
   maxSourceRefsPerItem: 64,
-} as const;
+} as const satisfies MemoryDedupSettings;
 
-/**
- * Normalise memory content for comparison: lowercase, NFKC normalise, strip punctuation,
- * collapse whitespace, trim. Deliberately no stemming or stop-word removal (keeps it
- * language-agnostic).
- */
+/** Stable baseline used by the experiment harness. */
+export const CURRENT_MEMORY_VARIANT: MemoryExperimentVariant = Object.freeze({
+  id: 'current',
+  ranking: MEMORY_RANKING_WEIGHTS,
+  dedup: MEMORY_DEDUP_SETTINGS,
+});
+
 export function normaliseMemoryContent(content: string): string {
   return content
     .toLocaleLowerCase()
     .normalize('NFKC')
-    // Replace punctuation (including hyphens) with spaces
     .replace(/[^\p{L}\p{N}\s_]/gu, ' ')
-    // Collapse multiple spaces
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-/**
- * Generate character n-grams (shingles) from a normalised string.
- * Character trigrams (size=3) are robust to word reordering and whitespace changes.
- */
-export function contentShingles(normalised: string, size: number = MEMORY_DEDUP_SETTINGS.shingleSize): Set<string> {
+export function contentShingles(
+  normalised: string,
+  size: number = MEMORY_DEDUP_SETTINGS.shingleSize,
+): Set<string> {
   const shingles = new Set<string>();
   if (normalised.length < size) {
-    // If string is shorter than shingle size, use the whole thing
     if (normalised.length > 0) shingles.add(normalised);
     return shingles;
   }
-  for (let i = 0; i <= normalised.length - size; i++) {
-    shingles.add(normalised.substring(i, i + size));
+  for (let index = 0; index <= normalised.length - size; index++) {
+    shingles.add(normalised.substring(index, index + size));
   }
   return shingles;
 }
 
-/**
- * Jaccard similarity between two sets: |A ∩ B| / |A ∪ B|.
- */
 export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 && b.size === 0) return 1;
   if (a.size === 0 || b.size === 0) return 0;
-  const intersection = new Set([...a].filter((x) => b.has(x)));
+  const intersection = new Set([...a].filter((value) => b.has(value)));
   const union = new Set([...a, ...b]);
   return intersection.size / union.size;
 }
 
-/**
- * Recency multiplier for ranking: `2 ** (-ageDays / halfLifeDays)`, clamped to floor.
- * Returns 1 for core-pinned items (they are exempt from decay).
- * Returns 1 for future `updatedAt` (clamps negative age to 1).
- */
 export function recencyMultiplier(
   updatedAt: number,
   asOf: number,
-  opts: { core?: boolean; halfLifeDays?: number; floor?: number } = {},
+  opts: {
+    readonly core?: boolean;
+    readonly halfLifeDays?: number;
+    readonly floor?: number;
+    readonly weights?: MemoryRankingWeights;
+  } = {},
 ): number {
-  const { core = false, halfLifeDays = MEMORY_RANKING_WEIGHTS.recencyHalfLifeDays, floor = MEMORY_RANKING_WEIGHTS.recencyFloor } = opts;
+  const weights = opts.weights ?? MEMORY_RANKING_WEIGHTS;
+  const core = opts.core ?? false;
+  const halfLifeDays = opts.halfLifeDays ?? weights.recencyHalfLifeDays;
+  const floor = opts.floor ?? weights.recencyFloor;
+  if (core && weights.coreExemptFromDecay) return 1;
 
-  // Core-pinned items are exempt from decay.
-  if (core && MEMORY_RANKING_WEIGHTS.coreExemptFromDecay) {
-    return 1;
-  }
-
-  const ageMs = asOf - updatedAt;
-  const ageDays = Math.max(0, ageMs / (1000 * 60 * 60 * 24));
-  const multiplier = Math.pow(2, -ageDays / halfLifeDays);
-  return Math.max(floor, multiplier);
+  const ageDays = Math.max(0, (asOf - updatedAt) / (1000 * 60 * 60 * 24));
+  return Math.max(floor, Math.pow(2, -ageDays / halfLifeDays));
 }
 
-/**
- * Content length factor: dampen very long memories that trivially contain many terms.
- * Sigmoid-like dampening: f(x) = 1 / (1 + (x / midpoint)), clamped to floor.
- */
-export function contentLengthFactor(length: number): number {
-  const midpoint = MEMORY_RANKING_WEIGHTS.lengthNormalisationChars;
-  const floor = MEMORY_RANKING_WEIGHTS.lengthNormalisationFloor;
-  if (length <= midpoint) return 1;
-  const factor = 1 / (1 + length / midpoint);
-  return Math.max(floor, factor);
+export function contentLengthFactor(
+  length: number,
+  weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
+): number {
+  if (length <= weights.lengthNormalisationChars) return 1;
+  const factor = 1 / (1 + length / weights.lengthNormalisationChars);
+  return Math.max(weights.lengthNormalisationFloor, factor);
 }
 
-/**
- * Trust weighting: lookup in `MEMORY_RANKING_WEIGHTS.trustWeights`.
- */
-export function trustWeight(trust: MemoryTrust): number {
-  return MEMORY_RANKING_WEIGHTS.trustWeights[trust] ?? MEMORY_RANKING_WEIGHTS.trustWeights.model_inference;
+export function trustWeight(
+  trust: MemoryTrust,
+  weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
+): number {
+  return weights.trustWeights[trust] ?? weights.trustWeights.model_inference;
 }
 
-/**
- * Hybrid score: blend lexical and semantic (embedding) similarity.
- * Both inputs should be in [0, 1] range (normalized).
- * Formula: score = wLex * lexical + wSem * semantic
- * When embeddings are unavailable, pass semantic=0 to degrade to pure lexical.
- */
-export function hybridScore(lexical: number, semantic: number): number {
-  const wLex = MEMORY_RANKING_WEIGHTS.lexicalWeight;
-  const wSem = MEMORY_RANKING_WEIGHTS.semanticWeight;
-  return wLex * lexical + wSem * semantic;
+export function hybridScore(
+  lexical: number,
+  semantic: number,
+  weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
+): number {
+  return weights.lexicalWeight * lexical + weights.semanticWeight * semantic;
 }
 
-/**
- * Compute the composite ranking score for a candidate memory.
- * Formula:
- *   lexical = importance*wI + confidence*wC
- *           + Σ_terms (content === term ? exactBonus : content.includes(term) ? termHit : 0)
- *           + termCoverageBonus * (matchedTerms / max(1, terms.length))
- *
- *   score = lexical
- *         * contentLengthFactor(item.content.length)
- *         * trustWeight(item.trust)
- *         * recencyMultiplier(item.updatedAt, asOf, { core })
- *         + (core ? coreBonus : 0)
- *
- * When semantic embedding score is provided, combines with lexical via hybridScore().
- */
 export function scoreMemoryCandidate(opts: {
-  item: MemoryItem;
-  terms: readonly string[];
-  core: boolean;
-  asOf: number;
-  semanticScore?: number;
+  readonly item: MemoryRankingCandidate;
+  readonly terms: readonly string[];
+  readonly core: boolean;
+  readonly asOf: number;
+  readonly semanticScore?: number;
+  readonly weights?: MemoryRankingWeights;
 }): number {
-  const { item, terms, core, asOf, semanticScore = 0 } = opts;
-
-  // Lexical score
-  const contentLC = item.content.toLocaleLowerCase();
-  let lexical = item.importance * MEMORY_RANKING_WEIGHTS.importanceWeight + item.confidence * MEMORY_RANKING_WEIGHTS.confidenceWeight;
+  const {
+    item,
+    terms,
+    core,
+    asOf,
+    semanticScore = 0,
+    weights = MEMORY_RANKING_WEIGHTS,
+  } = opts;
+  const content = item.content.toLocaleLowerCase();
+  let lexical = (
+    item.importance * weights.importanceWeight
+    + item.confidence * weights.confidenceWeight
+  );
 
   let matchedTerms = 0;
   for (const term of terms) {
-    if (contentLC === term) {
-      lexical += MEMORY_RANKING_WEIGHTS.exactContentMatchBonus;
+    if (content === term) {
+      lexical += weights.exactContentMatchBonus;
       matchedTerms++;
-    } else if (contentLC.includes(term)) {
-      lexical += MEMORY_RANKING_WEIGHTS.termHitBonus;
+    } else if (content.includes(term)) {
+      lexical += weights.termHitBonus;
       matchedTerms++;
     }
   }
-
-  // Term coverage bonus
   if (terms.length > 0) {
-    lexical += MEMORY_RANKING_WEIGHTS.termCoverageBonus * (matchedTerms / terms.length);
+    lexical += weights.termCoverageBonus * (matchedTerms / terms.length);
   }
 
-  // Normalize lexical to [0, 1] for hybrid scoring
-  // Cap at reasonable max (e.g., 10) and scale
   const normalizedLexical = Math.min(1, lexical / 10);
-
-  // Hybrid blend of lexical and semantic scores
-  const blended = hybridScore(normalizedLexical, semanticScore);
-
-  // Apply multipliers
-  const lengthFactor = contentLengthFactor(item.content.length);
-  const trust = trustWeight(item.trust);
-  const recency = recencyMultiplier(item.updatedAt, asOf, { core });
-
-  let score = blended * lengthFactor * trust * recency;
-
-  // Core bonus (additive, so pinned items cannot be multiplied away)
-  if (core) {
-    score += MEMORY_RANKING_WEIGHTS.coreBonus;
-  }
-
+  const blended = hybridScore(normalizedLexical, semanticScore, weights);
+  let score = (
+    blended
+    * contentLengthFactor(item.content.length, weights)
+    * trustWeight(item.trust, weights)
+    * recencyMultiplier(item.updatedAt, asOf, { core, weights })
+  );
+  if (core) score += weights.coreBonus;
   return score;
 }
 
 /**
- * @deprecated Use `scoreMemoryCandidate` instead. Kept for backwards compatibility.
- * Computes the pre-#450 lexical score without recency decay, trust weighting, or length normalisation.
+ * Select a near-duplicate without reading or writing storage. Equal-similarity
+ * ties are resolved newest-first and then by ID, matching the experiment's
+ * deterministic ordering contract.
  */
-export function lexicalScore(item: MemoryItem, terms: readonly string[]): number {
-  const contentLC = item.content.toLocaleLowerCase();
-  let score = item.importance * MEMORY_RANKING_WEIGHTS.importanceWeight + item.confidence * MEMORY_RANKING_WEIGHTS.confidenceWeight;
+export function selectNearDuplicateCandidate<T extends MemoryDedupCandidate>(
+  candidates: readonly T[],
+  incoming: IncomingMemoryDedupCandidate,
+  settings: MemoryDedupSettings = MEMORY_DEDUP_SETTINGS,
+): { readonly candidate: T; readonly similarity: number } | null {
+  if (!settings.enabled) return null;
+
+  const eligible = candidates
+    .filter((candidate) => (
+      candidate.status === 'active'
+      && candidate.kind === incoming.kind
+      && candidate.scope === incoming.scope
+    ))
+    .sort((left, right) => (
+      right.updatedAt - left.updatedAt
+      || left.id.localeCompare(right.id)
+    ))
+    .slice(0, settings.comparisonWindow);
+
+  const incomingShingles = contentShingles(
+    normaliseMemoryContent(incoming.content),
+    settings.shingleSize,
+  );
+  let best: { readonly candidate: T; readonly similarity: number } | null = null;
+
+  for (const candidate of eligible) {
+    const similarity = jaccardSimilarity(
+      incomingShingles,
+      contentShingles(normaliseMemoryContent(candidate.content), settings.shingleSize),
+    );
+    if (
+      similarity >= settings.nearDuplicateThreshold
+      && (best === null || similarity > best.similarity)
+    ) {
+      best = { candidate, similarity };
+    }
+  }
+  return best;
+}
+
+/**
+ * @deprecated Use scoreMemoryCandidate. Kept for backwards compatibility with
+ * the pre-recency lexical scorer.
+ */
+export function lexicalScore(
+  item: MemoryRankingCandidate,
+  terms: readonly string[],
+  weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
+): number {
+  const content = item.content.toLocaleLowerCase();
+  let score = (
+    item.importance * weights.importanceWeight
+    + item.confidence * weights.confidenceWeight
+  );
   for (const term of terms) {
-    if (contentLC === term) score += MEMORY_RANKING_WEIGHTS.exactContentMatchBonus;
-    else if (contentLC.includes(term)) score += MEMORY_RANKING_WEIGHTS.termHitBonus;
+    if (content === term) score += weights.exactContentMatchBonus;
+    else if (content.includes(term)) score += weights.termHitBonus;
   }
   return score;
 }
