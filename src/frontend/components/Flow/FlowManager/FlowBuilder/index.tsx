@@ -2013,7 +2013,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     // We don't need to log every dragover event as it would be too verbose
   }, []);
 
-  const onInit = useCallback((instance: any) => {
+  const onInit = useCallback((instance: unknown) => {
     log.debug('onInit: ReactFlow instance initialized');
     setReactFlowInstance(instance as ReactFlowInstance<FlowNode, Edge>);
   }, []);

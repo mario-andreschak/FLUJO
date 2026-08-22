@@ -19,6 +19,7 @@ import {
   SignalNodeProperties,
   StaticNodeProperties
 } from './types';
+import { isEdgeCondition } from '@/utils/shared/edgeConditions';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/FlowConverter');
@@ -85,15 +86,15 @@ export class FlowConverter {
           log.info(`Handling MCP connection: ${edge.id} (${edge.source} -> ${edge.target})`);
 
           // Find the executable tool consumer (Process or Static) and MCP node.
-          let consumerNode: BaseNode | undefined;
-          let mcpNode: BaseNode | undefined;
+          let consumerNode: ProcessNode | StaticNode | undefined;
+          let mcpNode: MCPNode | undefined;
 
           if (sourceNode instanceof ProcessNode || sourceNode instanceof StaticNode) {
             consumerNode = sourceNode;
-            mcpNode = targetNode;
+            mcpNode = targetNode instanceof MCPNode ? targetNode : undefined;
           } else if (targetNode instanceof ProcessNode || targetNode instanceof StaticNode) {
             consumerNode = targetNode;
-            mcpNode = sourceNode;
+            mcpNode = sourceNode instanceof MCPNode ? sourceNode : undefined;
           }
 
           if (consumerNode && mcpNode instanceof MCPNode) {
@@ -155,8 +156,8 @@ export class FlowConverter {
           // are what gate that tool.
           log.info(`Handling resource connection: ${edge.id} (${edge.source} -> ${edge.target})`);
 
-          let processNode: BaseNode | undefined;
-          let resourceNode: BaseNode | undefined;
+          let processNode: ProcessNode | undefined;
+          let resourceNode: ResourceNode | undefined;
           let role: 'consume' | 'produce' | undefined;
 
           if (sourceNode instanceof ResourceNode && targetNode instanceof ProcessNode) {
@@ -211,7 +212,7 @@ export class FlowConverter {
           sourceNode.node_params.orderedOutgoingEdges = sourceNode.node_params.orderedOutgoingEdges || [];
           sourceNode.node_params.orderedOutgoingEdges.push(action);
           const condition = (edge.data as { condition?: unknown } | undefined)?.condition;
-          if (condition && typeof condition === 'object') {
+          if (isEdgeCondition(condition)) {
             sourceNode.node_params.edgeConditions = sourceNode.node_params.edgeConditions || {};
             sourceNode.node_params.edgeConditions[action] = condition;
             log.info(`Retained edge condition for routing`, { edgeId: action, source: edge.source });

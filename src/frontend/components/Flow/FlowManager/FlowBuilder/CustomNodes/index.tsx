@@ -6,7 +6,7 @@ import {
   Connection,
   NodeToolbar,
 } from '@xyflow/react';
-import { alpha, styled, useTheme } from '@mui/material/styles';
+import { alpha, styled, useTheme, type Theme } from '@mui/material/styles';
 import {
   Paper,
   Typography,
@@ -45,7 +45,7 @@ export const STATIC_COLOR_LIGHT = flowNodeLightColors.static;
 
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
-const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
+const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: Theme) => string; light: (theme: Theme) => string }> = {
   start: { main: () => flowNodeColors.light.start, light: () => flowNodeColors.dark.start },
   process: { main: (t) => t.palette.primary.main, light: (t) => t.palette.primary.light },
   finish: { main: (t) => t.palette.success.main, light: (t) => t.palette.success.light },
@@ -57,8 +57,8 @@ const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: 
   static: { main: () => STATIC_COLOR, light: () => STATIC_COLOR_LIGHT },
 };
 
-const nodeMainColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
-const nodeLightColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).light(theme);
+const nodeMainColor = (type: NodeType, theme: Theme) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
+const nodeLightColor = (type: NodeType, theme: Theme) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).light(theme);
 
 const NodeContainer = styled(Paper, {
   shouldForwardProp: (prop) => !['nodeType', 'selected'].includes(prop as string),
@@ -206,10 +206,10 @@ const getNodeIcon = (type: NodeType) => {
   }
 };
 
-export const getNodeColor = (type: NodeType, theme: any) => nodeMainColor(type, theme);
+export const getNodeColor = (type: NodeType, theme: Theme) => nodeMainColor(type, theme);
 
 // Custom handle styles for different connection types
-const getMCPHandleStyle = (theme: any) => ({
+const getMCPHandleStyle = (theme: Theme) => ({
   backgroundColor: theme.palette.info.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
@@ -218,7 +218,7 @@ const getMCPHandleStyle = (theme: any) => ({
   borderWidth: 2
 });
 
-const getProcessHandleStyle = (theme: any) => ({
+const getProcessHandleStyle = (theme: Theme) => ({
   backgroundColor: theme.palette.primary.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
@@ -227,7 +227,7 @@ const getProcessHandleStyle = (theme: any) => ({
   borderWidth: 2
 });
 
-const getMCPConnectionHandleStyle = (theme: any) => ({
+const getMCPConnectionHandleStyle = (theme: Theme) => ({
   backgroundColor: theme.palette.info.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
@@ -236,7 +236,7 @@ const getMCPConnectionHandleStyle = (theme: any) => ({
   borderWidth: 2
 });
 
-const getResourceHandleStyle = (theme: any) => ({
+const getResourceHandleStyle = (theme: Theme) => ({
   backgroundColor: RESOURCE_COLOR,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,

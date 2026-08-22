@@ -138,11 +138,11 @@ function sanitizeForSubflow(messages: FlujoChatMessage[]): FlujoChatMessage[] {
   const out: FlujoChatMessage[] = [];
   for (const msg of messages) {
     if (msg.role === 'system' || msg.role === 'tool') continue;
-    if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0) {
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       continue;
     }
     if (!hasContent(msg.content)) continue;
-    const { processNodeId, ...rest } = msg as any;
+    const { processNodeId: _processNodeId, ...rest } = msg;
     out.push({ ...rest });
   }
   return out;
@@ -186,7 +186,13 @@ function messageText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((part) => (typeof part === 'string' ? part : typeof (part as any)?.text === 'string' ? (part as any).text : ''))
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string') {
+          return part.text;
+        }
+        return '';
+      })
       .join('');
   }
   return '';
@@ -646,7 +652,7 @@ function buildChildEmit(
  * conversations store) at runDepth+1, so runFlow's depth guard stops infinite
  * recursion.
  */
-export class SubflowNode extends BaseNode {
+export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, SubflowNodePrepResult, SubflowNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
     const existingInvocation = activeInvocationForNode(sharedState, node_params?.id);

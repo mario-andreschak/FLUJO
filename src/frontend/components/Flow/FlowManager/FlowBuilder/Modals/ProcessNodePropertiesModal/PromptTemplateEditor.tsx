@@ -4,6 +4,7 @@ import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/Pr
 import { createLogger } from '@/utils/logger';
 import { PromptReferenceSuggestion } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { ProcessNodeData } from './types';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -15,7 +16,7 @@ interface PromptTemplateEditorProps {
   excludeModelPrompt: boolean;
   excludeStartNodePrompt: boolean;
   excludeSystemPrompt: boolean;
-  nodeData: any;
+  nodeData: Pick<ProcessNodeData, 'id'> | null;
   flowId?: string;
   suggestions?: PromptReferenceSuggestion[];
   /** Use PromptBuilder's lightweight reference preview instead of the process-node renderer. */

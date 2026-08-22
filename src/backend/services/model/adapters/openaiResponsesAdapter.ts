@@ -376,18 +376,22 @@ export function fromResponse(
   const media: ModelMediaPart[] = [];
 
   for (const item of response.output ?? []) {
-    const nativeItem = item as unknown as Record<string, any>;
+    const nativeItem = item as unknown as Record<string, unknown>;
     if (nativeItem.type === 'message') {
-      for (const part of nativeItem.content ?? []) {
+      const content = Array.isArray(nativeItem.content) ? nativeItem.content : [];
+      for (const rawPart of content) {
+        if (!rawPart || typeof rawPart !== 'object') continue;
+        const part = rawPart as Record<string, unknown>;
         if (part.type === 'output_text' && typeof part.text === 'string') {
           textParts.push(part.text);
         } else if (part.type === 'refusal' && typeof part.refusal === 'string') {
           textParts.push(part.refusal);
         } else if (part.type === 'output_audio' && typeof part.data === 'string') {
+          const mimeType = typeof part.mime_type === 'string' ? part.mime_type : 'audio/mpeg';
           media.push({
             type: 'audio',
             data: part.data,
-            mimeType: part.mime_type ?? 'audio/mpeg',
+            mimeType,
             ...(typeof part.transcript === 'string' ? { transcript: part.transcript } : {}),
           });
         }
@@ -395,27 +399,33 @@ export function fromResponse(
     } else if (nativeItem.type === 'image_generation_call' && typeof nativeItem.result === 'string') {
       media.push({ type: 'image', data: nativeItem.result, mimeType: 'image/png' });
     } else if (nativeItem.type === 'video_generation_call') {
-      const url = nativeItem.url ?? nativeItem.result?.url;
-      const data = nativeItem.data ?? nativeItem.result?.data;
+      const result = nativeItem.result && typeof nativeItem.result === 'object'
+        ? nativeItem.result as Record<string, unknown>
+        : undefined;
+      const url = nativeItem.url ?? result?.url;
+      const data = nativeItem.data ?? result?.data;
       if (typeof url === 'string' || typeof data === 'string') {
+        const rawMimeType = nativeItem.mime_type ?? result?.mime_type;
         media.push({
           type: 'video',
           ...(typeof url === 'string' ? { url } : {}),
           ...(typeof data === 'string' ? { data } : {}),
-          mimeType: nativeItem.mime_type ?? nativeItem.result?.mime_type ?? 'video/mp4',
+          mimeType: typeof rawMimeType === 'string' ? rawMimeType : 'video/mp4',
         });
       }
     } else if (nativeItem.type === 'file' || nativeItem.type === 'output_file') {
       const url = nativeItem.url ?? nativeItem.file_url;
       const data = nativeItem.data;
-      const mimeType = nativeItem.mime_type ?? nativeItem.mimeType;
+      const rawMimeType = nativeItem.mime_type ?? nativeItem.mimeType;
+      const mimeType = typeof rawMimeType === 'string' ? rawMimeType : undefined;
+      const name = typeof nativeItem.filename === 'string' ? nativeItem.filename : undefined;
       if (typeof url === 'string' || typeof data === 'string') {
         media.push({
           type: mediaTypeFromMime(mimeType),
           ...(typeof url === 'string' ? { url } : {}),
           ...(typeof data === 'string' ? { data } : {}),
           ...(mimeType ? { mimeType } : {}),
-          ...(nativeItem.filename ? { name: nativeItem.filename } : {}),
+          ...(name ? { name } : {}),
         });
       }
     } else if (item.type === 'function_call') {

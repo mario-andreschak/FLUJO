@@ -24,6 +24,9 @@ import {
   deriveFlowSortGroup,
   sortFlowsFavoritesFirst,
 } from '@/utils/shared/flowGrouping';
+import type { Model } from '@/shared/types';
+import type { ServerGroupingItem } from '@/utils/shared/serverGrouping';
+import type { FlowGroupingItem } from '@/utils/shared/flowGrouping';
 
 /**
  * Shared "picker view-model" hook (#92 follow-up).
@@ -45,39 +48,52 @@ type GroupMode = 'none' | 'folder' | 'sort';
 // domains have unrelated item shapes; the public hook stays generic in <T>.
 interface DomainAdapter {
   defaultSort: string;
-  sort: (items: any[], sort: string) => any[];
-  deriveSortGroup: (item: any, sort: string) => { key: string; label: string };
-  getFolder: (item: any) => string | undefined;
-  getSearchText: (item: any) => string;
+  sort: (items: unknown[], sort: string) => unknown[];
+  deriveSortGroup: (item: unknown, sort: string) => { key: string; label: string };
+  getFolder: (item: unknown) => string | undefined;
+  getSearchText: (item: unknown) => string;
 }
+
+type PickerRecord = Record<string, unknown>;
+
+const asPickerRecord = (item: unknown): PickerRecord => item as PickerRecord;
+const optionalString = (value: unknown): string | undefined => (
+  typeof value === 'string' ? value : undefined
+);
 
 const ADAPTERS: Record<CardPickerDomain, DomainAdapter> = {
   models: {
     defaultSort: 'name-asc',
     // Favorites-first (#146) so favorited models surface at the top of every
     // model picker routed through the hook, matching the dashboard's ordering.
-    sort: (items, s) => sortModelsFavoritesFirst(items, s as ModelSortOption),
-    deriveSortGroup: (item, s) => deriveModelSortGroup(item, s as ModelSortOption),
-    getFolder: (item) => item.folder,
-    getSearchText: (item) => `${modelDisplayName(item)} ${item.name ?? ''}`,
+    sort: (items, s) => sortModelsFavoritesFirst(items as Model[], s as ModelSortOption),
+    deriveSortGroup: (item, s) => deriveModelSortGroup(item as Model, s as ModelSortOption),
+    getFolder: (item) => optionalString(asPickerRecord(item).folder),
+    getSearchText: (item) => {
+      const model = item as Model;
+      return `${modelDisplayName(model)} ${model.name ?? ''}`;
+    },
   },
   mcp: {
     defaultSort: 'name-asc',
     // Favorites-first (#146) so favorited servers surface at the top of every
     // server picker routed through the hook, matching the manager's ordering.
-    sort: (items, s) => sortServersFavoritesFirst(items, s as ServerSortOption),
-    deriveSortGroup: (item, s) => deriveServerSortGroup(item, s as ServerSortOption),
-    getFolder: (item) => item.folder,
-    getSearchText: (item) => `${item.name ?? ''} ${item.rootPath ?? item.path ?? ''}`,
+    sort: (items, s) => sortServersFavoritesFirst(items as ServerGroupingItem[], s as ServerSortOption),
+    deriveSortGroup: (item, s) => deriveServerSortGroup(item as ServerGroupingItem, s as ServerSortOption),
+    getFolder: (item) => optionalString(asPickerRecord(item).folder),
+    getSearchText: (item) => {
+      const record = asPickerRecord(item);
+      return `${optionalString(record.name) ?? ''} ${optionalString(record.rootPath) ?? optionalString(record.path) ?? ''}`;
+    },
   },
   flows: {
     defaultSort: 'name-asc',
     // Favorites-first (#120) so favorited flows surface at the top of every
     // flow picker routed through the hook, matching the dashboard's ordering.
-    sort: (items, s) => sortFlowsFavoritesFirst(items, s as FlowSortOption),
-    deriveSortGroup: (item, s) => deriveFlowSortGroup(item, s as FlowSortOption),
-    getFolder: (item) => item.folder,
-    getSearchText: (item) => item.name ?? '',
+    sort: (items, s) => sortFlowsFavoritesFirst(items as FlowGroupingItem[], s as FlowSortOption),
+    deriveSortGroup: (item, s) => deriveFlowSortGroup(item as FlowGroupingItem, s as FlowSortOption),
+    getFolder: (item) => optionalString(asPickerRecord(item).folder),
+    getSearchText: (item) => optionalString(asPickerRecord(item).name) ?? '',
   },
 };
 

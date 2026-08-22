@@ -45,11 +45,27 @@ interface SubflowNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
   onNavigateToFlow?: (flowId: string) => void;
   /** The id of the flow being edited, so it can be excluded from the picker. */
   flowId?: string;
   authoringMode?: FlowAuthoringMode;
+}
+
+interface SubflowNodeProperties extends Record<string, unknown> {
+  subflowId?: string;
+  captureVariable?: string;
+  captureResource?: string;
+  captureKv?: string;
+  parallelSubflowIds?: string[];
+  parallelSubflowIdsVar?: string;
+  mapOverList?: boolean;
+  spawnBriefs?: unknown[];
+  promptTemplate?: string;
+  inputMode?: 'full-history' | 'latest-message' | 'isolated';
+  sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+  sessionInputMode?: 'resume' | 'summary';
+  sessionTurnCap?: number | string;
 }
 
 export const SubflowNodePropertiesModal = ({
@@ -66,7 +82,7 @@ export const SubflowNodePropertiesModal = ({
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: SubflowNodeProperties;
   } | null>(null);
 
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -81,7 +97,7 @@ export const SubflowNodePropertiesModal = ({
 
   useEffect(() => {
     if (node) {
-      const existing = node.data.properties || {};
+      const existing = (node.data.properties || {}) as SubflowNodeProperties;
       // Issue #138: do NOT seed default values (previously `allowCallerPrompt`/
       // `saveConversation` were forced to `?? true` here). Seeding baked those
       // defaults into stored data on ANY save â€” e.g. opening the modal to change
@@ -123,7 +139,7 @@ export const SubflowNodePropertiesModal = ({
     return () => { cancelled = true; };
   }, [open]);
 
-  const handlePropertyChange = (key: string, value: any) => {
+  const handlePropertyChange = (key: string, value: unknown) => {
     setNodeData((prev) => {
       if (!prev) return null;
       return { ...prev, properties: { ...prev.properties, [key]: value } };

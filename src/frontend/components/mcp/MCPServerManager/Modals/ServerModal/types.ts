@@ -42,7 +42,7 @@ export interface RepoInfo {
   owner: string;
   repo: string;
   valid: boolean;
-  contents?: any;
+  contents?: unknown;
 }
 
 export interface TabProps {

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useOnSelectionChange, useReactFlow } from '@xyflow/react';
+import { useOnSelectionChange, useReactFlow, type Edge } from '@xyflow/react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { SelectedElementsState, ContextMenuState } from '../types';
 import { canDeleteNode } from '../utils/nodeUtils';
@@ -115,7 +115,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
 
   // Node context menu handler
   const onNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: any) => {
+    (event: React.MouseEvent, node: FlowNode) => {
       onContextMenu(event, node.id);
     },
     [onContextMenu]
@@ -123,7 +123,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
 
   // Edge context menu handler
   const onEdgeContextMenu = useCallback(
-    (event: MouseEvent | React.MouseEvent<Element, MouseEvent>, edge: any) => {
+    (event: MouseEvent | React.MouseEvent<Element, MouseEvent>, edge: Edge) => {
       onContextMenu(event, undefined, edge.id);
     },
     [onContextMenu]

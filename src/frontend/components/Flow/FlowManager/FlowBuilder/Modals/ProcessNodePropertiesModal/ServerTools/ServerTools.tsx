@@ -36,6 +36,7 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
 
@@ -48,6 +49,52 @@ interface ConnectedMcpNode {
   // Add other relevant properties if needed
 }
 
+interface AvailableServer {
+  name: string;
+  status?: string;
+  transport?: string;
+  rootPath?: string;
+  disabled?: boolean;
+}
+
+type ServerCardStatus = React.ComponentProps<typeof ServerCard>['status'];
+type ServerCardTransport = React.ComponentProps<typeof ServerCard>['transport'];
+
+const SERVER_CARD_STATUSES = new Set<ServerCardStatus>([
+  'connected',
+  'disconnected',
+  'error',
+  'connecting',
+  'initialization',
+  'requires_authentication',
+]);
+
+const SERVER_CARD_TRANSPORTS = new Set<ServerCardTransport>([
+  'stdio',
+  'websocket',
+  'sse',
+  'streamable',
+]);
+
+const toServerCardStatus = (status?: string): ServerCardStatus => {
+  if (status === 'starting') return 'connecting';
+  return SERVER_CARD_STATUSES.has(status as ServerCardStatus)
+    ? status as ServerCardStatus
+    : 'disconnected';
+};
+
+const toServerCardTransport = (transport?: string): ServerCardTransport => (
+  SERVER_CARD_TRANSPORTS.has(transport as ServerCardTransport)
+    ? transport as ServerCardTransport
+    : 'stdio'
+);
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : undefined
+);
+
 interface ServerToolsProps {
   isLoadingServers: boolean; // Keep for overall loading state if needed, or remove if handled per node
   connectedMcpNodes: ConnectedMcpNode[]; // Use this instead of connectedServers
@@ -56,16 +103,10 @@ interface ServerToolsProps {
    * runtime value is a full server config, so extra fields are accepted (and
    * used to render the picker's ServerCards).
    */
-  availableServers?: Array<{
-    name: string;
-    status?: string;
-    transport?: string;
-    rootPath?: string;
-    disabled?: boolean;
-  }>;
+  availableServers?: AvailableServer[];
   /** Adds an MCP node for the given server and wires it to this Process node. */
   onConnectMcpServer?: (serverName: string) => void;
-  serverToolsMap: Record<string, any[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
+  serverToolsMap: Record<string, Tool[]>; // Map tools by serverName (might need adjustment if tools are fetched per nodeId)
   serverStatuses: Record<string, string>; // Map status by serverName (might need adjustment)
   isLoadingTools: Record<string, boolean>; // Map loading by serverName (might need adjustment)
   handleSelectToolServer: (nodeId: string) => void; // Pass nodeId instead of serverName
@@ -125,19 +166,19 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   // the MCP page's saved search/sort/folder settings so choosing a server here
   // looks exactly like the MCP Servers page. Fed the already-filtered
   // connectable subset so already-connected servers stay hidden.
-  const serverPicker = useCardPicker<any>('mcp', connectableServers);
-  const renderServerCard = (server: any) => (
+  const serverPicker = useCardPicker<AvailableServer>('mcp', connectableServers);
+  const renderServerCard = (server: AvailableServer) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={toServerCardStatus(server.status)}
       path={server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={toServerCardTransport(server.transport)}
       pickerMode
       onClick={() => handleConnectServer(server.name)}
     />
   );
-  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const toServerCell = (server: AvailableServer): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
   const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
   const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
     ? serverPicker.groups.map((g) => ({ ...g, items: g.items.map(toServerCell) }))
@@ -195,10 +236,12 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     }
   };
 
-  const getParameterSummary = (inputSchema: any): string => {
-    const parameterCount = Object.keys(inputSchema?.properties ?? {}).length;
+  const getParameterSummary = (inputSchema: unknown): string => {
+    const schema = asRecord(inputSchema);
+    const properties = asRecord(schema?.properties) ?? {};
+    const parameterCount = Object.keys(properties).length;
     if (parameterCount === 0) return t('flows.serverTools.parameter.none');
-    const requiredCount = Array.isArray(inputSchema?.required) ? inputSchema.required.length : 0;
+    const requiredCount = Array.isArray(schema?.required) ? schema.required.length : 0;
     const required = requiredCount > 0
       ? tp('flows.serverTools.required', requiredCount)
       : '';
@@ -223,7 +266,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   };
 
   // Filter tools based on enabled status for a specific node and search query
-  const getFilteredTools = (nodeId: string, serverName: string, allToolsForServer: any[]): any[] => {
+  const getFilteredTools = (nodeId: string, serverName: string, allToolsForServer: Tool[]): Tool[] => {
     try {
       // Ensure allToolsForServer is defined and is an array
       if (!allToolsForServer || !Array.isArray(allToolsForServer)) {
@@ -311,10 +354,16 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   };
 
   // Format parameter schema for display
-  const formatParameterSchema = (inputSchema: any) => {
-    if (!inputSchema || !inputSchema.properties) {
+  const formatParameterSchema = (inputSchema: unknown) => {
+    const schema = asRecord(inputSchema);
+    const properties = asRecord(schema?.properties);
+    if (!properties) {
       return null;
     }
+
+    const required = Array.isArray(schema?.required)
+      ? schema.required.filter((name): name is string => typeof name === 'string')
+      : [];
 
     return (
       <Box sx={{ mt: 1 }}>
@@ -322,20 +371,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
           {t('flows.agentTools.parameters')}
         </Typography>
         <Box sx={{ pl: 1, mt: 0.5 }}>
-          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]: [string, any]) => (
-            <Box key={paramName} sx={{ mb: 0.5 }}>
+          {Object.entries(properties).map(([paramName, paramDetails]) => {
+            const details = asRecord(paramDetails);
+            const description = typeof details?.description === 'string' ? details.description : undefined;
+            const type = typeof details?.type === 'string' ? details.type : undefined;
+            return <Box key={paramName} sx={{ mb: 0.5 }}>
               <Typography variant="caption" component="span" sx={{ fontWeight: 'medium' }}>
                 {paramName}
-                {inputSchema.required?.includes(paramName) && 
+                {required.includes(paramName) &&
                   <Typography variant="caption" component="span" color="error.main"> *</Typography>
                 }
                 {': '}
               </Typography>
               <Typography variant="caption" component="span" color="text.secondary">
-                {paramDetails.description || paramDetails.type || t('flows.agentTools.noDescription')}
+                {description || type || t('flows.agentTools.noDescription')}
               </Typography>
-            </Box>
-          ))}
+            </Box>;
+          })}
         </Box>
       </Box>
     );

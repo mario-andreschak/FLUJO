@@ -2,6 +2,44 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/services/transcription/webSpeech');
 
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+}
+
+interface SpeechRecognitionResultLike {
+  readonly isFinal: boolean;
+  readonly [index: number]: SpeechRecognitionAlternativeLike;
+}
+
+interface SpeechRecognitionEventLike {
+  readonly resultIndex: number;
+  readonly results: {
+    readonly length: number;
+    readonly [index: number]: SpeechRecognitionResultLike;
+  };
+}
+
+interface SpeechRecognitionErrorEventLike {
+  readonly error: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+type SpeechWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
+
 // Check if the Web Speech API is available
 const isSpeechRecognitionSupported = () => {
   return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
@@ -9,7 +47,8 @@ const isSpeechRecognitionSupported = () => {
 
 // Get the appropriate SpeechRecognition constructor based on browser support
 const getSpeechRecognition = () => {
-  return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  const speechWindow = window as SpeechWindow;
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 };
 
 /**
@@ -44,6 +83,7 @@ export async function transcribeWithWebSpeech(
     
     // Create a SpeechRecognition instance
     const SpeechRecognition = getSpeechRecognition();
+    if (!SpeechRecognition) throw new Error('Web Speech API is not supported in this browser');
     const recognition = new SpeechRecognition();
     
     // Configure recognition
@@ -60,7 +100,7 @@ export async function transcribeWithWebSpeech(
       let finalTranscript = '';
       
       // Handle recognition results
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event) => {
         let interimTranscript = '';
         
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -91,7 +131,7 @@ export async function transcribeWithWebSpeech(
       };
       
       // Handle errors
-      recognition.onerror = (event: any) => {
+      recognition.onerror = (event) => {
         log.error('Recognition error', { error: event.error });
         reject(new Error(`Speech recognition error: ${event.error}`));
       };

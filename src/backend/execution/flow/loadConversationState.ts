@@ -38,7 +38,7 @@ export async function loadConversationStateReadOnly(
 
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
-    const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
     return state || undefined;
   } catch (error) {
     log.warn('Error reading conversation state without recovery', { conversationId, error });
@@ -89,7 +89,7 @@ export async function loadConversationState(conversationId: string): Promise<Sha
 async function loadFromDurableStorage(conversationId: string): Promise<SharedState | undefined> {
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
-    const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
     if (state) {
       log.debug('Loaded state from storage', { conversationId });
       // Persona snapshots deliberately omit their runtime capability. A read or

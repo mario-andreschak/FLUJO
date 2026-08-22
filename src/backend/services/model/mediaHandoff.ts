@@ -8,7 +8,13 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 
 const log = createLogger('backend/services/model/mediaHandoff');
 
-type WirePart = Record<string, any>;
+type WirePart = Record<string, unknown>;
+
+function nestedPart(value: unknown): WirePart | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as WirePart
+    : undefined;
+}
 
 /**
  * Refresh the host-local projection of persisted media before building model
@@ -71,12 +77,22 @@ export function filterUnsupportedMediaInputs(
 }
 
 function referencedUri(part: WirePart): string | undefined {
-  if (part.type === 'image_url') return part.image_url?.url;
-  if (part.type === 'audio_url') return part.audio_url?.url;
-  if (part.type === 'video_url') return part.video_url?.url;
+  if (part.type === 'image_url') {
+    const url = nestedPart(part.image_url)?.url;
+    return typeof url === 'string' ? url : undefined;
+  }
+  if (part.type === 'audio_url') {
+    const url = nestedPart(part.audio_url)?.url;
+    return typeof url === 'string' ? url : undefined;
+  }
+  if (part.type === 'video_url') {
+    const url = nestedPart(part.video_url)?.url;
+    return typeof url === 'string' ? url : undefined;
+  }
   if (part.type === 'file' || part.type === 'input_file') {
-    const file = part.file ?? part;
-    return file.file_data ?? file.file_url ?? file.url;
+    const file = nestedPart(part.file) ?? part;
+    const uri = file.file_data ?? file.file_url ?? file.url;
+    return typeof uri === 'string' ? uri : undefined;
   }
   return undefined;
 }
@@ -89,12 +105,12 @@ function replaceReferencedUri(
   strictOpenAiAudioFormats: boolean,
 ): WirePart {
   if (part.type === 'image_url') {
-    return { ...part, image_url: { ...part.image_url, url: dataUrl } };
+    return { ...part, image_url: { ...nestedPart(part.image_url), url: dataUrl } };
   }
   if (part.type === 'video_url') {
     return {
       ...part,
-      video_url: { ...part.video_url, url: dataUrl, mime_type: mimeType },
+      video_url: { ...nestedPart(part.video_url), url: dataUrl, mime_type: mimeType },
     };
   }
   if (part.type === 'audio_url') {
@@ -117,11 +133,11 @@ function replaceReferencedUri(
         }
       : {
           ...part,
-          audio_url: { ...part.audio_url, url: dataUrl, mime_type: mimeType },
+          audio_url: { ...nestedPart(part.audio_url), url: dataUrl, mime_type: mimeType },
         };
   }
   if (part.type === 'file' || part.type === 'input_file') {
-    const file = part.file ?? part;
+    const file = nestedPart(part.file) ?? part;
     return {
       type: 'file',
       file: {

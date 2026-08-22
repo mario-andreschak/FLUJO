@@ -11,6 +11,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { LiveLane, LiveLanes, laneList } from '@/utils/shared/liveLanes';
 import { getWorkingMessage, WORKING_MESSAGE_INTERVAL_MS } from './workingMessages';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
@@ -149,7 +150,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   );
   const workingMessage = locale === 'en'
     ? getWorkingMessage(messageSequence, messageStartedAt)
-    : t(`chat.live.working.${messageSequence % 6}` as any);
+    : t(`chat.live.working.${messageSequence % 6}` as TranslationKey);
 
   // Issue #400: countdown to the server-owned retry deadline. This is display
   // only — the frontend never re-issues the request when it reaches zero.

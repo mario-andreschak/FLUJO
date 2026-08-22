@@ -186,7 +186,7 @@ export type MCPSamplingPolicy = {
   maxCallsPerMinute?: number;
 };
 
-export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
+export type MCPStdioConfig = Omit<StdioServerParameters, 'env'> & MCPManagerConfig & {
   transport: 'stdio';
 };
 
@@ -348,16 +348,18 @@ export interface MCPStdioOAuthStatus {
   blockingAuthorization?: MCPStdioOAuthAuthorization;
 }
 
-// Define ServerState as an intersection type
-export type MCPServerState = MCPServerConfig & {
+type WithMCPServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
   tools: Array<{
     name: string;
     description: string;
-    inputSchema: Record<string, any>;
+    inputSchema: Record<string, unknown>;
   }>;
   error?: string;
   stderrOutput?: string;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
   stdioOAuth?: MCPStdioOAuthStatus;
-};
+  env: Record<string, EnvVarValue>;
+} : never;
+
+export type MCPServerState = WithMCPServerState<MCPServerConfig>;

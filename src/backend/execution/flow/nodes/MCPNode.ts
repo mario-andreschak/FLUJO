@@ -13,7 +13,7 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/MCPNode');
 
-export class MCPNode extends BaseNode {
+export class MCPNode extends BaseNode<MCPNodeParams, SharedState, MCPNodePrepResult, MCPNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: MCPNodeParams): Promise<MCPNodePrepResult> {
     log.info('prep() started');
     

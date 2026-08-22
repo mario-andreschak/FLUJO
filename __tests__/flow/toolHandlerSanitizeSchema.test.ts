@@ -60,7 +60,7 @@ describe('ToolHandler.sanitizeSchema — required field filtering', () => {
       },
     };
     const result = ToolHandler.sanitizeSchema(schema);
-    expect(result.properties.issue_fields.items.required).toEqual(['field_name']);
+    expect(result.properties!.issue_fields.items!.required).toEqual(['field_name']);
   });
 
   it('removes items.required when it becomes empty', () => {
@@ -73,7 +73,7 @@ describe('ToolHandler.sanitizeSchema — required field filtering', () => {
       },
     };
     const result = ToolHandler.sanitizeSchema(schema);
-    expect(result.items.required).toBeUndefined();
+    expect(result.items!.required).toBeUndefined();
   });
 
   it('fixes required inside nested properties recursively', () => {
@@ -88,7 +88,7 @@ describe('ToolHandler.sanitizeSchema — required field filtering', () => {
       },
     };
     const result = ToolHandler.sanitizeSchema(schema);
-    expect(result.properties.outer.required).toEqual(['inner']);
+    expect(result.properties!.outer.required).toEqual(['inner']);
   });
 
   it('still strips unsupported format alongside required filtering', () => {
@@ -101,8 +101,8 @@ describe('ToolHandler.sanitizeSchema — required field filtering', () => {
       required: ['url', 'name', 'missing'],
     };
     const result = ToolHandler.sanitizeSchema(schema);
-    expect(result.properties.url.format).toBeUndefined();
-    expect(result.properties.url.description).toContain('format: uri');
+    expect(result.properties!.url.format).toBeUndefined();
+    expect(result.properties!.url.description).toContain('format: uri');
     expect(result.required).toEqual(['url', 'name']);
   });
 
@@ -117,6 +117,6 @@ describe('ToolHandler.sanitizeSchema — required field filtering', () => {
       ],
     };
     const result = ToolHandler.sanitizeSchema(schema);
-    expect(result.oneOf[0].required).toEqual(['a']);
+    expect(result.oneOf![0].required).toEqual(['a']);
   });
 });

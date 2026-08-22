@@ -169,8 +169,8 @@ export interface DebugStep {
   // Snapshots of state and results for inspection
   stateBefore: Partial<SharedState>; // Snapshot before node execution
   stateAfter: Partial<SharedState>; // Snapshot after node execution
-  prepResultSnapshot: any; // Snapshot of the result from prep()
-  execResultSnapshot: any; // Snapshot of the result from execCore()
+  prepResultSnapshot: unknown; // Snapshot of the result from prep()
+  execResultSnapshot: unknown; // Snapshot of the result from execCore()
   /** Model-input visualization for a Process node's model call (issue #153).
    *  Populated only in debug mode; absent for non-model nodes / older traces. */
   modelInput?: ModelInputSnapshot;

@@ -121,6 +121,9 @@ jest.mock('@/backend/services/flow/index', () => ({
   flowService: {
     loadFlows: jest.fn(async () => [{ id: 'flow-1', name: 'TestFlow' }]),
     getFlow: jest.fn(async () => ({ id: 'flow-1', name: 'TestFlow' })),
+    getFlowByName: jest.fn(async (name: string) => (
+      name === 'TestFlow' ? { id: 'flow-1', name: 'TestFlow' } : null
+    )),
   },
 }));
 
@@ -136,7 +139,11 @@ jest.mock('@/backend/services/statistics', () => {
   return { ...actual, recordStatisticsEvent: jest.fn() };
 });
 
-import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/execution/flow/runFlow';
+import {
+  runFlow as runFlowWithContext,
+  type FlowRunInput,
+  type FlowRunMessageInput,
+} from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow/index';
@@ -1296,7 +1303,7 @@ describe('resume after error — turn replay (issue #151)', () => {
 
   // What the client re-sends on Retry: a user turn stamped with the ENTRY node
   // (START) + interim assistant output from it; NO fresh trailing user turn.
-  const retryMessages = [
+  const retryMessages: FlowRunMessageInput[] = [
     { role: 'user', content: 'question', id: 'u1', timestamp: 1, processNodeId: START },
     { role: 'assistant', content: 'interim from start node', id: 'a1', timestamp: 2, processNodeId: START },
   ];

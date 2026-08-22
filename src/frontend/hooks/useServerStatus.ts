@@ -29,14 +29,16 @@ function getServerPath(config: MCPServerConfig): string {
 
 // Define ServerState as an intersection type instead of extending MCPServerConfig 
 // but with the updated environment variable type
-type ServerState = Omit<MCPServerConfig, 'env'> & {
+type WithServerState<T extends MCPServerConfig> = T extends MCPServerConfig ? Omit<T, 'env'> & {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'starting' | 'initialization' | 'requires_authentication';
   path: string;
   error?: string;
   stderrOutput?: string;
   stdioOAuth?: MCPStdioOAuthStatus;
   env: Record<string, EnvVarValue>;
-};
+} : never;
+
+export type ServerState = WithServerState<MCPServerConfig>;
 
 /**
  * Custom hook for managing server status

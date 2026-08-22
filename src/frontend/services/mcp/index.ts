@@ -1,6 +1,6 @@
 'use client';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { Resource, ResourceTemplate, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
@@ -20,10 +20,10 @@ class MCPService {
   // private clients: Map<string, Client> = new Map(); // Store connected clients for direct access
   
   // Cache for tools to improve performance and reduce API calls
-  private toolsCache: Map<string, { tools: any[], timestamp: number }> = new Map();
+  private toolsCache: Map<string, { tools: Tool[], timestamp: number }> = new Map();
   // #15: parallel caches for resources/prompts listings (same TTL/eviction as tools).
-  private resourcesCache: Map<string, { data: any, timestamp: number }> = new Map();
-  private promptsCache: Map<string, { prompts: any[], timestamp: number }> = new Map();
+  private resourcesCache: Map<string, { data: ServerResourcesResult, timestamp: number }> = new Map();
+  private promptsCache: Map<string, { prompts: unknown[], timestamp: number }> = new Map();
   private CACHE_TTL = 60000; // 1 minute cache TTL
   // Tracks the last-seen resourceListVersion per server (from the server-status API).
   // When the version advances, checkResourceListVersion() evicts the resources cache so
@@ -59,7 +59,7 @@ class MCPService {
   /**
    * List tools available from an MCP server with caching
    */
-  async listServerTools(serverName: string) {
+  async listServerTools(serverName: string): Promise<{ tools: Tool[]; error?: string }> {
     try {
       // Check cache first
       const cachedData = this.toolsCache.get(serverName);
@@ -72,15 +72,26 @@ class MCPService {
       
       // Cache miss or expired, fetch from server
       const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/tools`);
-      const data = await response.json();
+      const data: unknown = await response.json();
+      const responseBody = data && typeof data === 'object'
+        ? data as Record<string, unknown>
+        : {};
       
-      if (data.error) {
-        log.warn(`Error listing tools for server ${serverName}:`, data.error);
-        return { tools: [], error: data.error };
+      if (responseBody.error) {
+        log.warn(`Error listing tools for server ${serverName}:`, responseBody.error);
+        return { tools: [], error: String(responseBody.error) };
       }
       
       // Ensure tools is always an array
-      const tools = Array.isArray(data.tools) ? data.tools : [];
+      const tools = Array.isArray(responseBody.tools)
+        ? responseBody.tools.filter((tool): tool is Tool => (
+            !!tool &&
+            typeof tool === 'object' &&
+            typeof (tool as Record<string, unknown>).name === 'string' &&
+            !!(tool as Record<string, unknown>).inputSchema &&
+            typeof (tool as Record<string, unknown>).inputSchema === 'object'
+          ))
+        : [];
       
       // Update cache
       this.toolsCache.set(serverName, { tools, timestamp: now });
@@ -112,7 +123,7 @@ class MCPService {
    * List resources and resource templates published by an MCP server (#15), with caching.
    * Returns `{ resources, resourceTemplates, error? }`.
    */
-  async listServerResources(serverName: string) {
+  async listServerResources(serverName: string): Promise<ServerResourcesResult> {
     try {
       const cached = this.resourcesCache.get(serverName);
       const now = Date.now();
@@ -122,12 +133,27 @@ class MCPService {
       }
 
       const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}/resources`);
-      const data = await response.json();
+      const data: unknown = await response.json();
+      const responseBody = data && typeof data === 'object'
+        ? data as Record<string, unknown>
+        : {};
 
       const result = {
-        resources: Array.isArray(data.resources) ? data.resources : [],
-        resourceTemplates: Array.isArray(data.resourceTemplates) ? data.resourceTemplates : [],
-        error: data.error,
+        resources: Array.isArray(responseBody.resources)
+          ? responseBody.resources.filter((resource): resource is Resource => (
+              !!resource &&
+              typeof resource === 'object' &&
+              typeof (resource as Record<string, unknown>).uri === 'string'
+            ))
+          : [],
+        resourceTemplates: Array.isArray(responseBody.resourceTemplates)
+          ? responseBody.resourceTemplates.filter((template): template is ResourceTemplate => (
+              !!template &&
+              typeof template === 'object' &&
+              typeof (template as Record<string, unknown>).uriTemplate === 'string'
+            ))
+          : [],
+        error: responseBody.error === undefined ? undefined : String(responseBody.error),
       };
 
       if (!result.error) {
@@ -244,7 +270,7 @@ class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: Record<string, any>, timeout?: number) {
+  async callTool(serverName: string, toolName: string, args: Record<string, unknown>, timeout?: number) {
     try {
       const response = await fetch(
         `/api/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
@@ -596,6 +622,12 @@ class MCPService {
   }
 
   // Server events functionality has been removed
+}
+
+interface ServerResourcesResult {
+  resources: Resource[];
+  resourceTemplates: ResourceTemplate[];
+  error?: string;
 }
 
 export const mcpService = new MCPService();

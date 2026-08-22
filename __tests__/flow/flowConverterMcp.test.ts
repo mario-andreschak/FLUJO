@@ -49,6 +49,10 @@ function processNode(flow: unknown): BaseNode {
   return successors[0] as BaseNode;
 }
 
+function mcpNodes(node: BaseNode): unknown {
+  return (node.node_params.properties as { mcpNodes?: unknown }).mcpNodes;
+}
+
 describe('FlowConverter MCP attachment derivation', () => {
   it('rebuilds and deduplicates mcpNodes without mutating the source flow', () => {
     const source = buildFlow();
@@ -60,8 +64,8 @@ describe('FlowConverter MCP attachment derivation', () => {
       id: 'mcp',
       properties: expect.objectContaining({ boundServer: 'current' }),
     }];
-    expect(first.node_params.properties.mcpNodes).toEqual(expected);
-    expect(second.node_params.properties.mcpNodes).toEqual(expected);
+    expect(mcpNodes(first)).toEqual(expected);
+    expect(mcpNodes(second)).toEqual(expected);
     expect((source.nodes.find(({ id }) => id === 'proc')!.data.properties as { mcpNodes: unknown[] }).mcpNodes)
       .toEqual([{ id: 'stale', properties: { boundServer: 'old' } }]);
   });
@@ -89,7 +93,7 @@ describe('FlowConverter MCP attachment derivation', () => {
     const stat = [...proc.successors.values()][0] as BaseNode;
 
     expect(stat.node_params.type).toBe('static');
-    expect(stat.node_params.properties.mcpNodes).toEqual([{
+    expect(mcpNodes(stat)).toEqual([{
       id: 'mcp',
       properties: expect.objectContaining({ boundServer: 'current', enabledTools: ['get_me'] }),
     }]);
@@ -132,7 +136,7 @@ describe('FlowConverter MCP attachment derivation', () => {
     (source.nodes.find(({ id }) => id === 'proc')!.data.properties as any).mcpNodes = sourceMcpNodes;
 
     const defaultConverted = processNode(FlowConverter.convert(source));
-    expect(defaultConverted.node_params.properties.mcpNodes).toEqual([{
+    expect(mcpNodes(defaultConverted)).toEqual([{
       id: 'mcp',
       properties: expect.objectContaining({ boundServer: 'current', enabledTools: ['get_me'] }),
     }]);
@@ -144,7 +148,7 @@ describe('FlowConverter MCP attachment derivation', () => {
     ]);
     const converted = processNode(FlowConverter.convert(source, { trustedInlineMcpBindings }));
 
-    expect(converted.node_params.properties.mcpNodes).toEqual([
+    expect(mcpNodes(converted)).toEqual([
       {
         id: personalComputerId,
         properties: {

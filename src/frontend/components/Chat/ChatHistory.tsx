@@ -76,6 +76,7 @@ import {
   conversationStatusColor,
 } from './conversationCardPalette';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 import { chatService } from '@/frontend/services/chat';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
@@ -407,12 +408,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   })[mode];
 
   const originLabel = React.useCallback(
-    (key: ConversationOriginKey) => t(`chat.origin.${key}` as any),
+    (key: ConversationOriginKey) => t(`chat.origin.${key}` as TranslationKey),
     [t],
   );
 
   const originDescription = React.useCallback(
-    (key: ConversationOriginKey) => t(`chat.origin.description.${key}` as any),
+    (key: ConversationOriginKey) => t(`chat.origin.description.${key}` as TranslationKey),
     [t],
   );
 

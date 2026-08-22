@@ -48,7 +48,7 @@ async function POST_handler(
       log.debug(`Loaded state from memory`, { requestId, conversationId });
     } else {
       try {
-        sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+        sharedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
         if (sharedState) {
           log.debug(`Loaded state from storage`, { requestId, conversationId });
           // Add to memory map if loaded from storage, so the flag is checked

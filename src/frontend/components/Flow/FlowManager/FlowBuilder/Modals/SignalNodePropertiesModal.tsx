@@ -20,7 +20,7 @@ interface SignalNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 /**
@@ -44,7 +44,7 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -77,8 +77,8 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
 
   if (!nodeData) return null;
 
-  const topic: string = nodeData.properties?.topic ?? '';
-  const payloadTemplate: string = nodeData.properties?.payloadTemplate ?? '';
+  const topic = typeof nodeData.properties?.topic === 'string' ? nodeData.properties.topic : '';
+  const payloadTemplate = typeof nodeData.properties?.payloadTemplate === 'string' ? nodeData.properties.payloadTemplate : '';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>

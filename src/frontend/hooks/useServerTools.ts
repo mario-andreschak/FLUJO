@@ -154,7 +154,7 @@ export function useServerTools(serverName: string | null) {
   /**
    * Test a tool with the specified parameters
    */
-  const testTool = useCallback(async (toolName: string, params: Record<string, any>, timeout?: number): Promise<ToolTestResult> => {
+  const testTool = useCallback(async (toolName: string, params: Record<string, unknown>, timeout?: number): Promise<ToolTestResult> => {
     if (!serverName) {
       return {
         success: false,

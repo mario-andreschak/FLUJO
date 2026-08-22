@@ -29,7 +29,12 @@ const log = createLogger('backend/flow/execution/nodes/SignalNode');
  *    at runDepth 0): a signal is an explicit authored emission and should fire
  *    wherever placed. Loop safety comes from the shared `chainDepth`.
  */
-export class SignalNode extends BaseNode {
+export class SignalNode extends BaseNode<
+  SignalNodeParams,
+  SharedState,
+  { topic: string; payloadTemplate: string },
+  Record<string, never>
+> {
   async prep(sharedState: SharedState, node_params?: SignalNodeParams): Promise<{ topic: string; payloadTemplate: string }> {
     const topic = (node_params?.properties?.topic ?? '').trim();
     const authoredPayloadTemplate = node_params?.properties?.payloadTemplate ?? '';

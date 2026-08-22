@@ -39,6 +39,10 @@ import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('app/models/ModelClient');
 
+function errorMessage(error: unknown): string | undefined {
+  return error instanceof Error ? error.message : undefined;
+}
+
 export default function ModelClient() {
   const { t } = useI18n();
   const router = useRouter();
@@ -190,10 +194,10 @@ export default function ModelClient() {
         setError(result.error || t('models.saveFailed'));
         return { success: false, error: result.error };
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to save model', error);
-      setError(error?.message || t('models.saveFailedRetry'));
-      return { success: false, error: error?.message || t('models.saveFailed') };
+      setError(errorMessage(error) || t('models.saveFailedRetry'));
+      return { success: false, error: errorMessage(error) || t('models.saveFailed') };
     } finally {
       setIsLoading(false);
     }
@@ -283,9 +287,9 @@ export default function ModelClient() {
       setModels(updated);
       router.refresh();
       return { success: true, created, existing };
-    } catch (guidedError: any) {
+    } catch (guidedError: unknown) {
       log.error('Failed to create guided model bundle', guidedError);
-      const message = guidedError?.message || t('models.guidedBundleFailed');
+      const message = errorMessage(guidedError) || t('models.guidedBundleFailed');
       setError(message);
       return { success: false, created, existing, error: message };
     } finally {
@@ -334,9 +338,9 @@ export default function ModelClient() {
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to set model folder', error);
-      setError(error?.message || t('models.moveFailedRetry'));
+      setError(errorMessage(error) || t('models.moveFailedRetry'));
     } finally {
       setIsLoading(false);
     }
@@ -365,9 +369,9 @@ export default function ModelClient() {
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to toggle model favorite', error);
-      setError(error?.message || t('models.favoriteFailedRetry'));
+      setError(errorMessage(error) || t('models.favoriteFailedRetry'));
     } finally {
       setIsLoading(false);
     }

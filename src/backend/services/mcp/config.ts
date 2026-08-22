@@ -3,7 +3,7 @@ import simpleGit from 'simple-git';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
+import { EnvVarValue, MCPLaunchSpec, MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
 import { getWorkspaceDataDir, remapLegacyDefaultWorkspaceReference } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/config');
@@ -96,7 +96,8 @@ function isFilesystemRootPath(rootPath: unknown): boolean {
 export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServiceResponse> {
   log.debug('Entering loadServerConfigs method');
   try {
-    const mcpServers = await loadItem<Record<string, any>>(StorageKey.MCP_SERVERS, {});
+    type StoredServerConfig = Partial<MCPServerConfig> & Record<string, unknown>;
+    const mcpServers = await loadItem<Record<string, StoredServerConfig>>(StorageKey.MCP_SERVERS, {});
     
     const configs = Object.entries(mcpServers).map(([name, serverConfig]) => {
       // Determine the transport type
@@ -105,48 +106,59 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
       // Layout-v2 compatibility: old GitHub installs persisted absolute paths
       // into the legacy managed MCP root. Normalize them in memory after the
       // clone has moved; never rewrite an explicit path that still exists.
-      const remapMcpPath = (value: unknown): unknown =>
+      const remapMcpPath = (value: unknown): string | undefined =>
         typeof value === 'string'
           ? remapLegacyDefaultWorkspaceReference(value, 'mcp-servers')
-          : value;
-      const remapMcpEnv = (record: unknown): unknown => {
-        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
-        return Object.fromEntries(Object.entries(record).map(([key, value]) => {
-          if (typeof value === 'string') return [key, remapMcpPath(value)];
-          if (value && typeof value === 'object' && typeof value.value === 'string') {
-            return [key, { ...value, value: remapMcpPath(value.value) }];
+          : undefined;
+      const remapMcpStringList = (value: unknown): string[] | undefined =>
+        Array.isArray(value)
+          ? value.map(remapMcpPath).filter((entry): entry is string => entry !== undefined)
+          : undefined;
+      const remapMcpEnv = (record: unknown): Record<string, EnvVarValue> | undefined => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
+        const remapped: Record<string, EnvVarValue> = {};
+        for (const [key, value] of Object.entries(record)) {
+          if (typeof value === 'string') {
+            remapped[key] = remapMcpPath(value) ?? value;
+            continue;
           }
-          return [key, value];
-        }));
+          if (
+            value && typeof value === 'object'
+            && 'value' in value && typeof value.value === 'string'
+            && 'metadata' in value && value.metadata && typeof value.metadata === 'object'
+            && 'isSecret' in value.metadata && typeof value.metadata.isSecret === 'boolean'
+          ) {
+            remapped[key] = {
+              value: remapMcpPath(value.value) ?? value.value,
+              metadata: { isSecret: value.metadata.isSecret },
+            };
+          }
+        }
+        return remapped;
       };
+      const rawLaunch = serverConfig.launch;
+      const remappedLaunch: Partial<MCPLaunchSpec> | undefined =
+        rawLaunch && typeof rawLaunch === 'object'
+          ? {
+              ...rawLaunch as Partial<MCPLaunchSpec>,
+              command: remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).command),
+              cwd: remapMcpPath((rawLaunch as Partial<MCPLaunchSpec>).cwd),
+              args: remapMcpStringList((rawLaunch as Partial<MCPLaunchSpec>).args),
+              env: remapMcpEnv((rawLaunch as Partial<MCPLaunchSpec>).env),
+            }
+          : undefined;
       serverConfig = {
         ...serverConfig,
         rootPath: remapMcpPath(serverConfig.rootPath),
         cwd: remapMcpPath(serverConfig.cwd),
         command: remapMcpPath(serverConfig.command),
-        args: Array.isArray(serverConfig.args)
-          ? serverConfig.args.map(remapMcpPath)
-          : serverConfig.args,
-        roots: Array.isArray(serverConfig.roots)
-          ? serverConfig.roots.map(remapMcpPath)
-          : serverConfig.roots,
+        args: remapMcpStringList(serverConfig.args),
+        roots: remapMcpStringList(serverConfig.roots),
         env: remapMcpEnv(serverConfig.env),
         ...(Object.prototype.hasOwnProperty.call(serverConfig, 'launch')
-          ? {
-              launch: serverConfig.launch && typeof serverConfig.launch === 'object'
-                ? {
-                    ...serverConfig.launch,
-                    command: remapMcpPath(serverConfig.launch.command),
-                    cwd: remapMcpPath(serverConfig.launch.cwd),
-                    args: Array.isArray(serverConfig.launch.args)
-                      ? serverConfig.launch.args.map(remapMcpPath)
-                      : serverConfig.launch.args,
-                    env: remapMcpEnv(serverConfig.launch.env),
-                  }
-                : serverConfig.launch,
-            }
+          ? { launch: remappedLaunch }
           : {}),
-      };
+      } as StoredServerConfig;
 
       // Read-time normalization (issue 52): remote servers saved with a too-wide
       // rootPath default ('/'/drive root) are re-pointed at their per-server folder,

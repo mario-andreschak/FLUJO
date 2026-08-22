@@ -5,6 +5,7 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type {
   Conversation,
   ConversationListItem,
+  ChatApiResponse,
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
@@ -23,8 +24,8 @@ const log = createLogger('frontend/services/chat/index');
  */
 export class ChatApiError extends Error {
   readonly status: number;
-  readonly body: any;
-  constructor(message: string, status: number, body: any) {
+  readonly body: unknown;
+  constructor(message: string, status: number, body: unknown) {
     super(message);
     this.name = 'ChatApiError';
     this.status = status;
@@ -131,7 +132,7 @@ async function parse<T>(response: Response): Promise<T> {
   if (response.status === 204) {
     return undefined as T;
   }
-  let body: any = undefined;
+  let body: unknown = undefined;
   const text = await response.text();
   if (text) {
     try {
@@ -141,9 +142,15 @@ async function parse<T>(response: Response): Promise<T> {
     }
   }
   if (!response.ok) {
-    const message =
-      (body && typeof body === 'object' && (body.error || body.message)) ||
-      `Request failed with status ${response.status}`;
+    const bodyRecord = body && typeof body === 'object'
+      ? body as Record<string, unknown>
+      : undefined;
+    const errorMessage = typeof bodyRecord?.error === 'string'
+      ? bodyRecord.error
+      : typeof bodyRecord?.message === 'string'
+        ? bodyRecord.message
+        : undefined;
+    const message = errorMessage ?? `Request failed with status ${response.status}`;
     throw new ChatApiError(message, response.status, body);
   }
   // Issue #383 (gap 4): the OpenAI-compatible chat-completions envelope
@@ -152,15 +159,15 @@ async function parse<T>(response: Response): Promise<T> {
   // AND no choices, so a legitimate completion whose CONTENT merely mentions
   // the word "error" is never mistaken for a failure) and throw the same
   // ChatApiError callers already handle for a non-2xx response.
-  if (
-    body
-    && typeof body === 'object'
-    && body.error
-    && typeof body.error === 'object'
-    && !Array.isArray(body.choices)
-  ) {
-    const message = typeof body.error.message === 'string' ? body.error.message : 'Request failed.';
-    const status = typeof body.error.status === 'number' ? body.error.status : response.status;
+  const bodyRecord = body && typeof body === 'object'
+    ? body as Record<string, unknown>
+    : undefined;
+  const providerError = bodyRecord?.error && typeof bodyRecord.error === 'object'
+    ? bodyRecord.error as Record<string, unknown>
+    : undefined;
+  if (providerError && !Array.isArray(bodyRecord?.choices)) {
+    const message = typeof providerError.message === 'string' ? providerError.message : 'Request failed.';
+    const status = typeof providerError.status === 'number' ? providerError.status : response.status;
     throw new ChatApiError(message, status, body);
   }
   return body as T;
@@ -376,14 +383,14 @@ class ChatService {
     id: string,
     action: 'approve' | 'reject',
     toolCallId: string,
-  ): Promise<any> {
+  ): Promise<ChatApiResponse> {
     log.debug('respondToToolCall: Entering method', { conversationId: id, action, toolCallId });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, toolCallId }),
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
   }
 
   /**
@@ -402,21 +409,21 @@ class ChatService {
   }
 
   /** POST /v1/chat/conversations/{id}/debug/step — advance one debug step. */
-  async debugStep(id: string): Promise<any> {
+  async debugStep(id: string): Promise<ChatApiResponse> {
     log.debug('debugStep: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/step`, {
       method: 'POST',
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
   }
 
   /** POST /v1/chat/conversations/{id}/debug/continue — resume from a pause. */
-  async debugContinue(id: string): Promise<any> {
+  async debugContinue(id: string): Promise<ChatApiResponse> {
     log.debug('debugContinue: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/continue`, {
       method: 'POST',
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
   }
 
   /** POST /v1/chat/conversations/{id}/debug/attach — pause at the next safe boundary. */
@@ -433,10 +440,10 @@ class ChatService {
    * Lets the debugger panel attach to a run this tab did not start (or one that
    * paused after its POST had already resolved) instead of waiting forever.
    */
-  async getDebugState(id: string): Promise<{ status: string; breakpoints: string[]; debugState: any }> {
+  async getDebugState(id: string): Promise<{ status: string; breakpoints: string[]; debugState: unknown }> {
     log.debug('getDebugState: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/state`);
-    return parse<{ status: string; breakpoints: string[]; debugState: any }>(response);
+    return parse<{ status: string; breakpoints: string[]; debugState: unknown }>(response);
   }
 
   /** PUT /v1/chat/conversations/{id}/breakpoints — replace breakpoint set. */
@@ -489,7 +496,7 @@ class ChatService {
   async completeFlowGeneratorTurn(payload: {
     conversationId: string;
     messages: Array<Record<string, unknown>>;
-  }): Promise<any> {
+  }): Promise<ChatApiResponse> {
     const response = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -503,7 +510,7 @@ class ChatService {
         },
       }),
     });
-    return parse<any>(response);
+    return parse<ChatApiResponse>(response);
   }
 
   /** Restore the bundled generator definition after user edits. */

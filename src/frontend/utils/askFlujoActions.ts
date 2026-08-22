@@ -104,17 +104,37 @@ export function setAskFlujoValueAtPath<T>(source: T, path: string | undefined, v
     throw new Error('The requested field path is not editable.');
   }
 
-  const root: any = Array.isArray(source) ? [...source] : { ...(source as any) };
-  let cursor = root;
-  let sourceCursor: any = source;
+  if (source === null || typeof source !== 'object') {
+    throw new Error('The editable source must be an object or array.');
+  }
+  type MutableContainer = Record<string, unknown> | unknown[];
+  const cloneContainer = (input: object): MutableContainer => (
+    Array.isArray(input) ? [...input] : { ...input as Record<string, unknown> }
+  );
+  const readSegment = (container: object, segment: string): unknown => (
+    Array.isArray(container)
+      ? container[Number(segment)]
+      : (container as Record<string, unknown>)[segment]
+  );
+  const writeSegment = (container: MutableContainer, segment: string, next: unknown): void => {
+    if (Array.isArray(container)) container[Number(segment)] = next;
+    else container[segment] = next;
+  };
+
+  const root = cloneContainer(source);
+  let cursor: MutableContainer = root;
+  let sourceCursor: unknown = source;
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index];
-    const current = sourceCursor?.[segment];
+    if (!sourceCursor || typeof sourceCursor !== 'object') {
+      throw new Error(`The field path does not exist at "${segment}".`);
+    }
+    const current = readSegment(sourceCursor, segment);
     if (current === null || typeof current !== 'object') {
       throw new Error(`The field path does not exist at "${segment}".`);
     }
-    const cloned = Array.isArray(current) ? [...current] : { ...current };
-    cursor[segment] = cloned;
+    const cloned = cloneContainer(current);
+    writeSegment(cursor, segment, cloned);
     cursor = cloned;
     sourceCursor = current;
   }
@@ -122,7 +142,7 @@ export function setAskFlujoValueAtPath<T>(source: T, path: string | undefined, v
   if (!sourceCursor || !(last in Object(sourceCursor))) {
     throw new Error(`The field "${last}" does not exist.`);
   }
-  cursor[last] = value;
+  writeSegment(cursor, last, value);
   return root as T;
 }
 

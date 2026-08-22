@@ -99,7 +99,7 @@ function isUnsupportedToolUseError(error: unknown): boolean {
   );
 }
 
-export class ProcessNode extends BaseNode {
+export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, ProcessNodePrepResult, ProcessNodeExecResult> {
   /**
    * Generate handoff tools for each connected non-MCP node
    */
@@ -130,9 +130,7 @@ export class ProcessNode extends BaseNode {
     const targets: { id: string; label: string; type: string }[] = [];
     const seenIds = new Set<string>();
     for (const edgeId of actions) {
-      const targetNode = this.successors instanceof Map
-        ? this.successors.get(edgeId)
-        : (this.successors as any)[edgeId];
+      const targetNode = this.successors.get(edgeId);
       if (!targetNode) {
         log.warn(`Target node not found for edge ${edgeId}`);
         continue;
@@ -1295,11 +1293,9 @@ export class ProcessNode extends BaseNode {
         log.error('Model execution error after call attempt', { error: errorDetails });
 
         // CHANGE: Instead of returning an error result, throw a custom error
-      const modelError = new Error(`Model execution failed: ${modelResult.error.message}`);
-
-      // Add properties to the error object
-      (modelError as any).isModelError = true;
-      (modelError as any).details = {
+      const modelError = Object.assign(
+        new Error(`Model execution failed: ${modelResult.error.message}`),
+        { isModelError: true, details: {
         message: modelResult.error.message,
         type: modelResult.error.type,
         code: modelResult.error.code,
@@ -1309,7 +1305,7 @@ export class ProcessNode extends BaseNode {
         status: typeof modelResult.error.details?.status === 'number' ? modelResult.error.details.status : undefined,
         // Include all other details from the original error
         ...modelResult.error.details
-      };
+      } });
 
       // Log that we're throwing a critical error
       log.error('Throwing critical model error to abort flow execution', {
@@ -1441,9 +1437,7 @@ export class ProcessNode extends BaseNode {
 
         // Find the edge ID that leads to this node
         for (const edgeId of actions) {
-          const targetNode = this.successors instanceof Map
-            ? this.successors.get(edgeId)
-            : (this.successors as any)[edgeId];
+          const targetNode = this.successors.get(edgeId);
 
           if (targetNode && targetNode.node_params?.id === targetNodeId) {
             // Set handoff request in shared state

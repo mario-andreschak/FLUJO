@@ -151,7 +151,7 @@ function descendantIds(items: ConversationListItem[], ancestorId: string): Set<s
 function messageContentMatches(state: SharedState, qLower: string): boolean {
   const messages = Array.isArray(state?.messages) ? state.messages : [];
   for (const m of messages) {
-    const content: unknown = (m as any)?.content;
+    const content: unknown = m.content;
     if (typeof content === 'string') {
       if (content.toLowerCase().includes(qLower)) return true;
     } else if (content != null) {
@@ -549,7 +549,7 @@ async function GET_handler(request: NextRequest) {
     }
     return NextResponse.json(validConversations);
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     const duration = Date.now() - startTime;
     log.error('Error listing conversations', {
       requestId,
@@ -558,7 +558,7 @@ async function GET_handler(request: NextRequest) {
     });
 
     // Check if the error is because the directory doesn't exist
-    if (error.code === 'ENOENT') {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
       log.warn('Conversations directory does not exist, returning empty list.', { requestId, path: conversationsDir });
       if (presenceOnly) return NextResponse.json({ count: 0 });
       if (paged) return NextResponse.json({ items: [], total: 0, hasMore: false });
@@ -711,8 +711,8 @@ async function POST_handler(req: NextRequest) {
       log.warn(`Conversation file already exists, potentially overwriting`, { requestId, conversationId, filePath });
       // Decide on behavior: return error, allow overwrite, etc. Let's allow overwrite for now.
       // return NextResponse.json({ error: `Conversation with ID ${conversationId} already exists` }, { status: 409 }); // 409 Conflict
-    } catch (accessError: any) {
-      if (accessError.code !== 'ENOENT') {
+    } catch (accessError: unknown) {
+      if (!accessError || typeof accessError !== 'object' || !('code' in accessError) || accessError.code !== 'ENOENT') {
         throw accessError; // Re-throw unexpected errors
       }
       // File doesn't exist, proceed normally
@@ -810,7 +810,7 @@ async function POST_handler(req: NextRequest) {
 
     return NextResponse.json(responseItem, { status: 201 }); // 201 Created
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       const duration = Date.now() - startTime;
       log.error('Error creating conversation', {
         requestId,

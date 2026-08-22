@@ -11,10 +11,10 @@ const log = createLogger('frontend/services/bugReport');
  * keys never touch the browser — the enhancement runs entirely backend-side.
  */
 class BugReportService {
-  private async fetchWithErrorHandling(url: string, options?: RequestInit): Promise<any> {
+  private async fetchWithErrorHandling<T>(url: string, options?: RequestInit): Promise<T> {
     log.debug('Making API request', { url, method: options?.method || 'GET' });
     const response = await fetch(url, options);
-    let data: any = null;
+    let data: unknown = null;
     if (response.status !== 204) {
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
@@ -26,12 +26,19 @@ class BugReportService {
     if (!response.ok) {
       const errorMessage =
         typeof data === 'object' && data !== null
-          ? data.error || data.message || JSON.stringify(data)
-          : data || `HTTP error! status: ${response.status}`;
+          ? (() => {
+              const record = data as Record<string, unknown>;
+              if (typeof record.error === 'string') return record.error;
+              if (typeof record.message === 'string') return record.message;
+              return JSON.stringify(data);
+            })()
+          : typeof data === 'string' && data
+            ? data
+            : `HTTP error! status: ${response.status}`;
       log.error('Request failed', { url, status: response.status, error: errorMessage });
       throw new Error(errorMessage);
     }
-    return data;
+    return data as T;
   }
 
   /**
@@ -45,7 +52,7 @@ class BugReportService {
     description: string;
     context: SafeBugContext;
   }): Promise<EnhanceResult> {
-    return this.fetchWithErrorHandling('/api/bugs/enhance', {
+    return this.fetchWithErrorHandling<EnhanceResult>('/api/bugs/enhance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),

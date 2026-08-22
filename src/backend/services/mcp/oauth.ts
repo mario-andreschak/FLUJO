@@ -196,8 +196,8 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       // yields one. Clearing the token set here (as this method once did) destroys the
       // refresh token and forces a full interactive re-auth after every access-token
       // lifetime (~1h for Asana), even though the grant is still perfectly valid.
-      if (this.config.oauthTokens.expires_in && (this.config.oauthTokens as any).issued_at) {
-        const issuedAt = (this.config.oauthTokens as any).issued_at;
+      const issuedAt = (this.config.oauthTokens as OAuthTokens & { issued_at?: number }).issued_at;
+      if (this.config.oauthTokens.expires_in && issuedAt) {
         const expiresIn = this.config.oauthTokens.expires_in;
         const currentTime = Math.floor(Date.now() / 1000);
         const expirationTime = issuedAt + expiresIn;

@@ -444,6 +444,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     }
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
+  const execResultSnapshot = currentStepData?.execResultSnapshot
+    && typeof currentStepData.execResultSnapshot === 'object'
+    ? currentStepData.execResultSnapshot as Record<string, unknown>
+    : undefined;
 
   const debugBoundary = debugState.debugBoundary;
   const boundaryColor = debugBoundary?.phase === 'before'
@@ -1102,19 +1106,20 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           {/* Accordion for Exec Result with Error Handling */}
           <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-              <Typography variant="caption" color={currentStepData.execResultSnapshot?.success === false ? 'error' : 'inherit'}>
-                {currentStepData.execResultSnapshot?.success === false ? t('chat.debug.execResultError') : t('chat.debug.execResult')}
+              <Typography variant="caption" color={execResultSnapshot?.success === false ? 'error' : 'inherit'}>
+                {execResultSnapshot?.success === false ? t('chat.debug.execResultError') : t('chat.debug.execResult')}
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
-              {currentStepData.execResultSnapshot?.success === false ? (
+              {execResultSnapshot?.success === false ? (
                 <Box sx={{ p: 1, background: theme.palette.error.light, borderRadius: 1 }}>
                   <Typography variant="body2" color="error" gutterBottom>
-                    <b>{t('chat.debug.error')}</b> {currentStepData.execResultSnapshot.error || t('chat.debug.unknownError')}
+                    <b>{t('chat.debug.error')}</b>{' '}
+                    {typeof execResultSnapshot.error === 'string' ? execResultSnapshot.error : t('chat.debug.unknownError')}
                   </Typography>
-                  {currentStepData.execResultSnapshot.errorDetails && (
+                  {execResultSnapshot.errorDetails !== undefined && (
                      <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '150px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '4px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
-                       {JSON.stringify(currentStepData.execResultSnapshot.errorDetails, null, 2)}
+                       {JSON.stringify(execResultSnapshot.errorDetails, null, 2)}
                      </pre>
                   )}
                 </Box>

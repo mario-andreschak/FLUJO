@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
+import { validateFlow, FlowValidationResult, type VFlow } from '@/utils/shared/flowValidation';
 import { 
   Box, 
   Grid, 
@@ -147,8 +147,8 @@ const FlowDashboard = ({
       try {
         const res = await fetch('/api/model');
         if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) ctx.models = data;
+          const data: unknown = await res.json();
+          if (Array.isArray(data)) ctx.models = data as Model[];
         }
       } catch (error) {
         log.warn('Could not load models for flow badges', error);
@@ -156,9 +156,17 @@ const FlowDashboard = ({
       try {
         const res = await fetch('/api/mcp/servers');
         if (res.ok) {
-          const data = await res.json();
+          const data: unknown = await res.json();
           if (Array.isArray(data)) {
-            ctx.servers = data.map((s: any) => ({ name: s.name, status: s.disabled ? 'disabled' : undefined }));
+            ctx.servers = data.flatMap((server): Array<{ name: string; status?: string }> => {
+              if (!server || typeof server !== 'object') return [];
+              const candidate = server as Record<string, unknown>;
+              if (typeof candidate.name !== 'string') return [];
+              return [{
+                name: candidate.name,
+                status: candidate.disabled === true ? 'disabled' : undefined,
+              }];
+            });
           }
         }
       } catch (error) {
@@ -186,7 +194,7 @@ const FlowDashboard = ({
     const map: Record<string, FlowValidationResult> = {};
     for (const flow of flows) {
       try {
-        map[flow.id] = validateFlow(flow as any, validationContext);
+        map[flow.id] = validateFlow(flow as VFlow, validationContext);
       } catch (error) {
         log.warn('Failed to validate flow for badge', { flowId: flow.id, error });
       }

@@ -94,9 +94,12 @@ function completion(
 function safeErrorText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value && typeof value === 'object') {
-    const candidate = value as Record<string, any>;
+    const candidate = value as Record<string, unknown>;
     if (typeof candidate.message === 'string') return candidate.message;
-    if (typeof candidate.error?.message === 'string') return candidate.error.message;
+    const nestedError = candidate.error && typeof candidate.error === 'object'
+      ? candidate.error as Record<string, unknown>
+      : undefined;
+    if (typeof nestedError?.message === 'string') return nestedError.message;
   }
   try {
     return JSON.stringify(value) ?? String(value);

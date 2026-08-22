@@ -7,7 +7,7 @@ import { FEATURES } from '@/config/features'; // Import feature flags
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/FinishNode');
 
-export class FinishNode extends BaseNode {
+export class FinishNode extends BaseNode<FinishNodeParams, SharedState, FinishNodePrepResult, FinishNodeExecResult> {
   async prep(sharedState: SharedState, node_params?: FinishNodeParams): Promise<FinishNodePrepResult> {
     log.debug('prep() started');
     

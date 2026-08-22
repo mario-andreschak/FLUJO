@@ -469,25 +469,30 @@ function toChatCompletion(
         },
       });
     } else {
-      const nativeBlock = block as unknown as Record<string, any>;
-      if (['image', 'audio', 'video', 'file', 'document'].includes(nativeBlock.type)) {
-        const source = nativeBlock.source ?? nativeBlock;
-        const mimeType =
+      const nativeBlock = block as unknown as Record<string, unknown>;
+      const nativeType = typeof nativeBlock.type === 'string' ? nativeBlock.type : '';
+      if (['image', 'audio', 'video', 'file', 'document'].includes(nativeType)) {
+        const source = nativeBlock.source && typeof nativeBlock.source === 'object'
+          ? nativeBlock.source as Record<string, unknown>
+          : nativeBlock;
+        const rawMimeType =
           source.media_type ??
           source.mime_type ??
           source.mimeType ??
-          (nativeBlock.type === 'image' ? 'image/png' : undefined);
+          (nativeType === 'image' ? 'image/png' : undefined);
+        const mimeType = typeof rawMimeType === 'string' ? rawMimeType : undefined;
         const data = source.data;
         const url = source.url;
+        const name = typeof nativeBlock.name === 'string' ? nativeBlock.name : undefined;
         if (typeof data === 'string' || typeof url === 'string') {
           media.push({
-            type: nativeBlock.type === 'document'
+            type: nativeType === 'document'
               ? 'file'
               : mediaTypeFromMime(mimeType),
             ...(typeof data === 'string' ? { data } : {}),
             ...(typeof url === 'string' ? { url } : {}),
             ...(mimeType ? { mimeType } : {}),
-            ...(nativeBlock.name ? { name: nativeBlock.name } : {}),
+            ...(name ? { name } : {}),
           });
         }
       }

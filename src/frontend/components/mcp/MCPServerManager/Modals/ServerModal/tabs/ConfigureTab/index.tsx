@@ -812,7 +812,7 @@ const ConfigureTab: React.FC<TabProps> = ({
                   
                   <Box>
                     <ArgumentsManager
-                      args={localConfig.transport === 'stdio' ? (localConfig as any).args || [] : []}
+                      args={localConfig.transport === 'stdio' ? localConfig.args || [] : []}
                       onArgChange={handleArgChange}
                       onAddArg={addArgField}
                       onRemoveArg={removeArgField}

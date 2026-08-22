@@ -45,7 +45,7 @@ function errorToPlain(err: unknown, depth = 0): unknown {
   return plain;
 }
 
-function logWithLevel(level: number, filepath: string, message: string, data?: any, overrideLogLevel?: number) {
+function logWithLevel(level: number, filepath: string, message: string, data?: unknown, overrideLogLevel?: number) {
   // Use the override log level if provided, otherwise use the global setting
   const effectiveLogLevel = typeof overrideLogLevel === 'number' ? overrideLogLevel : CURRENT_LOG_LEVEL;
 
@@ -136,19 +136,19 @@ export function createLogger(filepath: string, overrideLogLevel?: number) {
   const normalizedPath = normalizeFilePath(filepath);
   
   return {
-    verbose: (message: string, data?: any) => {
+    verbose: (message: string, data?: unknown) => {
       logWithLevel(LOG_LEVEL.VERBOSE, normalizedPath, message, data, overrideLogLevel);
     },
-    debug: (message: string, data?: any) => {
+    debug: (message: string, data?: unknown) => {
       logWithLevel(LOG_LEVEL.DEBUG, normalizedPath, message, data, overrideLogLevel);
     },
-    info: (message: string, data?: any) => {
+    info: (message: string, data?: unknown) => {
       logWithLevel(LOG_LEVEL.INFO, normalizedPath, message, data, overrideLogLevel);
     },
-    warn: (message: string, data?: any) => {
+    warn: (message: string, data?: unknown) => {
       logWithLevel(LOG_LEVEL.WARN, normalizedPath, message, data, overrideLogLevel);
     },
-    error: (message: string, data?: any) => {
+    error: (message: string, data?: unknown) => {
       logWithLevel(LOG_LEVEL.ERROR, normalizedPath, message, data, overrideLogLevel);
     }
   };

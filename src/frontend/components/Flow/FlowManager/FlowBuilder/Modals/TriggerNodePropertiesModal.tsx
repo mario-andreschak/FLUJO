@@ -96,7 +96,7 @@ interface TriggerNodePropertiesModalProps {
    * Called when the user saves. The caller should update the node data AND
    * sync the PlannedExecution to the API (see syncTriggerNode in FlowBuilder).
    */
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 /**

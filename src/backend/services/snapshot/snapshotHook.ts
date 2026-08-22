@@ -41,12 +41,26 @@ type ArmedBinding = { serverName: string; nodeId?: string };
 function armedBindings(node: ResolvedNode): ArmedBinding[] {
   const bindings: ArmedBinding[] = [];
   try {
-    const mcpNodes = (node as any)?.handle?.node_params?.properties?.mcpNodes;
+    const handle = node.handle && typeof node.handle === 'object'
+      ? node.handle as Record<string, unknown>
+      : undefined;
+    const nodeParams = handle?.node_params && typeof handle.node_params === 'object'
+      ? handle.node_params as Record<string, unknown>
+      : undefined;
+    const properties = nodeParams?.properties && typeof nodeParams.properties === 'object'
+      ? nodeParams.properties as Record<string, unknown>
+      : undefined;
+    const mcpNodes = properties?.mcpNodes;
     if (!Array.isArray(mcpNodes)) return bindings;
-    for (const m of mcpNodes) {
-      const serverName = m?.properties?.boundServer;
+    for (const rawBinding of mcpNodes) {
+      if (!rawBinding || typeof rawBinding !== 'object') continue;
+      const m = rawBinding as Record<string, unknown>;
+      const bindingProperties = m.properties && typeof m.properties === 'object'
+        ? m.properties as Record<string, unknown>
+        : undefined;
+      const serverName = bindingProperties?.boundServer;
       if (typeof serverName !== 'string' || serverName.length === 0) continue;
-      const candidateNodeId = m?.id ?? m?.properties?.id;
+      const candidateNodeId = m.id ?? bindingProperties?.id;
       bindings.push({
         serverName,
         ...(typeof candidateNodeId === 'string' ? { nodeId: candidateNodeId } : {}),

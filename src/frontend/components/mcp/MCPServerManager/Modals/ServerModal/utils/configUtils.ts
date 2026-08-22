@@ -5,6 +5,12 @@ import { translate, type Translator } from '@/frontend/i18n';
 
 const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
+function getStringProperty(value: unknown, property: string): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = (value as Record<string, unknown>)[property];
+  return typeof candidate === 'string' ? candidate : undefined;
+}
+
 // Type guard to check if a config is a StdioConfig
 function isStdioConfig(config: Partial<MCPServerConfig>): config is Partial<MCPStdioConfig> {
   return config.transport === 'stdio';
@@ -49,7 +55,7 @@ export const parseConfigFromReadme = async (
       const mergedConfig: MCPServerConfig = isStdioConfig(baseConfig) || hasCommand
         ? {
             ...baseConfig,
-            command: hasCommand ? (parseResult.config as any).command || '' : '',
+            command: hasCommand ? getStringProperty(parseResult.config, 'command') || '' : '',
             transport: baseConfig.transport || 'stdio'
           } as MCPStdioConfig
         : {
@@ -121,7 +127,7 @@ export const parseConfigFromClipboard = async (
       const mergedConfig: MCPServerConfig = isStdioConfig(baseConfig) || hasCommand
         ? {
             ...baseConfig,
-            command: hasCommand ? (result.config as any).command || '' : '',
+            command: hasCommand ? getStringProperty(result.config, 'command') || '' : '',
             transport: baseConfig.transport || 'stdio'
           } as MCPStdioConfig
         : {

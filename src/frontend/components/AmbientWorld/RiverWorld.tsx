@@ -14,6 +14,7 @@ import {
 } from './riverRenderer';
 import { RIVER_SCENES, resolveRiverScene, type RiverScene } from './sceneMap';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 interface CameraFlight {
   from: RiverCamera;
@@ -46,7 +47,7 @@ export default function RiverWorld() {
   const pathname = usePathname();
   const { isDarkMode, livingWorldEnabled, themeHydrated, visualStyle } = useTheme();
   const scene = useMemo(() => resolveRiverScene(pathname), [pathname]);
-  const sceneLabel = t(`ambient.scene.${scene.id}` as any);
+  const sceneLabel = t(`ambient.scene.${scene.id}` as TranslationKey);
   const sceneEyebrow = scene.id === 'home'
     ? t('ambient.eyebrow.home')
     : scene.id === 'models'

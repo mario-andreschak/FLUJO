@@ -1,13 +1,12 @@
 import React from 'react';
 import { TextField, Typography, Box } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Dispatch, SetStateAction } from 'react';
+import type { ProcessNodeData } from './types';
 
 interface NodeConfigurationProps {
-  nodeData: {
-    label: string;
-    description?: string;
-  } | null;
-  setNodeData: (data: any) => void;
+  nodeData: ProcessNodeData | null;
+  setNodeData: Dispatch<SetStateAction<ProcessNodeData | null>>;
 }
 
 const NodeConfiguration: React.FC<NodeConfigurationProps> = ({ nodeData, setNodeData }) => {
@@ -27,11 +26,11 @@ const NodeConfiguration: React.FC<NodeConfigurationProps> = ({ nodeData, setNode
         onChange={(e) =>
           // Editing the label by hand marks it custom so model (re)binding
           // never auto-overwrites it (issue #38, Item C).
-          setNodeData((prev: any) => ({
+          setNodeData((prev) => prev ? ({
             ...prev,
             label: e.target.value,
-            properties: { ...prev?.properties, nameIsCustom: true },
-          }))
+            properties: { ...prev.properties, nameIsCustom: true },
+          }) : null)
         }
         margin="normal"
       />

@@ -72,7 +72,7 @@ const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
 // survives reloads); the in-tab variable is the fast path within a session.
 interface FlowClipboard {
   nodes: FlowNode[];
-  edges: any[];
+  edges: Edge[];
 }
 const flowClipboardMemory = new Map<string, FlowClipboard>();
 
@@ -789,7 +789,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
   // Handle double-click on nodes to open edit properties
   const onNodeDoubleClick = useCallback(
-    (event: React.MouseEvent, node: any) => {
+    (event: React.MouseEvent, node: unknown) => {
       // Prevent default behavior
       event.preventDefault();
 

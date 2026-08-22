@@ -54,10 +54,10 @@ export function useThemeUtils() {
     const parts = colorPath.split('.');
     
     const activeColors = visualStyle === 'legacy' ? legacyThemeColors : themeColors;
-    let value: any = activeColors[theme];
+    let value: unknown = activeColors[theme];
     for (const part of parts) {
       if (value && typeof value === 'object' && part in value) {
-        value = value[part];
+        value = (value as Record<string, unknown>)[part];
       } else {
         log.warn(`Theme color path not found: ${colorPath}`);
         return '';

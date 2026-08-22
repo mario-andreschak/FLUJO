@@ -46,7 +46,12 @@ const log = createLogger('backend/flow/execution/nodes/StaticNode');
  * (new logical run) does. Subflow runs carry their own SharedState and therefore
  * their own markers. See docs/features/flows/static-node.md#re-entry-semantics.
  */
-export class StaticNode extends BaseNode {
+export class StaticNode extends BaseNode<
+  StaticNodeParams,
+  SharedState,
+  { entries: StaticEntry[]; injectOnce: boolean },
+  Record<string, never>
+> {
   async prep(
     _sharedState: SharedState,
     node_params?: StaticNodeParams

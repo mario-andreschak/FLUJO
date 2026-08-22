@@ -2,6 +2,14 @@ import OpenAI from 'openai';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : undefined;
+}
+
 /**
  * Flatten an OpenAI message `content` value to plain text. Handles the string
  * form and the multi-part array form (keeping only text parts; non-text parts
@@ -92,55 +100,62 @@ export function extractMediaParts(content: unknown): ModelMediaPart[] {
 
   for (const raw of content) {
     if (!raw || typeof raw !== 'object') continue;
-    const part = raw as Record<string, any>;
+    const part = raw as UnknownRecord;
+    const imageUrl = asRecord(part.image_url);
+    const inputAudio = asRecord(part.input_audio);
 
-    if (part.type === 'image_url' && typeof part.image_url?.url === 'string') {
-      const parsed = parseDataUrl(part.image_url.url);
+    if (part.type === 'image_url' && typeof imageUrl?.url === 'string') {
+      const parsed = parseDataUrl(imageUrl.url);
       media.push({
         type: 'image',
-        url: part.image_url.url,
+        url: imageUrl.url,
         ...(parsed ? { mimeType: parsed.mimeType, data: parsed.base64 } : {}),
       });
       continue;
     }
 
-    if (part.type === 'input_audio' && typeof part.input_audio?.data === 'string') {
-      const format = String(part.input_audio.format ?? 'wav').toLowerCase();
+    if (part.type === 'input_audio' && typeof inputAudio?.data === 'string') {
+      const format = String(inputAudio.format ?? 'wav').toLowerCase();
       media.push({
         type: 'audio',
         mimeType: AUDIO_FORMAT_MIME[format] ?? `audio/${format}`,
-        data: part.input_audio.data,
+        data: inputAudio.data,
       });
       continue;
     }
 
     const urlContainer =
-      part.type === 'audio_url' ? part.audio_url
-        : part.type === 'video_url' ? part.video_url
+      part.type === 'audio_url' ? asRecord(part.audio_url)
+        : part.type === 'video_url' ? asRecord(part.video_url)
           : undefined;
     if (urlContainer && typeof urlContainer.url === 'string') {
       const parsed = parseDataUrl(urlContainer.url);
       const fallbackType = part.type === 'audio_url' ? 'audio' : 'video';
+      const mimeType = parsed?.mimeType
+        ?? (typeof urlContainer.mime_type === 'string' ? urlContainer.mime_type : undefined);
       media.push({
         type: fallbackType,
         url: urlContainer.url,
-        mimeType: parsed?.mimeType ?? urlContainer.mime_type,
+        ...(mimeType ? { mimeType } : {}),
         ...(parsed ? { data: parsed.base64 } : {}),
       });
       continue;
     }
 
     if (part.type === 'file' || part.type === 'input_file') {
-      const file = part.file ?? part;
+      const file = asRecord(part.file) ?? part;
       const url = file.url ?? file.file_url ?? file.file_data;
       const parsed = typeof url === 'string' ? parseDataUrl(url) : undefined;
-      const mimeType = parsed?.mimeType ?? file.mime_type ?? file.mimeType;
+      const rawMimeType = parsed?.mimeType ?? file.mime_type ?? file.mimeType;
+      const mimeType = typeof rawMimeType === 'string' ? rawMimeType : undefined;
+      const rawName = file.filename ?? file.name;
+      const name = typeof rawName === 'string' ? rawName : undefined;
       media.push({
         type: mediaTypeFromMime(mimeType),
         ...(typeof url === 'string' ? { url } : {}),
         ...(parsed ? { data: parsed.base64 } : {}),
         ...(mimeType ? { mimeType } : {}),
-        ...(file.filename || file.name ? { name: file.filename ?? file.name } : {}),
+        ...(name ? { name } : {}),
       });
     }
   }
@@ -155,7 +170,7 @@ export function extractMediaParts(content: unknown): ModelMediaPart[] {
  */
 export function extractAssistantMedia(message: unknown): ModelMediaPart[] {
   if (!message || typeof message !== 'object') return [];
-  const candidate = message as Record<string, any>;
+  const candidate = message as Record<string, unknown>;
   const out: ModelMediaPart[] = [
     ...extractMediaParts(candidate.content),
     ...extractNativeMediaParts(candidate.content),
@@ -164,24 +179,26 @@ export function extractAssistantMedia(message: unknown): ModelMediaPart[] {
   const collectUrlArray = (field: string, type: ModelMediaPart['type']) => {
     const entries = candidate[field];
     if (!Array.isArray(entries)) return;
-    for (const entry of entries) {
+    for (const rawEntry of entries) {
+      const entry = asRecord(rawEntry);
+      if (!entry) continue;
       const url =
-        entry?.image_url?.url ??
-        entry?.audio_url?.url ??
-        entry?.video_url?.url ??
-        entry?.file_url?.url ??
-        entry?.url;
-      const data = entry?.data;
+        asRecord(entry.image_url)?.url ??
+        asRecord(entry.audio_url)?.url ??
+        asRecord(entry.video_url)?.url ??
+        asRecord(entry.file_url)?.url ??
+        entry.url;
+      const data = entry.data;
       if (typeof url !== 'string' && typeof data !== 'string') continue;
       const parsed = typeof url === 'string' ? parseDataUrl(url) : undefined;
+      const rawMimeType = parsed?.mimeType ?? entry.mimeType ?? entry.mime_type;
+      const mimeType = typeof rawMimeType === 'string' ? rawMimeType : undefined;
       out.push({
         type,
         ...(typeof url === 'string' ? { url } : {}),
         ...(typeof data === 'string' ? { data } : parsed ? { data: parsed.base64 } : {}),
-        ...(parsed?.mimeType || entry?.mimeType || entry?.mime_type
-          ? { mimeType: parsed?.mimeType ?? entry.mimeType ?? entry.mime_type }
-          : {}),
-        ...(entry?.name ? { name: entry.name } : {}),
+        ...(mimeType ? { mimeType } : {}),
+        ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
       });
     }
   };
@@ -191,13 +208,14 @@ export function extractAssistantMedia(message: unknown): ModelMediaPart[] {
   collectUrlArray('videos', 'video');
   collectUrlArray('files', 'file');
 
-  if (candidate.audio && typeof candidate.audio === 'object') {
-    const audio = candidate.audio;
+  const audio = asRecord(candidate.audio);
+  if (audio) {
     if (typeof audio.data === 'string') {
+      const rawMimeType = audio.mime_type ?? audio.mimeType;
       out.push({
         type: 'audio',
         data: audio.data,
-        mimeType: audio.mime_type ?? audio.mimeType ?? 'audio/mpeg',
+        mimeType: typeof rawMimeType === 'string' ? rawMimeType : 'audio/mpeg',
         ...(typeof audio.transcript === 'string' ? { transcript: audio.transcript } : {}),
       });
     }
@@ -221,9 +239,9 @@ export function extractNativeMediaParts(value: unknown): ModelMediaPart[] {
   const out: ModelMediaPart[] = [];
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;
-    const block = item as Record<string, any>;
-    const inline = block.inlineData ?? block.inline_data;
-    const source = block.source ?? inline ?? block;
+    const block = item as UnknownRecord;
+    const inline = asRecord(block.inlineData) ?? asRecord(block.inline_data);
+    const source = asRecord(block.source) ?? inline ?? block;
     const mimeType =
       source.mimeType ??
       source.mime_type ??
@@ -249,7 +267,7 @@ export function extractNativeMediaParts(value: unknown): ModelMediaPart[] {
     out.push({
       type: explicitType === 'document' || explicitType === 'file'
         ? 'file'
-        : mediaTypeFromMime(mimeType),
+        : mediaTypeFromMime(typeof mimeType === 'string' ? mimeType : undefined),
       ...(typeof data === 'string' ? { data } : {}),
       ...(typeof url === 'string' ? { url } : {}),
       ...(typeof mimeType === 'string' ? { mimeType } : {}),

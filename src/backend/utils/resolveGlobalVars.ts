@@ -18,22 +18,20 @@ interface EnvVarWithMetadata {
 }
 
 // Helper function to check if the stored data is in the new format
-function isNewFormat(data: any): data is Record<string, EnvVarWithMetadata> {
+function isNewFormat(data: unknown): data is Record<string, EnvVarWithMetadata> {
   if (!data || typeof data !== 'object') return false;
-  const keys = Object.keys(data);
-  if (keys.length === 0) return true; // Empty object is valid
-  
-  // Check if the first entry has the expected structure
-  const firstKey = keys[0];
-  const firstValue = data[firstKey];
-  return (
-    firstValue &&
-    typeof firstValue === 'object' &&
-    'value' in firstValue &&
-    'metadata' in firstValue &&
-    typeof firstValue.metadata === 'object' &&
-    'isSecret' in firstValue.metadata
-  );
+  const record = data as Record<string, unknown>;
+  return Object.values(record).every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const value = entry as Record<string, unknown>;
+    const metadata = value.metadata;
+    return (
+      typeof value.value === 'string' &&
+      metadata !== null &&
+      typeof metadata === 'object' &&
+      typeof (metadata as Record<string, unknown>).isSecret === 'boolean'
+    );
+  });
 }
 
 /**

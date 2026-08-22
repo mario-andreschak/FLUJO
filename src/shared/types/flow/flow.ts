@@ -10,7 +10,7 @@ export interface FlowNode extends Node {
     label: string;
     type: string;
     description?: string;
-    properties?: Record<string, any>;
+    properties?: Record<string, unknown>;
   };
   selected?: boolean;
 }

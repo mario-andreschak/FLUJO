@@ -326,7 +326,9 @@ export class FlowExecutor {
       // it into errorDetails so downstream response formatting reports the
       // *real* failure (e.g. a 429 rate limit) instead of collapsing everything
       // to a generic 500/internal_error.
-      const modelDetails = (error as any)?.details;
+      const modelDetails = error && typeof error === 'object' && 'details' in error
+        ? error.details
+        : undefined;
       sharedState.lastResponse = {
         success: false,
         error: error instanceof Error ? error.message : String(error),

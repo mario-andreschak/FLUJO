@@ -118,7 +118,7 @@ const RunSection: React.FC<RunSectionProps> = ({
           <div className="mt-6">
             <h4 className="text-md font-medium mb-4">{t('mcp.local.arguments')}</h4>
             <ArgumentsManager
-              args={localConfig.transport === 'stdio' ? (localConfig as any).args || [] : []}
+              args={localConfig.transport === 'stdio' ? localConfig.args || [] : []}
               onArgChange={handleArgChange}
               onAddArg={addArgField}
               onRemoveArg={removeArgField}

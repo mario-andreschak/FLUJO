@@ -1,26 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import type { ProcessNodeData, ProcessNodeProperties } from '../types';
 
 const useNodeData = (node: FlowNode | null) => {
-  const [nodeData, setNodeData] = useState<{
-    id: string; // Add id property
-    label: string;
-    type: string;
-    description?: string;
-    properties: Record<string, any>;
-  } | null>(null);
+  const [nodeData, setNodeData] = useState<ProcessNodeData | null>(null);
 
   useEffect(() => {
     if (node) {
       setNodeData({
         id: node.id, // Include the node ID
         ...node.data,
-        properties: { ...node.data.properties }
+        properties: { ...node.data.properties } as ProcessNodeProperties
       });
     }
   }, [node]);
 
-  const handlePropertyChange = useCallback((key: string, value: any) => {
+  const handlePropertyChange = useCallback((key: string, value: unknown) => {
     setNodeData((prev) => {
       if (!prev) return null;
       return {

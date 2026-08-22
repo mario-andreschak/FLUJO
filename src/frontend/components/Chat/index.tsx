@@ -308,6 +308,14 @@ export interface Conversation {
   lastError?: NormalizedChatError;
 }
 
+export interface ChatApiResponse extends Partial<Conversation> {
+  conversation_id?: string;
+  pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+  debugState?: SharedState;
+  error?: { message?: string };
+  lastResponse?: SharedState['lastResponse'];
+}
+
 // Represents the summary item shown in the list
 // Note: Backend GET /v1/chat/conversations returns this structure
 export interface ConversationListItem {
@@ -412,6 +420,13 @@ const isCancellationError = (err: unknown): boolean => {
   const texts = [anyErr?.message, typeof anyErr?.body?.error === 'string' ? anyErr.body.error : undefined];
   return texts.some(t => typeof t === 'string' && CANCELLED_MESSAGE_RE.test(t));
 };
+
+function chatApiErrorMessage(error: ChatApiError): string {
+  const body = error.body && typeof error.body === 'object'
+    ? error.body as Record<string, unknown>
+    : undefined;
+  return typeof body?.error === 'string' ? body.error : error.message;
+}
 
 const Chat: React.FC = () => {
   const router = useRouter();
@@ -1339,7 +1354,7 @@ const Chat: React.FC = () => {
         ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
       );
       log.info('Fetched detailed conversation successfully', { conversationId: id });
-    } catch (err: any) { // Use any for error checking
+    } catch (err: unknown) { // Use any for error checking
        log.error('Error fetching detailed conversation:', { conversationId: id, err });
        // Ignore errors for a selection that is no longer current.
        if (currentConversationIdRef.current !== id) return;
@@ -1681,7 +1696,7 @@ const Chat: React.FC = () => {
       log.error('Error creating conversation on backend:', err);
       let errorMsg = t('chat.page.createFailed');
       if (err instanceof ChatApiError) {
-        errorMsg += ` (${err.body?.error || err.message})`;
+        errorMsg += ` (${chatApiErrorMessage(err)})`;
       } else if (err instanceof Error) {
         errorMsg += ` (${err.message})`;
       }
@@ -1716,7 +1731,7 @@ const Chat: React.FC = () => {
       adoptCreatedConversation(created);
     } catch (err) {
       log.error('Error creating Persona conversation on backend:', err);
-      const detail = err instanceof ChatApiError ? err.body?.error || err.message : err instanceof Error ? err.message : '';
+      const detail = err instanceof ChatApiError ? chatApiErrorMessage(err) : err instanceof Error ? err.message : '';
       setError(`${t('chat.page.createFailed')}${detail ? ` (${detail})` : ''}`);
     } finally {
       personaCreationPendingRef.current = false;
@@ -2805,7 +2820,7 @@ const Chat: React.FC = () => {
       log.error('Error updating flowId on backend:', { conversationId: currentConversationId, flowId, err });
       let errorMsg = t('chat.page.updateAgentFailed');
       if (err instanceof ChatApiError) {
-        errorMsg += ` (${err.body?.error || err.message})`;
+        errorMsg += ` (${chatApiErrorMessage(err)})`;
       } else if (err instanceof Error) {
         errorMsg += ` (${err.message})`;
       }
@@ -3054,7 +3069,7 @@ const Chat: React.FC = () => {
   // Handle a conversation run response (from the OpenAI completion call, or the
   // respond/debug REST endpoints), including debug-paused state. `data` is the
   // parsed response body.
-  const handleApiResponse = useCallback((data: any, conversationId: string) => {
+  const handleApiResponse = useCallback((data: ChatApiResponse, conversationId: string) => {
     log.verbose('Handling API response data', JSON.stringify(data));
 
     // Keep the per-conversation running set in sync from the response status, for
@@ -3074,6 +3089,7 @@ const Chat: React.FC = () => {
 
     // --- Check for Debug Paused State ---
     if (data.status === 'paused_debug' && data.debugState) {
+      const debugState = data.debugState;
       log.info('API Response: Paused for debugging', { conversationId });
       if (!isViewed) {
         // A background conversation pausing must not hijack the viewed one's
@@ -3088,7 +3104,7 @@ const Chat: React.FC = () => {
         }
         return true;
       }
-      setDebugState(data.debugState as SharedState);
+      setDebugState(debugState);
       setIsDebugPaused(true);
       setDebugSessionActive(true);
       setIsLoading(false); // Stop general loading indicator
@@ -3097,11 +3113,11 @@ const Chat: React.FC = () => {
       stopPolling(); // Stop any active polling
       // Update detailed conversation from debug state if needed (e.g., messages)
       setDetailedConversation(prev => {
-        if (prev?.id === conversationId && data.debugState.messages) {
+        if (prev?.id === conversationId && debugState.messages) {
           // Avoid unnecessary updates if messages haven't changed
-          if (JSON.stringify(prev.messages) !== JSON.stringify(data.debugState.messages)) {
+          if (JSON.stringify(prev.messages) !== JSON.stringify(debugState.messages)) {
              log.debug("Updating detailed conversation messages from debug state");
-             return { ...prev, messages: data.debugState.messages, updatedAt: data.debugState.updatedAt };
+             return { ...prev, messages: debugState.messages, updatedAt: debugState.updatedAt };
           }
         }
         return prev;
@@ -3111,10 +3127,10 @@ const Chat: React.FC = () => {
         c.id === conversationId
           ? {
               ...c,
-              title: data.debugState.title ?? c.title, // Use debug state title if available
-              flowId: data.debugState.flowId ?? c.flowId, // Use debug state flowId if available
+              title: debugState.title ?? c.title, // Use debug state title if available
+              flowId: debugState.flowId ?? c.flowId, // Use debug state flowId if available
               status: 'paused_debug' as ConversationListItem['status'], // Set status specifically
-              updatedAt: data.debugState.updatedAt // Use debug state timestamp
+              updatedAt: debugState.updatedAt // Use debug state timestamp
             }
           : c
       ).sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))); // Re-sort
@@ -3141,7 +3157,7 @@ const Chat: React.FC = () => {
     // Assuming 'data' might be a full Conversation object from polling or a completion response
     if (data.messages && data.conversation_id === conversationId) {
        // --- Timestamp Validation ---
-       const validatedMessages = data.messages.map((msg: any, index: number) => {
+       const validatedMessages = data.messages.map((msg, index: number) => {
          if (typeof msg.timestamp !== 'number' || isNaN(msg.timestamp)) {
            log.warn(`Invalid timestamp found in message index ${index} from API response. Defaulting to Date.now().`, { conversationId, messageId: msg.id, invalidTimestamp: msg.timestamp });
            return { ...msg, timestamp: Date.now() };
@@ -3194,7 +3210,11 @@ const Chat: React.FC = () => {
       }
       if (data.status === 'error') {
          // Handle OpenAI compatible error structure
-         const errorMessage = data.error?.message || data.lastResponse?.error || t('chat.page.unknownExecutionError');
+         const lastResponseError = typeof data.lastResponse === 'object' && data.lastResponse !== null
+           && typeof data.lastResponse.error === 'string'
+           ? data.lastResponse.error
+           : undefined;
+         const errorMessage = data.error?.message || lastResponseError || t('chat.page.unknownExecutionError');
          // A user Stop ends the run as a cancellation error: present it neutrally
          // (the "stopped" banner) rather than flashing a red failure.
          if (CANCELLED_MESSAGE_RE.test(errorMessage) || stoppedConversationIdsRef.current.has(conversationId)) {
@@ -3446,17 +3466,16 @@ const Chat: React.FC = () => {
       success = true; // API call itself succeeded
 
       // --- Normalize completion data for the shared response handler ---
-      const responseData = {
-          ...(completion as any), // Spread the completion data (use 'any' carefully)
+      const responseData: ChatApiResponse = {
           // Ensure essential fields for handleApiResponse are present
-          status: (completion as any).status || 'completed', // Infer status if needed
+          status: (completion as OpenAI.ChatCompletion & ChatApiResponse).status || 'completed',
           conversation_id: conversation.id,
-          messages: (completion as any).messages || conversation.messages, // Use messages from completion if available
-          pendingToolCalls: (completion as any).pendingToolCalls,
-          debugState: (completion as any).debugState,
-          error: (completion as any).error,
-          lastResponse: (completion as any).lastResponse,
-          updatedAt: (completion as any).updatedAt || Date.now() // Add timestamp if missing
+          messages: (completion as OpenAI.ChatCompletion & ChatApiResponse).messages || conversation.messages,
+          pendingToolCalls: (completion as OpenAI.ChatCompletion & ChatApiResponse).pendingToolCalls,
+          debugState: (completion as OpenAI.ChatCompletion & ChatApiResponse).debugState,
+          error: (completion as OpenAI.ChatCompletion & ChatApiResponse).error,
+          lastResponse: (completion as OpenAI.ChatCompletion & ChatApiResponse).lastResponse,
+          updatedAt: (completion as OpenAI.ChatCompletion & ChatApiResponse).updatedAt || Date.now()
       };
 
       const handledDebug = handleApiResponse(responseData, conversation.id);
@@ -3504,7 +3523,9 @@ const Chat: React.FC = () => {
         log.verbose('APIError details', JSON.stringify(err));
       } else if (err instanceof OpenAIError) {
         errorMessage = `OpenAI Error: ${err.message}`;
-        const nestedError = (err as any).error;
+        const nestedError = 'error' in err && err.error && typeof err.error === 'object'
+          ? err.error as Record<string, unknown>
+          : undefined;
         if (nestedError && typeof nestedError === 'object') {
           if (nestedError.code) errorMessage += ` (Code: ${nestedError.code})`;
           if (nestedError.type) errorMessage += ` [Type: ${nestedError.type}]`;
@@ -3512,7 +3533,7 @@ const Chat: React.FC = () => {
         log.verbose('OpenAIError details', JSON.stringify(err));
       } else if (err instanceof ChatApiError) {
         // A backend REST error surfaced through chatService.
-        errorMessage = `Error: ${err.body?.error || err.message}`;
+        errorMessage = `Error: ${chatApiErrorMessage(err)}`;
         if (err.status) errorMessage += ` (Status: ${err.status})`;
         log.verbose('ChatApiError details', JSON.stringify(err.body));
       } else if (err instanceof Error) {
@@ -3953,15 +3974,14 @@ const Chat: React.FC = () => {
         });
 
         // Handle the response using the existing handler
-        const responseData = {
-          ...(completion as any),
-          status: (completion as any).status || 'completed',
+        const responseData: ChatApiResponse = {
+          status: (completion as OpenAI.ChatCompletion & ChatApiResponse).status || 'completed',
           conversation_id: updatedDetailedConv.id,
-          messages: (completion as any).messages || updatedDetailedConv.messages,
-          pendingToolCalls: (completion as any).pendingToolCalls,
-          debugState: (completion as any).debugState,
-          error: (completion as any).error,
-          updatedAt: (completion as any).updatedAt || Date.now()
+          messages: (completion as OpenAI.ChatCompletion & ChatApiResponse).messages || updatedDetailedConv.messages,
+          pendingToolCalls: (completion as OpenAI.ChatCompletion & ChatApiResponse).pendingToolCalls,
+          debugState: (completion as OpenAI.ChatCompletion & ChatApiResponse).debugState,
+          error: (completion as OpenAI.ChatCompletion & ChatApiResponse).error,
+          updatedAt: (completion as OpenAI.ChatCompletion & ChatApiResponse).updatedAt || Date.now()
         };
 
         handleApiResponse(responseData, updatedDetailedConv.id);
@@ -4115,7 +4135,7 @@ const Chat: React.FC = () => {
       log.error(`Error sending tool response (${action})`, { conversationId: currentConversationId, toolCallId, err });
       let errorMessage = action === 'approve' ? t('chat.page.approveFailed') : t('chat.page.rejectFailed');
       if (err instanceof ChatApiError) {
-        errorMessage += ` (${err.body?.error || err.message})`;
+        errorMessage += ` (${chatApiErrorMessage(err)})`;
       } else if (err instanceof Error) {
         errorMessage += ` (${err.message})`;
       }

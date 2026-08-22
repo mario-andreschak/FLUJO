@@ -5,7 +5,29 @@ import { ModelProvider } from '@/shared/types/model/provider';
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/provider');
 
-function discoverProviderMetadata(model: any): Partial<NormalizedModel> {
+interface ProviderModelRecord {
+  id: string;
+  name?: string;
+  description?: string;
+  owned_by?: string;
+  supported_parameters?: unknown;
+  context_length?: unknown;
+  max_completion_tokens?: unknown;
+  top_provider?: { max_completion_tokens?: unknown };
+  architecture?: {
+    input_modalities?: unknown;
+    output_modalities?: unknown;
+  };
+}
+
+function isProviderModelRecord(value: unknown): value is ProviderModelRecord {
+  return value !== null
+    && typeof value === 'object'
+    && 'id' in value
+    && typeof value.id === 'string';
+}
+
+function discoverProviderMetadata(model: ProviderModelRecord): Partial<NormalizedModel> {
   const supportedParameters = Array.isArray(model.supported_parameters)
     ? model.supported_parameters.filter((value: unknown): value is string => typeof value === 'string')
     : undefined;
@@ -118,7 +140,7 @@ export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
     return [];
   }
   
-  return data.data.map((model: any) => ({
+  return (data.data as unknown[]).filter(isProviderModelRecord).map((model) => ({
     id: model.id,
     name: model.name || model.id,
     description: model.description,
@@ -188,9 +210,10 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
       
       // For OpenAI, filter to only include chat models
       if (baseUrl.includes('api.openai.com')) {
-        return data.data
-          .filter((model: any) => model.id.includes('gpt'))
-          .map((model: any) => ({
+        return (data.data as unknown[])
+          .filter(isProviderModelRecord)
+          .filter((model) => model.id.includes('gpt'))
+          .map((model) => ({
             id: model.id,
             name: model.id,
             description: `OpenAI ${model.id}`
@@ -198,9 +221,9 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
       }
       
       // For other providers using OpenAI format (like OpenRouter)
-      return data.data
-        .filter((model: any) => model.id)
-        .map((model: any) => ({
+      return (data.data as unknown[])
+        .filter(isProviderModelRecord)
+        .map((model) => ({
           id: model.id,
           name: model.name || model.id,
           description: model.description || `Model ${model.id}`,
@@ -210,7 +233,7 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
     // Fallback for Ollama format
     else if (data.object === 'list' && Array.isArray(data.data)) {
       log.debug('Parsing response in Ollama format');
-      return data.data.map((model: any) => ({
+      return (data.data as unknown[]).filter(isProviderModelRecord).map((model) => ({
         id: model.id,
         name: model.id,
         description: `${model.owned_by ? `${model.owned_by}: ` : ''}${model.id}`

@@ -71,15 +71,19 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
     const durationMs = Date.now() - started;
 
     // Some providers (OpenRouter) return 200 with an error object in the body.
-    const maybeError = (completion as any)?.error;
+    const maybeError = 'error' in completion && completion.error && typeof completion.error === 'object'
+      ? completion.error as Record<string, unknown>
+      : undefined;
     if (maybeError) {
       return {
         ok: false,
         durationMs,
         error: {
-          message: maybeError.message || 'Provider returned an error in the response body',
+          message: typeof maybeError.message === 'string'
+            ? maybeError.message
+            : 'Provider returned an error in the response body',
           code: maybeError.code !== undefined ? String(maybeError.code) : undefined,
-          type: maybeError.type,
+          type: typeof maybeError.type === 'string' ? maybeError.type : undefined,
           body: maybeError,
         },
       };
@@ -95,7 +99,7 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
   } catch (error) {
     const durationMs = Date.now() - started;
     if (error instanceof OpenAI.APIError) {
-      const body = (error as any).error;
+      const body = 'error' in error ? error.error : undefined;
       const headers = pickHeaders(error.headers as Record<string, unknown> | undefined);
       return {
         ok: false,
@@ -122,7 +126,9 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
       error: {
         name: error instanceof Error ? error.name : undefined,
         message,
-        code: (error as any)?.code,
+        code: error && typeof error === 'object' && 'code' in error && error.code !== undefined
+          ? String(error.code)
+          : undefined,
         stack: error instanceof Error ? error.stack : undefined,
       },
     };

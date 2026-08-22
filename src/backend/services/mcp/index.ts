@@ -1164,11 +1164,16 @@ export class MCPService {
           }
           log.error(`Error chain: ${formatErrorChain(error)}`);
         } else if (error && typeof error === "object") {
+          const errorRecord = error as Record<string, unknown>;
+          const prototype = Object.getPrototypeOf(error) as {
+            constructor?: { name?: unknown };
+          } | null;
+          const constructorName = typeof prototype?.constructor?.name === "string"
+            ? prototype.constructor.name
+            : "Unknown";
           // Try to log individual properties of the error object
           log.error(`Error type: ${typeof error}`);
-          log.error(
-            `Error constructor: ${(error as any).constructor?.name || "Unknown"}`,
-          );
+          log.error(`Error constructor: ${constructorName}`);
 
           // Log all enumerable properties
           const errorProps = Object.getOwnPropertyNames(error);
@@ -1176,7 +1181,7 @@ export class MCPService {
             log.error(`Error properties: ${errorProps.join(", ")}`);
             errorProps.forEach((prop) => {
               try {
-                const value = (error as any)[prop];
+                const value = errorRecord[prop];
                 log.error(
                   `  ${prop}: ${typeof value === "function" ? "[Function]" : JSON.stringify(value)}`,
                 );
@@ -2921,12 +2926,12 @@ export class MCPService {
         // token to renew it with. With a refresh_token stored, the next connection attempt
         // refreshes silently (see MCPOAuthClientProvider.tokens), so fall through to the
         // real connection state instead of flashing the auth badge after every restart.
+        const issuedAt = (streamableConfig.oauthTokens as typeof streamableConfig.oauthTokens & { issued_at?: number }).issued_at;
         if (
           !streamableConfig.oauthTokens.refresh_token &&
           streamableConfig.oauthTokens.expires_in &&
-          (streamableConfig.oauthTokens as any).issued_at
+          issuedAt
         ) {
-          const issuedAt = (streamableConfig.oauthTokens as any).issued_at;
           const expiresIn = streamableConfig.oauthTokens.expires_in;
           const currentTime = Math.floor(Date.now() / 1000);
           const expirationTime = issuedAt + expiresIn;

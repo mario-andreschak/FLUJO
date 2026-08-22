@@ -7,7 +7,7 @@ export interface OAuthPopupOptions {
   windowName?: string;
   width?: number;
   height?: number;
-  onSuccess?: (result: any) => void;
+  onSuccess?: (result: unknown) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
 }
@@ -15,7 +15,7 @@ export interface OAuthPopupOptions {
 /**
  * Open OAuth popup window and handle the authentication flow
  */
-export function openOAuthPopup(options: OAuthPopupOptions): Promise<any> {
+export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
   const {
     url,
     windowName = 'oauth_popup',

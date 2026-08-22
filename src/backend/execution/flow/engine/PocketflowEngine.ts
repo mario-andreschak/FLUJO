@@ -3,7 +3,7 @@ import { Flow as PocketFlow, BaseNode } from '../pocketflow';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from '../FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { IMPLICIT_SUBFLOW_RETURN_ACTION, ProcessNodePrepResult, SharedState } from '../types';
+import { ExecResult, IMPLICIT_SUBFLOW_RETURN_ACTION, PrepResult, ProcessNodePrepResult, SharedState } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
@@ -295,8 +295,8 @@ export class PocketflowEngine implements FlowEngine {
       log.debug(`[PocketflowEngine] Node ${node.id} returned action: "${runResult.action}"`);
       return {
         action: runResult.action,
-        prepResult: runResult.prepResult,
-        execResult: runResult.execResult,
+        prepResult: runResult.prepResult as PrepResult,
+        execResult: runResult.execResult as ExecResult,
       };
     } finally {
       delete sharedState.emit;

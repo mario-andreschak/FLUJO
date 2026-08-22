@@ -21,7 +21,7 @@ import {
   Transforms,
 } from 'slate';
 import { withHistory } from 'slate-history';
-import { Editable, ReactEditor, Slate, useSlate, withReact } from 'slate-react';
+import { Editable, ReactEditor, Slate, useSlate, withReact, type RenderElementProps } from 'slate-react';
 import {
   findPromptRefs,
   parsePromptRefPill,
@@ -741,7 +741,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     onKeyDown?.(event);
   };
 
-  const renderElement = useCallback(({ attributes, children, element }: any) => {
+  const renderElement = useCallback(({ attributes, children, element }: RenderElementProps) => {
     if (element.type === 'binding-reference') {
       const reference = element as ReferenceElement;
       const serialized = encodePromptRefPill(reference.kind, reference.server, reference.name);

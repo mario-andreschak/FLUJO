@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Box, Paper, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import CodeIcon from '@mui/icons-material/Code';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -45,7 +46,7 @@ interface PromptBuilderProps {
 const ToolPreview = ({ server, name }: { server: string; name: string }) => {
   const { t } = useI18n();
   const isHandoff = server === 'handoff';
-  const [toolInfo, setToolInfo] = useState<any>(null);
+  const [toolInfo, setToolInfo] = useState<Tool | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -54,7 +55,7 @@ const ToolPreview = ({ server, name }: { server: string; name: string }) => {
       try {
         setIsLoading(true);
         const result = await mcpService.listServerTools(server);
-        const tool = result.tools?.find((candidate: any) => candidate.name === name);
+        const tool = result.tools.find((candidate) => candidate.name === name);
         if (!cancelled) setToolInfo(tool || null);
       } catch (error) {
         log.error(`Failed to fetch tool info for ${server}:${name}`, error);
@@ -106,7 +107,10 @@ const ResourcePreview = ({ server, name }: { server: string; name: string }) => 
         setIsLoading(true);
         const result = await mcpService.listServerResources(server);
         const all = [...(result.resources || []), ...(result.resourceTemplates || [])];
-        const match = all.find((resource: any) => resource.uri === name || resource.uriTemplate === name);
+        const match = all.find((resource) => (
+          ('uri' in resource && resource.uri === name)
+          || ('uriTemplate' in resource && resource.uriTemplate === name)
+        ));
         if (!cancelled) setDescription(match?.description || match?.name || null);
       } catch (error) {
         log.error(`Failed to fetch resource info for ${server}:${name}`, error);

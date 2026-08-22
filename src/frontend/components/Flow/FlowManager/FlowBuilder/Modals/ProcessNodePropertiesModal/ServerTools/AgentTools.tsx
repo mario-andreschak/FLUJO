@@ -25,7 +25,7 @@ interface HandoffTool {
   description: string;
   inputSchema: {
     type: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required: string[];
   };
 }
@@ -79,8 +79,16 @@ const AgentTools: React.FC<AgentToolsProps> = ({
           {t('flows.agentTools.parameters')}
         </Typography>
         <Box sx={{ pl: 1, mt: 0.5 }}>
-          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]: [string, any]) => (
-            <Box key={paramName} sx={{ mb: 0.5 }}>
+          {Object.entries(inputSchema.properties).map(([paramName, paramDetails]) => {
+            const details = paramDetails && typeof paramDetails === 'object'
+              ? paramDetails as Record<string, unknown>
+              : {};
+            const description = typeof details.description === 'string' ? details.description : undefined;
+            const type = typeof details.type === 'string' ? details.type : undefined;
+            const enumValues = Array.isArray(details.enum)
+              ? details.enum.filter((value): value is string => typeof value === 'string')
+              : [];
+            return <Box key={paramName} sx={{ mb: 0.5 }}>
               <Typography variant="caption" component="span" sx={{ fontWeight: 'medium' }}>
                 {paramName}
                 {inputSchema.required?.includes(paramName) &&
@@ -89,17 +97,17 @@ const AgentTools: React.FC<AgentToolsProps> = ({
                 {': '}
               </Typography>
               <Typography variant="caption" component="span" color="text.secondary">
-                {paramDetails.description || paramDetails.type || t('flows.agentTools.noDescription')}
+                {description || type || t('flows.agentTools.noDescription')}
               </Typography>
-              {paramDetails.enum && (
+              {enumValues.length > 0 && (
                 <Box sx={{ pl: 2, mt: 0.5 }}>
                   <Typography variant="caption" color="text.secondary">
-                    {t('flows.agentTools.options', { options: formatList(paramDetails.enum) })}
+                    {t('flows.agentTools.options', { options: formatList(enumValues) })}
                   </Typography>
                 </Box>
               )}
-            </Box>
-          ))}
+            </Box>;
+          })}
         </Box>
       </Box>
     );
