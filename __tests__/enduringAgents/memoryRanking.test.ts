@@ -8,6 +8,7 @@ import {
   contentLengthFactor,
   trustWeight,
   scoreMemoryCandidate,
+  selectNearDuplicateCandidate,
 } from '@/backend/services/enduringAgents/memoryRanking';
 import type { MemoryItem } from '@/shared/types/enduringAgent/enduringAgent';
 
@@ -133,6 +134,13 @@ describe('Memory Ranking (Issue #450)', () => {
       const halfLifeMs = MEMORY_RANKING_WEIGHTS.recencyHalfLifeDays * 1000 * 60 * 60 * 24;
       const multiplier = recencyMultiplier(now - halfLifeMs, now);
       expect(multiplier).toBeCloseTo(0.5, 1);
+    });
+
+    it('decays to one half at 90 days and one quarter at 180 days', () => {
+      const dayMs = 1000 * 60 * 60 * 24;
+
+      expect(recencyMultiplier(now - 90 * dayMs, now)).toBeCloseTo(0.5, 8);
+      expect(recencyMultiplier(now - 180 * dayMs, now)).toBeCloseTo(0.25, 8);
     });
 
     it('returns 1 for core-pinned items (exempt from decay)', () => {
@@ -311,6 +319,23 @@ describe('Memory Ranking (Issue #450)', () => {
       expect(twoTermScore).toBeGreaterThan(oneTermScore);
     });
 
+    it('uses lexical-only fallback when no semantic score is supplied', () => {
+      const item = baseItem();
+
+      expect(scoreMemoryCandidate({
+        item,
+        terms: ['release'],
+        core: false,
+        asOf: now,
+      })).toBe(scoreMemoryCandidate({
+        item,
+        terms: ['release'],
+        core: false,
+        asOf: now,
+        semanticScore: 0,
+      }));
+    });
+
     it('weights importance and confidence', () => {
       const lowConfidence = baseItem({ confidence: 0.3, importance: 0.3 });
       const highConfidence = baseItem({ confidence: 0.9, importance: 0.9 });
@@ -319,6 +344,57 @@ describe('Memory Ranking (Issue #450)', () => {
       const highScore = scoreMemoryCandidate({ item: highConfidence, terms: [], core: false, asOf: now });
 
       expect(highScore).toBeGreaterThan(lowScore);
+    });
+  });
+
+  describe('near-duplicate decision boundary', () => {
+    const candidate = (
+      id: string,
+      content: string,
+    ) => ({
+      id,
+      status: 'active' as const,
+      kind: 'semantic' as const,
+      scope: 'persona' as const,
+      content,
+      updatedAt: 1,
+    });
+
+    it('rejects a representative pair immediately below 0.82', () => {
+      const original = 'abcdefghijklmnopqrstuvwxyz012345';
+      const changed = `${original.slice(0, 15)}_${original.slice(16)}`;
+      const similarity = jaccardSimilarity(
+        contentShingles(original),
+        contentShingles(changed),
+      );
+
+      expect(similarity).toBeLessThan(MEMORY_DEDUP_SETTINGS.nearDuplicateThreshold);
+      expect(similarity).toBeGreaterThan(0.81);
+      expect(selectNearDuplicateCandidate(
+        [candidate('memory-below', changed)],
+        { kind: 'semantic', scope: 'persona', content: original },
+      )).toBeNull();
+    });
+
+    it('accepts a representative pair at or above 0.82', () => {
+      const original = 'abcdefghijklmnopqrstuvwxyz0123456';
+      const changed = `${original.slice(0, 15)}_${original.slice(16)}`;
+      const similarity = jaccardSimilarity(
+        contentShingles(original),
+        contentShingles(changed),
+      );
+
+      expect(similarity).toBeGreaterThanOrEqual(
+        MEMORY_DEDUP_SETTINGS.nearDuplicateThreshold,
+      );
+      expect(similarity).toBeLessThan(0.83);
+      expect(selectNearDuplicateCandidate(
+        [candidate('memory-above', changed)],
+        { kind: 'semantic', scope: 'persona', content: original },
+      )).toEqual({
+        candidate: candidate('memory-above', changed),
+        similarity,
+      });
     });
   });
 

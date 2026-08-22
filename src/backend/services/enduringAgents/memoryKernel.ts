@@ -244,7 +244,12 @@ async function createMemoryWithinMutation(
         incomingSourceRefs: record.sourceRefs,
         canUpgradeTrust: (trust) => {
           try {
-            assertActivationPolicy(trust, survivor.status, options, []);
+            assertActivationPolicy(
+              trust,
+              survivor.status,
+              options,
+              record.sourceRefs.map((ref) => ref.kind),
+            );
             return true;
           } catch {
             return false;

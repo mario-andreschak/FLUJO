@@ -23,6 +23,7 @@ export const MEMORY_RANKING_WEIGHTS = {
   termCoverageBonus: 1.5,
   lengthNormalisationChars: 280,
   lengthNormalisationFloor: 0.6,
+  /** Provisionally approved in issue #467; see docs/architecture/memory-ranking-dedup-decision.md. */
   recencyHalfLifeDays: 90,
   recencyFloor: 0.15,
   trustWeights: {
@@ -41,6 +42,7 @@ export const MEMORY_RANKING_WEIGHTS = {
 export const MEMORY_DEDUP_SETTINGS = {
   enabled: true,
   shingleSize: 3,
+  /** Provisionally approved in issue #467; see docs/architecture/memory-ranking-dedup-decision.md. */
   nearDuplicateThreshold: 0.82,
   comparisonWindow: 200,
   confidenceReinforcementStep: 0.05,

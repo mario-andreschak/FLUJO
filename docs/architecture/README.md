@@ -28,6 +28,10 @@ This section provides technical architecture and design documentation for Flujo.
 
 ## Decision Records
 
+- [Memory ranking and near-duplicate defaults](./memory-ranking-dedup-decision.md):
+  The accepted reinforce-in-place strategy, 90-day recency half-life, 0.82
+  trigram-Jaccard threshold, rollback switch, and privacy-gated tuning rules
+  for issue #467.
 - [Enduring-agent foundation contracts](./enduring-agent-foundation-contracts.md):
   Phase 0 domain ownership, immutable revision, Persona lease/fencing, memory
   trust, Flow tool-authority, compatibility, workspace, privacy, and threat-model

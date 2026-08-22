@@ -34,7 +34,8 @@ Phase 4 adds Persona-owned WorkItem CRUD with dependency/readiness enforcement,
 priorities, deadlines, next actions, and explicit (never automatic) promotion from
 run-scoped todos. The MemoryKernel adds provenance-stamped candidate/active,
 correction, conflict/supersession, forgetting, search, and curated core-memory
-lifecycles. Flow-authored synthetic memory/WorkItem tools execute only under the
+lifecycles. Its ranking and generic near-duplicate defaults are governed by the
+[memory ranking and near-duplicate decision](./memory-ranking-dedup-decision.md). Flow-authored synthetic memory/WorkItem tools execute only under the
 live Persona Activity fence; model writes remain `model_inference` candidates and
 untrusted external content cannot activate. Core memory is frozen into the same
 per-Activity instruction context as identity. After a non-maintenance Activity
