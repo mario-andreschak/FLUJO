@@ -39,6 +39,9 @@ This section provides technical architecture and design documentation for Flujo.
   Phase 0 domain ownership, immutable revision, Persona lease/fencing, memory
   trust, Flow tool-authority, compatibility, workspace, privacy, and threat-model
   contracts for issue #415.
+- [Persona runtime retention policy](./persona-runtime-retention.md):
+  Final mailbox, activity, dispatch, and lease-history windows and rank caps,
+  compaction/deletion boundaries, and default-off rollout contract for issue #479.
 - [FlowSpec node-type inclusion policy](./flowspec-node-inclusion-policy.md): which
   ReactFlow node types belong in the FlowSpec authoring contract, why, and the
   checklist for classifying future node types (issue #380).

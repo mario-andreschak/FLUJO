@@ -1,8 +1,10 @@
 import {
   PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
+  PERSONA_RUNTIME_RETENTION_POLICY,
   compactPersonaFlowDispatches,
   getActivityRetentionPolicy,
   getFlowDispatchRetentionPolicy,
+  getLeaseHistoryRetentionPolicy,
   getMailboxItemRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
 import {
@@ -11,6 +13,10 @@ import {
   type PersonaFlowDispatchRecord,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import {
+  applyRetention,
+  type RetentionPolicy,
+} from '@/backend/services/enduringAgents/retention';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import {
   listCollectionItemsWithStats,
@@ -18,6 +24,29 @@ import {
   saveCollectionItem,
 } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
+
+interface RetentionProbe {
+  id: string;
+  timestamp: number;
+  compactedAt?: number;
+}
+
+function probePolicy(
+  retentionMs: number,
+  detailedLimit: number,
+  save: (record: RetentionProbe) => Promise<unknown>,
+): RetentionPolicy<RetentionProbe> {
+  return {
+    recordKind: 'RetentionProbe',
+    isEligible: (record) => record.compactedAt === undefined,
+    timestampOf: (record) => record.timestamp,
+    isCompacted: (record) => record.compactedAt !== undefined,
+    retentionMs,
+    detailedLimit,
+    compact: (record, compactedAt) => ({ ...record, compactedAt }),
+    save,
+  };
+}
 
 function completedDispatch(): PersonaFlowDispatchRecord {
   return {
@@ -51,6 +80,84 @@ function completedDispatch(): PersonaFlowDispatchRecord {
 }
 
 describe('Persona runtime compaction', () => {
+  it('applies the approved per-kind retention windows and detailed rank caps', () => {
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    expect(PERSONA_RUNTIME_RETENTION_POLICY).toEqual({
+      mailboxItem: { retentionMs: 30 * dayMs, detailedLimit: 500 },
+      activity: { retentionMs: 30 * dayMs, detailedLimit: 200 },
+      flowDispatch: { retentionMs: 30 * dayMs, detailedLimit: 200 },
+      leaseHistory: { retentionMs: 90 * dayMs, detailedLimit: 1_000 },
+    });
+    expect(getMailboxItemRetentionPolicy()).toMatchObject(
+      PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem,
+    );
+    expect(getActivityRetentionPolicy()).toMatchObject(
+      PERSONA_RUNTIME_RETENTION_POLICY.activity,
+    );
+    expect(getFlowDispatchRetentionPolicy()).toMatchObject(
+      PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch,
+    );
+    expect(getLeaseHistoryRetentionPolicy()).toMatchObject(
+      PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory,
+    );
+  });
+
+  it.each([
+    ['30-day runtime records', PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.retentionMs],
+    ['90-day lease history', PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.retentionMs],
+  ])('uses a strict age cutoff for %s', async (_label, retentionMs) => {
+    const now = 10_000_000_000;
+    const cutoff = now - retentionMs;
+    const save = jest.fn(async () => undefined);
+    const records: RetentionProbe[] = [
+      { id: 'exact_cutoff', timestamp: cutoff },
+      { id: 'one_ms_older', timestamp: cutoff - 1 },
+    ];
+
+    const result = await applyRetention(
+      records,
+      probePolicy(retentionMs, records.length, save),
+      now,
+    );
+
+    expect(result).toEqual({ compacted: 1, remaining: 1 });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({
+      id: 'one_ms_older',
+      timestamp: cutoff - 1,
+      compactedAt: now,
+    });
+  });
+
+  it.each(Object.entries(PERSONA_RUNTIME_RETENTION_POLICY))(
+    'keeps exactly the configured newest-N detail for %s',
+    async (_kind, configuration) => {
+      const timestamp = 10_000;
+      const save = jest.fn(async () => undefined);
+      const records = Array.from(
+        { length: configuration.detailedLimit + 1 },
+        (_, index): RetentionProbe => ({
+          id: `record_${String(index).padStart(4, '0')}`,
+          timestamp,
+        }),
+      );
+
+      const result = await applyRetention(
+        records,
+        probePolicy(configuration.retentionMs, configuration.detailedLimit, save),
+        timestamp,
+      );
+
+      expect(result).toEqual({ compacted: 1, remaining: configuration.detailedLimit });
+      expect(save).toHaveBeenCalledWith({
+        id: 'record_0000',
+        timestamp,
+        compactedAt: timestamp,
+      });
+    },
+  );
+
   it('produces a schema-valid compacted Flow dispatch while preserving audit identity', () => {
     const original = completedDispatch();
     const policy = getFlowDispatchRetentionPolicy();

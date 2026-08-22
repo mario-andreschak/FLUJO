@@ -10,7 +10,6 @@ import type {
   PersonaLease,
   PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
-import { BEHAVIOR_MAINTENANCE_RETENTION_MS, BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT } from './behaviorMaintenance';
 import { canonicalJson } from './behaviorRevisions';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import {
@@ -27,6 +26,35 @@ import {
   savePersonaLease,
 } from './store';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Checked-in Persona runtime retention decision from issue #479.
+ *
+ * These values are intentionally independent of behavior maintenance, whose
+ * 30-day/newest-100 policy serves a different record family. Runtime overrides
+ * are not supported: changing a value requires review alongside recovery,
+ * storage, and lane-1 latency evidence.
+ */
+export const PERSONA_RUNTIME_RETENTION_POLICY = {
+  mailboxItem: {
+    retentionMs: 30 * DAY_MS,
+    detailedLimit: 500,
+  },
+  activity: {
+    retentionMs: 30 * DAY_MS,
+    detailedLimit: 200,
+  },
+  flowDispatch: {
+    retentionMs: 30 * DAY_MS,
+    detailedLimit: 200,
+  },
+  leaseHistory: {
+    retentionMs: 90 * DAY_MS,
+    detailedLimit: 1_000,
+  },
+} as const;
+
 export const PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP = 100;
 
 function digest(value: unknown): string {
@@ -35,7 +63,7 @@ function digest(value: unknown): string {
 
 /**
  * Compaction policy for mailbox items.
- * Terminal items older than BEHAVIOR_MAINTENANCE_RETENTION_MS or beyond the newest 100
+ * Terminal items older than 30 days or beyond the newest 500 detailed records
  * are compacted: summary and payloadRef are blanked, compactedAt marker set,
  * and admissionDigest (idempotency preservation) is computed.
  */
@@ -50,8 +78,8 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
     },
     timestampOf: (item) => item.completedAt ?? item.updatedAt,
     isCompacted: (item) => item.compactedAt !== undefined,
-    retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
-    detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.retentionMs,
+    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (item, compactedAt) => (
       {
@@ -74,7 +102,8 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
 
 /**
  * Compaction policy for activities.
- * Terminal activities older than retention window or beyond newest 100 are compacted:
+ * Terminal activities older than 30 days or beyond the newest 200 detailed
+ * records are compacted:
  * bulky fields (instructionContext, resourceRefs, error) are blanked, compactedAt marker set,
  * but identity and audit fields (id, status, outcome, timestamps, leaseId) are preserved
  * for crash recovery and reconciliation.
@@ -90,8 +119,8 @@ export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
     },
     timestampOf: (activity) => activity.completedAt ?? activity.updatedAt,
     isCompacted: (activity) => activity.compactedAt !== undefined,
-    retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
-    detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.activity.retentionMs,
+    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.activity.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (activity, compactedAt) => (
       {
@@ -112,7 +141,8 @@ export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
 
 /**
  * Compaction policy for flow dispatches.
- * Terminal dispatches older than retention window or beyond newest 100 are compacted:
+ * Terminal dispatches older than 30 days or beyond the newest 200 detailed
+ * records are compacted:
  * bulky fields (flowInput, instructionContext, maintenancePlan, maintenanceResult, routingDecision)
  * are blanked, but identity/dedup/audit fields (id, idempotencyDigest, requestHash, state,
  * admission, activityId, memoryCandidateLimit, timestamps) are preserved for
@@ -129,8 +159,8 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
     },
     timestampOf: (dispatch) => dispatch.completedAt ?? dispatch.updatedAt,
     isCompacted: (dispatch) => dispatch.compactedAt !== undefined,
-    retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
-    detailedLimit: BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
+    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch.retentionMs,
+    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (dispatch, compactedAt) => (
       {
@@ -157,9 +187,10 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
 
 /**
  * Legacy lease-history soft-compaction policy retained for direct compatibility.
- * It only records compactedAt and does not reduce record count. The runtime no
- * longer invokes it; irreversible count pruning lives in leaseHistoryPruning.ts
- * behind its own default-off feature flag (issue #478).
+ * Released records older than 90 days or beyond the newest 1000 are marked
+ * compacted. This does not reduce record count and is not scheduled; irreversible
+ * count pruning lives in leaseHistoryPruning.ts behind its own independent,
+ * default-off feature flag (issue #478).
  */
 export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> {
   return {
@@ -169,8 +200,8 @@ export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> 
     },
     timestampOf: (lease) => lease.releasedAt ?? lease.expiresAt,
     isCompacted: (lease) => lease.compactedAt !== undefined,
-    retentionMs: BEHAVIOR_MAINTENANCE_RETENTION_MS,
-    detailedLimit: 1000, // Keep newest 1000 archived leases for audit.
+    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.retentionMs,
+    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: (lease, compactedAt) => (
       {
