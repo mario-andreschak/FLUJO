@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 
-import { FEATURES } from '@/config/features';
+import {
+  FEATURES,
+  isPersonaBehaviorMaintenanceDiagnosisReady,
+} from '@/config/features';
 import {
   BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
   BehaviorMaintenanceRunSchema,
@@ -277,7 +280,7 @@ export async function admitBehaviorMaintenanceRun(
     const persona = await getPersona(sourceActivity.personaId);
     if (!persona || persona.autonomyLevel === 'locked') return null;
 
-    const diagnosisEnabled = FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS;
+    const diagnosisEnabled = isPersonaBehaviorMaintenanceDiagnosisReady();
     const maintenanceRuns = await completeLegacyShadowAdmissionRuns(
       await listBehaviorMaintenanceRuns(sourceActivity.personaId),
       now,
@@ -371,6 +374,10 @@ function reusableInstruction(activities: PersonaActivity[]): string | undefined 
 export async function diagnoseBehaviorMaintenanceRun(
   run: BehaviorMaintenanceRun,
 ): Promise<BehaviorMaintenanceDiagnosis> {
+  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
+    throw new Error('Persona Behavior maintenance diagnosis is not ready.');
+  }
+
   const activities = (await Promise.all(
     run.sourceActivityIds.map((id) => getPersonaActivity(run.personaId, id)),
   )).filter((activity): activity is PersonaActivity => activity !== null);
@@ -453,8 +460,8 @@ export async function recordBehaviorMaintenanceDiagnosis(input: {
   durationMs?: number;
   now?: number;
 }): Promise<BehaviorMaintenanceRun> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS) {
-    throw new Error('Persona Behavior maintenance diagnosis is disabled.');
+  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
+    throw new Error('Persona Behavior maintenance diagnosis is not ready.');
   }
   const inspected = await getBehaviorMaintenanceRun(input.runId);
   if (!inspected) {
@@ -527,7 +534,7 @@ export async function executeBehaviorMaintenanceRun(
     diagnose?: (run: BehaviorMaintenanceRun) => Promise<BehaviorMaintenanceDiagnosis>;
   } = {},
 ): Promise<BehaviorMaintenanceRun | null> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS) return null;
+  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) return null;
   const startedAt = options.now ?? Date.now();
   const claimed = await claimBehaviorMaintenanceRun(runId, startedAt);
   if (!claimed) return getBehaviorMaintenanceRun(runId);
@@ -652,7 +659,7 @@ export async function reconcileBehaviorMaintenanceRuns(
 
   for (const run of runs) {
     if (!ACTIVE_EXECUTION_STATES.has(run.state)) continue;
-    if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS) {
+    if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
       await completeShadowOnlyRun(run, now);
       continue;
     }

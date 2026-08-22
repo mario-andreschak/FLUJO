@@ -183,7 +183,10 @@ export const FEATURES = {
   /** Admit durable post-Activity Behavior assessment records. Shadow rollout is opt-in. */
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: false,
 
-  /** Permit diagnosis work after admission. Independent so admission can be observed safely. */
+  /**
+   * Permit diagnosis work after admission. Kept separate from admission so
+   * shadow evidence collection remains available.
+   */
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: false,
 
   /**
@@ -244,3 +247,16 @@ export const FEATURES = {
    */
   ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: false,
 };
+
+/**
+ * Whether Behavior maintenance diagnosis may take actionable work.
+ *
+ * Admission is intentionally excluded so it can continue collecting shadow
+ * evidence. Values are read on every call so rollout changes take effect
+ * without caching stale readiness.
+ */
+export function isPersonaBehaviorMaintenanceDiagnosisReady(): boolean {
+  return FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS
+    && FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS
+    && FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK;
+}

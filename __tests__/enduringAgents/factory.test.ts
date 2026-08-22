@@ -184,6 +184,46 @@ describe('workspace-authored Roles', () => {
 });
 
 describe('createPersonaFromRole', () => {
+  it('uses conservative autonomy defaults while preserving explicit overrides', async () => {
+    await inFreshWorkspace(async () => {
+      const cases = [
+        { roleDefault: undefined, explicit: undefined, expected: 'propose_overrides' },
+        { roleDefault: 'locked', explicit: undefined, expected: 'locked' },
+        { roleDefault: 'learn_hints', explicit: undefined, expected: 'learn_hints' },
+        { roleDefault: 'auto_apply_validated', explicit: 'locked', expected: 'locked' },
+        { roleDefault: 'auto_apply_validated', explicit: 'learn_hints', expected: 'learn_hints' },
+      ] as const;
+
+      for (const [index, testCase] of cases.entries()) {
+        const base = buildTestRoleVersion();
+        const defaults = clone(base.defaults ?? {});
+        delete defaults.autonomyLevel;
+        if (testCase.roleDefault !== undefined) {
+          defaults.autonomyLevel = testCase.roleDefault;
+        }
+        const version = 40 + index;
+        const roleVersion = await createRoleVersion(RoleVersionSchema.parse({
+          ...base,
+          id: `rolever_test_general_v${version}`,
+          version,
+          defaults,
+          createdAt: version,
+        }));
+
+        const bundle = await createPersonaFromRoleProduction({
+          name: `Autonomy case ${index}`,
+          roleVersionId: roleVersion.id,
+          idempotencyKey: `autonomy-case-${index}`,
+          ...(testCase.explicit === undefined
+            ? {}
+            : { autonomyLevel: testCase.explicit }),
+        });
+
+        expect(bundle.persona.autonomyLevel).toBe(testCase.expected);
+      }
+    });
+  });
+
   it('creates Jim ready and idle with exactly the primary and maintain_memory Behaviors', async () => {
     await inFreshWorkspace(async () => {
       const bundle = await createPersonaFromRole({

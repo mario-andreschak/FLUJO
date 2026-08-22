@@ -78,14 +78,38 @@ sufficient; neither overrides the other.
      post-Activity maintenance records. Off means `admitBehaviorMaintenanceRun`
      is a no-write call.
    - `ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS` — permits diagnosis and
-     proposal drafting after admission. Off means every active run is
-     terminalized as `completed` / `shadow_admission_only`, and
-     `recordBehaviorMaintenanceDiagnosis` refuses outright.
+     proposal drafting only while outcome metrics and outcome-driven automatic
+     rollback are also enabled. If any prerequisite is off, every active run is
+     terminalized as `completed` / `shadow_admission_only`, and diagnosis
+     persistence refuses outright.
+   - `ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS` — records terminal Activity
+     outcome samples used by the regression detector.
+   - `ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK` — permits the detector to
+     use the compare-and-swap rollback lane, subject to Persona autonomy.
 2. **Per-Persona autonomy** (`persona.autonomyLevel`): `locked` blocks admission,
    procedural hints, and proposals; `learn_hints` allows hints but refuses every
    Behavior override. These checks live in `behaviorLearning.ts` and are enforced
    regardless of the global gates, so enabling a gate never widens what a
    `locked` or `learn_hints` Persona may do.
+
+**Safe rollout order.** Keep every gate default-off. Enable outcome metrics
+first, automatic rollback second, and maintenance diagnosis last. Admission is
+independent and may remain enabled throughout to collect shadow evidence.
+
+**Safe rollback order.** Disable diagnosis first. Reconciliation remains
+available and terminalizes queued, leased, or otherwise active maintenance runs
+instead of stranding them. Admission may remain enabled for shadow evidence.
+
+Diagnosis readiness is evaluated dynamically from the diagnosis, outcome-metric,
+and automatic-rollback gates. Automatic rollback remains subject to Persona
+autonomy and never overrides `locked` or `learn_hints`.
+
+The `behavior-outcome-v1` detector requires at least 10 samples and a 0.15
+absolute success-rate regression across 14-day baseline and observation windows.
+Regression evidence is persisted before rollback is attempted. Successful
+automatic rollback records actor `behavior-outcome-detector` and audit action
+`auto_rolled_back`. Outcome projection remains best-effort: metric failure is
+observable but does not fail terminal Activity completion.
 
 **Operational caveat.** The gates have no environment-variable, config-file, or
 admin override. They are plain module constants, so changing one is a source
@@ -93,8 +117,8 @@ edit plus a rebuild and restart — a deploy, not a runtime operation. This is t
 intended shape for a developer-driven shadow rollout; a supported runtime
 override is a separate piece of work.
 
-**Mid-flight semantics.** Turning either gate off while runs are active does not
-strand them. Every completed Activity reconciles that Persona's maintenance runs
+**Mid-flight semantics.** Turning admission or any diagnosis prerequisite off
+while runs are active does not strand them. Every completed Activity reconciles that Persona's maintenance runs
 unconditionally (`PersonaFlowDispatcher.commitTerminal`), independently of
 whether admission produced a run, and `startPersonaFlowDispatcher()` performs an
 ungated sweep at process start. Whichever happens first terminalizes the

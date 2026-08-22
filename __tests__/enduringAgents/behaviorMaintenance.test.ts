@@ -1,4 +1,7 @@
-import { FEATURES } from '@/config/features';
+import {
+  FEATURES,
+  isPersonaBehaviorMaintenanceDiagnosisReady,
+} from '@/config/features';
 import {
   BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
   BEHAVIOR_MAINTENANCE_DIAGNOSIS_LEASE_MS,
@@ -11,6 +14,7 @@ import {
   executeBehaviorMaintenanceRun,
   getBehaviorAutoRollbackCooldownMs,
   reconcileBehaviorMaintenanceRuns,
+  recordBehaviorMaintenanceDiagnosis,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
 import { getBehaviorProposal } from '@/backend/services/enduringAgents/behaviorLearning';
 import {
@@ -32,6 +36,8 @@ import { runWithWorkspace } from '@/utils/workspace';
 type MutableMaintenanceFeatures = {
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: boolean;
   ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: boolean;
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS: boolean;
+  ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: boolean;
 };
 
 const maintenanceFeatures = FEATURES as unknown as MutableMaintenanceFeatures;
@@ -153,15 +159,52 @@ describe('Behavior automatic-rollback cooldown policy', () => {
   });
 });
 
+describe('Behavior maintenance diagnosis readiness', () => {
+  it.each([
+    [false, false, false, false],
+    [false, false, true, false],
+    [false, true, false, false],
+    [false, true, true, false],
+    [true, false, false, false],
+    [true, false, true, false],
+    [true, true, false, false],
+    [true, true, true, true],
+  ])(
+    'diagnosis=%s metrics=%s autoRollback=%s resolves readiness=%s',
+    (diagnosis, metrics, autoRollback, expected) => {
+      const original = {
+        diagnosis: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS,
+        metrics: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS,
+        autoRollback: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK,
+      };
+      try {
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = diagnosis;
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = metrics;
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = autoRollback;
+
+        expect(isPersonaBehaviorMaintenanceDiagnosisReady()).toBe(expected);
+      } finally {
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = original.diagnosis;
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = original.metrics;
+        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = original.autoRollback;
+      }
+    },
+  );
+});
+
 describe('Behavior maintenance lifecycle', () => {
   beforeEach(() => {
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = true;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
   });
 
   afterEach(() => {
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
+    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
   });
 
   it('does not write a run when admission and diagnosis are disabled', async () => {
@@ -182,6 +225,56 @@ describe('Behavior maintenance lifecycle', () => {
       expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toEqual([]);
     });
   });
+
+  it.each([
+    ['outcome metrics', 'ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS'],
+    ['automatic rollback', 'ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK'],
+  ] as const)(
+    'dynamically blocks every diagnosis boundary and restart reconciliation when %s stops',
+    async (_label, disabledFlag) => {
+      await inFreshWorkspace(async () => {
+        const setup = await setupPersona();
+        const now = Date.now();
+        const source = activity({
+          id: 'activity_safety_dependency_disabled_midflight',
+          personaId: setup.persona.id,
+          behaviorRevisionId: setup.revision.id,
+          now,
+        });
+        await persistActivity(source);
+        const pending = await admitBehaviorMaintenanceRun(source, now);
+        if (!pending) throw new Error('Expected queued maintenance admission.');
+
+        maintenanceFeatures[disabledFlag] = false;
+
+        await expect(diagnoseBehaviorMaintenanceRun(pending))
+          .rejects.toThrow('diagnosis is not ready');
+        await expect(recordBehaviorMaintenanceDiagnosis({
+          runId: pending.id,
+          action: 'no_change',
+          reasonCode: 'must_not_persist',
+          now: now + 1,
+        })).rejects.toThrow('diagnosis is not ready');
+        await expect(executeBehaviorMaintenanceRun(pending.id, { now: now + 1 }))
+          .resolves.toBeNull();
+        expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
+          state: 'queued',
+          attempts: 0,
+        });
+
+        await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
+        expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
+          state: 'completed',
+          reasonCode: 'shadow_admission_only',
+          attempts: 0,
+          completedAt: now + 2,
+        });
+
+        maintenanceFeatures[disabledFlag] = true;
+        expect(isPersonaBehaviorMaintenanceDiagnosisReady()).toBe(true);
+      });
+    },
+  );
 
   it('never admits cancelled Activities', async () => {
     await inFreshWorkspace(async () => {
