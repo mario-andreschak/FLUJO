@@ -4,6 +4,7 @@ import { modelService } from '@/backend/services/model';
 import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
 import { supportsEmbeddings } from '@/shared/types/model/embeddings';
 import { createLogger } from '@/utils/logger';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   CreateMemoryItemInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
@@ -41,6 +42,7 @@ import {
   recordSemanticRecallFallback,
   recordSemanticRecallStage,
 } from './memoryRecallMetrics';
+import { getMemoryQueryVectorCache } from './memoryQueryVectorCache';
 import { getMemorySettings } from './memorySettings';
 import {
   MEMORY_DEDUP_SETTINGS,
@@ -68,6 +70,7 @@ const MemorySearchQuerySchema = z.object({
   statuses: z.array(z.enum(MEMORY_STATUSES)).optional(),
   trust: z.array(z.enum(MEMORY_TRUST_LEVELS)).optional(),
   coreOnly: z.boolean().optional(),
+  mode: z.enum(['lexical', 'hybrid']).optional(),
   asOf: z.number().int().nonnegative().optional(),
   limit: z.number().int().min(1).max(200).optional(),
 }).strict();
@@ -89,6 +92,8 @@ export interface MemoryMutationOptions extends PersonaDomainMutationOptions {
   skipNearDuplicateMerge?: boolean;
 }
 
+export type MemoryRecallMode = 'lexical' | 'hybrid';
+
 export interface MemorySearchQuery {
   query?: string;
   kinds?: MemoryKind[];
@@ -96,6 +101,8 @@ export interface MemorySearchQuery {
   statuses?: MemoryStatus[];
   trust?: MemoryTrust[];
   coreOnly?: boolean;
+  /** Internal comparison control. Omitted preserves workspace-configured behavior. */
+  mode?: MemoryRecallMode;
   asOf?: number;
   limit?: number;
 }
@@ -329,22 +336,28 @@ export interface SemanticRecallContext {
   readonly semanticWeight: number;
 }
 
+function lexicalRecallContext(
+  floor: number = MEMORY_SEMANTIC_FLOOR,
+): SemanticRecallContext {
+  return {
+    scores: new Map(),
+    floor,
+    lexicalWeight: 1,
+    semanticWeight: 0,
+  };
+}
+
 function semanticFallback(
   reason: string,
   floor: number = MEMORY_SEMANTIC_FLOOR,
 ): SemanticRecallContext {
   recordSemanticRecallFallback(reason);
   log.debug('Semantic recall unavailable; using lexical fallback.', { reason });
-  return {
-    scores: new Map(),
-    floor,
-    lexicalWeight: MEMORY_RANKING_WEIGHTS.lexicalWeight,
-    semanticWeight: MEMORY_RANKING_WEIGHTS.semanticWeight,
-  };
+  return lexicalRecallContext(floor);
 }
 
 /**
- * Prepare one query embedding and one Persona sidecar read for a recall.
+ * Prepare one cached query embedding and one Persona sidecar read for a recall.
  * Provider and sidecar failures are intentionally contained at this boundary.
  */
 export async function prepareSemanticRecall(
@@ -370,22 +383,31 @@ export async function prepareSemanticRecall(
 
   try {
     const embeddingStartedAt = performance.now();
-    const queryEmbedding = await getEmbeddingProvider().embed(model, {
+    const queryVector = await getMemoryQueryVectorCache().getOrCreate({
+      workspaceId: getCurrentWorkspace(),
+      provider: model.adapter,
       modelId: model.name,
-      text: query,
       dimensions: settings.semanticEmbeddingDimensions,
+      query,
+    }, async () => {
+      const queryEmbedding = await getEmbeddingProvider().embed(model, {
+        modelId: model.name,
+        text: query,
+        dimensions: settings.semanticEmbeddingDimensions,
+      });
+      if (
+        queryEmbedding.vector.length === 0
+        || queryEmbedding.vector.length !== queryEmbedding.dimensions
+        || !queryEmbedding.vector.every(Number.isFinite)
+      ) {
+        throw new Error('Embedding provider returned an invalid query vector.');
+      }
+      return queryEmbedding.vector;
     });
     recordSemanticRecallStage(
       'query_embedding',
       performance.now() - embeddingStartedAt,
     );
-    if (
-      queryEmbedding.vector.length === 0
-      || queryEmbedding.vector.length !== queryEmbedding.dimensions
-      || !queryEmbedding.vector.every(Number.isFinite)
-    ) {
-      return semanticFallback('invalid_query_vector', settings.semanticFloor);
-    }
 
     const sidecarStartedAt = performance.now();
     const embeddings = await listPersonaEmbeddings(personaId);
@@ -397,8 +419,8 @@ export async function prepareSemanticRecall(
       personaId,
       items,
       embeddings,
-      queryEmbedding.vector,
-      queryEmbedding.modelId,
+      queryVector,
+      model.name,
     );
     recordSemanticRecallStage('cosine_scoring', performance.now() - scoringStartedAt);
 
@@ -444,7 +466,9 @@ export async function searchPersonaMemory(
     } : {}),
   });
   recordSemanticRecallStage('item_load', performance.now() - itemLoadStartedAt);
-  const semantic = await prepareSemanticRecall(personaId, parsed.query, items);
+  const semantic = parsed.mode === 'lexical'
+    ? lexicalRecallContext()
+    : await prepareSemanticRecall(personaId, parsed.query, items);
   const rankStartedAt = performance.now();
   const candidates = items.map((item) => {
     const lexicalHit = terms.some(
