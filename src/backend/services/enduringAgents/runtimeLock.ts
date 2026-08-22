@@ -19,9 +19,35 @@ const LOCK_ROOT_SEGMENTS = ['.runtime-locks', 'enduring-agents'] as const;
 const LOCK_ACQUIRE_TIMEOUT_MS = 15_000;
 const LOCK_RETRY_MS = 25;
 const PROCESS_BIRTH_CACHE_TTL_MS = 1_000;
+// Keep the Windows OS lookup well inside the 15-second acquisition budget.
+// A timeout is uncertainty and must never be treated as stale-owner evidence.
+const WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 900;
 const PROCESS_BIRTH_MARKER_SUPPORTED = ['darwin', 'linux', 'win32'].includes(process.platform);
 const UUID_FILE_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const execFileAsync = promisify(execFile);
+
+interface ProcessBirthProbeOptions {
+  encoding: 'utf8';
+  timeout: number;
+  windowsHide?: boolean;
+  env?: NodeJS.ProcessEnv;
+}
+
+type ProcessBirthProbeRunner = (
+  executable: string,
+  args: string[],
+  options: ProcessBirthProbeOptions,
+) => Promise<{ stdout: string }>;
+
+const defaultProcessBirthProbeRunner: ProcessBirthProbeRunner = async (
+  executable,
+  args,
+  options,
+) => {
+  const { stdout } = await execFileAsync(executable, args, options);
+  return { stdout: String(stdout) };
+};
+let processBirthProbeRunner = defaultProcessBirthProbeRunner;
 
 declare global {
   // Next can evaluate this module in multiple route bundles in one process.
@@ -46,6 +72,7 @@ const ISSUED_RUNTIME_LOCKS = global.__flujo_enduring_agent_issued_runtime_lock_s
 const DEFERRED_CLEANUP_KEYS = global.__flujo_enduring_agent_deferred_lock_cleanups
   ??= new Set<string>();
 const processBirthCache = new Map<number, { checkedAt: number; marker: string | null }>();
+const processBirthInFlight = new Map<number, Promise<string | null>>();
 
 interface LockOwnerRecord {
   ownerId: string;
@@ -317,7 +344,33 @@ async function getLinuxBootId(): Promise<string | null> {
   return bootId;
 }
 
-async function queryProcessBirthMarker(pid: number): Promise<string | null> {
+async function queryWindowsProcessBirthMarker(pid: number): Promise<string | null> {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
+  const normalizedSystemRoot = path.win32.normalize(systemRoot);
+  if (!/^[a-z]:\\/i.test(normalizedSystemRoot)) return null;
+  const powershellPath = path.win32.join(
+    normalizedSystemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const { stdout } = await processBirthProbeRunner(powershellPath, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
+  ], {
+    encoding: 'utf8',
+    timeout: WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  const value = stdout.trim();
+  return value ? `win32-v2:${value}` : null;
+}
+
+async function queryPlatformProcessBirthMarker(pid: number): Promise<string | null> {
   try {
     if (process.platform === 'linux') {
       const [stat, bootId] = await Promise.all([
@@ -334,28 +387,10 @@ async function queryProcessBirthMarker(pid: number): Promise<string | null> {
       return startTime ? `linux-v2:${bootId}:${startTime}` : null;
     }
     if (process.platform === 'win32') {
-      const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-      if (!systemRoot || !path.win32.isAbsolute(systemRoot)) return null;
-      const normalizedSystemRoot = path.win32.normalize(systemRoot);
-      if (!/^[a-z]:\\/i.test(normalizedSystemRoot)) return null;
-      const powershellPath = path.win32.join(
-        normalizedSystemRoot,
-        'System32',
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe',
-      );
-      const { stdout } = await execFileAsync(powershellPath, [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
-      ], { encoding: 'utf8', timeout: 3_000, windowsHide: true });
-      const value = stdout.trim();
-      return value ? `win32-v2:${value}` : null;
+      return await queryWindowsProcessBirthMarker(pid);
     }
     if (process.platform === 'darwin') {
-      const { stdout } = await execFileAsync('/bin/ps', [
+      const { stdout } = await processBirthProbeRunner('/bin/ps', [
         '-o',
         'state=',
         '-o',
@@ -377,6 +412,18 @@ async function queryProcessBirthMarker(pid: number): Promise<string | null> {
     // A failed birth lookup is uncertainty. PID liveness remains fail-closed.
   }
   return null;
+}
+
+let processBirthMarkerProbe = queryPlatformProcessBirthMarker;
+
+async function queryProcessBirthMarker(pid: number): Promise<string | null> {
+  try {
+    return await processBirthMarkerProbe(pid);
+  } catch {
+    // Probe failures and timeouts are uncertainty. Callers must remain fail
+    // closed and may only recover a lock from explicit stale-owner evidence.
+    return null;
+  }
 }
 
 async function getOwnProcessBirthMarkerV2(): Promise<string | null> {
@@ -412,9 +459,52 @@ async function getProcessBirthMarker(pid: number): Promise<string | null> {
   if (cached && runtimeClock.monotonicNow() - cached.checkedAt < PROCESS_BIRTH_CACHE_TTL_MS) {
     return cached.marker;
   }
-  const marker = await queryProcessBirthMarker(pid);
-  processBirthCache.set(pid, { checkedAt: runtimeClock.monotonicNow(), marker });
-  return marker;
+  const existing = processBirthInFlight.get(pid);
+  if (existing) return existing;
+
+  const lookup = queryProcessBirthMarker(pid)
+    .then((marker) => {
+      processBirthCache.set(pid, { checkedAt: runtimeClock.monotonicNow(), marker });
+      return marker;
+    })
+    .finally(() => {
+      if (processBirthInFlight.get(pid) === lookup) {
+        processBirthInFlight.delete(pid);
+      }
+    });
+  processBirthInFlight.set(pid, lookup);
+  return lookup;
+}
+
+/** Narrow test seam for deterministic process-probe regression coverage. */
+export function _setPersonaRuntimeLockProcessBirthProbeForTests(
+  probe?: (pid: number) => Promise<string | null>,
+): void {
+  processBirthMarkerProbe = probe ?? queryPlatformProcessBirthMarker;
+  processBirthCache.clear();
+  processBirthInFlight.clear();
+}
+
+export function _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(
+  runner?: ProcessBirthProbeRunner,
+): void {
+  processBirthProbeRunner = runner ?? defaultProcessBirthProbeRunner;
+}
+
+export async function _getPersonaRuntimeLockProcessBirthMarkerForTests(
+  pid: number,
+): Promise<string | null> {
+  return getProcessBirthMarker(pid);
+}
+
+export async function _queryWindowsProcessBirthMarkerForTests(
+  pid: number,
+): Promise<string | null> {
+  try {
+    return await queryWindowsProcessBirthMarker(pid);
+  } catch {
+    return null;
+  }
 }
 
 function birthMarkerVersion(marker: string): string | null {
@@ -489,6 +579,20 @@ async function isOwnerProcessAlive(
   }
   return !currentBirthMarker
     || !birthMarkersProveDifferent(owner.processBirthMarkerV2, currentBirthMarker);
+}
+
+export async function _isPersonaRuntimeLockOwnerAliveForTests(
+  pid: number,
+  processBirthMarkerV2?: string,
+): Promise<boolean> {
+  return isOwnerProcessAlive({
+    ownerId: randomUUID(),
+    processInstanceId: 'runtime-lock-process-probe-test',
+    pid,
+    processBirthMarkerV2,
+    workspace: getCurrentWorkspace(),
+    acquiredAt: 0,
+  }, new Set());
 }
 
 async function unlinkWithRetry(filePath: string): Promise<void> {

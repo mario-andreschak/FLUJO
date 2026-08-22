@@ -26,6 +26,11 @@ import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
+  _getPersonaRuntimeLockProcessBirthMarkerForTests,
+  _isPersonaRuntimeLockOwnerAliveForTests,
+  _queryWindowsProcessBirthMarkerForTests,
+  _setPersonaRuntimeLockProcessBirthProbeForTests,
+  _setPersonaRuntimeLockProcessBirthProbeRunnerForTests,
   withIssuedPersonaRuntimeLockOperation,
   withPersonaRuntimeLock,
 } from '@/backend/services/enduringAgents/runtimeLock';
@@ -253,10 +258,115 @@ async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 afterEach(() => {
+  _setPersonaRuntimeLockProcessBirthProbeForTests();
+  _setPersonaRuntimeLockProcessBirthProbeRunnerForTests();
   jest.restoreAllMocks();
 });
 
 describe('enduring-agent Activity runtime', () => {
+  it('deduplicates concurrent process-birth probes for the same PID', async () => {
+    let settleProbe!: (marker: string | null) => void;
+    const probe = jest.fn(() => new Promise<string | null>((resolve) => {
+      settleProbe = resolve;
+    }));
+    _setPersonaRuntimeLockProcessBirthProbeForTests(probe);
+
+    const lookups = [
+      _getPersonaRuntimeLockProcessBirthMarkerForTests(2_000_000_001),
+      _getPersonaRuntimeLockProcessBirthMarkerForTests(2_000_000_001),
+      _getPersonaRuntimeLockProcessBirthMarkerForTests(2_000_000_001),
+    ];
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    settleProbe('win32-v2:123');
+    await expect(Promise.all(lookups)).resolves.toEqual([
+      'win32-v2:123',
+      'win32-v2:123',
+      'win32-v2:123',
+    ]);
+  });
+
+  it('cleans up a failed process-birth probe so a later lookup can retry', async () => {
+    const probe = jest.fn()
+      .mockRejectedValueOnce(new Error('probe timed out'))
+      .mockResolvedValueOnce('win32-v2:456');
+    _setPersonaRuntimeLockProcessBirthProbeForTests(probe);
+
+    await expect(
+      _getPersonaRuntimeLockProcessBirthMarkerForTests(2_000_000_002),
+    ).resolves.toBeNull();
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    // Resetting the completed uncertainty cache simulates its normal TTL expiry.
+    _setPersonaRuntimeLockProcessBirthProbeForTests(probe);
+    await expect(
+      _getPersonaRuntimeLockProcessBirthMarkerForTests(2_000_000_002),
+    ).resolves.toBe('win32-v2:456');
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a live legacy owner fail closed when its birth probe times out', async () => {
+    const unrelated = await spawnLiveUnrelatedProcess();
+    try {
+      _setPersonaRuntimeLockProcessBirthProbeForTests(async () => {
+        throw new Error('probe timed out');
+      });
+      await expect(
+        _isPersonaRuntimeLockOwnerAliveForTests(unrelated.pid!),
+      ).resolves.toBe(true);
+    } finally {
+      await stopChild(unrelated);
+    }
+  });
+
+  it('uses a fresh probe to confirm a versioned process-birth mismatch', async () => {
+    const unrelated = await spawnLiveUnrelatedProcess();
+    try {
+      const probe = jest.fn()
+        .mockResolvedValueOnce('win32-v2:222')
+        .mockResolvedValueOnce('win32-v2:111');
+      _setPersonaRuntimeLockProcessBirthProbeForTests(probe);
+
+      await expect(_isPersonaRuntimeLockOwnerAliveForTests(
+        unrelated.pid!,
+        'win32-v2:111',
+      )).resolves.toBe(true);
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      await stopChild(unrelated);
+    }
+  });
+
+  it('bounds and hardens the Windows process-birth command', async () => {
+    const previousSystemRoot = process.env.SystemRoot;
+    process.env.SystemRoot = 'C:\\Windows';
+    const runner = jest.fn().mockResolvedValue({ stdout: '987654321' });
+    _setPersonaRuntimeLockProcessBirthProbeRunnerForTests(runner);
+    try {
+      await expect(
+        _queryWindowsProcessBirthMarkerForTests(321),
+      ).resolves.toBe('win32-v2:987654321');
+      expect(runner).toHaveBeenCalledTimes(1);
+      expect(runner).toHaveBeenCalledWith(
+        expect.stringMatching(/^[A-Z]:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$p=Get-Process -Id 321 -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks',
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 900,
+          windowsHide: true,
+        },
+      );
+    } finally {
+      if (previousSystemRoot === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = previousSystemRoot;
+    }
+  });
+
   it('admits retries by a hashed deterministic key and rejects changed duplicate work', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createJim();
