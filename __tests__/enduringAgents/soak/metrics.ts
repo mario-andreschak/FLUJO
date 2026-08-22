@@ -1,5 +1,14 @@
 export type CriterionMode = 'enforce' | 'warn' | 'report';
 
+export type SoakCriterionStatus = 'passed' | 'failed' | 'not_evaluated';
+
+export interface SoakCriterionResult {
+  key: string;
+  status: SoakCriterionStatus;
+  summary: string;
+  evidence: Record<string, number | string | boolean>;
+}
+
 export interface DailySoakMetric {
   day: number;
   activitiesAttempted: number;
@@ -8,8 +17,11 @@ export interface DailySoakMetric {
   recallP95Ms: number;
   residentMemoryBytes: number;
   eventAppendP95Ms: number;
+  eventLogSegments: number;
   collectionCounts: Record<string, number>;
-  faults: string[];
+  collectionUncompactedCounts: Record<string, number>;
+  faultsScheduled: string[];
+  faultsExecuted: string[];
 }
 
 export function percentile(values: number[], quantile: number): number {
@@ -18,16 +30,27 @@ export function percentile(values: number[], quantile: number): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1)];
 }
 
-export function renderSoakReport(metrics: DailySoakMetric[]): string {
+export function renderSoakReport(
+  metrics: DailySoakMetric[],
+  criteria: SoakCriterionResult[],
+): string {
   const last = metrics.at(-1);
+  const rows = criteria.map((criterion) => (
+    `| ${criterion.key} | ${criterion.status} | ${criterion.summary} |`
+  ));
   return [
     '# Persona soak report',
     '',
     `Simulated days: ${metrics.length}`,
-    `Activities: ${metrics.reduce((n, metric) => n + metric.activitiesSucceeded, 0)}`,
+    `Activities attempted: ${metrics.reduce((n, metric) => n + metric.activitiesAttempted, 0)}`,
+    `Activities completed successfully: ${metrics.reduce((n, metric) => n + metric.activitiesSucceeded, 0)}`,
     `Final recall precision: ${last?.recallPrecision.toFixed(4) ?? 'n/a'}`,
     `Final recall p95: ${last?.recallP95Ms.toFixed(2) ?? 'n/a'} ms`,
-    `Faults injected: ${metrics.flatMap((metric) => metric.faults).length}`,
+    `Faults executed: ${metrics.flatMap((metric) => metric.faultsExecuted).length}`,
+    '',
+    '| Criterion | Status | Evidence |',
+    '|---|---|---|',
+    ...rows,
     '',
   ].join('\n');
 }

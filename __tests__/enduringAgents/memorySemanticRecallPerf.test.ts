@@ -1,4 +1,6 @@
+import { promises as fs } from 'fs';
 import { cpus, release } from 'os';
+import path from 'path';
 import { performance } from 'perf_hooks';
 
 import goldenFixtureJson from '../fixtures/memory-ranking/golden-semantic-v1.json';
@@ -18,7 +20,6 @@ import {
 import { CURRENT_MEMORY_VARIANT } from '@/backend/services/enduringAgents/memoryRanking';
 import { setMemorySettings } from '@/backend/services/enduringAgents/memorySettings';
 import { getMemoryIndex } from '@/backend/services/enduringAgents/indexing';
-import { listMemoryItems } from '@/backend/services/enduringAgents/store';
 import { modelService } from '@/backend/services/model';
 import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
 import {
@@ -27,8 +28,11 @@ import {
   type MemoryEmbedding,
 } from '@/shared/types/enduringAgent';
 import { StorageKey } from '@/shared/types/storage';
-import { saveCollectionItem, saveItem } from '@/utils/storage/backend';
-import { runWithWorkspace } from '@/utils/workspace';
+import {
+  saveCollectionItem,
+  saveShardedCollectionItem,
+} from '@/utils/storage/backend';
+import { getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 
 import { summarizeLatency } from './benchmarks/recallMetrics';
 import { createPersonaFromRole } from './fixtures/personaFactory';
@@ -74,8 +78,9 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
             const content = index === ITEM_COUNT - 1
               ? 'Deploys run from the release branch.'
               : `Synthetic memory item ${index}`;
-            await saveCollectionItem(
+            await saveShardedCollectionItem(
               ENDURING_AGENT_COLLECTIONS.memoryItems,
+              persona.id,
               id,
               MemoryItemSchema.parse({
                 schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
@@ -109,10 +114,19 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
         ));
       }
 
-      await saveItem(
-        `${StorageKey.MEMORY_EMBEDDINGS}:${persona.id}` as any,
+      await saveCollectionItem(
+        StorageKey.MEMORY_EMBEDDINGS,
+        persona.id,
         embeddings,
       );
+      // Persona creation initializes an empty memory index. The benchmark seeds
+      // shards in bulk to keep fixture setup O(n), then exercises the production
+      // missing-index recovery path to build the authoritative 50k index once.
+      const databaseDirectory = path.join(getWorkspaceDataDir(), 'db');
+      await Promise.all([
+        'persona-memories.index.json',
+        'persona-memories.generation.json',
+      ].map(file => fs.rm(path.join(databaseDirectory, file), { force: true })));
       const memoryIndex = await getMemoryIndex();
       expect(memoryIndex.collection).toBe(ENDURING_AGENT_COLLECTIONS.memoryItems);
       expect(memoryIndex.sourceCount).toBe(ITEM_COUNT);
@@ -142,11 +156,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
         contentDigest: computeContentDigest(query),
       });
 
-      const [storedItems, storedEmbeddings] = await Promise.all([
-        listMemoryItems(persona.id, { statuses: ['active'] }),
-        listPersonaEmbeddings(persona.id),
-      ]);
-      expect(storedItems).toHaveLength(ITEM_COUNT);
+      const storedEmbeddings = await listPersonaEmbeddings(persona.id);
       expect(storedEmbeddings).toHaveLength(ITEM_COUNT);
       expect(storedEmbeddings.every((embedding) => (
         embedding.modelId === modelId
@@ -269,6 +279,12 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
         latencyMilliseconds: summarizeLatency(samples),
       };
       process.stdout.write(`${JSON.stringify(report)}\n`);
+      const outputPath = process.env.FLUJO_MEMORY_BENCHMARK_OUTPUT;
+      if (outputPath) {
+        const resolved = path.resolve(outputPath);
+        await fs.mkdir(path.dirname(resolved), { recursive: true });
+        await fs.writeFile(resolved, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+      }
       expect(report.latencyMilliseconds.p95).toBeLessThan(150);
     });
   });

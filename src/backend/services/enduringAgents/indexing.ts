@@ -17,7 +17,7 @@ import {
   saveShardedCollectionItem,
   writeFileAtomic,
 } from '@/utils/storage/backend';
-import { getWorkspaceDataDir } from '@/utils/workspace';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { invalidatePersonaRecordCache } from './personaRecordCache';
@@ -94,6 +94,27 @@ type Config<T extends IndexEntry = IndexEntry> = {
   buildEntry: (value: unknown) => T | null;
   validStatuses?: ReadonlySet<string>;
 };
+
+interface CachedPersonaRecordIndex {
+  revision: number;
+  sourceCount: number;
+  mtimeMs: number;
+  sizeBytes: number;
+  index: PersonaRecordIndex<IndexEntry>;
+}
+
+declare global {
+  var __flujo_persona_record_index_cache: Map<string, CachedPersonaRecordIndex> | undefined;
+}
+
+function recordIndexCache(): Map<string, CachedPersonaRecordIndex> {
+  global.__flujo_persona_record_index_cache ??= new Map();
+  return global.__flujo_persona_record_index_cache;
+}
+
+function recordIndexCacheKey(config: Config): string {
+  return workspaceCacheKey('persona-record-index', config.collection);
+}
 
 function dbDir(): string { return path.join(getWorkspaceDataDir(), 'db'); }
 
@@ -292,6 +313,59 @@ async function loadIndex<T extends IndexEntry>(
     return null;
   }
 }
+
+async function indexFingerprint(
+  config: Config,
+): Promise<{ mtimeMs: number; sizeBytes: number } | null> {
+  try {
+    const stats = await fs.stat(indexPath(config));
+    return { mtimeMs: stats.mtimeMs, sizeBytes: stats.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function rememberIndex<T extends IndexEntry>(
+  config: Config<T>,
+  index: PersonaRecordIndex<T>,
+): Promise<void> {
+  const fingerprint = await indexFingerprint(config);
+  if (!fingerprint) {
+    recordIndexCache().delete(recordIndexCacheKey(config));
+    return;
+  }
+  recordIndexCache().set(recordIndexCacheKey(config), {
+    revision: index.revision,
+    sourceCount: index.sourceCount,
+    ...fingerprint,
+    index: index as PersonaRecordIndex<IndexEntry>,
+  });
+}
+
+async function loadCurrentIndex<T extends IndexEntry>(
+  config: Config<T>,
+  generation: CollectionGeneration | null,
+): Promise<PersonaRecordIndex<T> | null> {
+  if (!generation || generation.dirty) return null;
+  const [fingerprint, cached] = await Promise.all([
+    indexFingerprint(config),
+    Promise.resolve(recordIndexCache().get(recordIndexCacheKey(config))),
+  ]);
+  if (
+    fingerprint
+    && cached
+    && cached.revision === generation.revision
+    && cached.sourceCount === generation.sourceCount
+    && cached.mtimeMs === fingerprint.mtimeMs
+    && cached.sizeBytes === fingerprint.sizeBytes
+  ) {
+    return cached.index as PersonaRecordIndex<T>;
+  }
+  const loaded = await loadIndex(config, generation);
+  if (loaded) await rememberIndex(config, loaded);
+  return loaded;
+}
 async function writeGeneration(config: Config, generation: CollectionGeneration): Promise<void> {
   await writeFileAtomic(generationPath(config), JSON.stringify(generation, null, 2));
 }
@@ -322,11 +396,11 @@ async function buildIndex<T extends IndexEntry>(
 }
 async function getIndex<T extends IndexEntry>(config: Config<T>): Promise<PersonaRecordIndex<T>> {
   const generation = await loadGeneration(config);
-  const loaded = await loadIndex(config, generation);
+  const loaded = await loadCurrentIndex(config, generation);
   if (loaded) return loaded;
   return runInWriteChain(config.chainKey, async () => {
     const currentGeneration = await loadGeneration(config);
-    const current = await loadIndex(config, currentGeneration);
+    const current = await loadCurrentIndex(config, currentGeneration);
     if (current) return current;
     const revision = Math.max(1, currentGeneration?.revision ?? 0);
     const rebuilt = await buildIndex(config, revision);
@@ -338,6 +412,7 @@ async function getIndex<T extends IndexEntry>(config: Config<T>): Promise<Person
       sourceCount: rebuilt.sourceCount,
       dirty: false,
     });
+    await rememberIndex(config, rebuilt);
     return rebuilt;
   });
 }
@@ -361,7 +436,7 @@ async function mutateIndex<T extends IndexEntry>(
   await runInWriteChain(config.chainKey, async () => {
     const generation = await loadGeneration(config);
     const baselineRevision = generation?.revision ?? 0;
-    const current = await loadIndex(config, generation)
+    const current = await loadCurrentIndex(config, generation)
       ?? await buildIndex(config, baselineRevision);
     const revision = Math.max(1, baselineRevision + 1);
     const dirty: CollectionGeneration = {
@@ -392,6 +467,7 @@ async function mutateIndex<T extends IndexEntry>(
       sourceCount: next.sourceCount,
       dirty: false,
     });
+    await rememberIndex(config, next);
   });
 }
 

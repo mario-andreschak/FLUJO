@@ -20,6 +20,7 @@ const env = {
   PERSONA_SOAK_SEED: seed,
   PERSONA_SOAK_OUTPUT: output,
   PERSONA_SOAK_QUICK: quick ? '1' : '0',
+  PERSONA_SOAK_FULL: quick ? '0' : '1',
   PERSONA_SOAK_WITH_LEARNING: values.has('with-learning') ? '1' : '0',
 };
 const child = spawn(process.execPath, [

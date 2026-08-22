@@ -8,6 +8,11 @@ import {
   getMailboxItemRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
 import {
+  PERSONA_ACTIVITY_SCHEMA_VERSION,
+  PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION,
+  PersonaActivitySchema,
+} from '@/shared/types/enduringAgent';
+import {
   PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
   PersonaFlowDispatchRecordSchema,
   type PersonaFlowDispatchRecord,
@@ -77,6 +82,46 @@ function completedDispatch(): PersonaFlowDispatchRecord {
     startedAt: 150,
     completedAt: 200,
   };
+}
+
+function erroredActivityWithCoreSnapshot() {
+  return PersonaActivitySchema.parse({
+    schemaVersion: PERSONA_ACTIVITY_SCHEMA_VERSION,
+    id: 'activity_1',
+    personaId: 'persona_1',
+    kind: 'assignment',
+    status: 'error',
+    source: { kind: 'assignment', sourceId: 'source_1' },
+    behaviorId: 'behavior_1',
+    behaviorRevisionId: 'revision_1',
+    coreFlowId: 'flow_1',
+    coreFlowRevisionId: 'revision_1',
+    coreAppRefs: ['test-app'],
+    instructionContext: {
+      schemaVersion: PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION,
+      personaId: 'persona_1',
+      activityId: 'activity_1',
+      behaviorRevisionId: 'revision_1',
+      behaviorContentHash: 'c'.repeat(64),
+      behaviorSlotKey: 'primary',
+      rootFlowId: 'flow_1',
+      roleVersionId: 'role_version_1',
+      personaName: 'Compaction Persona',
+      roleName: 'Compaction Role',
+      roleMission: 'Exercise schema-valid runtime retention.',
+      instruction: 'Private frozen instructions.',
+    },
+    instructionContextDigest: 'd'.repeat(64),
+    instructionContextSchemaVersion: PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION,
+    entryPointPayloadRef: 'private-entry-point',
+    resourceRefs: ['private-resource'],
+    outcomeRef: 'private-outcome',
+    error: 'private failure details',
+    createdAt: 100,
+    updatedAt: 200,
+    startedAt: 150,
+    completedAt: 200,
+  });
 }
 
 describe('Persona runtime compaction', () => {
@@ -183,6 +228,29 @@ describe('Persona runtime compaction', () => {
     expect(compacted.maintenancePlan).toBeUndefined();
     expect(compacted.maintenanceResult).toBeUndefined();
     expect(compacted.routingDecision).toBeUndefined();
+  });
+
+  it('produces a schema-valid compacted errored Activity while preserving Core identity', () => {
+    const original = erroredActivityWithCoreSnapshot();
+    const compacted = getActivityRetentionPolicy().compact(original, 300);
+
+    expect(() => PersonaActivitySchema.parse(compacted)).not.toThrow();
+    expect(compacted).toEqual(expect.objectContaining({
+      id: original.id,
+      personaId: original.personaId,
+      status: original.status,
+      behaviorRevisionId: original.behaviorRevisionId,
+      coreFlowId: original.coreFlowId,
+      coreFlowRevisionId: original.coreFlowRevisionId,
+      instructionContextDigest: original.instructionContextDigest,
+      instructionContextSchemaVersion: original.instructionContextSchemaVersion,
+      compactedAt: 300,
+    }));
+    expect(compacted.instructionContext).toBeUndefined();
+    expect(compacted.entryPointPayloadRef).toBeUndefined();
+    expect(compacted.resourceRefs).toBeUndefined();
+    expect(compacted.error).toBeUndefined();
+    expect(compacted.outcomeRef).toBeUndefined();
   });
 
   it('persists schema-valid Flow-dispatch compaction through the real adapter', async () => {

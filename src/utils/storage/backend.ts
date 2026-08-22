@@ -269,6 +269,21 @@ const getCollectionDir = (collection: string) => path.join(storageDir(), collect
 const getCollectionItemPath = (collection: string, id: string) =>
   path.join(getCollectionDir(collection), `${id}.json`);
 
+/** Lightweight freshness probe for a single collection item. */
+export async function getCollectionItemStats(
+  collection: string,
+  id: string,
+): Promise<{ mtimeMs: number; sizeBytes: number } | null> {
+  assertSafeCollectionId(id);
+  try {
+    const stats = await fs.stat(getCollectionItemPath(collection, id));
+    return { mtimeMs: stats.mtimeMs, sizeBytes: stats.size };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export const PERSONA_SHARDED_COLLECTIONS = [
   'persona-memories',
   'persona-mailbox',

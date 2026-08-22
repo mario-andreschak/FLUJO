@@ -105,8 +105,8 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
  * Terminal activities older than 30 days or beyond the newest 200 detailed
  * records are compacted:
  * bulky fields (instructionContext, resourceRefs, error) are blanked, compactedAt marker set,
- * but identity and audit fields (id, status, outcome, timestamps, leaseId) are preserved
- * for crash recovery and reconciliation.
+ * but identity and audit fields (including the Core snapshot digest) are preserved for crash
+ * recovery and reconciliation.
  */
 export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
   return {
@@ -126,8 +126,6 @@ export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
       {
         ...activity,
         instructionContext: undefined,
-        instructionContextDigest: undefined,
-        instructionContextSchemaVersion: undefined,
         entryPointPayloadRef: undefined,
         resourceRefs: undefined,
         error: undefined,

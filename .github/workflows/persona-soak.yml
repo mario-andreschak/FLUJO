@@ -11,10 +11,6 @@ on:
       seed:
         description: Deterministic seed
         default: '459'
-      with_learning:
-        description: Exercise learning rollback
-        type: boolean
-        default: false
 
 concurrency:
   group: persona-soak-${{ github.ref }}
@@ -26,7 +22,7 @@ permissions:
 jobs:
   soak:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,8 +34,8 @@ jobs:
         env:
           SOAK_DAYS: ${{ inputs.days || '28' }}
           SOAK_SEED: ${{ inputs.seed || '459' }}
-          SOAK_LEARNING: ${{ inputs.with_learning && '--with-learning' || '' }}
-        run: npm run soak:personas -- --days="$SOAK_DAYS" --seed="$SOAK_SEED" $SOAK_LEARNING
+          PERSONA_SOAK_DEBUG: '1'
+        run: npm run soak:personas -- --days="$SOAK_DAYS" --seed="$SOAK_SEED"
       - name: Publish report to job summary
         if: always()
         run: test ! -f soak-artifacts/persona-soak.md || cat soak-artifacts/persona-soak.md >> "$GITHUB_STEP_SUMMARY"

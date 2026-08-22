@@ -5,4 +5,4 @@ process.argv.push(
   '--runInBand',
   '__tests__/enduringAgents/memorySemanticRecallPerf.test.ts',
 );
-require('./run-local-jest.cjs');
+require('./run-local-jest.cjs').main();
