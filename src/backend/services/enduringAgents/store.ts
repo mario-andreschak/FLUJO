@@ -35,6 +35,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   assertSafeCollectionId,
   deleteCollectionItem,
+  listAllShardedCollectionItems,
   listCollectionItemEntriesStrict,
   listCollectionItems,
   loadCollectionItem,
@@ -57,6 +58,7 @@ import {
   type BasePersonaIndexEntry,
   deleteIndexedCollectionItem,
   getActivityIndex,
+  getLeaseHistoryIndex,
   getMailboxIndex,
   getMemoryIndex,
   getWorkItemIndex,
@@ -105,6 +107,7 @@ async function getRecord<T extends IdentifiedRecord>(options: {
   recordKind: string;
   schema: ZodType<T>;
   personaId?: string;
+  includeLegacyShardFallback?: boolean;
   validate?: (record: T, raw: unknown) => void;
 }): Promise<T | null> {
   assertSafeCollectionId(options.id);
@@ -115,6 +118,7 @@ async function getRecord<T extends IdentifiedRecord>(options: {
         options.personaId,
         options.id,
         null,
+        { includeLegacy: options.includeLegacyShardFallback !== false },
       )
     : await loadCollectionItem<unknown | null>(
         options.collection,
@@ -559,11 +563,27 @@ export interface PersonaSummaryRecords {
   mailboxItems: PersonaMailboxItem[];
 }
 
+const SUMMARY_INDEX_PAGE_SIZE = 1_000;
+
+async function listRequestedPersonaRecords<T extends IdentifiedRecord>(
+  personaIds: readonly string[],
+  list: (personaId: string, query: PersonaRecordQueryOptions) => Promise<T[]>,
+): Promise<T[]> {
+  const records = await Promise.all(personaIds.map(async (personaId) => {
+    const selected: T[] = [];
+    for (let offset = 0; ; offset += SUMMARY_INDEX_PAGE_SIZE) {
+      const page = await list(personaId, { offset, limit: SUMMARY_INDEX_PAGE_SIZE });
+      selected.push(...page);
+      if (page.length < SUMMARY_INDEX_PAGE_SIZE) return selected;
+    }
+  }));
+  return records.flat().sort((left, right) => left.id.localeCompare(right.id));
+}
+
 /**
- * Read every collection needed by the Persona gallery once, then retain only
- * records owned by the requested bounded Persona page. This is intentionally a
- * read-only bulk projection boundary: it takes no runtime lock and performs no
- * reconciliation.
+ * Read shared gallery collections once and use Persona indexes for collections
+ * owned by the requested bounded page. This read-only projection boundary takes
+ * no runtime lock and performs no reconciliation.
  */
 export async function listPersonaSummaryRecords(
   personaIds: readonly string[],
@@ -608,37 +628,32 @@ export async function listPersonaSummaryRecords(
       schema: PersonaAppGrantSchema,
       strict: true,
     }),
-    listRecords({
-      collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
-      recordKind: 'MemoryItem',
-      schema: MemoryItemSchema,
-    }),
-    listRecords({
-      collection: ENDURING_AGENT_COLLECTIONS.workItems,
-      recordKind: 'PersonaWorkItem',
-      schema: PersonaWorkItemSchema,
-    }),
-    listRecords({
-      collection: ENDURING_AGENT_COLLECTIONS.activities,
-      recordKind: 'PersonaActivity',
-      schema: PersonaActivitySchema,
-    }),
-    listRecords({
-      collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
-      recordKind: 'PersonaMailboxItem',
-      schema: PersonaMailboxItemSchema,
-      strict: true,
-    }),
+    listRequestedPersonaRecords(
+      [...requested],
+      (personaId, query) => listMemoryItems(personaId, query),
+    ),
+    listRequestedPersonaRecords(
+      [...requested],
+      (personaId, query) => listPersonaWorkItems(personaId, query),
+    ),
+    listRequestedPersonaRecords(
+      [...requested],
+      (personaId, query) => listPersonaActivities(personaId, query),
+    ),
+    listRequestedPersonaRecords(
+      [...requested],
+      (personaId, query) => listPersonaMailboxItems(personaId, query),
+    ),
   ]);
 
   return {
     roleVersions,
     behaviorBindings: behaviorBindings.filter((record) => requested.has(record.personaId)),
     appGrants: appGrants.filter((record) => requested.has(record.personaId)),
-    memoryItems: memoryItems.filter((record) => requested.has(record.personaId)),
-    workItems: workItems.filter((record) => requested.has(record.personaId)),
-    activities: activities.filter((record) => requested.has(record.personaId)),
-    mailboxItems: mailboxItems.filter((record) => requested.has(record.personaId)),
+    memoryItems,
+    workItems,
+    activities,
+    mailboxItems,
   };
 }
 
@@ -1845,28 +1860,67 @@ export async function getPersonaLease(personaId: string): Promise<PersonaLease |
 
 /** Resolve the durable acquisition record referenced by PersonaActivity.leaseId. */
 export async function getPersonaLeaseRecord(id: string): Promise<PersonaLease | null> {
-  const record = await getRecord({
-    collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
-    id,
-    recordKind: 'PersonaLease',
-    schema: PersonaLeaseSchema,
-  });
-  if (record && record.workspaceId !== getCurrentWorkspace()) {
-    throw new Error(
-      `PersonaLease ${JSON.stringify(record.id)} belongs to workspace `
-      + `${JSON.stringify(record.workspaceId)}, not ${JSON.stringify(getCurrentWorkspace())}.`,
-    );
+  assertSafeCollectionId(id);
+  const owner = (await getLeaseHistoryIndex()).entries
+    .find((entry) => entry.id === id)?.personaId;
+
+  if (owner) {
+    const indexedRecord = await getRecord({
+      collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
+      personaId: owner,
+      id,
+      recordKind: 'PersonaLease',
+      schema: PersonaLeaseSchema,
+      includeLegacyShardFallback: false,
+    });
+    if (indexedRecord) {
+      if (indexedRecord.workspaceId !== getCurrentWorkspace()) {
+        throw new Error(
+          `PersonaLease ${JSON.stringify(indexedRecord.id)} belongs to workspace `
+          + `${JSON.stringify(indexedRecord.workspaceId)}, not `
+          + `${JSON.stringify(getCurrentWorkspace())}.`,
+        );
+      }
+      return indexedRecord;
+    }
   }
-  return record;
+
+  // Recovery only: normal reads resolve the Persona shard through the index.
+  // This collision-aware scan includes both Persona shards and legacy flat records.
+  const shardedRecords = await listAllShardedCollectionItems<unknown>(
+    ENDURING_AGENT_COLLECTIONS.leaseHistory,
+  );
+  for (const value of shardedRecords) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    if ((value as { id?: unknown }).id !== id) continue;
+
+    const record = parseRecord('PersonaLease', PersonaLeaseSchema, value);
+    if (record.workspaceId !== getCurrentWorkspace()) {
+      throw new Error(
+        `PersonaLease ${JSON.stringify(record.id)} belongs to workspace `
+        + `${JSON.stringify(record.workspaceId)}, not `
+        + `${JSON.stringify(getCurrentWorkspace())}.`,
+      );
+    }
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
+    return record;
+  }
+
+  return null;
 }
 
-export async function listPersonaLeaseRecords(personaId: string): Promise<PersonaLease[]> {
+export async function listPersonaLeaseRecords(
+  personaId: string,
+  options?: PersonaRecordQueryOptions,
+): Promise<PersonaLease[]> {
   assertSafeCollectionId(personaId);
-  const records = await listRecords({
+  const records = await listIndexedPersonaRecords({
+    personaId,
+    query: options,
     collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
     recordKind: 'PersonaLease',
     schema: PersonaLeaseSchema,
-    strict: true,
+    index: await getLeaseHistoryIndex(),
   });
   for (const record of records) {
     if (record.workspaceId !== getCurrentWorkspace()) {
@@ -1876,7 +1930,7 @@ export async function listPersonaLeaseRecords(personaId: string): Promise<Person
       );
     }
   }
-  return records.filter((record) => record.personaId === personaId);
+  return records.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 export function savePersonaLease(value: PersonaLease): Promise<PersonaLease> {
@@ -1891,7 +1945,7 @@ export function savePersonaLease(value: PersonaLease): Promise<PersonaLease> {
         throw new Error('PersonaLease renewedAt moved backwards.');
       }
     }
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, record);
+    await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
     return record;
   });
 }
@@ -1915,7 +1969,11 @@ export function deletePersonaLeaseRecord(expected: PersonaLease): Promise<void> 
     ) {
       throw new Error('PersonaLease changed before guarded pruning completed.');
     }
-    await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id);
+    await deleteIndexedCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.leaseHistory,
+      record.personaId,
+      record.id,
+    );
   });
 }
 

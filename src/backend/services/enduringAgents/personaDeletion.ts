@@ -17,8 +17,6 @@ import { withConversationExecutionLock } from '@/backend/execution/flow/conversa
 import { persistConversationSummaryStrict } from '@/backend/execution/flow/conversationSummaryStore';
 import {
   deleteCollectionItem,
-  deletePersonaCollectionShard,
-  deleteShardedCollectionItem,
   loadCollectionItem,
   listCollectionItemEntriesStrict,
   saveCollectionItem,
@@ -40,7 +38,10 @@ import {
 import { listBehaviorProposals } from './behaviorLearning';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { removePersonaIndexEntries } from './indexing';
+import {
+  deleteIndexedCollectionItem,
+  deleteIndexedPersonaCollectionShard,
+} from './indexing';
 import { personaDeletionTombstoneId } from './ids';
 import { deletePersonaHome, inspectPersonaHome } from './namespaces';
 import { listPersonaFlowDispatches } from './personaDispatcher';
@@ -367,15 +368,9 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   // Remove the living actor first. The already-durable tombstone prevents the
   // deterministic factory from resurrecting the id while erasure continues.
   await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, personaId);
-  // Runtime writers are quiescent under the Persona lock. Remove the four
-  // link-checked shards in O(1) directory operations, then clean any legacy
-  // flat compatibility copies before committing the derived index update.
-  await Promise.all([
-    deletePersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.memoryItems, personaId),
-    deletePersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.workItems, personaId),
-    deletePersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.activities, personaId),
-    deletePersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.mailboxItems, personaId),
-  ]);
+  // Runtime writers are quiescent under the Persona lock. Delete indexed
+  // records through the dirty-generation protocol so a crash between source
+  // removal and sidecar mutation is recovered by rebuilding the index.
   await Promise.all([
     ...behaviorBindings.map((item) => deleteCollectionItem(
       ENDURING_AGENT_COLLECTIONS.behaviorBindings,
@@ -401,22 +396,22 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
       ENDURING_AGENT_COLLECTIONS.appGrants,
       item.id,
     )),
-    ...memoryItems.map((item) => deleteShardedCollectionItem(
+    ...memoryItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.memoryItems,
       personaId,
       item.id,
     )),
-    ...workItems.map((item) => deleteShardedCollectionItem(
+    ...workItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.workItems,
       personaId,
       item.id,
     )),
-    ...activities.map((item) => deleteShardedCollectionItem(
+    ...activities.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.activities,
       personaId,
       item.id,
     )),
-    ...mailboxItems.map((item) => deleteShardedCollectionItem(
+    ...mailboxItems.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.mailboxItems,
       personaId,
       item.id,
@@ -426,8 +421,9 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
       item.id,
     )),
     ...runtimeRecoveryReceipts.map((item) => deletePersonaRuntimeRecoveryReceipt(item.id)),
-    ...leaseRecords.map((item) => deleteCollectionItem(
+    ...leaseRecords.map((item) => deleteIndexedCollectionItem(
       ENDURING_AGENT_COLLECTIONS.leaseHistory,
+      personaId,
       item.id,
     )),
     deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, personaId),
@@ -435,7 +431,17 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     deletePersonaHome(personaId),
     deletePersonaEmbeddings(personaId),
   ]);
-  await removePersonaIndexEntries(personaId);
+
+  // Sweep each Persona shard through the same dirty-generation protocol. This
+  // removes source files that a clean-but-incomplete sidecar failed to list and
+  // clears any stale index entries for the deleted Persona.
+  await Promise.all([
+    deleteIndexedPersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.memoryItems, personaId),
+    deleteIndexedPersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.workItems, personaId),
+    deleteIndexedPersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.activities, personaId),
+    deleteIndexedPersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.mailboxItems, personaId),
+    deleteIndexedPersonaCollectionShard(ENDURING_AGENT_COLLECTIONS.leaseHistory, personaId),
+  ]);
 }
 
 export async function deletePersona(

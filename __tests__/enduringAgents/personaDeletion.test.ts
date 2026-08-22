@@ -27,6 +27,7 @@ import {
   saveBehaviorOutcomeMetric,
   savePersonaDeletionTombstone,
 } from '@/backend/services/enduringAgents/store';
+import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import { personaDeletionTombstoneId } from '@/backend/services/enduringAgents/ids';
 import { getPersonaHome, inspectPersonaHome } from '@/backend/services/enduringAgents/namespaces';
 import {
@@ -35,7 +36,7 @@ import {
   type BehaviorOutcomeMetric,
   type PersonaDeletionArchivePolicy,
 } from '@/shared/types/enduringAgent';
-import { runWithWorkspace } from '@/utils/workspace';
+import { getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 import {
   loadCollectionItem,
   loadItem,
@@ -585,6 +586,46 @@ describe('Persona deletion policy', () => {
       // Exact retries are idempotent after a crash or lost HTTP response.
       await expect(deletePersona(personaId, confirmation(preview.previewToken)))
         .resolves.toEqual(tombstone);
+    });
+  });
+
+  it('sweeps Persona shard files omitted from a clean but incomplete index', async () => {
+    await runWithWorkspace(freshWorkspace(), async () => {
+      const { persona } = await createPersonaFromRole({
+        id: 'jim_incomplete_index_delete',
+        name: 'Jim Incomplete Index',
+        initialMemories: [{ content: 'Unindexed private state.' }],
+      });
+      const dataDir = getWorkspaceDataDir();
+      const indexPath = path.join(dataDir, 'persona-memories.index.json');
+      const generationPath = path.join(dataDir, 'persona-memories.generation.json');
+      const shardPath = path.join(
+        dataDir,
+        ENDURING_AGENT_COLLECTIONS.memoryItems,
+        persona.id,
+      );
+      const index = JSON.parse(await fs.readFile(indexPath, 'utf8')) as {
+        entries: Array<{ personaId: string }>;
+        sourceCount: number;
+      };
+      index.entries = index.entries.filter(entry => entry.personaId !== persona.id);
+      index.sourceCount = index.entries.length;
+      await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
+      const generation = JSON.parse(await fs.readFile(generationPath, 'utf8')) as {
+        sourceCount: number;
+      };
+      generation.sourceCount = index.entries.length;
+      await fs.writeFile(generationPath, JSON.stringify(generation, null, 2));
+
+      const preview = await previewPersonaDeletion(persona.id);
+      expect(preview.counts.memoryItems).toBe(0);
+      await deletePersona(persona.id, confirmation(preview.previewToken));
+
+      await expect(fs.access(shardPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      const repaired = JSON.parse(await fs.readFile(indexPath, 'utf8')) as {
+        entries: Array<{ personaId: string }>;
+      };
+      expect(repaired.entries.some(entry => entry.personaId === persona.id)).toBe(false);
     });
   });
 

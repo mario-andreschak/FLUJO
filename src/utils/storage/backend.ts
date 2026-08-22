@@ -274,6 +274,7 @@ export const PERSONA_SHARDED_COLLECTIONS = [
   'persona-mailbox',
   'persona-work-items',
   'persona-activities',
+  'persona-lease-history',
 ] as const;
 export type PersonaShardedCollection = typeof PERSONA_SHARDED_COLLECTIONS[number];
 const PERSONA_SHARDED_COLLECTION_SET = new Set<string>(PERSONA_SHARDED_COLLECTIONS);
@@ -362,13 +363,27 @@ async function assertLinkFreeDirectory(
   return shardDir;
 }
 
-async function readTextOrNull(filePath: string): Promise<string | null> {
+type TextFileWithStats = {
+  content: string;
+  mtimeMs: number;
+  sizeBytes: number;
+};
+
+async function readTextWithStatsOrNull(filePath: string): Promise<TextFileWithStats | null> {
   const stats = await lstatOrNull(filePath);
   if (!stats) return null;
   if (!stats.isFile() || stats.isSymbolicLink()) {
     throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
   }
-  return fs.readFile(filePath, 'utf8');
+  return {
+    content: await fs.readFile(filePath, 'utf8'),
+    mtimeMs: stats.mtimeMs,
+    sizeBytes: stats.size,
+  };
+}
+
+async function readTextOrNull(filePath: string): Promise<string | null> {
+  return (await readTextWithStatsOrNull(filePath))?.content ?? null;
 }
 
 function parsePersonaShardRecord<T>(
@@ -420,6 +435,7 @@ export async function loadShardedCollectionItem<T>(
   personaId: string,
   recordId: string,
   defaultValue: T,
+  options?: { includeLegacy?: boolean },
 ): Promise<T> {
   assertPersonaShardedCollection(collection);
   assertSafeCollectionId(personaId);
@@ -429,7 +445,7 @@ export async function loadShardedCollectionItem<T>(
   const legacyPath = getLegacyCollectionItemPath(collection, recordId);
   const [sharded, legacy] = await Promise.all([
     shardDir ? readTextOrNull(shardedPath) : Promise.resolve(null),
-    readTextOrNull(legacyPath),
+    options?.includeLegacy === false ? Promise.resolve(null) : readTextOrNull(legacyPath),
   ]);
   if (sharded !== null && legacy !== null && sharded !== legacy) {
     throw new PersonaShardCollisionError(collection, personaId, recordId);
@@ -438,6 +454,33 @@ export async function loadShardedCollectionItem<T>(
   return content === null
     ? defaultValue
     : parsePersonaShardRecord<T>(content, collection, personaId, recordId);
+}
+
+export async function getShardedCollectionItemStats(
+  collection: PersonaShardedCollection,
+  personaId: string,
+  recordId: string,
+): Promise<{ mtimeMs: number; sizeBytes: number } | null> {
+  assertPersonaShardedCollection(collection);
+  assertSafeCollectionId(personaId);
+  assertSafeCollectionId(recordId);
+  const shardDir = await assertLinkFreeDirectory(collection, personaId, false);
+  const shardedPath = getShardedCollectionItemPath(collection, personaId, recordId);
+  const legacyPath = getLegacyCollectionItemPath(collection, recordId);
+  const [sharded, legacy] = await Promise.all([
+    shardDir ? readTextWithStatsOrNull(shardedPath) : Promise.resolve(null),
+    readTextWithStatsOrNull(legacyPath),
+  ]);
+  if (sharded && legacy && sharded.content !== legacy.content) {
+    throw new PersonaShardCollisionError(collection, personaId, recordId);
+  }
+  const selected = sharded ?? legacy;
+  if (!selected) return null;
+  parsePersonaShardRecord(selected.content, collection, personaId, recordId);
+  return {
+    mtimeMs: selected.mtimeMs,
+    sizeBytes: selected.sizeBytes,
+  };
 }
 
 export async function saveShardedCollectionItem<T extends { id: string; personaId: string }>(

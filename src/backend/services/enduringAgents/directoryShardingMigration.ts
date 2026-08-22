@@ -11,6 +11,7 @@ import { getWorkspaceDbDir } from '@/utils/workspace';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   getActivityIndex,
+  getLeaseHistoryIndex,
   getMailboxIndex,
   getMemoryIndex,
   getWorkItemIndex,
@@ -18,8 +19,8 @@ import {
 } from './indexing';
 import { withWorkspaceRuntimeLock } from './runtimeLock';
 
-const MIGRATION_ID = 'enduring-agent-directory-sharding-v1';
-const MIGRATION_VERSION = 1 as const;
+const MIGRATION_ID = 'enduring-agent-directory-sharding-v2';
+const MIGRATION_VERSION = 2 as const;
 
 type MigrationPhase = 'planned' | 'source-removed' | 'conflict';
 
@@ -94,11 +95,12 @@ async function indexedEntries(): Promise<Array<{
   collection: PersonaShardedCollection;
   entry: IndexEntry;
 }>> {
-  const [memories, mailbox, workItems, activities] = await Promise.all([
+  const [memories, mailbox, workItems, activities, leaseHistory] = await Promise.all([
     getMemoryIndex(),
     getMailboxIndex(),
     getWorkItemIndex(),
     getActivityIndex(),
+    getLeaseHistoryIndex(),
   ]);
   return [
     ...memories.entries.map((entry) => ({
@@ -117,6 +119,10 @@ async function indexedEntries(): Promise<Array<{
       collection: ENDURING_AGENT_COLLECTIONS.activities,
       entry,
     })),
+    ...leaseHistory.entries.map((entry) => ({
+      collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
+      entry,
+    })),
   ].sort((left, right) => (
     left.collection.localeCompare(right.collection)
     || left.entry.id.localeCompare(right.entry.id)
@@ -124,7 +130,7 @@ async function indexedEntries(): Promise<Array<{
 }
 
 /**
- * Relocate the four Persona-owned record collections before runtime writers
+ * Relocate the five Persona-owned record collections before runtime writers
  * start. The durable journal is intentionally independent from record schema
  * migrations: it records filesystem progress and can recover a crash after the
  * destination write but before legacy cleanup.

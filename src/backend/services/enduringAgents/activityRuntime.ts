@@ -535,7 +535,7 @@ async function saveLeaseHead(
   // The acquisition record makes Activity.leaseId resolvable. The Persona-keyed
   // head remains the fencing authority and is written second/conservatively.
   await lock.assertOwned();
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, record);
+  await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
   await lock.assertOwned();
   await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, record.personaId, record);
   return record;
@@ -547,7 +547,7 @@ async function saveLeaseHistoryRecord(
 ): Promise<PersonaLease> {
   const record = PersonaLeaseSchema.parse(value) as PersonaLease;
   await lock.assertOwned();
-  await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, record);
+  await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record);
   return record;
 }
 

@@ -10,14 +10,23 @@ import {
   type PersonaLease,
   type PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
-import { listCollectionItemsWithStats } from '@/utils/storage/backend';
+import {
+  getShardedCollectionItemStats,
+  listCollectionItemsWithStats,
+  type PersonaShardedCollection,
+} from '@/utils/storage/backend';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import { getPersonaRuntimeClock } from './runtimeClock';
-import { getPersona } from './store';
+import {
+  getPersona,
+  listPersonaActivities,
+  listPersonaLeaseRecords,
+  listPersonaMailboxItems,
+} from './store';
 
 const runtimeClock = getPersonaRuntimeClock();
 
@@ -87,6 +96,7 @@ type RuntimeStorageRecord = {
 
 type RuntimeStorageDescriptor<T extends RuntimeStorageRecord> = {
   collection: string;
+  indexedCollection?: PersonaShardedCollection;
   schema: ZodType<T>;
   statusOf: (record: T) => string;
   timestampOf: (record: T) => number;
@@ -97,8 +107,26 @@ async function collectKind<T extends RuntimeStorageRecord>(
   personaId: string,
   workspaceId: string,
   descriptor: RuntimeStorageDescriptor<T>,
+  indexedRecords?: readonly T[],
 ): Promise<PersonaStorageKindStats> {
-  const entries = await listCollectionItemsWithStats<unknown>(descriptor.collection);
+  const entries = indexedRecords
+    ? await Promise.all(indexedRecords.map(async (item) => {
+        if (!descriptor.indexedCollection) {
+          throw new PersonaStorageStatsUnavailableError();
+        }
+        const stats = await getShardedCollectionItemStats(
+          descriptor.indexedCollection,
+          item.personaId,
+          item.id,
+        );
+        if (!stats) throw new PersonaStorageStatsUnavailableError();
+        return {
+          id: item.id,
+          item,
+          ...stats,
+        };
+      }))
+    : await listCollectionItemsWithStats<unknown>(descriptor.collection);
   const result: PersonaStorageKindStats = {
     total: 0,
     byStatus: {},
@@ -153,6 +181,7 @@ async function collectKind<T extends RuntimeStorageRecord>(
 
 const MAILBOX_DESCRIPTOR: RuntimeStorageDescriptor<PersonaMailboxItem> = {
   collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+  indexedCollection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
   schema: PersonaMailboxItemSchema as ZodType<PersonaMailboxItem>,
   statusOf: (record) => record.status,
   timestampOf: (record) => record.createdAt,
@@ -160,6 +189,7 @@ const MAILBOX_DESCRIPTOR: RuntimeStorageDescriptor<PersonaMailboxItem> = {
 
 const ACTIVITY_DESCRIPTOR: RuntimeStorageDescriptor<PersonaActivity> = {
   collection: ENDURING_AGENT_COLLECTIONS.activities,
+  indexedCollection: ENDURING_AGENT_COLLECTIONS.activities,
   schema: PersonaActivitySchema as ZodType<PersonaActivity>,
   statusOf: (record) => record.status,
   timestampOf: (record) => record.createdAt,
@@ -175,11 +205,29 @@ const FLOW_DISPATCH_DESCRIPTOR: RuntimeStorageDescriptor<PersonaFlowDispatchReco
 
 const LEASE_HISTORY_DESCRIPTOR: RuntimeStorageDescriptor<PersonaLease> = {
   collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
+  indexedCollection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
   schema: PersonaLeaseSchema as ZodType<PersonaLease>,
   statusOf: (record) => record.status,
   timestampOf: (record) => record.acquiredAt,
   workspaceIdOf: (record) => record.workspaceId,
 };
+
+const STORAGE_INDEX_PAGE_SIZE = 1_000;
+
+async function listAllIndexedPersonaRecords<T extends RuntimeStorageRecord>(
+  personaId: string,
+  list: (
+    personaId: string,
+    query: { offset: number; limit: number },
+  ) => Promise<T[]>,
+): Promise<T[]> {
+  const records: T[] = [];
+  for (let offset = 0; ; offset += STORAGE_INDEX_PAGE_SIZE) {
+    const page = await list(personaId, { offset, limit: STORAGE_INDEX_PAGE_SIZE });
+    records.push(...page);
+    if (page.length < STORAGE_INDEX_PAGE_SIZE) return records;
+  }
+}
 
 /**
  * Return a read-only, workspace-scoped operational snapshot for one Persona.
@@ -192,11 +240,25 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
     throw new PersonaStorageStatsNotFoundError();
   }
   const workspaceId = getCurrentWorkspace();
-  const [mailboxItems, activities, flowDispatches, leaseHistory] = await Promise.all([
-    collectKind(validatedPersonaId, workspaceId, MAILBOX_DESCRIPTOR),
-    collectKind(validatedPersonaId, workspaceId, ACTIVITY_DESCRIPTOR),
+  const [mailboxRecords, activityRecords, leaseRecords, flowDispatches] = await Promise.all([
+    listAllIndexedPersonaRecords(
+      validatedPersonaId,
+      (id, query) => listPersonaMailboxItems(id, query),
+    ),
+    listAllIndexedPersonaRecords(
+      validatedPersonaId,
+      (id, query) => listPersonaActivities(id, query),
+    ),
+    listAllIndexedPersonaRecords(
+      validatedPersonaId,
+      (id, query) => listPersonaLeaseRecords(id, query),
+    ),
     collectKind(validatedPersonaId, workspaceId, FLOW_DISPATCH_DESCRIPTOR),
-    collectKind(validatedPersonaId, workspaceId, LEASE_HISTORY_DESCRIPTOR),
+  ]);
+  const [mailboxItems, activities, leaseHistory] = await Promise.all([
+    collectKind(validatedPersonaId, workspaceId, MAILBOX_DESCRIPTOR, mailboxRecords),
+    collectKind(validatedPersonaId, workspaceId, ACTIVITY_DESCRIPTOR, activityRecords),
+    collectKind(validatedPersonaId, workspaceId, LEASE_HISTORY_DESCRIPTOR, leaseRecords),
   ]);
   const kinds = { mailboxItems, activities, flowDispatches, leaseHistory };
   const values = Object.values(kinds);

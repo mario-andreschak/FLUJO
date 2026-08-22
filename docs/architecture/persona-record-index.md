@@ -1,8 +1,18 @@
 # Persona record indexes
 
-Persona memory, mailbox, Activity, and work-item collections use workspace-local JSON
-sidecars under `db/`. The sidecars are derived data: collection records remain the
-source of truth.
+Persona memory, mailbox, Activity, work-item, and lease-history collections use
+workspace-local JSON sidecars under `db/`. The sidecars are derived data;
+collection records remain the source of truth. Lease history uses
+`persona-lease-history.index.json` with
+`persona-lease-history.generation.json`, and its source records are sharded at
+`db/persona-lease-history/<personaId>/<recordId>.json`.
+
+## Ownership
+
+Workspace-global scan elimination belongs to epic #448 lane 1 (scaling and
+indexing), following #449's sidecar precedent. Retention and compaction remain
+owned by #453 and consume the bounded indexed APIs without changing their
+logical storage-statistics contract. Issue #480 records this decision.
 
 ## Contract
 
@@ -14,7 +24,8 @@ Every current sidecar is a `PersonaRecordIndex` with:
 - `sourceCount`, deterministic `generatedAt` (the maximum entry `updatedAt`, or
   zero for an empty collection), and entries sorted by record ID;
 - unique, runtime-validated entries. Memory and mailbox statuses are checked against
-  their domain status sets.
+  their domain status sets. Lease-history entries map `renewedAt` to the common
+  `updatedAt` index field.
 
 A validated empty index is valid and is not confused with a missing sidecar.
 
@@ -40,7 +51,14 @@ freshness metadata are conservatively rebuilt.
 
 Warm reads filter index entries by Persona before opening source record files. A
 malformed record owned by another Persona is therefore outside the read set and
-cannot block the target Persona.
+cannot block the target Persona. Runtime storage statistics consume these bounded
+Persona reads for mailbox, Activity, and lease history; flow-dispatch statistics
+remain workspace-global until that collection has its own index.
+
+Persona gallery projections use the memory, mailbox, Activity, and work-item
+sidecars for the requested page. Role versions remain global because they are
+shared immutable records, while behavior bindings and app grants remain residual
+global collections pending their own ownership/cardinality decision.
 
 ## Performance tests
 

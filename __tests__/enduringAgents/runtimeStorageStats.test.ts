@@ -1,9 +1,16 @@
+const getShardedCollectionItemStatsMock = jest.fn();
 const listCollectionItemsWithStatsMock = jest.fn();
 const getPersonaMock = jest.fn();
+const listPersonaMailboxItemsMock = jest.fn();
+const listPersonaActivitiesMock = jest.fn();
+const listPersonaLeaseRecordsMock = jest.fn();
 const getCurrentWorkspaceMock = jest.fn();
 
 jest.mock('@/utils/storage/backend', () => ({
   ...jest.requireActual('@/utils/storage/backend'),
+  getShardedCollectionItemStats: (...args: unknown[]) => (
+    getShardedCollectionItemStatsMock(...args)
+  ),
   listCollectionItemsWithStats: (...args: unknown[]) => listCollectionItemsWithStatsMock(...args),
 }));
 
@@ -15,6 +22,9 @@ jest.mock('@/utils/workspace', () => ({
 jest.mock('@/backend/services/enduringAgents/store', () => ({
   ...jest.requireActual('@/backend/services/enduringAgents/store'),
   getPersona: (...args: unknown[]) => getPersonaMock(...args),
+  listPersonaMailboxItems: (...args: unknown[]) => listPersonaMailboxItemsMock(...args),
+  listPersonaActivities: (...args: unknown[]) => listPersonaActivitiesMock(...args),
+  listPersonaLeaseRecords: (...args: unknown[]) => listPersonaLeaseRecordsMock(...args),
 }));
 
 import {
@@ -67,8 +77,8 @@ function dispatch(overrides: Partial<PersonaFlowDispatchRecord> = {}): PersonaFl
   };
 }
 
-function entry(
-  item: { id: string },
+function entry<T extends { id: string }>(
+  item: T,
   sizeBytes = Buffer.byteLength(JSON.stringify(item), 'utf8'),
 ): StoredEntry {
   return { id: item.id, item, mtimeMs: 100, sizeBytes };
@@ -122,6 +132,21 @@ describe('Persona runtime storage statistics', () => {
       releasedAt: 7,
     };
 
+    listPersonaMailboxItemsMock.mockResolvedValue([mailbox]);
+    listPersonaActivitiesMock.mockResolvedValue([activity]);
+    listPersonaLeaseRecordsMock.mockResolvedValue([lease]);
+    const indexedSizes: Record<string, number> = {
+      mailbox_1: 100,
+      activity_1: 200,
+      lease_1: 400,
+    };
+    getShardedCollectionItemStatsMock.mockImplementation(
+      async (_collection: string, _personaId: string, id: string) => ({
+        mtimeMs: 100,
+        sizeBytes: indexedSizes[id] ?? 1,
+      }),
+    );
+
     const entries = new Map<string, StoredEntry[]>([
       [ENDURING_AGENT_COLLECTIONS.mailboxItems, [
         entry(mailbox),
@@ -138,10 +163,6 @@ describe('Persona runtime storage statistics', () => {
 
   it('reports all four kinds, native statuses, timestamps, compaction, and exact bytes', async () => {
     const stats = await getPersonaStorageStats('persona_1');
-    const mailboxBytes = (await listCollectionItemsWithStatsMock(
-      ENDURING_AGENT_COLLECTIONS.mailboxItems,
-    ))[0].sizeBytes;
-
     expect(stats.kinds.mailboxItems).toEqual({
       total: 1,
       byStatus: { queued: 1 },
@@ -149,7 +170,7 @@ describe('Persona runtime storage statistics', () => {
       uncompacted: 1,
       oldestCreatedAt: 10,
       newestCreatedAt: 10,
-      approxBytes: mailboxBytes,
+      approxBytes: 100,
     });
     expect(stats.kinds.activities).toEqual(expect.objectContaining({
       total: 1,
@@ -170,13 +191,16 @@ describe('Persona runtime storage statistics', () => {
       records: 4,
       compacted: 2,
       uncompacted: 2,
-      approxBytes: mailboxBytes + 900,
+      approxBytes: 1_000,
     });
     expect(stats.retentionEnabled).toBe(false);
   });
 
   it('returns four zero-filled kinds for an existing Persona without runtime records', async () => {
     listCollectionItemsWithStatsMock.mockResolvedValue([]);
+    listPersonaMailboxItemsMock.mockResolvedValue([]);
+    listPersonaActivitiesMock.mockResolvedValue([]);
+    listPersonaLeaseRecordsMock.mockResolvedValue([]);
     const stats = await getPersonaStorageStats('persona_1');
 
     expect(Object.keys(stats.kinds)).toEqual([
@@ -202,12 +226,11 @@ describe('Persona runtime storage statistics', () => {
     }
   });
 
-  it('ignores malformed records that identify a different Persona', async () => {
-    listCollectionItemsWithStatsMock.mockImplementation(async (collection: string) => (
-      collection === ENDURING_AGENT_COLLECTIONS.activities
-        ? [entry({ id: 'invalid_other', personaId: 'persona_other' } as { id: string }, 10)]
-        : []
-    ));
+  it('keeps foreign records outside the bounded indexed statistics inputs', async () => {
+    listCollectionItemsWithStatsMock.mockResolvedValue([]);
+    listPersonaMailboxItemsMock.mockResolvedValue([]);
+    listPersonaActivitiesMock.mockResolvedValue([]);
+    listPersonaLeaseRecordsMock.mockResolvedValue([]);
 
     await expect(getPersonaStorageStats('persona_1')).resolves.toMatchObject({
       totals: { records: 0, approxBytes: 0 },
@@ -220,11 +243,9 @@ describe('Persona runtime storage statistics', () => {
       .rejects.toBeInstanceOf(PersonaStorageStatsNotFoundError);
 
     getPersonaMock.mockResolvedValue({ id: 'persona_1' });
-    listCollectionItemsWithStatsMock.mockImplementation(async (collection: string) => (
-      collection === ENDURING_AGENT_COLLECTIONS.activities
-        ? [entry({ id: 'invalid', personaId: 'persona_1' }, 10)]
-        : []
-    ));
+    listPersonaActivitiesMock.mockResolvedValueOnce([
+      { id: 'invalid', personaId: 'persona_1' },
+    ]);
     await expect(getPersonaStorageStats('persona_1'))
       .rejects.toBeInstanceOf(PersonaStorageStatsUnavailableError);
 

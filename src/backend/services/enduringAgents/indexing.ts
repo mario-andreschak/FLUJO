@@ -4,11 +4,13 @@ import path from 'path';
 import type {
   MemoryItem,
   PersonaActivity,
+  PersonaLease,
   PersonaMailboxItem,
   PersonaWorkItem,
 } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
 import {
+  deletePersonaCollectionShard,
   deleteShardedCollectionItem,
   listAllShardedCollectionItems,
   runInWriteChain,
@@ -46,17 +48,19 @@ export interface PersonaMailboxItemIndexEntry extends BasePersonaIndexEntry {
   notBefore?: number | null;
 }
 export type PersonaActivityIndexEntry = BasePersonaIndexEntry;
+export type PersonaLeaseIndexEntry = BasePersonaIndexEntry;
 export interface PersonaWorkItemIndexEntry extends BasePersonaIndexEntry {
   priority?: string;
   deadline?: number | null;
 }
 export type IndexEntry = MemoryItemIndexEntry | PersonaMailboxItemIndexEntry
-  | PersonaActivityIndexEntry | PersonaWorkItemIndexEntry;
+  | PersonaActivityIndexEntry | PersonaLeaseIndexEntry | PersonaWorkItemIndexEntry;
 
 export type IndexedCollection = typeof ENDURING_AGENT_COLLECTIONS.memoryItems
   | typeof ENDURING_AGENT_COLLECTIONS.mailboxItems
   | typeof ENDURING_AGENT_COLLECTIONS.activities
-  | typeof ENDURING_AGENT_COLLECTIONS.workItems;
+  | typeof ENDURING_AGENT_COLLECTIONS.workItems
+  | typeof ENDURING_AGENT_COLLECTIONS.leaseHistory;
 
 export interface PersonaRecordIndex<T extends IndexEntry = IndexEntry> {
   recordKind: 'PersonaRecordIndex';
@@ -80,7 +84,8 @@ interface CollectionGeneration {
   dirty: boolean;
 }
 
-type IndexedRecord = MemoryItem | PersonaMailboxItem | PersonaActivity | PersonaWorkItem;
+type IndexedRecord = MemoryItem | PersonaMailboxItem | PersonaActivity | PersonaWorkItem
+  | PersonaLease;
 type Config<T extends IndexEntry = IndexEntry> = {
   collection: IndexedCollection;
   filename: string;
@@ -134,6 +139,19 @@ function mailboxEntry(value: unknown): PersonaMailboxItemIndexEntry | null {
   };
 }
 function activityEntry(value: unknown): PersonaActivityIndexEntry | null { return common(value); }
+function leaseEntry(value: unknown): PersonaLeaseIndexEntry | null {
+  const item = objectEntry(value);
+  if (!item || typeof item.id !== 'string' || item.id.length === 0
+    || typeof item.personaId !== 'string' || item.personaId.length === 0
+    || typeof item.renewedAt !== 'number' || !Number.isSafeInteger(item.renewedAt)
+    || item.renewedAt < 0) return null;
+  return {
+    id: item.id,
+    personaId: item.personaId,
+    updatedAt: item.renewedAt,
+    ...(typeof item.status === 'string' ? { status: item.status } : {}),
+  };
+}
 function workItemEntry(value: unknown): PersonaWorkItemIndexEntry | null {
   const base = common(value); const item = objectEntry(value);
   if (!base || !item) return null;
@@ -174,6 +192,13 @@ const CONFIGS: Record<IndexedCollection, Config> = {
     generationFilename: 'persona-work-items.generation.json',
     chainKey: 'work-item-index',
     buildEntry: workItemEntry,
+  },
+  [ENDURING_AGENT_COLLECTIONS.leaseHistory]: {
+    collection: ENDURING_AGENT_COLLECTIONS.leaseHistory,
+    filename: 'persona-lease-history.index.json',
+    generationFilename: 'persona-lease-history.generation.json',
+    chainKey: 'lease-history-index',
+    buildEntry: leaseEntry,
   },
 };
 
@@ -322,6 +347,8 @@ export const getActivityIndex = (): Promise<PersonaRecordIndex<PersonaActivityIn
   getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.activities] as Config<PersonaActivityIndexEntry>);
 export const getWorkItemIndex = (): Promise<PersonaRecordIndex<PersonaWorkItemIndexEntry>> =>
   getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.workItems] as Config<PersonaWorkItemIndexEntry>);
+export const getLeaseHistoryIndex = (): Promise<PersonaRecordIndex<PersonaLeaseIndexEntry>> =>
+  getIndex(CONFIGS[ENDURING_AGENT_COLLECTIONS.leaseHistory] as Config<PersonaLeaseIndexEntry>);
 
 async function mutateIndex<T extends IndexEntry>(
   config: Config<T>,
@@ -412,6 +439,27 @@ export async function deleteIndexedCollectionItem(
         }
         return entries.filter(entry => entry.id !== id);
       },
+    );
+  } finally {
+    invalidatePersonaRecordCache(collection, personaId);
+  }
+}
+
+/**
+ * Remove a Persona shard and every matching sidecar entry in one recoverable
+ * mutation. Persona deletion uses this after deleting known records so a
+ * clean-but-incomplete index cannot leave unindexed shard files behind.
+ */
+export async function deleteIndexedPersonaCollectionShard(
+  collection: IndexedCollection,
+  personaId: string,
+): Promise<void> {
+  const config = CONFIGS[collection];
+  try {
+    await mutateIndex(
+      config,
+      () => deletePersonaCollectionShard(collection, personaId),
+      entries => entries.filter(entry => entry.personaId !== personaId),
     );
   } finally {
     invalidatePersonaRecordCache(collection, personaId);

@@ -29,6 +29,7 @@ type TestRecord = {
   id: string;
   personaId: string;
   updatedAt: number;
+  renewedAt?: number;
   status?: string;
   payload: string;
 };
@@ -43,6 +44,7 @@ function record(
     id,
     personaId,
     updatedAt: 1,
+    ...(collection === ENDURING_AGENT_COLLECTIONS.leaseHistory ? { renewedAt: 1 } : {}),
     ...(collection === ENDURING_AGENT_COLLECTIONS.memoryItems ? { status: 'active' } : {}),
     ...(collection === ENDURING_AGENT_COLLECTIONS.mailboxItems ? { status: 'queued' } : {}),
     payload,
@@ -54,6 +56,7 @@ const COLLECTIONS: PersonaShardedCollection[] = [
   ENDURING_AGENT_COLLECTIONS.mailboxItems,
   ENDURING_AGENT_COLLECTIONS.workItems,
   ENDURING_AGENT_COLLECTIONS.activities,
+  ENDURING_AGENT_COLLECTIONS.leaseHistory,
 ];
 
 describe('Enduring Agent Persona directory sharding', () => {
@@ -126,7 +129,7 @@ describe('Enduring Agent Persona directory sharding', () => {
     });
   });
 
-  it('migrates all four collections and is idempotent', async () => {
+  it('migrates all five collections and is idempotent', async () => {
     await inFreshWorkspace(async () => {
       const values = COLLECTIONS.map((collection, index) => ({
         collection,
@@ -155,7 +158,7 @@ describe('Enduring Agent Persona directory sharding', () => {
       const state = JSON.parse(await fs.readFile(path.join(
         getWorkspaceDataDir(),
         'db',
-        'enduring-agent-directory-sharding-v1.json',
+        'enduring-agent-directory-sharding-v2.json',
       ), 'utf8')) as { status: string };
       expect(state.status).toBe('completed');
     });
