@@ -83,7 +83,7 @@ interface GenerateFlowDialogProps {
 
 type DraftPayload = GeneratedFlowInfo;
 
-function message(role: 'user' | 'assistant', content: string): Record<string, any> {
+function message(role: 'user' | 'assistant', content: string): Record<string, unknown> {
   return {
     id: uuidv4(),
     role,
@@ -102,7 +102,7 @@ function parseJson(value: unknown): unknown {
 }
 
 /** Find the newest complete generated-draft tool result in a Flow conversation. */
-export function extractFlowDraft(messages: Array<Record<string, any>>): {
+export function extractFlowDraft(messages: Array<Record<string, unknown>>): {
   flow: Flow;
   flows: Flow[];
   rootFlowId: string;
@@ -112,7 +112,7 @@ export function extractFlowDraft(messages: Array<Record<string, any>>): {
     if (depth > 6) return null;
     const parsed = parseJson(input);
     if (!parsed || typeof parsed !== 'object') return null;
-    const record = parsed as Record<string, any>;
+    const record = parsed as Record<string, unknown>;
     if (record.flow && Array.isArray(record.flows) && typeof record.rootFlowId === 'string') {
       return record as ReturnType<typeof extractFlowDraft>;
     }
@@ -137,7 +137,7 @@ export function extractFlowDraft(messages: Array<Record<string, any>>): {
   return null;
 }
 
-function displayMessages(messages: Array<Record<string, any>>): ChatMessage[] {
+function displayMessages(messages: Array<Record<string, unknown>>): ChatMessage[] {
   return messages
     .filter((entry) => (
       (entry.role === 'user' || entry.role === 'assistant') &&
@@ -155,14 +155,17 @@ function displayMessages(messages: Array<Record<string, any>>): ChatMessage[] {
 
 /** Recover successful experimental MCP installs for the normal post-draft summary. */
 function extractInstalledServers(
-  messages: Array<Record<string, any>>,
+  messages: Array<Record<string, unknown>>,
 ): InstalledServerInfo[] {
   const found = new Map<string, InstalledServerInfo>();
   const inspect = (input: unknown, depth = 0): void => {
     if (depth > 6) return;
     const parsed = parseJson(input);
     if (!parsed || typeof parsed !== 'object') return;
-    const record = parsed as Record<string, any>;
+    const record = parsed as Record<string, unknown>;
+    const plan = record.plan && typeof record.plan === 'object'
+      ? record.plan as Record<string, unknown>
+      : undefined;
     if (
       record.installed === true &&
       typeof record.serverName === 'string' &&
@@ -180,14 +183,14 @@ function extractInstalledServers(
           ))
           .filter(Boolean),
         alreadyExisted: record.alreadyExisted === true,
-        ...(typeof record.plan?.command === 'string'
-          ? { command: record.plan.command }
+        ...(typeof plan?.command === 'string'
+          ? { command: plan.command }
           : {}),
-        ...(Array.isArray(record.plan?.args)
-          ? { args: record.plan.args.map(String) }
+        ...(Array.isArray(plan?.args)
+          ? { args: plan.args.map(String) }
           : {}),
-        ...(typeof record.plan?.verificationStatus === 'string'
-          ? { verificationStatus: record.plan.verificationStatus }
+        ...(typeof plan?.verificationStatus === 'string'
+          ? { verificationStatus: plan.verificationStatus }
           : {}),
       });
     }
@@ -226,7 +229,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [wireMessages, setWireMessages] = useState<Array<Record<string, any>>>([]);
+  const [wireMessages, setWireMessages] = useState<Array<Record<string, unknown>>>([]);
   const [draft, setDraft] = useState<DraftPayload | null>(null);
   const [allowInstall, setAllowInstall] = useState(false);
   const [maxDepth, setMaxDepth] = useState(DEFAULT_SUBFLOW_DEPTH);
@@ -310,8 +313,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           conversationId: id,
           messages: nextMessages,
         });
-        const canonical = Array.isArray(response?.messages)
-          ? response.messages
+        const canonical: Array<Record<string, unknown>> = Array.isArray(response?.messages)
+          ? response.messages.map((entry) => ({ ...entry }))
           : nextMessages;
         setWireMessages(canonical);
         const proposed = extractFlowDraft(canonical);
@@ -325,7 +328,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           rootFlowId: proposed.rootFlowId,
           errorCount: proposed.validation?.errorCount ?? 0,
           warningCount: proposed.validation?.warningCount ?? 0,
-          attempts: canonical.filter((entry: Record<string, any>) => entry.role === 'user').length,
+          attempts: canonical.filter((entry) => entry.role === 'user').length,
           installedServers: extractInstalledServers(canonical),
         };
         setDraft(generatedByFlow);

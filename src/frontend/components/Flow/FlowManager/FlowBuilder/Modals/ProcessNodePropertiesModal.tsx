@@ -25,7 +25,10 @@ import {
 } from '@/utils/shared/promptRefs';
 import { mcpService } from '@/frontend/services/mcp';
 import type { MCPResource, MCPResourceTemplate } from '@/shared/types/mcp';
-import { ProcessNodePropertiesModalProps } from './ProcessNodePropertiesModal/types'; // Adjusted path
+import {
+  ProcessNodePropertiesModalProps,
+  type ProcessNodeProperties,
+} from './ProcessNodePropertiesModal/types'; // Adjusted path
 import useModelManagement from './ProcessNodePropertiesModal/hooks/useModelManagement'; // Adjusted path
 import useServerConnection from './ProcessNodePropertiesModal/hooks/useServerConnection'; // Adjusted path
 import useNodeData from './ProcessNodePropertiesModal/hooks/useNodeData'; // Adjusted path
@@ -276,16 +279,16 @@ export const ProcessNodePropertiesModal = ({
           return enabled === undefined || enabled === 'all' || enabled.includes(uri);
         });
         return [
-          ...(result.resources ?? [])
-            .filter((resource: MCPResource) => isEnabled(resource.uri))
-            .map((resource: MCPResource) => createPromptReferenceSuggestion(
+          ...result.resources
+            .filter((resource) => isEnabled(resource.uri))
+            .map((resource) => createPromptReferenceSuggestion(
               { kind: 'resource', server: serverName, name: resource.uri },
               resource.name || resource.uri,
               resource.description || `${serverName} · ${resource.uri}`,
             )),
-          ...(result.resourceTemplates ?? [])
-            .filter((resource: MCPResourceTemplate) => isEnabled(resource.uriTemplate))
-            .map((resource: MCPResourceTemplate) => createPromptReferenceSuggestion(
+          ...result.resourceTemplates
+            .filter((resource) => isEnabled(resource.uriTemplate))
+            .map((resource) => createPromptReferenceSuggestion(
               { kind: 'resource', server: serverName, name: resource.uriTemplate },
               resource.name || resource.uriTemplate,
               resource.description || `${serverName} · ${resource.uriTemplate}`,
@@ -368,32 +371,33 @@ export const ProcessNodePropertiesModal = ({
     if (!open) return;
 
     if (node) {
+      const properties = node.data.properties as ProcessNodeProperties;
       // Always load the prompt template from the node's properties
-      const savedPromptTemplate = node.data.properties?.promptTemplate || '';
+      const savedPromptTemplate = properties.promptTemplate ?? '';
       setPromptTemplate(savedPromptTemplate);
 
       // Set model binding status
-      if (node.data.properties?.boundModel) {
+      if (properties.boundModel) {
         setIsModelBound(true);
       } else {
         setIsModelBound(false);
       }
 
       // Load toggle states from node properties if they exist
-      setExcludeModelPrompt(node.data.properties?.excludeModelPrompt || false);
-      setExcludeStartNodePrompt(node.data.properties?.excludeStartNodePrompt || false);
-      setExcludeSystemPrompt(node.data.properties?.excludeSystemPrompt || false);
-      setInputMode(node.data.properties?.inputMode || 'full-history');
-      setIsolatedPrompt(node.data.properties?.isolatedPrompt || '');
-      setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
-      setOutputMode(node.data.properties?.outputMode || 'full-conversation');
-      setEnableTodoTool(node.data.properties?.enableTodoTool || false);
-      setPersonaAbilities(normalizePersonaAbilities(node.data.properties?.personaTools));
+      setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
+      setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
+      setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
+      setInputMode(properties.inputMode ?? 'full-history');
+      setIsolatedPrompt(properties.isolatedPrompt ?? '');
+      setAllowCallerPrompt(properties.allowCallerPrompt !== false);
+      setOutputMode(properties.outputMode ?? 'full-conversation');
+      setEnableTodoTool(properties.enableTodoTool ?? false);
+      setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
 
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
-      setCaptureVariable(node.data.properties?.captureVariable || '');
-      setCaptureResource(node.data.properties?.captureResource || '');
-      const kvParsed = parseKvRef(node.data.properties?.captureKv || '');
+      setCaptureVariable(properties.captureVariable ?? '');
+      setCaptureResource(properties.captureResource ?? '');
+      const kvParsed = parseKvRef(properties.captureKv ?? '');
       setCaptureKvScope(kvParsed.scope);
       setCaptureKvKey(kvParsed.key || '');
 
@@ -502,9 +506,8 @@ export const ProcessNodePropertiesModal = ({
     }
     
     // Get the tool description if available from serverToolsMap
-    const toolsMap = serverToolsMap as Record<string, any[]>;
-    const tools = toolsMap[serverName] || [];
-    const tool = tools.find((t: any) => t.name === toolName);
+    const tools = serverToolsMap[serverName] || [];
+    const tool = tools.find((candidate) => candidate.name === toolName);
     const toolDescription = tool?.description || '';
     
     // Create the binding pill (canonical format). Handoff tools use the pseudo-server
@@ -560,7 +563,7 @@ export const ProcessNodePropertiesModal = ({
 
   const handleSave = () => {
     if (node && nodeData) {
-      const properties: Record<string, any> = {
+      const properties: Record<string, unknown> = {
         ...nodeData.properties,
         promptTemplate: promptTemplate,
       };

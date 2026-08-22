@@ -105,7 +105,7 @@ class ErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
-  componentDidCatch(error: any) {
+  componentDidCatch(error: unknown) {
     log.error('AppWrapper error boundary caught an error:', error);
   }
 

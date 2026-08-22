@@ -4,6 +4,11 @@ import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 
 const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
+interface GitCommandResponse {
+  error?: string;
+  commandOutput?: string;
+}
+
 /**
  * Drive one of the git route's streaming actions (`installStream` / `buildStream`, #65),
  * forwarding each stdout/stderr chunk to `onOutput` as it arrives and resolving with the
@@ -88,7 +93,7 @@ export const installDependencies = async (
       }),
     });
 
-    const result = await response.json();
+    const result = await response.json() as GitCommandResponse;
 
     if (!response.ok) {
       throw new Error(result.error || t('mcp.local.messages.installFailed'));
@@ -111,7 +116,11 @@ export const installDependencies = async (
         type: 'error',
         text: t('mcp.build.installError', { error: (error as Error).message || t('mcp.server.unknownError') })
       },
-      output: error instanceof Response ? await error.text() : (error as any)?.message || t('mcp.server.unknownError')
+      output: error instanceof Response
+        ? await error.text()
+        : error instanceof Error
+          ? error.message
+          : t('mcp.server.unknownError')
     };
   }
 };
@@ -158,7 +167,7 @@ export const buildServer = async (
       }),
     });
 
-    const result = await response.json();
+    const result = await response.json() as GitCommandResponse;
 
     if (!response.ok) {
       throw new Error(result.error || t('mcp.build.serverFailed'));
@@ -181,7 +190,11 @@ export const buildServer = async (
         type: 'error',
         text: t('mcp.build.serverError', { error: (error as Error).message || t('mcp.server.unknownError') })
       },
-      output: error instanceof Response ? await error.text() : (error as any)?.message || t('mcp.server.unknownError')
+      output: error instanceof Response
+        ? await error.text()
+        : error instanceof Error
+          ? error.message
+          : t('mcp.server.unknownError')
     };
   }
 };

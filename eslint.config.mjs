@@ -52,7 +52,7 @@ export default defineConfig([
       'import/namespace': 'error',
       'import/export': 'error',
       '@typescript-eslint/no-unused-vars': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/ban-ts-comment': 'off',
       'react-hooks/exhaustive-deps': 'off',
       // These rules target React Compiler adoption. FLUJO does not enable the
@@ -116,6 +116,10 @@ export default defineConfig([
     files: ['__tests__/**/*.{js,jsx,ts,tsx}'],
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
+      // Tests deliberately force malformed inputs and partial framework mocks
+      // across typed boundaries. Keep that escape hatch test-only; production
+      // TypeScript is protected by the error-level rule above.
+      '@typescript-eslint/no-explicit-any': 'off',
       'react/display-name': 'off',
     },
   },

@@ -31,7 +31,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
   } = useServerTools(serverName);
 
   // Handle tool testing
-  const handleTestTool = async (toolName: string, params: Record<string, any>, timeout?: number) => {
+  const handleTestTool = async (toolName: string, params: Record<string, unknown>, timeout?: number) => {
     log.debug(`Testing tool ${toolName} with params:`, params);
     if (timeout !== undefined) {
       log.debug(`Using timeout: ${timeout} seconds`);

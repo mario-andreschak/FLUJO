@@ -201,6 +201,12 @@ export class FlowService { // Add export keyword here
     }
   }
 
+  /** Find a flow by its authored display name. */
+  async getFlowByName(name: string): Promise<Flow | null> {
+    const flows = await this.loadFlows();
+    return flows.find((flow) => flow.name === name) ?? null;
+  }
+
   /**
    * Explicit, idempotent #470 field migration. Originals are backed up once in
    * db/flow-behavior-rules-backups before atomic collection writes replace

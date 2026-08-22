@@ -475,10 +475,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           submit: result.error || t('models.saveFailed')
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       log.error('Failed to save model', { error });
       setErrors({
-        submit: error?.message || t('models.saveFailed'),
+        submit: error instanceof Error ? error.message : t('models.saveFailed'),
       });
     }
   };

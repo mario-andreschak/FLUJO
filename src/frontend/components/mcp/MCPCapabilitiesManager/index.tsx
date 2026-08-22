@@ -310,36 +310,49 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
 
 /** Render an MCP ReadResourceResult into readable text for preview. */
 function formatResourceContents(
-  data: any,
+  data: unknown,
   t: Translator,
   formatNumber: (value: number) => string,
 ): string {
-  const contents = data?.contents;
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : undefined;
+  const contents = record?.contents;
   if (!Array.isArray(contents) || contents.length === 0) return t('mcp.capabilities.noContents');
   return contents
-    .map((c: any) => {
-      if (typeof c.text === 'string') return c.text;
-      if (typeof c.blob === 'string') return t('mcp.capabilities.binary', {
-        type: c.mimeType || t('mcp.capabilities.data'),
-        count: formatNumber(c.blob.length),
+    .map((content) => {
+      const entry = content && typeof content === 'object'
+        ? content as Record<string, unknown>
+        : {};
+      if (typeof entry.text === 'string') return entry.text;
+      if (typeof entry.blob === 'string') return t('mcp.capabilities.binary', {
+        type: typeof entry.mimeType === 'string' ? entry.mimeType : t('mcp.capabilities.data'),
+        count: formatNumber(entry.blob.length),
       });
-      return JSON.stringify(c, null, 2);
+      return JSON.stringify(content, null, 2);
     })
     .join('\n\n---\n\n');
 }
 
 /** Render an MCP GetPromptResult into readable text for preview. */
-function formatPromptResult(data: any, t: Translator): string {
-  const messages = data?.messages;
+function formatPromptResult(data: unknown, t: Translator): string {
+  const record = data && typeof data === 'object' ? data as Record<string, unknown> : undefined;
+  const messages = record?.messages;
   if (!Array.isArray(messages) || messages.length === 0) return t('mcp.capabilities.noMessages');
   return messages
-    .map((m: any) => {
-      const role = m.role || 'user';
-      const content = m.content;
+    .map((message) => {
+      const entry = message && typeof message === 'object'
+        ? message as Record<string, unknown>
+        : {};
+      const role = typeof entry.role === 'string' ? entry.role : 'user';
+      const content = entry.content && typeof entry.content === 'object'
+        ? entry.content as Record<string, unknown>
+        : undefined;
       let text: string;
       if (typeof content?.text === 'string') text = content.text;
       else if (content?.type === 'resource') text = t('mcp.capabilities.embedded', {
-        uri: content.resource?.uri || '',
+        uri: typeof content.resource === 'object' && content.resource !== null
+          && typeof (content.resource as Record<string, unknown>).uri === 'string'
+          ? (content.resource as Record<string, unknown>).uri as string
+          : '',
       });
       else text = JSON.stringify(content, null, 2);
       return `[${role}]\n${text}`;

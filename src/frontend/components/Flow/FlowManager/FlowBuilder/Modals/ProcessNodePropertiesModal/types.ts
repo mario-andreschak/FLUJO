@@ -28,10 +28,30 @@ export interface ProcessNodePropertiesModalProps {
 }
 
 export interface ProcessNodeData {
+    id?: string;
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, unknown>;
+    properties: ProcessNodeProperties;
+}
+
+export interface ProcessNodeProperties extends Record<string, unknown> {
+    boundModel?: string;
+    modelName?: string;
+    nameIsCustom?: boolean;
+    promptTemplate?: string;
+    excludeModelPrompt?: boolean;
+    excludeStartNodePrompt?: boolean;
+    excludeSystemPrompt?: boolean;
+    inputMode?: 'full-history' | 'latest-message' | 'isolated';
+    isolatedPrompt?: string;
+    allowCallerPrompt?: boolean;
+    outputMode?: 'full-conversation' | 'latest-message';
+    enableTodoTool?: boolean;
+    personaTools?: unknown;
+    captureVariable?: string;
+    captureResource?: string;
+    captureKv?: string;
 }
 
 export interface PropertyDefinition {

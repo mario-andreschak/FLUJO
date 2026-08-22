@@ -23,22 +23,20 @@ interface EnvVarWithMetadata {
 }
 
 // Helper function to check if the stored data is in the new format
-function isNewFormat(data: any): data is Record<string, EnvVarWithMetadata> {
+function isNewFormat(data: unknown): data is Record<string, EnvVarWithMetadata> {
   if (!data || typeof data !== 'object') return false;
-  const keys = Object.keys(data);
-  if (keys.length === 0) return true; // Empty object is valid
-  
-  // Check if the first entry has the expected structure
-  const firstKey = keys[0];
-  const firstValue = data[firstKey];
-  return (
-    firstValue &&
-    typeof firstValue === 'object' &&
-    'value' in firstValue &&
-    'metadata' in firstValue &&
-    typeof firstValue.metadata === 'object' &&
-    'isSecret' in firstValue.metadata
-  );
+  const record = data as Record<string, unknown>;
+  return Object.values(record).every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const value = entry as Record<string, unknown>;
+    const metadata = value.metadata;
+    return (
+      typeof value.value === 'string' &&
+      metadata !== null &&
+      typeof metadata === 'object' &&
+      typeof (metadata as Record<string, unknown>).isSecret === 'boolean'
+    );
+  });
 }
 
 // Helper function to migrate old format to new format
@@ -311,17 +309,25 @@ async function POST_handler(req: NextRequest) {
       const varsToStore: Record<string, EnvVarWithMetadata> = { ...envVars };
       
       for (const [varKey, varData] of Object.entries(variables)) {
+        const varRecord = varData && typeof varData === 'object'
+          ? varData as Record<string, unknown>
+          : undefined;
         // Extract value and metadata from the variable data
-        const varValue = typeof varData === 'object' && varData !== null && 'value' in varData
-          ? (varData as any).value
+        const varValue = varRecord && 'value' in varRecord
+          ? varRecord.value
           : varData;
           
-        const varMetadata = typeof varData === 'object' && varData !== null && 'metadata' in varData
-          ? (varData as any).metadata
+        const rawMetadata = varRecord && 'metadata' in varRecord
+          ? varRecord.metadata
           : { isSecret: isSecretEnvVar(varKey) };
+        const varMetadata = rawMetadata && typeof rawMetadata === 'object'
+          ? rawMetadata as { isSecret?: unknown }
+          : undefined;
         
         // Get the isSecret flag from metadata
-        const isSecret = varMetadata?.isSecret ?? isSecretEnvVar(varKey);
+        const isSecret = typeof varMetadata?.isSecret === 'boolean'
+          ? varMetadata.isSecret
+          : isSecretEnvVar(varKey);
         const stringValue = String(varValue || '');
         
         // Silently ignore the placeholder value

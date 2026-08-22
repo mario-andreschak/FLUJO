@@ -844,19 +844,34 @@ export const PersonaActivitySchema = z.object({
       path: ['outcome', 'decidedAt'],
     });
   }
-  const snapshotFields = [
+  const snapshotIdentityFields = [
     record.coreFlowId,
     record.coreFlowRevisionId,
-    record.instructionContext,
     record.instructionContextDigest,
     record.instructionContextSchemaVersion,
   ];
-  const hasSnapshot = snapshotFields.some((value) => value !== undefined);
-  if (hasSnapshot && snapshotFields.some((value) => value === undefined)) {
+  const hasSnapshotIdentity = snapshotIdentityFields.some((value) => value !== undefined);
+  const snapshotFields = [...snapshotIdentityFields, record.instructionContext];
+  if (
+    record.compactedAt === undefined
+    && snapshotFields.some((value) => value !== undefined)
+    && snapshotFields.some((value) => value === undefined)
+  ) {
     ctx.addIssue({
       code: 'custom',
       message: 'An Activity Core snapshot must be persisted as one complete immutable bundle.',
       path: ['instructionContext'],
+    });
+  }
+  if (
+    record.compactedAt !== undefined
+    && hasSnapshotIdentity
+    && snapshotIdentityFields.some((value) => value === undefined)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A compacted Activity must preserve its complete Core snapshot identity bundle.',
+      path: ['instructionContextDigest'],
     });
   }
   if (record.instructionContext) {
@@ -991,7 +1006,11 @@ export const PersonaActivitySchema = z.object({
       path: ['startedAt'],
     });
   }
-  if (record.status === 'error' && !record.error?.trim()) {
+  if (
+    record.status === 'error'
+    && record.compactedAt === undefined
+    && !record.error?.trim()
+  ) {
     ctx.addIssue({
       code: 'custom',
       message: 'An errored Activity requires an error message.',
@@ -1037,8 +1056,19 @@ export const PersonaActivitySchema = z.object({
         path: ['compactedAt'],
       });
     }
-    // For compacted activities, bulky fields should be blanked/truncated.
-    // The activity needs to retain instructionContextDigest, id, status, timestamps, leaseId, conversationId.
+    if (
+      record.instructionContext !== undefined
+      || record.entryPointPayloadRef !== undefined
+      || record.resourceRefs !== undefined
+      || record.error !== undefined
+      || record.outcomeRef !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A compacted Activity must omit bulky runtime payload fields.',
+        path: ['compactedAt'],
+      });
+    }
   }
 });
 

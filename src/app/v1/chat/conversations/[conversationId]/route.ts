@@ -79,8 +79,9 @@ async function buildContextInfo(sharedState: SharedState): Promise<
 
       if (msg.processNodeId && sharedState.flowId) {
         const flow = await flowService.getFlow(sharedState.flowId);
-        const node = (flow as any)?.nodes?.find((n: any) => n.id === msg.processNodeId);
-        const boundModelId = node?.data?.properties?.boundModel;
+        const node = flow?.nodes.find((candidate) => candidate.id === msg.processNodeId);
+        const rawBoundModelId = node?.data?.properties?.boundModel;
+        const boundModelId = typeof rawBoundModelId === 'string' ? rawBoundModelId : undefined;
         if (boundModelId) {
           const model = await modelService.getModel(boundModelId);
           if (model) {
@@ -133,7 +134,7 @@ async function GET_handler(
       // Use variable
       const storageKey = `conversations/${conversationId}` as StorageKey;
       try {
-        sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+        sharedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
         if (sharedState) {
           stateSource = 'storage';
           if (!isPersonaOwnedConversationState(sharedState)) {
@@ -350,7 +351,7 @@ async function PATCH_handler(
   return withConversationExecutionLock(conversationId, async () => {
     try {
     // 1. Load existing state from storage
-    const existingState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    const existingState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
 
     if (!existingState) {
       log.warn(`Conversation state not found for PATCH`, { requestId, conversationId });
@@ -543,9 +544,9 @@ async function DELETE_handler(
   return withConversationExecutionLock(conversationId, async () => {
     try {
     const existingState = FlowExecutor.conversationStates.get(conversationId)
-      ?? await loadItemBackend<SharedState>(
+      ?? await loadItemBackend<SharedState | undefined>(
         `conversations/${conversationId}` as StorageKey,
-        undefined as any,
+        undefined,
       );
     if (isPersonaOwnedConversationState(existingState)) {
       if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
@@ -602,7 +603,7 @@ async function DELETE_handler(
 
     return new Response(null, { status: 204 }); // Success, No Content
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       // The conversation still exists (delete failed) — clear the tombstone so
       // it isn't left permanently unpersistable/unloggable.
       unmarkConversationDeleted(conversationId);

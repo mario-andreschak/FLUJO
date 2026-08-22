@@ -17,7 +17,7 @@ interface ModelsResult {
 }
 
 class ModelService {
-  private async fetchWithErrorHandling(url: string, options?: RequestInit): Promise<any> {
+  private async fetchWithErrorHandling<T>(url: string, options?: RequestInit): Promise<T> {
     try {
       // Log request attempt
       log.debug('Making API request', { 
@@ -85,7 +85,7 @@ class ModelService {
         status: response.status
       });
 
-      return data;
+      return data as T;
     } catch (error) {
       // If it's a network error, provide a more user-friendly message
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
@@ -120,7 +120,7 @@ class ModelService {
    */
   async tryLoadModels(): Promise<Model[] | null> {
     try {
-      const models = await this.fetchWithErrorHandling('/api/model');
+      const models = await this.fetchWithErrorHandling<Model[]>('/api/model');
       return Array.isArray(models) ? models : null;
     } catch (error) {
       log.error('Failed to load models', error);
@@ -134,7 +134,7 @@ class ModelService {
 
   async getModel(id: string): Promise<Model | null> {
     try {
-      const model = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(id)}`);
+      const model = await this.fetchWithErrorHandling<Model>(`/api/model/${encodeURIComponent(id)}`);
       return model;
     } catch (error) {
       log.error('Failed to get model', { id, error });
@@ -158,7 +158,7 @@ class ModelService {
         provider: model.provider 
       });
 
-      const newModel = await this.fetchWithErrorHandling('/api/model', {
+      const newModel = await this.fetchWithErrorHandling<Model>('/api/model', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -225,7 +225,7 @@ class ModelService {
         displayName: model.displayName 
       });
 
-      const updatedModel = await this.fetchWithErrorHandling(`/api/model/${encodeURIComponent(model.id)}`, {
+      const updatedModel = await this.fetchWithErrorHandling<Model>(`/api/model/${encodeURIComponent(model.id)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -401,7 +401,7 @@ class ModelService {
         apiKey: apiKey ? 'provided' : 'not provided'
       });
 
-      const response = await this.fetchWithErrorHandling('/api/model/provider', {
+      const response = await this.fetchWithErrorHandling<{ models?: NormalizedModel[] }>('/api/model/provider', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

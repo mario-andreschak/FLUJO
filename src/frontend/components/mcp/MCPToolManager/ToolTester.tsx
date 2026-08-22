@@ -30,6 +30,12 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+);
+
 interface ToolTestResult {
   success: boolean;
   output: string;
@@ -47,10 +53,10 @@ interface ToolTesterProps {
   tools: Array<{
     name: string;
     description: string;
-    inputSchema: Record<string, any>;
-    _meta?: Record<string, any>; // #97: carries ui.resourceUri for MCP Apps
+    inputSchema: Record<string, unknown>;
+    _meta?: Record<string, unknown>; // #97: carries ui.resourceUri for MCP Apps
   }>;
-  onTestTool: (toolName: string, params: Record<string, any>, timeout?: number) => Promise<ToolTestResult>;
+  onTestTool: (toolName: string, params: Record<string, unknown>, timeout?: number) => Promise<ToolTestResult>;
   onClose?: () => void; // Optional handler to dismiss the tester panel
   prefill?: ToolTesterPrefill;
 }
@@ -70,7 +76,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const toolsArray = Array.isArray(tools) ? tools : [];
   log.debug('Tools array:', { count: toolsArray.length });
   const [selectedTool, setSelectedTool] = useState<string>('');
-  const [params, setParams] = useState<Record<string, any>>({});
+  const [params, setParams] = useState<Record<string, unknown>>({});
   const [result, setResult] = useState<ToolTestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timeoutValue, setTimeoutValue] = useState<number>(60);
@@ -122,13 +128,14 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     
     try {
       // Ensure parameters are correctly typed according to the schema before sending
-      const typedParams: Record<string, any> = {};
+      const typedParams: Record<string, unknown> = {};
       const selectedToolData = toolsArray.find((t) => t.name === selectedTool);
       
       if (selectedToolData?.inputSchema?.properties) {
+        const schemaProperties = asRecord(selectedToolData.inputSchema.properties) ?? {};
         // Process each parameter according to its schema type
         Object.entries(params).forEach(([key, value]) => {
-          const schema = selectedToolData.inputSchema.properties[key];
+          const schema = asRecord(schemaProperties[key]);
           if (!schema) {
             typedParams[key] = value;
             return;
@@ -488,31 +495,38 @@ const ToolTester: React.FC<ToolTesterProps> = ({
             result.success ? (
               (() => {
                 try {
-                  const parsedOutput = JSON.parse(result.output);
+                  const parsedOutput: unknown = JSON.parse(result.output);
+                  const parsedRecord = asRecord(parsedOutput);
+                  const parsedData = asRecord(parsedRecord?.data);
                   // Check if it has the expected MCP content structure (nested under 'data')
-                  if (parsedOutput && parsedOutput.data && Array.isArray(parsedOutput.data.content)) {
+                  if (Array.isArray(parsedData?.content)) {
                     return (
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                        {parsedOutput.data.content.map((item: any, index: number) => {
-                          if (item.type === 'text') {
-                            return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
-                          } else if (item.type === 'image' && item.data && item.mimeType) {
+                        {parsedData.content.map((item, index) => {
+                          const itemRecord = asRecord(item);
+                          const itemType = typeof itemRecord?.type === 'string' ? itemRecord.type : 'unknown';
+                          const itemText = typeof itemRecord?.text === 'string' ? itemRecord.text : undefined;
+                          const itemData = typeof itemRecord?.data === 'string' ? itemRecord.data : undefined;
+                          const itemMimeType = typeof itemRecord?.mimeType === 'string' ? itemRecord.mimeType : undefined;
+                          if (itemType === 'text' && itemText !== undefined) {
+                            return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{itemText}</ReactMarkdown>;
+                          } else if (itemType === 'image' && itemData && itemMimeType) {
                             return (
                               // MCP tool images are data URLs, which the Next image optimizer does not support.
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 key={index}
-                                src={`data:${item.mimeType};base64,${item.data}`}
+                                src={`data:${itemMimeType};base64,${itemData}`}
                                 alt={t('mcp.tester.imageAlt', { number: formatNumber(index + 1) })}
                                 style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
                               />
                             );
-                          } else if (item.type === 'audio' && item.data && item.mimeType) {
+                          } else if (itemType === 'audio' && itemData && itemMimeType) {
                             return (
                               <audio
                                 key={index}
                                 controls
-                                src={`data:${item.mimeType};base64,${item.data}`}
+                                src={`data:${itemMimeType};base64,${itemData}`}
                                 style={{ width: '100%' }}
                               >
                                 {t('mcp.tester.audioUnsupported')}

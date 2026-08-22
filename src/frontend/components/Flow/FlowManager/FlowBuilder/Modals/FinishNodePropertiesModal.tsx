@@ -19,7 +19,7 @@ interface FinishNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: FinishNodePropertiesModalProps) => {
@@ -29,7 +29,7 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
 
   useEffect(() => {

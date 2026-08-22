@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import type { Theme } from '@mui/material/styles';
 import { TabProps, MessageState } from '../../types';
 import { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp/mcp';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -43,14 +44,14 @@ interface ServerInfo {
 }
 
 // Function to get a consistent gray color
-const getServerColor = (theme: any): string => {
+const getServerColor = (theme: Theme): string => {
   return theme.palette.mode === 'dark' 
     ? '#424242' // Dark gray in dark mode
     : '#607d8b'; // Blue gray in light mode
 };
 
 // Create a subtle gray gradient
-const getServerGradient = (theme: any): string => {
+const getServerGradient = (theme: Theme): string => {
   const baseColor = theme.palette.mode === 'dark' 
     ? '#424242' // Dark gray in dark mode
     : '#607d8b'; // Blue gray in light mode

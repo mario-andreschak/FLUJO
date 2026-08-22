@@ -28,35 +28,39 @@ export function hidePresetParameters(
   schema: Record<string, unknown> | undefined,
   presetArgs: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
-  const cloned = JSON.parse(JSON.stringify(schema ?? { type: 'object', properties: {} })) as Record<string, any>;
+  const cloned = JSON.parse(JSON.stringify(schema ?? { type: 'object', properties: {} })) as Record<string, unknown>;
   const keys = new Set(Object.keys(presetArgs ?? {}));
   if (keys.size === 0) return cloned;
 
   if (cloned.properties && typeof cloned.properties === 'object' && !Array.isArray(cloned.properties)) {
-    for (const key of keys) delete cloned.properties[key];
+    const properties = cloned.properties as Record<string, unknown>;
+    for (const key of keys) delete properties[key];
   }
   if (Array.isArray(cloned.required)) {
-    cloned.required = cloned.required.filter((key: unknown) => typeof key !== 'string' || !keys.has(key));
-    if (cloned.required.length === 0) delete cloned.required;
+    const required = cloned.required.filter((key: unknown) => typeof key !== 'string' || !keys.has(key));
+    if (required.length === 0) delete cloned.required;
+    else cloned.required = required;
   }
   if (cloned.dependentRequired && typeof cloned.dependentRequired === 'object') {
-    for (const key of keys) delete cloned.dependentRequired[key];
-    for (const [key, dependencies] of Object.entries(cloned.dependentRequired)) {
+    const dependentRequired = cloned.dependentRequired as Record<string, unknown>;
+    for (const key of keys) delete dependentRequired[key];
+    for (const [key, dependencies] of Object.entries(dependentRequired)) {
       if (Array.isArray(dependencies)) {
-        cloned.dependentRequired[key] = dependencies.filter((dependency: unknown) => (
+        dependentRequired[key] = dependencies.filter((dependency: unknown) => (
           typeof dependency !== 'string' || !keys.has(dependency)
         ));
       }
     }
   }
   if (cloned.dependencies && typeof cloned.dependencies === 'object') {
-    for (const key of keys) delete cloned.dependencies[key];
+    const dependencies = cloned.dependencies as Record<string, unknown>;
+    for (const key of keys) delete dependencies[key];
   }
   return cloned;
 }
 
 /** Convert a form string to the primitive/object type declared by JSON Schema. */
-export function coercePresetEditorValue(value: string, schema: Record<string, any> | undefined): unknown {
+export function coercePresetEditorValue(value: string, schema: Record<string, unknown> | undefined): unknown {
   const trimmed = value.trim();
   // Parse structured JSON before the reference check so nested placeholders
   // remain strings inside a real object/array instead of turning the entire

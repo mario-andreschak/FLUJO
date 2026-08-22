@@ -341,7 +341,7 @@ export class ModelHandler {
    * @param baseMessage Optional prefix (e.g. the SDK's "429 ..." message) to build on.
    */
   private static extractProviderErrorDetails(
-    body: any,
+    body: unknown,
     baseMessage?: string
   ): {
     message: string;
@@ -351,32 +351,55 @@ export class ModelHandler {
     retryAfter?: string;
     providerError?: unknown;
   } {
+    const errorBody = body && typeof body === 'object'
+      ? body as Record<string, unknown>
+      : {};
     let message =
-      baseMessage || body?.message || 'Provider returned an unspecified error in the response body.';
+      baseMessage
+      || (typeof errorBody.message === 'string' ? errorBody.message : undefined)
+      || 'Provider returned an unspecified error in the response body.';
 
     // When a base message is supplied (SDK path), append the body's own message
     // if it adds something beyond the prefix.
     if (
       baseMessage &&
-      typeof body?.message === 'string' &&
-      body.message &&
-      body.message !== baseMessage
+      typeof errorBody.message === 'string' &&
+      errorBody.message &&
+      errorBody.message !== baseMessage
     ) {
-      message = `${baseMessage} - ${body.message}`;
+      message = `${baseMessage} - ${errorBody.message}`;
     }
 
-    const meta = body?.metadata;
+    const meta = errorBody.metadata && typeof errorBody.metadata === 'object'
+      ? errorBody.metadata as Record<string, unknown>
+      : undefined;
     if (meta) {
       let rawMsg: string | undefined;
       if (typeof meta.raw === 'string') {
         try {
           const parsed = JSON.parse(meta.raw);
-          rawMsg = parsed?.error?.message || parsed?.message || meta.raw;
+          const parsedRecord = parsed && typeof parsed === 'object'
+            ? parsed as Record<string, unknown>
+            : {};
+          const parsedError = parsedRecord.error && typeof parsedRecord.error === 'object'
+            ? parsedRecord.error as Record<string, unknown>
+            : undefined;
+          rawMsg = typeof parsedError?.message === 'string'
+            ? parsedError.message
+            : typeof parsedRecord.message === 'string'
+              ? parsedRecord.message
+              : meta.raw;
         } catch {
           rawMsg = meta.raw; // not JSON — use the string as-is
         }
       } else if (meta.raw && typeof meta.raw === 'object') {
-        rawMsg = meta.raw.error?.message || meta.raw.message;
+        const raw = meta.raw as Record<string, unknown>;
+        const nestedError = raw.error && typeof raw.error === 'object'
+          ? raw.error as Record<string, unknown>
+          : undefined;
+        rawMsg = typeof nestedError?.message === 'string'
+          ? nestedError.message
+          : typeof raw.message === 'string' ? raw.message : undefined;
       }
       const upstreamParts: string[] = [];
       if (meta.provider_name) upstreamParts.push(String(meta.provider_name));
@@ -387,15 +410,15 @@ export class ModelHandler {
     }
 
     // Requesty's origin tag: "router" vs "provider" (see doc comment above).
-    if (typeof body?.origin === 'string' && body.origin) {
-      message = `${message} (origin: ${body.origin})`;
+    if (typeof errorBody.origin === 'string' && errorBody.origin) {
+      message = `${message} (origin: ${errorBody.origin})`;
     }
 
     return {
       message,
-      code: body?.code,
-      type: body?.type,
-      param: body?.param,
+      code: errorBody.code,
+      type: errorBody.type,
+      param: errorBody.param,
       retryAfter: meta?.retry_after_seconds != null ? String(meta.retry_after_seconds) : undefined,
       providerError: body,
     };
@@ -1068,7 +1091,7 @@ export class ModelHandler {
       // error"). The real reason lives in the parsed response body
       // (error.error); extractProviderErrorDetails digs it out so the user
       // sees something actionable instead of a generic line.
-      const body = (error as any).error as any; // parsed response body, if any
+      const body = 'error' in error ? error.error : undefined;
       const extracted = ModelHandler.extractProviderErrorDetails(body, error.message);
 
       // Prefer the response header retry-after; fall back to the body's
@@ -2737,7 +2760,7 @@ export class ModelHandler {
           // Some providers (like OpenRouter for certain errors) might return a 200 OK
           // with an error object in the body instead of throwing an HTTP error.
           if (chatCompletion && typeof chatCompletion === 'object' && 'error' in chatCompletion && chatCompletion.error) {
-            const errorObj = chatCompletion.error as any; // Type assertion for easier access
+            const errorObj = chatCompletion.error as unknown; // Type assertion for easier access
             attemptError = errorObj;
 
             // Shape the message + details consistently with the thrown-error path.

@@ -17,6 +17,7 @@ import {
   getMemoryItem,
   getPersona,
   listMemoryItems,
+  saveMemoryItem,
 } from '@/backend/services/enduringAgents/store';
 import type { CreateMemoryItemInput } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
@@ -380,11 +381,17 @@ describe('memory-kernel near-duplicate persistence (issues #467 and #468)', () =
       }), { skipNearDuplicateMerge: true });
 
       for (let index = 0; index < MEMORY_DEDUP_SETTINGS.comparisonWindow; index += 1) {
-        await storeMemoryCandidate(memoryInput(personaId, {
+        const timestamp = oldest.updatedAt + index + 1;
+        await saveMemoryItem({
+          ...oldest,
           id: `memory-window-${index.toString().padStart(3, '0')}`,
           content: `Unrelated filler record number ${index}: ${'x'.repeat(index + 1)}`,
-          status: 'active',
-        }), { skipNearDuplicateMerge: true });
+          sourceRefs: [
+            { kind: 'user_statement', id: `window-source-${index}`, observedAt: timestamp },
+          ],
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
       }
 
       const incoming = await storeMemoryCandidate(memoryInput(personaId, {

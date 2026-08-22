@@ -18,6 +18,18 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/flow/execution/handlers/ToolHandler');
 
+export interface SanitizedToolSchema extends OpenAI.FunctionParameters {
+  type?: string;
+  format?: string;
+  description?: string;
+  properties?: Record<string, SanitizedToolSchema>;
+  required?: string[];
+  items?: SanitizedToolSchema;
+  oneOf?: SanitizedToolSchema[];
+  anyOf?: SanitizedToolSchema[];
+  allOf?: SanitizedToolSchema[];
+}
+
 export class ToolHandler {
   /**
    * Sanitizes a JSON Schema to ensure compatibility with all LLM providers
@@ -26,11 +38,11 @@ export class ToolHandler {
    * (Google AI Studio / Gemini via OpenRouter rejects schemas where required
    * contains keys not present in properties).
    */
-  static sanitizeSchema(schema: any): any {
-    if (!schema || typeof schema !== 'object') return schema;
+  static sanitizeSchema(schema: unknown): SanitizedToolSchema {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return {};
     
     // Make a deep copy to avoid modifying the original
-    const result = JSON.parse(JSON.stringify(schema));
+    const result = JSON.parse(JSON.stringify(schema)) as SanitizedToolSchema;
     
     // Handle string type with format
     if (result.type === 'string' && result.format) {
@@ -47,8 +59,9 @@ export class ToolHandler {
     
     // Process properties recursively
     if (result.properties) {
-      Object.keys(result.properties).forEach(key => {
-        result.properties[key] = ToolHandler.sanitizeSchema(result.properties[key]);
+      const properties = result.properties;
+      Object.keys(properties).forEach(key => {
+        properties[key] = ToolHandler.sanitizeSchema(properties[key]);
       });
     }
 
@@ -57,7 +70,7 @@ export class ToolHandler {
     // only contains keys that are actually declared. Remove `required` entirely when
     // it would become empty or when there are no `properties` at all.
     if (Array.isArray(result.required)) {
-      if (result.properties && typeof result.properties === 'object') {
+      if (result.properties) {
         const definedKeys = new Set(Object.keys(result.properties));
         result.required = (result.required as unknown[]).filter(
           (k): k is string => typeof k === 'string' && definedKeys.has(k)
@@ -77,11 +90,9 @@ export class ToolHandler {
     }
     
     // Process oneOf, anyOf, allOf
-    ['oneOf', 'anyOf', 'allOf'].forEach(key => {
-      if (Array.isArray(result[key])) {
-        result[key] = result[key].map((item: any) => ToolHandler.sanitizeSchema(item));
-      }
-    });
+    if (Array.isArray(result.oneOf)) result.oneOf = result.oneOf.map((item) => ToolHandler.sanitizeSchema(item));
+    if (Array.isArray(result.anyOf)) result.anyOf = result.anyOf.map((item) => ToolHandler.sanitizeSchema(item));
+    if (Array.isArray(result.allOf)) result.allOf = result.allOf.map((item) => ToolHandler.sanitizeSchema(item));
     
     return result;
   }

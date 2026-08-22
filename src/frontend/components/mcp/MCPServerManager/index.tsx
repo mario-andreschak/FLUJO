@@ -22,7 +22,7 @@ import {
 } from '@/frontend/utils/quickActions';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
-import { useServerStatus } from '@/frontend/hooks/useServerStatus';
+import { useServerStatus, type ServerState } from '@/frontend/hooks/useServerStatus';
 import { MCP_FORMATS, getMcpFormat, McpFormatId } from '@/utils/mcp/mcpFormats';
 import { createLogger } from '@/utils/logger';
 import {
@@ -617,7 +617,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
-  const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
+  const folders = useMemo(() => collectFolders(servers, (server) => server.folder), [servers]);
 
   // Grouped view of the filtered/sorted servers, driven by the active group mode.
   const sortLabel = (option: ServerSortOption) => t(`mcp.server.sort.${option}`);
@@ -663,14 +663,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setShowConnectionWizard(false);
   };
 
-  const serverGroups = useMemo<CardGroup<any>[]>(() => {
+  const serverGroups = useMemo<CardGroup<ServerState>[]>(() => {
     if (groupMode === 'folder') return groupByFolder(
       filteredAndSortedServers,
-      (s: any) => s.folder,
+      (server) => server.folder,
       t('mcp.server.ungrouped'),
     );
-    if (groupMode === 'sort') return groupItems(filteredAndSortedServers, (s: any) => {
-      const group = deriveServerSortGroup(s, sortOption);
+    if (groupMode === 'sort') return groupItems(filteredAndSortedServers, (server) => {
+      const group = deriveServerSortGroup(server, sortOption);
       if (group.key === 'status:connected') return { ...group, label: t('mcp.status.connected') };
       if (group.key === 'status:error') return { ...group, label: t('mcp.status.error') };
       if (group.key === 'status:auth') return { ...group, label: t('mcp.server.requiresAuth') };
@@ -749,10 +749,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   };
 
   // Render the server list for a subset (whole list or one collapsible group).
-  const renderServers = (items: any[]) => (
+  const renderServers = (items: ServerState[]) => (
     <ServerList
-      servers={items.map((server: any) => ({
+      servers={items.map(({ status, ...server }) => ({
         ...server,
+        status: status === 'starting' ? 'connecting' as const : status,
         tools: [] // Add empty tools array to match the ServerList interface
       }))}
       isLoading={isLoading}

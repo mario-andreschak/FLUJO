@@ -9,7 +9,7 @@ export function createSeededStubModel(seed: number, facts: StubFact[]): Completi
   let call = 0;
   const complete = async (): Promise<CompletionResult> => {
     const fact = facts[(seed + call++) % facts.length];
-    const content = `<persona_activity_outcome>{"resolution":"completed","summary":"${fact.subject}: ${fact.value}"}</persona_activity_outcome>`;
+    const content = `<persona_activity_outcome>{"resolution":"succeeded","summary":"${fact.subject}: ${fact.value}"}</persona_activity_outcome>`;
     return {
       completion: {
         id: `soak-completion-${call}`,

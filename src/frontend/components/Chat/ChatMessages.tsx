@@ -88,6 +88,33 @@ import { ChatMarkdownContent } from './ChatMarkdown';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : undefined
+);
+
+interface TextContentPart {
+  type: 'text';
+  text: string;
+}
+
+interface ImageUrlContentPart {
+  type: 'image_url';
+  image_url: { url: string };
+}
+
+const isTextContentPart = (value: unknown): value is TextContentPart => {
+  const record = asRecord(value);
+  return record?.type === 'text' && typeof record.text === 'string';
+};
+
+const isImageUrlContentPart = (value: unknown): value is ImageUrlContentPart => {
+  const record = asRecord(value);
+  const imageUrl = asRecord(record?.image_url);
+  return record?.type === 'image_url' && typeof imageUrl?.url === 'string';
+};
+
 // How many messages render initially / how many more each expander click adds.
 // Long conversations previously rendered EVERY bubble on every update; the
 // window keeps steady-state work proportional to what is actually on screen.
@@ -422,42 +449,47 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
     <Box sx={{ width: '100%', minWidth: 0 }}>
       {(() => {
         try {
-          const parsedContent = JSON.parse(content);
+          const parsedContent: unknown = JSON.parse(content);
+          const parsedRecord = asRecord(parsedContent);
           // MCP structured content: an array of text/image/audio parts.
-          if (parsedContent && Array.isArray(parsedContent.content)) {
+          if (Array.isArray(parsedRecord?.content)) {
             return (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {parsedContent.content.map((item: any, index: number) => {
-                  if (item.type === 'text') {
-                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{item.text}</ReactMarkdown>;
-                  } else if (item.type === 'image' && item.data && item.mimeType) {
+                {parsedRecord.content.map((item, index) => {
+                  const itemRecord = asRecord(item);
+                  const itemType = typeof itemRecord?.type === 'string' ? itemRecord.type : 'unknown';
+                  const itemData = typeof itemRecord?.data === 'string' ? itemRecord.data : undefined;
+                  const itemMimeType = typeof itemRecord?.mimeType === 'string' ? itemRecord.mimeType : undefined;
+                  if (itemType === 'text' && typeof itemRecord?.text === 'string') {
+                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{itemRecord.text}</ReactMarkdown>;
+                  } else if (itemType === 'image' && itemData && itemMimeType) {
                     return (
                       // MCP tool images are data URLs, which the Next image optimizer does not support.
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         key={index}
-                        src={`data:${item.mimeType};base64,${item.data}`}
+                        src={`data:${itemMimeType};base64,${itemData}`}
                         alt={`Tool Result Image ${index + 1}`}
                         style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }}
                       />
                     );
-                  } else if (item.type === 'audio' && item.data && item.mimeType) {
+                  } else if (itemType === 'audio' && itemData && itemMimeType) {
                     return (
                       <audio
                         key={index}
                         controls
-                        src={`data:${item.mimeType};base64,${item.data}`}
+                        src={`data:${itemMimeType};base64,${itemData}`}
                         style={{ width: '100%', marginTop: '8px' }}
                       >
                         Your browser does not support the audio element.
                       </audio>
                     );
-                  } else if (item.type === 'video' && item.data && item.mimeType) {
+                  } else if (itemType === 'video' && itemData && itemMimeType) {
                     return (
                       <video
                         key={index}
                         controls
-                        src={`data:${item.mimeType};base64,${item.data}`}
+                        src={`data:${itemMimeType};base64,${itemData}`}
                         style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }}
                       >
                         Your browser does not support the video element.
@@ -474,7 +506,7 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                           bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1,
                         }}
                       >
-                        {`Unsupported content type: ${item.type}\n${JSON.stringify(item, null, 2)}`}
+                        {`Unsupported content type: ${itemType}\n${JSON.stringify(item, null, 2)}`}
                       </Box>
                     );
                   }
@@ -1234,8 +1266,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 array. Render text as markdown and image_url parts inline. */}
             {message.role !== 'tool' && Array.isArray(message.content) && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {(message.content as any[]).map((part, partIndex) => {
-                  if (part?.type === 'text') {
+                {(message.content as unknown[]).map((part, partIndex) => {
+                  if (isTextContentPart(part)) {
                     return (
                       // Same renderer map as the string-content path above: it
                       // routes anchors through MarkdownLink, so multipart text
@@ -1245,7 +1277,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                       <ChatMarkdownContent key={partIndex}>{part.text}</ChatMarkdownContent>
                     );
                   }
-                  if (part?.type === 'image_url' && part.image_url?.url) {
+                  if (isImageUrlContentPart(part)) {
                     return (
                       // Provider image URLs may be data URLs and cannot be statically optimized.
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1266,10 +1298,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 media={message.media.filter(part =>
                   part.type !== 'image' ||
                   !Array.isArray(message.content) ||
-                  !(message.content as any[]).some(
+                    !(message.content as unknown[]).some(
                     contentPart =>
-                      contentPart?.type === 'image_url' &&
-                      contentPart.image_url?.url === mediaDataUrl(part)
+                      isImageUrlContentPart(contentPart) &&
+                      contentPart.image_url.url === mediaDataUrl(part)
                   )
                 )}
               />

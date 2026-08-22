@@ -4,6 +4,8 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { Flow } from '@/shared/types/flow';
+import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { VFlow } from '@/utils/shared/flowValidation';
 
 const log = createLogger('backend/execution/flow/validateFlowForRun');
 
@@ -22,12 +24,12 @@ export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidati
   }
 
   let servers: Array<{ name: string; status?: string }> | undefined;
-  let configs: any[] | undefined;
+  let configs: MCPServerConfig[] | undefined;
   try {
     const rawConfigs = await mcpService.loadServerConfigs();
     if (Array.isArray(rawConfigs)) {
       configs = rawConfigs;
-      servers = rawConfigs.map((s: { name: string; disabled?: boolean }) => ({
+      servers = rawConfigs.map((s) => ({
         name: s.name,
         status: s.disabled ? 'disabled' : undefined,
       }));
@@ -43,11 +45,11 @@ export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidati
   try {
     const disabledByName = new Map(
       (Array.isArray(configs) ? configs : []).map(
-        (s: { name: string; disabled?: boolean }) => [s.name, !!s.disabled]
+        (s) => [s.name, !!s.disabled]
       )
     );
     const flowServers = new Set<string>();
-    for (const node of ((flow as any).nodes ?? []) as any[]) {
+    for (const node of flow.nodes) {
       const nodeType = node?.data?.type ?? node?.type;
       const bound = node?.data?.properties?.boundServer;
       if (nodeType === 'mcp' && typeof bound === 'string' && bound) {
@@ -76,7 +78,7 @@ export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidati
     serverTools = undefined;
   }
 
-  return validateFlow(flow as any, { models, servers, serverTools });
+  return validateFlow(flow as unknown as VFlow, { models, servers, serverTools });
 }
 
 /**

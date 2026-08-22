@@ -86,7 +86,7 @@ export interface FlowValidationContext {
 interface VNodeData {
   label?: string;
   type?: string;
-  properties?: Record<string, any> | null;
+  properties?: Record<string, unknown> | null;
 }
 export interface VNode {
   id: string;
@@ -604,9 +604,15 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       );
       continue;
     }
-    entries.forEach((entry: any, index: number) => {
-      if (!entry || entry.kind !== 'toolCall') return;
-      const toolName = typeof entry.toolName === 'string' ? entry.toolName.trim() : '';
+    entries.forEach((entry: unknown, index: number) => {
+      if (!entry || typeof entry !== 'object' || !('kind' in entry) || entry.kind !== 'toolCall') return;
+      const toolEntry = entry as {
+        toolName?: unknown;
+        executionMode?: unknown;
+        serverName?: unknown;
+        argumentsJson?: unknown;
+      };
+      const toolName = typeof toolEntry.toolName === 'string' ? toolEntry.toolName.trim() : '';
       if (!toolName) {
         add(
           'error',
@@ -615,8 +621,8 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           node
         );
       }
-      if (entry.executionMode === 'real') {
-        const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+      if (toolEntry.executionMode === 'real') {
+        const serverName = typeof toolEntry.serverName === 'string' ? toolEntry.serverName.trim() : '';
         if (!serverName) {
           add(
             'error',
@@ -648,7 +654,7 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           }
         }
       }
-      const args = typeof entry.argumentsJson === 'string' ? entry.argumentsJson.trim() : '';
+      const args = typeof toolEntry.argumentsJson === 'string' ? toolEntry.argumentsJson.trim() : '';
       if (args && STATIC_PLACEHOLDER_PATTERN.test(args)) {
         // `${var:…}` / `${res:…}` are substituted at injection time and may legitimately
         // sit in a non-string position (e.g. {"n": ${var:COUNT}}), so the authored text

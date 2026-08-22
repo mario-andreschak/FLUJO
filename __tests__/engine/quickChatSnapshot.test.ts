@@ -90,7 +90,7 @@ function trustedPersonaState(flowSnapshot: ReactFlow, conversationId: string) {
 }
 
 function resolvedMcpNodes(resolved: Awaited<ReturnType<PocketflowEngine['resolveNode']>>) {
-  return (resolved.handle as BaseNode).node_params.properties.mcpNodes;
+  return ((resolved.handle as BaseNode).node_params.properties as { mcpNodes?: unknown }).mcpNodes;
 }
 
 describe('PocketflowEngine — quick-chat snapshot resolution (issue #61)', () => {

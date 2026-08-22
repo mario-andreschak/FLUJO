@@ -9,6 +9,12 @@ defines the Phase C acceptance benchmark for Persona-memory recall.
 npm run test:memory-recall-benchmark
 ```
 
+The `persona-memory-recall-benchmark` GitHub Actions workflow runs the same gate
+weekly and on manual dispatch. It writes the exact JSON result to
+`benchmark-artifacts/persona-memory-recall.json` and uploads that file even when
+the `<150 ms` assertion fails, so a release claim can link evidence for its exact
+commit instead of relying on console output.
+
 The command enables the opt-in suite, selects the Node Jest project, and runs
 `memorySemanticRecallPerf.test.ts` serially with `--runInBand`. Set
 `FLUJO_BENCHMARK_COMMIT` to the tested commit SHA outside GitHub Actions;

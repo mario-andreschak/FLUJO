@@ -5,6 +5,7 @@ import { MCPServerConfig } from '@/shared/types/mcp';
 import { mcpService } from '@/frontend/services/mcp';
 import { findConnectedMCPNodes } from '../utils';
 import { createLogger } from '@/utils/logger';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection');
 
@@ -30,7 +31,7 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
   const isLoadingServers = serverStatus.isLoading || false;
   
   const [serverStatuses, setServerStatuses] = useState<Record<string, string>>({});
-  const [serverToolsMap, setServerToolsMap] = useState<Record<string, any[]>>({});
+  const [serverToolsMap, setServerToolsMap] = useState<Record<string, Tool[]>>({});
   const [isLoadingTools, setIsLoadingTools] = useState<Record<string, boolean>>({});
   const [selectedToolServerNodeId, setSelectedToolServerNodeId] = useState<string | null>(null); // Renamed state
   // const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null); // This seems redundant now
@@ -67,21 +68,23 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
         }
 
         const serverName = mcpNode.data.properties.boundServer;
-        if (!serverName) {
+        if (typeof serverName !== 'string' || !serverName) {
           log.warn(`MCP node ${nodeId} is not bound to any server.`);
           return;
         }
 
         const serverInfo = allServers.find(s => s.name === serverName);
         const status = serverInfo?.status || 'unknown';
-        const enabledTools = mcpNode.data.properties.enabledTools || [];
+        const enabledTools = Array.isArray(mcpNode.data.properties.enabledTools)
+          ? mcpNode.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
+          : [];
         const enabledResources = mcpNode.data.properties.enabledResources as string[] | 'all' | undefined;
 
         nodes.push({
           nodeId: nodeId,
           serverName: serverName,
           status: status,
-          enabledTools: Array.isArray(enabledTools) ? enabledTools : [],
+          enabledTools,
           enabledResources,
         });
         processedNodeIds.add(nodeId); // Mark as processed
@@ -115,7 +118,7 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
 
       const loadToolsForServers = async () => {
         const newIsLoadingTools: Record<string, boolean> = {};
-        const newServerToolsMap: Record<string, any[]> = { ...serverToolsMap }; // Keep existing tools
+        const newServerToolsMap: Record<string, Tool[]> = { ...serverToolsMap }; // Keep existing tools
 
         // Identify servers needing tool loading/reloading
         const serversToLoad = uniqueServerNames.filter(serverName => {

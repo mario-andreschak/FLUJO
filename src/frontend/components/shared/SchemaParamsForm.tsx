@@ -16,6 +16,12 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import GlobalReferenceEditor from './GlobalReferenceEditor';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+);
+
 /**
  * Render input fields for an MCP tool's parameters from its JSON schema
  * (`inputSchema`: { type:'object', properties, required }). Extracted from the
@@ -28,9 +34,9 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
  */
 export interface SchemaParamsFormProps {
   /** The tool's inputSchema (a JSON Schema object). */
-  schema: Record<string, any> | undefined;
-  values: Record<string, any>;
-  onChange: (values: Record<string, any>) => void;
+  schema: Record<string, unknown> | undefined;
+  values: Record<string, unknown>;
+  onChange: (values: Record<string, unknown>) => void;
   size?: 'small' | 'medium';
 }
 
@@ -45,8 +51,10 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
   // destroyed by round-tripping through the parsed value.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
-  const properties: Record<string, any> = schema?.properties ?? {};
-  const required: string[] = Array.isArray(schema?.required) ? schema.required : [];
+  const properties = asRecord(schema?.properties) ?? {};
+  const required = Array.isArray(schema?.required)
+    ? schema.required.filter((key): key is string => typeof key === 'string')
+    : [];
   const keys = Object.keys(properties);
 
   if (keys.length === 0) {
@@ -70,9 +78,14 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {keys.map(key => {
-        const prop = properties[key] ?? {};
+        const prop = asRecord(properties[key]) ?? {};
         const label = required.includes(key) ? `${key} *` : key;
         const description = typeof prop.description === 'string' ? prop.description : '';
+        const enumOptions = Array.isArray(prop.enum)
+          ? prop.enum.filter((option): option is string | number => (
+              typeof option === 'string' || typeof option === 'number'
+            ))
+          : [];
 
         if (prop.type === 'boolean') {
           return (
@@ -99,7 +112,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
           );
         }
 
-        if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+        if (enumOptions.length > 0) {
           const current = values[key];
           return (
             <FormControl key={key} size={size} fullWidth>
@@ -107,11 +120,11 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               <Select
                 labelId={`schema-param-${key}`}
                 label={label}
-                value={prop.enum.includes(current) ? current : ''}
+                value={enumOptions.includes(current as string | number) ? current as string | number : ''}
                 onChange={(e) => setValue(key, e.target.value)}
               >
-                {prop.enum.map((option: unknown) => (
-                  <MenuItem key={String(option)} value={option as string | number}>
+                {enumOptions.map((option) => (
+                  <MenuItem key={String(option)} value={option}>
                     {String(option)}
                   </MenuItem>
                 ))}

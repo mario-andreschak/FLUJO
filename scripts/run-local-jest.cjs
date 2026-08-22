@@ -107,6 +107,7 @@ module.exports = {
   EXCLUDE_ISOLATED_SUITES_ENV,
   EXCLUDE_ISOLATED_SUITES_FLAG,
   jestArgsFromNpm,
+  main,
   partitionRunnerFlags,
   withoutForeignNodeModuleBins,
 };

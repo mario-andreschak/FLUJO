@@ -20,7 +20,7 @@ interface StartNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
 }
 
 export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartNodePropertiesModalProps) => {
@@ -30,7 +30,7 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
   } | null>(null);
   
   const [promptTemplate, setPromptTemplate] = useState('');
@@ -43,7 +43,9 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       });
       
       // Load the prompt template from the node's properties
-      const savedPromptTemplate = node.data.properties?.promptTemplate || '';
+      const savedPromptTemplate = typeof node.data.properties?.promptTemplate === 'string'
+        ? node.data.properties.promptTemplate
+        : '';
       setPromptTemplate(savedPromptTemplate);
     }
   }, [node, open]);

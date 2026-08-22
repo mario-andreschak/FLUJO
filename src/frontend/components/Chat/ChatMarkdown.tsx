@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { Box, Typography } from '@mui/material';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -21,7 +21,7 @@ const CHAT_MARKDOWN_COMPONENTS: Components = {
   li: (props) => <Box component="li" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Box>,
   a: MarkdownLink,
   blockquote: (props) => <Box component="blockquote" sx={{ borderLeft: '4px solid', borderColor: 'divider', pl: 2, py: 0.5, my: 1, bgcolor: 'action.hover', borderRadius: '4px' }}>{props.children}</Box>,
-  code: ({ className, children }: any) => {
+  code: ({ className, children }: { className?: string; children?: ReactNode }) => {
     const match = /language-(\w+)/.exec(className || '');
     const isInline = !match && !className;
     return isInline
@@ -33,4 +33,3 @@ const CHAT_MARKDOWN_COMPONENTS: Components = {
 export const ChatMarkdownContent = memo(function ChatMarkdownContent({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>{children}</ReactMarkdown>;
 });
-

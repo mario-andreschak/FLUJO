@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 import type { PersonaBehaviorComposition } from '@/shared/types/enduringAgent';
+import type { EmitFn } from '@/shared/types/execution/events';
 import { createLogger } from '@/utils/logger';
 
 import type { ToolDefinition } from '../types';
@@ -99,7 +100,7 @@ export async function executeBehaviorToolCall(
   ctx: {
     conversationId?: string;
     toolCallId?: string;
-    emit?: (event: any) => void;
+    emit?: EmitFn;
   },
 ): Promise<BehaviorToolCallOutcome> {
   let durablePin:

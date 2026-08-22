@@ -42,7 +42,6 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
-import type { FlowService as FlowServiceType } from '@/backend/services/flow/index';
 import { Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
 import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -119,18 +118,6 @@ function unansweredOrdinaryCalls(
     (call) => !isHandoffToolCall(call) && !answeredIds.has(call.id),
   );
 }
-
-// --- Add getFlowByName to flowService if it doesn't exist ---
-// (Moved here from chatCompletionService: flow-name resolution now lives in the
-// keystone, since the OpenAI route is a thin adapter on top of runFlow.)
-if (!(flowService as any).getFlowByName) {
-  (flowService as any).getFlowByName = async (name: string): Promise<Flow | null> => {
-    const flows = await flowService.loadFlows();
-    return flows.find(flow => flow.name === name) || null;
-  };
-  log.info('Added getFlowByName method directly to flowService instance.');
-}
-const flowServiceWithGetByName = flowService as FlowServiceType & { getFlowByName: (name: string) => Promise<Flow | null> };
 
 // Persist conversation state WITHOUT the in-memory-only debug execution trace.
 const persistState = persistConversationState;
@@ -401,7 +388,7 @@ export interface FlowRunInput {
   flowDefinition?: Flow;
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
-  messages?: any[];
+  messages?: FlowRunMessageInput[];
   /** Latest future-turn context supplied by mounted MCP Apps. */
   mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
   /** Convenience: a single user message. Used when `messages` is absent. */
@@ -514,6 +501,10 @@ export interface FlowRunInput {
   /** MeetingEngine-only fresh action buffer for this participant turn. */
   meetingTurn?: SharedState['meetingTurn'];
 }
+
+export type FlowRunMessageInput = OpenAI.ChatCompletionMessageParam
+  & Partial<Pick<FlujoChatMessage, 'id' | 'timestamp' | 'processNodeId'>>
+  & { depth?: number };
 
 export interface FlowRunResult {
   status: FlowRunStatus;
@@ -753,9 +744,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const ephemeral = input.mode === 'ephemeral';
 
   // Reconstruct the legacy `data` shape the body below reads from.
-  const inputMessages: any[] = input.messages
+  const inputMessages: FlowRunMessageInput[] = input.messages
     ?? (input.prompt !== undefined ? [{ role: 'user', content: input.prompt }] : []);
-  const data: { model?: string; messages: any[]; processNodeId?: string } = {
+  const data: { model?: string; messages: FlowRunMessageInput[]; processNodeId?: string } = {
     model: input.modelName,
     messages: inputMessages,
     processNodeId: input.processNodeId,
@@ -793,7 +784,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // transient and never adopt a persisted conversation).
   else if (!ephemeral) {
     try {
-      loadedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
+      loadedState = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
       if (loadedState) {
         log.info(`Loaded conversation state from storage: ${effectiveConvId}`);
         stateSource = 'storage';
@@ -1331,7 +1322,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.messages ?? [],
       effectiveConvId,
       sharedState,
-    );
+    ) as FlowRunMessageInput[];
   }
 
   // Snapshot the pre-turn messages for the log reconcile below: the incoming
@@ -1353,7 +1344,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     let resolvedFlowId = input.flowDefinition ? input.flowDefinition.id : input.flowId;
     if (!resolvedFlowId && data.model) {
       const flowName = data.model.substring(5); // Assumes "flow-FlowName" format
-      const reactFlow = await flowServiceWithGetByName.getFlowByName(flowName);
+      const reactFlow = await flowService.getFlowByName(flowName);
       if (!reactFlow) {
         log.error(`Flow not found: ${flowName}`);
         return finalizeRun({
@@ -1390,13 +1381,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // depth>0 messages are display-only subflow steps served by the projection
     // — they must never (re-)enter the parent transcript / model context.
     const initialMessages: FlujoChatMessage[] = (data.messages || [])
-      .filter(msg => !((msg as any).depth > 0))
+      .filter(msg => !(typeof msg.depth === 'number' && msg.depth > 0))
       .map(msg => ({
         ...msg,
-        id: (msg as any).id || crypto.randomUUID(),
-        timestamp: (msg as any).timestamp || Date.now(),
-        processNodeId: (msg as any).processNodeId || undefined,
-      }));
+        id: msg.id || crypto.randomUUID(),
+        timestamp: msg.timestamp || Date.now(),
+        processNodeId: msg.processNodeId || undefined,
+      }) as FlujoChatMessage);
     sharedState.messages = initialMessages;
     // Stamp lastUserMessageAt for the initial user turn
     const _initLastUser = [...initialMessages].reverse().find(m => m.role === 'user');
@@ -1425,14 +1416,14 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       // As above: drop display-only subflow step messages (depth>0) so they
       // can never round-trip from the projection into the parent transcript.
       const normalizedInputMessages = data.messages
-        .filter(msg => !((msg as any).depth > 0))
+        .filter(msg => !(typeof msg.depth === 'number' && msg.depth > 0))
         .map(msg => {
-          const flujoMsg: FlujoChatMessage = {
+          const flujoMsg = {
             ...msg,
-            id: (msg as any).id || crypto.randomUUID(),
-            timestamp: (msg as any).timestamp || Date.now(),
-            processNodeId: (msg as any).processNodeId || undefined,
-          };
+            id: msg.id || crypto.randomUUID(),
+            timestamp: msg.timestamp || Date.now(),
+            processNodeId: msg.processNodeId || undefined,
+          } as FlujoChatMessage;
           return flujoMsg;
         });
       if (input.resumeAsNewTurn) {
@@ -3134,7 +3125,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       currentAction = ERROR_ACTION;
     }
     if (currentAction !== ERROR_ACTION) {
-      const modelDetails = (loopError as any)?.details;
+      const modelDetails = loopError && typeof loopError === 'object' && 'details' in loopError
+        ? loopError.details
+        : undefined;
       sharedState.lastResponse = {
         success: false,
         error: loopError instanceof Error ? loopError.message : String(loopError),

@@ -208,7 +208,7 @@ async function handleRequest(request: NextRequest) {
     log.verbose('Chat completion request payload (truncated)', () => ({
       ...completionData,
       messages: Array.isArray(completionData.messages)
-        ? completionData.messages.map((msg): any => {
+        ? completionData.messages.map((msg) => {
             if (msg && msg.content && typeof msg.content === 'string' && msg.content.length > 100) {
               return {
                 ...msg,
@@ -218,14 +218,20 @@ async function handleRequest(request: NextRequest) {
             if (msg && Array.isArray(msg.content)) {
               return {
                 ...msg,
-                content: msg.content.map((part: any) => {
-                  if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 100) {
-                    return { ...part, text: part.text.substring(0, 100) + `... (${part.text.length - 100} more characters)` };
+                content: msg.content.map((part) => {
+                  const partRecord = part && typeof part === 'object'
+                    ? part as unknown as Record<string, unknown>
+                    : undefined;
+                  if (partRecord?.type === 'text' && typeof partRecord.text === 'string' && partRecord.text.length > 100) {
+                    return { ...partRecord, text: partRecord.text.substring(0, 100) + `... (${partRecord.text.length - 100} more characters)` };
                   }
-                  if (part?.type === 'image_url') {
-                    const url: string = part.image_url?.url ?? '';
+                  if (partRecord?.type === 'image_url') {
+                    const imageUrl = partRecord.image_url && typeof partRecord.image_url === 'object'
+                      ? partRecord.image_url as Record<string, unknown>
+                      : {};
+                    const url = typeof imageUrl.url === 'string' ? imageUrl.url : '';
                     const isData = url.startsWith('data:');
-                    return { ...part, image_url: { ...part.image_url, url: isData ? `[image data url, ${url.length} chars]` : url } };
+                    return { ...partRecord, image_url: { ...imageUrl, url: isData ? `[image data url, ${url.length} chars]` : url } };
                   }
                   return part;
                 })

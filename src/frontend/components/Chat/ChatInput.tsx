@@ -195,7 +195,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
       .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
       .map((candidate) => ({
         server: candidate.data.properties?.boundServer as string | undefined,
-        enabledTools: new Set<string>(candidate.data.properties?.enabledTools ?? []),
+        enabledTools: new Set<string>(
+          Array.isArray(candidate.data.properties?.enabledTools)
+            ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
+            : [],
+        ),
         enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
       }))
       .filter((context): context is {

@@ -6,8 +6,24 @@ import { findBindings } from '@/utils/shared';
 import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import type { MCPNodeReference } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
+import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/utils/PromptRenderer');
+
+interface PromptNodeProperties {
+  promptTemplate?: unknown;
+  boundModel?: unknown;
+  excludeModelPrompt?: unknown;
+  excludeStartNodePrompt?: unknown;
+  excludeSystemPrompt?: unknown;
+}
+
+interface DescribedTool {
+  description?: string;
+  inputSchema?: {
+    properties?: Record<string, { description?: string }>;
+  };
+}
 
 export interface PromptRenderOptions {
   renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${_-_-_server_-_-_name}, rendered shows descriptions
@@ -230,7 +246,10 @@ export class PromptRenderer {
     }
 
     // Return the prompt template
-    const promptTemplate = startNode.data.properties?.promptTemplate || '';
+    const properties = startNode.data.properties as PromptNodeProperties | undefined;
+    const promptTemplate = typeof properties?.promptTemplate === 'string'
+      ? properties.promptTemplate
+      : '';
     log.debug(`Found start node prompt`, {
       nodeId: startNode.id,
       length: promptTemplate.length
@@ -269,7 +288,8 @@ export class PromptRenderer {
     }
 
     // Check if the node has a bound model
-    const modelId = node.data.properties?.boundModel;
+    const properties = node.data.properties as PromptNodeProperties | undefined;
+    const modelId = typeof properties?.boundModel === 'string' ? properties.boundModel : undefined;
     if (!modelId) {
       log.debug(`No model bound to node ${nodeId}`);
       return { prompt: '', modelId: null, reasoningSchema: null, functionCallingSchema: null };
@@ -331,10 +351,11 @@ export class PromptRenderer {
     }
 
     // Return the node's prompt template and exclusion settings
-    const promptTemplate = node.data.properties?.promptTemplate || '';
-    const excludeModelPrompt = node.data.properties?.excludeModelPrompt || false;
-    const excludeStartNodePrompt = node.data.properties?.excludeStartNodePrompt || false;
-    const excludeSystemPrompt = node.data.properties?.excludeSystemPrompt || false;
+    const properties = node.data.properties as PromptNodeProperties | undefined;
+    const promptTemplate = typeof properties?.promptTemplate === 'string' ? properties.promptTemplate : '';
+    const excludeModelPrompt = properties?.excludeModelPrompt === true;
+    const excludeStartNodePrompt = properties?.excludeStartNodePrompt === true;
+    const excludeSystemPrompt = properties?.excludeSystemPrompt === true;
 
     log.debug(`Found node prompt and settings`, {
       length: promptTemplate.length,
@@ -510,13 +531,13 @@ export class PromptRenderer {
   }
 
   /** Flatten an MCP ReadResourceResult into plain text for prompt inlining. */
-  private formatResourceContents(data: any): string {
-    const contents = data?.contents;
+  private formatResourceContents(data: ReadResourceResult): string {
+    const contents = data.contents;
     if (!Array.isArray(contents) || contents.length === 0) return '(empty resource)';
     return contents
-      .map((c: any) => {
-        if (typeof c.text === 'string') return c.text;
-        if (typeof c.blob === 'string') {
+      .map((c) => {
+        if ('text' in c && typeof c.text === 'string') return c.text;
+        if ('blob' in c && typeof c.blob === 'string') {
           // Don't inline base64, but keep the reference actionable: the model
           // can read the bytes back through MCP resources/read if it needs them.
           const kb = Math.round((c.blob.length * 3 / 4) / 1024);
@@ -530,7 +551,7 @@ export class PromptRenderer {
   /**
    * Format tool description in JSON format
    */
-  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: any): string {
+  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: DescribedTool): string {
     // Generate JSON format description with proper TypeScript typing
     const toolObj: {
       tool: string;
@@ -558,7 +579,7 @@ ${JSON.stringify(toolObj, null, 2)}]`;
   /**
    * Format tool description in XML format
    */
-  private formatToolDescriptionXML(serverName: string, toolName: string, tool: any): string {
+  private formatToolDescriptionXML(serverName: string, toolName: string, tool: DescribedTool): string {
     // Generate XML format description
     let xmlExample = `<${toolName}>\n`;
     
@@ -580,7 +601,7 @@ ${xmlExample}]`;
   }
 
   // Helper method to format tool parameters
-  private formatToolParameters(tool: any): string {
+  private formatToolParameters(tool: DescribedTool): string {
     if (!tool.inputSchema || !tool.inputSchema.properties) {
       return '';
     }

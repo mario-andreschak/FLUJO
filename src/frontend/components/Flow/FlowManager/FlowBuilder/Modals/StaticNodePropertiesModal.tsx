@@ -47,7 +47,7 @@ import type { FlowNode } from '@/frontend/types/flow/flow';
 import type { MCPToolResponse } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
-import { useServerStatus } from '@/frontend/hooks/useServerStatus';
+import { useServerStatus, type ServerState } from '@/frontend/hooks/useServerStatus';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { mcpService } from '@/frontend/services/mcp';
@@ -495,7 +495,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
   const [serverPickerEntry, setServerPickerEntry] = useState<number | null>(null);
   const [toolReferenceSuggestions, setToolReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
   const { servers, isLoading: loadingServers, loadError } = useServerStatus();
-  const serverPicker = useCardPicker<any>('mcp', servers);
+  const serverPicker = useCardPicker<ServerState>('mcp', servers);
 
   useEffect(() => {
     if (!node) return;
@@ -585,13 +585,13 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
 
   if (!node || !nodeData) return null;
 
-  const renderServerCard = (server: any) => (
+  const renderServerCard = (server: ServerState) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={server.status === 'starting' ? 'connecting' : server.status}
       path={server.path || server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={server.transport}
       pickerMode
       selected={serverPickerEntry !== null && entries[serverPickerEntry]?.kind === 'toolCall'
         && entries[serverPickerEntry].serverName === server.name}
@@ -601,7 +601,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
       }}
     />
   );
-  const toServerItem = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server), searchText: server.name });
+  const toServerItem = (server: ServerState): CardPickerItem => ({ key: server.name, content: renderServerCard(server), searchText: server.name });
   const serverItems = serverPicker.items.map(toServerItem);
   const serverGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
     ? serverPicker.groups.map((group) => ({ ...group, items: group.items.map(toServerItem) }))

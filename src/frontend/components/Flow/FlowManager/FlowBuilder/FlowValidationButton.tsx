@@ -138,7 +138,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
       if (loadedConfigs) {
         const disabledByName = new Map(loadedConfigs.map(s => [s.name, !!s.disabled]));
         const flowServers = new Set<string>();
-        for (const n of nodes as any[]) {
+        for (const n of nodes) {
           const nodeType = n?.data?.type ?? n?.type;
           const bound = n?.data?.properties?.boundServer;
           if (nodeType === 'mcp' && typeof bound === 'string' && bound) flowServers.add(bound);
@@ -174,7 +174,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
         : undefined;
 
       const result = validateFlow(
-        { nodes, edges } as any,
+        { nodes, edges },
         { models, servers, serverTools, fileAccessMcp }
       );
       setIssues(result.issues);

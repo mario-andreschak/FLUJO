@@ -1,0 +1,36 @@
+name: persona-memory-recall-benchmark
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 4 * * 1'
+
+concurrency:
+  group: persona-memory-recall-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  controlled-recall-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run build:mcp
+      - name: Run production-path 50k Persona recall benchmark
+        env:
+          FLUJO_MEMORY_BENCHMARK_OUTPUT: benchmark-artifacts/persona-memory-recall.json
+        run: npm run test:memory-recall-benchmark
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-memory-recall-${{ github.run_id }}
+          path: benchmark-artifacts/persona-memory-recall.json
+          if-no-files-found: error

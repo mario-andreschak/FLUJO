@@ -190,7 +190,7 @@ export function useMcpAppsDiscovery({
             description: typeof resource.description === 'string' && resource.description.trim()
               ? resource.description.trim()
               : undefined,
-            mimeType: resource.mimeType,
+            mimeType: resource.mimeType ?? MCP_APP_MIME_TYPE,
             toolNames: toolsByResource.get(resource.uri) || [],
             listedResource: true,
           });

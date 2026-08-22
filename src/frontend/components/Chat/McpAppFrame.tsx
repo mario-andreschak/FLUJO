@@ -23,10 +23,12 @@ import type {
   McpUiUpdateModelContextRequest,
 } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type {
+import {
+  CallToolResultSchema,
+  type CallToolResult,
   JSONRPCMessage,
-  MessageExtraInfo,
-  Tool,
+  type MessageExtraInfo,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
@@ -70,6 +72,22 @@ const ALL_DISPLAY_MODES: McpUiDisplayMode[] = ['inline', 'fullscreen', 'pip'];
 const SUPPORTED_CONTEXT_BLOCK_TYPES = new Set(['text']);
 export const MAX_MCP_APP_CONTEXT_BYTES = 256 * 1024;
 const MAX_APP_DIMENSION_PX = 6_000;
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+);
+
+interface TextMessageBlock {
+  type: 'text';
+  text: string;
+}
+
+const isTextMessageBlock = (value: unknown): value is TextMessageBlock => {
+  const record = asRecord(value);
+  return record?.type === 'text' && typeof record.text === 'string';
+};
 
 
 export interface McpAppFrameProps {
@@ -187,11 +205,12 @@ export interface McpAppFrameProps {
  * The host advertises text only, so mixed/unsupported or empty content is
  * rejected instead of being acknowledged and silently discarded.
  */
-export function contentToText(params: any): string {
-  if (params?.role !== 'user') {
+export function contentToText(params: unknown): string {
+  const request = asRecord(params);
+  if (request?.role !== 'user') {
     throw new Error('This host accepts ui/message only with role "user"');
   }
-  const content = params?.content;
+  const content = request.content;
   const blocks = Array.isArray(content)
     ? content
     : content && typeof content === 'object'
@@ -199,14 +218,11 @@ export function contentToText(params: any): string {
       : [];
   if (
     blocks.length === 0
-    || blocks.some((block: any) => (
-      block?.type !== 'text'
-      || typeof block.text !== 'string'
-    ))
+    || !blocks.every(isTextMessageBlock)
   ) {
     throw new Error('This host accepts text-only ui/message content');
   }
-  const text = blocks.map((block: any) => block.text).join('\n').trim();
+  const text = blocks.map((block) => block.text).join('\n').trim();
   if (!text) throw new Error('ui/message text must not be empty');
   return text;
 }
@@ -571,7 +587,7 @@ export function sanitizeGrantedPermissions(
  * stable MCP Apps MIME type.
  */
 export function extractAppResource(readData: unknown, expectedUri: string): AppResource {
-  const contents = (readData as { contents?: Array<Record<string, any>> } | null | undefined)?.contents;
+  const contents = (readData as { contents?: Array<Record<string, unknown>> } | null | undefined)?.contents;
   if (!Array.isArray(contents) || contents.length === 0) {
     throw new Error('Resource has no contents');
   }
@@ -587,7 +603,13 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
 
   let html: string;
   try {
-    html = typeof entry.text === 'string' ? entry.text : decodeBase64Utf8(entry.blob);
+    if (typeof entry.text === 'string') {
+      html = entry.text;
+    } else if (typeof entry.blob === 'string') {
+      html = decodeBase64Utf8(entry.blob);
+    } else {
+      throw new Error('Missing app resource body');
+    }
   } catch {
     throw new Error(`Resource ${expectedUri} contains invalid base64 UTF-8 HTML`);
   }
@@ -595,7 +617,8 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
   if (byteLength > MAX_UI_RESOURCE_BYTES) {
     throw new Error(`Resource exceeds the ${Math.round(MAX_UI_RESOURCE_BYTES / 1024)} KiB size cap`);
   }
-  const uiMeta = (entry._meta ?? entry.meta)?.ui;
+  const entryMeta = asRecord(entry._meta ?? entry.meta);
+  const uiMeta = asRecord(entryMeta?.ui);
   const csp = McpUiResourceCspSchema.safeParse(uiMeta?.csp);
   if (uiMeta?.csp !== undefined && !csp.success) {
     throw new Error(`Resource ${expectedUri} declares an invalid CSP policy`);
@@ -645,7 +668,7 @@ function makeClientShim(
     getServerCapabilities: () => ({ tools: {}, resources: {} }),
     setNotificationHandler: () => { /* no listChanged advertised */ },
     request: async (
-      req: { method: string; params?: any },
+      req: { method: string; params?: unknown },
       _resultSchema?: unknown,
       options?: { signal?: AbortSignal },
     ) => {
@@ -655,11 +678,14 @@ function makeClientShim(
         // bound to serverName). The dedicated backend path additionally checks
         // `_meta.ui.visibility` before dispatch, so model-only tools cannot be
         // reached through the app bridge.
-        log.info(`MCP App tools/call: ${serverName}/${params?.name}`);
+        const callParams = asRecord(params);
+        const requestedToolName = typeof callParams?.name === 'string' ? callParams.name : undefined;
+        if (!requestedToolName) throw new Error('MCP App tool call is missing a tool name');
+        log.info(`MCP App tools/call: ${serverName}/${requestedToolName}`);
         const r = await mcpService.callToolFromApp(
           serverName,
-          params.name,
-          params.arguments ?? {},
+          requestedToolName,
+          asRecord(callParams?.arguments) ?? {},
           undefined,
           options?.signal,
           ownerScope,
@@ -669,17 +695,20 @@ function makeClientShim(
           onAccessRevoked(message);
           throw new Error(message);
         }
-        if (!r || r.success === false) throw new Error(r?.error || `Tool call failed: ${params?.name}`);
+        if (!r || r.success === false) throw new Error(r?.error || `Tool call failed: ${requestedToolName}`);
         return r.data;
       }
       if (method === 'resources/read') {
-        const r = await mcpService.readResourceFromApp(serverName, params.uri);
+        const readParams = asRecord(params);
+        const requestedUri = typeof readParams?.uri === 'string' ? readParams.uri : undefined;
+        if (!requestedUri) throw new Error('MCP App resource read is missing a URI');
+        const r = await mcpService.readResourceFromApp(serverName, requestedUri);
         if (r?.httpStatus === 403) {
           const message = r?.error || 'MCP Apps access was disabled for this server';
           onAccessRevoked(message);
           throw new Error(message);
         }
-        if (!r || r.success === false) throw new Error(r?.error || `Resource read failed: ${params?.uri}`);
+        if (!r || r.success === false) throw new Error(r?.error || `Resource read failed: ${requestedUri}`);
         return r.data;
       }
       if (method === 'resources/list') return { resources: [] };
@@ -710,21 +739,16 @@ function buildToolArguments(raw: string | undefined): Record<string, unknown> {
 export function buildToolResult(
   raw: string | undefined,
   isError: boolean | undefined = undefined,
-): any | null {
+): CallToolResult | null {
   if (raw === undefined) {
     return isError === true ? { content: [], isError: true } : null;
   }
-  const resultData = safeParse(raw);
-  if (resultData && typeof resultData === 'object') {
-    return Array.isArray((resultData as { content?: unknown }).content)
-      ? {
-          ...resultData,
-          ...(isError === true ? { isError: true } : {}),
-        }
-      : {
-          content: [{ type: 'text', text: raw }],
-          ...(isError === true ? { isError: true } : {}),
-        };
+  const parsedResult = CallToolResultSchema.safeParse(safeParse(raw));
+  if (parsedResult.success) {
+    return {
+      ...parsedResult.data,
+      ...(isError === true ? { isError: true } : {}),
+    };
   }
   return {
     content: [{ type: 'text', text: raw }],
@@ -1303,7 +1327,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // the inner View it writes) so do not "fix" the console notice here.
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
-      const allow = buildAllowAttribute(app.permissions as any);
+      const allow = buildAllowAttribute(app.permissions);
       if (allow) iframe.setAttribute('allow', allow);
       // A self-framing app supplies its own background; forcing #fff on the
       // iframe flashes white over a dark workbench or browser window until it
@@ -1431,8 +1455,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       bridge.ondownloadfile = async ({ contents }) => {
         if (!isActiveBridge()) return { isError: true };
         try {
-          for (const c of (contents as any[]) ?? []) {
-            const resource = c?.resource;
+          for (const content of (contents as unknown[]) ?? []) {
+            const resource = asRecord(asRecord(content)?.resource);
             if (!resource) continue;
             const name = (typeof resource.uri === 'string' ? resource.uri.split('/').pop() : '') || 'download';
             const mime = typeof resource.mimeType === 'string' ? resource.mimeType : 'application/octet-stream';
@@ -1656,7 +1680,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         iframe.contentWindow!,
       ));
       if (!isActiveBridge()) return;
-      await bridge.sendSandboxResourceReady({ html: app.html, csp: app.csp as any, permissions: app.permissions as any });
+      await bridge.sendSandboxResourceReady({ html: app.html, csp: app.csp, permissions: app.permissions });
     } catch (e) {
       if (!isCurrentMount()) return;
       log.warn(`Failed to mount MCP App ${uri} from ${serverName}`, e);

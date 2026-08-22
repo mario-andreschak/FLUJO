@@ -9,6 +9,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { ModelInputSnapshot, WireStatus, ModelInputProvenanceEntry } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 
 /**
@@ -75,7 +76,7 @@ const contentPre: React.CSSProperties = {
  */
 export function wireSummary(
   counts: ModelInputSnapshot['counts'],
-  t?: (key: any, values?: Record<string, string | number>) => string,
+  t?: Translator,
 ): string {
   if (t) {
     return [

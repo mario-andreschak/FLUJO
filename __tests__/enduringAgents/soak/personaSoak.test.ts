@@ -3,6 +3,8 @@ import { runPersonaSoak } from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
 
+jest.setTimeout(165 * 60 * 1_000);
+
 describe('deterministic Persona soak harness', () => {
   it('generates byte-identical seeded schedules with weekly ingress coverage', () => {
     const options = { days: 28, activitiesPerDay: 20, seed: 459 };
@@ -16,7 +18,7 @@ describe('deterministic Persona soak harness', () => {
   });
 
   it('runs quick or full simulated time and enforces runtime health invariants', async () => {
-    const quick = process.env.PERSONA_SOAK_QUICK === '1';
+    const quick = process.env.PERSONA_SOAK_FULL !== '1';
     const days = Number(process.env.PERSONA_SOAK_DAYS ?? (quick ? 3 : 28));
     const activitiesPerDay = Number(process.env.PERSONA_SOAK_ACTIVITIES_PER_DAY ?? (quick ? 5 : 20));
     const summary = await runPersonaSoak({
@@ -31,6 +33,19 @@ describe('deterministic Persona soak harness', () => {
     expect(summary.splitBrainCount).toBe(0);
     expect(summary.strandedLeaseCount).toBe(0);
     expect(summary.stuckPersonaCount).toBe(0);
+    expect(summary.runtimeEvidence).toMatchObject({
+      persistedActivities: expect.any(Number),
+      persistedMailboxItems: expect.any(Number),
+      persistedLeaseAcquisitions: expect.any(Number),
+      modelCalls: expect.any(Number),
+    });
+    expect(summary.runtimeEvidence.persistedActivities).toBeGreaterThanOrEqual(summary.activities);
+    expect(summary.runtimeEvidence.persistedMailboxItems).toBeGreaterThanOrEqual(summary.activities);
+    expect(summary.runtimeEvidence.persistedLeaseAcquisitions).toBeGreaterThanOrEqual(summary.activities);
+    expect(summary.runtimeEvidence.modelCalls).toBeGreaterThan(0);
+    expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
+    expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);
+    expect(summary.criteria.filter((criterion) => criterion.status === 'failed')).toEqual([]);
   });
 
   it('absorbs real restart windows without losing deterministic timer order', async () => {

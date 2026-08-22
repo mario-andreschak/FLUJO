@@ -85,7 +85,11 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
         if (cancelled) return;
         setModels(loadedModels);
         const names = Array.isArray(serverConfigs)
-          ? serverConfigs.filter((s: any) => !s.disabled).map((s: any) => s.name as string)
+          ? serverConfigs.flatMap((server) => {
+              if (!server || typeof server !== 'object') return [];
+              const record = server as Record<string, unknown>;
+              return record.disabled !== true && typeof record.name === 'string' ? [record.name] : [];
+            })
           : [];
         setServerNames(names);
         // Default the model to the first available one so a user can start in two clicks.
@@ -134,7 +138,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
       setPicks(prev => ({ ...prev, [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), loading: true } }));
       try {
         const { tools } = await mcpService.listServerTools(name);
-        const names = Array.isArray(tools) ? tools.map((t: any) => t.name).filter(Boolean) : [];
+        const names = tools.map((tool) => tool.name);
         setPicks(prev => ({
           ...prev,
           [name]: { ...(prev[name] ?? { selected: false, tools: null, expanded: true }), available: names, loading: false },

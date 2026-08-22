@@ -26,10 +26,10 @@ interface ToolParameterPresetsEditorProps {
   workspaceRoots?: string[];
 }
 
-function propertiesOf(tool: MCPToolResponse): Record<string, Record<string, any>> {
+function propertiesOf(tool: MCPToolResponse): Record<string, Record<string, unknown>> {
   const properties = (tool.inputSchema as { properties?: unknown } | undefined)?.properties;
   return properties && typeof properties === 'object' && !Array.isArray(properties)
-    ? properties as Record<string, Record<string, any>>
+    ? properties as Record<string, Record<string, unknown>>
     : {};
 }
 
@@ -92,6 +92,8 @@ export default function ToolParameterPresetsEditor({
                 {Object.entries(properties).map(([parameter, schema]) => {
                   const enabled = Object.prototype.hasOwnProperty.call(value[tool.name] ?? {}, parameter);
                   const stored = value[tool.name]?.[parameter];
+                  const schemaType = typeof schema.type === 'string' ? schema.type : 'unknown';
+                  const schemaDescription = typeof schema.description === 'string' ? schema.description : undefined;
                   return (
                     <Box key={parameter} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '180px minmax(0, 1fr)' }, gap: 1, alignItems: 'start' }}>
                       <FormControlLabel
@@ -99,7 +101,7 @@ export default function ToolParameterPresetsEditor({
                         label={(
                           <Box>
                             <Typography variant="body2" fontFamily="monospace">{parameter}</Typography>
-                            <Typography variant="caption" color="text.secondary">{schema.type || 'any'}</Typography>
+                            <Typography variant="caption" color="text.secondary">{schemaType}</Typography>
                           </Box>
                         )}
                       />
@@ -115,9 +117,9 @@ export default function ToolParameterPresetsEditor({
                           placeholder="Literal, ${global:NAME}, or @reference"
                           ariaLabel={`Fixed value for ${tool.name}.${parameter}`}
                         />
-                        {schema.description && (
+                        {schemaDescription && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                            {schema.description}
+                            {schemaDescription}
                           </Typography>
                         )}
                       </Box>

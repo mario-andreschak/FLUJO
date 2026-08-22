@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Box, Typography } from '@mui/material';
+import type { Theme } from '@mui/material/styles';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 export interface OptionCardProps {
@@ -42,7 +43,7 @@ const OptionCard = ({ selected, icon, title, description, onClick }: OptionCardP
       transition: 'border-color 120ms, background-color 120ms',
       '&:hover': { borderColor: selected ? 'primary.main' : 'text.disabled' },
       outline: 'none',
-      '&:focus-visible': { boxShadow: (theme: any) => `0 0 0 3px ${theme.palette.primary.light}` },
+      '&:focus-visible': { boxShadow: (theme: Theme) => `0 0 0 3px ${theme.palette.primary.light}` },
     }}
   >
     {selected && (

@@ -32,10 +32,14 @@ import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/Car
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/RootsManager';
 import { FlowNode } from '@/frontend/types/flow/flow';
-import { useServerStatus } from '@/frontend/hooks/useServerStatus';
+import { useServerStatus, type ServerState } from '@/frontend/hooks/useServerStatus';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
-import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
+import {
+  DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+  TOOL_CALL_TIMEOUT_INFINITE,
+  type MCPToolParameterPresets,
+} from '@/shared/types/mcp';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { createLogger } from '@/utils/logger/index';
@@ -49,7 +53,7 @@ interface MCPNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
   authoringMode?: FlowAuthoringMode;
   /** Open the server card picker immediately for a quick-created MCP node. */
   serverPickerInitiallyOpen?: boolean;
@@ -59,6 +63,28 @@ interface MCPNodePropertiesModalProps {
 
 type CompactTab = 'server' | 'tools' | 'settings';
 type DesktopTab = 'tools' | 'settings';
+
+interface MCPNodeProperties extends Record<string, unknown> {
+  boundServer?: string;
+  nameIsCustom?: boolean;
+  enabledTools?: string[];
+  toolParameterPresets?: MCPToolParameterPresets;
+  roots?: string[];
+  toolTimeout?: number;
+}
+
+interface MCPNodeData {
+  label: string;
+  type: string;
+  description?: string;
+  properties: MCPNodeProperties;
+}
+
+type ServerCardStatus = React.ComponentProps<typeof ServerCard>['status'];
+
+const toServerCardStatus = (status: ServerState['status']): ServerCardStatus => (
+  status === 'starting' ? 'connecting' : status
+);
 
 export const MCPNodePropertiesModal = ({
   open,
@@ -73,12 +99,7 @@ export const MCPNodePropertiesModal = ({
   const theme = useTheme();
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
   const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
-  const [nodeData, setNodeData] = useState<{
-    label: string;
-    type: string;
-    description?: string;
-    properties: Record<string, any>;
-  } | null>(null);
+  const [nodeData, setNodeData] = useState<MCPNodeData | null>(null);
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
   const [retryingAll, setRetryingAll] = useState(false);
   const [serverPickerOpen, setServerPickerOpen] = useState(false);
@@ -92,8 +113,8 @@ export const MCPNodePropertiesModal = ({
     loadError,
     retryServer,
   } = useServerStatus();
-  const serverPicker = useCardPicker<any>('mcp', servers);
-  const selectedServer = nodeData?.properties?.boundServer || '';
+  const serverPicker = useCardPicker<ServerState>('mcp', servers);
+  const selectedServer = nodeData?.properties.boundServer ?? '';
   const {
     tools: mcpTools,
     toolsServerName,
@@ -106,7 +127,7 @@ export const MCPNodePropertiesModal = ({
     if (!node) return;
     setNodeData({
       ...node.data,
-      properties: { ...node.data.properties },
+      properties: { ...node.data.properties } as MCPNodeProperties,
     });
     const hasServer = !!node.data.properties?.boundServer;
     setActiveCompactTab(hasServer ? 'tools' : 'server');
@@ -136,7 +157,7 @@ export const MCPNodePropertiesModal = ({
     setInitializeToolsForServer(null);
   }, [initializeToolsForServer, isLoadingTools, mcpTools, selectedServer, toolsError, toolsServerName]);
 
-  const handlePropertyChange = (key: string, value: any) => {
+  const handlePropertyChange = (key: string, value: unknown) => {
     setNodeData((previous) => previous ? {
       ...previous,
       properties: { ...previous.properties, [key]: value },
@@ -160,7 +181,7 @@ export const MCPNodePropertiesModal = ({
   const handleRetryAllServers = async () => {
     setRetryingAll(true);
     try {
-      await Promise.all(servers.map((server: any) => retryServer(server.name)));
+      await Promise.all(servers.map((server) => retryServer(server.name)));
     } finally {
       setRetryingAll(false);
     }
@@ -239,23 +260,23 @@ export const MCPNodePropertiesModal = ({
   const enabledTools = Array.isArray(nodeData.properties?.enabledTools)
     ? nodeData.properties.enabledTools as string[]
     : [];
-  const selectedServerConfig = servers.find((server: any) => server.name === boundServer);
+  const selectedServerConfig = servers.find((server) => server.name === boundServer);
   const toolTimeout = nodeData.properties?.toolTimeout;
   const isTimeoutInfinite = toolTimeout === TOOL_CALL_TIMEOUT_INFINITE;
 
-  const renderServerCard = (server: any) => (
+  const renderServerCard = (server: ServerState) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={toServerCardStatus(server.status)}
       path={server.path || server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={server.transport}
       pickerMode
       selected={boundServer === server.name}
       onClick={() => handleServerSelect(server.name)}
     />
   );
-  const toServerCell = (server: any): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
+  const toServerCell = (server: ServerState): CardPickerItem => ({ key: server.name, content: renderServerCard(server) });
   const serverPickerItems: CardPickerItem[] = serverPicker.items.map(toServerCell);
   const serverPickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
     ? serverPicker.groups.map((group) => ({ ...group, items: group.items.map(toServerCell) }))

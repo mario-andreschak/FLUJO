@@ -70,8 +70,8 @@
     "prepublishOnly": "npm run build && npm run validate:mcp-release",
     "version": "node scripts/sync-version.mjs && git add -u -- src README.md githubpages/index.html mcp-servers package.json package-lock.json",
     "release": "node scripts/release.mjs",
-    "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20",
-    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5"
+    "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning",
+    "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",

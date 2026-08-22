@@ -7,6 +7,7 @@ import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import OptionCard from '@/frontend/components/shared/OptionCard';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Model, ProcessNodeData } from './types';
 
 type InputMode = 'full-history' | 'latest-message' | 'isolated';
 type OutputMode = 'full-conversation' | 'latest-message';
@@ -27,8 +28,8 @@ export interface PromptIOControlsProps {
   outputMode: OutputMode;
   setOutputMode: (value: OutputMode) => void;
   isModelBound: boolean;
-  models: any[];
-  nodeData: any;
+  models: Model[];
+  nodeData: ProcessNodeData;
 }
 
 /**

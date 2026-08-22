@@ -18,14 +18,47 @@ import { createLogger } from '@/utils/logger';
 import {
   clearItem,
   deleteCollectionItem,
+  getCollectionItemStats,
   loadCollectionItem,
   loadItem,
   saveCollectionItem,
 } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/enduringAgents/memoryEmbeddingStore');
 const MEMORY_EMBEDDING_COLLECTION = StorageKey.MEMORY_EMBEDDINGS;
+
+interface PersonaEmbeddingCacheEntry {
+  mtimeMs: number;
+  sizeBytes: number;
+  embeddings: MemoryEmbedding[];
+}
+
+declare global {
+  var __flujo_persona_embedding_cache: Map<string, PersonaEmbeddingCacheEntry> | undefined;
+}
+
+function embeddingCache(): Map<string, PersonaEmbeddingCacheEntry> {
+  global.__flujo_persona_embedding_cache ??= new Map();
+  return global.__flujo_persona_embedding_cache;
+}
+
+function embeddingCacheKey(personaId: string): string {
+  return workspaceCacheKey('persona-memory-embeddings', personaId);
+}
+
+async function cachePersonaEmbeddings(
+  personaId: string,
+  embeddings: MemoryEmbedding[],
+): Promise<void> {
+  const stats = await getCollectionItemStats(MEMORY_EMBEDDING_COLLECTION, personaId);
+  if (!stats) {
+    embeddingCache().delete(embeddingCacheKey(personaId));
+    return;
+  }
+  embeddingCache().set(embeddingCacheKey(personaId), { ...stats, embeddings });
+}
 
 function legacyEmbeddingStorageKey(personaId: string): StorageKey {
   return `${StorageKey.MEMORY_EMBEDDINGS}:${personaId}` as StorageKey;
@@ -43,6 +76,16 @@ export function computeContentDigest(text: string): string {
  */
 async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding[]> {
   try {
+    const stats = await getCollectionItemStats(MEMORY_EMBEDDING_COLLECTION, personaId);
+    const cached = embeddingCache().get(embeddingCacheKey(personaId));
+    if (
+      stats
+      && cached
+      && cached.mtimeMs === stats.mtimeMs
+      && cached.sizeBytes === stats.sizeBytes
+    ) {
+      return cached.embeddings;
+    }
     const stored = await loadCollectionItem<MemoryEmbedding[] | null>(
       MEMORY_EMBEDDING_COLLECTION,
       personaId,
@@ -51,7 +94,9 @@ async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding
     const embeddings = stored ?? (process.platform === 'win32'
       ? []
       : await loadItem<MemoryEmbedding[]>(legacyEmbeddingStorageKey(personaId), []));
-    return embeddings.filter((e) => MemoryEmbeddingSchema.safeParse(e).success);
+    const parsed = embeddings.filter((e) => MemoryEmbeddingSchema.safeParse(e).success);
+    if (stored !== null) await cachePersonaEmbeddings(personaId, parsed);
+    return parsed;
   } catch (error: unknown) {
     log.warn(`Failed to load embeddings for persona ${personaId}:`, error);
     return [];
@@ -64,6 +109,7 @@ async function loadPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding
 async function savePersonaEmbeddings(personaId: string, embeddings: MemoryEmbedding[]): Promise<void> {
   try {
     await saveCollectionItem(MEMORY_EMBEDDING_COLLECTION, personaId, embeddings);
+    await cachePersonaEmbeddings(personaId, embeddings);
   } catch (error: unknown) {
     log.error(`Failed to save embeddings for persona ${personaId}:`, error);
     throw error;
@@ -180,6 +226,7 @@ export async function deletePersonaEmbeddings(personaId: string): Promise<number
 
     if (count > 0) {
       await deleteCollectionItem(MEMORY_EMBEDDING_COLLECTION, personaId);
+      embeddingCache().delete(embeddingCacheKey(personaId));
       if (process.platform !== 'win32') {
         await clearItem(legacyEmbeddingStorageKey(personaId));
       }

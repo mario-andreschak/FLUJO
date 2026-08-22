@@ -326,7 +326,12 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         : null;
       
       // Prepare the request body
-      const requestBody: any = {
+      const requestBody: {
+        action: 'encrypt';
+        data: string;
+        token?: string;
+        password?: string;
+      } = {
         action: 'encrypt',
         data: value
       };

@@ -692,7 +692,7 @@ export function compileFlowSpec(
         continue;
       }
 
-      const properties: Record<string, any> = {};
+      const properties: Record<string, unknown> = {};
       const prompt = typeof specNode.prompt === 'string' ? specNode.prompt : undefined;
 
       if (type === 'start') {
@@ -1225,7 +1225,7 @@ export function compileFlowSpec(
     key: string,
     depth: number,
     ancestorNames: string[],
-    properties: Record<string, any>
+    properties: Record<string, unknown>
   ): void {
     const hasParallelFlows = Array.isArray(specNode.parallelFlows) && specNode.parallelFlows.length > 0;
     const hasParallelSpecs = Array.isArray(specNode.parallelSubflowSpecs) && specNode.parallelSubflowSpecs.length > 0;
@@ -1454,7 +1454,7 @@ export function compileFlowSpec(
   }
 
   /** Map the parallel tuning fields onto the subflow node's properties (issue #102). */
-  function applyParallelTuning(specNode: FlowSpecNode, properties: Record<string, any>): void {
+  function applyParallelTuning(specNode: FlowSpecNode, properties: Record<string, unknown>): void {
     if (specNode.concurrencyLimit !== undefined) {
       if (typeof specNode.concurrencyLimit === 'number' && !Number.isNaN(specNode.concurrencyLimit)) {
         properties.concurrencyLimit = Math.max(1, Math.floor(specNode.concurrencyLimit));
@@ -1523,7 +1523,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
     if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') continue;
-    const props = (node.data?.properties ?? {}) as Record<string, any>;
+    const props = (node.data?.properties ?? {}) as Record<string, unknown>;
     const specNode: FlowSpecNode = {
       key: node.id,
       type,

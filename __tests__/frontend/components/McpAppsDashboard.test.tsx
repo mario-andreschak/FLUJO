@@ -149,7 +149,7 @@ describe('McpAppsDashboard', () => {
       resourceTemplates: [],
     });
     service.listServerTools.mockResolvedValue({
-      tools: [{ name: 'get_forecast', _meta: { ui: { resourceUri: 'ui://forecast' } } }],
+      tools: [{ name: 'get_forecast', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://forecast' } } }],
     });
 
     renderDashboard(onOpenToolTester);
@@ -169,7 +169,7 @@ describe('McpAppsDashboard', () => {
       error: 'resources/list is unavailable',
     });
     service.listServerTools.mockResolvedValue({
-      tools: [{ name: 'open_terminal', _meta: { ui: { resourceUri: 'ui://bash/real-terminal' } } }],
+      tools: [{ name: 'open_terminal', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://bash/real-terminal' } } }],
     });
 
     renderDashboard();

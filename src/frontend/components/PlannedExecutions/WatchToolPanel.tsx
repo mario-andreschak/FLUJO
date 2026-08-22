@@ -43,7 +43,7 @@ interface WatchToolPanelProps {
 interface ToolEntry {
   name: string;
   description?: string;
-  inputSchema?: Record<string, any>;
+  inputSchema?: Record<string, unknown>;
 }
 
 // Full server config (not just the name) so the card picker can render status,
@@ -184,10 +184,17 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   const renderServerCard = (server: ServerConfigLike) => (
     <ServerCard
       name={server.name}
-      status={(server.status as any) || 'disconnected'}
+      status={server.status === 'connected' || server.status === 'error'
+        || server.status === 'connecting' || server.status === 'initialization'
+        || server.status === 'requires_authentication'
+        ? server.status
+        : 'disconnected'}
       path={server.rootPath || ''}
       enabled={!server.disabled}
-      transport={(server.transport as any) || 'stdio'}
+      transport={server.transport === 'websocket' || server.transport === 'sse'
+        || server.transport === 'streamable'
+        ? server.transport
+        : 'stdio'}
       pickerMode
       selected={config.serverName === server.name}
       onClick={() => handlePickServer(server.name)}

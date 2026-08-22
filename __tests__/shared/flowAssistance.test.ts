@@ -44,15 +44,21 @@ describe('flow assistance', () => {
     expect(once.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate)
       .toContain('${tool:files__read_file}');
 
+    const proposedPrompt = once.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate;
+    if (typeof proposedPrompt !== 'string') {
+      throw new Error('Expected the process prompt template to remain a string');
+    }
+
     const twice = applyStepToolSelections(once, {
       nodeId: 'work',
       selections: [{ server: 'files', tool: 'read_file', reason: 'the step reads project notes' }],
       availableTools: { files: ['read_file', 'write_file'] },
-      proposedPrompt: once.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate,
+      proposedPrompt,
     });
     expect(twice.nodes).toHaveLength(once.nodes.length);
     expect(twice.edges).toHaveLength(once.edges.length);
-    expect((twice.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate.match(/\$\{tool:files__read_file\}/g) ?? []))
+    const twicePrompt = twice.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate;
+    expect((typeof twicePrompt === 'string' ? twicePrompt.match(/\$\{tool:files__read_file\}/g) : []) ?? [])
       .toHaveLength(1);
   });
 

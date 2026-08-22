@@ -87,18 +87,25 @@ async function loadFlow(flowId: string, caches: BuildCaches): Promise<Flow | nul
 
 /** Build the MCP-server facets for a Process node from its bound MCP node references. */
 async function summariseServers(properties: Record<string, unknown>, caches: BuildCaches): Promise<HandoffServerSummary[]> {
-  const mcpNodes = Array.isArray((properties as any).mcpNodes) ? (properties as any).mcpNodes : [];
+  const mcpNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
   const servers: HandoffServerSummary[] = [];
   const seen = new Set<string>();
   for (const mcpNode of mcpNodes) {
-    const boundServer: string | undefined = mcpNode?.properties?.boundServer;
+    if (!mcpNode || typeof mcpNode !== 'object') continue;
+    const nodeProperties = 'properties' in mcpNode
+      && mcpNode.properties && typeof mcpNode.properties === 'object'
+      ? mcpNode.properties as Record<string, unknown>
+      : {};
+    const boundServer = typeof nodeProperties.boundServer === 'string'
+      ? nodeProperties.boundServer
+      : undefined;
     if (!boundServer || seen.has(boundServer)) continue;
     seen.add(boundServer);
     const connected = await isServerConnected(boundServer, caches);
     // Tool names come from the node's own enabledTools — no server round-trip
     // (and therefore no spawn). We surface them only when the server is live.
-    const enabledTools: string[] = Array.isArray(mcpNode?.properties?.enabledTools)
-      ? mcpNode.properties.enabledTools
+    const enabledTools: string[] = Array.isArray(nodeProperties.enabledTools)
+      ? nodeProperties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
       : [];
     servers.push({
       name: boundServer,
@@ -131,7 +138,7 @@ async function summariseNode(
   if (userDescription && userDescription.trim()) return summary;
 
   if (type === 'subflow') {
-    const subflowId = (properties as any).subflowId as string | undefined;
+    const subflowId = typeof properties.subflowId === 'string' ? properties.subflowId : undefined;
     if (!subflowId) {
       summary.subflowMissing = true;
       return summary;
@@ -161,8 +168,9 @@ async function summariseNode(
   }
 
   // Process (or any model-bound) node.
-  summary.modelName = await resolveModelName((properties as any).boundModel as string | undefined, caches);
-  const promptTemplate = (properties as any).promptTemplate;
+  const boundModel = typeof properties.boundModel === 'string' ? properties.boundModel : undefined;
+  summary.modelName = await resolveModelName(boundModel, caches);
+  const promptTemplate = properties.promptTemplate;
   if (typeof promptTemplate === 'string' && promptTemplate.trim()) {
     summary.promptSummary = promptTemplate;
   }

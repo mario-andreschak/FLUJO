@@ -46,7 +46,7 @@ interface ResourceNodePropertiesModalProps {
   open: boolean;
   node: FlowNode | null;
   onClose: () => void;
-  onSave: (nodeId: string, data: any) => void;
+  onSave: (nodeId: string, data: FlowNode['data']) => void;
   /** All nodes on the current canvas — used to auto-suggest `${res:NAME}` names
    *  already referenced elsewhere in this flow (issue #183 item 4). */
   flowNodes?: FlowNode[];
@@ -56,6 +56,14 @@ interface BrowsedResource {
   uri: string;
   name?: string;
   description?: string;
+  mimeType?: string;
+}
+
+interface ResourceNodeProperties extends Record<string, unknown> {
+  scope?: 'mcp' | 'run';
+  boundServer?: string;
+  uri?: string;
+  runName?: string;
   mimeType?: string;
 }
 
@@ -80,7 +88,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
     label: string;
     type: string;
     description?: string;
-    properties: Record<string, any>;
+    properties: ResourceNodeProperties;
   } | null>(null);
 
   const { servers, isLoading: isLoadingServers } = useServerStatus();
@@ -99,7 +107,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
         ...node.data,
         // #183 item 2: new resource nodes default to the run-scoped ("Temporary
         // Data") type; an existing node's explicit scope is preserved by the spread.
-        properties: { scope: 'run', ...node.data.properties },
+        properties: { scope: 'run', ...node.data.properties } as ResourceNodeProperties,
       });
       const hasCustomLabel = !!node.data.label && node.data.label.trim() !== DEFAULT_RESOURCE_LABEL;
       const hasDescription = !!node.data.description && node.data.description.trim().length > 0;
@@ -150,12 +158,12 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
           setBrowsed([]);
         } else {
           const list: BrowsedResource[] = [
-            ...(result.resources ?? []).map((r: any) => ({
+            ...result.resources.map((r) => ({
               uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType,
             })),
             // Templates are offered too — picking one puts the raw uriTemplate
             // in the field for the user to fill in.
-            ...(result.resourceTemplates ?? []).map((template: any) => ({
+            ...result.resourceTemplates.map((template) => ({
               uri: template.uriTemplate,
               name: template.name
                 ? `${template.name} (${t('flows.resource.template')})`
@@ -180,7 +188,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
     if (!node || !nodeData) return;
     // Persist only the fields of the active scope so a scope switch doesn't
     // leave stale bindings behind.
-    const properties: Record<string, any> = { ...nodeData.properties };
+    const properties: Record<string, unknown> = { ...nodeData.properties };
     if (scope === 'run') {
       delete properties.boundServer;
       delete properties.uri;
@@ -237,7 +245,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
                   }}
                 >
                   {isLoadingServers && <MenuItem value="" disabled>{t('flows.resource.loadingServers')}</MenuItem>}
-                  {servers.map((s: any) => (
+                  {servers.map((s) => (
                     <MenuItem key={s.name} value={s.name}>{s.name}</MenuItem>
                   ))}
                 </Select>
