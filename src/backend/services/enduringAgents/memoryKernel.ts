@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { modelService } from '@/backend/services/model';
+import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
+import { supportsEmbeddings } from '@/shared/types/model/embeddings';
 import { createLogger } from '@/utils/logger';
 import {
   CreateMemoryItemInputSchema,
@@ -28,10 +31,23 @@ import {
 } from './domainMutation';
 import { randomEnduringAgentId } from './ids';
 import { buildReinforcedMemoryItem } from './memoryDeduplication';
+import {
+  buildSemanticMemoryScores,
+  listPersonaEmbeddings,
+  type SemanticMemoryScore,
+} from './memoryEmbeddingStore';
+import {
+  recordSemanticRecallCandidates,
+  recordSemanticRecallFallback,
+  recordSemanticRecallStage,
+} from './memoryRecallMetrics';
 import { getMemorySettings } from './memorySettings';
 import {
   MEMORY_DEDUP_SETTINGS,
+  MEMORY_RANKING_WEIGHTS,
+  MEMORY_SEMANTIC_FLOOR,
   scoreMemoryCandidate,
+  semanticCandidateEligible,
   selectNearDuplicateCandidate,
 } from './memoryRanking';
 import { normalizeMemorySourceRefs } from './provenance';
@@ -306,6 +322,97 @@ function queryTerms(query: string | undefined): string[] {
   return [...new Set((query?.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []))];
 }
 
+export interface SemanticRecallContext {
+  readonly scores: ReadonlyMap<string, SemanticMemoryScore>;
+  readonly floor: number;
+  readonly lexicalWeight: number;
+  readonly semanticWeight: number;
+}
+
+function semanticFallback(
+  reason: string,
+  floor: number = MEMORY_SEMANTIC_FLOOR,
+): SemanticRecallContext {
+  recordSemanticRecallFallback(reason);
+  log.debug('Semantic recall unavailable; using lexical fallback.', { reason });
+  return {
+    scores: new Map(),
+    floor,
+    lexicalWeight: MEMORY_RANKING_WEIGHTS.lexicalWeight,
+    semanticWeight: MEMORY_RANKING_WEIGHTS.semanticWeight,
+  };
+}
+
+/**
+ * Prepare one query embedding and one Persona sidecar read for a recall.
+ * Provider and sidecar failures are intentionally contained at this boundary.
+ */
+export async function prepareSemanticRecall(
+  personaId: string,
+  query: string | undefined,
+  items: readonly MemoryItem[],
+): Promise<SemanticRecallContext> {
+  if (!query?.trim()) return semanticFallback('empty_query');
+
+  const settings = await getMemorySettings();
+  if (!settings.semanticRecallEnabled) {
+    return semanticFallback('disabled', settings.semanticFloor);
+  }
+  if (!settings.semanticEmbeddingModelId) {
+    return semanticFallback('missing_model', settings.semanticFloor);
+  }
+
+  const model = await modelService.getModel(settings.semanticEmbeddingModelId);
+  if (!model) return semanticFallback('model_not_found', settings.semanticFloor);
+  if (!supportsEmbeddings(model.adapter)) {
+    return semanticFallback('unsupported_adapter', settings.semanticFloor);
+  }
+
+  try {
+    const embeddingStartedAt = performance.now();
+    const queryEmbedding = await getEmbeddingProvider().embed(model, {
+      modelId: model.name,
+      text: query,
+      dimensions: settings.semanticEmbeddingDimensions,
+    });
+    recordSemanticRecallStage(
+      'query_embedding',
+      performance.now() - embeddingStartedAt,
+    );
+    if (
+      queryEmbedding.vector.length === 0
+      || queryEmbedding.vector.length !== queryEmbedding.dimensions
+      || !queryEmbedding.vector.every(Number.isFinite)
+    ) {
+      return semanticFallback('invalid_query_vector', settings.semanticFloor);
+    }
+
+    const sidecarStartedAt = performance.now();
+    const embeddings = await listPersonaEmbeddings(personaId);
+    recordSemanticRecallStage('sidecar_load', performance.now() - sidecarStartedAt);
+    if (embeddings.length === 0) recordSemanticRecallFallback('missing_sidecar');
+
+    const scoringStartedAt = performance.now();
+    const scores = buildSemanticMemoryScores(
+      personaId,
+      items,
+      embeddings,
+      queryEmbedding.vector,
+      queryEmbedding.modelId,
+    );
+    recordSemanticRecallStage('cosine_scoring', performance.now() - scoringStartedAt);
+
+    return {
+      scores,
+      floor: settings.semanticFloor,
+      lexicalWeight: settings.lexicalWeight,
+      semanticWeight: settings.semanticWeight,
+    };
+  } catch {
+    return semanticFallback('embedding_failure', settings.semanticFloor);
+  }
+}
+
 export async function searchPersonaMemory(
   personaId: string,
   query: MemorySearchQuery = {},
@@ -319,6 +426,7 @@ export async function searchPersonaMemory(
   const asOf = parsed.asOf ?? Date.now();
   const defaultStatuses: MemoryStatus[] = ['active'];
   const limit = parsed.limit ?? 50;
+  const itemLoadStartedAt = performance.now();
   const items = await listMemoryItems(personaId, {
     statuses: parsed.statuses ?? defaultStatuses,
     kinds: parsed.kinds?.length ? parsed.kinds : undefined,
@@ -335,18 +443,50 @@ export async function searchPersonaMemory(
       coreIds: [...coreIds],
     } : {}),
   });
-  const results = items.filter((item) => (
-    terms.length === 0 || terms.some((term) => item.content.toLocaleLowerCase().includes(term))
-  )).map((item) => ({
+  recordSemanticRecallStage('item_load', performance.now() - itemLoadStartedAt);
+  const semantic = await prepareSemanticRecall(personaId, parsed.query, items);
+  const rankStartedAt = performance.now();
+  const candidates = items.map((item) => {
+    const lexicalHit = terms.some(
+      (term) => item.content.toLocaleLowerCase().includes(term),
+    );
+    return {
+      item,
+      core: coreIds.has(item.id),
+      lexicalHit,
+      semantic: semantic.scores.get(item.id),
+    };
+  });
+  const eligible = candidates.filter(({ lexicalHit, semantic: semanticScore }) => (
+    terms.length === 0
+    || semanticCandidateEligible(lexicalHit, semanticScore, semantic.floor)
+  ));
+  recordSemanticRecallCandidates(candidates.length, eligible.length);
+
+  const rankingWeights = {
+    ...MEMORY_RANKING_WEIGHTS,
+    lexicalWeight: semantic.lexicalWeight,
+    semanticWeight: semantic.semanticWeight,
+  };
+  const results = eligible.map(({ item, core, semantic: semanticScore }) => ({
     item,
-    core: coreIds.has(item.id),
-    score: scoreMemoryCandidate({ item, terms, core: coreIds.has(item.id), asOf }),
+    core,
+    score: scoreMemoryCandidate({
+      item,
+      terms,
+      core,
+      asOf,
+      semantic: semanticScore,
+      weights: rankingWeights,
+    }),
   }));
-  return terms.length === 0 ? results : results.sort((left, right) => (
+  const ordered = terms.length === 0 ? results : results.sort((left, right) => (
     right.score - left.score
     || right.item.updatedAt - left.item.updatedAt
     || left.item.id.localeCompare(right.item.id)
   )).slice(0, limit);
+  recordSemanticRecallStage('filter_rank', performance.now() - rankStartedAt);
+  return ordered;
 }
 
 export async function correctMemory(

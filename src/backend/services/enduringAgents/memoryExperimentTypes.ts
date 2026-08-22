@@ -121,6 +121,7 @@ export interface MemoryExperimentQueryOutcome {
   readonly actualIds: readonly string[];
   readonly hit: boolean;
   readonly recallAtK: FractionMetric;
+  readonly reciprocalRank: number;
   readonly exactOrderMatch: boolean | null;
 }
 
@@ -145,6 +146,7 @@ export interface MemoryExperimentResult {
   readonly metrics: {
     readonly recallHitRate: FractionMetric;
     readonly recallAtK: FractionMetric;
+    readonly meanReciprocalRank: FractionMetric;
     readonly rankingAccuracy: FractionMetric;
     readonly duplicateMergePrecision: FractionMetric;
     readonly duplicateRecall: FractionMetric;

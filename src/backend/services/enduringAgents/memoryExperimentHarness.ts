@@ -12,7 +12,9 @@ import type {
 } from './memoryExperimentTypes';
 import {
   CURRENT_MEMORY_VARIANT,
+  MEMORY_SEMANTIC_FLOOR,
   scoreMemoryCandidate,
+  semanticCandidateEligible,
   selectNearDuplicateCandidate,
 } from './memoryRanking';
 
@@ -282,18 +284,28 @@ function runQueryCases(
     const ranked = candidateIds
       .map((id) => itemById.get(id))
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .filter((item) => (
+      .map((item) => {
+        const lexicalHit = terms.some(
+          (term) => item.content.toLocaleLowerCase().includes(term),
+        );
+        const semanticValue = query.semanticScores?.[item.id];
+        const semantic = semanticValue === undefined
+          ? undefined
+          : { available: true as const, score: semanticValue };
+        return { item, lexicalHit, semantic };
+      })
+      .filter(({ lexicalHit, semantic }) => (
         terms.length === 0
-        || terms.some((term) => item.content.toLocaleLowerCase().includes(term))
+        || semanticCandidateEligible(lexicalHit, semantic, MEMORY_SEMANTIC_FLOOR)
       ))
-      .map((item) => ({
+      .map(({ item, semantic }) => ({
         item,
         score: scoreMemoryCandidate({
           item,
           terms,
           core: item.core ?? false,
           asOf: query.asOf,
-          semanticScore: query.semanticScores?.[item.id] ?? 0,
+          semantic,
           weights: variant.ranking,
         }),
       }))
@@ -306,6 +318,7 @@ function runQueryCases(
     const actualIds = ranked.map(({ item }) => item.id);
     const relevant = new Set(query.relevantIds);
     const relevantHits = actualIds.filter((id) => relevant.has(id)).length;
+    const firstRelevantIndex = actualIds.findIndex((id) => relevant.has(id));
     const expectedOrder = query.expectedOrder ?? [];
     return {
       caseId: query.id,
@@ -314,6 +327,7 @@ function runQueryCases(
       actualIds,
       hit: relevantHits > 0,
       recallAtK: fraction(relevantHits, relevant.size),
+      reciprocalRank: firstRelevantIndex < 0 ? 0 : 1 / (firstRelevantIndex + 1),
       exactOrderMatch: expectedOrder.length === 0
         ? null
         : expectedOrder.every((id, index) => actualIds[index] === id),
@@ -394,6 +408,10 @@ export function runMemoryExperiment(
       (sum, outcome) => sum + outcome.recallAtK.denominator,
       0,
     );
+    const reciprocalRankTotal = queryOutcomes.reduce(
+      (sum, outcome) => sum + outcome.reciprocalRank,
+      0,
+    );
     const ordering = queryOutcomes.filter((outcome) => outcome.exactOrderMatch !== null);
     const correctOrdering = ordering.filter((outcome) => outcome.exactOrderMatch).length;
 
@@ -410,6 +428,7 @@ export function runMemoryExperiment(
       metrics: {
         recallHitRate: fraction(recallHits, queryOutcomes.length),
         recallAtK: fraction(relevantHits, relevantExpected),
+        meanReciprocalRank: fraction(reciprocalRankTotal, queryOutcomes.length),
         rankingAccuracy: fraction(correctOrdering, ordering.length),
         duplicateMergePrecision: fraction(
           counts.truePositives,

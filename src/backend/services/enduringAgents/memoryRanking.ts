@@ -14,6 +14,15 @@ import type {
   MemoryRankingWeights,
 } from './memoryExperimentTypes';
 
+export const MEMORY_LEXICAL_WEIGHT = 0.6;
+export const MEMORY_SEMANTIC_WEIGHT = 0.4;
+export const MEMORY_SEMANTIC_FLOOR = 0.75;
+
+export interface SemanticRankingInput {
+  readonly available: boolean;
+  readonly score?: number;
+}
+
 /** Production ranking defaults. Experiments pass a complete fork explicitly. */
 export const MEMORY_RANKING_WEIGHTS = {
   importanceWeight: 0.25,
@@ -34,8 +43,8 @@ export const MEMORY_RANKING_WEIGHTS = {
   },
   coreBonus: 2,
   coreExemptFromDecay: true,
-  lexicalWeight: 0.6,
-  semanticWeight: 0.4,
+  lexicalWeight: MEMORY_LEXICAL_WEIGHT,
+  semanticWeight: MEMORY_SEMANTIC_WEIGHT,
 } as const satisfies MemoryRankingWeights;
 
 /** Production near-duplicate defaults. Experiments pass a complete fork explicitly. */
@@ -125,12 +134,36 @@ export function trustWeight(
   return weights.trustWeights[trust] ?? weights.trustWeights.model_inference;
 }
 
+export function normaliseSemanticScore(score: number | undefined): number | null {
+  if (score === undefined || !Number.isFinite(score)) return null;
+  return Math.min(1, Math.max(0, score));
+}
+
 export function hybridScore(
   lexical: number,
-  semantic: number,
+  semantic: number | SemanticRankingInput | undefined,
   weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
 ): number {
-  return weights.lexicalWeight * lexical + weights.semanticWeight * semantic;
+  const semanticInput = typeof semantic === 'number'
+    ? { available: true, score: semantic }
+    : semantic;
+  const semanticScore = normaliseSemanticScore(semanticInput?.score);
+  if (!semanticInput?.available || semanticScore === null) return lexical;
+  return weights.lexicalWeight * lexical + weights.semanticWeight * semanticScore;
+}
+
+export function semanticCandidateEligible(
+  lexicalHit: boolean,
+  semantic: SemanticRankingInput | undefined,
+  floor: number = MEMORY_SEMANTIC_FLOOR,
+): boolean {
+  if (lexicalHit) return true;
+  if (!semantic?.available) return false;
+  const score = normaliseSemanticScore(semantic.score);
+  const effectiveFloor = Number.isFinite(floor)
+    ? Math.min(1, Math.max(0, floor))
+    : MEMORY_SEMANTIC_FLOOR;
+  return score !== null && score >= effectiveFloor;
 }
 
 export function scoreMemoryCandidate(opts: {
@@ -138,6 +171,8 @@ export function scoreMemoryCandidate(opts: {
   readonly terms: readonly string[];
   readonly core: boolean;
   readonly asOf: number;
+  readonly semantic?: SemanticRankingInput;
+  /** @deprecated Prefer semantic, which represents availability explicitly. */
   readonly semanticScore?: number;
   readonly weights?: MemoryRankingWeights;
 }): number {
@@ -146,9 +181,13 @@ export function scoreMemoryCandidate(opts: {
     terms,
     core,
     asOf,
-    semanticScore = 0,
     weights = MEMORY_RANKING_WEIGHTS,
   } = opts;
+  const semantic = opts.semantic ?? (
+    opts.semanticScore === undefined
+      ? undefined
+      : { available: true, score: opts.semanticScore }
+  );
   const content = item.content.toLocaleLowerCase();
   let lexical = (
     item.importance * weights.importanceWeight
@@ -170,7 +209,7 @@ export function scoreMemoryCandidate(opts: {
   }
 
   const normalizedLexical = Math.min(1, lexical / 10);
-  const blended = hybridScore(normalizedLexical, semanticScore, weights);
+  const blended = hybridScore(normalizedLexical, semantic, weights);
   let score = (
     blended
     * contentLengthFactor(item.content.length, weights)

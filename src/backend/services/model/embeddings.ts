@@ -94,7 +94,7 @@ export class EmbeddingProvider {
    * @param b Second vector
    * @returns Cosine similarity in range [0, 1]
    */
-  static cosineSimilarity(a: number[], b: number[]): number {
+  static cosineSimilarity(a: readonly number[], b: readonly number[]): number {
     if (a.length !== b.length) {
       throw new Error('Vectors must have the same length');
     }

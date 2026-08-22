@@ -1,7 +1,8 @@
 # Memory ranking golden set
 
-`golden-v1.json` is a synthetic, privacy-safe fixture for the memory ranking
-A/B evaluator. It must never contain copied workspace or production memory text.
+`golden-v1.json` and `golden-semantic-v1.json` are synthetic, privacy-safe
+fixtures for the memory ranking A/B evaluator. They must never contain copied
+workspace or production memory text.
 
 All timestamps are fixed Unix milliseconds. Cases use explicit IDs as their
 oracle; snapshots are not the source of truth. A fixture change requires review
@@ -13,6 +14,8 @@ Metrics are defined as follows:
 - Recall hit rate: query cases with at least one relevant ID in top-K, divided
   by all query cases.
 - Recall@K: relevant IDs retrieved divided by relevant IDs expected.
+- Mean reciprocal rank (MRR): the average reciprocal position of the first
+  relevant result, with misses contributing zero.
 - Ranking accuracy: ordering cases whose returned top-N prefix exactly equals
   `expectedOrder`, divided by ordering cases.
 - Duplicate merge precision: true positives divided by predicted positives. A
@@ -24,10 +27,11 @@ A zero denominator is represented as `null`, with raw numerator and
 denominator retained. Ranking uses the production tie-break order: score
 descending, `updatedAt` descending, then ID ascending.
 
-The current fixture is lexical-only. Future semantic cases must check in fixed
-per-item semantic scores; they must not call a model, embedding service, network,
-or workspace storage. Variants are explicit experiment inputs and are not
-persisted workspace settings.
+`golden-v1.json` remains the lexical baseline. `golden-semantic-v1.json` checks
+in fixed per-item semantic scores and includes the no-shared-term shipping query.
+Neither fixture may call a model, embedding service, network, or workspace
+storage. Variants are explicit experiment inputs and are not persisted workspace
+settings.
 
 Run the baseline:
 
@@ -35,6 +39,16 @@ Run the baseline:
 npm run test:memory-experiment
 npm run test:memory-experiment -- --json=memory-experiment-results.json
 ```
+
+Run the opt-in 50k storage/sidecar/cosine/ranking benchmark:
+
+```sh
+npm run benchmark:memory-semantic
+```
+
+The benchmark emits p50/p95 stage timings and documents that provider network
+latency is excluded; production recall metrics record query-embedding latency
+separately.
 
 A strict partial variant file has this shape:
 

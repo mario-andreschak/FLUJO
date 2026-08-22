@@ -5,9 +5,14 @@
  */
 
 import { createHash } from 'crypto';
-import { z } from 'zod';
 
-import type { CreateMemoryEmbeddingInput, MemoryEmbedding, EmbeddingValidityResult } from '@/shared/types/enduringAgent';
+import { EmbeddingProvider } from '@/backend/services/model/embeddings';
+import type {
+  CreateMemoryEmbeddingInput,
+  EmbeddingValidityResult,
+  MemoryEmbedding,
+  MemoryItem,
+} from '@/shared/types/enduringAgent';
 import { MemoryEmbeddingSchema } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
 import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
@@ -174,6 +179,50 @@ export async function deletePersonaEmbeddings(personaId: string): Promise<number
  */
 export async function listPersonaEmbeddings(personaId: string): Promise<MemoryEmbedding[]> {
   return loadPersonaEmbeddings(personaId);
+}
+
+export interface SemanticMemoryScore {
+  readonly available: true;
+  readonly score: number;
+}
+
+/**
+ * Join an already-loaded Persona sidecar to candidate items without N+1 storage
+ * reads. Invalid, stale, foreign, or incompatible vectors are simply absent.
+ */
+export function buildSemanticMemoryScores(
+  personaId: string,
+  items: readonly MemoryItem[],
+  embeddings: readonly MemoryEmbedding[],
+  queryVector: readonly number[],
+  expectedModelId: string,
+): Map<string, SemanticMemoryScore> {
+  if (queryVector.length === 0 || !queryVector.every(Number.isFinite)) return new Map();
+
+  const embeddingByMemoryId = new Map(
+    embeddings.map((embedding) => [embedding.memoryId, embedding]),
+  );
+  const scores = new Map<string, SemanticMemoryScore>();
+
+  for (const item of items) {
+    const embedding = embeddingByMemoryId.get(item.id);
+    if (!embedding) continue;
+    if (embedding.personaId !== personaId) continue;
+    if (embedding.modelId !== expectedModelId) continue;
+    if (embedding.contentDigest !== computeContentDigest(item.content)) continue;
+    if (embedding.dimensions !== queryVector.length) continue;
+    if (embedding.vector.length !== queryVector.length) continue;
+    if (!embedding.vector.every(Number.isFinite)) continue;
+
+    const cosine = EmbeddingProvider.cosineSimilarity(queryVector, embedding.vector);
+    if (!Number.isFinite(cosine)) continue;
+    scores.set(item.id, {
+      available: true,
+      score: Math.min(1, Math.max(0, cosine)),
+    });
+  }
+
+  return scores;
 }
 
 /**

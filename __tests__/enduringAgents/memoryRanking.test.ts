@@ -6,6 +6,9 @@ import {
   jaccardSimilarity,
   recencyMultiplier,
   contentLengthFactor,
+  hybridScore,
+  normaliseSemanticScore,
+  semanticCandidateEligible,
   trustWeight,
   scoreMemoryCandidate,
   selectNearDuplicateCandidate,
@@ -319,21 +322,47 @@ describe('Memory Ranking (Issue #450)', () => {
       expect(twoTermScore).toBeGreaterThan(oneTermScore);
     });
 
-    it('uses lexical-only fallback when no semantic score is supplied', () => {
+    it('distinguishes lexical-only fallback from an available semantic zero', () => {
       const item = baseItem();
+      const lexicalOnly = scoreMemoryCandidate({
+        item,
+        terms: ['release'],
+        core: false,
+        asOf: now,
+      });
+      const availableZero = scoreMemoryCandidate({
+        item,
+        terms: ['release'],
+        core: false,
+        asOf: now,
+        semantic: { available: true, score: 0 },
+      });
 
-      expect(scoreMemoryCandidate({
-        item,
-        terms: ['release'],
-        core: false,
-        asOf: now,
-      })).toBe(scoreMemoryCandidate({
-        item,
-        terms: ['release'],
-        core: false,
-        asOf: now,
-        semanticScore: 0,
-      }));
+      expect(lexicalOnly).toBeGreaterThan(availableZero);
+    });
+
+    it('uses exact hybrid weights and a lexical-identical unavailable fallback', () => {
+      expect(hybridScore(0.5, { available: true, score: 0.75 }))
+        .toBeCloseTo(0.6 * 0.5 + 0.4 * 0.75);
+      expect(hybridScore(0.5, undefined)).toBe(0.5);
+      expect(hybridScore(0.5, { available: false, score: 1 })).toBe(0.5);
+    });
+
+    it('clamps valid semantic scores and enforces the inclusive floor', () => {
+      expect(normaliseSemanticScore(Number.NaN)).toBeNull();
+      expect(normaliseSemanticScore(-1)).toBe(0);
+      expect(normaliseSemanticScore(2)).toBe(1);
+      expect(semanticCandidateEligible(false, undefined, 0.75)).toBe(false);
+      expect(semanticCandidateEligible(
+        false,
+        { available: true, score: 0.7499 },
+        0.75,
+      )).toBe(false);
+      expect(semanticCandidateEligible(
+        false,
+        { available: true, score: 0.75 },
+        0.75,
+      )).toBe(true);
     });
 
     it('weights importance and confidence', () => {

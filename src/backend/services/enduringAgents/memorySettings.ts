@@ -61,7 +61,7 @@ export async function getMemorySettings(): Promise<Required<MemorySettings>> {
 export async function setMemorySettings(updates: Partial<MemorySettings>): Promise<void> {
   try {
     const current = await getMemorySettings();
-    const merged = { ...current, ...updates };
+    const merged = mergeMemorySettings({ ...current, ...updates });
     await saveItem(StorageKey.MEMORY_SETTINGS, merged);
     // Invalidate cache to force reload on next access
     const settingsKey = workspaceCacheKey('memory-settings');
