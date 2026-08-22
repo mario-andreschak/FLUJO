@@ -12,6 +12,10 @@ import {
   type CreateBehaviorProposalInput,
 } from '@/backend/services/enduringAgents';
 import {
+  DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
+  admitBehaviorMaintenanceRun,
+} from '@/backend/services/enduringAgents/behaviorMaintenance';
+import {
   behaviorRevisionId,
   hashBehaviorFlow,
   snapshotBehaviorFlow,
@@ -214,6 +218,7 @@ function metricFor(proposal: BehaviorProposal) {
 describe('Behavior outcome metrics and automatic rollback', () => {
   const originalMetrics = FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS;
   const originalAutoRollback = FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK;
+  const originalMaintenanceAdmission = FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION;
 
   beforeEach(() => {
     FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
@@ -223,6 +228,7 @@ describe('Behavior outcome metrics and automatic rollback', () => {
   afterEach(() => {
     FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = originalMetrics;
     FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = originalAutoRollback;
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = originalMaintenanceAdmission;
   });
 
   it('freezes the baseline of the previous revision when a proposal is activated', async () => {
@@ -321,6 +327,7 @@ describe('Behavior outcome metrics and automatic rollback', () => {
   it('reverts a regressed proposal automatically and records why', async () => {
     await inFreshWorkspace(async () => {
       FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
+      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 10, failed: 0 });
       const activated = await activatedProposal(setup);
@@ -346,6 +353,29 @@ describe('Behavior outcome metrics and automatic rollback', () => {
         action: 'auto_rolled_back',
         actor: BEHAVIOR_OUTCOME_DETECTOR_ACTOR,
         revisionId: setup.baseRevision.id,
+      });
+
+      const cooldownCandidate = terminalActivity({
+        id: 'activity_rolled_back_cooldown',
+        setup,
+        revisionId: activated.activatedRevisionId!,
+        succeeded: false,
+        at: metric!.autoRollbackAt!,
+      });
+      await savePersonaActivity(cooldownCandidate);
+      const admitted = await admitBehaviorMaintenanceRun(
+        cooldownCandidate,
+        metric!.autoRollbackAt!,
+      );
+      expect(admitted?.sourceActivityIds).not.toContain(cooldownCandidate.id);
+      expect(admitted?.suppressedCandidates).toContainEqual({
+        activityId: cooldownCandidate.id,
+        activatedRevisionId: activated.activatedRevisionId,
+        proposalId: activated.id,
+        metricId: metric!.id,
+        reasonCode: 'auto_rollback_cooldown',
+        autoRollbackAt: metric!.autoRollbackAt,
+        cooldownUntil: metric!.autoRollbackAt! + DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
       });
 
       // Terminal: later samples cannot reopen the measurement.

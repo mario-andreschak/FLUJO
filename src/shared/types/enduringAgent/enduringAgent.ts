@@ -762,6 +762,16 @@ export const BEHAVIOR_MAINTENANCE_ACTIONS = [
 export type BehaviorMaintenanceAction =
   (typeof BEHAVIOR_MAINTENANCE_ACTIONS)[number];
 
+export interface BehaviorMaintenanceSuppressedCandidate {
+  activityId: string;
+  activatedRevisionId: string;
+  proposalId: string;
+  metricId: string;
+  reasonCode: 'auto_rollback_cooldown';
+  autoRollbackAt: number;
+  cooldownUntil: number;
+}
+
 /** Private-content-free durable lifecycle record for post-Activity diagnosis. */
 export interface BehaviorMaintenanceRun {
   schemaVersion: typeof BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION;
@@ -770,6 +780,7 @@ export interface BehaviorMaintenanceRun {
   personaId: string;
   sourceActivityIds: string[];
   sourceWindowDigest: string;
+  suppressedCandidates?: BehaviorMaintenanceSuppressedCandidate[];
   behaviorSlotKey: string;
   baseRevisionId: string;
   baseContentHash: string;

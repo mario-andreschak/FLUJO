@@ -17,6 +17,7 @@ import {
   BEHAVIOR_OUTCOME_POLICY,
 } from './behaviorOutcomePolicy';
 import { stableEnduringAgentId } from './ids';
+import { withPersonaRuntimeLock } from './runtimeLock';
 import {
   BehaviorBindingActivationConflictError,
   getBehaviorOutcomeMetric,
@@ -262,35 +263,38 @@ async function maybeAutoRollback(
   }
 
   const { getBehaviorProposal, rollbackBehaviorProposal } = await import('./behaviorLearning');
-  const proposal = await getBehaviorProposal(metric.proposalId);
-  if (!proposal || proposal.status !== 'activated') {
-    return persistVerdict(
-      metric,
-      'regressed',
-      `${reason} The improvement was no longer in use, so nothing was undone.`,
-    );
-  }
-
-  try {
-    await rollbackBehaviorProposal(
-      metric.proposalId,
-      { actor: BEHAVIOR_OUTCOME_DETECTOR_ACTOR, reason },
-      { auditAction: 'auto_rolled_back' },
-    );
-  } catch (error) {
-    if (error instanceof BehaviorBindingActivationConflictError) {
+  return withPersonaRuntimeLock(metric.personaId, async (lock) => {
+    await lock.assertOwned();
+    const proposal = await getBehaviorProposal(metric.proposalId);
+    if (!proposal || proposal.status !== 'activated') {
       return persistVerdict(
         metric,
         'regressed',
-        `${reason} FLUJO stopped without undoing it because the Behavior changed while the `
-        + 'result was being checked.',
+        `${reason} The improvement was no longer in use, so nothing was undone.`,
       );
     }
-    throw error;
-  }
 
-  const at = Date.now();
-  return persistVerdict(metric, 'rolled_back', reason, { autoRollbackAt: at });
+    try {
+      await rollbackBehaviorProposal(
+        metric.proposalId,
+        { actor: BEHAVIOR_OUTCOME_DETECTOR_ACTOR, reason },
+        { auditAction: 'auto_rolled_back' },
+      );
+    } catch (error) {
+      if (error instanceof BehaviorBindingActivationConflictError) {
+        return persistVerdict(
+          metric,
+          'regressed',
+          `${reason} FLUJO stopped without undoing it because the Behavior changed while the `
+          + 'result was being checked.',
+        );
+      }
+      throw error;
+    }
+
+    const at = Date.now();
+    return persistVerdict(metric, 'rolled_back', reason, { autoRollbackAt: at });
+  });
 }
 
 /**

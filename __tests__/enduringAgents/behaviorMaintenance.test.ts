@@ -3,10 +3,13 @@ import {
   BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
   BEHAVIOR_MAINTENANCE_DIAGNOSIS_LEASE_MS,
   BEHAVIOR_MAINTENANCE_RETENTION_MS,
+  DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
+  activeAutoRollbackCooldownsByRevision,
   admitBehaviorMaintenanceRun,
   compactBehaviorMaintenanceRuns,
   diagnoseBehaviorMaintenanceRun,
   executeBehaviorMaintenanceRun,
+  getBehaviorAutoRollbackCooldownMs,
   reconcileBehaviorMaintenanceRuns,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
 import { getBehaviorProposal } from '@/backend/services/enduringAgents/behaviorLearning';
@@ -20,6 +23,7 @@ import {
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   BehaviorMaintenanceRunSchema,
+  type BehaviorOutcomeMetric,
   type PersonaActivity,
   type PersonaActivityOutcomeResolution,
 } from '@/shared/types/enduringAgent';
@@ -100,6 +104,54 @@ function activity(input: {
 async function persistActivity(value: PersonaActivity): Promise<void> {
   await savePersonaActivity(value);
 }
+
+describe('Behavior automatic-rollback cooldown policy', () => {
+  const cooldownCases: Array<[string | undefined, number]> = [
+    [undefined, DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['0', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['-1', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['3599999', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['1.5', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['Infinity', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['3600000', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+    ['7200000', 2 * DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
+  ];
+
+  it.each(cooldownCases)('validates configured cooldown %p', (raw, expected) => {
+    expect(getBehaviorAutoRollbackCooldownMs(raw)).toBe(expected);
+  });
+
+  it('uses the latest active expiry for an exact Persona revision', () => {
+    const now = 10_000;
+    const metric = (input: Partial<BehaviorOutcomeMetric>): BehaviorOutcomeMetric => ({
+      id: 'outcome_default',
+      personaId: 'persona_a',
+      activatedRevisionId: 'revision_a',
+      proposalId: 'proposal_default',
+      verdict: 'rolled_back',
+      autoRollbackAt: now - 50,
+      ...input,
+    } as unknown as BehaviorOutcomeMetric);
+    const cooldowns = activeAutoRollbackCooldownsByRevision([
+      metric({ id: 'outcome_old', proposalId: 'proposal_old', autoRollbackAt: now - 75 }),
+      metric({ id: 'outcome_new', proposalId: 'proposal_new', autoRollbackAt: now - 25 }),
+      metric({ id: 'outcome_other', personaId: 'persona_b', autoRollbackAt: now - 1 }),
+      metric({ id: 'outcome_regressed', verdict: 'regressed', autoRollbackAt: undefined }),
+    ], 'persona_a', now, 100);
+
+    expect([...cooldowns.entries()]).toEqual([['revision_a', {
+      activatedRevisionId: 'revision_a',
+      proposalId: 'proposal_new',
+      metricId: 'outcome_new',
+      autoRollbackAt: now - 25,
+      cooldownUntil: now + 75,
+    }]]);
+    expect(activeAutoRollbackCooldownsByRevision([
+      metric({ autoRollbackAt: now - 100 }),
+    ], 'persona_a', now, 100).size).toBe(0);
+  });
+});
 
 describe('Behavior maintenance lifecycle', () => {
   beforeEach(() => {
@@ -631,6 +683,15 @@ describe('Behavior maintenance lifecycle', () => {
           state,
           reasonCode: 'retention_' + state,
           action: state === 'completed' ? 'no_change' : undefined,
+          suppressedCandidates: [{
+            activityId: source.id,
+            activatedRevisionId: setup.revision.id,
+            proposalId: 'proposal_retention_' + state,
+            metricId: 'outcome_retention_' + state,
+            reasonCode: 'auto_rollback_cooldown',
+            autoRollbackAt: now,
+            cooldownUntil: now + DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
+          }],
           updatedAt: terminalAt,
           completedAt: terminalAt,
         }));

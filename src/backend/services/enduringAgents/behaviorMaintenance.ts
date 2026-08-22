@@ -6,8 +6,10 @@ import {
   BehaviorMaintenanceRunSchema,
   type BehaviorMaintenanceAction,
   type BehaviorMaintenanceRun,
+  type BehaviorOutcomeMetric,
   type PersonaActivity,
 } from '@/shared/types/enduringAgent';
+import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
 import { suggestBehaviorInstructionImprovement } from './behaviorLearning';
@@ -20,9 +22,12 @@ import {
   getPersona,
   getPersonaActivity,
   listBehaviorMaintenanceRuns,
+  listBehaviorOutcomeMetrics,
   listPersonaActivities,
   saveBehaviorMaintenanceRun,
 } from './store';
+
+const log = createLogger('backend/services/enduringAgents/behaviorMaintenance');
 
 export const BEHAVIOR_MAINTENANCE_DETECTOR_VERSION = 'activity-outcome-v2';
 export const BEHAVIOR_MAINTENANCE_POLICY_VERSION = 'shadow-manual-v2';
@@ -32,6 +37,18 @@ export const BEHAVIOR_MAINTENANCE_DIAGNOSIS_LEASE_MS = 60 * 1_000;
 export const BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT = 100;
 const ELIGIBLE_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_SOURCE_ACTIVITIES = 20;
+export const DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS = 60 * 60 * 1_000;
+
+type SuppressedCandidate =
+  NonNullable<BehaviorMaintenanceRun['suppressedCandidates']>[number];
+
+interface ActiveAutoRollbackCooldown {
+  activatedRevisionId: string;
+  proposalId: string;
+  metricId: string;
+  autoRollbackAt: number;
+  cooldownUntil: number;
+}
 
 const ACTIVE_EXECUTION_STATES = new Set<BehaviorMaintenanceRun['state']>([
   'queued',
@@ -50,6 +67,59 @@ const COMPACTION_ELIGIBLE_STATES = new Set<BehaviorMaintenanceRun['state']>([
 
 function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+export function getBehaviorAutoRollbackCooldownMs(
+  raw = process.env.FLUJO_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
+): number {
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed)
+    && Number.isInteger(parsed)
+    && parsed >= DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS
+    ? parsed
+    : DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS;
+}
+
+export function activeAutoRollbackCooldownsByRevision(
+  metrics: BehaviorOutcomeMetric[],
+  personaId: string,
+  now: number,
+  cooldownMs: number,
+): Map<string, ActiveAutoRollbackCooldown> {
+  const active = new Map<string, ActiveAutoRollbackCooldown>();
+  for (const metric of metrics) {
+    if (
+      metric.personaId !== personaId
+      || metric.verdict !== 'rolled_back'
+      || metric.autoRollbackAt === undefined
+    ) continue;
+
+    const cooldownUntil = metric.autoRollbackAt + cooldownMs;
+    if (now >= cooldownUntil) continue;
+
+    const candidate: ActiveAutoRollbackCooldown = {
+      activatedRevisionId: metric.activatedRevisionId,
+      proposalId: metric.proposalId,
+      metricId: metric.id,
+      autoRollbackAt: metric.autoRollbackAt,
+      cooldownUntil,
+    };
+    const existing = active.get(metric.activatedRevisionId);
+    if (
+      !existing
+      || candidate.cooldownUntil > existing.cooldownUntil
+      || (
+        candidate.cooldownUntil === existing.cooldownUntil
+        && candidate.metricId.localeCompare(existing.metricId) > 0
+      )
+    ) {
+      active.set(metric.activatedRevisionId, candidate);
+    }
+  }
+  return active;
 }
 
 export function isEligibleBehaviorMaintenanceActivity(
@@ -73,9 +143,51 @@ export async function collectBehaviorMaintenanceEvidenceWindow(
   activities: PersonaActivity[];
   sourceWindowDigest: string;
   evidenceTrust: BehaviorMaintenanceRun['evidenceTrust'];
+  suppressedCandidates: SuppressedCandidate[];
 }> {
-  const activities = (await listPersonaActivities(personaId))
-    .filter((activity) => isEligibleBehaviorMaintenanceActivity(activity, now))
+  const candidates = (await listPersonaActivities(personaId))
+    .filter((activity) => isEligibleBehaviorMaintenanceActivity(activity, now));
+  let eligibleCandidates = candidates;
+  let suppressedCandidates: SuppressedCandidate[] = [];
+
+  if (FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK) {
+    const cooldowns = activeAutoRollbackCooldownsByRevision(
+      await listBehaviorOutcomeMetrics(personaId),
+      personaId,
+      now,
+      getBehaviorAutoRollbackCooldownMs(),
+    );
+    const suppressedActivityIds = new Set<string>();
+    suppressedCandidates = candidates
+      .map((activity): (SuppressedCandidate & { completedAt: number }) | null => {
+        if (!activity.behaviorRevisionId) return null;
+        const cooldown = cooldowns.get(activity.behaviorRevisionId);
+        if (!cooldown) return null;
+        suppressedActivityIds.add(activity.id);
+        return {
+          activityId: activity.id,
+          activatedRevisionId: cooldown.activatedRevisionId,
+          proposalId: cooldown.proposalId,
+          metricId: cooldown.metricId,
+          reasonCode: 'auto_rollback_cooldown',
+          autoRollbackAt: cooldown.autoRollbackAt,
+          cooldownUntil: cooldown.cooldownUntil,
+          completedAt: activity.completedAt ?? 0,
+        };
+      })
+      .filter((candidate): candidate is SuppressedCandidate & { completedAt: number } => (
+        candidate !== null
+      ))
+      .sort((left, right) => (
+        right.completedAt - left.completedAt
+        || right.activityId.localeCompare(left.activityId)
+      ))
+      .slice(0, MAX_SOURCE_ACTIVITIES)
+      .map(({ completedAt: _completedAt, ...candidate }) => candidate);
+    eligibleCandidates = candidates.filter((activity) => !suppressedActivityIds.has(activity.id));
+  }
+
+  const activities = eligibleCandidates
     .sort((left, right) => (
       (right.completedAt ?? 0) - (left.completedAt ?? 0)
       || right.id.localeCompare(left.id)
@@ -118,6 +230,7 @@ export async function collectBehaviorMaintenanceEvidenceWindow(
       missingCount,
       externallyTainted,
     },
+    suppressedCandidates,
   };
 }
 
@@ -181,6 +294,12 @@ export async function admitBehaviorMaintenanceRun(
     if (!revision || revision.personaId !== sourceActivity.personaId) return null;
 
     const window = await collectBehaviorMaintenanceEvidenceWindow(sourceActivity.personaId, now);
+    if (window.suppressedCandidates.length > 0) {
+      log.info('Behavior maintenance candidates suppressed by automatic rollback cooldown.', {
+        personaId: sourceActivity.personaId,
+        suppressedCandidates: window.suppressedCandidates,
+      });
+    }
     if (window.activities.length === 0) return null;
     const workspaceId = getCurrentWorkspace();
     const id = stableEnduringAgentId('maint', {
@@ -199,6 +318,9 @@ export async function admitBehaviorMaintenanceRun(
       personaId: sourceActivity.personaId,
       sourceActivityIds: window.activities.map((activity) => activity.id),
       sourceWindowDigest: window.sourceWindowDigest,
+      ...(window.suppressedCandidates.length > 0
+        ? { suppressedCandidates: window.suppressedCandidates }
+        : {}),
       behaviorSlotKey: revision.slotKey,
       baseRevisionId: revision.id,
       baseContentHash: revision.contentHash,
