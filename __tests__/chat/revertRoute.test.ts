@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import path from 'node:path';
 
 const assertUnlockedMock = jest.fn(async () => undefined);
 const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
@@ -44,7 +45,8 @@ jest.mock('@/backend/services/snapshot/ShadowRepoService', () => ({
 import { GET, POST } from '@/app/v1/chat/conversations/[conversationId]/revert/route';
 
 const CONVERSATION_ID = 'conversation-1';
-const ROOT = 'C:\\repo';
+const ROOT = path.resolve('repo');
+const OTHER_ROOT = path.resolve('other-repo');
 
 function chatMessage(id: string, role: 'user' | 'assistant' = 'assistant') {
   return { id, role, content: id, timestamp: id === 'm1' ? 1 : 2 };
@@ -158,7 +160,7 @@ describe('conversation revert route', () => {
     readConversationLogMock.mockResolvedValue([
       message('m1'),
       changedFiles('snapshot-before-m1', 'snapshot-after-m1', ['first.ts']),
-      changedFiles('snapshot-before-other', 'snapshot-after-other', ['other.ts'], 'D:\\other-repo'),
+      changedFiles('snapshot-before-other', 'snapshot-after-other', ['other.ts'], OTHER_ROOT),
     ]);
 
     const response = await preview('m1');
