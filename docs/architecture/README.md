@@ -28,6 +28,9 @@ This section provides technical architecture and design documentation for Flujo.
 
 ## Decision Records
 
+- [Single-gate tool approval proposal](./tool-approval-single-gate-proposal.md):
+  Proposed conversation-scoped approval contract, workflow evidence, state and API
+  requirements, verification matrix, and required stakeholder sign-off for issue #469.
 - [Memory ranking and near-duplicate defaults](./memory-ranking-dedup-decision.md):
   The accepted reinforce-in-place strategy, 90-day recency half-life, 0.82
   trigram-Jaccard threshold, rollback switch, and privacy-gated tuning rules
