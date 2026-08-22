@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { FEATURES } from '@/config/features';
 import { modelService } from '@/backend/services/model';
 import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
 import { supportsEmbeddings } from '@/shared/types/model/embeddings';
@@ -8,6 +9,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   CreateMemoryItemInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
+  ResolveMemoryConflictInputSchema,
   EnduringAgentIdSchema,
   MEMORY_KINDS,
   MEMORY_SCOPES,
@@ -15,6 +17,7 @@ import {
   MEMORY_TRUST_LEVELS,
   MemoryItemSchema,
   MemorySourceRefSchema,
+  type ConflictResolutionAudit,
   type CreateMemoryItemInput,
   type MemoryItem,
   type MemoryKind,
@@ -52,6 +55,7 @@ import {
   semanticCandidateEligible,
   selectNearDuplicateCandidate,
 } from './memoryRanking';
+import { lexicalRelationScorer } from './memorySimilarity';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
   getMemoryItem,
@@ -107,10 +111,32 @@ export interface MemorySearchQuery {
   limit?: number;
 }
 
+export interface MemoryConflictSummary {
+  id: string;
+  content: string;
+  kind: MemoryKind;
+  scope: MemoryScope;
+  status: MemoryStatus;
+  trust: MemoryTrust;
+  confidence: number;
+  importance: number;
+  updatedAt: number;
+}
+
 export interface MemorySearchResult {
   item: MemoryItem;
   score: number;
   core: boolean;
+  conflicts?: MemoryConflictSummary[];
+}
+
+export type ResolveMemoryConflictInput = z.infer<typeof ResolveMemoryConflictInputSchema>;
+
+export interface ResolveMemoryConflictResult {
+  resolutionId: string;
+  audit: ConflictResolutionAudit;
+  left: MemoryItem;
+  right: MemoryItem;
 }
 
 export interface CorrectMemoryInput {
@@ -190,18 +216,15 @@ async function createMemoryWithinMutation(
   activityId?: string,
 ): Promise<MemoryItem> {
   const now = Date.now();
+  const settings = await getMemorySettings();
   const invokedByFlow = Boolean(options.executionAuthority);
   const trust: MemoryTrust = invokedByFlow ? 'model_inference' : input.trust;
   const status: 'candidate' | 'active' = invokedByFlow ? 'candidate' : input.status ?? 'candidate';
   const refs = [...input.sourceRefs];
-  
-  // Calculate expiresAt for candidates only (D1, A5)
+
   let expiresAt: number | undefined;
-  if (status === 'candidate') {
-    const settings = await getMemorySettings();
-    if (settings.candidateExpiryDays > 0) {
-      expiresAt = now + (settings.candidateExpiryDays * 24 * 60 * 60 * 1000);
-    }
+  if (status === 'candidate' && settings.candidateExpiryDays > 0) {
+    expiresAt = now + (settings.candidateExpiryDays * 24 * 60 * 60 * 1000);
   }
   if (activityId && !refs.some((ref) => ref.kind === 'activity' && ref.id === activityId)) {
     refs.push({ kind: 'activity', id: activityId, observedAt: now });
@@ -226,11 +249,54 @@ async function createMemoryWithinMutation(
     ...(input.validFrom !== undefined ? { validFrom: input.validFrom } : {}),
     ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
     ...(input.supersedes?.length ? { supersedes: input.supersedes } : {}),
-    ...(input.conflictsWith?.length ? { conflictsWith: input.conflictsWith } : {}),
+    ...(input.conflictsWith?.length ? { conflictsWith: [...new Set(input.conflictsWith)].sort() } : {}),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     createdAt: now,
     updatedAt: now,
   }) as MemoryItem;
+
+  const explicitIds = [...new Set(record.conflictsWith ?? [])].filter(id => id !== record.id).sort();
+  const explicitTargets = explicitIds.length > 0
+    ? await listMemoryItems(record.personaId, { ids: explicitIds })
+    : [];
+  if (
+    explicitTargets.length !== explicitIds.length
+    || explicitTargets.some(target => target.personaId !== record.personaId)
+  ) {
+    throw new PersonaDomainConflictError('conflictsWith must reference existing memories owned by this Persona.');
+  }
+
+  const automaticTargets = FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
+    && settings.conflictDetectionEnabled
+    ? await listMemoryItems(record.personaId, {
+      statuses: ['active'],
+      kinds: [record.kind],
+      scopes: [record.scope],
+      limit: 200,
+      order: 'updated_at',
+    })
+    : [];
+  const supersededIds = new Set(record.supersedes ?? []);
+  const detectedTargets = automaticTargets.filter(target => (
+    target.id !== record.id
+    && !supersededIds.has(target.id)
+    && lexicalRelationScorer.score(
+      target.content,
+      record.content,
+      settings.conflictSimilarityThreshold,
+    ).relation === 'contradict'
+  ));
+  const targetsById = new Map(
+    [...explicitTargets, ...detectedTargets].map(target => [target.id, target]),
+  );
+  const conflictIds = [...targetsById.keys()].sort();
+  const desiredRecord = conflictIds.length > 0
+    ? { ...record, conflictsWith: conflictIds }
+    : (() => {
+      const { conflictsWith: _empty, ...withoutConflicts } = record;
+      return withoutConflicts as MemoryItem;
+    })();
+
   const existing = await getMemoryItem(record.personaId, record.id);
   if (existing) {
     const sameSemanticValue = existing.personaId === record.personaId
@@ -241,34 +307,34 @@ async function createMemoryWithinMutation(
       && existing.confidence === record.confidence
       && existing.importance === record.importance
       && existing.trust === record.trust
-      // observedAt records when this attempt saw the evidence. It may legitimately
-      // differ on an idempotent retry and is not part of the memory's identity.
       && stableSourceRefValue(existing) === stableSourceRefValue(record)
-      && JSON.stringify(existing.supersedes ?? []) === JSON.stringify(record.supersedes ?? [])
-      && JSON.stringify(existing.conflictsWith ?? []) === JSON.stringify(record.conflictsWith ?? []);
-    if (sameSemanticValue) return existing;
-    throw new PersonaDomainConflictError(`MemoryItem ${JSON.stringify(record.id)} already exists.`);
+      && JSON.stringify(existing.supersedes ?? []) === JSON.stringify(record.supersedes ?? []);
+    if (!sameSemanticValue) {
+      throw new PersonaDomainConflictError(`MemoryItem ${JSON.stringify(record.id)} already exists.`);
+    }
+    if (conflictIds.length === 0) return existing;
   }
 
-  // Issue #450: Dedup on write via near-duplicate detection
+  // Relation classification precedes issue #450 dedup so a supported
+  // contradiction can never be collapsed into its opposite.
   if (
-    MEMORY_DEDUP_SETTINGS.enabled
+    !existing
+    && conflictIds.length === 0
+    && MEMORY_DEDUP_SETTINGS.enabled
     && !options.skipNearDuplicateMerge
     && !record.supersedes?.length
-    && !record.conflictsWith?.length
   ) {
     const nearDup = await findNearDuplicateCandidate(record.personaId, record.kind, record.scope, record.content);
     if (nearDup) {
       const { candidate: survivor, similarity } = nearDup;
-      // Reinforce the survivor instead of persisting a sibling
       const reinforced = await saveMemoryItem(buildReinforcedMemoryItem(survivor, {
         now,
         incomingTrust: record.trust,
         incomingSourceRefs: record.sourceRefs,
-        canUpgradeTrust: (trust) => {
+        canUpgradeTrust: (nextTrust) => {
           try {
             assertActivationPolicy(
-              trust,
+              nextTrust,
               survivor.status,
               options,
               record.sourceRefs.map((ref) => ref.kind),
@@ -289,7 +355,32 @@ async function createMemoryWithinMutation(
     }
   }
 
-  return saveMemoryItem(record);
+  // The store has no durable multi-record transaction. Create the new record
+  // without edges, then update targets, then complete its reverse edges. Every
+  // step is idempotent and the lifecycle sweep repairs a crash after target writes.
+  let saved = existing ?? await saveMemoryItem((() => {
+    const { conflictsWith: _deferred, ...withoutConflicts } = desiredRecord;
+    return withoutConflicts as MemoryItem;
+  })());
+  for (const target of targetsById.values()) {
+    const links = [...new Set([...(target.conflictsWith ?? []), record.id])].sort();
+    if (JSON.stringify(links) !== JSON.stringify(target.conflictsWith ?? [])) {
+      await saveMemoryItem({
+        ...target,
+        conflictsWith: links,
+        updatedAt: Math.max(Date.now(), target.updatedAt + 1),
+      });
+    }
+  }
+  if (conflictIds.length > 0) {
+    const links = [...new Set([...(saved.conflictsWith ?? []), ...conflictIds])].sort();
+    saved = await saveMemoryItem({
+      ...saved,
+      conflictsWith: links,
+      updatedAt: Math.max(Date.now(), saved.updatedAt + 1),
+    });
+  }
+  return saved;
 }
 
 /**
@@ -323,6 +414,149 @@ export async function getPersonaMemory(personaId: string, memoryId: string): Pro
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(memoryId);
   return requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
+}
+
+function sameConflictPair(audit: ConflictResolutionAudit, leftId: string, rightId: string): boolean {
+  return audit.memoryIds.includes(leftId) && audit.memoryIds.includes(rightId);
+}
+
+export async function resolveMemoryConflict(
+  personaId: string,
+  memoryId: string,
+  input: ResolveMemoryConflictInput,
+  options: MemoryMutationOptions = {},
+): Promise<ResolveMemoryConflictResult> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(memoryId);
+  const parsed = ResolveMemoryConflictInputSchema.parse(input);
+  if (options.executionAuthority) {
+    throw new PersonaDomainConflictError(
+      'A model-run tool may only propose a conflict resolution for human review.',
+    );
+  }
+  if (memoryId === parsed.counterpartId) {
+    throw new PersonaDomainConflictError('A memory cannot resolve a conflict with itself.');
+  }
+
+  return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
+    const left = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
+    const right = requireOwnedMemory(
+      await getMemoryItem(personaId, parsed.counterpartId),
+      personaId,
+      parsed.counterpartId,
+    );
+    const resolutionId = parsed.resolutionId ?? randomEnduringAgentId('memresolution');
+    const leftReplay = left.conflictResolutions?.find(audit => audit.resolutionId === resolutionId);
+    const rightReplay = right.conflictResolutions?.find(audit => audit.resolutionId === resolutionId);
+    const replayAudits = [leftReplay, rightReplay].filter(
+      (audit): audit is ConflictResolutionAudit => audit !== undefined,
+    );
+    if (
+      replayAudits.some(replay => (
+        replay.action !== parsed.action
+        || replay.reason !== parsed.reason
+        || replay.memoryIds[0] !== left.id
+        || replay.memoryIds[1] !== right.id
+      ))
+      || (leftReplay && rightReplay && JSON.stringify(leftReplay) !== JSON.stringify(rightReplay))
+    ) {
+      throw new PersonaDomainConflictError('Resolution ID was already used for a different decision.');
+    }
+    const replay = replayAudits[0];
+    const histories = [...(left.conflictResolutions ?? []), ...(right.conflictResolutions ?? [])];
+    const competing = histories.find(audit => (
+      audit.resolutionId !== resolutionId
+      && sameConflictPair(audit, left.id, right.id)
+    ));
+    if (competing) {
+      throw new PersonaDomainConflictError('This memory conflict was already resolved.');
+    }
+    const linked = left.conflictsWith?.includes(right.id) || right.conflictsWith?.includes(left.id);
+    if (!linked && !replay) {
+      throw new PersonaDomainConflictError('The memories do not have an unresolved conflict relation.');
+    }
+
+    const updateCoreForWinner = async (resolvedLeft: MemoryItem, resolvedRight: MemoryItem) => {
+      if (parsed.action === 'keep_both') return;
+      const loserId = parsed.action === 'keep_left' ? right.id : left.id;
+      const winner = parsed.action === 'keep_left' ? resolvedLeft : resolvedRight;
+      const currentCore = persona.coreMemoryItemIds ?? [];
+      const nextCore = [...new Set(currentCore.flatMap(id => (
+        id !== loserId ? [id] : winner.status === 'active' ? [winner.id] : []
+      )))];
+      if (JSON.stringify(nextCore) !== JSON.stringify(currentCore)) {
+        await updatePersona({
+          ...persona,
+          coreMemoryItemIds: nextCore,
+          updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+        });
+      }
+    };
+    if (leftReplay && rightReplay && !linked) {
+      await updateCoreForWinner(left, right);
+      return { resolutionId, audit: leftReplay, left, right };
+    }
+
+    const winnerId = parsed.action === 'keep_left'
+      ? left.id
+      : parsed.action === 'keep_right' ? right.id : undefined;
+    const audit: ConflictResolutionAudit = replay ?? {
+      resolutionId,
+      memoryIds: [left.id, right.id],
+      action: parsed.action,
+      ...(winnerId ? { winnerId } : {}),
+      actor: 'user',
+      authority: 'manual_api',
+      reason: parsed.reason,
+      resolvedAt: Date.now(),
+    };
+    const appendAudit = (item: MemoryItem): ConflictResolutionAudit[] => {
+      const history = item.conflictResolutions ?? [];
+      return history.some(entry => entry.resolutionId === resolutionId)
+        ? history
+        : [...history, audit];
+    };
+    const withoutCounterpart = (item: MemoryItem, counterpartId: string): string[] | undefined => {
+      const links = (item.conflictsWith ?? []).filter(id => id !== counterpartId);
+      return links.length > 0 ? links : undefined;
+    };
+    const nextTimestamp = (item: MemoryItem) => Math.max(Date.now(), item.updatedAt + 1);
+
+    let nextLeft: MemoryItem = {
+      ...left,
+      conflictsWith: withoutCounterpart(left, right.id),
+      conflictResolutions: appendAudit(left),
+      updatedAt: nextTimestamp(left),
+    };
+    let nextRight: MemoryItem = {
+      ...right,
+      conflictsWith: withoutCounterpart(right, left.id),
+      conflictResolutions: appendAudit(right),
+      updatedAt: nextTimestamp(right),
+    };
+    if (parsed.action === 'keep_left') {
+      nextLeft = {
+        ...nextLeft,
+        supersedes: [...new Set([...(nextLeft.supersedes ?? []), right.id])].sort(),
+      };
+      nextRight = { ...nextRight, status: 'superseded' };
+    } else if (parsed.action === 'keep_right') {
+      nextRight = {
+        ...nextRight,
+        supersedes: [...new Set([...(nextRight.supersedes ?? []), left.id])].sort(),
+      };
+      nextLeft = { ...nextLeft, status: 'superseded' };
+    }
+
+    // Undefined optional fields must be omitted for strict persistence and clean API output.
+    if (!nextLeft.conflictsWith) delete nextLeft.conflictsWith;
+    if (!nextRight.conflictsWith) delete nextRight.conflictsWith;
+    const savedLeft = await saveMemoryItem(nextLeft);
+    const savedRight = await saveMemoryItem(nextRight);
+
+    await updateCoreForWinner(savedLeft, savedRight);
+    return { resolutionId, audit, left: savedLeft, right: savedRight };
+  });
 }
 
 function queryTerms(query: string | undefined): string[] {
@@ -510,7 +744,38 @@ export async function searchPersonaMemory(
     || left.item.id.localeCompare(right.item.id)
   )).slice(0, limit);
   recordSemanticRecallStage('filter_rank', performance.now() - rankStartedAt);
-  return ordered;
+  if (!FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING) return ordered;
+
+  const conflictIds = [...new Set(ordered.flatMap(
+    result => result.item.conflictsWith ?? [],
+  ))];
+  if (conflictIds.length === 0) return ordered;
+  const conflicts = await listMemoryItems(personaId, { ids: conflictIds });
+  const conflictsById = new Map(conflicts.map(item => [item.id, item]));
+  return ordered.map((result): MemorySearchResult => {
+    const hydrated = (result.item.conflictsWith ?? [])
+      .filter(id => id !== result.item.id)
+      .map(id => conflictsById.get(id))
+      .filter((item): item is MemoryItem => item?.personaId === personaId)
+      .sort((left, right) => (
+        Number(right.status === 'active') - Number(left.status === 'active')
+        || right.updatedAt - left.updatedAt
+        || left.id.localeCompare(right.id)
+      ))
+      .slice(0, 5)
+      .map((item): MemoryConflictSummary => ({
+        id: item.id,
+        content: item.content,
+        kind: item.kind,
+        scope: item.scope,
+        status: item.status,
+        trust: item.trust,
+        confidence: item.confidence,
+        importance: item.importance,
+        updatedAt: item.updatedAt,
+      }));
+    return hydrated.length > 0 ? { ...result, conflicts: hydrated } : result;
+  });
 }
 
 export async function correctMemory(

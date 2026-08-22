@@ -985,6 +985,25 @@ export const MEMORY_TRUST_LEVELS = [
 ] as const;
 export type MemoryTrust = (typeof MEMORY_TRUST_LEVELS)[number];
 
+export const MEMORY_CONFLICT_RESOLUTION_ACTIONS = [
+  'keep_left',
+  'keep_right',
+  'keep_both',
+] as const;
+export type MemoryConflictResolutionAction =
+  (typeof MEMORY_CONFLICT_RESOLUTION_ACTIONS)[number];
+
+export interface ConflictResolutionAudit {
+  resolutionId: string;
+  memoryIds: [string, string];
+  action: MemoryConflictResolutionAction;
+  winnerId?: string;
+  actor: 'user' | 'system';
+  authority: 'manual_api';
+  reason: string;
+  resolvedAt: number;
+}
+
 export const MEMORY_SOURCE_KINDS = [
   'user_statement',
   'conversation',
@@ -1028,6 +1047,8 @@ export interface MemoryItem {
   supersedes?: string[];
   /** Explicitly retained contradictory evidence; conflicts are never overwritten. */
   conflictsWith?: string[];
+  /** Append-only audit history for explicit conflict resolutions. */
+  conflictResolutions?: ConflictResolutionAudit[];
   /** Timestamp when a human reviewed/activated this item via UI/API. */
   reviewedAt?: number;
   /** Timestamp of the most recent recall (lexical search result). Throttled to 1/hour to avoid write amplification. */

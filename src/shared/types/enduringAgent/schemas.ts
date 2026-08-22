@@ -9,6 +9,7 @@ import {
   BEHAVIOR_MAINTENANCE_RUN_STATES,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
+  MEMORY_CONFLICT_RESOLUTION_ACTIONS,
   MEMORY_KINDS,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
@@ -1214,6 +1215,38 @@ export const MemoryBackfillMergeSchema = z.object({
   mergedAt: TimestampSchema,
 }).strict();
 
+export const ConflictResolutionAuditSchema = z.object({
+  resolutionId: EnduringAgentIdSchema,
+  memoryIds: z.tuple([EnduringAgentIdSchema, EnduringAgentIdSchema])
+    .refine(([left, right]) => left !== right, 'Conflict resolution memories must be distinct.'),
+  action: z.enum(MEMORY_CONFLICT_RESOLUTION_ACTIONS),
+  winnerId: EnduringAgentIdSchema.optional(),
+  actor: z.enum(['user', 'system']),
+  authority: z.literal('manual_api'),
+  reason: NonEmptyText(10_000),
+  resolvedAt: TimestampSchema,
+}).strict().superRefine((audit, ctx) => {
+  const expectedWinner = audit.action === 'keep_left'
+    ? audit.memoryIds[0]
+    : audit.action === 'keep_right' ? audit.memoryIds[1] : undefined;
+  if (audit.winnerId !== expectedWinner) {
+    ctx.addIssue({
+      code: 'custom',
+      message: expectedWinner
+        ? 'winnerId must match the selected conflict side.'
+        : 'keep_both cannot select a winner.',
+      path: ['winnerId'],
+    });
+  }
+});
+
+export const ResolveMemoryConflictInputSchema = z.object({
+  counterpartId: EnduringAgentIdSchema,
+  action: z.enum(MEMORY_CONFLICT_RESOLUTION_ACTIONS),
+  reason: NonEmptyText(10_000),
+  resolutionId: EnduringAgentIdSchema.optional(),
+}).strict();
+
 export const MemoryItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
@@ -1230,6 +1263,7 @@ export const MemoryItemSchema = z.object({
   validUntil: TimestampSchema.optional(),
   supersedes: UniqueIdsSchema.optional(),
   conflictsWith: UniqueIdsSchema.optional(),
+  conflictResolutions: z.array(ConflictResolutionAuditSchema).max(256).optional(),
   reviewedAt: TimestampSchema.optional(),
   lastRecalledAt: TimestampSchema.optional(),
   corroborationCount: z.number().int().min(0).max(10_000).optional(),
@@ -1274,6 +1308,15 @@ export const MemoryItemSchema = z.object({
       message: 'A MemoryItem cannot conflict with itself.',
       path: ['conflictsWith'],
     });
+  }
+  for (const [index, audit] of (record.conflictResolutions ?? []).entries()) {
+    if (!audit.memoryIds.includes(record.id)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A conflict resolution audit must include this MemoryItem.',
+        path: ['conflictResolutions', index, 'memoryIds'],
+      });
+    }
   }
   if (record.backfillMerge && !record.backfillMerge.memberIds.includes(record.id)) {
     ctx.addIssue({

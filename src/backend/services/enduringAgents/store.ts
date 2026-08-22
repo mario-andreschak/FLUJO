@@ -1714,6 +1714,7 @@ async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
   for (const relatedId of new Set([
     ...(record.supersedes ?? []),
     ...(record.conflictsWith ?? []),
+    ...(record.conflictResolutions?.flatMap(audit => audit.memoryIds) ?? []),
     ...(record.backfillMerge?.memberIds ?? []),
     ...(record.backfillMergedInto ? [record.backfillMergedInto] : []),
   ])) {

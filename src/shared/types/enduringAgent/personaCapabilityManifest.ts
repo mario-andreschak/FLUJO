@@ -8,6 +8,7 @@
 export const PERSONA_NATIVE_ABILITY_IDS = [
   'remember',
   'recall',
+  'resolve_conflict',
   'correct',
   'forget',
   'pin',
@@ -23,7 +24,9 @@ export type PersonaNativeAbilityId = (typeof PERSONA_NATIVE_ABILITY_IDS)[number]
 
 /** Safe defaults for newly materialized Persona Core Flows. */
 export const DEFAULT_PERSONA_NATIVE_ABILITY_IDS = PERSONA_NATIVE_ABILITY_IDS.filter(
-  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget'> => ability !== 'forget',
+  (ability): ability is Exclude<PersonaNativeAbilityId, 'forget' | 'resolve_conflict'> => (
+    ability !== 'forget' && ability !== 'resolve_conflict'
+  ),
 );
 
 export const PERSONA_CAPABILITY_AREAS = [
@@ -144,6 +147,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
     backendOperations: [
       'memory.remember',
       'memory.recall',
+      'memory.resolve-conflict',
       'memory.correct',
       'memory.forget',
       'memory.pin',
@@ -155,6 +159,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'POST /v1/personas/[personaId]/memories',
       'GET /v1/personas/[personaId]/memories/[memoryId]',
       'DELETE /v1/personas/[personaId]/memories/[memoryId]',
+      'POST /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict',
       'POST /v1/personas/[personaId]/memories/[memoryId]/activate',
       'POST /v1/personas/[personaId]/memories/[memoryId]/correct',
       'POST /v1/personas/[personaId]/memories/[memoryId]/pin',

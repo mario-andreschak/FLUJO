@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   correctMemory,
   forgetMemory,
+  getPersonaMemory,
   pinMemoryToCore,
   searchPersonaMemory,
   storeMemoryCandidate,
@@ -27,6 +28,7 @@ export {
 export const PERSONA_MEMORY_TOOL_NAMES = [
   'remember',
   'recall',
+  'resolve_conflict',
   'correct',
   'forget',
   'pin',
@@ -72,6 +74,21 @@ export const PERSONA_MEMORY_TOOL_DEFINITIONS: Record<PersonaMemoryToolName, Tool
         limit: { type: 'number', minimum: 1, maximum: 50 },
         core_only: { type: 'boolean' },
       },
+    },
+  },
+  resolve_conflict: {
+    name: 'resolve_conflict',
+    description: 'Propose a reviewable resolution for two conflicting memories. This tool never finalizes the resolution.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memory_id: { type: 'string' },
+        counterpart_id: { type: 'string' },
+        action: { type: 'string', enum: ['keep_left', 'keep_right', 'keep_both'] },
+        rationale: { type: 'string', minLength: 1, maxLength: 10000 },
+      },
+      required: ['memory_id', 'counterpart_id', 'action', 'rationale'],
+      additionalProperties: false,
     },
   },
   correct: {
@@ -216,7 +233,57 @@ export async function executePersonaMemoryGatewayTool(
           statuses: ['active'],
         });
         await trusted.executionAuthority.assertCurrent();
-        return { success: true, data: { memories: results } };
+        const disagreements = [...new Set(results.flatMap(result => (
+          result.conflicts?.map(conflict => (
+            `${result.item.id} conflicts with ${conflict.id} (${conflict.content.slice(0, 160)})`
+          )) ?? []
+        )))];
+        const conflictNotice = disagreements.length > 0
+          ? `Some recalled memories have unresolved contradictions: ${disagreements.join('; ')}`
+          : undefined;
+        return {
+          success: true,
+          data: {
+            memories: results,
+            ...(conflictNotice ? { conflict_notice: conflictNotice } : {}),
+          },
+        };
+      }
+      case 'resolve_conflict': {
+        const leftId = stringArg(args, 'memory_id') ?? '';
+        const rightId = stringArg(args, 'counterpart_id') ?? '';
+        const action = stringArg(args, 'action');
+        const rationale = stringArg(args, 'rationale');
+        if (!['keep_left', 'keep_right', 'keep_both'].includes(action ?? '') || !rationale) {
+          throw new Error('A valid conflict resolution action and rationale are required.');
+        }
+        const [left, right] = await Promise.all([
+          getPersonaMemory(trusted.personaId, leftId),
+          getPersonaMemory(trusted.personaId, rightId),
+        ]);
+        if (!left.conflictsWith?.includes(right.id) && !right.conflictsWith?.includes(left.id)) {
+          throw new Error('The proposed memories do not have an unresolved conflict relation.');
+        }
+        const memory = await storeMemoryCandidate({
+          personaId: trusted.personaId,
+          kind: 'reflection',
+          scope: 'persona',
+          content: [
+            `Proposed conflict resolution: ${action}.`,
+            `Left memory: ${left.id}.`,
+            `Right memory: ${right.id}.`,
+            `Rationale: ${rationale}`,
+          ].join(' '),
+          confidence: 1,
+          importance: Math.max(left.importance, right.importance),
+          sourceRefs: activitySource,
+          trust: 'model_inference',
+          status: 'candidate',
+        }, { ...options, skipNearDuplicateMerge: true });
+        return {
+          success: true,
+          data: { proposed: true, finalized: false, resolution_proposal: memory },
+        };
       }
       case 'correct': {
         const memory = await correctMemory(trusted.personaId, stringArg(args, 'memory_id') ?? '', {

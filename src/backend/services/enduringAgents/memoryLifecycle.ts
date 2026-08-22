@@ -188,7 +188,11 @@ export async function sweepMemoryCandidates(personaId?: string, now = Date.now()
     const settings = await getMemorySettings();
 
     // Early exit if no cleanup is needed
-    if (settings.candidateExpiryDays <= 0 && !settings.autoPromoteEnabled) {
+    if (
+      settings.candidateExpiryDays <= 0
+      && !settings.autoPromoteEnabled
+      && !FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
+    ) {
       return stats;
     }
 
@@ -251,9 +255,61 @@ async function sweepPersonaMemoryCandidates(
       }
     }
 
-    // TODO: Repair one-sided conflictsWith links (D5)
+    if (FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING) {
+      stats.repaired += await repairPersonaConflictLinks(personaId);
+    }
   } catch (error) {
     log.error('Error sweeping persona candidates.', { personaId, error });
   }
 }
 
+
+/** Repair at most 200 stored conflict edges for one Persona per sweep. */
+async function repairPersonaConflictLinks(personaId: string): Promise<number> {
+  return withPersonaDomainMutation(personaId, {}, async () => {
+    const items = await listMemoryItems(personaId, { order: 'updated_at' });
+    const seenPairs = new Set<string>();
+    let examined = 0;
+    let repaired = 0;
+
+    for (const snapshot of items) {
+      for (const targetId of snapshot.conflictsWith ?? []) {
+        if (examined >= 200) return repaired;
+        const pairKey = [snapshot.id, targetId].sort().join('\u0000');
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        examined++;
+
+        const source = await getMemoryItem(personaId, snapshot.id);
+        if (!source?.conflictsWith?.includes(targetId)) continue;
+        const target = await getMemoryItem(personaId, targetId);
+        if (!target || target.personaId !== personaId) {
+          const links = source.conflictsWith.filter(id => id !== targetId);
+          const next = {
+            ...source,
+            ...(links.length > 0 ? { conflictsWith: links } : {}),
+            updatedAt: Math.max(Date.now(), source.updatedAt + 1),
+          } as MemoryItem;
+          if (links.length === 0) delete next.conflictsWith;
+          await saveMemoryItem(next);
+          repaired++;
+          log.warn('Removed invalid memory conflict link.', {
+            personaId,
+            memoryId: source.id,
+            targetId,
+          });
+          continue;
+        }
+        if (!target.conflictsWith?.includes(source.id)) {
+          await saveMemoryItem({
+            ...target,
+            conflictsWith: [...new Set([...(target.conflictsWith ?? []), source.id])].sort(),
+            updatedAt: Math.max(Date.now(), target.updatedAt + 1),
+          });
+          repaired++;
+        }
+      }
+    }
+    return repaired;
+  });
+}
