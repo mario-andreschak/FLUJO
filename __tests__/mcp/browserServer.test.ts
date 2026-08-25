@@ -159,12 +159,17 @@ describe('bundled browser MCP', () => {
     expect(() => new Function(viewScript!)).not.toThrow();
   });
 
-  it('persists screenshots and reports their full absolute file path', async () => {
+  it('persists immutable screenshots with artifact identity and hashes', async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-screenshot-test-'));
     const previousDataDir = process.env.FLUJO_DATA_DIR;
     process.env.FLUJO_DATA_DIR = dataDir;
-    const png = Buffer.from('png screenshot bytes');
+    const png = Buffer.alloc(26);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(png);
+    png.writeUInt32BE(1280, 16);
+    png.writeUInt32BE(720, 20);
+    png.writeUInt8(6, 25);
     const page = {
+      evaluate: jest.fn(async () => 1),
       isClosed: jest.fn(() => false),
       locator: jest.fn(() => ({ innerText: jest.fn(async () => '') })),
       on: jest.fn(),
@@ -194,15 +199,22 @@ describe('bundled browser MCP', () => {
         {},
         new AbortController().signal,
       );
-      const structured = result.structuredContent as { path?: string };
+      const structured = result.structuredContent as {
+        path?: string;
+        artifactId?: string;
+        sha256?: string;
+        encodedPng?: { width: number; height: number };
+      };
       expect(path.isAbsolute(structured.path ?? '')).toBe(true);
-      expect(structured.path).toBe(path.join(
+      expect(path.dirname(structured.path!)).toBe(path.join(
         path.resolve(dataDir),
         'screenshots',
         'browser',
         opened.id,
-        'viewport.png',
       ));
+      expect(path.basename(structured.path!)).toBe(`${structured.artifactId}-viewport.png`);
+      expect(structured.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(structured.encodedPng).toEqual({ width: 1280, height: 720 });
       await expect(fs.readFile(structured.path!)).resolves.toEqual(png);
       expect(JSON.parse((result.content[0] as { text: string }).text).path).toBe(structured.path);
 
@@ -213,8 +225,25 @@ describe('bundled browser MCP', () => {
       );
       const fullPagePath = (fullPageResult.structuredContent as { path: string }).path;
       expect(path.isAbsolute(fullPagePath)).toBe(true);
-      expect(fullPagePath).toBe(path.join(path.dirname(structured.path!), 'full-page.png'));
+      expect(path.dirname(fullPagePath)).toBe(path.dirname(structured.path!));
+      expect(fullPagePath).not.toBe(structured.path);
+      expect(path.basename(fullPagePath)).toMatch(/^[a-f0-9-]+-full-page\.png$/);
       await expect(fs.readFile(fullPagePath)).resolves.toEqual(png);
+
+      const explicitPath = path.join(dataDir, 'baseline.png');
+      const explicit = await browserCallTool(
+        'browser_screenshot',
+        { outputPath: explicitPath },
+        new AbortController().signal,
+      );
+      expect((explicit.structuredContent as { path: string }).path).toBe(explicitPath);
+      const refusedOverwrite = await browserCallTool(
+        'browser_screenshot',
+        { outputPath: explicitPath },
+        new AbortController().signal,
+      );
+      expect(refusedOverwrite.isError).toBe(true);
+      await expect(fs.readFile(explicitPath)).resolves.toEqual(png);
     } finally {
       if (previousDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
       else process.env.FLUJO_DATA_DIR = previousDataDir;

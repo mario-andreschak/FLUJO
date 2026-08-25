@@ -3,8 +3,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { CDPSession } from 'patchright';
 import {
+  BrowserMcpError,
   enabledEnv,
   getSession,
+  getSessionForGateway,
   integerEnv,
   type BrowserSession,
 } from './runtime.js';
@@ -171,14 +173,14 @@ function respondJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function resolveChannel(sessionId: string): SessionChannel {
+function resolveChannel(sessionId: string, gatewayToken: string): SessionChannel {
   const existing = channels.get(sessionId);
   if (existing && !existing.disposed) {
-    // Re-validate so the idle reaper sees the session as active while streaming.
-    getSession(sessionId);
+    // Re-validate both liveness and the per-session capability token.
+    getSessionForGateway(sessionId, gatewayToken);
     return existing;
   }
-  const session = getSession(sessionId);
+  const session = getSessionForGateway(sessionId, gatewayToken);
   const channel: SessionChannel = {
     sessionId: session.id,
     session,
@@ -235,6 +237,11 @@ function disposeChannel(channel: SessionChannel): void {
   channel.audioPreparePromise = undefined;
   channel.audioExecutionContexts.clear();
   void cdp?.detach().catch(() => undefined);
+}
+
+async function emitWarning(channel: SessionChannel, code: string, message: string): Promise<void> {
+  const payload = JSON.stringify({ sessionId: channel.sessionId, code, message });
+  for (const client of channel.eventClients) client.write(`event: warning\ndata: ${payload}\n\n`);
 }
 
 async function emitState(channel: SessionChannel, phase: 'loading' | 'idle'): Promise<void> {
@@ -551,6 +558,10 @@ async function dispatchInput(channel: SessionChannel, event: Record<string, unkn
     if (width < 320 || height < 240 || width > 3840 || height > 2160) return;
     const current = page.viewportSize();
     if (current && current.width === width && current.height === height) return;
+    if (channel.session.viewportPolicy === 'fixed') {
+      await emitWarning(channel, 'FIXED_VIEWPORT', 'This recording uses a fixed page viewport; the dock is scaling the stream instead of resizing evidence.');
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'Recording session viewports are fixed and cannot be resized by the live view.');
+    }
     await page.setViewportSize({ width, height });
   }
 }
@@ -604,9 +615,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     respondJson(res, 403, { error: 'Invalid gateway token.' });
     return;
   }
+  const sessionId = url.searchParams.get('s') ?? '';
+  const gatewayToken = url.searchParams.get('k') ?? '';
   if (req.method === 'GET' && url.pathname === '/view') {
+    // This document contains no session data. Its stream/input requests still
+    // require the per-session capability before they can attach to a page.
     // No X-Frame-Options and no frame-ancestors: the MCP App sandbox origin is
-    // unknown here, and the bearer token is what actually gates access.
+    // unknown here, and the bearer tokens are what actually gate access.
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
@@ -616,10 +631,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.end(renderBrowserViewHtml());
     return;
   }
-  const sessionId = url.searchParams.get('s') ?? '';
   let channel: SessionChannel;
   try {
-    channel = resolveChannel(sessionId);
+    channel = resolveChannel(sessionId, gatewayToken);
   } catch (error) {
     respondJson(res, 404, { error: error instanceof Error ? error.message : 'Unknown session.' });
     return;
@@ -707,10 +721,11 @@ export function browserGatewayEndpoint(): BrowserGatewayEndpoint | undefined {
  * until a client opens /audio. Failure is intentionally non-fatal: browser
  * navigation and the screenshot stream must continue when audio is unavailable.
  */
-export async function prepareBrowserAudioStream(sessionId: string): Promise<void> {
+export async function prepareBrowserAudioStream(sessionId: string, gatewayToken?: string): Promise<void> {
   if (!streamEnabled() || !audioEnabled()) return;
   try {
-    await prepareAudio(resolveChannel(sessionId));
+    const key = gatewayToken || getSession(sessionId).gatewayToken || '';
+    await prepareAudio(resolveChannel(sessionId, key));
   } catch {
     // Audio is an optional live-view capability.
   }

@@ -6,6 +6,12 @@ import {
 } from '../../mcp-servers/browser/src/gateway';
 import { audioTapSource } from '../../mcp-servers/browser/src/audioTap';
 import { BROWSER_APP_URI, browserReadResource } from '../../mcp-servers/browser/src/resources';
+import {
+  registerSession,
+  reserveSession,
+  shutdownBrowserRuntime,
+  type BrowserSession,
+} from '../../mcp-servers/browser/src/runtime';
 
 const mockLaunchBrowser = jest.fn();
 jest.mock('patchright', () => ({
@@ -29,6 +35,7 @@ describe('browser live view gateway', () => {
 
   afterEach(async () => {
     await shutdownBrowserGateway();
+    await shutdownBrowserRuntime();
     process.env = { ...savedEnv };
   });
 
@@ -82,6 +89,55 @@ describe('browser live view gateway', () => {
 
     const raw = await rawRequest(endpoint.origin, `/view?s=demo&t=${endpoint.token}`, 'attacker.example');
     expect(raw).toContain('403');
+  });
+
+  it('rejects dock viewport mutation for recordings while resizing interactive sessions', async () => {
+    const endpoint = (await ensureBrowserGateway())!;
+    const makeSession = (id: string, viewportPolicy: 'fixed' | 'resizable') => {
+      let viewport = { width: 1280, height: 720 };
+      const page = {
+        close: jest.fn(async () => undefined),
+        isClosed: jest.fn(() => false),
+        keyboard: {},
+        mainFrame: jest.fn(() => ({})),
+        mouse: {},
+        off: jest.fn(),
+        on: jest.fn(),
+        once: jest.fn(),
+        setViewportSize: jest.fn(async (next: { width: number; height: number }) => { viewport = next; }),
+        title: jest.fn(async () => ''),
+        url: jest.fn(() => 'about:blank'),
+        viewportSize: jest.fn(() => viewport),
+      };
+      const context = { close: jest.fn(async () => undefined) };
+      reserveSession(id, 'run:gateway-test', viewportPolicy === 'fixed' ? 'recording' : 'interactive');
+      const session = registerSession({
+        id,
+        mode: 'sandbox',
+        ownerScope: 'run:gateway-test',
+        purpose: viewportPolicy === 'fixed' ? 'recording' : 'interactive',
+        viewportPolicy,
+        context,
+        page,
+        touchedAt: Date.now(),
+        documentRequests: 0,
+        navigationBlocked: false,
+        blockedRequestCount: 0,
+      } as unknown as BrowserSession, 'run:gateway-test');
+      return { session, page };
+    };
+    const fixed = makeSession('fixed-recording', 'fixed');
+    const interactive = makeSession('interactive', 'resizable');
+
+    const input = (session: BrowserSession) => fetch(
+      `${endpoint.origin}/input?s=${session.id}&t=${encodeURIComponent(endpoint.token)}&k=${encodeURIComponent(session.gatewayToken!)}`,
+      { method: 'POST', body: JSON.stringify({ type: 'viewport', width: 900, height: 600 }) },
+    ).then((response) => response.json());
+
+    await expect(input(fixed.session)).resolves.toMatchObject({ ok: false });
+    expect(fixed.page.setViewportSize).not.toHaveBeenCalled();
+    await expect(input(interactive.session)).resolves.toMatchObject({ ok: true });
+    expect(interactive.page.setViewportSize).toHaveBeenCalledWith({ width: 900, height: 600 });
   });
 
   it('captures page audio unless the operator opts out', () => {

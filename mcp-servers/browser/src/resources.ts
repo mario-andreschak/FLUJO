@@ -110,7 +110,7 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
 (function(){
   "use strict";
   var GATEWAY = ${config};
-  var parentWin = window.parent, idc = 1, pending = {}, sessionId = "", starting = false, ownsSession = false;
+  var parentWin = window.parent, idc = 1, pending = {}, sessionId = "", sessionKey = "", starting = false, ownsSession = false;
   var frame = document.getElementById("frame");
   var fallback = document.getElementById("fallback");
   var shot = document.getElementById("shot");
@@ -172,7 +172,7 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
     return false;
   }
   function mountLiveView(){
-    frame.src = GATEWAY.origin + "/view?s=" + encodeURIComponent(sessionId) + "&t=" + encodeURIComponent(GATEWAY.token);
+    frame.src = GATEWAY.origin + "/view?s=" + encodeURIComponent(sessionId) + "&t=" + encodeURIComponent(GATEWAY.token) + "&k=" + encodeURIComponent(sessionKey);
     // A CSP-blocked or unreachable iframe fires neither load nor error, so a
     // silent live view must degrade to screenshots on its own.
     clearTimeout(readyTimer);
@@ -242,7 +242,8 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
       var result = await call("browser_open", args);
       var state = payload(result);
       sessionId = state.sessionId || "";
-      if (!sessionId) throw new Error("The browser session did not report an id.");
+      sessionKey = result && result._meta && result._meta.flujo && result._meta.flujo.gatewaySessionToken || "";
+      if (!sessionId || !sessionKey) throw new Error("The browser session handshake did not report its private capability.");
       if (!GATEWAY.origin || !GATEWAY.token) useFallback("The live stream gateway is disabled, so this view falls back to screenshots.");
       else if (!frameGrantCovers(GATEWAY.origin)) useFallback("This deployment cannot frame the local live-view gateway; showing periodic screenshots.");
       else mountLiveView();

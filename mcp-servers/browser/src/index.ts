@@ -26,9 +26,22 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {} } },
 );
 
+function ownerScopeOf(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const flujo = (meta as Record<string, unknown>).flujo;
+  if (!flujo || typeof flujo !== 'object') return undefined;
+  const ownerScope = (flujo as Record<string, unknown>).ownerScope;
+  return typeof ownerScope === 'string' && ownerScope.trim() ? ownerScope : undefined;
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: browserToolDefinitions() }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
-  browserCallTool(request.params.name, request.params.arguments ?? {}, extra.signal),
+  browserCallTool(
+    request.params.name,
+    request.params.arguments ?? {},
+    extra.signal,
+    ownerScopeOf(request.params._meta),
+  ),
 );
 server.setRequestHandler(ListResourcesRequestSchema, async () => browserListResources());
 server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));

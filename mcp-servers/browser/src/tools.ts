@@ -13,12 +13,13 @@ import {
   defaultViewport,
   failureCategoryForCode,
   getSession,
+  listSessions,
   openSession,
   publicPageState,
+  releaseOwnerScope,
   resetNavigationCounter,
   runCancellable,
   timeoutMs,
-  writeScreenshotArtifact,
   type BrowserErrorCode,
   type BrowserFailureCategory,
   type BrowserSession,
@@ -31,12 +32,13 @@ import {
   finiteParameter,
   navigateCaptureSource,
   normalizeResolution,
+  pngDimensions,
   resolutionFallbacks,
   resolveCaptureSource,
   sha256Hex,
   writeCaptureArtifact,
 } from './capture.js';
-import { recordingStatus, startRecording, stopRecording } from './recording.js';
+import { recordingStatus, releaseRecordingsForOwner, startRecording, stopRecording } from './recording.js';
 import { prepareBrowserAudioStream } from './gateway.js';
 
 const MAX_TEXT_CHARS = 50_000;
@@ -218,12 +220,13 @@ export function browserToolDefinitions(): Tool[] {
     },
     {
       name: 'browser_screenshot',
-      description: 'Capture a PNG screenshot, persist it under the FLUJO data directory, and report its full absolute file path.',
+      description: 'Capture an immutable PNG screenshot with artifact ID, SHA-256, geometry, and an optional safe no-overwrite outputPath.',
       inputSchema: {
         type: 'object',
         properties: {
           sessionId: SESSION_PROPERTY,
           fullPage: { type: 'boolean', default: false },
+          outputPath: { type: 'string', description: 'Optional immutable .png destination confined to the FLUJO data directory or browser screenshot root.' },
           timeoutMs: TIMEOUT_PROPERTY,
         },
         additionalProperties: false,
@@ -334,6 +337,20 @@ export function browserToolDefinitions(): Tool[] {
       _meta: APP_META,
     },
     {
+      name: 'browser_list_sessions',
+      description: 'List this caller owner scope\'s active and reserved browser sessions with lifecycle and capacity diagnostics.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_release_owner',
+      description: 'Close every browser session owned by this authoritative caller scope. Idempotent.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      _meta: APP_META,
+    },
+    {
       name: 'browser_diagnostics',
       description: 'Report configured/actual browser mode, channel, headless state, persistence, locale, service-worker policy, and the active page fingerprint without opening a destination site.',
       inputSchema: {
@@ -369,10 +386,15 @@ export function browserToolDefinitions(): Tool[] {
   ];
 }
 
-function success(data: Record<string, unknown>, extraContent: CallToolResult['content'] = []): CallToolResult {
+function success(
+  data: Record<string, unknown>,
+  extraContent: CallToolResult['content'] = [],
+  gatewaySessionToken?: string,
+): CallToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(data) }, ...extraContent],
     structuredContent: data,
+    ...(gatewaySessionToken ? { _meta: { flujo: { gatewaySessionToken } } } : {}),
   };
 }
 
@@ -464,7 +486,7 @@ function finiteNumberArg(args: Record<string, unknown>, key: string, fallback?: 
   return parsed;
 }
 
-type CapturePageHandle = { page: Page; close: () => Promise<void> };
+type CapturePageHandle = { page: Page; close: () => Promise<void>; session?: BrowserSession };
 
 function hasCaptureSource(args: Record<string, unknown>): boolean {
   return ['source', 'url', 'html', 'filePath'].some((key) => typeof args[key] === 'string' && String(args[key]).trim().length > 0);
@@ -487,15 +509,16 @@ async function acquireCapturePage(
   signal: AbortSignal,
   viewport: { width: number; height: number; deviceScaleFactor?: number; colorScheme?: 'light' | 'dark' },
   preferActive: boolean,
+  ownerScope?: string,
 ): Promise<CapturePageHandle> {
   if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
-    const session = getSession(args.sessionId);
-    return { page: session.page, close: async () => undefined };
+    const session = getSession(args.sessionId, ownerScope);
+    return { page: session.page, close: async () => undefined, session };
   }
   if (preferActive) {
     try {
-      const session = getSession(undefined);
-      return { page: session.page, close: async () => undefined };
+      const session = getSession(undefined, ownerScope);
+      return { page: session.page, close: async () => undefined, session };
     } catch (error) {
       if (!(error instanceof BrowserMcpError) || error.code !== 'NOT_FOUND') throw error;
     }
@@ -510,6 +533,7 @@ async function captureRegionOrPage(
   args: Record<string, unknown>,
   signal: AbortSignal,
   timeout: number,
+  ownerScope?: string,
 ): Promise<CaptureToolResult> {
   const resolution = normalizeResolution(args.resolution, args.width, args.height, {
     defaultValue: { width: 1920, height: 1080 },
@@ -542,10 +566,16 @@ async function captureRegionOrPage(
       signal,
       { ...candidate, deviceScaleFactor, colorScheme },
       !source,
+      ownerScope,
     );
     try {
       if (resolution.explicit && typeof handle.page.setViewportSize === 'function') {
-        await handle.page.setViewportSize(candidate).catch(() => undefined);
+        const current = handle.page.viewportSize();
+        if (handle.session?.viewportPolicy === 'fixed' && current
+          && (current.width !== candidate.width || current.height !== candidate.height)) {
+          throw new BrowserMcpError('INVALID_ARGUMENT', 'A fixed recording viewport cannot be changed by a capture request.');
+        }
+        if (handle.session?.viewportPolicy !== 'fixed') await handle.page.setViewportSize(candidate);
       }
       const { png, colorType } = await captureDeterministicPng(
         handle.page,
@@ -595,6 +625,7 @@ async function captureRegionTool(
   args: Record<string, unknown>,
   signal: AbortSignal,
   timeout: number,
+  ownerScope?: string,
 ): Promise<CaptureToolResult> {
   const viewport = defaultViewport();
   const region = args.region && typeof args.region === 'object' && !Array.isArray(args.region)
@@ -617,7 +648,7 @@ async function captureRegionTool(
   const { page, close } = await acquireCapturePage(args, signal, {
     width: Math.min(3840, Math.max(viewport.width, x + width)),
     height: Math.min(2160, Math.max(viewport.height, y + height)),
-  }, !source);
+  }, !source, ownerScope);
   try {
     const { png, colorType } = await captureRegionPng(page, source, { x, y, width, height }, timeout);
     const filePath = await writeCaptureArtifact(
@@ -650,6 +681,7 @@ async function captureElementMetricsTool(
   args: Record<string, unknown>,
   signal: AbortSignal,
   timeout: number,
+  ownerScope?: string,
 ): Promise<Record<string, unknown>> {
   const rawSelectors = args.selectors;
   if (!Array.isArray(rawSelectors) || rawSelectors.length === 0) {
@@ -664,7 +696,7 @@ async function captureElementMetricsTool(
   const hasSource = hasCaptureSource(args);
 
   if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
-    const session = getSession(args.sessionId);
+    const session = getSession(args.sessionId, ownerScope);
     if (hasSource) {
       const source = await optionalCaptureSource(args);
       if (!source) throw new BrowserMcpError('INVALID_ARGUMENT', 'Could not resolve the supplied source.');
@@ -685,7 +717,7 @@ async function captureElementMetricsTool(
     }
   }
 
-  const session = getSession(undefined);
+  const session = getSession(undefined, ownerScope);
   return { success: true, metrics: await evaluateElementMetrics(session.page, selectors) };
 }
 
@@ -749,7 +781,7 @@ async function navigate(session: BrowserSession, rawUrl: string, timeout: number
   // Install the main-world audio hook before page.goto: once a page has created
   // its AudioContext or fired a media play event, it cannot be intercepted
   // retroactively.
-  await prepareBrowserAudioStream(session.id);
+  await prepareBrowserAudioStream(session.id, session.gatewayToken ?? '');
   resetNavigationCounter(session);
   return runCancellable(session, signal, async () => {
     try {
@@ -768,24 +800,25 @@ export async function browserCallTool(
   name: string,
   rawArgs: unknown,
   signal: AbortSignal,
+  ownerScope?: string,
 ): Promise<CallToolResult> {
   try {
     const args = objectArgs(rawArgs);
     if (name === 'browser_open') {
-      const session = await openSession(args.sessionId, signal);
+      const session = await openSession(args.sessionId, signal, ownerScope);
       const timeout = timeoutMs(args.timeoutMs);
       const data = typeof args.url === 'string' && args.url.length > 0
         ? await navigate(session, args.url, timeout, signal)
         : { success: true, ...publicPageState(session) };
       // Keep the session identity in the structured result at the process
       // boundary; callers must not scrape the human-readable text payload.
-      return success({ ...data, sessionId: session.id });
+      return success({ ...data, sessionId: session.id }, [], session.gatewayToken);
     }
     if (name === 'browser_close') {
       let sessionId: string;
       if (args.sessionId === undefined || args.sessionId === '') {
         try {
-          sessionId = getSession(undefined).id;
+          sessionId = getSession(undefined, ownerScope).id;
         } catch (error) {
           if (error instanceof BrowserMcpError && error.code === 'NOT_FOUND') {
             return success({ success: true, sessionId: null, closed: false });
@@ -795,16 +828,21 @@ export async function browserCallTool(
       } else {
         sessionId = stringArg(args, 'sessionId', 64);
       }
-      const closed = await closeSession(sessionId);
+      const closed = await closeSession(sessionId, ownerScope);
       return success({ success: true, sessionId, closed });
+    }
+    if (name === 'browser_list_sessions') return success(listSessions(ownerScope));
+    if (name === 'browser_release_owner') {
+      const finalizedRecordings = await releaseRecordingsForOwner(ownerScope);
+      return success({ ...await releaseOwnerScope(ownerScope), finalizedRecordings });
     }
     if (name === 'browser_diagnostics') {
       let session: BrowserSession | undefined;
       if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
-        session = getSession(args.sessionId);
+        session = getSession(args.sessionId, ownerScope);
       } else {
         try {
-          session = getSession(undefined);
+          session = getSession(undefined, ownerScope);
         } catch (error) {
           if (!(error instanceof BrowserMcpError) || error.code !== 'NOT_FOUND') throw error;
         }
@@ -818,15 +856,15 @@ export async function browserCallTool(
     const timeout = timeoutMs(args.timeoutMs);
 
     if (name === 'browser_capture_page') {
-      const result = await captureRegionOrPage(args, signal, timeout);
+      const result = await captureRegionOrPage(args, signal, timeout, ownerScope);
       return success(result.data, [{ type: 'image', data: result.image.data, mimeType: result.image.mimeType }]);
     }
     if (name === 'browser_capture_region') {
-      const result = await captureRegionTool(args, signal, timeout);
+      const result = await captureRegionTool(args, signal, timeout, ownerScope);
       return success(result.data, [{ type: 'image', data: result.image.data, mimeType: result.image.mimeType }]);
     }
     if (name === 'browser_capture_element_metrics') {
-      return success(await captureElementMetricsTool(args, signal, timeout));
+      return success(await captureElementMetricsTool(args, signal, timeout, ownerScope));
     }
     if (name === 'browser_record_start') {
       return recordingResult(await startRecording(
@@ -844,6 +882,7 @@ export async function browserCallTool(
           timeoutMs: args.timeoutMs,
         },
         signal,
+        ownerScope,
       ));
     }
     if (name === 'browser_record_stop') {
@@ -851,13 +890,13 @@ export async function browserCallTool(
         recordingId: args.recordingId,
         sessionId: args.sessionId,
         outputPath: args.outputPath,
-      }));
+      }, ownerScope));
     }
     if (name === 'browser_record_status') {
-      return recordingResult(recordingStatus({ recordingId: args.recordingId, sessionId: args.sessionId }));
+      return recordingResult(recordingStatus({ recordingId: args.recordingId, sessionId: args.sessionId }, ownerScope));
     }
 
-    const session = getSession(args.sessionId);
+    const session = getSession(args.sessionId, ownerScope);
     if (name === 'browser_navigate') {
       return success(await navigate(session, stringArg(args, 'url', 8_192), timeout, signal));
     }
@@ -966,22 +1005,53 @@ export async function browserCallTool(
     }
     if (name === 'browser_screenshot') {
       const fullPage = args.fullPage === true;
-      const png = await runCancellable(session, signal, () => session.page.screenshot({
-        type: 'png',
-        fullPage,
-        timeout,
-      }));
+      const capturedAt = new Date().toISOString();
+      const artifactId = randomUUID();
+      const [png, deviceScaleFactor] = await Promise.all([
+        runCancellable(session, signal, () => session.page.screenshot({
+          type: 'png',
+          fullPage,
+          timeout,
+        })),
+        session.page.evaluate<number>('window.devicePixelRatio').catch(() => session.deviceScaleFactor ?? 1),
+      ]);
       if (png.length > MAX_SCREENSHOT_BYTES) {
         throw new BrowserMcpError('INVALID_ARGUMENT', 'The screenshot exceeded the 5 MB artifact limit.');
       }
-      const filePath = await writeScreenshotArtifact(session.id, fullPage, png);
+      const filePath = await writeCaptureArtifact(
+        typeof args.outputPath === 'string' && args.outputPath.length > 0 ? args.outputPath : undefined,
+        [session.id, `${artifactId}-${fullPage ? 'full-page' : 'viewport'}.png`],
+        png,
+      );
+      const viewport = session.page.viewportSize();
+      const encodedPng = pngDimensions(png);
       const data = {
         success: true,
         ...publicPageState(session),
+        artifactId,
         path: filePath,
         mimeType: 'image/png',
         bytes: png.length,
-        viewport: session.page.viewportSize(),
+        sha256: sha256Hex(png),
+        capturedAt,
+        viewport,
+        actualViewport: viewport,
+        deviceScaleFactor,
+        encodedPng,
+        fullPage,
+        ...(session.recordingId ? {
+          recordingId: session.recordingId,
+          recordingGeometry: {
+            configuredViewport: session.configuredViewport,
+            configuredVideoResolution: session.configuredVideoResolution,
+            deviceScaleFactor: session.deviceScaleFactor ?? deviceScaleFactor,
+            viewportPolicy: session.viewportPolicy,
+          },
+        } : {}),
+        captureConditions: {
+          exactPixelArtifact: !fullPage,
+          note: 'PNG is lossless; callers remain responsible for freezing application animation, timestamps, cursors, and overlays.',
+        },
       };
       return success(data, [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }]);
     }

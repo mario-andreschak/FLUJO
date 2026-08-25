@@ -39,12 +39,15 @@ import {
   BrowserMcpError,
   acquireBrowser,
   defaultViewport,
+  effectiveBrowserOwnerScope,
   ensureScratchDir,
   closeSession,
   integerEnv,
   installRequestPolicy,
   recordingRoot,
   registerSession,
+  releaseSessionReservation,
+  reserveSession,
   type BrowserSession,
 } from './runtime.js';
 
@@ -68,6 +71,7 @@ function createDeferred<T>(): Deferred<T> {
 
 type RecordingState = {
   id: string;
+  ownerScope: string;
   context: BrowserContext;
   page: Page;
   cdp?: CDPSession;
@@ -82,14 +86,17 @@ type RecordingState = {
   done: Deferred<Record<string, unknown>>;
   requestedResolution: Resolution;
   effectiveResolution: Resolution;
+  actualViewport: Resolution;
+  deviceScaleFactor: number;
   warnings: string[];
   setupAttempts: string[];
 };
 
 const recordings = new Map<string, RecordingState>();
+const recordingReservations = new Set<string>();
 const finalizingRecordings = new Map<string, RecordingState>();
-const completedRecordings = new Map<string, { result: Record<string, unknown>; completedAt: number }>();
-let latestCompletedId: string | undefined;
+const completedRecordings = new Map<string, { result: Record<string, unknown>; completedAt: number; ownerScope: string }>();
+const latestCompletedIds = new Map<string, string>();
 
 function wavHeader(dataLength: number, sampleRate: number, channels: number, bitsPerSample: number): Buffer {
   const blockAlign = (channels * bitsPerSample) / 8;
@@ -228,20 +235,23 @@ async function confineOutputPath(outputPath: string): Promise<string> {
 function resolveRecordingState(
   args: { recordingId?: unknown; sessionId?: unknown },
   allowMissing: boolean,
+  ownerScopeInput?: string,
 ): RecordingState | undefined {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
   const id = typeof args.recordingId === 'string' && args.recordingId
     ? args.recordingId
     : (typeof args.sessionId === 'string' && args.sessionId ? args.sessionId : undefined);
   if (id) {
     const state = recordings.get(id);
-    if (!state) {
+    if (!state || state.ownerScope !== ownerScope) {
       if (allowMissing) return undefined;
       throw new BrowserMcpError('NOT_FOUND', 'No matching recording is running.');
     }
     return state;
   }
-  if (recordings.size === 1) return [...recordings.values()][0];
-  if (recordings.size === 0) {
+  const owned = [...recordings.values()].filter((state) => state.ownerScope === ownerScope);
+  if (owned.length === 1) return owned[0];
+  if (owned.length === 0) {
     if (allowMissing) return undefined;
     throw new BrowserMcpError('NOT_FOUND', 'No recording is running.');
   }
@@ -260,23 +270,38 @@ function rememberCompleted(result: Record<string, unknown>): void {
     if (!oldest) break;
     completedRecordings.delete(oldest);
   }
-  completedRecordings.set(id, { result, completedAt: now });
-  latestCompletedId = id;
+  const state = finalizingRecordings.get(id);
+  const ownerScope = state?.ownerScope ?? effectiveBrowserOwnerScope();
+  completedRecordings.set(id, { result, completedAt: now, ownerScope });
+  latestCompletedIds.set(ownerScope, id);
 }
 
-function completedRecording(args: { recordingId?: unknown; sessionId?: unknown }): Record<string, unknown> | undefined {
+function completedRecording(
+  args: { recordingId?: unknown; sessionId?: unknown },
+  ownerScopeInput?: string,
+): Record<string, unknown> | undefined {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
   const id = typeof args.recordingId === 'string' && args.recordingId
     ? args.recordingId
-    : (typeof args.sessionId === 'string' && args.sessionId ? args.sessionId : latestCompletedId);
-  return id ? completedRecordings.get(id)?.result : undefined;
+    : (typeof args.sessionId === 'string' && args.sessionId ? args.sessionId : latestCompletedIds.get(ownerScope));
+  const entry = id ? completedRecordings.get(id) : undefined;
+  return entry?.ownerScope === ownerScope ? entry.result : undefined;
 }
 
-function finalizingRecording(args: { recordingId?: unknown; sessionId?: unknown }): RecordingState | undefined {
+function finalizingRecording(
+  args: { recordingId?: unknown; sessionId?: unknown },
+  ownerScopeInput?: string,
+): RecordingState | undefined {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
   const id = typeof args.recordingId === 'string' && args.recordingId
     ? args.recordingId
     : (typeof args.sessionId === 'string' && args.sessionId ? args.sessionId : undefined);
-  if (id) return finalizingRecordings.get(id);
-  if (finalizingRecordings.size === 1 && recordings.size === 0) return [...finalizingRecordings.values()][0];
+  if (id) {
+    const state = finalizingRecordings.get(id);
+    return state?.ownerScope === ownerScope ? state : undefined;
+  }
+  const owned = [...finalizingRecordings.values()].filter((state) => state.ownerScope === ownerScope);
+  if (owned.length === 1 && ![...recordings.values()].some((state) => state.ownerScope === ownerScope)) return owned[0];
   return undefined;
 }
 
@@ -288,6 +313,70 @@ function mimeForPath(filePath: string | undefined): string | undefined {
   if (extension === '.webm') return 'video/webm';
   if (extension === '.wav') return 'audio/wav';
   return undefined;
+}
+
+async function readWebmDimensions(filePath: string | undefined): Promise<Resolution | null> {
+  if (!filePath) return null;
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const stat = await handle.stat();
+    const bytes = Math.min(stat.size, 2 * 1024 * 1024);
+    const buffer = Buffer.alloc(bytes);
+    await handle.read(buffer, 0, bytes, 0);
+    let width: number | undefined;
+    let height: number | undefined;
+    for (let index = 0; index < buffer.length - 2 && (!width || !height); index += 1) {
+      const id = buffer[index];
+      if (id !== 0xb0 && id !== 0xba) continue;
+      const first = buffer[index + 1];
+      let length = 1;
+      let mask = 0x80;
+      while (length <= 4 && (first & mask) === 0) {
+        length += 1;
+        mask >>= 1;
+      }
+      if (length > 4 || index + 1 + length >= buffer.length) continue;
+      let size = first & (mask - 1);
+      for (let cursor = 1; cursor < length; cursor += 1) size = (size << 8) | buffer[index + 1 + cursor];
+      if (size < 1 || size > 4 || index + 1 + length + size > buffer.length) continue;
+      let value = 0;
+      for (let cursor = 0; cursor < size; cursor += 1) {
+        value = (value << 8) | buffer[index + 1 + length + cursor];
+      }
+      if (value < 1 || value > 16_384) continue;
+      if (id === 0xb0) width = value;
+      else height = value;
+    }
+    return width && height ? { width, height } : null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function geometryPayload(state: RecordingState, encoded: Resolution | null = null): Record<string, unknown> {
+  const viewportMismatch = state.actualViewport.width !== state.effectiveResolution.width
+    || state.actualViewport.height !== state.effectiveResolution.height
+    || state.deviceScaleFactor !== 1;
+  const encodedMismatch = encoded !== null
+    && (encoded.width !== state.effectiveResolution.width || encoded.height !== state.effectiveResolution.height);
+  return {
+    requestedViewport: state.requestedResolution,
+    actualViewport: state.actualViewport,
+    deviceScaleFactor: state.deviceScaleFactor,
+    configuredVideoResolution: state.effectiveResolution,
+    actualEncodedVideoResolution: encoded,
+    contentBounds: {
+      x: 0,
+      y: 0,
+      width: state.effectiveResolution.width,
+      height: state.effectiveResolution.height,
+    },
+    letterboxInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+    geometryMismatch: viewportMismatch || encodedMismatch,
+  };
 }
 
 function runFfmpegTranscode(ffmpeg: string, source: string, dest: string): Promise<void> {
@@ -332,7 +421,7 @@ async function finalizeRecording(state: RecordingState, outputPathOverride?: str
 
   let videoPath: string | undefined;
   const video = state.page.video();
-  await closeSession(state.id).catch((error) => {
+  await closeSession(state.id, state.ownerScope).catch((error) => {
     warnings.push(`Closing the recording context reported: ${error instanceof Error ? error.message : 'unknown error'}.`);
   });
   if (video) {
@@ -431,6 +520,15 @@ async function finalizeRecording(state: RecordingState, outputPathOverride?: str
   }
 
   const stat = outputPath ? await fs.stat(outputPath).catch(() => undefined) : undefined;
+  const actualEncodedVideoResolution = await readWebmDimensions(videoPath);
+  if (!actualEncodedVideoResolution) {
+    warnings.push('The finalized WebM dimensions could not be verified in-process; actualEncodedVideoResolution is null.');
+  } else if (
+    actualEncodedVideoResolution.width !== state.effectiveResolution.width
+    || actualEncodedVideoResolution.height !== state.effectiveResolution.height
+  ) {
+    warnings.push(`Encoded geometry mismatch: configured ${state.effectiveResolution.width}x${state.effectiveResolution.height}, observed ${actualEncodedVideoResolution.width}x${actualEncodedVideoResolution.height}. Exact evidence is invalid.`);
+  }
   const success = Boolean(outputPath && stat?.isFile() && stat.size > 0);
   const artifacts = [
     outputPath ? { kind: 'video', path: outputPath, mimeType: mimeForPath(outputPath) ?? 'video/webm', bytes: stat?.size ?? 0 } : undefined,
@@ -444,6 +542,7 @@ async function finalizeRecording(state: RecordingState, outputPathOverride?: str
     durationMs,
     requestedResolution: state.requestedResolution,
     effectiveResolution: state.effectiveResolution,
+    ...geometryPayload(state, actualEncodedVideoResolution),
     videoPath,
     audioPath,
     mergedPath,
@@ -485,8 +584,13 @@ export type StartRecordingArgs = {
   timeoutMs?: unknown;
 };
 
-export async function startRecording(args: StartRecordingArgs, signal: AbortSignal): Promise<Record<string, unknown>> {
-  if (recordings.size >= MAX_CONCURRENT_RECORDINGS) {
+export async function startRecording(
+  args: StartRecordingArgs,
+  signal: AbortSignal,
+  ownerScopeInput?: string,
+): Promise<Record<string, unknown>> {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  if (recordings.size + recordingReservations.size >= MAX_CONCURRENT_RECORDINGS) {
     throw new BrowserMcpError('SESSION_LIMIT', `The recording limit (${MAX_CONCURRENT_RECORDINGS}) has been reached.`);
   }
   const defaults = defaultViewport();
@@ -517,27 +621,56 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
   const outputPath = typeof args.outputPath === 'string' && args.outputPath.length > 0 ? args.outputPath : undefined;
 
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
-  const browser: Browser = await acquireBrowser();
-  if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
-
   const id = randomUUID();
+  recordingReservations.add(id);
+  try {
+    reserveSession(id, ownerScope, 'recording');
+  } catch (error) {
+    recordingReservations.delete(id);
+    throw error;
+  }
+  let browser: Browser;
+  try {
+    browser = await acquireBrowser();
+  } catch (error) {
+    recordingReservations.delete(id);
+    releaseSessionReservation(id, ownerScope);
+    throw error;
+  }
+  if (signal.aborted) {
+    recordingReservations.delete(id);
+    releaseSessionReservation(id, ownerScope);
+    throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+  }
   const setupAttempts: string[] = [];
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   let videoDir = '';
   let effectiveResolution: Resolution | undefined;
+  let actualViewport: Resolution | undefined;
   const candidates = resolutionFallbacks(resolution.effective)
     .filter(({ width, height }) => width <= maxWidth && height <= maxHeight);
   for (const candidate of candidates) {
-    videoDir = await ensureScratchDir(path.join('recordings', `${id}-${candidate.width}x${candidate.height}`));
     try {
+      videoDir = await ensureScratchDir(path.join('recordings', `${id}-${candidate.width}x${candidate.height}`));
       context = await browser.newContext({
         viewport: candidate,
+        deviceScaleFactor: 1,
         acceptDownloads: false,
         recordVideo: { dir: videoDir, size: candidate },
       });
       page = await context.newPage();
+      const observed = await page.evaluate<{ width: number; height: number; dpr: number }>(
+        '({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio })',
+      );
+      if (observed.width !== candidate.width || observed.height !== candidate.height || observed.dpr !== 1) {
+        throw new BrowserMcpError(
+          'BROWSER_UNAVAILABLE',
+          `Recording geometry mismatch during startup: requested ${candidate.width}x${candidate.height} DPR 1, observed ${observed.width}x${observed.height} DPR ${observed.dpr}.`,
+        );
+      }
       effectiveResolution = candidate;
+      actualViewport = { width: observed.width, height: observed.height };
       break;
     } catch (error) {
       setupAttempts.push(`${candidate.width}x${candidate.height}: ${error instanceof Error ? error.message : 'context creation failed'}`);
@@ -547,7 +680,9 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
       page = undefined;
     }
   }
-  if (!context || !page || !effectiveResolution) {
+  if (!context || !page || !effectiveResolution || !actualViewport) {
+    recordingReservations.delete(id);
+    releaseSessionReservation(id, ownerScope);
     throw new BrowserMcpError(
       'BROWSER_UNAVAILABLE',
       `Could not start video recording after safe resolution fallbacks. ${setupAttempts.join(' | ')}`,
@@ -557,31 +692,53 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
     resolution.warnings.push(`Recording recovered at ${effectiveResolution.width}x${effectiveResolution.height} after ${setupAttempts.length} failed resolution attempt(s).`);
   }
   if (signal.aborted) {
+    recordingReservations.delete(id);
+    releaseSessionReservation(id, ownerScope);
     await context.close().catch(() => undefined);
     throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
   }
 
+  const now = Date.now();
   const session: BrowserSession = {
     id,
     mode: 'sandbox',
+    ownerScope,
+    purpose: 'recording',
+    lifecycleState: 'active',
+    viewportPolicy: 'fixed',
+    createdAt: now,
+    gatewayToken: randomUUID(),
+    recordingId: id,
+    configuredViewport: effectiveResolution,
+    configuredVideoResolution: effectiveResolution,
+    deviceScaleFactor: 1,
     context,
     page,
-    touchedAt: Date.now(),
+    touchedAt: now,
     documentRequests: 0,
     navigationBlocked: false,
     blockedRequestCount: 0,
   };
-  registerSession(session);
+  try {
+    registerSession(session, ownerScope);
+  } catch (error) {
+    recordingReservations.delete(id);
+    releaseSessionReservation(id, ownerScope);
+    await context.close().catch(() => undefined);
+    throw error;
+  }
   try {
     await installRequestPolicy(context);
   } catch (error) {
-    await closeSession(id).catch(() => undefined);
+    recordingReservations.delete(id);
+    await closeSession(id, ownerScope).catch(() => undefined);
     await fs.rm(videoDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 
   const state: RecordingState = {
     id,
+    ownerScope,
     context,
     page,
     videoDir,
@@ -593,9 +750,13 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
     done: createDeferred<Record<string, unknown>>(),
     requestedResolution: resolution.requested,
     effectiveResolution,
+    actualViewport,
+    deviceScaleFactor: 1,
     warnings: [...resolution.warnings],
     setupAttempts,
   };
+  session.onExpire = () => { void finalizeRecording(state); };
+  recordingReservations.delete(id);
   recordings.set(id, state);
 
   if (audioRequested) {
@@ -645,6 +806,7 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
     startedAt: state.startedAt,
     requestedResolution: state.requestedResolution,
     effectiveResolution: state.effectiveResolution,
+    ...geometryPayload(state),
     audio: state.audio,
     sourceLoaded,
     ...(autoStopAt ? { autoStopAt, durationMs } : {}),
@@ -658,11 +820,14 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
 
 export type StopRecordingArgs = { recordingId?: unknown; sessionId?: unknown; outputPath?: unknown };
 
-export async function stopRecording(args: StopRecordingArgs): Promise<Record<string, unknown>> {
-  const existing = completedRecording(args);
-  const state = resolveRecordingState(args, true);
+export async function stopRecording(
+  args: StopRecordingArgs,
+  ownerScopeInput?: string,
+): Promise<Record<string, unknown>> {
+  const existing = completedRecording(args, ownerScopeInput);
+  const state = resolveRecordingState(args, true, ownerScopeInput);
   if (!state) {
-    const finalizing = finalizingRecording(args);
+    const finalizing = finalizingRecording(args, ownerScopeInput);
     if (finalizing) return finalizing.done.promise;
     if (existing) return existing;
     throw new BrowserMcpError('NOT_FOUND', 'No matching recording is running or recently completed. Start one with browser_record_start.');
@@ -673,10 +838,13 @@ export async function stopRecording(args: StopRecordingArgs): Promise<Record<str
 
 export type RecordingStatusArgs = { recordingId?: unknown; sessionId?: unknown };
 
-export function recordingStatus(args: RecordingStatusArgs): Record<string, unknown> {
-  const state = resolveRecordingState(args, true);
+export function recordingStatus(
+  args: RecordingStatusArgs,
+  ownerScopeInput?: string,
+): Record<string, unknown> {
+  const state = resolveRecordingState(args, true, ownerScopeInput);
   if (!state) {
-    const finalizing = finalizingRecording(args);
+    const finalizing = finalizingRecording(args, ownerScopeInput);
     if (finalizing) {
       return {
         success: true,
@@ -687,11 +855,12 @@ export function recordingStatus(args: RecordingStatusArgs): Record<string, unkno
         elapsedMs: Date.now() - finalizing.startedAt,
         audioBytes: finalizing.audioBytes,
         effectiveResolution: finalizing.effectiveResolution,
+        ...geometryPayload(finalizing),
         warnings: finalizing.warnings,
         nextAction: 'Call browser_record_stop with this recordingId; it will wait for finalization and return the artifact.',
       };
     }
-    const completed = completedRecording(args);
+    const completed = completedRecording(args, ownerScopeInput);
     if (completed) return { ...completed, running: false };
     return {
       success: true,
@@ -708,9 +877,17 @@ export function recordingStatus(args: RecordingStatusArgs): Record<string, unkno
     elapsedMs: Date.now() - state.startedAt,
     audioBytes: state.audioBytes,
     effectiveResolution: state.effectiveResolution,
+    ...geometryPayload(state),
     warnings: state.warnings,
     nextAction: 'Continue driving the session, or call browser_record_stop to finalize and retrieve the video.',
   };
+}
+
+export async function releaseRecordingsForOwner(ownerScopeInput?: string): Promise<number> {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  const states = [...recordings.values()].filter((state) => state.ownerScope === ownerScope);
+  await Promise.all(states.map((state) => finalizeRecording(state).catch(() => undefined)));
+  return states.length;
 }
 
 /** Finalise (never silently drop) every in-flight recording during process shutdown. */
@@ -720,7 +897,8 @@ export async function shutdownAllRecordings(): Promise<void> {
     ...states.map((state) => finalizeRecording(state).catch(() => undefined)),
     ...[...finalizingRecordings.values()].map((state) => state.done.promise.catch(() => undefined)),
   ]);
+  recordingReservations.clear();
   finalizingRecordings.clear();
   completedRecordings.clear();
-  latestCompletedId = undefined;
+  latestCompletedIds.clear();
 }

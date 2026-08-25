@@ -27,6 +27,11 @@ export type BrowserErrorCode =
 export type BrowserFailureCategory = 'cancelled' | 'input' | 'policy' | 'runtime' | 'site';
 export type BrowserMode = 'sandbox' | 'trusted';
 export type BrowserWindowVisibility = 'minimized' | 'offscreen' | 'visible';
+export type BrowserSessionPurpose = 'interactive' | 'recording';
+export type BrowserSessionState = 'reserved' | 'active' | 'closing';
+export type BrowserViewportPolicy = 'resizable' | 'fixed';
+export type BrowserGeometry = { width: number; height: number };
+export const LEGACY_BROWSER_OWNER_SCOPE = 'legacy:anonymous';
 
 export function failureCategoryForCode(code: BrowserErrorCode): BrowserFailureCategory {
   if (code === 'CANCELLED') return 'cancelled';
@@ -55,6 +60,18 @@ export type PolicyBlock = {
 export type BrowserSession = {
   id: string;
   mode: BrowserMode;
+  ownerScope?: string;
+  purpose?: BrowserSessionPurpose;
+  lifecycleState?: BrowserSessionState;
+  viewportPolicy?: BrowserViewportPolicy;
+  createdAt?: number;
+  expiresAt?: number;
+  gatewayToken?: string;
+  recordingId?: string;
+  configuredViewport?: BrowserGeometry;
+  configuredVideoResolution?: BrowserGeometry;
+  deviceScaleFactor?: number;
+  onExpire?: () => void;
   context: BrowserContext;
   page: Page;
   touchedAt: number;
@@ -81,8 +98,19 @@ let trustedContext: BrowserContext | undefined;
 let trustedContextPromise: Promise<BrowserContext> | undefined;
 const launchStates: Partial<Record<BrowserMode, RuntimeLaunchState>> = {};
 let runtimeRoot: string | undefined;
-let lastSessionId: string | undefined;
 const sessions = new Map<string, BrowserSession>();
+const reservations = new Map<string, {
+  id: string;
+  ownerScope: string;
+  purpose: BrowserSessionPurpose;
+  createdAt: number;
+  expiresAt: number;
+}>();
+const lastSessionIds = new Map<string, string>();
+
+export function effectiveBrowserOwnerScope(ownerScope?: string): string {
+  return ownerScope?.trim() || LEGACY_BROWSER_OWNER_SCOPE;
+}
 
 export function integerEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = Number.parseInt(process.env[name] ?? '', 10);
@@ -299,13 +327,6 @@ async function ensureRuntimeRoot(): Promise<string> {
   return runtimeRoot;
 }
 
-function screenshotRoot(): string {
-  const configured = process.env.FLUJO_BROWSER_SCREENSHOT_DIR?.trim();
-  if (configured) return path.resolve(configured);
-  const dataRoot = process.env.FLUJO_DATA_DIR?.trim() || process.cwd();
-  return path.resolve(dataRoot, 'screenshots', 'browser');
-}
-
 /** Persistence root for `browser_record_*` artifacts (WebM/WAV/muxed output). */
 export function recordingRoot(): string {
   const configured = process.env.FLUJO_BROWSER_RECORD_DIR?.trim();
@@ -320,25 +341,6 @@ export async function ensureScratchDir(prefix: string): Promise<string> {
   const dir = path.join(root, prefix);
   await fs.mkdir(dir, { recursive: true });
   return dir;
-}
-
-/** Persist the latest screenshot and return the absolute host path reported to MCP clients. */
-export async function writeScreenshotArtifact(
-  sessionId: string,
-  fullPage: boolean,
-  png: Buffer,
-): Promise<string> {
-  if (!SESSION_ID_PATTERN.test(sessionId)) {
-    throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required for screenshot storage.');
-  }
-  const filePath = path.join(
-    screenshotRoot(),
-    sessionId,
-    fullPage ? 'full-page.png' : 'viewport.png',
-  );
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, png);
-  return path.resolve(filePath);
 }
 
 type LaunchOptions = NonNullable<Parameters<typeof chromium.launch>[0]>;
@@ -508,9 +510,13 @@ export async function acquireBrowser(): Promise<Browser> {
         if (sandboxBrowser === launched) sandboxBrowser = undefined;
         delete launchStates.sandbox;
         for (const [id, session] of sessions) {
-          if (session.mode === 'sandbox') sessions.delete(id);
+          if (session.mode === 'sandbox') {
+            sessions.delete(id);
+            if (lastSessionIds.get(effectiveBrowserOwnerScope(session.ownerScope)) === id) {
+              lastSessionIds.delete(effectiveBrowserOwnerScope(session.ownerScope));
+            }
+          }
         }
-        if (lastSessionId && !sessions.has(lastSessionId)) lastSessionId = undefined;
       });
       return launched;
     } catch {
@@ -573,9 +579,13 @@ async function acquireTrustedContext(): Promise<BrowserContext> {
         if (trustedContext === context) trustedContext = undefined;
         delete launchStates.trusted;
         for (const [id, session] of sessions) {
-          if (session.mode === 'trusted') sessions.delete(id);
+          if (session.mode === 'trusted') {
+            sessions.delete(id);
+            if (lastSessionIds.get(effectiveBrowserOwnerScope(session.ownerScope)) === id) {
+              lastSessionIds.delete(effectiveBrowserOwnerScope(session.ownerScope));
+            }
+          }
         }
-        if (lastSessionId && !sessions.has(lastSessionId)) lastSessionId = undefined;
       });
       return context;
     } catch (error) {
@@ -599,38 +609,98 @@ function validateSessionId(value: unknown): string {
   return value;
 }
 
+function sessionIdleMs(): number {
+  return integerEnv('FLUJO_BROWSER_IDLE_TIMEOUT_MS', DEFAULT_IDLE_MS, 10_000, 24 * 60 * 60_000);
+}
+
+function sessionOwner(session: BrowserSession): string {
+  return effectiveBrowserOwnerScope(session.ownerScope);
+}
+
 function touchSession(session: BrowserSession): BrowserSession {
-  session.touchedAt = Date.now();
-  lastSessionId = session.id;
+  const now = Date.now();
+  session.touchedAt = now;
+  session.expiresAt = now + sessionIdleMs();
+  lastSessionIds.set(sessionOwner(session), session.id);
   return session;
 }
 
-function lastLiveSession(mode?: BrowserMode): BrowserSession | undefined {
-  const remembered = lastSessionId ? sessions.get(lastSessionId) : undefined;
-  if (remembered && !remembered.page.isClosed() && (!mode || remembered.mode === mode)) return remembered;
+function removeSessionEntry(session: BrowserSession): void {
+  if (sessions.get(session.id) !== session) return;
+  session.lifecycleState = 'closing';
+  sessions.delete(session.id);
+  const ownerScope = sessionOwner(session);
+  if (lastSessionIds.get(ownerScope) === session.id) lastSessionIds.delete(ownerScope);
+}
+
+async function shutdownSession(session: BrowserSession): Promise<void> {
+  if (session.mode === 'trusted') await session.page.close().catch(() => undefined);
+  else await session.context.close().catch(() => undefined);
+}
+
+function purgeUnavailableSessions(): void {
+  const now = Date.now();
+  for (const session of sessions.values()) {
+    if (session.page.isClosed() || (session.expiresAt ?? (session.touchedAt + sessionIdleMs())) <= now) {
+      removeSessionEntry(session);
+      if (session.onExpire) session.onExpire();
+      else void shutdownSession(session);
+    }
+  }
+  for (const [id, reservation] of reservations) {
+    if (reservation.expiresAt <= now) reservations.delete(id);
+  }
+}
+
+function lastLiveSession(ownerScope: string, mode?: BrowserMode): BrowserSession | undefined {
+  purgeUnavailableSessions();
+  const rememberedId = lastSessionIds.get(ownerScope);
+  const remembered = rememberedId ? sessions.get(rememberedId) : undefined;
+  if (remembered && sessionOwner(remembered) === ownerScope && (!mode || remembered.mode === mode)) return remembered;
 
   let latest: BrowserSession | undefined;
   for (const session of sessions.values()) {
-    if (session.page.isClosed()) {
-      sessions.delete(session.id);
-      continue;
+    if (sessionOwner(session) === ownerScope && (!mode || session.mode === mode) && (!latest || session.touchedAt >= latest.touchedAt)) {
+      latest = session;
     }
-    if ((!mode || session.mode === mode) && (!latest || session.touchedAt >= latest.touchedAt)) latest = session;
   }
-  lastSessionId = latest?.id;
+  if (latest) lastSessionIds.set(ownerScope, latest.id);
+  else lastSessionIds.delete(ownerScope);
   return latest;
 }
 
-async function closeSessionInternal(id: string): Promise<boolean> {
+export function reserveSession(
+  id: string,
+  ownerScopeInput?: string,
+  purpose: BrowserSessionPurpose = 'interactive',
+): void {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  purgeUnavailableSessions();
+  const occupied = sessions.get(id);
+  if (occupied) {
+    if (sessionOwner(occupied) !== ownerScope) throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'The browser session is already active.');
+  }
+  if (reservations.has(id)) throw new BrowserMcpError('SESSION_LIMIT', 'The browser session is already being opened.');
+  const maxSessions = integerEnv('FLUJO_BROWSER_MAX_SESSIONS', DEFAULT_MAX_SESSIONS, 1, 32);
+  if (sessions.size + reservations.size >= maxSessions) {
+    throw new BrowserMcpError('SESSION_LIMIT', `The browser session limit (${maxSessions}) has been reached.`);
+  }
+  const now = Date.now();
+  reservations.set(id, { id, ownerScope, purpose, createdAt: now, expiresAt: now + sessionIdleMs() });
+}
+
+export function releaseSessionReservation(id: string, ownerScopeInput?: string): void {
+  const reservation = reservations.get(id);
+  if (reservation && reservation.ownerScope === effectiveBrowserOwnerScope(ownerScopeInput)) reservations.delete(id);
+}
+
+async function closeSessionInternal(id: string, ownerScopeInput?: string): Promise<boolean> {
   const session = sessions.get(id);
   if (!session) return false;
-  sessions.delete(id);
-  if (lastSessionId === id) lastSessionId = undefined;
-  if (session.mode === 'trusted') {
-    await session.page.close().catch(() => undefined);
-  } else {
-    await session.context.close().catch(() => undefined);
-  }
+  if (ownerScopeInput !== undefined && sessionOwner(session) !== effectiveBrowserOwnerScope(ownerScopeInput)) return false;
+  removeSessionEntry(session);
+  await shutdownSession(session);
   return true;
 }
 
@@ -711,16 +781,22 @@ function reusableTrustedPage(context: BrowserContext): Page | undefined {
   );
 }
 
-export async function openSession(requestedId: unknown, signal: AbortSignal): Promise<BrowserSession> {
+export async function openSession(
+  requestedId: unknown,
+  signal: AbortSignal,
+  ownerScopeInput?: string,
+): Promise<BrowserSession> {
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
   const mode = browserMode();
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
   const id = validateSessionId(requestedId);
+  purgeUnavailableSessions();
   const existing = sessions.get(id);
-  if (existing) return touchSession(existing);
-  const maxSessions = integerEnv('FLUJO_BROWSER_MAX_SESSIONS', DEFAULT_MAX_SESSIONS, 1, 32);
-  if (sessions.size >= maxSessions) {
-    throw new BrowserMcpError('SESSION_LIMIT', `The browser session limit (${maxSessions}) has been reached.`);
+  if (existing) {
+    if (sessionOwner(existing) !== ownerScope) throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
+    return touchSession(existing);
   }
+  reserveSession(id, ownerScope, 'interactive');
 
   let context: BrowserContext | undefined;
   let page: Page | undefined;
@@ -758,12 +834,20 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
       page = await context.newPage();
       await installRequestPolicy(context);
     }
+    const now = Date.now();
     const session: BrowserSession = {
       id,
       mode,
+      ownerScope,
+      purpose: 'interactive',
+      lifecycleState: 'active',
+      viewportPolicy: 'resizable',
+      createdAt: now,
+      expiresAt: now + sessionIdleMs(),
+      gatewayToken: randomUUID(),
       context,
       page,
-      touchedAt: Date.now(),
+      touchedAt: now,
       documentRequests: 0,
       navigationBlocked: false,
       blockedRequestCount: 0,
@@ -772,10 +856,8 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
       throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     }
     session.page.on('download', (download) => void download.cancel().catch(() => undefined));
-    session.page.on('close', () => {
-      sessions.delete(id);
-      if (lastSessionId === id) lastSessionId = undefined;
-    });
+    session.page.on('close', () => removeSessionEntry(session));
+    reservations.delete(id);
     sessions.set(id, session);
     return touchSession(session);
   } catch (error) {
@@ -785,12 +867,29 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
     }
     throw error;
   } finally {
+    releaseSessionReservation(id, ownerScope);
     signal.removeEventListener('abort', onAbort);
   }
 }
 
-/** Register a session created outside `openSession()` (used by the recording module, which owns its own context lifecycle). */
-export function registerSession(session: BrowserSession): BrowserSession {
+/** Register a session created outside `openSession()` after reserving capacity synchronously. */
+export function registerSession(session: BrowserSession, ownerScopeInput?: string): BrowserSession {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput ?? session.ownerScope);
+  const reservation = reservations.get(session.id);
+  if (!reservation) reserveSession(session.id, ownerScope, session.purpose ?? 'interactive');
+  else if (reservation.ownerScope !== ownerScope) {
+    throw new BrowserMcpError('NOT_FOUND', 'The browser session reservation belongs to another owner.');
+  }
+  const now = Date.now();
+  session.ownerScope = ownerScope;
+  session.purpose ??= 'interactive';
+  session.lifecycleState = 'active';
+  session.viewportPolicy ??= 'resizable';
+  session.createdAt ??= now;
+  session.expiresAt = now + sessionIdleMs();
+  session.gatewayToken ??= randomUUID();
+  reservations.delete(session.id);
+  session.page.on('close', () => removeSessionEntry(session));
   sessions.set(session.id, session);
   return touchSession(session);
 }
@@ -831,9 +930,11 @@ export async function createCaptureContext(
   }
 }
 
-export function getSession(value: unknown): BrowserSession {
+export function getSession(value: unknown, ownerScopeInput?: string): BrowserSession {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  purgeUnavailableSessions();
   if (value === undefined || value === '') {
-    const latest = lastLiveSession();
+    const latest = lastLiveSession(ownerScope);
     if (!latest) throw new BrowserMcpError('NOT_FOUND', 'No active browser session exists.');
     return touchSession(latest);
   }
@@ -841,23 +942,83 @@ export function getSession(value: unknown): BrowserSession {
     throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required.');
   }
   const session = sessions.get(value);
-  if (!session || session.page.isClosed()) {
-    sessions.delete(value);
+  if (!session || sessionOwner(session) !== ownerScope) {
     throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
   }
   return touchSession(session);
 }
 
-export async function closeSession(value: unknown): Promise<boolean> {
+export function getSessionForGateway(value: unknown, gatewayToken: unknown): BrowserSession {
+  purgeUnavailableSessions();
+  if (typeof value !== 'string' || !SESSION_ID_PATTERN.test(value) || typeof gatewayToken !== 'string') {
+    throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
+  }
+  const session = sessions.get(value);
+  if (!session?.gatewayToken || session.gatewayToken !== gatewayToken) {
+    throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
+  }
+  return touchSession(session);
+}
+
+export async function closeSession(value: unknown, ownerScopeInput?: string): Promise<boolean> {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
   if (value === undefined || value === '') {
-    const latest = lastLiveSession();
+    const latest = lastLiveSession(ownerScope);
     if (!latest) return false;
-    return closeSessionInternal(latest.id);
+    return closeSessionInternal(latest.id, ownerScope);
   }
   if (typeof value !== 'string' || !SESSION_ID_PATTERN.test(value)) {
     throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required.');
   }
-  return closeSessionInternal(value);
+  return closeSessionInternal(value, ownerScope);
+}
+
+export function listSessions(ownerScopeInput?: string): Record<string, unknown> {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  purgeUnavailableSessions();
+  const now = Date.now();
+  const owned = [...sessions.values()].filter((session) => sessionOwner(session) === ownerScope);
+  const reserved = [...reservations.values()].filter((entry) => entry.ownerScope === ownerScope);
+  const maxSessions = integerEnv('FLUJO_BROWSER_MAX_SESSIONS', DEFAULT_MAX_SESSIONS, 1, 32);
+  return {
+    success: true,
+    sessions: [
+      ...owned.map((session) => ({
+        sessionId: session.id,
+        purpose: session.purpose ?? 'interactive',
+        mode: session.mode,
+        state: session.lifecycleState ?? 'active',
+        viewportPolicy: session.viewportPolicy ?? 'resizable',
+        ageMs: now - (session.createdAt ?? session.touchedAt),
+        idleMs: now - session.touchedAt,
+        expiresAt: session.expiresAt ?? (session.touchedAt + sessionIdleMs()),
+      })),
+      ...reserved.map((entry) => ({
+        sessionId: entry.id,
+        purpose: entry.purpose,
+        state: 'reserved',
+        ageMs: now - entry.createdAt,
+        idleMs: 0,
+        expiresAt: entry.expiresAt,
+      })),
+    ],
+    capacity: {
+      used: sessions.size + reservations.size,
+      owned: owned.length + reserved.length,
+      limit: maxSessions,
+    },
+  };
+}
+
+export async function releaseOwnerScope(ownerScopeInput?: string): Promise<Record<string, unknown>> {
+  const ownerScope = effectiveBrowserOwnerScope(ownerScopeInput);
+  const owned = [...sessions.values()].filter((session) => sessionOwner(session) === ownerScope);
+  for (const session of owned) removeSessionEntry(session);
+  for (const [id, reservation] of reservations) {
+    if (reservation.ownerScope === ownerScope) reservations.delete(id);
+  }
+  await Promise.all(owned.map((session) => shutdownSession(session)));
+  return { success: true, ownerScope, closed: owned.length };
 }
 
 export async function runCancellable<T>(
@@ -1026,7 +1187,8 @@ export async function shutdownBrowserRuntime(): Promise<void> {
   const activeTrusted = trustedContext;
   sandboxBrowser = undefined;
   trustedContext = undefined;
-  lastSessionId = undefined;
+  reservations.clear();
+  lastSessionIds.clear();
   delete launchStates.sandbox;
   delete launchStates.trusted;
   await activeTrusted?.close().catch(() => undefined);
@@ -1039,10 +1201,6 @@ export async function shutdownBrowserRuntime(): Promise<void> {
 }
 
 const idleTimer = setInterval(() => {
-  const idleMs = integerEnv('FLUJO_BROWSER_IDLE_TIMEOUT_MS', DEFAULT_IDLE_MS, 10_000, 24 * 60 * 60_000);
-  const cutoff = Date.now() - idleMs;
-  for (const session of sessions.values()) {
-    if (session.touchedAt < cutoff) void closeSessionInternal(session.id);
-  }
+  purgeUnavailableSessions();
 }, 30_000);
 idleTimer.unref();

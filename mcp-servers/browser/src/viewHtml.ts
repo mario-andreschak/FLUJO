@@ -122,6 +122,7 @@ body.audio-blocked #sound{color:var(--accent)}
   var q = new URLSearchParams(location.search);
   var sid = q.get("s") || "";
   var token = q.get("t") || "";
+  var sessionKey = q.get("k") || "";
   var el = function(id){ return document.getElementById(id); };
   var screenEl = el("screen"), overlay = el("overlay"), overlayMsg = el("overlayMsg");
   var urlEl = el("url"), statusEl = el("status"), progress = el("progress");
@@ -130,7 +131,7 @@ body.audio-blocked #sound{color:var(--accent)}
   var editing = false, streamAlive = false, retryTimer = 0, retryDelay = 500;
 
   function api(path){
-    return path + "?s=" + encodeURIComponent(sid) + "&t=" + encodeURIComponent(token);
+    return path + "?s=" + encodeURIComponent(sid) + "&t=" + encodeURIComponent(token) + "&k=" + encodeURIComponent(sessionKey);
   }
   function toShell(message){
     try { parent.postMessage(Object.assign({ source: "flujo-browser-view" }, message), "*"); } catch (e) {}
@@ -379,6 +380,11 @@ body.audio-blocked #sound{color:var(--accent)}
       try { data = JSON.parse(message.data); } catch (e) { return; }
       applyState(data);
     });
+    events.addEventListener("warning", function(message){
+      var data;
+      try { data = JSON.parse(message.data); } catch (e) { return; }
+      setStatus(data.message || "The requested viewport change was rejected.");
+    });
     events.onerror = function(){
       // EventSource reconnects on its own; surface nothing unless frames stop.
       if (!streamAlive) setStatus("Reconnecting…");
@@ -454,7 +460,7 @@ body.audio-blocked #sound{color:var(--accent)}
     if (data.type === "loading"){ setLoading(!!data.value); return; }
   });
 
-  if (!sid || !token){
+  if (!sid || !token || !sessionKey){
     showOverlay("Live view unavailable", "The session handshake did not complete.");
     return;
   }

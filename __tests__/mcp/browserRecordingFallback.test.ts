@@ -34,6 +34,7 @@ describe('browser recording recovery', () => {
       saveAs: jest.fn(async (destination: string) => fs.writeFile(destination, Buffer.from('WEBM_BYTES'))),
     };
     const page = {
+      evaluate: jest.fn(async () => ({ width: 1280, height: 720, dpr: 1 })),
       isClosed: jest.fn(() => closed),
       mainFrame: jest.fn(() => ({})),
       on: jest.fn(),
@@ -65,12 +66,18 @@ describe('browser recording recovery', () => {
         status: 'recording',
         requestedResolution: { width: 1920, height: 1080 },
         effectiveResolution: { width: 1280, height: 720 },
+        actualViewport: { width: 1280, height: 720 },
+        deviceScaleFactor: 1,
+        configuredVideoResolution: { width: 1280, height: 720 },
+        geometryMismatch: false,
         attempts: [expect.stringContaining('encoder rejected')],
       });
       expect(newContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
         recordVideo: expect.objectContaining({ size: { width: 1920, height: 1080 } }),
       }));
       expect(newContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        viewport: { width: 1280, height: 720 },
+        deviceScaleFactor: 1,
         recordVideo: expect.objectContaining({ size: { width: 1280, height: 720 } }),
       }));
 

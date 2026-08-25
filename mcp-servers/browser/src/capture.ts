@@ -166,7 +166,7 @@ export function finiteParameter(value: unknown, fallback: number): number {
 /**
  * Local `getDataDir()`/`isInside()` — deliberately not imported from
  * `mcp-servers/shared`: the browser package resolves `FLUJO_DATA_DIR` inline
- * everywhere else (see `runtime.ts`'s `screenshotRoot()`), and does not carry
+ * and does not carry
  * the `@flujo-ai/mcp-shared` workspace dependency the other packages use.
  */
 export function getDataDir(): string {
@@ -192,6 +192,13 @@ export function pngColorType(png: Buffer): number {
     throw new BrowserMcpError('UNEXPECTED', 'The captured image is not a valid PNG.');
   }
   return png.readUInt8(PNG_COLOR_TYPE_OFFSET);
+}
+
+export function pngDimensions(png: Buffer): Resolution {
+  if (png.length < 24 || png.subarray(0, 8).toString('hex') !== PNG_SIGNATURE) {
+    throw new BrowserMcpError('UNEXPECTED', 'The captured image is not a valid PNG.');
+  }
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
 
 /**
@@ -404,7 +411,7 @@ export function sha256Hex(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
-/** Default persistence root for still captures, mirroring `writeScreenshotArtifact()`'s layout. */
+/** Default persistence root for immutable still-capture artifacts. */
 export function captureRoot(): string {
   const configured = process.env.FLUJO_BROWSER_SCREENSHOT_DIR?.trim();
   if (configured) return path.resolve(configured);
@@ -419,18 +426,63 @@ export async function writeCaptureArtifact(
   data: Buffer,
 ): Promise<string> {
   let filePath: string;
+  const roots = [getDataDir(), captureRoot()];
   if (outputPath) {
+    if (/^[A-Za-z]:[^\\/]/.test(outputPath) || /^\\\\/.test(outputPath)) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath must not use drive-relative, UNC, or Windows device-path syntax.');
+    }
     const resolved = path.resolve(outputPath);
-    const dataDir = getDataDir();
-    const root = captureRoot();
-    if (!isInside(dataDir, resolved) && !isInside(root, resolved)) {
+    if (!roots.some((root) => isInside(root, resolved))) {
       throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath must be inside the FLUJO data directory or the browser screenshot root.');
     }
     filePath = resolved;
   } else {
     filePath = path.join(captureRoot(), ...defaultRelativePath);
   }
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, data);
-  return filePath;
+  if (path.extname(filePath).toLowerCase() !== '.png') {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'Browser screenshot outputPath must end in .png.');
+  }
+  if (process.platform === 'win32') {
+    const reserved = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+    if (path.resolve(filePath).split(/[\\/]/).some((part) => reserved.test(part))) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath contains a Windows reserved device name.');
+    }
+  }
+
+  const parent = path.dirname(filePath);
+  await fs.mkdir(parent, { recursive: true });
+  const [realParent, realRoots] = await Promise.all([
+    fs.realpath(parent),
+    Promise.all(roots.map(async (root) => {
+      await fs.mkdir(root, { recursive: true });
+      return fs.realpath(root);
+    })),
+  ]);
+  if (!realRoots.some((root) => isInside(root, realParent))) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath traverses a symlink or junction outside an approved artifact root.');
+  }
+
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath already exists; browser artifacts never overwrite existing evidence.');
+    }
+    throw error;
+  }
+  try {
+    const boundaryParent = await fs.realpath(parent);
+    if (boundaryParent !== realParent || !realRoots.some((root) => isInside(root, boundaryParent))) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'outputPath parent changed during artifact creation.');
+    }
+    await handle.writeFile(data);
+    await handle.sync();
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await fs.unlink(filePath).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  return path.resolve(filePath);
 }
