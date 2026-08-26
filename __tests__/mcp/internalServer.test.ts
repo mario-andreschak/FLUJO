@@ -10,6 +10,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
 import {
   createShippedServerConfig,
+  resolvePlaywrightBrowsersPath,
   shippedServerEnv,
   SHIPPED_MCP_SERVERS,
 } from '@/backend/services/mcp/shippedServers';
@@ -120,6 +121,21 @@ describe('persisted shipped server configs', () => {
 });
 
 describe('normal stdio delivery', () => {
+  it('resolves Patchright\'s installation-wide browser cache on supported platforms', () => {
+    expect(resolvePlaywrightBrowsersPath({ PLAYWRIGHT_BROWSERS_PATH: ' /shared/browsers ' }, 'linux'))
+      .toBe('/shared/browsers');
+    expect(resolvePlaywrightBrowsersPath({ LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local' }, 'win32'))
+      .toBe(path.win32.join('C:\\Users\\tester\\AppData\\Local', 'ms-playwright'));
+    expect(resolvePlaywrightBrowsersPath({ USERPROFILE: 'C:\\Users\\fallback' }, 'win32'))
+      .toBe(path.win32.join('C:\\Users\\fallback', 'AppData', 'Local', 'ms-playwright'));
+    expect(resolvePlaywrightBrowsersPath({ HOME: '/Users/tester' }, 'darwin'))
+      .toBe(path.posix.join('/Users/tester', 'Library', 'Caches', 'ms-playwright'));
+    expect(resolvePlaywrightBrowsersPath({ XDG_CACHE_HOME: '/var/cache/tester' }, 'linux'))
+      .toBe(path.posix.join('/var/cache/tester', 'ms-playwright'));
+    expect(resolvePlaywrightBrowsersPath({ HOME: '/home/tester' }, 'linux'))
+      .toBe(path.posix.join('/home/tester', '.cache', 'ms-playwright'));
+  });
+
   it('persists direct package entrypoints and ordinary working directories', () => {
     for (const descriptor of SHIPPED_MCP_SERVERS) {
       const config = createShippedServerConfig(descriptor);
@@ -204,5 +220,17 @@ describe('normal stdio delivery', () => {
       FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS: '0',
     })).toMatchObject({ FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS: '0' });
     expect(shippedServerEnv(filesystem, environment)).not.toHaveProperty('PLAYWRIGHT_BROWSERS_PATH');
+  });
+
+  it('seeds a fresh bundled browser with the host Patchright cache', () => {
+    const browser = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'browser')!;
+    const environment = process.platform === 'win32'
+      ? { FLUJO_DATA_DIR: '/data', LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local' }
+      : { FLUJO_DATA_DIR: '/data', HOME: '/home/tester' };
+    const expected = process.platform === 'win32'
+      ? path.join('C:\\Users\\tester\\AppData\\Local', 'ms-playwright')
+      : path.join('/home/tester', '.cache', 'ms-playwright');
+
+    expect(shippedServerEnv(browser, environment).PLAYWRIGHT_BROWSERS_PATH).toBe(expected);
   });
 });

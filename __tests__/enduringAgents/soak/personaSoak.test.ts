@@ -1,5 +1,5 @@
 import { PERSONA_INGRESS_MATRIX } from '../personaIngressMatrix';
-import { runPersonaSoak } from './soakHarness';
+import { exerciseHardCrashProcessBoundary, runPersonaSoak } from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
 
@@ -55,5 +55,9 @@ describe('deterministic Persona soak harness', () => {
     clock.setTimer(() => order.push(2), 5);
     await clock.absorbRealTime(5);
     expect(order).toEqual([1, 2]);
+  });
+
+  it('fails closed across a hard process crash after a published claim', async () => {
+    await expect(exerciseHardCrashProcessBoundary(459)).resolves.toBeUndefined();
   });
 });

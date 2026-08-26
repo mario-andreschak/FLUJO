@@ -33,6 +33,8 @@ import { setNavigationGuard, clearNavigationGuard, NavigationGuard } from '@/fro
 import { useEntityDeepLink } from '@/frontend/hooks/useEntityDeepLink';
 import { useHistoryGuard } from '@/frontend/hooks/useHistoryGuard';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
 import type { QuickModelChangeResult } from '@/frontend/components/Flow/FlowDashboard/QuickChangeModelsDialog';
@@ -82,7 +84,10 @@ const FlowsPage = () => {
     log.debug('Entering flow editor', { flowId });
     setSelectedFlow(flowId);
     pushedByUsRef.current = true;
-    router.push(magicLinkPath({ kind: 'flow-editor', id: flowId }));
+    navigateWorkspaceRoute(
+      router,
+      withWorkspaceUrl(magicLinkPath({ kind: 'flow-editor', id: flowId })),
+    );
   }, [router]);
   
   // Generated draft (issue #14): an UNSAVED flow the builder edits via initialFlow.

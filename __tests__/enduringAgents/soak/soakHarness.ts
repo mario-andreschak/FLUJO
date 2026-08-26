@@ -128,6 +128,7 @@ interface ProcessPersona {
 }
 
 interface ProcessClaim {
+  mailboxItem: { id: string };
   activity: { id: string };
   lease: { fencingToken: number };
   fence: {
@@ -139,6 +140,12 @@ interface ProcessClaim {
     fencingToken: number;
   };
   recovered: boolean;
+}
+
+interface ProcessRuntimeSnapshot {
+  activities: Array<{ id: string; status: string; error?: string }>;
+  mailboxItems: Array<{ id: string; status: string; claimedActivityId?: string }>;
+  lease: { activityId: string; status: string; fencingToken: number } | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -427,7 +434,7 @@ async function exerciseAdministrativeRecovery(personaId: string): Promise<void> 
   }
 }
 
-async function exerciseHardCrashProcessBoundary(seed: number): Promise<void> {
+export async function exerciseHardCrashProcessBoundary(seed: number): Promise<void> {
   const environment = await createPersonaProcessEnvironment(`soak-hard-crash-${seed}`);
   const clients: PersonaProcessClient[] = [];
   try {
@@ -449,25 +456,42 @@ async function exerciseHardCrashProcessBoundary(seed: number): Promise<void> {
         summary: 'Recover one active Activity after SIGKILL.',
       },
     });
-    const before = await first.request<ProcessClaim>({
+    const before = await first.request<ProcessClaim | null>({
       type: 'claim', personaId: created.persona.id, ttlMs: 1_000,
     });
+    if (!before) throw new Error('Hard-crash fault could not claim its Activity.');
     await first.kill();
     await new Promise((resolve) => setTimeout(resolve, 1_100));
 
     const restarted = await restartPersonaProcess(environment);
     clients.push(restarted);
-    const after = await restarted.request<ProcessClaim>({
+    const after = await restarted.request<ProcessClaim | null>({
       type: 'claim', personaId: created.persona.id, ttlMs: 1_000,
     });
+    const runtime = await restarted.request<ProcessRuntimeSnapshot>({
+      type: 'inspect', personaId: created.persona.id,
+    });
+    const activity = runtime.activities.find((candidate) => candidate.id === before.activity.id);
+    const mailboxItem = runtime.mailboxItems.find(
+      (candidate) => candidate.id === before.mailboxItem.id,
+    );
     if (
-      !after.recovered
-      || after.activity.id !== before.activity.id
-      || after.lease.fencingToken <= before.lease.fencingToken
+      after !== null
+      || activity?.status !== 'error'
+      || !activity.error?.includes('automatic replay was suppressed')
+      || mailboxItem?.status !== 'rejected'
+      || mailboxItem.claimedActivityId !== before.activity.id
+      || runtime.lease?.activityId !== before.activity.id
+      || runtime.lease.status !== 'expired'
+      || runtime.lease.fencingToken !== before.lease.fencingToken
     ) {
-      throw new Error('Hard-crash process recovery did not preserve Activity identity and advance the fence.');
+      throw new Error(`Hard-crash process recovery did not fail closed coherently: ${JSON.stringify({
+        replayedClaim: after,
+        activity,
+        mailboxItem,
+        lease: runtime.lease,
+      })}`);
     }
-    await restarted.request({ type: 'complete', fence: after.fence });
   } finally {
     await Promise.all(clients.map((client) => client.close().catch(() => undefined)));
     await removePersonaProcessEnvironment(environment);
@@ -930,7 +954,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
               'os-process-hard-crash-recovery',
               hardCrashExecuted,
               hardCrashExecuted
-                ? 'A killed child process recovered the same Activity with a higher fence.'
+                ? 'A killed child process safely terminalized uncertain work without replay or a stranded lease.'
                 : 'The process-boundary fault was scheduled but did not execute.',
               { hardCrashExecuted },
             )

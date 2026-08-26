@@ -36,7 +36,10 @@ import {
   getWorkspaceDataDir,
   remapLegacyDefaultWorkspaceReference,
 } from "@/utils/workspace";
-import { shippedDescriptorForConfig } from './shippedServers';
+import {
+  resolvePlaywrightBrowsersPath,
+  shippedDescriptorForConfig,
+} from './shippedServers';
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -814,6 +817,15 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   transformedEnv.FLUJO_DATA_DIR = workspaceDataDir;
   transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
   if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {
+    // Package installation happens before the child's private HOME/cache is
+    // created. Existing records may therefore have no explicit browser-binary
+    // path even though Patchright installed Chromium successfully in the host
+    // cache. Reattach that installation-wide, read-only asset at the final
+    // launch boundary; explicit persisted/operator paths still win.
+    if (!transformedEnv.PLAYWRIGHT_BROWSERS_PATH?.trim()) {
+      const browsersPath = resolvePlaywrightBrowsersPath(process.env);
+      if (browsersPath) transformedEnv.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+    }
     // Durable browser output/profile overrides from a pre-workspace config must
     // not keep writing beside (or outside) the workspace tree.
     transformedEnv.FLUJO_BROWSER_PROFILE_DIR = path.join(

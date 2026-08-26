@@ -15,6 +15,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
 const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
+const priorPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
 let dataRoot: string;
 
 beforeAll(async () => {
@@ -31,7 +32,14 @@ afterAll(async () => {
   else process.env.FLUJO_PARENT_DATA_DIR = priorParentDataDir;
   if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
   else process.env.FLUJO_DATA_DIR = priorDataDir;
+  if (priorPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+  else process.env.PLAYWRIGHT_BROWSERS_PATH = priorPlaywrightBrowsersPath;
   await fs.rm(dataRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  if (priorPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+  else process.env.PLAYWRIGHT_BROWSERS_PATH = priorPlaywrightBrowsersPath;
 });
 
 const config: MCPStdioConfig = {
@@ -172,6 +180,36 @@ describe('stdio MCP runtime homes', () => {
     expect(launch.env.FLUJO_BROWSER_PROFILE_DIR).toBe(path.join(root, 'browser-profile', 'trusted'));
     expect(launch.env.FLUJO_BROWSER_SCREENSHOT_DIR).toBe(path.join(root, 'screenshots', 'browser'));
     expect(launch.env.FLUJO_BROWSER_RECORD_DIR).toBe(path.join(root, 'recordings', 'browser'));
+  });
+
+  it('reattaches the host browser-binary cache to an existing workspace record', () => {
+    const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
+    const shipped = createShippedServerConfig(browser, {
+      FLUJO_DATA_DIR: dataRoot,
+    });
+    delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
+    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
+
+    const launch = runWithWorkspace('runtime-b', () => resolveStdioLaunch(shipped));
+
+    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
+      .toBe(path.join(dataRoot, 'shared-browser-binaries'));
+    expect(path.relative(getWorkspaceDataDir('runtime-b'), launch.env.HOME))
+      .not.toMatch(/^\.\.(?:[\\/]|$)/);
+  });
+
+  it('preserves an explicit workspace browser-binary path over the host default', () => {
+    const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
+    const shipped = createShippedServerConfig(browser, {
+      FLUJO_DATA_DIR: dataRoot,
+      PLAYWRIGHT_BROWSERS_PATH: path.join(dataRoot, 'configured-browser-binaries'),
+    });
+    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
+
+    const launch = runWithWorkspace('runtime-b', () => resolveStdioLaunch(shipped));
+
+    expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
+      .toBe(path.join(dataRoot, 'configured-browser-binaries'));
   });
 
   it('remaps only unambiguous absolute paths left by a legacy managed MCP clone', async () => {

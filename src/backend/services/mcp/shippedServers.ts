@@ -62,6 +62,42 @@ export function shippedMcpAppRoot(env: Environment = process.env): string {
   return path.resolve(env.FLUJO_APP_ROOT?.trim() || process.cwd());
 }
 
+/**
+ * Locate the installation-wide Patchright browser cache before stdio runtime
+ * isolation replaces HOME, USERPROFILE, LOCALAPPDATA and XDG_CACHE_HOME.
+ *
+ * Patchright's install script writes browser binaries to Playwright's standard
+ * per-user cache unless PLAYWRIGHT_BROWSERS_PATH is explicit. The binaries are
+ * immutable installation assets rather than workspace data, so bundled browser
+ * children may share them while profiles, downloads and generated media remain
+ * below the selected workspace.
+ */
+export function resolvePlaywrightBrowsersPath(
+  env: Environment = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const explicit = env.PLAYWRIGHT_BROWSERS_PATH?.trim();
+  if (explicit) return explicit;
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+
+  if (platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (localAppData) return pathApi.join(localAppData, 'ms-playwright');
+    const userProfile = env.USERPROFILE?.trim();
+    return userProfile
+      ? pathApi.join(userProfile, 'AppData', 'Local', 'ms-playwright')
+      : undefined;
+  }
+
+  const home = env.HOME?.trim();
+  if (platform === 'darwin') {
+    return home ? pathApi.join(home, 'Library', 'Caches', 'ms-playwright') : undefined;
+  }
+  const cacheHome = env.XDG_CACHE_HOME?.trim();
+  if (cacheHome) return pathApi.join(cacheHome, 'ms-playwright');
+  return home ? pathApi.join(home, '.cache', 'ms-playwright') : undefined;
+}
+
 /** Forward only the operator controls needed by the standalone child process. */
 export function shippedServerEnv(
   descriptor: ShippedMcpServerDescriptor,
@@ -158,6 +194,10 @@ export function shippedServerEnv(
     && !result.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS?.trim()
   ) {
     result.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '1';
+  }
+  if (descriptor.defaultName === 'browser') {
+    const browsersPath = resolvePlaywrightBrowsersPath(env);
+    if (browsersPath) result.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
   }
   // Inherit-all (bash) and explicit forwarded values must never overwrite the
   // workspace process boundary established above.
