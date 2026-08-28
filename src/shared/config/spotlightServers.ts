@@ -1,8 +1,8 @@
 /**
  * Curated MCP servers shown in the ServerModal's "Spotlight" tab.
  *
- * Each entry is either a bare registry URL or a { url, env } object. The URL
- * points into the official MCP Registry, in one of three forms:
+ * Each entry is either a bare registry URL or a SpotlightSource with curated
+ * defaults. The URL points into the official MCP Registry, in one of three forms:
  *  - exact version:
  *    https://registry.modelcontextprotocol.io/v0.1/servers/<url-encoded name>/versions/<version>
  *  - version-less (versions list; resolved to the latest available version):
@@ -25,13 +25,24 @@ export interface SpotlightSource {
    * repo. Secrets must keep going through the existing isSecret env flow.
    */
   env?: Record<string, string>;
+  /**
+   * Exact remote URL corrections for this source only. Applied to fresh and
+   * cached records without changing their transport or declared headers.
+   */
+  remoteUrlOverrides?: Record<string, string>;
 }
 
 export const SPOTLIGHT_SERVERS: (string | SpotlightSource)[] = [
   // Web search + page fetch (offers both a local npm package and a remote endpoint)
   'https://registry.modelcontextprotocol.io/?q=ai.keenable%2Fweb-search',
   // Web search + page fetch (remote)
-  'https://registry.modelcontextprotocol.io/v0.1/servers/ai.parallel%2Fsearch-mcp/versions',
+  {
+    url: 'https://registry.modelcontextprotocol.io/v0.1/servers/ai.parallel%2Fsearch-mcp/versions',
+    // The registry still lists an endpoint that rejects anonymous requests.
+    remoteUrlOverrides: {
+      'https://search-mcp.parallel.ai/mcp': 'https://search.parallel.ai/mcp'
+    }
+  },
   'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.mario-andreschak%2Fmcp-abap-adt/versions',
   {
     url: 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.microsoft%2Fplaywright-mcp/versions',
