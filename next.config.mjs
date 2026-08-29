@@ -18,6 +18,12 @@ const nextConfig = {
     // graph representation instead of requiring users/CI to raise NODE_OPTIONS.
     webpackBuildWorker: true,
     webpackMemoryOptimizations: true,
+    // Every request crosses the local-origin proxy, which clones request bodies.
+    // Next otherwise clips that clone at 10 MiB and still forwards the partial
+    // body, leaving large chat-completion JSON unterminated. Normal follow-up
+    // turns are append-only, but edits, retries, and first sends can legitimately
+    // carry the full transcript, so retain enough headroom for those paths.
+    proxyClientMaxBodySize: '100mb',
   },
   // Pin the workspace root to this project. Without this, a stray
   // package-lock.json in a parent dir (e.g. the user's home folder) makes
