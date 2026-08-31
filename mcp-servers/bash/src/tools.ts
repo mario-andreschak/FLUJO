@@ -407,7 +407,7 @@ let cachedShellInfo: ShellInfoPayload | undefined;
 /** Describe the shells and interpreters actually available on this machine. */
 export function collectShellInfo(): ShellInfoPayload {
   if (cachedShellInfo) return cachedShellInfo;
-  const defaultPlan = buildSpawn('', 'default');
+  const defaultPlan = resolveShellPlan('', 'default', 'command');
   const shells: ShellInfoShellEntry[] = [
     shellEntry('pwsh', resolvePwshExecutable()),
     shellEntry('powershell', resolveWindowsPowerShellExecutable()),
@@ -425,7 +425,9 @@ export function collectShellInfo(): ShellInfoPayload {
   const notes = [
     'Tool output merges stdout and stderr into one "output" field; "isError" reflects the process exit code only.',
     `The "default" shell on this machine is "${defaultPlan.effectiveShell}".`,
-    'Pass shell:"bash" for POSIX syntax (&&, pipes into head/grep, $(…)); an unavailable explicit shell fails fast.',
+    'Pass shell:"bash" for POSIX syntax; on Windows it launches the absolute Git Bash path reported above, never a bare bash lookup inside PowerShell.',
+    'A specific default-shell command may auto-select PowerShell 7 or Git Bash only for unquoted POSIX &&/|| chaining.',
+    'PowerShell programs use BOM-free encoded transport; write_stdin preserves a leading BOM unless bomPolicy:"strip-leading" is requested.',
   ];
   if (!shells.find((entry) => entry.shell === 'pwsh')?.available
     && shells.find((entry) => entry.shell === 'powershell')?.available) {
@@ -472,6 +474,10 @@ interface BashSession {
   ownerScope: string;
   command: string;
   cwd: string;
+  requestedShell: ShellKind;
+  shell: EffectiveShell;
+  shellPath: string;
+  shellSubstitution?: ResolvedShellPlan['shellSubstitution'];
   child: ChildProcess;
   output: string;
   truncated: boolean;
@@ -502,7 +508,10 @@ interface BashSession {
 interface TerminalSession {
   id: string;
   ownerScope: string;
+  requestedShell: ShellKind;
   shell: EffectiveShell;
+  shellPath: string;
+  shellSubstitution?: ResolvedShellPlan['shellSubstitution'];
   cwd: string;
   pty: IPty;
   output: string;
@@ -1097,8 +1106,23 @@ const POWERSHELL_PRELUDE = [
 
 const POWERSHELL_EPILOGUE = 'exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })';
 
+/** Remove exactly one caller-supplied leading U+FEFF from PowerShell source. */
+export function normalizePowerShellSource(command: string): string {
+  return command.charCodeAt(0) === 0xfeff ? command.slice(1) : command;
+}
+
 export function wrapPowerShellCommand(command: string): string {
-  return `${POWERSHELL_PRELUDE}\n${command}\n${POWERSHELL_EPILOGUE}`;
+  const normalized = normalizePowerShellSource(command);
+  return `${POWERSHELL_PRELUDE}\n${normalized}\n${POWERSHELL_EPILOGUE}`;
+}
+
+/**
+ * PowerShell's encoded-command transport is UTF-16LE without a BOM. Keeping the
+ * complete program in one base64 argv value avoids Windows command-line quoting
+ * ambiguities around nested quotes and literal `-c` arguments.
+ */
+export function encodePowerShellCommand(command: string): string {
+  return Buffer.from(wrapPowerShellCommand(command), 'utf16le').toString('base64');
 }
 
 /** `chcp 65001` forces UTF-8 output for cmd.exe children (issue #364). */
@@ -1107,110 +1131,161 @@ export function wrapCmdCommand(command: string): string {
 }
 
 function powerShellArgs(command: string): string[] {
-  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)];
+  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(command)];
 }
 
-interface SpawnPlan {
+type ShellLaunchMode = 'command' | 'pty';
+
+interface ResolvedShellPlan {
+  requestedShell: ShellKind;
+  selectedShell: ShellKind;
   file: string;
-  args: string[];
-  useShell: boolean;
   effectiveShell: EffectiveShell;
-  windowsVerbatimArguments?: boolean;
+  autoSelected: boolean;
   /** Explicit shell lookup failed before any user command was executed. */
   unavailableShell?: Exclude<ShellKind, 'default'>;
   shellSubstitution?: { requested: 'pwsh'; used: 'powershell'; reason: string };
   startError?: string;
 }
 
-/**
- * Build the spawn arguments for the requested shell. Returns the command, argv
- * and whether Node's `shell:true` wrapping applies. Shells are resolved
- * to a concrete executable path up front (checking Git for Windows' well-known
- * install locations for `bash` when it isn't on `PATH`). An unavailable
- * explicitly requested shell is reported before any user command is executed.
- */
-function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
+type ExecutableShellPlan = Omit<ResolvedShellPlan, 'requestedShell' | 'selectedShell' | 'autoSelected'>;
+
+/** Resolve one shell request to the exact executable shared by every entry point. */
+function resolveShellExecutable(shell: ShellKind, mode: ShellLaunchMode): ExecutableShellPlan {
   if (shell === 'powershell') {
-    const resolved = resolveWindowsPowerShellExecutable();
-    return resolved
-      ? { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'powershell' }
-      : { file: '', args: [], useShell: false, effectiveShell: 'powershell', unavailableShell: 'powershell' };
+    const file = resolveWindowsPowerShellExecutable();
+    return file
+      ? { file, effectiveShell: 'powershell' }
+      : { file: '', effectiveShell: 'powershell', unavailableShell: 'powershell' };
   }
   if (shell === 'pwsh') {
-    const resolved = resolvePwshExecutable();
-    if (resolved) {
-      return { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
-    }
+    const file = resolvePwshExecutable();
+    if (file) return { file, effectiveShell: 'pwsh' };
     const windowsPowerShell = resolveWindowsPowerShellExecutable();
     if (windowsPowerShell) {
       return {
         file: windowsPowerShell,
-        args: powerShellArgs(command),
-        useShell: false,
         effectiveShell: 'powershell',
         shellSubstitution: {
-          requested: 'pwsh', used: 'powershell',
+          requested: 'pwsh',
+          used: 'powershell',
           reason: 'PowerShell 7 (pwsh) is not installed on this machine.',
         },
       };
     }
-    return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
+    return { file: '', effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
   if (shell === 'bash') {
-    const resolved = resolveBashExecutable();
-    if (resolved) {
-      return { file: resolved, args: ['-c', command], useShell: false, effectiveShell: 'bash' };
-    }
-    return { file: '', args: [], useShell: false, effectiveShell: 'bash', unavailableShell: 'bash' };
+    const file = resolveBashExecutable();
+    return file
+      ? { file, effectiveShell: 'bash' }
+      : { file: '', effectiveShell: 'bash', unavailableShell: 'bash' };
   }
   if (shell === 'cmd') {
-    const resolved = resolveCmdExecutable();
-    if (resolved) {
-      return {
-        file: resolved,
-        args: ['/d', '/s', '/c', wrapCmdCommand(command)],
-        useShell: false,
-        effectiveShell: 'cmd',
-        windowsVerbatimArguments: true,
-      };
-    }
-    return { file: '', args: [], useShell: false, effectiveShell: 'cmd', unavailableShell: 'cmd' };
+    const file = resolveCmdExecutable();
+    return file
+      ? { file, effectiveShell: 'cmd' }
+      : { file: '', effectiveShell: 'cmd', unavailableShell: 'cmd' };
   }
   if (process.platform === 'win32') {
     const pwsh = resolvePwshExecutable();
-    if (pwsh) {
-      return { file: pwsh, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
-    }
+    if (pwsh) return { file: pwsh, effectiveShell: 'pwsh' };
     const windowsPowerShell = resolveWindowsPowerShellExecutable();
-    if (windowsPowerShell) {
-      return { file: windowsPowerShell, args: powerShellArgs(command), useShell: false, effectiveShell: 'powershell' };
-    }
+    if (windowsPowerShell) return { file: windowsPowerShell, effectiveShell: 'powershell' };
     const cmd = resolveCmdExecutable();
-    if (cmd) {
-      return {
-        file: cmd,
-        args: ['/d', '/s', '/c', wrapCmdCommand(command)],
-        useShell: false,
-        effectiveShell: 'cmd',
-        windowsVerbatimArguments: true,
-      };
-    }
+    if (cmd) return { file: cmd, effectiveShell: 'cmd' };
     return {
       file: '',
-      args: [],
-      useShell: false,
       effectiveShell: 'cmd',
       startError: 'No usable PowerShell or cmd executable was found.',
     };
   }
+  if (mode === 'pty') {
+    const loginShell = getEnvCaseInsensitive('SHELL');
+    const bash = resolveBashExecutable();
+    const file = firstExistingFile([loginShell, bash, '/bin/sh', findExecutableOnPath('sh')]);
+    if (!file) {
+      return {
+        file: '',
+        effectiveShell: 'sh',
+        startError: 'No interactive POSIX shell was found.',
+      };
+    }
+    return {
+      file,
+      effectiveShell: path.basename(file).toLowerCase().startsWith('bash') ? 'bash' : 'sh',
+    };
+  }
   const sh = firstExistingFile(['/bin/sh', findExecutableOnPath('sh')]);
-  if (sh) return { file: sh, args: ['-c', command], useShell: false, effectiveShell: 'sh' };
+  return sh
+    ? { file: sh, effectiveShell: 'sh' }
+    : { file: '', effectiveShell: 'sh', startError: 'No POSIX /bin/sh executable was found.' };
+}
+
+/**
+ * Resolve executable identity once, including the narrow default-shell
+ * auto-selection for unquoted POSIX chaining on Windows PowerShell 5.1.
+ */
+function resolveShellPlan(
+  command: string,
+  requestedShell: ShellKind,
+  mode: ShellLaunchMode,
+): ResolvedShellPlan {
+  let selectedShell = requestedShell;
+  let autoSelected = false;
+  let resolved = resolveShellExecutable(selectedShell, mode);
+  if (mode === 'command'
+    && requestedShell === 'default'
+    && resolved.effectiveShell === 'powershell'
+    && commandUsesPosixChaining(command)) {
+    if (resolvePwshExecutable()) selectedShell = 'pwsh';
+    else if (resolveBashExecutable()) selectedShell = 'bash';
+    if (selectedShell !== 'default') {
+      autoSelected = true;
+      resolved = resolveShellExecutable(selectedShell, mode);
+    }
+  }
+  return { requestedShell, selectedShell, autoSelected, ...resolved };
+}
+
+/** Test seam proving command and PTY entry points consume the same resolver. */
+export function _resolveShellPlanForTests(
+  command: string,
+  shell: ShellKind,
+  mode: ShellLaunchMode = 'command',
+): ResolvedShellPlan {
+  return resolveShellPlan(command, shell, mode);
+}
+
+interface SpawnPlan extends ResolvedShellPlan {
+  args: string[];
+  useShell: boolean;
+  windowsVerbatimArguments?: boolean;
+}
+
+/**
+ * Build command-specific argv around a resolved executable. Child spawning
+ * remains direct with `shell:false`.
+ */
+function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
+  const plan = resolveShellPlan(command, shell, 'command');
+  let args: string[] = [];
+  let windowsVerbatimArguments: boolean | undefined;
+  if (plan.file) {
+    if (plan.effectiveShell === 'pwsh' || plan.effectiveShell === 'powershell') {
+      args = powerShellArgs(command);
+    } else if (plan.effectiveShell === 'bash' || plan.effectiveShell === 'sh') {
+      args = ['-c', command];
+    } else {
+      args = ['/d', '/s', '/c', wrapCmdCommand(command)];
+      windowsVerbatimArguments = true;
+    }
+  }
   return {
-    file: '',
-    args: [],
+    ...plan,
+    args,
     useShell: false,
-    effectiveShell: 'sh',
-    startError: 'No POSIX /bin/sh executable was found.',
+    ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
   };
 }
 
@@ -1251,8 +1326,10 @@ interface SpawnOutcome {
   child?: ChildProcess;
   startError?: string;
   effectiveShell: EffectiveShell;
+  shellPath: string;
   unavailableShell?: Exclude<ShellKind, 'default'>;
   shellSubstitution?: SpawnPlan['shellSubstitution'];
+  shellAutoSelected: boolean;
 }
 
 function startChild(command: string, cwd: string, shell: ShellKind, env: Record<string, string>): SpawnOutcome {
@@ -1265,9 +1342,16 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
     startError,
     windowsVerbatimArguments,
     shellSubstitution,
+    autoSelected,
   } = buildSpawn(command, shell);
-  if (unavailableShell) return { effectiveShell, unavailableShell };
-  if (startError) return { effectiveShell, startError };
+  const metadata = {
+    effectiveShell,
+    shellPath: file,
+    shellSubstitution,
+    shellAutoSelected: autoSelected,
+  };
+  if (unavailableShell) return { ...metadata, unavailableShell };
+  if (startError) return { ...metadata, startError };
   // POSIX: detached so killProcessTree can signal the whole group (see killProcessTree).
   const detached = process.platform !== 'win32';
   try {
@@ -1278,11 +1362,11 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
       detached,
       ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
-    return { child, effectiveShell, shellSubstitution };
+    return { child, ...metadata };
   } catch (err) {
     return {
       startError: err instanceof Error ? err.message : String(err),
-      effectiveShell,
+      ...metadata,
     };
   }
 }
@@ -1529,59 +1613,26 @@ export function createStreamDecoder(mode: OutputEncodingMode = 'auto'): (chunk: 
   };
 }
 
-interface PtySpawnPlan {
-  file: string;
+interface PtySpawnPlan extends ResolvedShellPlan {
   args: string[];
-  effectiveShell: EffectiveShell;
-  unavailableShell?: Exclude<ShellKind, 'default'>;
-  startError?: string;
 }
 
-/** Resolve an interactive shell executable without wrapping a command string. */
+/** Build PTY-specific argv around the same resolved executable used elsewhere. */
 function buildPtySpawn(shell: ShellKind): PtySpawnPlan {
-  if (shell === 'powershell') {
-    const file = resolveWindowsPowerShellExecutable();
-    return file
-      ? { file, args: ['-NoLogo'], effectiveShell: 'powershell' }
-      : { file: '', args: [], effectiveShell: 'powershell', unavailableShell: 'powershell' };
+  const plan = resolveShellPlan('', shell, 'pty');
+  let args: string[] = [];
+  if (plan.file) {
+    if (plan.effectiveShell === 'pwsh' || plan.effectiveShell === 'powershell') {
+      args = ['-NoLogo'];
+    } else if (plan.effectiveShell === 'bash') {
+      args = ['--noprofile', '--norc', '-i'];
+    } else if (plan.effectiveShell === 'cmd') {
+      args = ['/d', '/q'];
+    } else {
+      args = ['-i'];
+    }
   }
-  if (shell === 'pwsh') {
-    const file = resolvePwshExecutable();
-    return file
-      ? { file, args: ['-NoLogo'], effectiveShell: 'pwsh' }
-      : { file: '', args: [], effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
-  }
-  if (shell === 'bash') {
-    const file = resolveBashExecutable();
-    return file
-      ? { file, args: ['--noprofile', '--norc', '-i'], effectiveShell: 'bash' }
-      : { file: '', args: [], effectiveShell: 'bash', unavailableShell: 'bash' };
-  }
-  if (shell === 'cmd') {
-    const file = resolveCmdExecutable();
-    return file
-      ? { file, args: ['/d', '/q'], effectiveShell: 'cmd' }
-      : { file: '', args: [], effectiveShell: 'cmd', unavailableShell: 'cmd' };
-  }
-  if (process.platform === 'win32') {
-    const pwsh = resolvePwshExecutable();
-    if (pwsh) return { file: pwsh, args: ['-NoLogo'], effectiveShell: 'pwsh' };
-    const powershell = resolveWindowsPowerShellExecutable();
-    if (powershell) return { file: powershell, args: ['-NoLogo'], effectiveShell: 'powershell' };
-    const cmd = resolveCmdExecutable();
-    if (cmd) return { file: cmd, args: ['/d', '/q'], effectiveShell: 'cmd' };
-    return { file: '', args: [], effectiveShell: 'cmd', startError: 'No usable PowerShell or cmd executable was found.' };
-  }
-  const loginShell = getEnvCaseInsensitive('SHELL');
-  const bash = resolveBashExecutable();
-  const file = firstExistingFile([loginShell, bash, '/bin/sh', findExecutableOnPath('sh')]);
-  if (!file) return { file: '', args: [], effectiveShell: 'sh', startError: 'No interactive POSIX shell was found.' };
-  const isBash = path.basename(file).toLowerCase().startsWith('bash');
-  return {
-    file,
-    args: isBash ? ['--noprofile', '--norc', '-i'] : ['-i'],
-    effectiveShell: isBash ? 'bash' : 'sh',
-  };
+  return { ...plan, args };
 }
 
 function createCommandProgressReporter(context?: BashExecutionContext, heartbeatMs = 10_000): {
@@ -1670,7 +1721,7 @@ export function bashToolDefinitions(): Tool[] {
   const shellProp = {
     type: 'string',
     enum: ['default', 'pwsh', 'powershell', 'bash', 'cmd'],
-    description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Use "pwsh" (PowerShell 7), "powershell" (Windows PowerShell 5.1), "bash", or "cmd" for explicit syntax; unavailable explicit shells return an error.',
+    description: 'Command parser. "default" uses PowerShell on Windows and /bin/sh elsewhere. Explicit "bash" launches FLUJO\'s absolute resolved Git Bash path on Windows (WSL relay launchers are rejected). Explicit "pwsh" may report a compatibility substitution to Windows PowerShell 5.1; other unavailable explicit shells return an error.',
   };
   const cwdProp = { type: 'string', description: 'Working directory. Relative paths resolve from the FLUJO data directory; configured roots still apply.' };
   const envProp = {
@@ -1695,7 +1746,7 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'shell_info',
       description:
-        'Describe this machine before running anything: platform, which shell "default" resolves to, which of pwsh/powershell/bash/cmd/sh are available, and whether common interpreters (python, node, git, ffmpeg, …) are on PATH. Call this instead of discovering the environment through failed commands.',
+        'Describe this machine before running anything: platform, the effective "default" shell and absolute path, resolved paths for pwsh/powershell/bash/cmd/sh, and common interpreters. Explicit Bash execution uses the reported Git Bash path; call this instead of invoking a bare "bash" from PowerShell.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -1771,7 +1822,7 @@ export function bashToolDefinitions(): Tool[] {
       name: 'run',
       description:
         'Run one command to completion. "output" is stdout and stderr MERGED (no 2>&1 needed) and "isError" reflects the process exit code only — text on stderr is not a failure. '
-        + 'On an unknown machine call "shell_info" first; prefer shell:"bash" for POSIX syntax (&&, pipes into head/grep). Output is UTF-8 decoded and PowerShell runs with invariant culture, so numbers and text are stable. '
+        + 'On an unknown machine call "shell_info" first; prefer shell:"bash" for POSIX syntax (&&, pipes into head/grep). Results include the absolute shellPath used. PowerShell programs use BOM-free encoded transport and invariant culture. '
         + 'Use start/status for a persistent background session.',
       inputSchema: {
         type: 'object',
@@ -1796,7 +1847,7 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'start',
-      description: 'Start an independent background command and return its sessionId. Output is stdout and stderr merged, decoded as UTF-8. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
+      description: 'Start an independent background command and return its sessionId plus the effective shell and absolute shellPath. Output is stdout and stderr merged, decoded as UTF-8. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1867,13 +1918,18 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'write_stdin',
-      description: 'Write a string to a running background session\'s stdin. Pass "newline": false to omit the trailing newline. Returns { sessionId, written }.',
+      description: 'Write UTF-8 text to a running background session\'s stdin. Pass "newline": false to omit the trailing newline. Leading-BOM stripping is opt-in; raw input is preserved by default. Returns { sessionId, written }.',
       inputSchema: {
         type: 'object',
         properties: {
           sessionId: { type: 'string', description: 'The id returned by start.' },
-          data: { type: 'string', description: 'Text to write to stdin.' },
+          data: { type: 'string', description: 'Text to encode as UTF-8 and write to stdin.' },
           newline: { type: 'boolean', description: 'Append a trailing newline (default true).' },
+          bomPolicy: {
+            type: 'string',
+            enum: ['preserve', 'strip-leading'],
+            description: 'Leading UTF-8 BOM policy. "preserve" is the default; "strip-leading" removes exactly one initial U+FEFF from this write.',
+          },
         },
         required: ['sessionId', 'data'],
       },
@@ -1903,27 +1959,6 @@ export function bashToolDefinitions(): Tool[] {
 
 function maybeNormalize(text: string, normalize: boolean): string {
   return normalize ? text.replace(/\r\n?/g, '\n') : text;
-}
-
-interface ShellSelection {
-  shell: ShellKind;
-  autoSelected: boolean;
-}
-
-/**
- * Only when the caller said `shell: "default"` may we pick a different shell
- * (issue #364): a command chained with POSIX `&&`/`||` cannot even parse under
- * Windows PowerShell 5.1, so prefer a shell that can run it. An explicitly
- * requested shell is never overridden.
- */
-function selectShell(command: string, requested: ShellKind): ShellSelection {
-  if (requested !== 'default') return { shell: requested, autoSelected: false };
-  const plan = buildSpawn(command, 'default');
-  if (plan.effectiveShell === 'powershell' && commandUsesPosixChaining(command)) {
-    if (resolvePwshExecutable()) return { shell: 'pwsh', autoSelected: true };
-    if (resolveBashExecutable()) return { shell: 'bash', autoSelected: true };
-  }
-  return { shell: 'default', autoSelected: false };
 }
 
 /** Optional per-call output limits shared by `run` and `start`. */
@@ -1977,8 +2012,8 @@ async function runTool(
   roots: string[],
   context?: BashExecutionContext,
 ): Promise<CallToolResult> {
-  const command = String(args?.command ?? '').trim();
-  if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
+  const command = String(args?.command ?? '');
+  if (!command.trim()) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const shellValidation = validateShell(args.shell);
   if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
@@ -2006,7 +2041,6 @@ async function runTool(
       return textResult({ error: err instanceof Error ? err.message : String(err), cwd }, true);
     }
   }
-  const selection = selectShell(command, requestedShell);
   registerExitCleanup();
   const startedAt = Date.now();
 
@@ -2026,15 +2060,18 @@ async function runTool(
     const decodeStderr = createStreamDecoder(encodingMode);
     const progress = createCommandProgressReporter(context);
 
-    const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
-      command,
-      cwd,
-      selection.shell,
-      envValidation.env,
-    );
+    const {
+      child,
+      startError,
+      effectiveShell,
+      shellPath,
+      unavailableShell,
+      shellSubstitution,
+      shellAutoSelected,
+    } = startChild(command, cwd, requestedShell, envValidation.env);
     const dialectWarnings = detectDialectMismatch(command, effectiveShell);
     const dialect = dialectWarnings.length ? { dialectWarnings } : {};
-    const auto = selection.autoSelected ? { shellAutoSelected: true } : {};
+    const auto = shellAutoSelected ? { shellAutoSelected: true } : {};
     const substitution = shellSubstitution ? { shellSubstitution } : {};
     const spoolInfo = () => (outputFilePath
       ? { outputFile: outputFilePath, outputBytes: spool.bytes(), ...(spool.error() ? { outputFileError: spool.error() } : {}) }
@@ -2062,7 +2099,7 @@ async function runTool(
     if (startError || !child) {
       spool.close();
       void progress.stop().then(() => {
-        resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true));
+        resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellPath }, true));
       });
       return;
     }
@@ -2079,6 +2116,7 @@ async function runTool(
         cwd,
         requestedShell,
         shell: effectiveShell,
+        shellPath,
         exitCode: null,
         output: finalOut,
         ...outputStats(),
@@ -2109,6 +2147,7 @@ async function runTool(
           cwd,
           requestedShell,
           shell: effectiveShell,
+          shellPath,
           exitCode: null,
           timeoutMs,
           elapsedMs: Date.now() - startedAt,
@@ -2143,7 +2182,7 @@ async function runTool(
       // ENOENT here means the resolved executable vanished between resolution and spawn.
       foregroundChildren().delete(child);
       append(`\n${err.message}`);
-      void finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, output: maybeNormalize(output, normalize) }, true));
+      void finish(textResult({ error: `Command failed to start (${effectiveShell}): ${err.message}`, cwd, shell: effectiveShell, shellPath, output: maybeNormalize(output, normalize) }, true));
     });
 
     child.on('close', (code: number | null) => {
@@ -2156,6 +2195,7 @@ async function runTool(
         cwd,
         requestedShell,
         shell: effectiveShell,
+        shellPath,
         output: finalOut,
         ...outputStats(),
         ...spoolInfo(),
@@ -2184,8 +2224,8 @@ async function startTool(
   ownerScope: string,
   context?: BashExecutionContext,
 ): Promise<CallToolResult> {
-  const command = String(args?.command ?? '').trim();
-  if (!command) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
+  const command = String(args?.command ?? '');
+  if (!command.trim()) return textResult({ error: 'Provide "command": a shell command line to run.' }, true);
 
   const shellValidation = validateShell(args.shell);
   if (!shellValidation.valid) return invalidShellResult(shellValidation.requestedShell);
@@ -2243,13 +2283,15 @@ async function startTool(
       return textResult({ error: err instanceof Error ? err.message : String(err), cwd }, true);
     }
   }
-  const selection = selectShell(command, requestedShell);
-  const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
-    command,
-    cwd,
-    selection.shell,
-    envValidation.env,
-  );
+  const {
+    child,
+    startError,
+    effectiveShell,
+    shellPath,
+    unavailableShell,
+    shellSubstitution,
+    shellAutoSelected,
+  } = startChild(command, cwd, requestedShell, envValidation.env);
   if (unavailableShell) {
     return textResult({
       error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
@@ -2261,7 +2303,7 @@ async function startTool(
     }, true);
   }
   if (startError || !child) {
-    return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true);
+    return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell, shellPath }, true);
   }
 
   const id = `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2270,6 +2312,10 @@ async function startTool(
     ownerScope,
     command,
     cwd,
+    requestedShell,
+    shell: effectiveShell,
+    shellPath,
+    ...(shellSubstitution ? { shellSubstitution } : {}),
     child,
     output: '',
     truncated: false,
@@ -2335,9 +2381,10 @@ async function startTool(
     cwd,
     requestedShell,
     shell: effectiveShell,
+    shellPath,
     ...(detached ? { detached: true } : {}),
     ...(shellSubstitution ? { shellSubstitution } : {}),
-    ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
+    ...(shellAutoSelected ? { shellAutoSelected: true } : {}),
     ...(dialectWarnings.length ? { dialectWarnings } : {}),
     ...(outputFilePath ? { outputFile: outputFilePath } : {}),
   });
@@ -2346,6 +2393,10 @@ async function startTool(
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     sessionId: session.id,
+    requestedShell: session.requestedShell,
+    shell: session.shell,
+    shellPath: session.shellPath,
+    ...(session.shellSubstitution ? { shellSubstitution: session.shellSubstitution } : {}),
     running: session.running,
     exitCode: session.exitCode,
     output: session.output,
@@ -2524,14 +2575,30 @@ function writeStdinTool(args: Record<string, unknown>, ownerScope: string): Call
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
   if (!session.running) return textResult({ error: `Session "${id}" has already exited.` }, true);
+  const bomPolicy = args.bomPolicy === undefined ? 'preserve' : args.bomPolicy;
+  if (bomPolicy !== 'preserve' && bomPolicy !== 'strip-leading') {
+    return textResult({
+      error: '"bomPolicy" must be one of "preserve" or "strip-leading".',
+      requestedBomPolicy: args.bomPolicy,
+    }, true);
+  }
   const data = typeof args.data === 'string' ? args.data : '';
   const withNewline = args.newline === false ? data : `${data}\n`;
+  let payload = Buffer.from(withNewline, 'utf8');
+  if (bomPolicy === 'strip-leading'
+    && payload.length >= 3
+    && payload[0] === 0xef
+    && payload[1] === 0xbb
+    && payload[2] === 0xbf) {
+    payload = payload.subarray(3);
+  }
   try {
-    session.child.stdin?.write(withNewline);
+    session.child.stdin?.write(payload);
+    touchSession(session);
   } catch (err) {
     return textResult({ error: `Failed to write to stdin: ${err instanceof Error ? err.message : String(err)}` }, true);
   }
-  return textResult({ sessionId: id, written: Buffer.byteLength(withNewline, 'utf8') });
+  return textResult({ sessionId: id, written: payload.length, bomPolicy });
 }
 
 function killTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
@@ -2551,6 +2618,9 @@ function listSessionsTool(ownerScope: string): CallToolResult {
     .map((s) => ({
       sessionId: s.id,
       command: s.command,
+      requestedShell: s.requestedShell,
+      shell: s.shell,
+      shellPath: s.shellPath,
       running: s.running,
       exitCode: s.exitCode,
       detached: s.detached === true,
@@ -2580,7 +2650,10 @@ function releaseOwnerTool(ownerScope: string): CallToolResult {
 function terminalSnapshot(session: TerminalSession): Record<string, unknown> {
   return {
     sessionId: session.id,
+    requestedShell: session.requestedShell,
     shell: session.shell,
+    shellPath: session.shellPath,
+    ...(session.shellSubstitution ? { shellSubstitution: session.shellSubstitution } : {}),
     cwd: session.cwd,
     running: session.running,
     exitCode: session.exitCode,
@@ -2665,6 +2738,7 @@ async function openTerminalTool(
       error: `Failed to open pseudoterminal (${plan.effectiveShell}): ${error instanceof Error ? error.message : String(error)}`,
       cwd,
       shell: plan.effectiveShell,
+      shellPath: plan.file,
     }, true);
   }
 
@@ -2673,7 +2747,10 @@ async function openTerminalTool(
   const session: TerminalSession = {
     id,
     ownerScope,
+    requestedShell: shellValidation.shell,
     shell: plan.effectiveShell,
+    shellPath: plan.file,
+    ...(plan.shellSubstitution ? { shellSubstitution: plan.shellSubstitution } : {}),
     cwd,
     pty,
     output: '',

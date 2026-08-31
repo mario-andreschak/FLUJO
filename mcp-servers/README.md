@@ -132,6 +132,14 @@ and a pseudoterminal on macOS/Linux, renders ANSI/VT output with xterm, accepts
 keyboard and pasted input, and negotiates terminal size through app-only tools.
 As with a normal terminal, stdout and stderr share the PTY stream.
 
+Shell discovery, foreground/background commands, and PTY sessions share one
+resolved executable plan. On Windows, explicit `shell: "bash"` launches the
+absolute Git Bash path reported by `shell_info` and rejects WSL relay launchers;
+results expose the executable as `shellPath`. PowerShell programs use BOM-free
+UTF-16LE `-EncodedCommand` transport (and remain subject to Windows command-line
+size limits). Background `write_stdin` preserves UTF-8 input by default; opt into
+removing exactly one leading BOM with `bomPolicy: "strip-leading"`.
+
 Foreground `run` calls stream merged output as MCP progress and send a liveness
 heartbeat every ten seconds while they are silent. FLUJO forwards those updates
 to the live run indicator and uses them to keep a finite client request timeout

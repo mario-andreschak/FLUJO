@@ -28,7 +28,8 @@ import {
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
   _resolveCommandTimeoutMsForTests,
-  wrapPowerShellCommand,
+  _resolveShellPlanForTests,
+  encodePowerShellCommand,
   wrapCmdCommand,
 } from '@/backend/services/mcp/internal/bashTools';
 
@@ -73,7 +74,7 @@ function mockCompletedChild(output: string): void {
   }) as typeof spawn);
 }
 
-function mockNeverClosingChild(): void {
+function mockNeverClosingChild(): ChildProcess {
   const child = Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
     stderr: new PassThrough(),
@@ -82,6 +83,7 @@ function mockNeverClosingChild(): void {
     killed: false,
   }) as unknown as ChildProcess;
   mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
+  return child;
 }
 
 async function withResolvedPowerShell(
@@ -160,6 +162,10 @@ describe('bash tool definitions', () => {
     expect(tools.find((tool) => tool.name === 'sleep')?.inputSchema).toEqual(expect.objectContaining({
       required: ['seconds'],
     }));
+    expect(tools.find((tool) => tool.name === 'write_stdin')?.inputSchema.properties?.bomPolicy)
+      .toEqual(expect.objectContaining({
+        enum: ['preserve', 'strip-leading'],
+      }));
   });
 
   it('allows multi-hour and explicitly unbounded foreground timeouts', () => {
@@ -227,7 +233,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(command)],
         expect.objectContaining({ shell: false })
       );
     });
@@ -247,7 +253,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(command)],
         expect.objectContaining({ shell: false })
       );
     });
@@ -265,7 +271,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(started.sessionId).toBeTruthy();
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(command)],
         expect.objectContaining({ shell: false })
       );
 
@@ -337,13 +343,40 @@ describe('bash shell selection (issues #225, #327)', () => {
     process.env.PATHEXT = '.EXE';
     try {
       _resetBashShellCacheForTests();
+      const info = parse(await bashCallTool('shell_info', {}));
+      const reportedBash = (info.shells as Array<{ shell: string; path: string | null }>)
+        .find((entry) => entry.shell === 'bash');
+
       mockCompletedChild('git-bash-marker');
       const r = await bashCallTool('run', { command: 'printf git-bash-marker', shell: 'bash' });
+      const foreground = parse(r);
       expect(r.isError).toBeUndefined();
-      expect(parse(r).shell).toBe('bash');
-      expect(mockedSpawn).toHaveBeenCalledWith(
+      expect(foreground).toEqual(expect.objectContaining({
+        shell: 'bash',
+        shellPath: gitBash,
+      }));
+      expect(reportedBash?.path).toBe(gitBash);
+      expect(_resolveShellPlanForTests('', 'bash', 'pty')).toEqual(expect.objectContaining({
+        effectiveShell: 'bash',
+        file: gitBash,
+      }));
+
+      mockCompletedChild('git-bash-background-marker');
+      const background = parse(await bashCallTool('start', {
+        command: 'printf git-bash-background-marker',
+        shell: 'bash',
+      }));
+      expect(background.shellPath).toBe(gitBash);
+      expect(mockedSpawn).toHaveBeenNthCalledWith(
+        1,
         gitBash,
         ['-c', 'printf git-bash-marker'],
+        expect.objectContaining({ shell: false }),
+      );
+      expect(mockedSpawn).toHaveBeenNthCalledWith(
+        2,
+        gitBash,
+        ['-c', 'printf git-bash-background-marker'],
         expect.objectContaining({ shell: false }),
       );
     } finally {
@@ -387,7 +420,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(r.isError).toBeUndefined();
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand('Write-Output windowsapps-pwsh-marker')],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand('Write-Output windowsapps-pwsh-marker')],
         expect.objectContaining({ shell: false }),
       );
     } finally {
@@ -438,7 +471,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShellCommand(command)],
         expect.objectContaining({ shell: false }),
       );
     });
@@ -696,6 +729,44 @@ describe('bash background sessions', () => {
     expect(new Set(started.map((entry) => entry.sessionId))).toHaveProperty('size', 3);
     const listed = parse(await bashCallTool('list_sessions', {}));
     expect(listed.sessions).toHaveLength(3);
+  });
+
+  it('preserves stdin BOMs by default and strips exactly one leading BOM on request', async () => {
+    const child = mockNeverClosingChild();
+    const chunks: Buffer[] = [];
+    child.stdin?.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+
+    const started = parse(await bashCallTool('start', { command: 'stdin-bom-fixture' }));
+    const sessionId = started.sessionId as string;
+    const preserved = parse(await bashCallTool('write_stdin', {
+      sessionId,
+      data: '\uFEFFalpha\uFEFF',
+      newline: false,
+    }));
+    const stripped = parse(await bashCallTool('write_stdin', {
+      sessionId,
+      data: '\uFEFFbeta\uFEFF',
+      bomPolicy: 'strip-leading',
+    }));
+
+    expect(preserved).toEqual(expect.objectContaining({
+      written: Buffer.byteLength('\uFEFFalpha\uFEFF', 'utf8'),
+      bomPolicy: 'preserve',
+    }));
+    expect(stripped).toEqual(expect.objectContaining({
+      written: Buffer.byteLength('beta\uFEFF\n', 'utf8'),
+      bomPolicy: 'strip-leading',
+    }));
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('\uFEFFalpha\uFEFFbeta\uFEFF\n');
+
+    const invalid = await bashCallTool('write_stdin', {
+      sessionId,
+      data: 'must-not-write',
+      bomPolicy: 'automatic',
+    });
+    expect(invalid.isError).toBe(true);
+    expect(parse(invalid).error).toContain('bomPolicy');
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('\uFEFFalpha\uFEFFbeta\uFEFF\n');
   });
 
   itWithRealShell('starts a session, waits for it, and reads the result', async () => {

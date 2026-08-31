@@ -214,6 +214,62 @@ describe('issue #314 — the WSL bash relay is never selected as "bash"', () => 
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('uses the absolute Git Bash path even when the Windows default is PowerShell 5.1', async () => {
+    if (!isWin) return;
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-493-git-bash-'));
+    const gitBash = path.join(tempDir, 'Git', 'bin', 'bash.exe');
+    const fakeSystemRoot = path.join(tempDir, 'Windows');
+    const system32 = path.join(fakeSystemRoot, 'System32');
+    const wslBash = path.join(system32, 'bash.exe');
+    const windowsPowerShell = path.join(
+      system32,
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    await Promise.all([
+      fsp.mkdir(path.dirname(gitBash), { recursive: true }),
+      fsp.mkdir(path.dirname(windowsPowerShell), { recursive: true }),
+    ]);
+    await Promise.all([
+      fsp.writeFile(gitBash, 'git bash placeholder'),
+      fsp.writeFile(wslBash, 'wsl relay placeholder'),
+      fsp.writeFile(windowsPowerShell, 'powershell placeholder'),
+    ]);
+    try {
+      await withShellEnv(
+        {
+          PATH: system32,
+          Path: system32,
+          PATHEXT: '.EXE',
+          SystemRoot: fakeSystemRoot,
+          ProgramFiles: tempDir,
+          LocalAppData: tempDir,
+        },
+        async () => {
+          mockCompletedChild('git-bash');
+          const r = await bashCallTool('run', {
+            command: 'printf git-bash',
+            shell: 'bash',
+          });
+          expect(r.isError).toBeUndefined();
+          expect(parse(r)).toEqual(expect.objectContaining({
+            requestedShell: 'bash',
+            shell: 'bash',
+            shellPath: gitBash,
+          }));
+          expect(mockedSpawn).toHaveBeenCalledWith(
+            gitBash,
+            ['-c', 'printf git-bash'],
+            expect.objectContaining({ shell: false }),
+          );
+        },
+      );
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('issue #314 — missing executables are named, not hidden behind a localized message', () => {

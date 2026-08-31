@@ -7,6 +7,8 @@ import {
   detectInteractiveHangRisk,
   commandUsesPosixChaining,
   createStreamDecoder,
+  encodePowerShellCommand,
+  normalizePowerShellSource,
   wrapPowerShellCommand,
   wrapCmdCommand,
 } from '@/backend/services/mcp/internal/bashTools';
@@ -108,6 +110,24 @@ describe('createStreamDecoder', () => {
 });
 
 describe('shell command wrapping', () => {
+  it('removes exactly one leading PowerShell source BOM without trimming other characters', () => {
+    expect(normalizePowerShellSource('\uFEFF\uFEFF  Write-Output ok')).toBe('\uFEFF  Write-Output ok');
+    expect(normalizePowerShellSource('  \uFEFFWrite-Output ok')).toBe('  \uFEFFWrite-Output ok');
+  });
+
+  it('encodes the complete PowerShell program as BOM-free UTF-16LE', () => {
+    const source = '\uFEFF$value = \'héllo \uFEFF "nested" -c\'; Write-Output $value';
+    const bytes = Buffer.from(encodePowerShellCommand(source), 'base64');
+    expect([...bytes.subarray(0, 2)]).not.toEqual([0xff, 0xfe]);
+
+    const decoded = bytes.toString('utf16le');
+    expect(decoded).toContain("$ErrorActionPreference='Continue'");
+    expect(decoded).toContain('$value = \'héllo \uFEFF "nested" -c\'');
+    expect(decoded).toContain('Write-Output $value');
+    expect(decoded).toContain('exit $(if ($null -ne $LASTEXITCODE)');
+    expect(decoded).not.toContain('\n\uFEFF$value');
+  });
+
   it('forces UTF-8, invariant culture and native exit codes for PowerShell', () => {
     const wrapped = wrapPowerShellCommand('ffmpeg -version');
     expect(wrapped).toContain("$ErrorActionPreference='Continue'");
