@@ -12,16 +12,17 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-3.45.0-green.svg)](package.json)
+</div>
+
 
 Too complicated? Missing a feature? Stuck on something?
 Hop into the Discord, or create an Issue on Github! It really helps a lot!
 https://github.com/mario-andreschak/FLUJO/issues
 https://discord.gg/KPyrjTSSat
 
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.45.0-green.svg)](package.json)
 
-</div>
 
 [![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
