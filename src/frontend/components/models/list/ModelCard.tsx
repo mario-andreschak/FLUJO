@@ -24,6 +24,7 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import { Model } from '@/shared/types';
 import { getProviderProfile } from '@/shared/types/model/provider';
 import { ModelTestResult } from '@/shared/types/model/response';
@@ -44,6 +45,8 @@ export interface ModelCardProps {
   /** Optional in selectable/picker mode; required on the management page. */
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Convert this model into a saved Start → Process → Finish agent. */
+  onConvertToAgent?: (modelId: string) => void;
   /** The model's current organizing folder (#80 / shared with #71). */
   folder?: string;
   /** Existing folders on the Models surface, offered for reuse in the picker. */
@@ -74,6 +77,7 @@ export const ModelCard = ({
   model,
   onEdit,
   onDelete,
+  onConvertToAgent,
   folder,
   folders = [],
   onSetFolder,
@@ -485,6 +489,18 @@ export const ModelCard = ({
               <ScienceIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {onConvertToAgent && (
+            <Tooltip title={t('models.card.convertTooltip')} arrow>
+              <IconButton
+                size="small"
+                aria-label={t('models.card.convertAria', { model: model.displayName || model.name })}
+                onClick={() => onConvertToAgent(model.id)}
+                sx={{ color: 'text.secondary', '&:hover': { color: 'primary.main' } }}
+              >
+                <AccountTreeRoundedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
 
           <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.15 }}>
             {onSetFolder && (
@@ -535,6 +551,16 @@ export const ModelCard = ({
               <ScienceIcon />
             </IconButton>
           </Tooltip>
+          {onConvertToAgent && (
+            <Tooltip title={t('models.card.convertTooltip')} arrow>
+              <IconButton
+                aria-label={t('models.card.convertAria', { model: model.displayName || model.name })}
+                onClick={() => onConvertToAgent(model.id)}
+              >
+                <AccountTreeRoundedIcon />
+              </IconButton>
+            </Tooltip>
+          )}
           <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
             <EditIcon />
           </IconButton>

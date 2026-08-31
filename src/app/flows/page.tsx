@@ -68,6 +68,11 @@ const FlowsPage = () => {
   // a fresh deep link), so handleBackToDashboard knows whether `router.back()`
   // is safe or would leave the app entirely.
   const isEditing = searchParams.get('mode') === 'edit' && !!selectedFlow;
+  const authoringModeParam = searchParams.get('authoringMode');
+  const requestedAuthoringMode: FlowAuthoringMode | undefined =
+    authoringModeParam === 'advanced' || authoringModeParam === 'guided'
+      ? authoringModeParam
+      : undefined;
   const requestedReturnTo = searchParams.get('returnTo');
   const returnTo = requestedReturnTo
     && requestedReturnTo.startsWith('/personas/')
@@ -725,7 +730,7 @@ const FlowsPage = () => {
               key={selectedFlow}
               ref={flowBuilderRef}
               initialFlow={selectedFlowData}
-              initialAuthoringMode={builderEntryMode}
+              initialAuthoringMode={builderEntryMode ?? requestedAuthoringMode}
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
               onConversionCommitted={handleConversionCommitted}
