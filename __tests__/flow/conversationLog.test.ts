@@ -3,11 +3,11 @@
  *
  * The log is the per-conversation source of truth: every persisted step is an
  * APPEND (one JSONL line), and the displayed conversation is a pure fold of
- * 'message' / 'message:removed' events (upsert by id, system-role excluded,
- * subflow steps tagged with depth). These tests pin:
+ * message events (upsert by id, system-role excluded, subflow steps tagged
+ * with depth). Context tombstones are projected separately. These tests pin:
  *  - the store: append order, ephemeral refusal (policy chokepoint), unknown-
  *    conversation refusal, truncated-tail tolerance, idempotent delete;
- *  - the projection: upsert-by-id, system exclusion, depth tagging, removal.
+ *  - the projections: durable Chat history versus active model context.
  */
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -20,6 +20,8 @@ import {
   hasConversationLog,
   flushConversationLog,
   projectMessages,
+  projectModelContextMessages,
+  recoverConversationTranscript,
   recoverMessagesFromLog,
   repairDanglingToolCalls,
   INTERRUPTED_TOOL_RESULT_CONTENT,
@@ -292,16 +294,20 @@ describe('projectMessages (conversation-as-projection)', () => {
     ]);
   });
 
-  it('message:removed deletes and later upserts still land at the right place', () => {
-    const projected = projectMessages([
+  it('keeps context-removed messages in Chat while pruning them from model context', () => {
+    const events = [
       messageEvent(convId, msg('u1', 'user')),
       messageEvent(convId, msg('a1', 'assistant')),
       messageEvent(convId, msg('u2', 'user')),
       { type: 'message:removed', conversationId: convId, seq: -1, timestamp: 2, messageId: 'a1' } as ExecutionEvent,
       messageEvent(convId, msg('u2', 'user', 'edited')), // upsert after a removal shifted indices
-    ]);
-    expect(projected.map((m) => m.id)).toEqual(['u1', 'u2']);
-    expect(projected[1].content).toBe('edited');
+    ];
+    const durable = projectMessages(events);
+    const modelContext = projectModelContextMessages(events);
+    expect(durable.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(durable[2].content).toBe('edited');
+    expect(modelContext.map((m) => m.id)).toEqual(['u1', 'u2']);
+    expect(modelContext[1].content).toBe('edited');
   });
 
   it('removal of an unknown id is a no-op', () => {
@@ -310,6 +316,27 @@ describe('projectMessages (conversation-as-projection)', () => {
       { type: 'message:removed', conversationId: convId, seq: -1, timestamp: 2, messageId: 'nope' } as ExecutionEvent,
     ]);
     expect(projected.map((m) => m.id)).toEqual(['u1']);
+  });
+});
+
+describe('recoverConversationTranscript (durable Chat recovery)', () => {
+  it('restores context-tombstoned JSONL messages without changing active state', async () => {
+    const convId = 'conv-recover-canonical-chat';
+    const state = makeState(convId);
+    state.messages = [msg('u1', 'user'), msg('u2', 'user')];
+    await appendRawForState(state, [
+      { type: 'message', message: msg('u1', 'user') },
+      { type: 'message', message: msg('a1', 'assistant', 'still canonical') },
+      { type: 'message:removed', messageId: 'a1' },
+      { type: 'message', message: msg('u2', 'user') },
+    ]);
+
+    const recovered = await recoverConversationTranscript(state);
+    expect(recovered.source).toBe('durable-log');
+    expect(recovered.messages.map((message) => message.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(state.messages.map((message) => message.id)).toEqual(['u1', 'u2']);
+    expect(projectModelContextMessages((await readConversationLog(convId))!).map((message) => message.id))
+      .toEqual(['u1', 'u2']);
   });
 });
 
@@ -419,7 +446,7 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
   // the turn-start reconcile line). Because the display route prefers the
   // projection, it renders one message until the log is rebuilt.
 
-  it('rebuilds the log from the snapshot when the projection is a strict truncated subset', async () => {
+  it('repairs the log from the snapshot when the active projection is a strict truncated subset', async () => {
     const convId = 'conv-repair-truncated';
     // Truncated log: only the first (reconcile) message survived.
     await appendRawForState(makeState(convId), [{ type: 'message', message: msg('u1', 'user') }]);
@@ -431,10 +458,11 @@ describe('repairTruncatedConversationLog (issue #49: log behind the snapshot)', 
     const repaired = await repairTruncatedConversationLog(state);
     expect(repaired?.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
 
-    // The log itself is rebuilt so future reads project the full transcript.
+    // The repair is append-only and future reads project the full transcript.
     await flushConversationLog(convId);
     const events = await readConversationLog(convId);
     expect(projectMessages(events!).map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(events?.filter((event) => event.type === 'message')).toHaveLength(3);
   });
 
   it('does nothing when the log is level with or ahead of the snapshot', async () => {

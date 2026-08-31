@@ -2403,6 +2403,13 @@ export class ModelHandler {
       // and gets its own attempt id, so retries never look like separate calls.
       const providerInvocationId = newStatisticsInvocationId();
       let sdkDispatchOrdinal = 0;
+      // Self-orchestrating adapters can make several SDK requests inside one
+      // completion. Track streamed transcript/steering messages so each later
+      // dispatch archive captures the canonical conversation as it existed at
+      // that exact request boundary, not the call's initial static array.
+      const archiveCanonicalMessages = opts?.archiveModelTurns
+        ? structuredClone(opts.canonicalMessages ?? messages)
+        : undefined;
       const usageFromProviderResult = (value: unknown) => {
         if (!value || typeof value !== 'object') return undefined;
         const raw = (value as { usage?: Record<string, unknown> }).usage;
@@ -2525,6 +2532,9 @@ export class ModelHandler {
           // attempt is no longer safe to replay automatically (issue #400).
           attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
+          if (archiveCanonicalMessages) {
+            upsertMessageById(archiveCanonicalMessages, structuredClone(message));
+          }
           opts?.onTranscriptMessage?.(message);
         };
 
@@ -2620,8 +2630,12 @@ export class ModelHandler {
                         adapter: snapshot.adapter,
                         operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
-                        canonicalMessages: opts.canonicalMessages ?? messages,
-                        genericWire: hydratedMessages,
+                        canonicalMessages: archiveCanonicalMessages
+                          ? structuredClone(archiveCanonicalMessages)
+                          : opts.canonicalMessages ?? messages,
+                        genericWire: snapshot.wireMessages !== undefined
+                          ? structuredClone(snapshot.wireMessages)
+                          : hydratedMessages,
                         sdkRequest: snapshot.request,
                         modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,

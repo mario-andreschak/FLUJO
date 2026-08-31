@@ -53,6 +53,13 @@ export enum StorageKey {
   // Repairs browser records created under the former @flujo-ai package id and
   // clears stale process-status fields that could preserve a duplicated path.
   MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6 = 'mcp_shipped_browser_repair_migration_v6',
+  // Repairs FLUJO control-server records created under the former @flujo-ai
+  // package id so they launch the current installation instead of a stale
+  // workspace-local package copy.
+  MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7 = 'mcp_shipped_flujo_repair_migration_v7',
+  // Repairs Bash records that still launch a copied workspace package instead
+  // of the version shipped with the current FLUJO installation.
+  MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8 = 'mcp_shipped_bash_repair_migration_v8',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -109,6 +116,8 @@ export const StorageKeys = {
   MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
   MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5: StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5,
   MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6: StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6,
+  MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7: StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7,
+  MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8: StorageKey.MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,

@@ -80,7 +80,7 @@ import {
   type PersonaAttribution,
   type PersonaInstructionContext,
 } from '@/shared/types/enduringAgent';
-import { hashBehaviorFlow } from '@/backend/services/enduringAgents/behaviorRevisions';
+import { behaviorFlowMatchesContentHash } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -167,7 +167,7 @@ function assertBehaviorSnapshotMatchesInstructionContext(
   if (flow.id !== context.rootFlowId) {
     throw new Error(`${label} Behavior snapshot does not match the Persona instruction root Flow.`);
   }
-  if (hashBehaviorFlow(flow) !== context.behaviorContentHash) {
+  if (!behaviorFlowMatchesContentHash(flow, context.behaviorContentHash)) {
     throw new Error(`${label} Behavior snapshot does not match the attributed immutable revision.`);
   }
 }

@@ -7,11 +7,8 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
-  readConversationLog,
-  projectMessages,
-  flushConversationLog,
   deleteConversationLog,
-  repairTruncatedConversationLog,
+  recoverConversationTranscript,
 } from '@/backend/execution/flow/conversationLog';
 import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
@@ -35,10 +32,50 @@ import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloa
 import {
   getPersona,
   getPersonaDeletionTombstone,
+  listPersonaActivities,
 } from '@/backend/services/enduringAgents';
 import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
+
+const TERMINAL_PERSONA_ACTIVITY_STATUSES = new Set(['completed', 'cancelled', 'error']);
+
+/**
+ * Persona conversations remain lifecycle-owned while work can still mutate
+ * them. A strict-loopback user may remove a never-started draft or a
+ * conversation whose every matching Activity is terminal; active work and
+ * anonymized retention archives remain protected.
+ */
+async function personaConversationDeleteConflict(
+  state: SharedState,
+  conversationId: string,
+): Promise<string | null> {
+  if (state.personaArchived) {
+    return 'An anonymized Persona archive is retained by lifecycle policy and cannot be deleted from Chat.';
+  }
+
+  const personaId = state.personaAttribution?.personaId
+    ?? state.personaInstructionContext?.personaId
+    ?? state.personaTargetId;
+  if (typeof personaId !== 'string' || !personaId) {
+    return 'Persona conversation ownership is incomplete, so deletion could not be authorized.';
+  }
+
+  const activityId = state.personaAttribution?.activityId
+    ?? state.personaInstructionContext?.activityId;
+  const activities = (await listPersonaActivities(personaId))
+    .filter((activity) => activity.conversationId === conversationId);
+  if (
+    typeof activityId === 'string'
+    && !activities.some((activity) => activity.id === activityId)
+  ) {
+    return 'The owning Persona Activity could not be verified, so nothing was deleted.';
+  }
+  if (activities.some((activity) => !TERMINAL_PERSONA_ACTIVITY_STATUSES.has(activity.status))) {
+    return 'This Persona conversation is still queued, running, or waiting. Stop it before deleting it.';
+  }
+  return null;
+}
 
 /**
  * Context-usage snapshot for the conversation's most recent model call.
@@ -111,6 +148,11 @@ async function GET_handler(
   const awaitedParams = await params; // Await the params object
   const conversationId = awaitedParams.conversationId; // Access conversationId from awaited params
   const requestId = `conv-get-${Date.now()}`;
+  const rawMessageLimit = request.nextUrl.searchParams.get('messageLimit');
+  const parsedMessageLimit = rawMessageLimit === null ? undefined : Number.parseInt(rawMessageLimit, 10);
+  const messageLimit = parsedMessageLimit !== undefined && Number.isFinite(parsedMessageLimit)
+    ? Math.max(1, Math.min(500, parsedMessageLimit))
+    : undefined;
   log.info('Handling GET request for conversation state', { requestId, conversationId });
 
   if (!conversationId) { // Check using the variable
@@ -165,31 +207,26 @@ async function GET_handler(
       // from before the log existed (or whose log is missing) fall back to the
       // legacy SharedState messages. System-role messages are model plumbing
       // and are excluded from the displayed transcript on BOTH paths.
-      let displayedMessages: SharedState['messages'];
-      await flushConversationLog(conversationId);
-      // Self-heal conversations whose log lost events (issue #49): when a
-      // planned run's bus events were dropped by the (formerly per-instance)
-      // log tap, the `.jsonl` holds only the turn-start reconcile line while
-      // the `.json` snapshot is complete. Rebuild the log from the snapshot and
-      // display it. Returns undefined when there is nothing to repair (the
-      // common case), leaving the normal projection path below untouched.
-      const repaired = await repairTruncatedConversationLog(sharedState);
-      if (repaired) {
-        displayedMessages = repaired;
-      } else {
-        const logEvents = await readConversationLog(conversationId);
-        const projected = logEvents ? projectMessages(logEvents) : [];
-        if (projected.length > 0) {
-          displayedMessages = projected;
-        } else {
-          displayedMessages = (sharedState.messages || [])
-            .filter(msg => msg.role !== 'system')
-            .map(msg => ({
-              ...msg,
-              id: msg.id || crypto.randomUUID() // Add ID if missing (legacy data)
-            }));
-        }
-      }
+      // Always resolve the durable Chat projection, including for the bounded
+      // initial hydration request. SharedState is intentionally only the active
+      // model-context view; using it here caused context tombstones to hide
+      // recoverable JSONL history after a crash or pruned on-wire dispatch.
+      const recoveredTranscript = await recoverConversationTranscript(sharedState);
+      const canonicalMessages = recoveredTranscript.messages;
+      const displayedMessages: SharedState['messages'] = messageLimit === undefined
+        ? canonicalMessages
+        : canonicalMessages.slice(-messageLimit);
+      const transcriptWindow: {
+        truncated: boolean;
+        loadedCount: number;
+        totalCount: number;
+        source: 'snapshot' | 'durable-log';
+      } = {
+        truncated: canonicalMessages.length > displayedMessages.length,
+        loadedCount: displayedMessages.length,
+        totalCount: canonicalMessages.length,
+        source: recoveredTranscript.source,
+      };
       const messagesWithIds = request.nextUrl.searchParams.get('compactToolPayloads') === '1'
         ? await projectLazyToolPayloads(displayedMessages, conversationId)
         : displayedMessages;
@@ -203,6 +240,7 @@ async function GET_handler(
         id: sharedState.conversationId || conversationId, // Prefer state ID, fallback to param
         title: sharedState.title || 'Untitled Conversation',
         messages: messagesWithIds, // Use messages with guaranteed IDs
+        transcriptWindow,
         flowId: sharedState.flowId || null, // Ensure flowId is included
         ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId)
           ? { personaId: sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId }
@@ -548,14 +586,12 @@ async function DELETE_handler(
         `conversations/${conversationId}` as StorageKey,
         undefined,
       );
-    if (isPersonaOwnedConversationState(existingState)) {
+    if (existingState && isPersonaOwnedConversationState(existingState)) {
       if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
       const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
       if (personaNotLocal) return personaNotLocal;
-      return NextResponse.json(
-        { error: 'Persona-owned conversations must be deleted through the Persona lifecycle.' },
-        { status: 409 },
-      );
+      const conflict = await personaConversationDeleteConflict(existingState, conversationId);
+      if (conflict) return NextResponse.json({ error: conflict }, { status: 409 });
     }
     // Tombstone FIRST: from here on, the persistence chokepoint and the
     // conversation-log tap refuse this id, so an in-flight run can no longer

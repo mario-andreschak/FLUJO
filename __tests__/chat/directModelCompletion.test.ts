@@ -195,4 +195,42 @@ describe('flow- regression on /v1/chat/completions', () => {
     expect(generateChatCompletion).not.toHaveBeenCalled();
     expect(res.status).toBe(400); // flow_not_found behavior unchanged
   });
+
+  it('appends only the new turn and does not echo the authoritative transcript', async () => {
+    runFlowMock.mockResolvedValue({
+      conversationId: 'conv-append',
+      messages: [
+        { id: 'user-old', role: 'user', content: 'old' },
+        { id: 'user-new', role: 'user', content: 'new' },
+        { id: 'assistant-new', role: 'assistant', content: 'answer' },
+      ],
+      outputText: 'answer',
+      toolCalls: undefined,
+      finalAction: 'FINAL_RESPONSE',
+      sharedState: { status: 'completed', pendingToolCalls: undefined },
+    });
+
+    const res = await processChatCompletion(
+      {
+        model: 'flow-Test',
+        messages: [{ id: 'user-new', role: 'user', content: 'new' }],
+        appendMessages: true,
+      } as any,
+      true,
+      false,
+      false,
+      'conv-append',
+      false,
+      true,
+    );
+
+    expect(runFlowMock).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-append',
+      messages: [{ id: 'user-new', role: 'user', content: 'new' }],
+      resumeAsNewTurn: true,
+    }));
+    const body = await res.json();
+    expect(body.status).toBe('completed');
+    expect(body).not.toHaveProperty('messages');
+  });
 });

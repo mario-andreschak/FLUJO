@@ -304,9 +304,15 @@ class PersonasService {
     return parse(fetch(withWorkspaceUrl('/v1/roles'), { signal }));
   }
 
-  flowReadiness(flowRef: string): Promise<PersonaFlowReadiness> {
+  flowReadiness(
+    flowRef: string,
+    options: { allowModelFallback?: boolean } = {},
+  ): Promise<PersonaFlowReadiness> {
+    const params = new URLSearchParams();
+    if (options.allowModelFallback) params.set('allowModelFallback', '1');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
     return parse(fetch(withWorkspaceUrl(
-      `/v1/flows/${encodeURIComponent(flowRef)}/readiness`,
+      `/v1/flows/${encodeURIComponent(flowRef)}/readiness${query}`,
     )));
   }
 

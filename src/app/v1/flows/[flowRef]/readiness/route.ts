@@ -26,11 +26,14 @@ async function GET_handler(request: NextRequest, context: RouteContext) {
   }
 
   const validation = await validateFlowObjectForRun(flow);
+  const allowModelFallback = request.nextUrl.searchParams.get('allowModelFallback') === '1';
+  const blockingIssues = validation.issues.filter((issue) => (
+    issue.severity === 'error'
+    && !(allowModelFallback && issue.code === 'process-missing-model')
+  ));
   return NextResponse.json({
-    state: validation.isRunnable ? 'ready' : 'invalid',
-    issues: validation.issues
-      .filter((issue) => issue.severity === 'error')
-      .map((issue) => issue.message),
+    state: blockingIssues.length === 0 ? 'ready' : 'invalid',
+    issues: blockingIssues.map((issue) => issue.message),
   });
 }
 

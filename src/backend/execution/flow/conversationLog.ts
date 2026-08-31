@@ -195,9 +195,8 @@ function chainAppend(conversationId: string, lines: string): Promise<void> {
 }
 
 // Truncating rewrite of a whole log, serialized through the SAME per-conversation
-// chain as appends so it never interleaves with an in-flight append. Used only
-// by the self-heal repair (repairTruncatedConversationLog) to replace a log that
-// lost events with one rebuilt from the authoritative SharedState snapshot.
+// chain as appends so it never interleaves with an in-flight append. Used by the
+// transactional transcript-replacement path so it can roll back atomically.
 function chainWrite(conversationId: string, content: string): Promise<void> {
   const key = ck(conversationId);
   const previous = appendChains.get(key) ?? Promise.resolve();
@@ -356,7 +355,7 @@ export async function replaceConversationTranscript(
     .flatMap((line) => {
       try { return [JSON.parse(line) as ExecutionEvent]; } catch { return []; }
     });
-  const projected = projectMessages(existingEvents);
+  const projected = projectModelContextMessages(existingEvents);
   const baseline = projected.length > 0
     ? projected
     : originalMessages.filter((message) => message.role !== 'system');
@@ -441,7 +440,8 @@ export async function deleteConversationLog(conversationId: string): Promise<voi
 }
 
 /**
- * Project a conversation's displayed messages from its event log.
+ * Project a conversation's durable, displayed Chat transcript from its event
+ * log.
  *
  * Pure fold over 'message' / 'message:removed' events:
  *  - upsert by message id — a message that appears again (streamed live then
@@ -452,10 +452,28 @@ export async function deleteConversationLog(conversationId: string): Promise<voi
  *  - subflow child messages (event depth > 0) are inlined in order, tagged
  *    with `depth` for nested display — they are display-only and never part
  *    of the parent's model context;
- *  - 'message:removed' deletes (the chat client prunes/disables messages and
- *    sends the reduced history; the turn-start reconcile records removals).
+ *  - 'message:removed' is deliberately ignored. It is a model-context
+ *    tombstone emitted when a message is pruned from the next on-wire request;
+ *    it must never erase the canonical Chat transcript.
  */
 export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
+  return projectMessageEvents(events, false);
+}
+
+/**
+ * Project the active model-context transcript. Unlike the durable Chat
+ * projection, this fold applies `message:removed` tombstones. Execution and
+ * wire-context recovery use this view; UI/history readers must use
+ * projectMessages instead.
+ */
+export function projectModelContextMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
+  return projectMessageEvents(events, true);
+}
+
+function projectMessageEvents(
+  events: ExecutionEvent[],
+  applyContextRemovals: boolean,
+): FlujoChatMessage[] {
   const messages: FlujoChatMessage[] = [];
   const indexById = new Map<string, number>();
   // The first Codex live-streaming release used SDK-local ids such as
@@ -502,7 +520,7 @@ export function projectMessages(events: ExecutionEvent[]): FlujoChatMessage[] {
         };
         break;
       }
-    } else if (event.type === 'message:removed') {
+    } else if (applyContextRemovals && event.type === 'message:removed') {
       const existingIndex = indexById.get(event.messageId);
       if (existingIndex === undefined) continue;
       messages.splice(existingIndex, 1);
@@ -692,7 +710,7 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
   const events = await readConversationLog(conversationId);
   if (!events) return false;
 
-  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
   const snapshotIds = (state.messages ?? [])
     .filter((m) => m.role !== 'system' && !!m.id)
     .map((m) => m.id);
@@ -724,10 +742,10 @@ export async function recoverMessagesFromLog(state: SharedState): Promise<boolea
  *  - every projected id still exists in the snapshot (a subset) — so we are
  *    extending a truncated prefix, not clobbering a legitimately diverged log
  *    (edited/pruned history, where lengths match or ids differ).
- * On a match the `.jsonl` is rewritten as a sequence of `message` events from
- * the snapshot (system messages excluded, matching projection semantics) and
- * the authoritative messages are returned for display. Otherwise returns
- * undefined and the log is left untouched. Never throws.
+ * On a match the snapshot-only messages are APPENDED as `message` events
+ * (system messages excluded). Existing audit history and context tombstones
+ * remain intact. The authoritative active messages are returned for display;
+ * otherwise this returns undefined and leaves the log untouched. Never throws.
  */
 export async function repairTruncatedConversationLog(
   state: SharedState,
@@ -744,7 +762,7 @@ export async function repairTruncatedConversationLog(
   const events = await readConversationLog(conversationId);
   if (!events) return undefined; // no log — route falls back to the snapshot itself
 
-  const projectedParent = projectMessages(events).filter((m) => !((m.depth ?? 0) > 0));
+  const projectedParent = projectModelContextMessages(events).filter((m) => !((m.depth ?? 0) > 0));
   const snapshot = (state.messages ?? []).filter((m) => m.role !== 'system' && !!m.id);
   // Not the truncation signature: log is level with / ahead of the snapshot.
   if (projectedParent.length >= snapshot.length) return undefined;
@@ -752,23 +770,66 @@ export async function repairTruncatedConversationLog(
   // Diverged (not a truncated prefix) — don't clobber a legitimately edited log.
   if (!projectedParent.every((m) => snapshotIds.has(m.id))) return undefined;
 
-  // The log is fully replaced, so re-number from 0 with fresh monotonic seqs
-  // and continue the durable counter past the rebuilt file.
-  let rebuiltSeq = 0;
-  const content = snapshot
-    .map((m) => serialize({ type: 'message', message: m, conversationId, seq: rebuiltSeq++, timestamp: Date.now() } as ExecutionEvent))
-    .join('');
+  const projectedIds = new Set(projectedParent.map((message) => message.id));
+  const missing = snapshot.filter((message) => !projectedIds.has(message.id));
   try {
-    await commitConversationWrite(state, () => chainWrite(conversationId, content));
-    nextSeq.set(ck(conversationId), rebuiltSeq);
+    await appendRawForState(
+      state,
+      missing.map((message) => ({ type: 'message' as const, message })),
+    );
     log.info(
-      `Rebuilt truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} message(s)); issue #49 self-heal.`
+      `Repaired truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} active message(s), ${missing.length} append(s)); issue #49 self-heal.`
     );
   } catch (err) {
-    log.warn(`Failed to rebuild truncated conversation log ${conversationId}`, { err });
-    // Still return the snapshot for display; the rewrite can retry next read.
+    log.warn(`Failed to repair truncated conversation log ${conversationId}`, { err });
+    // Still return the snapshot for display; the append can retry next read.
   }
   return snapshot;
+}
+
+export interface RecoveredConversationTranscript {
+  messages: FlujoChatMessage[];
+  source: 'snapshot' | 'durable-log';
+}
+
+/**
+ * Resolve the canonical Chat transcript and self-heal recoverable persistence
+ * gaps. The JSONL is the durable source of truth for anything it observed;
+ * context tombstones are ignored, and snapshot-only messages are merged as a
+ * crash/legacy fallback. This function never mutates `state.messages`, because
+ * that array is the active model-context view.
+ */
+export async function recoverConversationTranscript(
+  state: SharedState,
+): Promise<RecoveredConversationTranscript> {
+  const snapshot = (state.messages ?? [])
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      ...message,
+      id: message.id || crypto.randomUUID(),
+    }));
+  if (state.ephemeral) return { messages: snapshot, source: 'snapshot' };
+
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) {
+    return { messages: snapshot, source: 'snapshot' };
+  }
+
+  await flushConversationLog(conversationId);
+  await repairTruncatedConversationLog(state);
+  const events = await readConversationLog(conversationId);
+  const durable = events ? projectMessages(events) : [];
+  if (durable.length === 0) return { messages: snapshot, source: 'snapshot' };
+
+  // A crash can leave the materialized snapshot one append ahead of a damaged
+  // log tail. Keep all durable history, then surface any snapshot-only messages
+  // until a later successful self-heal makes them durable too.
+  const durableIds = new Set(durable.map((message) => message.id));
+  const snapshotOnly = snapshot.filter((message) => !durableIds.has(message.id));
+  return {
+    messages: [...durable, ...snapshotOnly],
+    source: 'durable-log',
+  };
 }
 
 /** True if a persisted log exists for this conversation. */

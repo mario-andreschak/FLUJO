@@ -157,7 +157,6 @@ describe('trusted Persona instruction context', () => {
   it('advertises configured Persona tools canonically and filters denied abilities', async () => {
     const prep = await new ProcessNode().prep(state({
       behaviorRules: [{ effect: 'deny', action: 'suggest_improvement', resource: '*' }],
-      // Persona abilities are only advertised under trusted mutation authority.
       executionAuthority: {
         signal: new AbortController().signal,
         assertCurrent: jest.fn(async () => undefined),

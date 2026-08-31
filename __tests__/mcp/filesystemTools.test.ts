@@ -378,6 +378,31 @@ describe('filesystem operations', () => {
     }
   });
 
+  it('search reports coalesced progress with useful scan counters', async () => {
+    _setRipgrepExecutableForTests(null);
+    await fsp.mkdir(path.join(dir, 'progress'));
+    await Promise.all([
+      fsp.writeFile(path.join(dir, 'progress', 'a.txt'), 'progress token'),
+      fsp.writeFile(path.join(dir, 'progress', 'b.txt'), 'progress token'),
+    ]);
+    const onProgress = jest.fn();
+
+    const out = await filesystemCallTool(
+      'search',
+      { path: dir, content: 'progress token' },
+      undefined,
+      { onProgress },
+    );
+
+    expect(out.isError).toBeUndefined();
+    expect(onProgress).toHaveBeenCalled();
+    const updates = onProgress.mock.calls.map(([update]) => update as { progress: number; message: string });
+    expect(updates.map(update => update.progress)).toEqual(
+      updates.map(update => update.progress).sort((a, b) => a - b),
+    );
+    expect(updates.some(update => /directories, \d+ files, \d+ matches/.test(update.message))).toBe(true);
+  });
+
   it('search uses ripgrep JSON as a transparent content fast path', async () => {
     const executable = process.platform === 'win32' ? 'C:\\tools\\rg.exe' : '/tools/rg';
     _setRipgrepExecutableForTests(executable);

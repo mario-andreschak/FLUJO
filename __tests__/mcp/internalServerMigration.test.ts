@@ -62,6 +62,8 @@ describe('shipped MCP package migration (#347)', () => {
     expect(storage.get(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4)).toBe(true);
     expect(storage.get(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5)).toBe(true);
     expect(storage.get(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6)).toBe(true);
+    expect(storage.get(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7)).toBe(true);
+    expect(storage.get(StorageKey.MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8)).toBe(true);
   });
 
   it('preserves a user-owned same-name config and transfers all legacy override fields only to new records', async () => {
@@ -244,6 +246,96 @@ describe('shipped MCP package migration (#347)', () => {
     await migrateShippedMcpServers();
 
     expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>).browser).toEqual(custom);
+  });
+
+  it('repairs the former FLUJO package id after earlier migrations completed', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      control: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['.\\dist\\index.js'],
+        cwd: process.cwd(),
+        rootPath: '.\\mcp-servers\\flujo',
+        source: { type: 'marketplace', id: '@flujo-ai/mcp-flujo' },
+        disabled: false,
+        favorite: true,
+        status: 'connected',
+        tools: [],
+        path: 'mcp-servers\\flujo\\dist\\index.js',
+        error: 'Unknown FLUJO tool: create_ticket_for_human',
+      },
+    });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
+    storage.set(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6, true);
+
+    await migrateShippedMcpServers();
+
+    const control = (storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).control;
+    expect(control).toMatchObject({
+      command: 'node',
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' },
+      disabled: false,
+      favorite: true,
+    });
+    expect(path.isAbsolute((control.args as string[])[0])).toBe(true);
+    expect(path.isAbsolute(control.rootPath as string)).toBe(true);
+    expect(control).not.toHaveProperty('error');
+    expect(control).not.toHaveProperty('path');
+    expect(control).not.toHaveProperty('status');
+    expect(control).not.toHaveProperty('tools');
+    expect(storage.get(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7)).toBe(true);
+  });
+
+  it('repairs a Bash record that still launches the stale workspace copy', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      shell: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['.\\dist\\index.js'],
+        cwd: process.cwd(),
+        rootPath: '.\\mcp-servers\\bash',
+        env: { CUSTOM_TERMINAL_SETTING: 'preserved' },
+        source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
+        disabled: true,
+        roots: ['C:/workspace'],
+        favorite: true,
+        status: 'connected',
+        tools: [],
+        path: '.\\dist\\index.js',
+        stderrOutput: 'old copied server output',
+      },
+    });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
+    storage.set(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6, true);
+    storage.set(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7, true);
+
+    await migrateShippedMcpServers();
+
+    const shell = (storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).shell;
+    expect(shell).toMatchObject({
+      command: 'node',
+      source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
+      disabled: true,
+      roots: ['C:/workspace'],
+      favorite: true,
+      enableMcpApps: true,
+      env: expect.objectContaining({ CUSTOM_TERMINAL_SETTING: 'preserved' }),
+    });
+    expect(path.isAbsolute((shell.args as string[])[0])).toBe(true);
+    expect(path.basename((shell.args as string[])[0])).toBe('index.js');
+    expect(path.isAbsolute(shell.rootPath as string)).toBe(true);
+    expect(path.basename(shell.rootPath as string)).toBe('bash');
+    expect(shell).not.toHaveProperty('path');
+    expect(shell).not.toHaveProperty('status');
+    expect(shell).not.toHaveProperty('stderrOutput');
+    expect(shell).not.toHaveProperty('tools');
+    expect(storage.get(StorageKey.MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8)).toBe(true);
   });
 
   it('coalesces concurrent callers and becomes a no-op after durable markers', async () => {

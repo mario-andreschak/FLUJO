@@ -288,6 +288,19 @@ describe('PersonaCreationWizard', () => {
     }));
   });
 
+  it('checks selected Flows in Persona model-fallback mode', async () => {
+    render(wizard({ draft: draftRecord() }));
+
+    await waitFor(() => {
+      expect(readinessMock).toHaveBeenCalledWith('core_flow', {
+        allowModelFallback: true,
+      });
+      expect(readinessMock).toHaveBeenCalledWith('behavior_flow', {
+        allowModelFallback: true,
+      });
+    });
+  });
+
   it('keeps default Apps for a genuinely new, unedited wizard', async () => {
     rolesMock.mockResolvedValue({
       roleDefinitions: [],

@@ -61,6 +61,49 @@ const config: MCPStdioConfig = {
 };
 
 describe('stdio MCP runtime homes', () => {
+  it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
+    const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
+    const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
+    const previous = new Map(tracked.map(key => [key, process.env[key]]));
+    const hostHome = path.join(dataRoot, 'real-host-home');
+    const hostAppData = path.join(hostHome, 'AppData', 'Roaming');
+
+    try {
+      process.env.HOME = hostHome;
+      process.env.USERPROFILE = hostHome;
+      process.env.APPDATA = hostAppData;
+      process.env.FLUJO_BASH_HOST_ENV_TEST = 'visible-from-host';
+      delete process.env.GH_CONFIG_DIR;
+
+      const shipped = createShippedServerConfig(bash);
+      // Existing installations used this package ID. They must still be
+      // recognized as the bundled host terminal instead of a third-party MCP.
+      shipped.source = { type: 'marketplace', id: '@flujo-ai/mcp-bash' };
+      shipped.env = {
+        ...shipped.env,
+        HOME: path.join(dataRoot, 'stale-private-home'),
+        USERPROFILE: path.join(dataRoot, 'stale-private-profile'),
+        APPDATA: path.join(dataRoot, 'stale-private-appdata'),
+        GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
+      };
+
+      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(shipped));
+
+      expect(launch.env.HOME).toBe(hostHome);
+      expect(launch.env.USERPROFILE).toBe(hostHome);
+      expect(launch.env.APPDATA).toBe(hostAppData);
+      expect(launch.env.FLUJO_BASH_HOST_ENV_TEST).toBe('visible-from-host');
+      expect(launch.env).not.toHaveProperty('GH_CONFIG_DIR');
+      expect(launch.cwd).toBe(shipped.rootPath);
+    } finally {
+      for (const key of tracked) {
+        const value = previous.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('forces conventional home, config, cache, temp and FLUJO roots per workspace', () => {
     const launchA = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
     const launchB = runWithWorkspace('runtime-b', () => resolveStdioLaunch(config));

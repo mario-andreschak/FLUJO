@@ -119,7 +119,13 @@ async function GET_handler(
       // Replay from the cursor (ascending seq), then go live. Recent positions
       // are served from the in-memory ring buffer; when the requested position
       // is older than the buffer holds (evicted, channel GC'd, or after a
-      // process restart) we fall back to the durable JSONL log for the gap.
+      // process restart) normal reconnects fall back to durable JSONL.
+      //
+      // Chat re-attachment uses `replay=activity` after its authoritative GET
+      // snapshot. That mode deliberately NEVER reads the durable conversation
+      // log: a live process already has the current run's bounded ring buffer,
+      // while a restarted process cannot still be executing the old run. This
+      // keeps opening Chat independent of total conversation length.
       // seq is authoritative and monotonic (issue #261), so the two sources
       // share one sequence space and `send`'s strictly-newer guard dedups any
       // overlap. readConversationLog is awaited BEFORE the buffer snapshot so
@@ -127,7 +133,9 @@ async function GET_handler(
       // there is no await between the buffer snapshot and subscribe, so no live
       // event can slip through the gap.
       if (fromSeq !== null && !Number.isNaN(fromSeq)) {
-        const logged = await readConversationLog(conversationId);
+        const logged = activityOnlyReplay
+          ? undefined
+          : await readConversationLog(conversationId);
         const buffered = executionEventBus.getBufferedSince(conversationId, fromSeq);
         const earliestBuffered = buffered.length ? buffered[0].seq : Number.POSITIVE_INFINITY;
 

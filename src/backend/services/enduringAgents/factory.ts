@@ -244,14 +244,20 @@ async function resolveDefaultModelId(
   roleVersion: RoleVersion,
   coreTemplate: Flow,
 ): Promise<string | undefined> {
-  const authoredDefault = roleVersion.defaultModelId ?? firstBoundModel(coreTemplate);
+  const authoredDefault = roleVersion.defaultModelId
+    ?? firstBoundModel(coreTemplate)
+    ?? firstBoundModel(roleVersion.coreFlowTemplate as Flow | undefined)
+    ?? roleVersion.behaviorSlots
+      .map((slot) => firstBoundModel(slot.flowTemplate as Flow))
+      .find((modelId): modelId is string => Boolean(modelId));
   if (authoredDefault) return authoredDefault;
 
-  // A sole configured model is the only unambiguous workspace fallback. With
-  // zero or multiple models, provisioning must stay blocked rather than pick an
-  // arbitrary provider/model.
+  // Model storage order is the workspace's stable user-configured precedence.
+  // Persona creation must not dead-end merely because an otherwise valid Flow
+  // leaves its model blank; materialization fills only missing bindings and
+  // never overwrites an authored model choice.
   const models = await modelService.loadModels();
-  return models.length === 1 ? models[0].id : undefined;
+  return models[0]?.id;
 }
 
 async function requireRunnableGeneratedFlow(flow: Flow, label: string): Promise<Flow> {
@@ -307,7 +313,11 @@ async function savePersonaOwnedFlow(input: {
   return flow;
 }
 
-async function requireReadySharedFlow(flowRef: string, label: string): Promise<Flow> {
+async function requireReadySharedFlow(
+  flowRef: string,
+  label: string,
+  options: { allowMissingModel?: boolean } = {},
+): Promise<Flow> {
   const flow = await flowService.getFlow(flowRef);
   if (!flow || flow.personaOwnership) {
     throw new PersonaFactoryConflictError(
@@ -315,10 +325,12 @@ async function requireReadySharedFlow(flowRef: string, label: string): Promise<F
     );
   }
   const readiness = await validateFlowObjectForRun(flow);
-  if (!readiness.isRunnable) {
-    const issues = readiness.issues
-      .filter((issue) => issue.severity === 'error')
-      .map((issue) => issue.message);
+  const blockingIssues = readiness.issues.filter((issue) => (
+    issue.severity === 'error'
+    && !(options.allowMissingModel && issue.code === 'process-missing-model')
+  ));
+  if (blockingIssues.length > 0) {
+    const issues = blockingIssues.map((issue) => issue.message);
     throw new PersonaFactoryConflictError(
       `${label} ${JSON.stringify(flowRef)} needs attention before it can be used.`
       + (issues.length > 0 ? ` ${issues.join(' ')}` : ''),
@@ -425,11 +437,15 @@ async function materializeInitialMemories(
 export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
   const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
   const selectedCoreFlow = input.coreFlowRef
-    ? await requireReadySharedFlow(input.coreFlowRef, 'Core Flow')
+    ? await requireReadySharedFlow(input.coreFlowRef, 'Core Flow', { allowMissingModel: true })
     : undefined;
   const behaviorFlows = await Promise.all(
     (input.behaviorFlowRefs ?? []).map(
-      (flowRef) => requireReadySharedFlow(flowRef, 'Behavior Flow'),
+      (flowRef) => requireReadySharedFlow(
+        flowRef,
+        'Behavior Flow',
+        { allowMissingModel: true },
+      ),
     ),
   );
   const personaId = resolvePersonaId(input);
@@ -473,6 +489,12 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       (slot) => requireRunnableGeneratedFlow(
         bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
         `Required Behavior ${JSON.stringify(slot.key)}`,
+      ),
+    ));
+    const preparedBehaviorFlows = await Promise.all(behaviorFlows.map(
+      (flow) => requireRunnableGeneratedFlow(
+        bindDefaultModelToFlow(flow, defaultModelId),
+        `Behavior Flow ${JSON.stringify(flow.name)}`,
       ),
     ));
     log.info('Persona Role version validated for provisioning', {
@@ -538,9 +560,9 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       })
     )));
     const selectedBehaviorBindings = await Promise.all(
-      behaviorFlows.map((flow) => materializeSelectedBehavior(persona!, flow)),
+      preparedBehaviorFlows.map((flow) => materializeSelectedBehavior(persona!, flow)),
     );
-    const supplementalFlows = await Promise.all(behaviorFlows.map((flow) => (
+    const supplementalFlows = await Promise.all(preparedBehaviorFlows.map((flow) => (
       savePersonaOwnedFlow({
         persona: persona!,
         source: flow,
@@ -699,8 +721,7 @@ export async function reconcilePersonaRoleBehaviors(personaId?: string): Promise
           ?? bundle.behaviorRevisions.map((revision) => firstBoundModel(revision.flowSnapshot))
             .find((modelId): modelId is string => Boolean(modelId));
         const configuredModels = inheritedModelId ? [] : await modelService.loadModels();
-        const defaultModelId = inheritedModelId
-          ?? (configuredModels.length === 1 ? configuredModels[0].id : undefined);
+        const defaultModelId = inheritedModelId ?? configuredModels[0]?.id;
         const preparedMissingFlows = await Promise.all(missingSlots.map((slot) => (
           requireRunnableGeneratedFlow(
             bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),

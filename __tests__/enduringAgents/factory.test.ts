@@ -312,6 +312,53 @@ describe('createPersonaFromRole', () => {
     });
   });
 
+  it('binds the first configured workspace model when a selected Core has no model', async () => {
+    await inFreshWorkspace(async () => {
+      await saveItem(StorageKey.MODELS, [
+        {
+          id: 'model-first',
+          name: 'first-model',
+          displayName: 'First model',
+          provider: 'openai',
+        },
+        {
+          id: 'model-second',
+          name: 'second-model',
+          displayName: 'Second model',
+          provider: 'openai',
+        },
+      ]);
+      const sourceCore = clone(buildTestRoleVersion().coreFlowTemplate!);
+      sourceCore.id = 'shared_unbound_core';
+      sourceCore.name = 'Shared unbound Core';
+      await flowService.saveFlow(sourceCore);
+
+      const bundle = await createPersonaFromRole({
+        name: 'Mina',
+        coreFlowRef: sourceCore.id,
+        idempotencyKey: 'unbound-shared-core',
+      });
+
+      const persistedSource = await flowService.getFlow(sourceCore.id);
+      expect(persistedSource?.nodes
+        .filter((candidate) => candidate.data.type === 'process')
+        .every((candidate) => candidate.data.properties?.boundModel === undefined))
+        .toBe(true);
+
+      const personaCore = await flowService.getFlow(bundle.persona.composition!.coreFlowRef!);
+      expect(personaCore?.personaOwnership).toMatchObject({
+        personaId: bundle.persona.id,
+        sourceFlowId: sourceCore.id,
+        kind: 'core',
+      });
+      expect(personaCore?.nodes
+        .filter((candidate) => candidate.data.type === 'process')
+        .map((candidate) => candidate.data.properties?.boundModel))
+        .toEqual(['model-first']);
+      expect(bundle.persona.provisioningState).toBe('ready');
+    });
+  });
+
   it('returns the same complete Persona on retry without duplicate children', async () => {
     await inFreshWorkspace(async () => {
       const input = { name: 'Jim', idempotencyKey: 'retry-jim' };

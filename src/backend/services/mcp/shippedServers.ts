@@ -24,6 +24,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   {
     defaultName: 'flujo',
     packageId: '@mario.andreschak/mcp-flujo',
+    legacyPackageIds: ['@flujo-ai/mcp-flujo'],
     packageDirectory: 'flujo',
     icons: [{ src: '/mcp-icons/flujo.svg', mimeType: 'image/svg+xml' }],
   },
@@ -40,6 +41,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   {
     defaultName: 'bash',
     packageId: '@mario.andreschak/mcp-bash',
+    legacyPackageIds: ['@flujo-ai/mcp-bash'],
     packageDirectory: 'bash',
     icons: [{ src: '/mcp-icons/bash.svg', mimeType: 'image/svg+xml' }],
     enableMcpApps: true,
@@ -131,12 +133,6 @@ export function shippedServerEnv(
   } else if (descriptor.defaultName === 'bash') {
     forwarded.add('FLUJO_BASH_ROOTS');
     forwarded.add('FLUJO_FS_ROOTS');
-    forwarded.add('FLUJO_BASH_INHERIT_ENV');
-    if (/^(1|true|yes|on)$/i.test(env.FLUJO_BASH_INHERIT_ENV?.trim() ?? '')) {
-      for (const [key, value] of Object.entries(env)) {
-        if (typeof value === 'string') result[key] = value;
-      }
-    }
   } else if (descriptor.defaultName === 'browser') {
     for (const key of [
       'FLUJO_BROWSER_ENABLED',
@@ -199,8 +195,8 @@ export function shippedServerEnv(
     const browsersPath = resolvePlaywrightBrowsersPath(env);
     if (browsersPath) result.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
   }
-  // Inherit-all (bash) and explicit forwarded values must never overwrite the
-  // workspace process boundary established above.
+  // Explicit forwarded values must never overwrite the workspace process
+  // boundary established above.
   result.FLUJO_PARENT_DATA_DIR = parentDataDir;
   result.FLUJO_DATA_DIR = workspaceDataDir;
   result.FLUJO_WORKSPACE = workspace;

@@ -88,6 +88,13 @@ const MAX_MEDIA_BYTES = 32 * 1024 * 1024;
 const SEARCH_MAX_FILE_BYTES = 5_000_000;
 /** #287: how many files to scan concurrently during a content search. */
 const SEARCH_CONCURRENCY = 16;
+/** Directory reads are independent I/O; a bounded breadth-first batch avoids
+ * serially walking every directory on large workspaces. */
+const SEARCH_DIRECTORY_CONCURRENCY = 32;
+/** Do not turn a fast filesystem walk into a notification flood. */
+const SEARCH_PROGRESS_INTERVAL_MS = 500;
+/** Silent searches still report liveness so the host can distinguish work from a hang. */
+const SEARCH_PROGRESS_HEARTBEAT_MS = 5_000;
 /** #287: context lines shown around each `read_file` pattern match. */
 const READ_PATTERN_CONTEXT = 2;
 /** #287: cap on matches returned by a single `read_file` pattern grep. */
@@ -96,6 +103,72 @@ const MAX_READ_PATTERN_MATCHES = 200;
 const MAX_READ_PATTERN_LENGTH = 4_096;
 
 type SearchMatch = { path: string; line?: number; text?: string };
+
+export interface FilesystemToolProgress {
+  progress: number;
+  message?: string;
+}
+
+export interface FilesystemExecutionContext {
+  signal?: AbortSignal;
+  onProgress?: (progress: FilesystemToolProgress) => void | Promise<void>;
+}
+
+interface SearchProgressSnapshot {
+  phase: string;
+  directories: number;
+  files: number;
+  matches: number;
+}
+
+/**
+ * Coalesced MCP progress for search. The numeric field is a notification
+ * sequence (MCP requires it to increase); useful counters live in the message.
+ */
+function createSearchProgressReporter(context?: FilesystemExecutionContext): {
+  update: (patch: Partial<SearchProgressSnapshot>, force?: boolean) => void;
+  stop: () => Promise<void>;
+} {
+  const report = context?.onProgress;
+  if (!report) return { update: () => undefined, stop: async () => undefined };
+
+  let snapshot: SearchProgressSnapshot = {
+    phase: 'starting',
+    directories: 0,
+    files: 0,
+    matches: 0,
+  };
+  let sequence = 0;
+  let lastDeliveredAt = 0;
+  let stopped = false;
+  let chain = Promise.resolve();
+
+  const deliver = () => {
+    if (stopped || context?.signal?.aborted) return;
+    lastDeliveredAt = Date.now();
+    const current = ++sequence;
+    const message = `${snapshot.phase}: ${snapshot.directories} directories, ${snapshot.files} files, ${snapshot.matches} matches`;
+    chain = chain
+      .then(() => report({ progress: current, message }))
+      .catch((error) => log.debug('Could not deliver filesystem search progress', error));
+  };
+  const heartbeat = setInterval(deliver, SEARCH_PROGRESS_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  return {
+    update: (patch, force = false) => {
+      snapshot = { ...snapshot, ...patch };
+      if (force || Date.now() - lastDeliveredAt >= SEARCH_PROGRESS_INTERVAL_MS) deliver();
+    },
+    stop: async () => {
+      if (stopped) return;
+      clearInterval(heartbeat);
+      if (!context?.signal?.aborted && Date.now() - lastDeliveredAt > 0) deliver();
+      stopped = true;
+      await chain;
+    },
+  };
+}
 
 /**
  * ripgrep is an installer-provided acceleration, not a runtime requirement.
@@ -1293,6 +1366,7 @@ async function searchContentWithRipgrep(
   needle: string,
   limit: number,
   signal?: AbortSignal,
+  onProgress?: (patch: Partial<SearchProgressSnapshot>, force?: boolean) => void,
 ): Promise<{ matches: SearchMatch[]; truncated: boolean } | null> {
   if (limit <= 0) return { matches: [], truncated: true };
   const args = [
@@ -1348,6 +1422,7 @@ async function searchContentWithRipgrep(
   }
 
   const matches: SearchMatch[] = [];
+  let files = 0;
   let truncated = false;
   let parseFailed = false;
   const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -1368,6 +1443,11 @@ async function searchContentWithRipgrep(
         parseFailed = true;
         break;
       }
+      if (event.type === 'begin') {
+        files++;
+        onProgress?.({ phase: 'searching file contents', files });
+        continue;
+      }
       if (event.type !== 'match') continue;
       const relativePath = event.data?.path?.text;
       const text = event.data?.lines?.text;
@@ -1380,6 +1460,7 @@ async function searchContentWithRipgrep(
         line: lineNumber,
         text: text.replace(/\r?\n$/, '').slice(0, 400),
       });
+      onProgress?.({ phase: 'searching file contents', files, matches: matches.length });
       if (matches.length >= limit) {
         truncated = true;
         child.kill();
@@ -1416,10 +1497,16 @@ async function scanFileContent(
   needle: string,
   onMatch: (match: SearchMatch) => boolean,
   shouldStop: () => boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   let stream: ReturnType<Awaited<ReturnType<typeof fs.open>>['createReadStream']> | undefined;
   let lines: readline.Interface | undefined;
+  const onAbort = () => {
+    lines?.close();
+    stream?.destroy(new Error('Filesystem search cancelled.'));
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     handle = await fs.open(full, 'r');
     const st = await handle.stat();
@@ -1443,6 +1530,7 @@ async function scanFileContent(
   } catch {
     // Unreadable or concurrently removed files are skipped, matching the old search behavior.
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     lines?.close();
     stream?.destroy();
     await handle?.close().catch(() => undefined);
@@ -1456,12 +1544,15 @@ async function searchWithNode(
   contentPattern: string,
   limit: number,
   signal?: AbortSignal,
+  onProgress?: (patch: Partial<SearchProgressSnapshot>, force?: boolean) => void,
 ): Promise<{ matches: SearchMatch[]; truncated: boolean }> {
   const nameMatches: SearchMatch[] = [];
   const contentMatches: SearchMatch[] = [];
   const active = new Set<Promise<void>>();
   let nameLimitReached = false;
   let contentLimitReached = false;
+  let directoriesScanned = 0;
+  let filesScanned = 0;
 
   const shouldStopContent = () => signal?.aborted === true || nameLimitReached || contentMatches.length >= limit;
   const scheduleContentScan = async (full: string): Promise<void> => {
@@ -1483,48 +1574,76 @@ async function searchWithNode(
         return !nameLimitReached;
       },
       shouldStopContent,
+      signal,
     ).finally(() => active.delete(task));
     active.add(task);
   };
 
-  async function walk(dir: string): Promise<void> {
-    if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) return;
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) return;
-      const full = path.join(dir, entry.name);
-      if (namePattern && entry.name.toLowerCase().includes(namePattern)) {
-        nameMatches.push({ path: full });
-        if (nameMatches.length >= limit) {
-          nameLimitReached = true;
-          return;
-        }
+  // Bounded breadth-first traversal. The former recursive walk awaited every
+  // directory serially, which made name-only searches crawl on workspaces with
+  // many small folders even though the filesystem can serve independent reads
+  // concurrently.
+  const directories = [rootPath];
+  while (
+    directories.length > 0
+    && !signal?.aborted
+    && !nameLimitReached
+    && (namePattern || !contentLimitReached)
+  ) {
+    const batch = directories.splice(0, SEARCH_DIRECTORY_CONCURRENCY);
+    const listings = await Promise.all(batch.map(async (dir) => {
+      try {
+        return { dir, entries: await fs.readdir(dir, { withFileTypes: true }) };
+      } catch {
+        return { dir, entries: [] as import('node:fs').Dirent[] };
       }
+    }));
+    directoriesScanned += listings.length;
+    onProgress?.({
+      phase: contentPattern ? 'walking directories and scanning files' : 'searching names',
+      directories: directoriesScanned,
+      files: filesScanned,
+      matches: nameMatches.length + contentMatches.length,
+    });
 
-      let isDirectory = entry.isDirectory();
-      let isFile = entry.isFile();
-      // Dirent normally carries the type on Windows/macOS/Linux. Fall back only
-      // for filesystems that report an unknown type; never follow symlinks.
-      if (!isDirectory && !isFile && !entry.isSymbolicLink()) {
-        const type = await entryType(full);
-        isDirectory = type === 'directory';
-        isFile = type === 'file';
-      }
-      if (isDirectory) {
-        await walk(full);
-      } else if (isFile && contentPattern && !contentLimitReached) {
-        await scheduleContentScan(full);
+    for (const { dir, entries } of listings) {
+      for (const entry of entries) {
+        if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) break;
+        const full = path.join(dir, entry.name);
+        if (namePattern && entry.name.toLowerCase().includes(namePattern)) {
+          nameMatches.push({ path: full });
+          onProgress?.({ matches: nameMatches.length + contentMatches.length });
+          if (nameMatches.length >= limit) {
+            nameLimitReached = true;
+            break;
+          }
+        }
+
+        let isDirectory = entry.isDirectory();
+        let isFile = entry.isFile();
+        // Dirent normally carries the type on Windows/macOS/Linux. Fall back only
+        // for filesystems that report an unknown type; never follow symlinks.
+        if (!isDirectory && !isFile && !entry.isSymbolicLink()) {
+          const type = await entryType(full);
+          isDirectory = type === 'directory';
+          isFile = type === 'file';
+        }
+        if (isDirectory) {
+          directories.push(full);
+        } else if (isFile) {
+          filesScanned++;
+          if (contentPattern && !contentLimitReached) await scheduleContentScan(full);
+        }
       }
     }
   }
 
-  await walk(rootPath);
   await Promise.all(active);
+  onProgress?.({
+    directories: directoriesScanned,
+    files: filesScanned,
+    matches: nameMatches.length + contentMatches.length,
+  }, true);
   const matches = [...nameMatches, ...contentMatches].slice(0, limit);
   return {
     matches,
@@ -1535,8 +1654,9 @@ async function searchWithNode(
 async function searchTool(
   args: Record<string, unknown>,
   roots: string[],
-  signal?: AbortSignal,
+  context?: FilesystemExecutionContext,
 ): Promise<CallToolResult> {
+  const signal = context?.signal;
   if (signal?.aborted) throw new Error('Filesystem search cancelled.');
   const rootPath = await resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
@@ -1545,35 +1665,67 @@ async function searchTool(
     return errorResult('Provide "namePattern" and/or "content" to search for.');
   }
 
-  const ripgrep = contentPattern ? await resolveRipgrepExecutable() : null;
-  if (!ripgrep) {
-    const result = await searchWithNode(rootPath, namePattern, contentPattern, MAX_SEARCH_RESULTS, signal);
+  const progress = createSearchProgressReporter(context);
+  progress.update({ phase: 'starting filesystem search' }, true);
+  try {
+    const ripgrep = contentPattern ? await resolveRipgrepExecutable() : null;
+    if (!ripgrep) {
+      const result = await searchWithNode(
+        rootPath,
+        namePattern,
+        contentPattern,
+        MAX_SEARCH_RESULTS,
+        signal,
+        progress.update,
+      );
+      if (signal?.aborted) throw new Error('Filesystem search cancelled.');
+      progress.update({ phase: 'filesystem search complete', matches: result.matches.length }, true);
+      return dualResult(result);
+    }
+
+    // Name matches retain their historical priority in the combined response.
+    const names = namePattern
+      ? await searchWithNode(rootPath, namePattern, '', MAX_SEARCH_RESULTS, signal, progress.update)
+      : { matches: [] as SearchMatch[], truncated: false };
     if (signal?.aborted) throw new Error('Filesystem search cancelled.');
-    return dualResult(result);
-  }
+    if (names.truncated) return dualResult(names);
 
-  // Name matches retain their historical priority in the combined response.
-  const names = namePattern
-    ? await searchWithNode(rootPath, namePattern, '', MAX_SEARCH_RESULTS, signal)
-    : { matches: [] as SearchMatch[], truncated: false };
-  if (signal?.aborted) throw new Error('Filesystem search cancelled.');
-  if (names.truncated) return dualResult(names);
+    const remaining = MAX_SEARCH_RESULTS - names.matches.length;
+    const content = await searchContentWithRipgrep(
+      ripgrep,
+      rootPath,
+      contentPattern,
+      remaining,
+      signal,
+      progress.update,
+    );
+    if (content) {
+      progress.update({
+        phase: 'filesystem search complete',
+        matches: names.matches.length + content.matches.length,
+      }, true);
+      return dualResult({
+        matches: [...names.matches, ...content.matches],
+        truncated: content.truncated || names.matches.length + content.matches.length >= MAX_SEARCH_RESULTS,
+      });
+    }
 
-  const remaining = MAX_SEARCH_RESULTS - names.matches.length;
-  const content = await searchContentWithRipgrep(ripgrep, rootPath, contentPattern, remaining, signal);
-  if (content) {
+    const fallback = await searchWithNode(
+      rootPath,
+      '',
+      contentPattern,
+      remaining,
+      signal,
+      progress.update,
+    );
+    if (signal?.aborted) throw new Error('Filesystem search cancelled.');
     return dualResult({
-      matches: [...names.matches, ...content.matches],
-      truncated: content.truncated || names.matches.length + content.matches.length >= MAX_SEARCH_RESULTS,
+      matches: [...names.matches, ...fallback.matches],
+      truncated: fallback.truncated || names.matches.length + fallback.matches.length >= MAX_SEARCH_RESULTS,
     });
+  } finally {
+    await progress.stop();
   }
-
-  const fallback = await searchWithNode(rootPath, '', contentPattern, remaining, signal);
-  if (signal?.aborted) throw new Error('Filesystem search cancelled.');
-  return dualResult({
-    matches: [...names.matches, ...fallback.matches],
-    truncated: fallback.truncated || names.matches.length + fallback.matches.length >= MAX_SEARCH_RESULTS,
-  });
 }
 
 async function getFileInfoTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
@@ -1621,8 +1773,15 @@ export async function filesystemCallTool(
   toolName: string,
   args: Record<string, unknown>,
   callerNodeId?: string,
-  signal?: AbortSignal,
+  contextOrSignal?: FilesystemExecutionContext | AbortSignal,
 ): Promise<CallToolResult> {
+  // Backwards-compatible direct-call shape: older callers/tests passed the
+  // AbortSignal itself as argument four.
+  const context: FilesystemExecutionContext | undefined = contextOrSignal
+    ? ('aborted' in contextOrSignal
+        ? { signal: contextOrSignal as AbortSignal }
+        : contextOrSignal as FilesystemExecutionContext)
+    : undefined;
   try {
     // MCP App launcher (#97): pure UI trigger — returns immediately without
     // touching the filesystem. The app renders in chat; the user's pick returns
@@ -1645,7 +1804,7 @@ export async function filesystemCallTool(
       case 'dir_tree':
         return await dirTreeTool(args, roots);
       case 'search':
-        return await searchTool(args, roots, signal);
+        return await searchTool(args, roots, context);
       case 'get_file_info':
         return await getFileInfoTool(args, roots);
       case 'create_directory':

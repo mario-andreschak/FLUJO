@@ -12,16 +12,14 @@
  *   - orphan cleanup: every live session is force-killed on FLUJO process exit,
  *     and idle finished sessions are swept after a TTL.
  *
- * Confinement + env hygiene (issue #175): the `cwd` is confined to the same
+ * Confinement (issue #175): the `cwd` is confined to the same
  * effective roots as the built-in `filesystem` server (a HARD CEILING from
  * `FLUJO_BASH_ROOTS`, falling back to `FLUJO_FS_ROOTS`, plus UI-persisted roots
  * that may only narrow within it). This is a best-effort guardrail — a shell can
  * `cd` elsewhere or use absolute paths, so `FLUJO_FS_ROOTS`/`FLUJO_BASH_ROOTS`
- * and OS permissions remain the real boundary. Spawned commands also DO NOT
- * inherit the full backend `process.env` by default (which would leak secrets);
- * only a minimal allow-list is passed. Set `FLUJO_BASH_INHERIT_ENV=1` to restore
- * full inheritance. Individual calls may pass explicit `env` overrides without
- * enabling full inheritance.
+ * and OS permissions remain the real boundary. Spawned commands inherit the
+ * Bash server's complete host environment, just like a terminal opened by the
+ * same FLUJO process. Individual calls may still pass explicit `env` overrides.
  *
  * Every tool returns a machine-readable JSON envelope in a single text content
  * block; failures come back as `isError: true` rather than thrown.
@@ -881,36 +879,6 @@ async function resolveOutputFile(input: unknown, cwd: string, roots: string[]): 
 }
 
 /**
- * A truthy env flag: "1", "true", "yes", "on" (case-insensitive).
- */
-function isTruthyEnv(value: string | undefined): boolean {
-  return typeof value === 'string' && /^(1|true|yes|on)$/i.test(value.trim());
-}
-
-/**
- * Names of environment variables that are safe (and often necessary) to pass to
- * a spawned shell. Anything not on this list — notably API keys / secrets — is
- * withheld by default so a command like `env` / `printenv` / `Get-ChildItem Env:`
- * cannot read them back (issue #175). `LC_*` locale vars are allowed by prefix.
- */
-const ENV_ALLOWLIST = new Set([
-  'path',
-  'home', 'userprofile', 'homedrive', 'homepath',
-  'appdata', 'localappdata', 'programdata',
-  'tmp', 'temp', 'tmpdir',
-  'lang', 'lc_all', 'term', 'colorterm', 'no_color',
-  'shell', 'user', 'username', 'logname',
-  // Windows essentials so the default shell can even start.
-  'systemroot', 'windir', 'comspec', 'pathext', 'systemdrive',
-  'programfiles', 'programfiles(x86)',
-  'number_of_processors', 'processor_architecture',
-  // Non-secret FLUJO installation-root marker. A command that launches FLUJO
-  // must not reinterpret this Bash server's workspace-scoped FLUJO_DATA_DIR as
-  // the parent of a second `workspaces/<workspace>` namespace.
-  'flujo_parent_data_dir', 'flujo_workspace',
-]);
-
-/**
  * Returns the managed utilities directory path where Unix-like utilities
  * (BusyBox applets on Windows) are installed. This directory is prepended to
  * the child process PATH so that tools like grep, find, sed, awk are available.
@@ -980,19 +948,12 @@ function ensureWindowsEnvDefault(
 }
 
 /**
- * Build the child process environment. By default only the minimal allow-list is
- * inherited (secrets never leave the backend). Explicit per-command overrides
- * are then applied. Setting `FLUJO_BASH_INHERIT_ENV` to a truthy value restores
- * full `process.env` inheritance for power users.
+ * Build the child process environment. A terminal is expected to behave like
+ * the host account that launched FLUJO, so inherit the complete server process
+ * environment and then apply explicit per-command overrides.
  */
 function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = isTruthyEnv(process.env.FLUJO_BASH_INHERIT_ENV)
-    ? { ...process.env }
-    : Object.fromEntries(
-        Object.entries(process.env).filter(([key]) =>
-          ENV_ALLOWLIST.has(key.toLowerCase()) || /^LC_/i.test(key)
-        )
-      ) as NodeJS.ProcessEnv;
+  const out: NodeJS.ProcessEnv = { ...process.env };
   const currentPath = getEnvCaseInsensitive('PATH') ?? '';
   const utilityDirs = [getManagedUtilsDir(), getBundledRipgrepDir()]
     .filter((dir): dir is string => Boolean(dir))
@@ -1359,8 +1320,15 @@ const SHELL_BUILTINS = new Set([
   'copy', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir', 'move', 'ren', 'rename', 'pushd', 'popd',
 ]);
 
+function commandAvailabilityName(head: string, shell: EffectiveShell): string {
+  const name = path.basename(head).toLowerCase();
+  return shell === 'pwsh' || shell === 'powershell' || shell === 'cmd'
+    ? name.replace(/\.(?:com|exe|bat|cmd)$/i, '')
+    : name;
+}
+
 function isMissingCommandCandidate(head: string, shell: EffectiveShell): boolean {
-  const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
+  const name = commandAvailabilityName(head, shell);
   if (!name || SHELL_BUILTINS.has(name) || /^[-/$]/.test(head) || /^[A-Za-z_][\w-]*=/.test(head)) return false;
   if (/^[A-Za-z]+-[A-Za-z][A-Za-z-]*$/.test(head) && (shell === 'pwsh' || shell === 'powershell')) return false;
   return !/[\\/]/.test(head) && !/^\.?\.?$/.test(head);
@@ -1396,7 +1364,7 @@ export function detectDialectMismatch(
 
   if (!posixShell) {
     for (const head of new Set(heads)) {
-      const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
+      const name = commandAvailabilityName(head, shell);
       if (!isMissingCommandCandidate(head, shell) || isAvailable(name)) continue;
       if (POSIX_ONLY_BINARIES.has(name)) {
         warnings.push(

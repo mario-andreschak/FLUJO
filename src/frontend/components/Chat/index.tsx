@@ -252,6 +252,13 @@ export interface Conversation {
   id: string;
   title: string;
   messages: ChatMessage[];
+  /** Bounded initial hydration metadata. Full durable history is opt-in. */
+  transcriptWindow?: {
+    truncated: boolean;
+    loadedCount: number;
+    totalCount: number;
+    source: 'snapshot' | 'durable-log';
+  };
   flowId: string | null;
   /** Trusted-local Persona target/attribution. Drafts expose only personaId. */
   personaId?: string;
@@ -411,7 +418,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
 const SIDEBAR_PAGE_SIZE = 50;
-const MODEL_DELTA_COMMIT_INTERVAL_MS = 100;
+const MODEL_DELTA_COMMIT_INTERVAL_MS = 125;
+const CHAT_HYDRATION_MESSAGE_LIMIT = 200;
 
 const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
 const isCancellationError = (err: unknown): boolean => {
@@ -457,6 +465,7 @@ const Chat: React.FC = () => {
   // Full details of the currently selected conversation, fetched when selected
   const [detailedConversation, setDetailedConversation] = useState<Conversation | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState<boolean>(false);
+  const [isLoadingFullTranscript, setIsLoadingFullTranscript] = useState<boolean>(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
   // Currently selected conversation ID (persisted)
@@ -1298,8 +1307,11 @@ const Chat: React.FC = () => {
     // pushed by the drain effect is lost. We replace it atomically below once
     // the server response arrives.
     try {
-      // Use the endpoint that returns the full state
-      const conversation = await chatService.getConversation(id);
+      // Hydrate from the materialized state snapshot. Durable JSONL history is
+      // loaded only when the user explicitly asks for it.
+      const conversation = await chatService.getConversation(id, {
+        messageLimit: CHAT_HYDRATION_MESSAGE_LIMIT,
+      });
 
       // Guard against an out-of-order response: if the user switched to a
       // different conversation while this request was in flight, a late reply
@@ -1375,6 +1387,44 @@ const Chat: React.FC = () => {
       }
     }
   }, [fetchConversations, setCurrentConversationId, t]); // currentConversationId read via ref
+
+  const loadFullTranscript = useCallback(async () => {
+    const id = currentConversationIdRef.current;
+    if (!id || isLoadingFullTranscript) return;
+    setIsLoadingFullTranscript(true);
+    try {
+      const conversation = await chatService.getConversation(id);
+      if (currentConversationIdRef.current !== id) return;
+      setDetailedConversation(current => {
+        if (!current || current.id !== id) return current;
+        // Preserve live messages that arrived while the durable projection was
+        // loading, preferring their newer streamed representation by id.
+        const liveById = new Map(current.messages.map(message => [message.id, message]));
+        const merged = conversation.messages.map(message => liveById.get(message.id) ?? message);
+        const historyIds = new Set(conversation.messages.map(message => message.id));
+        for (const message of current.messages) {
+          if (!historyIds.has(message.id)) merged.push(message);
+        }
+        return {
+          ...conversation,
+          messages: merged,
+          transcriptWindow: {
+            truncated: false,
+            loadedCount: merged.length,
+            totalCount: merged.length,
+            source: 'durable-log',
+          },
+        };
+      });
+    } catch (error) {
+      log.error('Failed to load full transcript', { conversationId: id, error });
+      if (currentConversationIdRef.current === id) {
+        setError(t('chat.page.detailsLoadFailed', { id }));
+      }
+    } finally {
+      setIsLoadingFullTranscript(false);
+    }
+  }, [isLoadingFullTranscript, t]);
 
   useEffect(() => {
     // Switching conversations: drop any approval prompt belonging to the previous
@@ -2633,7 +2683,13 @@ const Chat: React.FC = () => {
 
     } catch (err) {
       log.error('Error deleting conversation:', { conversationId, err });
-      setError(t('chat.page.deleteFailed', { id: conversationId }));
+      const detail = err instanceof ChatApiError
+        ? chatApiErrorMessage(err)
+        : err instanceof Error ? err.message : '';
+      setError(
+        t('chat.page.deleteFailed', { id: conversationId })
+          + (detail ? ` (${detail})` : ''),
+      );
       // Revert optimistic UI update — including the shields, so the restored
       // conversation is fetchable/pollable again.
       pendingDeleteIdsRef.current.delete(conversationId);
@@ -3052,7 +3108,7 @@ const Chat: React.FC = () => {
     // A Persona draft intentionally has no Flow selected; metadata.personaId
     // routes it through the trusted dispatcher instead.
     if (updatedDetailedConv.personaId || updatedDetailedConv.flowId) {
-      const success = await sendToChatCompletions(updatedDetailedConv); // Pass the updated state
+      const success = await sendToChatCompletions(updatedDetailedConv, { appendMessage: userMessage });
       // Refresh conversation list after successful send? Only if title/timestamp changed significantly.
       // The backend updates the timestamp, so the list will re-sort on next fetch.
       // Let's skip explicit refetch here unless needed.
@@ -3287,7 +3343,10 @@ const Chat: React.FC = () => {
 
   // Send conversation to chat completions API
   // Returns true on success, false on error
-  const sendToChatCompletions = async (conversation: Conversation): Promise<boolean> => {
+  const sendToChatCompletions = async (
+    conversation: Conversation,
+    options?: { appendMessage?: ChatMessage; processNodeId?: string },
+  ): Promise<boolean> => {
     // Persona drafts intentionally carry no flowId; their trusted target is
     // sent separately in metadata and resolved only by the dispatcher.
     if (!conversation?.id || (!conversation.personaId && !conversation.flowId) || !openaiRef.current) {
@@ -3295,6 +3354,32 @@ const Chat: React.FC = () => {
        setError(t('chat.page.agentMissing'));
        return false;
     }
+
+    // Retry/edit paths intentionally replace or reuse history. If Chat only
+    // hydrated a suffix, resolve the complete durable projection before that
+    // operation so a bounded UI snapshot can never truncate server history.
+    if (!options?.appendMessage && conversation.transcriptWindow?.truncated) {
+      try {
+        conversation = await chatService.getConversation(conversation.id);
+      } catch (error) {
+        log.error('Could not hydrate history required for transcript mutation', {
+          conversationId: conversation.id,
+          error,
+        });
+        setError(t('chat.page.detailsLoadFailed', { id: conversation.id }));
+        return false;
+      }
+    }
+
+    // Normal turns send only the new message. The server owns authoritative
+    // history and appends it atomically; uploading/rebuilding every prior turn
+    // here made click-to-request latency grow with conversation length. A local
+    // split has not been persisted yet, so its first send intentionally carries
+    // the inherited transcript once.
+    const appendOnly = Boolean(
+      options?.appendMessage
+      && !localOnlyConversationIdsRef.current.has(conversation.id),
+    );
 
     // Reset pending calls and error before sending
     setPendingToolCalls(null);
@@ -3355,7 +3440,9 @@ const Chat: React.FC = () => {
       // depth>0 messages are nested subflow steps served by the backend's
       // projection for display only — they are never part of the parent
       // transcript and must not be sent back as history.
-      const messages = conversation.messages
+      const messages = (appendOnly && options?.appendMessage
+        ? [options.appendMessage]
+        : conversation.messages)
         .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
         .map(msg => {
           // Collapse text/doc/audio to a string or, for image attachments, a
@@ -3438,6 +3525,8 @@ const Chat: React.FC = () => {
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id, // Pass the correct ID
                 compactToolPayloads: "true",
+                appendMessages: appendOnly ? "true" : undefined,
+                processNodeId: options?.processNodeId,
                 ...personaRouting,
                 // Undefined means "retain backend state"; only a hydrated or
                 // explicitly updated map is sent. This prevents navigation from
@@ -3453,6 +3542,8 @@ const Chat: React.FC = () => {
             if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
             if (meta.compactToolPayloads) filteredMeta.compactToolPayloads = meta.compactToolPayloads;
+            if (meta.appendMessages) filteredMeta.appendMessages = meta.appendMessages;
+            if (meta.processNodeId) filteredMeta.processNodeId = meta.processNodeId;
             if (meta.personaId) filteredMeta.personaId = meta.personaId;
             if (meta.behaviorSlotKey) filteredMeta.behaviorSlotKey = meta.behaviorSlotKey;
             if (meta.mcpAppContexts !== undefined) {
@@ -3866,144 +3957,46 @@ const Chat: React.FC = () => {
     if (!detailedConversation) return;
     log.debug('Editing message', { messageId, contentLength: newContent.length, processNodeId });
 
-    const messageIndex = detailedConversation.messages.findIndex(msg => msg.id === messageId);
-    if (messageIndex === -1) return;
+    let baseConversation = detailedConversation;
+    if (baseConversation.transcriptWindow?.truncated) {
+      try {
+        baseConversation = await chatService.getConversation(baseConversation.id);
+      } catch (error) {
+        log.error('Could not load full transcript before editing', {
+          conversationId: baseConversation.id,
+          error,
+        });
+        setError(t('chat.page.sendEditedFailed'));
+        return;
+      }
+      if (currentConversationIdRef.current !== baseConversation.id) return;
+    }
 
-    const messageToEdit = detailedConversation.messages[messageIndex];
+    const messageIndex = baseConversation.messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return;
     const updatedMessage: ChatMessage = {
-      ...messageToEdit,
+      ...baseConversation.messages[messageIndex],
       content: newContent,
       timestamp: Date.now(),
-      processNodeId: processNodeId || undefined // Add processNodeId to the message
+      processNodeId: processNodeId || undefined,
     };
-
-    const messagesUpToEdit = [
-      ...detailedConversation.messages.slice(0, messageIndex),
-      updatedMessage
-    ];
-
-    const updatedDetailedConv = {
-      ...detailedConversation,
-      messages: messagesUpToEdit
+    const updatedDetailedConv: Conversation = {
+      ...baseConversation,
+      messages: [...baseConversation.messages.slice(0, messageIndex), updatedMessage],
+      transcriptWindow: {
+        truncated: false,
+        loadedCount: messageIndex + 1,
+        totalCount: messageIndex + 1,
+        source: 'durable-log',
+      },
     };
-    updateDetailedConversationState(updatedDetailedConv); // Optimistic update
+    updateDetailedConversationState(updatedDetailedConv);
 
-    if (updatedDetailedConv.personaId) {
-      // Persona edits stay on the same trusted target and intentionally carry
-      // no caller-selected Process-node authority.
-      await sendToChatCompletions(updatedDetailedConv);
-      return;
-    }
-
-    if (updatedDetailedConv.flowId) {
-      // Create metadata with processNodeId for the API call
-      const editedConversationAppContexts =
-        mcpAppContextsByConversationRef.current.get(updatedDetailedConv.id);
-      const metadata: ChatCompletionMetadata = {
-        flujo: "true",
-        requireApproval: requireApproval ? "true" : undefined,
-        flujodebug: executeInDebugger ? "true" : undefined,
-        conversationId: updatedDetailedConv.id,
-        processNodeId: processNodeId || undefined, // Add processNodeId to metadata
-        mcpAppContexts: editedConversationAppContexts === undefined
-          ? undefined
-          : JSON.stringify(editedConversationAppContexts),
-      };
-
-      // Call the API with the updated metadata
-      if (!openaiRef.current) return;
-      setError(null);
-      setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
-      setIsLoading(true);
-      setLoadingConversationId(updatedDetailedConv.id);
-      markConvRunning(updatedDetailedConv.id, true);
-      markConversationStopped(updatedDetailedConv.id, false); // a fresh run supersedes a prior Stop
-      setLiveStats({ totalTokens: 0, activeNode: null, startedAt: Date.now(), lastEventAt: Date.now() });
-      await openEventStream(updatedDetailedConv.id);
-      try {
-        const flow = await flowService.getFlow(updatedDetailedConv.flowId);
-        if (!flow) {
-          throw new Error(`Flow with ID ${updatedDetailedConv.flowId} not found`);
-        }
-
-        // Prepare messages for the API (depth>0 = display-only subflow steps,
-        // never sent back as history — same rule as the send path)
-        const messages = updatedDetailedConv.messages
-          .filter(msg => !msg.disabled && !((msg.depth ?? 0) > 0))
-          .map(msg => {
-            // Same content shaping as the send path: string for text/doc/audio,
-            // multipart array when image attachments are present.
-            const content = buildApiContent(msg);
-            // Same identity carry as the send path: preserved ids keep the
-            // canonical copies mergeable with what the UI already shows.
-            const identity = { id: msg.id, timestamp: msg.timestamp, processNodeId: msg.processNodeId };
-            // Create properly typed message based on role
-            if (msg.role === 'user') return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-            if (msg.role === 'assistant') return {
-              role: 'assistant', content, tool_calls: msg.tool_calls, toolPayloads: msg.toolPayloads, ...identity,
-            } as OpenAI.ChatCompletionAssistantMessageParam;
-            if (msg.role === 'system') return { role: 'system', content, ...identity } as OpenAI.ChatCompletionSystemMessageParam;
-            if (msg.role === 'tool') {
-              if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-              return {
-                role: 'tool', content, tool_call_id: msg.tool_call_id, toolPayloads: msg.toolPayloads, ...identity,
-              } as OpenAI.ChatCompletionToolMessageParam;
-            }
-            return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam; // Fallback
-          });
-
-        // Make the API call with processNodeId in metadata
-        const completion = await openaiRef.current.chat.completions.create({
-          model: `flow-${flow.name}`,
-          messages,
-          stream: false,
-          metadata: (() => {
-            // Filter out undefined values
-            const filteredMeta: { [key: string]: string } = {};
-            if (metadata.flujo) filteredMeta.flujo = metadata.flujo;
-            if (metadata.requireApproval) filteredMeta.requireApproval = metadata.requireApproval;
-            if (metadata.flujodebug) filteredMeta.flujodebug = metadata.flujodebug;
-            if (metadata.conversationId) filteredMeta.conversationId = metadata.conversationId;
-            filteredMeta.compactToolPayloads = 'true';
-            if (metadata.processNodeId) filteredMeta.processNodeId = metadata.processNodeId;
-            if (metadata.mcpAppContexts !== undefined) {
-              filteredMeta.mcpAppContexts = metadata.mcpAppContexts;
-            }
-            return filteredMeta;
-          })()
-        });
-
-        // Handle the response using the existing handler
-        const responseData: ChatApiResponse = {
-          status: (completion as OpenAI.ChatCompletion & ChatApiResponse).status || 'completed',
-          conversation_id: updatedDetailedConv.id,
-          messages: (completion as OpenAI.ChatCompletion & ChatApiResponse).messages || updatedDetailedConv.messages,
-          pendingToolCalls: (completion as OpenAI.ChatCompletion & ChatApiResponse).pendingToolCalls,
-          debugState: (completion as OpenAI.ChatCompletion & ChatApiResponse).debugState,
-          error: (completion as OpenAI.ChatCompletion & ChatApiResponse).error,
-          updatedAt: (completion as OpenAI.ChatCompletion & ChatApiResponse).updatedAt || Date.now()
-        };
-
-        handleApiResponse(responseData, updatedDetailedConv.id);
-
-      } catch (err) {
-        const cancelled = isCancellationError(err) || stoppedConversationIdsRef.current.has(updatedDetailedConv.id);
-        if (cancelled) {
-          log.info('Edited-message run cancelled by user', { conversationId: updatedDetailedConv.id });
-          markConversationStopped(updatedDetailedConv.id, true);
-        } else {
-          log.error('Error sending edited message:', err);
-          setError(err instanceof Error ? err.message : t('chat.page.sendEditedFailed'));
-        }
-        markConvRunning(updatedDetailedConv.id, false);
-        // Scoped teardown: leave another conversation's live view alone.
-        if (loadingConversationIdRef.current === updatedDetailedConv.id) {
-          setIsLoading(false);
-          setLoadingConversationId(null);
-          closeEventStream();
-        }
-      }
-    }
+    await sendToChatCompletions(updatedDetailedConv, {
+      // Persona edits stay on the trusted target and do not accept caller
+      // Process-node authority.
+      processNodeId: updatedDetailedConv.personaId ? undefined : processNodeId || undefined,
+    });
   };
 
   // Begin editing a message in the ChatInput (issue: editing moved out of the
@@ -5545,6 +5538,9 @@ const Chat: React.FC = () => {
                 pendingElicitation={pendingElicitation}
                 availableNodes={availableNodes} // Memoized nodes for the attribution pill
                 conversationId={detailedConversation.id} // Resets the render window on switch
+                hasEarlierMessages={detailedConversation.transcriptWindow?.truncated === true}
+                isLoadingEarlierMessages={isLoadingFullTranscript}
+                onLoadEarlierMessages={loadFullTranscript}
                 editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}

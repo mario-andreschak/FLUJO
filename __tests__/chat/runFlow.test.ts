@@ -17,7 +17,10 @@ import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/fl
 import { IMPLICIT_SUBFLOW_RETURN_ACTION } from '@/backend/execution/flow/types';
 import type { PersonaInstructionContext } from '@/shared/types/enduringAgent';
 import type { Flow } from '@/shared/types/flow';
-import { hashBehaviorFlow } from '@/backend/services/enduringAgents/behaviorRevisions';
+import {
+  hashBehaviorFlow,
+  hashLegacyBehaviorFlow,
+} from '@/backend/services/enduringAgents/behaviorRevisions';
 
 const START = '077cfac0-start';
 const PROCESS = 'ef2a3c01-process';
@@ -165,6 +168,44 @@ beforeEach(() => {
 });
 
 describe('runFlow keystone', () => {
+  it('accepts a validated legacy permissionRules hash for the same canonical Behavior', async () => {
+    const flow = {
+      ...behaviorFlow(FLOW_ID, 'legacy-policy-key'),
+      behaviorRules: [],
+    };
+    const { behaviorRules, ...legacyBase } = flow;
+    const legacyHash = hashLegacyBehaviorFlow({
+      ...legacyBase,
+      permissionRules: behaviorRules,
+    });
+    expect(legacyHash).not.toBe(hashBehaviorFlow(flow));
+
+    const context = personaInstructionContext('activity-legacy-hash', {
+      behaviorRevisionId: 'behavior-revision-legacy-hash',
+      behaviorContentHash: legacyHash,
+      rootFlowId: flow.id,
+    });
+    const result = await runFlow({
+      flowDefinition: flow,
+      messages: [],
+      mode: 'conversation',
+      conversationId: 'legacy-behavior-hash',
+      personaAttribution: {
+        personaId: context.personaId,
+        activityId: context.activityId,
+        behaviorRevisionId: context.behaviorRevisionId,
+      },
+      personaInstructionContext: context,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => undefined),
+        signal: new AbortController().signal,
+      },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.flowSnapshot).toEqual(flow);
+  });
+
   it('rejects a caller that omits the invocation context', async () => {
     await expect(runFlowWithContext({
       flowId: FLOW_ID,

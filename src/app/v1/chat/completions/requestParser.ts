@@ -101,6 +101,8 @@ export interface ChatCompletionRequest {
   mcpAppContexts?: McpAppModelContextMap;
   /** Parsed internal response-shaping flag; public callers should use metadata. */
   compactToolPayloads?: boolean;
+  /** Parsed stateful-chat flag: append request messages to saved history. */
+  appendMessages?: boolean;
 }
 
 // Define a new interface for the parsed result including the extracted flags
@@ -111,6 +113,7 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
   flujodebug: boolean; // Add flujodebug here
   processNodeId?: string; // Add processNodeId for message edits
   compactToolPayloads: boolean;
+  appendMessages: boolean;
   /** Validated trusted-control-plane Persona target, never forwarded as model input. */
   personaTarget?: PersonaChatCompletionTarget;
 }
@@ -165,6 +168,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       requireApproval: false, // Always false for GET
       flujodebug: false, // Always false for GET
       compactToolPayloads: false,
+      appendMessages: false,
     };
 
     const duration = Date.now() - startTime;
@@ -211,6 +215,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const requireApproval = data.metadata?.requireApproval === "true";
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
       const compactToolPayloads = data.metadata?.compactToolPayloads === "true";
+      const appendMessages = data.metadata?.appendMessages === "true";
       const personaTarget = parsePersonaTarget(data.metadata);
       const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
       if (parsedAppContexts.error) {
@@ -247,9 +252,10 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         requireApproval, 
         flujodebug,
         compactToolPayloads,
+        appendMessages,
         ...(personaTarget ? { personaTarget } : {}),
         mcpAppContexts: parsedAppContexts.contexts,
-        processNodeId: data.processNodeId // Pass through processNodeId if provided
+        processNodeId: data.processNodeId ?? data.metadata?.processNodeId,
       };
     } catch (error) {
       const duration = Date.now() - startTime;

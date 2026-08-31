@@ -6,6 +6,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import {
   appendRawForState,
+  projectModelContextMessages,
   projectMessages,
   readConversationLog,
 } from '@/backend/execution/flow/conversationLog';
@@ -290,7 +291,7 @@ if (isPersonaOwnedConversationState(state)) {
       if (!events || !operation.chatHeadMessageIds || !operation.chatTailMessageIds) {
         return NextResponse.json({ error: 'Chat undo data is unavailable' }, { status: 409 });
       }
-      const currentIds = projectMessages(events).map(message => message.id);
+      const currentIds = projectModelContextMessages(events).map(message => message.id);
       if (JSON.stringify(currentIds) !== JSON.stringify(operation.chatHeadMessageIds)) {
         return NextResponse.json(
           { error: 'The chat changed after the restore and can no longer be undone safely' },

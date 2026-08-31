@@ -89,6 +89,7 @@ async function processChatCompletionInternal(
     debug: flujodebug,
     continueDebug,
     userTurn,
+    ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
     // This adapter is the interactive chat/completions entry point. Classify it
     // as chat so runtime behavior stays attended even though transport is HTTP.
     source: 'chat',
@@ -151,10 +152,15 @@ async function processChatCompletionInternal(
     content: result.outputText,
     tool_calls: result.toolCalls,
   };
-  const latestAssistantMedia = [...result.messages]
-    .reverse()
-    .find(message => message.role === 'assistant' && message.media?.length)
-    ?.media;
+  let latestAssistantMedia: ModelMediaPart[] | undefined;
+  let latestModelUsage: FlujoChatMessage['usage'];
+  for (let index = result.messages.length - 1; index >= 0; index--) {
+    const message = result.messages[index];
+    if (message.role !== 'assistant') continue;
+    if (!latestAssistantMedia && message.media?.length) latestAssistantMedia = message.media;
+    if (!latestModelUsage && message.usage) latestModelUsage = message.usage;
+    if (latestAssistantMedia && latestModelUsage) break;
+  }
   if (latestAssistantMedia?.length) {
     (responseMessage as unknown as { media?: ModelMediaPart[] }).media = latestAssistantMedia;
   }
@@ -170,18 +176,29 @@ async function processChatCompletionInternal(
     finish_reason = 'length';
   }
 
-  // Calculate usage (simplified, mirrors the legacy behavior).
-  const promptTokens = countTokens(result.messages.map(m => m.content || '').join('\n'));
-  const completionTokens = countTokens(result.outputText);
+  // Prefer the provider-reported latest call. In append-only Chat mode, joining
+  // and recounting the entire saved transcript would put O(history) work back
+  // on the response path we just made incremental.
+  const promptTokens = latestModelUsage?.promptTokens
+    ?? countTokens((data.appendMessages ? data.messages : result.messages).map(m => m.content || '').join('\n'));
+  const completionTokens = latestModelUsage?.completionTokens ?? countTokens(result.outputText);
   const usage: TokenUsage = {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: promptTokens + completionTokens,
   };
 
-  const responseMessages = data.compactToolPayloads
-    ? await projectLazyToolPayloads(result.messages, result.conversationId)
-    : result.messages;
+  // The stateful Chat UI already receives transcript deltas over SSE and does
+  // one authoritative snapshot fetch at the terminal boundary. Echoing the
+  // entire transcript here makes every send response grow forever and forces
+  // React to reconcile the same history again. `appendMessages` therefore
+  // returns only completion metadata; classic OpenAI-compatible requests keep
+  // the historical full-message extension unchanged.
+  const responseMessages = data.appendMessages
+    ? undefined
+    : data.compactToolPayloads
+      ? await projectLazyToolPayloads(result.messages, result.conversationId)
+      : result.messages;
   const responseData = {
     id: `chatcmpl-${Date.now()}`,
     object: 'chat.completion',
@@ -193,7 +210,7 @@ async function processChatCompletionInternal(
       finish_reason,
     }],
     usage,
-    messages: responseMessages as FlujoChatMessage[],
+    ...(responseMessages ? { messages: responseMessages as FlujoChatMessage[] } : {}),
     conversation_id: result.conversationId,
     status: result.sharedState.status || (result.finalAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     pendingToolCalls: result.sharedState.pendingToolCalls,
@@ -391,6 +408,7 @@ async function processPersonaChatCompletion(
       debug: flujodebug,
       continueDebug,
       userTurn,
+      ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
       source: 'chat',
     },
   }, { waitForCompletion: false });

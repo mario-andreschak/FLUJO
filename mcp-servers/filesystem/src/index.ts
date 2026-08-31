@@ -46,14 +46,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: filesystemToolDefinitions(),
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
-  filesystemCallTool(
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  const progressToken = request.params._meta?.progressToken;
+  const result = await filesystemCallTool(
     request.params.name,
     request.params.arguments ?? {},
     callerNodeIdOf(request.params._meta),
-    extra.signal,
-  ),
-);
+    {
+      signal: extra.signal,
+      ...(progressToken !== undefined
+        ? {
+            onProgress: async (progress) => {
+              await server.notification(
+                {
+                  method: 'notifications/progress',
+                  params: { progressToken, ...progress },
+                },
+                { relatedRequestId: extra.requestId },
+              );
+            },
+          }
+        : {}),
+    },
+  );
+  if (progressToken !== undefined) await server.ping();
+  return result;
+});
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => filesystemListResources());
 server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));

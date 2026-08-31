@@ -203,6 +203,7 @@ describe('/v1/personas/[personaId]', () => {
     expect(listPersonaFlowDispatchesMock).toHaveBeenCalledWith('jim');
     // With no dispatches there are no per-Activity results, and the route omits
     // the key entirely rather than passing an empty Map.
+    // An empty result map is deliberately omitted by the route, not passed as an empty Map.
     expect(projectPersonaPresentationMock).toHaveBeenCalledWith(bundle, {
       activeActivityId: undefined,
     });

@@ -58,6 +58,13 @@ export interface SdkRequestSnapshot {
   operation: string;
   /** Exact request object after provider-native translation, without credentials. */
   request: unknown;
+  /**
+   * Provider-neutral messages for this specific SDK dispatch. Self-orchestrating
+   * adapters may issue multiple native turns inside one FLUJO model call (for
+   * example after mid-run steering), so the caller's initial wire array is not
+   * necessarily the wire view for every observed request.
+   */
+  wireMessages?: OpenAI.ChatCompletionMessageParam[];
 }
 
 /**

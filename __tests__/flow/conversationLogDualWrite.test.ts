@@ -90,6 +90,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import {
   readConversationLog,
   projectMessages,
+  projectModelContextMessages,
   flushConversationLog,
   hasConversationLog,
   _setConversationLogDirForTests,
@@ -236,13 +237,22 @@ describe('turn-start reconcile: pruned/edited client history', () => {
     const removed = events!.filter(e => e.type === 'message:removed');
     expect(removed.map(e => (e as any).messageId)).toEqual([assistantId]);
 
-    const projected = projectMessages(events!);
+    const durable = projectMessages(events!);
+    expect(durable.map(m => m.id)).toEqual([
+      'user-1',
+      assistantId,
+      'user-2',
+      'assistant-turn2',
+    ]);
+    expect(durable.find(m => m.id === 'user-1')?.content).toBe('first ask (edited)');
+
+    const projected = projectModelContextMessages(events!);
     expect(projected.map(m => ({ id: m.id, content: m.content }))).toEqual([
       { id: 'user-1', content: 'first ask (edited)' },
       { id: 'user-2', content: 'second ask' },
       { id: 'assistant-turn2', content: 'second answer' },
     ]);
-    // The projection tracks the state's transcript exactly.
+    // Only the active model-context projection tracks SharedState exactly.
     expect(projected.map(m => m.id)).toEqual(nonSystem(second.sharedState.messages).map(m => m.id));
   });
 });

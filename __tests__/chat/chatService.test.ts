@@ -220,6 +220,17 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(conv);
   });
 
+  it('getConversation: requests a bounded snapshot when messageLimit is set', async () => {
+    const conv = { id: 'bounded', title: 'T', messages: [], flowId: 'f', createdAt: 1, updatedAt: 2 };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, conv));
+
+    await chatService.getConversation('bounded', { messageLimit: 200 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations/bounded?compactToolPayloads=1&messageLimit=200',
+    );
+  });
+
   it('getConversation: maps a 404 to ChatApiError with status', async () => {
     fetchMock.mockResolvedValue(makeResponse(404, { error: 'Conversation not found' }));
 

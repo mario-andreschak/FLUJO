@@ -361,7 +361,9 @@ export default function PersonaCreationWizard({
     setLoadingReadiness((current) => new Set([...current, ...missing]));
     void Promise.all(missing.map(async (ref) => {
       try {
-        return [ref, await personasService.flowReadiness(ref)] as const;
+        return [ref, await personasService.flowReadiness(ref, {
+          allowModelFallback: true,
+        })] as const;
       } catch (cause) {
         return [ref, {
           state: 'invalid' as const,

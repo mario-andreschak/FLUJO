@@ -227,6 +227,56 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
 }
 
 /**
+ * Environment keys that locate the signed-in host account and its tool config.
+ * If the host does not define one of these, a stale value persisted on the MCP
+ * record must not resurrect it and redirect a CLI into a private/fake home.
+ */
+const HOST_TERMINAL_ENV_KEYS = new Set([
+  'path', 'pathext',
+  'home', 'userprofile', 'homedrive', 'homepath',
+  'appdata', 'localappdata', 'programdata',
+  'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
+  'xdg_state_home', 'xdg_runtime_dir',
+  'tmp', 'temp', 'tmpdir',
+  'shell', 'comspec', 'systemroot', 'windir', 'systemdrive',
+  'programfiles', 'programfiles(x86)',
+  'gh_config_dir',
+]);
+
+function setEnvCaseInsensitively(
+  target: Record<string, string>,
+  key: string,
+  value: string | undefined,
+): void {
+  for (const existing of Object.keys(target)) {
+    if (existing.toLowerCase() === key.toLowerCase()) delete target[existing];
+  }
+  if (value !== undefined) target[key] = value;
+}
+
+/**
+ * Give the bundled Bash server the actual environment of the FLUJO process.
+ * Persisted per-server values remain available for explicit additions, while
+ * the live host wins for existing keys. Host identity/config keys also mirror
+ * absence, preventing an old GH_CONFIG_DIR/HOME workaround from surviving.
+ */
+function hostTerminalEnvironment(configured: Record<string, string>): Record<string, string> {
+  const result = { ...configured };
+  const hostEntries = Object.entries(process.env).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+
+  for (const [key, value] of hostEntries) {
+    setEnvCaseInsensitively(result, key, value);
+  }
+  for (const key of HOST_TERMINAL_ENV_KEYS) {
+    const host = hostEntries.find(([name]) => name.toLowerCase() === key);
+    if (!host) setEnvCaseInsensitively(result, key, undefined);
+  }
+  return result;
+}
+
+/**
  * Identity key of everything in a stdio config that affects the spawned process.
  *
  * The spawn pipeline REWRITES the configured command/args (.bat -> `cmd.exe /c`, bare
@@ -703,7 +753,9 @@ function applyWindowsSpawnEssentials(env: Record<string, string>): void {
  */
 export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
-  const isShipped = Boolean(shippedDescriptorForConfig(config));
+  const shippedDescriptor = shippedDescriptorForConfig(config);
+  const isShipped = Boolean(shippedDescriptor);
+  const isHostTerminal = shippedDescriptor?.defaultName === 'bash';
   const remapMcpPath = (value: string): string => isShipped
     ? value
     : remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
@@ -778,7 +830,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  const runtime = isolatedStdioRuntime(config.name);
+  const runtime = isHostTerminal ? undefined : isolatedStdioRuntime(config.name);
   const resolvedCwd = remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
@@ -790,7 +842,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
     // Package managers walk ancestor directories for package.json/node_modules.
     // Keep their cwd outside both the server root and every other server root.
-    packageRunnerCwd: runtime.cwd,
+    packageRunnerCwd: runtime?.cwd,
   }));
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
@@ -799,24 +851,26 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   log.debug(`env: ${JSON.stringify(config.env)}`);
 
   // Transform the env object to extract only the value part from each key.
-  const transformedEnv = transformEnv(config.env);
+  const configuredEnv = transformEnv(config.env);
+  const transformedEnv = isHostTerminal
+    ? hostTerminalEnvironment(configuredEnv)
+    : configuredEnv;
   if (!isShipped) {
     for (const [name, value] of Object.entries(transformedEnv)) {
       transformedEnv[name] = remapMcpPath(value);
     }
   }
-  // Force the live child boundary for every stdio server, not only shipped
-  // packages. These assignments intentionally win over persisted config and
-  // over inherit-all launch modes; otherwise ordinary SDK defaults expose the
-  // host account and let workspace A reuse workspace B's auth/config state.
-  Object.assign(transformedEnv, runtime.env);
+  // Third-party and non-terminal shipped servers keep private runtime homes.
+  // Bundled Bash deliberately stays attached to the host account so installed
+  // CLIs, credentials and config behave exactly as they do in a local terminal.
+  if (runtime) Object.assign(transformedEnv, runtime.env);
   applyWindowsSpawnEssentials(transformedEnv);
   const parentDataDir = getDataDir();
   const workspaceDataDir = getWorkspaceDataDir();
   transformedEnv.FLUJO_PARENT_DATA_DIR = parentDataDir;
   transformedEnv.FLUJO_DATA_DIR = workspaceDataDir;
   transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
-  if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {
+  if (shippedDescriptor?.defaultName === 'browser') {
     // Package installation happens before the child's private HOME/cache is
     // created. Existing records may therefore have no explicit browser-binary
     // path even though Patchright installed Chromium successfully in the host

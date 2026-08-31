@@ -207,6 +207,31 @@ export function hashLegacyBehaviorFlow(value: unknown): string {
 }
 
 /**
+ * Match an execution snapshot against either the canonical Behavior hash or
+ * the semantically equivalent pre-#470 `permissionRules` representation.
+ *
+ * The store validates a legacy revision against its exact persisted key before
+ * returning a canonical Flow whose policy key is `behaviorRules`. Runtime no
+ * longer has the raw record, so attribution must reconstruct that one historic
+ * representation instead of treating a validated migration as tampering.
+ */
+export function behaviorFlowMatchesContentHash(
+  flow: Flow,
+  expectedContentHash: string,
+): boolean {
+  if (hashBehaviorFlow(flow) === expectedContentHash) return true;
+
+  const canonical = snapshotBehaviorFlow(flow);
+  if (!Object.prototype.hasOwnProperty.call(canonical, 'behaviorRules')) return false;
+  const { behaviorRules, ...legacyBase } = canonical;
+  const legacy = {
+    ...legacyBase,
+    permissionRules: behaviorRules,
+  } as Flow & { permissionRules: Flow['behaviorRules'] };
+  return hashLegacyBehaviorFlow(legacy) === expectedContentHash;
+}
+
+/**
  * Verify that a Persona-owned snapshot derives from an immutable Role template.
  * Generated id/name fields may differ, and the factory may add one consistent
  * default model to every otherwise-unbound process node. Every other

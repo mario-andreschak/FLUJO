@@ -152,6 +152,11 @@ interface ChatMessagesProps {
   availableNodes?: { id: string; label: string }[]; // Add available nodes for dropdown
   /** Resets the render window when the user switches conversations. */
   conversationId?: string;
+  /** The server intentionally hydrated only a recent suffix. */
+  hasEarlierMessages?: boolean;
+  /** Explicitly request the durable transcript once the local window is open. */
+  onLoadEarlierMessages?: () => void;
+  isLoadingEarlierMessages?: boolean;
   /** Id of the message currently being edited in the ChatInput (or null). */
   editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
@@ -1741,6 +1746,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   pendingElicitation,
   availableNodes = [], // Destructure with default empty array
   conversationId,
+  hasEarlierMessages = false,
+  onLoadEarlierMessages,
+  isLoadingEarlierMessages = false,
   editingMessageId,
   onToggleDisabled,
   onSplitConversation,
@@ -1965,14 +1973,24 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {/* Older messages are kept out of the DOM until requested */}
-      {hiddenCount > 0 && (
+      {(hiddenCount > 0 || hasEarlierMessages) && (
         <Box sx={{ display: 'flex', justifyContent: 'center' }}>
           <Button
             size="small"
             variant="outlined"
-            onClick={() => setVisibleCount(count => count + MESSAGES_WINDOW_STEP)}
+            disabled={isLoadingEarlierMessages}
+            startIcon={isLoadingEarlierMessages ? <CircularProgress size={14} /> : undefined}
+            onClick={() => {
+              if (hiddenCount > 0) {
+                setVisibleCount(count => count + MESSAGES_WINDOW_STEP);
+              } else {
+                onLoadEarlierMessages?.();
+              }
+            }}
           >
-            {t('chat.messages.earlier', { count: hiddenCount })}
+            {hiddenCount > 0
+              ? t('chat.messages.earlier', { count: hiddenCount })
+              : t('chat.messages.loadFullHistory')}
           </Button>
         </Box>
       )}

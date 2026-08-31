@@ -55,7 +55,10 @@ function classifyLegacyOverride(
   revisions: BehaviorRevision[],
 ): 'authored-derived' | 'accepted' | 'ambiguous' {
   if (active.source.kind !== 'persona_override') return 'ambiguous';
-  if (active.source.sourceFlowRef) return 'authored-derived';
+  // Both fields are mutable authoring provenance. Older Persona-copy records
+  // commonly carried only overrideFlowRef, so ignoring it left an edited Core
+  // pinned forever to its stale immutable revision.
+  if (active.source.sourceFlowRef || active.source.overrideFlowRef) return 'authored-derived';
 
   const revisionsById = new Map(revisions.map((revision) => [revision.id, revision]));
   const visited = new Set<string>();

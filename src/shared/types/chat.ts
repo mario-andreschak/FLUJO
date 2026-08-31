@@ -44,6 +44,13 @@ export interface ChatCompletionMetadata {
   compactToolPayloads?: "true";
 
   /**
+   * FLUJO stateful-chat extension: `messages` contains only the new turn and
+   * must be appended to the conversation's authoritative server transcript.
+   * This keeps normal sends O(new turn) instead of uploading all history.
+   */
+  appendMessages?: "true";
+
+  /**
    * Local trusted-control-plane extension: route this request to a durable
    * Persona instead of invoking a Flow directly. External OpenAI-compatible
    * clients cannot use this field; the route applies the local-request guard

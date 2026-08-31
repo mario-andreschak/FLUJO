@@ -75,7 +75,6 @@ export const RUNTIME_ENVIRONMENT_DEFINITIONS: RuntimeEnvironmentDefinition[] = [
   ...definitions('access', {
     FLUJO_FS_ROOTS: 'Filesystem hard-ceiling paths separated by the platform path delimiter.',
     FLUJO_BASH_ROOTS: 'Bash hard-ceiling paths; falls back to FLUJO_FS_ROOTS.',
-    FLUJO_BASH_INHERIT_ENV: 'Forward the complete main-process environment to bundled Bash when truthy.',
   }),
   ...definitions('bash', {
     FLUJO_BASH_COMMAND_MAX_TIMEOUT_MS: 'Maximum timeout accepted for a Bash command.',

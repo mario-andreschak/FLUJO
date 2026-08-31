@@ -102,4 +102,28 @@ describe('chat message header actions', () => {
     expect(css).toContain(createAppTheme('light').palette.primary.dark);
     document.documentElement.classList.remove('modern-theme');
   });
+
+  it('loads durable history only after the user asks for it', () => {
+    const onLoadEarlierMessages = jest.fn();
+    render(
+      <ThemeProvider theme={createAppTheme('light')}>
+        <ChatMessages
+          messages={[{
+            id: 'recent-only',
+            timestamp: 4,
+            role: 'assistant',
+            content: 'Recent snapshot',
+          } as FlujoChatMessage]}
+          conversationId="conversation-bounded"
+          hasEarlierMessages
+          onLoadEarlierMessages={onLoadEarlierMessages}
+          onToggleDisabled={() => undefined}
+          onSplitConversation={() => undefined}
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load full history' }));
+    expect(onLoadEarlierMessages).toHaveBeenCalledTimes(1);
+  });
 });

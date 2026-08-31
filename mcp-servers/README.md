@@ -155,7 +155,6 @@ Relevant variables:
 - `FLUJO_DATA_DIR`: base for relative paths and the no-roots fallback.
 - `FLUJO_FS_ROOTS`: path-delimited filesystem ceiling; also the bash fallback ceiling.
 - `FLUJO_BASH_ROOTS`: path-delimited bash working-directory ceiling.
-- `FLUJO_BASH_INHERIT_ENV=1`: explicitly lets bash commands inherit the full FLUJO backend environment. Without it, commands receive only the existing minimal allow-list.
 - `FLUJO_BASH_COMMAND_MAX_TIMEOUT_MS`: positive-value ceiling for foreground `run` and `wait` timeouts (default 12 hours); `timeout: -1` explicitly disables their Bash-side timer.
 - `FLUJO_MCP_DEBUG=1`: enables package debug diagnostics on stderr.
 

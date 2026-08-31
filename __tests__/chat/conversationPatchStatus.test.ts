@@ -18,7 +18,7 @@ import { makeLocalRequest } from '../utils/localRequest';
 // The route module imports the flow engine and services at top level; none of
 // them are exercised by PATCH, so stub them to keep the test hermetic.
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
-  FlowExecutor: { conversationStates: new Map() },
+  FlowExecutor: { conversationStates: new Map(), clearFlowCache: jest.fn() },
 }));
 jest.mock('@/backend/services/flow', () => ({ flowService: {} }));
 jest.mock('@/backend/services/model', () => ({ modelService: {} }));
@@ -30,17 +30,38 @@ const mockGetPersona = jest.fn(async (_personaId: string) => ({
 }));
 const mockGetPersonaDeletionTombstone = jest.fn(async (_personaId: string) =>
   mockPersonaDeleted ? { status: 'completed' } : null);
+const mockListPersonaActivities = jest.fn(
+  async (..._args: unknown[]): Promise<unknown[]> => [],
+);
 jest.mock('@/backend/services/enduringAgents', () => ({
   getPersona: (personaId: string) => mockGetPersona(personaId),
   getPersonaDeletionTombstone: (personaId: string) =>
     mockGetPersonaDeletionTombstone(personaId),
+  listPersonaActivities: (...args: unknown[]) => mockListPersonaActivities(...args),
+}));
+type RecoveredTranscriptMock = {
+  messages: SharedState['messages'];
+  source: 'snapshot' | 'durable-log';
+};
+const mockRecoverConversationTranscript = jest.fn<Promise<RecoveredTranscriptMock>, [SharedState]>(async (state) => ({
+  messages: (state.messages ?? []).filter(message => message.role !== 'system') as SharedState['messages'],
+  source: 'snapshot' as const,
 }));
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
-  readConversationLog: jest.fn(),
-  projectMessages: jest.fn(() => []),
-  flushConversationLog: jest.fn(),
   deleteConversationLog: jest.fn(),
-  repairTruncatedConversationLog: jest.fn(async () => undefined),
+  recoverConversationTranscript: (...args: [SharedState]) => mockRecoverConversationTranscript(...args),
+}));
+jest.mock('@/backend/services/runResources', () => ({
+  deleteRunResources: jest.fn(),
+  listRunResources: jest.fn(async () => []),
+}));
+jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
+  deleteModelTurnArchive: jest.fn(),
+}));
+jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
+  deleteConversationSummary: jest.fn(),
+  persistConversationSummary: jest.fn(),
+  persistConversationSummaryStrict: jest.fn(),
 }));
 
 // In-memory storage backing the route's loadItem/saveItem.
@@ -49,6 +70,9 @@ jest.mock('@/utils/storage/backend', () => ({
   loadItem: jest.fn(async (key: string) => stored[key]),
   saveItem: jest.fn(async (key: string, value: SharedState) => {
     stored[key] = value;
+  }),
+  deleteCollectionItem: jest.fn(async (collection: string, id: string) => {
+    delete stored[`${collection}/${id}`];
   }),
 }));
 
@@ -105,6 +129,49 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
     mockPersonaDeleted = false;
     mockGetPersona.mockClear();
     mockGetPersonaDeletionTombstone.mockClear();
+    mockListPersonaActivities.mockReset().mockResolvedValue([]);
+    mockRecoverConversationTranscript.mockClear();
+    mockRecoverConversationTranscript.mockImplementation(async (state: SharedState) => ({
+      messages: (state.messages ?? []).filter(message => message.role !== 'system') as SharedState['messages'],
+      source: 'snapshot' as const,
+    }));
+  });
+
+  it('hydrates a bounded suffix from the automatically recovered durable transcript', async () => {
+    seedConversation('conv-fast', 'completed');
+    stored['conversations/conv-fast'].messages = [
+      { id: 'system-1', role: 'system', content: 'model plumbing' },
+      { id: 'message-1', role: 'user', content: 'first' },
+      { id: 'message-2', role: 'assistant', content: 'second' },
+      { id: 'message-3', role: 'user', content: 'third' },
+    ] as SharedState['messages'];
+    mockRecoverConversationTranscript.mockResolvedValueOnce({
+      messages: [
+        { id: 'message-from-log', role: 'assistant', content: 'recovered' },
+        { id: 'message-1', role: 'user', content: 'first' },
+        { id: 'message-2', role: 'assistant', content: 'second' },
+        { id: 'message-3', role: 'user', content: 'third' },
+      ] as SharedState['messages'],
+      source: 'durable-log',
+    });
+
+    const response = await GET(new NextRequest(
+      'http://localhost/v1/chat/conversations/conv-fast?compactToolPayloads=1&messageLimit=2',
+      { headers: { host: 'localhost', origin: 'http://localhost' } },
+    ), {
+      params: Promise.resolve({ conversationId: 'conv-fast' }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.messages.map((message: { id: string }) => message.id)).toEqual(['message-2', 'message-3']);
+    expect(body.transcriptWindow).toEqual({
+      truncated: true,
+      loadedCount: 2,
+      totalCount: 4,
+      source: 'durable-log',
+    });
+    expect(mockRecoverConversationTranscript).toHaveBeenCalledWith(stored['conversations/conv-fast']);
   });
 
   it('does not report a never-run conversation as completed when its flow changes', async () => {
@@ -261,7 +328,7 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
     expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
   });
 
-  it('re-reads ownership after a paused Persona-target PATCH before deleting', async () => {
+  it('re-reads ownership after a paused Persona-target PATCH before deleting the resulting draft', async () => {
     const id = 'conv-delete-target-race';
     seedConversation(id, undefined);
     let lookupStarted!: () => void;
@@ -290,11 +357,8 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
 
     expect((await patch).status).toBe(200);
     const deleteResponse = await deletion;
-    expect(deleteResponse.status).toBe(409);
-    expect(stored[`conversations/${id}`]).toMatchObject({
-      flowId: '',
-      personaTargetId: 'persona-target',
-    });
+    expect(deleteResponse.status).toBe(204);
+    expect(stored[`conversations/${id}`]).toBeUndefined();
   });
 
   it('does not let the generic read/delete route expose or erase Persona state', async () => {
@@ -325,5 +389,48 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
       if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
       else process.env.FLUJO_EXPOSURE_MODE = previousMode;
     }
+  });
+
+  it('deletes a terminal Persona conversation after lifecycle verification', async () => {
+    const id = 'conv-persona-terminal';
+    seedConversation(id, 'error');
+    stored[`conversations/${id}`].flowId = '';
+    stored[`conversations/${id}`].personaTargetId = 'persona-1';
+    mockListPersonaActivities.mockResolvedValueOnce([{
+      id: 'activity-terminal',
+      personaId: 'persona-1',
+      conversationId: id,
+      status: 'error',
+    }]);
+
+    const response = await DELETE(makeLocalRequest(), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(stored[`conversations/${id}`]).toBeUndefined();
+  });
+
+  it('keeps an active Persona conversation until its Activity stops', async () => {
+    const id = 'conv-persona-running';
+    seedConversation(id, 'running');
+    stored[`conversations/${id}`].flowId = '';
+    stored[`conversations/${id}`].personaTargetId = 'persona-1';
+    mockListPersonaActivities.mockResolvedValueOnce([{
+      id: 'activity-running',
+      personaId: 'persona-1',
+      conversationId: id,
+      status: 'running',
+    }]);
+
+    const response = await DELETE(makeLocalRequest(), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/still queued, running, or waiting/i),
+    });
+    expect(stored[`conversations/${id}`]).toBeDefined();
   });
 });

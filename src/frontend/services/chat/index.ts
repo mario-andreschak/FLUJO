@@ -197,10 +197,23 @@ class ChatService {
     return parse<ConversationListItem[]>(response);
   }
 
-  /** GET /v1/chat/conversations/{id} — full conversation (messages included). */
-  async getConversation(id: string): Promise<Conversation> {
-    log.debug('getConversation: Entering method', { conversationId: id });
-    const response = await fetch(`${BASE}/${encodeURIComponent(id)}?compactToolPayloads=1`);
+  /** GET /v1/chat/conversations/{id}. Pass messageLimit for fast Chat hydration. */
+  async getConversation(
+    id: string,
+    options: { messageLimit?: number; signal?: AbortSignal } = {},
+  ): Promise<Conversation> {
+    log.debug('getConversation: Entering method', {
+      conversationId: id,
+      messageLimit: options.messageLimit,
+    });
+    const params = new URLSearchParams({ compactToolPayloads: '1' });
+    if (options.messageLimit !== undefined) {
+      params.set('messageLimit', String(options.messageLimit));
+    }
+    const url = `${BASE}/${encodeURIComponent(id)}?${params.toString()}`;
+    const response = options.signal
+      ? await fetch(url, { signal: options.signal })
+      : await fetch(url);
     return parse<Conversation>(response);
   }
 

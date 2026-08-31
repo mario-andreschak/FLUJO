@@ -16,6 +16,7 @@ const appendRawForStateMock = jest.fn(async (_state: unknown, _raws: unknown[]) 
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   readConversationLog: (...args: unknown[]) => readConversationLogMock(...args),
   projectMessages: (...args: unknown[]) => projectMessagesMock(...args),
+  projectModelContextMessages: (...args: unknown[]) => projectMessagesMock(...args),
   appendRawForState: (state: unknown, raws: unknown[]) => appendRawForStateMock(state, raws),
 }));
 

@@ -314,7 +314,10 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
   // Drop the in-memory channel + ring buffer for a conversation (simulates the
   // post-run:done channel GC / a process restart).
   const evictBuffer = (conversationId: string) => {
-    (executionEventBus as unknown as { channels: Map<string, unknown> }).channels.delete(conversationId);
+    const channels = (executionEventBus as unknown as { channels: Map<string, unknown> }).channels;
+    for (const key of channels.keys()) {
+      if (key === conversationId || key.endsWith(`\u0000${conversationId}`)) channels.delete(key);
+    }
   };
 
   beforeAll(async () => {
@@ -367,6 +370,28 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
       const replay = await readEvents(reader, 2);
       expect(replay.events.map((e) => e.seq)).toEqual([2, 3]);
       expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('activity reattach skips durable transcript replay after buffer eviction', async () => {
+    const conv = 'conv-events-jsonl-activity-skip';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'old', role: 'assistant', content: 'old' } }); // seq 1
+    emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+    await flushConversationLog(conv);
+    evictBuffer(conv);
+
+    const { reader, abort } = await openStream(conv, 0, { activityOnly: true });
+    try {
+      // Reattachment is now a live-control subscription, not transcript
+      // hydration. The first delivered item is therefore genuinely new.
+      emit(conv, { type: 'run:start', flowId: 'f' }); // seq 3
+      const live = await readEvents(reader, 1);
+      expect(live.events.map((event) => event.seq)).toEqual([3]);
+      expect(live.events[0].type).toBe('run:start');
     } finally {
       abort.abort();
     }

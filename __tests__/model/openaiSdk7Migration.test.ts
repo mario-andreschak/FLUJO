@@ -94,4 +94,21 @@ describe('OpenAI SDK 7 compatibility boundary', () => {
       compactToolPayloads: true,
     });
   });
+
+  it('extracts the stateful append-only turn contract from metadata', async () => {
+    const request = new NextRequest('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'flow-test',
+        messages: [{ role: 'user', content: 'only the new turn' }],
+        metadata: { flujo: 'true', appendMessages: 'true' },
+      }),
+    });
+
+    await expect(parseRequestParameters(request)).resolves.toMatchObject({
+      appendMessages: true,
+      messages: [{ role: 'user', content: 'only the new turn' }],
+    });
+  });
 });

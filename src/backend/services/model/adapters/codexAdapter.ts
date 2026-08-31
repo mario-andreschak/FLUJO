@@ -759,6 +759,7 @@ export class CodexAdapter implements CompletionAdapter {
       // different from waiting for createCompletion to return, which allowed a
       // long Codex agentic loop to ignore the intervention until it was over.
       let nextTurnInput = initialInput;
+      let nextTurnWireMessages: OpenAI.ChatCompletionMessageParam[] | undefined;
       let connectionRetryUsed = false;
       let sdkTurnIndex = 0;
       while (true) {
@@ -790,6 +791,9 @@ export class CodexAdapter implements CompletionAdapter {
                   options: threadOptions,
                 },
               },
+              ...(nextTurnWireMessages
+                ? { wireMessages: structuredClone(nextTurnWireMessages) }
+                : {}),
             });
           } catch (archiveError) {
             log.warn('Could not archive Codex SDK request', archiveError);
@@ -937,6 +941,7 @@ export class CodexAdapter implements CompletionAdapter {
               ? message.content
               : JSON.stringify(message.content))
             .join('\n\n');
+          nextTurnWireMessages = structuredClone(steeringMessages);
           // The next answer, not the superseded pre-intervention draft, is the
           // node's effective final output. The earlier prose remains in transcript.
           resultText = '';
@@ -952,6 +957,7 @@ export class CodexAdapter implements CompletionAdapter {
         if (!connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
           connectionRetryUsed = true;
           nextTurnInput = continuationInput;
+          nextTurnWireMessages = [{ role: 'user', content: continuationInput }];
           log.warn('Codex connection closed mid-response; continuing the same thread once');
           continue;
         }

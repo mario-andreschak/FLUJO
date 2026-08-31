@@ -1,9 +1,8 @@
 /**
- * Tests for the shipped `bash` package's confinement + env hygiene (issue #175):
+ * Tests for the shipped `bash` package's confinement and host environment:
  *  - the `cwd` is confined to the same effective-roots model as `filesystem`
  *    (persisted roots + a FLUJO_BASH_ROOTS / FLUJO_FS_ROOTS hard ceiling), and
- *  - spawned commands DO NOT inherit the full backend process.env by default;
- *    a documented opt-in (FLUJO_BASH_INHERIT_ENV) restores it.
+ *  - spawned commands inherit the Bash server's complete host environment.
  *
  * The ordinary config loader is mocked so the effective-roots merge can be
  * exercised without a real storage layer.
@@ -111,10 +110,9 @@ describe('bash cwd confinement (issue #175)', () => {
   });
 });
 
-describe('bash env scrubbing (issue #175)', () => {
+describe('bash host environment inheritance', () => {
   let dir: string;
   const prevSecret = process.env.FAKE_SECRET;
-  const prevInherit = process.env.FLUJO_BASH_INHERIT_ENV;
   const prevParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
   const prevWorkspace = process.env.FLUJO_WORKSPACE;
 
@@ -125,21 +123,19 @@ describe('bash env scrubbing (issue #175)', () => {
     process.env.FAKE_SECRET = SECRET;
     process.env.FLUJO_PARENT_DATA_DIR = dir;
     process.env.FLUJO_WORKSPACE = 'bash-owner';
-    delete process.env.FLUJO_BASH_INHERIT_ENV;
   });
   afterEach(async () => {
     _resetBashSessionsForTests();
     await fsp.rm(dir, { recursive: true, force: true });
     if (prevSecret === undefined) delete process.env.FAKE_SECRET; else process.env.FAKE_SECRET = prevSecret;
-    if (prevInherit === undefined) delete process.env.FLUJO_BASH_INHERIT_ENV; else process.env.FLUJO_BASH_INHERIT_ENV = prevInherit;
     if (prevParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = prevParentDataDir;
     if (prevWorkspace === undefined) delete process.env.FLUJO_WORKSPACE; else process.env.FLUJO_WORKSPACE = prevWorkspace;
   });
 
-  itWithRealShell('does NOT leak a secret env var to spawned commands by default', async () => {
+  itWithRealShell('inherits the complete host environment by default', async () => {
     const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };
-    expect(payload.output ?? '').not.toContain(SECRET);
+    expect(payload.output ?? '').toContain(SECRET);
   });
 
   itWithRealShell('passes the non-secret FLUJO root and workspace markers by default', async () => {
@@ -151,12 +147,5 @@ describe('bash env scrubbing (issue #175)', () => {
     const workspacePayload = JSON.parse(text(workspaceResult)) as { output?: string };
     expect(parentPayload.output ?? '').toContain(dir);
     expect(workspacePayload.output ?? '').toContain('bash-owner');
-  });
-
-  itWithRealShell('restores full env inheritance when FLUJO_BASH_INHERIT_ENV is set', async () => {
-    process.env.FLUJO_BASH_INHERIT_ENV = '1';
-    const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
-    const payload = JSON.parse(text(r)) as { output?: string };
-    expect(payload.output ?? '').toContain(SECRET);
   });
 });

@@ -371,6 +371,35 @@ describe('Persona Core provenance resolution', () => {
     });
   });
 
+  it('rematerializes a legacy Persona-copy override after an authored model edit', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const authored = await requireAuthoredFlow(setup.bundle.persona);
+      const legacy = await installOverride(setup, authored.flow, {
+        kind: 'persona_override',
+        parentRevisionId: setup.baseRevision.id,
+        overrideFlowRef: authored.flowRef,
+      });
+      const changed = clone(authored.flow);
+      processNode(changed).data.properties = {
+        ...processNode(changed).data.properties,
+        boundModel: 'model-edited-on-canvas',
+      };
+      changed.updatedAt = Math.max(Date.now(), (changed.updatedAt ?? 0) + 1);
+      await expect(flowService.saveFlow(changed)).resolves.toMatchObject({ success: true });
+
+      const resolved = await resolvePersonaCoreRevision(setup.bundle.persona.id);
+      expect(resolved.id).not.toBe(legacy.id);
+      expect(processNode(resolved.flowSnapshot).data.properties?.boundModel)
+        .toBe('model-edited-on-canvas');
+      expect(resolved.source).toMatchObject({
+        kind: 'persona_override',
+        parentRevisionId: legacy.id,
+        sourceFlowRef: authored.flowRef,
+      });
+    });
+  });
+
   it('does not let unchanged authored content immediately undo a rollback', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();

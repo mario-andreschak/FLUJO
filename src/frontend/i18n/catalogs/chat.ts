@@ -315,6 +315,7 @@ export const chatMessageRows = {
   'chat.question.decline': ['Decline', 'Rechazar', 'Ablehnen', 'Refuser', 'Rifiuta', 'Recusar', '拒绝'],
   'chat.question.answer': ['Answer', 'Responder', 'Antworten', 'Répondre', 'Rispondi', 'Responder', '回答'],
   'chat.messages.earlier': ['Show earlier messages ({count} more)', 'Mostrar mensajes anteriores ({count} más)', 'Frühere Nachrichten anzeigen ({count} weitere)', 'Afficher les messages précédents ({count} de plus)', 'Mostra messaggi precedenti (altri {count})', 'Mostrar mensagens anteriores (mais {count})', '显示更早的消息（还有 {count} 条）'],
+  'chat.messages.loadFullHistory': ['Load full history', 'Cargar historial completo', 'Vollständigen Verlauf laden', 'Charger tout l’historique', 'Carica cronologia completa', 'Carregar histórico completo', '加载完整历史记录'],
   'chat.messages.attachment.one': ['{count} attachment', '{count} adjunto', '{count} Anhang', '{count} pièce jointe', '{count} allegato', '{count} anexo', '{count} 个附件'],
   'chat.messages.attachment.other': ['{count} attachments', '{count} adjuntos', '{count} Anhänge', '{count} pièces jointes', '{count} allegati', '{count} anexos', '{count} 个附件'],
   'chat.messages.queued': ['Queued', 'En cola', 'In Warteschlange', 'En attente', 'In coda', 'Na fila', '已排队'],

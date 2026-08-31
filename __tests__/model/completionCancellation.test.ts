@@ -63,6 +63,29 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
   appendRawForState: (...args: unknown[]) => mockAppendRawForState(...args),
 }));
 
+let archiveDispatchCounter = 0;
+const archiveModelDispatchMock = jest.fn(async (input: Record<string, unknown>): Promise<Record<string, unknown>> => ({
+  id: `dispatch-${++archiveDispatchCounter}`,
+  conversationId: input.conversationId,
+  node: { nodeId: input.nodeId },
+  modelId: input.modelId,
+  modelName: input.modelName,
+  adapter: input.adapter,
+  operation: input.operation,
+  timestamp: 1,
+  outcome: 'running',
+  attempt: input.attempt,
+  canonicalMessageCount: Array.isArray(input.canonicalMessages) ? input.canonicalMessages.length : 0,
+  wireMessageCount: Array.isArray(input.genericWire) ? input.genericWire.length : 0,
+  mediaCount: 0,
+  archiveVersion: 1,
+}));
+const updateModelDispatchOutcomeMock = jest.fn(async (..._args: unknown[]) => undefined);
+jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
+  archiveModelDispatch: (...args: [Record<string, unknown>]) => archiveModelDispatchMock(...args),
+  updateModelDispatchOutcome: (...args: unknown[]) => updateModelDispatchOutcomeMock(...args),
+}));
+
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -101,12 +124,88 @@ beforeEach(() => {
   conversationStates.clear();
   createCompletionMock.mockClear();
   mockAppendRawForState.mockClear();
+  archiveModelDispatchMock.mockClear();
+  archiveDispatchCounter = 0;
+  updateModelDispatchOutcomeMock.mockClear();
   adapterBehavior = 'complete';
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
 });
 
 describe('mid-flight completion cancellation', () => {
+  it('archives steering in the canonical and wire views of the next internal dispatch', async () => {
+    seedState('conv-steering-archive');
+    const streamedAssistant = {
+      id: 'assistant-before-steering',
+      timestamp: 2,
+      role: 'assistant',
+      content: 'I started with the first approach.',
+    } as const;
+    const injectedUser = {
+      id: 'steer-1',
+      timestamp: 3,
+      role: 'user',
+      content: 'Are we over-engineering this?',
+      injected: true,
+    } as const;
+    createCompletionMock.mockImplementationOnce(async (input: CompletionInput) => {
+      await input.onSdkRequest?.({
+        adapter: 'codex-cli',
+        operation: 'thread.runStreamed',
+        request: { input: 'initial' },
+      });
+      input.onTranscriptMessage?.(streamedAssistant);
+      input.onTranscriptMessage?.(injectedUser);
+      await input.onSdkRequest?.({
+        adapter: 'codex-cli',
+        operation: 'thread.runStreamed',
+        request: { input: injectedUser.content },
+        wireMessages: [injectedUser],
+      });
+      return {
+        completion: {
+          id: 'cmpl-steered',
+          object: 'chat.completion',
+          created: 3,
+          model: 'test-model',
+          choices: [
+            { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'No.', refusal: null } },
+          ],
+        },
+        transcript: [streamedAssistant, injectedUser],
+      };
+    });
+
+    const result = await ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'hi',
+      messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-steering-archive',
+      archiveModelTurns: true,
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+
+    expect(result.success).toBe(true);
+    expect(archiveModelDispatchMock).toHaveBeenCalledTimes(2);
+    const first = archiveModelDispatchMock.mock.calls[0][0] as {
+      canonicalMessages: Array<{ id: string }>;
+      genericWire: Array<{ role: string; content: unknown }>;
+    };
+    const second = archiveModelDispatchMock.mock.calls[1][0] as typeof first;
+    expect(first.canonicalMessages.map(message => message.id)).toEqual(['u1']);
+    expect(second.canonicalMessages.map(message => message.id)).toEqual([
+      'u1',
+      'assistant-before-steering',
+      'steer-1',
+    ]);
+    expect(second.genericWire).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Are we over-engineering this?' }),
+    ]);
+  });
+
   it('completes normally when the conversation is never cancelled', async () => {
     seedState('conv-ok');
     const result = await callModel('conv-ok');

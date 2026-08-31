@@ -12,7 +12,7 @@
  *   - a plain handoff ends the run and surfaces as a routing tool_call.
  */
 import type OpenAI from 'openai';
-import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
@@ -283,10 +283,15 @@ describe('CodexAdapter — transcript & usage', () => {
       .mockReturnValueOnce([injected])
       .mockReturnValue([]);
     const streamed: FlujoChatMessage[] = [];
+    const sdkRequests: SdkRequestSnapshot[] = [];
 
     const { completion, transcript } = await new CodexAdapter().createCompletion(baseInput({
       consumeSteeringMessages,
       onTranscriptMessage: message => streamed.push(message),
+      onSdkRequest: async snapshot => {
+        sdkRequests.push(snapshot);
+        return `dispatch-${sdkRequests.length}`;
+      },
     }));
 
     expect(runStreamedMock).toHaveBeenCalledTimes(2);
@@ -298,6 +303,11 @@ describe('CodexAdapter — transcript & usage', () => {
     ]);
     expect(streamed).toEqual(transcript);
     expect(completion.choices[0].message.content).toBe('corrected answer');
+    expect(sdkRequests).toHaveLength(2);
+    expect(sdkRequests[0].wireMessages).toBeUndefined();
+    expect(sdkRequests[1].wireMessages).toEqual([
+      expect.objectContaining({ id: 'steer-1', role: 'user', content: 'stop and use the other approach' }),
+    ]);
   });
 
   it('emits item.updated text as append-only deltas and reconciles the transcript id', async () => {

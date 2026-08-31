@@ -40,6 +40,12 @@ describe('detectDialectMismatch', () => {
     expect(warnings.join(' ')).toMatch(/"custom-tool" was not found on PATH/);
   });
 
+  it('checks Windows PATHEXT command names without their explicit suffix', () => {
+    const available = (name: string) => name === 'gcloud';
+    expect(detectDialectMismatch('gcloud.cmd compute instances list', 'cmd', available)).toEqual([]);
+    expect(detectDialectMismatch('gcloud.cmd compute instances list', 'powershell', available)).toEqual([]);
+  });
+
   it('does not mistake builtins, assignments, paths, or PowerShell cmdlets for executables', () => {
     expect(detectDialectMismatch('$p="x"; Get-ChildItem .; dir', 'powershell', noneAvailable)).toEqual([]);
   });

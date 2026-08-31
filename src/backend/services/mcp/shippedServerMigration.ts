@@ -296,6 +296,92 @@ async function runBrowserRecordRepairMigration(): Promise<void> {
   await saveItem(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6, true);
 }
 
+function pointsAtRelativeShippedPackageCopy(
+  stored: StoredServer,
+  descriptor: ShippedMcpServerDescriptor,
+): boolean {
+  if (typeof stored.rootPath !== 'string' || path.isAbsolute(stored.rootPath)) return false;
+  const normalizedRoot = stored.rootPath
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+  return normalizedRoot === `mcp-servers/${descriptor.packageDirectory.toLowerCase()}`;
+}
+
+/**
+ * Repair control-server records written under the former @flujo-ai package id.
+ * Those records can retain a relative package root, which resolves inside the
+ * workspace and launches an obsolete copied bundle instead of this install.
+ */
+async function runFlujoRecordRepairMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  const descriptor = SHIPPED_MCP_SERVERS.find((candidate) => candidate.packageDirectory === 'flujo');
+  let changed = false;
+
+  if (descriptor) {
+    const expected = persistedConfig(createShippedServerConfig(descriptor));
+    for (const [recordName, stored] of Object.entries(nextServers)) {
+      if (!isInstalledPackage(stored, descriptor)) continue;
+      const repaired = normalizedInstalledRecord(stored, descriptor);
+      repaired.rootPath = expected.rootPath;
+      for (const transient of ['error', 'path', 'status', 'stderrOutput', 'tools']) {
+        delete repaired[transient];
+      }
+      if (JSON.stringify(repaired) !== JSON.stringify(stored)) {
+        nextServers[recordName] = repaired;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7, true);
+}
+
+/**
+ * Repair Bash records left on a copied workspace package by V4/V5. A non-empty
+ * relative root made V5 consider the record complete even though it still
+ * launched the older `workspaces/<workspace>/mcp-servers/bash` bundle. Keep
+ * user controls, but bind package-owned launch fields to this installation.
+ */
+async function runBashRecordRepairMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  const descriptor = SHIPPED_MCP_SERVERS.find((candidate) => candidate.packageDirectory === 'bash');
+  let changed = false;
+
+  if (descriptor) {
+    const expected = persistedConfig(createShippedServerConfig(descriptor));
+    for (const [recordName, stored] of Object.entries(nextServers)) {
+      if (
+        !isInstalledPackage(stored, descriptor)
+        || !pointsAtRelativeShippedPackageCopy(stored, descriptor)
+      ) continue;
+      const repaired = normalizedInstalledRecord(stored, descriptor);
+      repaired.rootPath = expected.rootPath;
+      for (const transient of ['error', 'path', 'status', 'stderrOutput', 'tools']) {
+        delete repaired[transient];
+      }
+      if (JSON.stringify(repaired) !== JSON.stringify(stored)) {
+        nextServers[recordName] = repaired;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_SHIPPED_BASH_REPAIR_MIGRATION_V8, true);
+}
+
 /** Provision and upgrade shipped packages without synthetic runtime injection. */
 export function migrateShippedMcpServers(): Promise<void> {
   const workspace = getCurrentWorkspace();
@@ -308,6 +394,8 @@ export function migrateShippedMcpServers(): Promise<void> {
       await runOrdinaryStdioMigration();
       await runShippedServerRootsMigration();
       await runBrowserRecordRepairMigration();
+      await runFlujoRecordRepairMigration();
+      await runBashRecordRepairMigration();
     } finally {
       migrationsInFlight.delete(workspace);
     }
