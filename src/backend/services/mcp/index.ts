@@ -129,6 +129,13 @@ import {
   MCPServiceResponse,
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
+  MCP_SKILLS_EXTENSION_ID,
+  type McpGetSkillResult,
+  type McpLoadedSkill,
+  type McpReadSkillDirectoryResult,
+  type McpServerSkillsResult,
+  type McpSkillsExtensionCapability,
+  type McpVerifiedSkillResource,
 } from "@/shared/types/mcp";
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
@@ -162,6 +169,15 @@ import {
   listServerPrompts as listPrompts,
   getPrompt as getPromptFn,
 } from "./prompts";
+import {
+  McpSkillsUnsupportedError,
+  getMcpSkill,
+  getMcpSkillsCapability,
+  listMcpSkills,
+  loadVerifiedMcpSkill,
+  readMcpSkillDirectory,
+  readVerifiedMcpSkillResource,
+} from "./skills";
 import {
   MCPResource,
   MCPResourceTemplate,
@@ -226,6 +242,15 @@ import {
   serverSupportsExternalAuthorization,
 } from "./externalAuthorization";
 import { revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
+
+function mcpFailure<T>(response: MCPServiceResponse): MCPServiceResponse<T> {
+  return {
+    success: false,
+    error: response.error,
+    statusCode: response.statusCode,
+    errorType: response.errorType,
+  };
+}
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -2353,6 +2378,229 @@ export class MCPService {
     const result = await readResourceFn(client, serverName, uri);
     log.info(`readResource: Read resource ${uri} on ${serverName}`);
     return result;
+  }
+
+  private async prepareMcpSkillsClient(
+    serverName: string,
+  ): Promise<MCPServiceResponse<{ client: Client; capability: McpSkillsExtensionCapability }>> {
+    const config = await this.getServerConfig(serverName);
+    if (!config) {
+      return { success: false, error: `MCP server '${serverName}' was not found.`, statusCode: 404 };
+    }
+    if (config.disabled) {
+      return {
+        success: false,
+        error: `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`,
+        statusCode: 409,
+        errorType: "disabled",
+      };
+    }
+    if (config.enableMcpSkills !== true) {
+      return {
+        success: false,
+        error: `MCP Skills are disabled for server '${serverName}'.`,
+        statusCode: 409,
+        errorType: "skills_disabled",
+      };
+    }
+
+    const connect = await this.connectServer(serverName);
+    if (!connect.success) {
+      return {
+        success: false,
+        error: connect.error || `Failed to connect to MCP server '${serverName}'.`,
+        statusCode: connect.statusCode || 502,
+      };
+    }
+
+    const client = this.getClient(serverName);
+    const capability = getMcpSkillsCapability(client, true);
+    if (!client || !capability) {
+      return {
+        success: false,
+        error: `Server '${serverName}' does not advertise ${MCP_SKILLS_EXTENSION_ID}.`,
+        statusCode: 404,
+        errorType: "skills_unsupported",
+      };
+    }
+    return { success: true, data: { client, capability } };
+  }
+
+  async getServerSkillsCapability(
+    serverName: string,
+  ): Promise<McpSkillsExtensionCapability | undefined> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    return prepared.success ? prepared.data?.capability : undefined;
+  }
+
+  async listServerSkills(
+    serverName: string,
+    cursor?: string,
+  ): Promise<McpServerSkillsResult> {
+    const config = await this.getServerConfig(serverName);
+    if (!config || config.disabled || config.enableMcpSkills !== true) {
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability: "disabled",
+        ...(!config ? { error: `MCP server '${serverName}' was not found.` } : {}),
+      };
+    }
+
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) {
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability:
+          prepared.errorType === "skills_unsupported" ? "unsupported" : "available",
+        ...(prepared.errorType === "skills_unsupported" ? {} : { error: prepared.error }),
+      };
+    }
+
+    const attempt = async (client: Client) => listMcpSkills(client, true, cursor);
+    try {
+      const result = await attempt(prepared.data.client);
+      return {
+        ...result,
+        serverName,
+        availability: "available",
+        capability: prepared.data.capability,
+      };
+    } catch (error) {
+      if (error instanceof McpSkillsUnsupportedError) {
+        return {
+          resultType: "complete",
+          skills: [],
+          serverName,
+          availability: "unsupported",
+        };
+      }
+
+      const reconnect = await this.forceReconnect(serverName);
+      if (reconnect.success) {
+        const retryClient = this.getClient(serverName);
+        try {
+          const result = await attempt(retryClient as Client);
+          const capability = getMcpSkillsCapability(retryClient, true);
+          return {
+            ...result,
+            serverName,
+            availability: "available",
+            ...(capability ? { capability } : {}),
+          };
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+
+      return {
+        resultType: "complete",
+        skills: [],
+        serverName,
+        availability: "available",
+        error: error instanceof Error ? error.message : "Failed to list MCP Skills.",
+      };
+    }
+  }
+
+  async getServerSkill(
+    serverName: string,
+    uri: string,
+  ): Promise<MCPServiceResponse<McpGetSkillResult>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+
+    try {
+      return { success: true, data: await getMcpSkill(prepared.data.client, true, uri) };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to get MCP Skill.",
+        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
+      };
+    }
+  }
+
+  async readServerSkillDirectory(
+    serverName: string,
+    uri: string,
+    cursor?: string,
+  ): Promise<MCPServiceResponse<McpReadSkillDirectoryResult>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+
+    try {
+      return {
+        success: true,
+        data: await readMcpSkillDirectory(prepared.data.client, true, uri, cursor),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to read MCP Skill directory.",
+        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
+      };
+    }
+  }
+
+  async readVerifiedSkillResource(
+    serverName: string,
+    skillUri: string,
+    resourceUri: string,
+  ): Promise<MCPServiceResponse<McpVerifiedSkillResource>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+    const skill = await this.getServerSkill(serverName, skillUri);
+    if (!skill.success || !skill.data) return mcpFailure(skill);
+
+    try {
+      return {
+        success: true,
+        data: await readVerifiedMcpSkillResource(
+          prepared.data.client,
+          true,
+          skill.data.skill,
+          resourceUri,
+        ),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to verify MCP Skill resource.",
+        statusCode: 422,
+      };
+    }
+  }
+
+  async loadVerifiedSkill(
+    serverName: string,
+    skillUri: string,
+  ): Promise<MCPServiceResponse<McpLoadedSkill>> {
+    const prepared = await this.prepareMcpSkillsClient(serverName);
+    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
+    const skill = await this.getServerSkill(serverName, skillUri);
+    if (!skill.success || !skill.data) return mcpFailure(skill);
+
+    try {
+      return {
+        success: true,
+        data: await loadVerifiedMcpSkill(
+          prepared.data.client,
+          true,
+          serverName,
+          skill.data.skill,
+        ),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to load MCP Skill.",
+        statusCode: 422,
+      };
+    }
   }
 
   /**

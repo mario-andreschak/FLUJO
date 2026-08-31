@@ -17,6 +17,12 @@ import { mcpService } from '@/backend/services/mcp';
 import { isLocked } from '@/utils/encryption/lockGate';
 import type { Tool, CallToolResult, Resource, ResourceTemplate, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  McpGetSkillResult,
+  McpListSkillsResult,
+  McpReadSkillDirectoryResult,
+  McpSkillsExtensionCapability,
+} from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/proxyForward');
 
@@ -160,6 +166,79 @@ export async function proxyListResourceTemplates(serverName: string): Promise<{ 
  *   and is closer to the MCP 2026-07-28 spec intent (which introduces -32002 ResourceNotFound;
  *   update when that code is exported by whichever SDK version is in use).
  */
+export async function getProxySkillsCapability(
+  serverName: string,
+): Promise<McpSkillsExtensionCapability | undefined> {
+  if (await isLocked()) return undefined;
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) return undefined;
+  return mcpService.getServerSkillsCapability(serverName);
+}
+
+export async function proxyListSkills(
+  serverName: string,
+  cursor?: string,
+): Promise<McpListSkillsResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.listServerSkills(serverName, cursor);
+  if (result.availability !== 'available' || result.error) {
+    throw new Error(
+      result.error || `MCP Skills are unavailable for downstream server '${serverName}'.`,
+    );
+  }
+  const { resultType, skills, nextCursor, ttlMs, cacheScope } = result;
+  return {
+    resultType,
+    skills,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    ...(ttlMs === undefined ? {} : { ttlMs }),
+    ...(cacheScope === undefined ? {} : { cacheScope }),
+  };
+}
+
+export async function proxyGetSkill(
+  serverName: string,
+  uri: string,
+): Promise<McpGetSkillResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.getServerSkill(serverName, uri);
+  if (!result.success || !result.data) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
+  }
+  return result.data;
+}
+
+export async function proxyReadSkillDirectory(
+  serverName: string,
+  uri: string,
+  cursor?: string,
+): Promise<McpReadSkillDirectoryResult> {
+  if (await isLocked()) throw new Error(LOCKED_MESSAGE);
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) {
+    throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
+  }
+  const result = await mcpService.readServerSkillDirectory(serverName, uri, cursor);
+  if (!result.success || !result.data) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Skill directory not found: '${uri}' on server '${serverName}': ${result.error ?? 'unknown error'}`,
+    );
+  }
+  return result.data;
+}
+
 export async function proxyReadResource(serverName: string, uri: string): Promise<ReadResourceResult> {
   if (await isLocked()) {
     throw new Error(LOCKED_MESSAGE);

@@ -81,6 +81,7 @@ export function capabilityKey(config: MCPServerConfig): string {
     samplingConfigKey(config),
     elicitationConfigKey(config),
     config.enableMcpApps === true ? "mcp-apps:on" : "mcp-apps:off",
+    config.enableMcpSkills === true ? "mcp-skills:on" : "mcp-skills:off",
   ].join("|");
 }
 
@@ -934,7 +935,7 @@ export function shouldRecreateClient(
   if (currentCapKey !== capabilityKey(config)) {
     return {
       needsNewClient: true,
-      reason: "Client capabilities (sampling/elicitation/MCP Apps) changed",
+      reason: "Client capabilities (sampling/elicitation/MCP Apps/Skills) changed",
     };
   }
 

@@ -32,6 +32,10 @@ node mcp-servers/browser/dist/index.js
 
 `mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
 
+### Experimental Skills forwarding
+
+`mcp-flujo` advertises the draft `io.modelcontextprotocol/skills` extension and implements the frozen revision `SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03`. It aggregates only downstream servers with `enableMcpSkills: true`, follows bounded pagination, and rewrites entries to server-qualified `skill+flujo://` URIs so equal source URIs on two servers cannot collide. Resource reads return only content that passes FLUJO's declared size and SHA-256 verification. Discovery is not approval, and the standalone process holds no mutable approval state. See `docs/features/mcp-skills.md`.
+
 ## Filesystem server
 
 The filesystem `search` tool keeps one small cross-platform interface for name

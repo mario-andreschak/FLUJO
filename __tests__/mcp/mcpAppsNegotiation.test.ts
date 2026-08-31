@@ -99,7 +99,7 @@ describe('MCP Apps client capability negotiation', () => {
 
     expect(result).toEqual({
       needsNewClient: true,
-      reason: 'Client capabilities (sampling/elicitation/MCP Apps) changed',
+      reason: 'Client capabilities (sampling/elicitation/MCP Apps/Skills) changed',
     });
   });
 });

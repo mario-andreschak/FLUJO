@@ -3,13 +3,16 @@ export type FlujoOperation =
   | 'callTool'
   | 'listResources'
   | 'listResourceTemplates'
-  | 'readResource';
+  | 'readResource'
+  | 'listSkills'
+  | 'getSkill';
 
 type FlujoPayload = {
   name?: string;
   args?: Record<string, unknown>;
   uri?: string;
   cursor?: string;
+  skillUri?: string;
 };
 
 const AUTHORING_TOOLS = new Set([
@@ -165,6 +168,17 @@ export async function flujoRequest<T>(
     return requestJson<T>('/api/mcp/flujo/resources/read', {
       method: 'POST',
       body: JSON.stringify({ uri: payload.uri }),
+    });
+  }
+  if (operation === 'listSkills') {
+    return requestJson<T>('/api/mcp/flujo/skills');
+  }
+  if (operation === 'getSkill') {
+    const uri = payload.skillUri?.trim();
+    if (!uri) throw new Error('A standalone MCP Skill URI is required.');
+    return requestJson<T>('/api/mcp/flujo/skills', {
+      method: 'POST',
+      body: JSON.stringify({ uri }),
     });
   }
 

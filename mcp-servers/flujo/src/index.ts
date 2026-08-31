@@ -14,12 +14,28 @@ import {
   type ReadResourceResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import { flujoRequest } from './client.js';
+import {
+  MCP_SKILLS_EXTENSION_ID,
+  McpGetSkillRequestSchema,
+  McpListSkillsRequestSchema,
+  type StandaloneGetSkillResult,
+  type StandaloneListSkillsResult,
+} from './skills.js';
 
 export * from './client.js';
+export * from './skills.js';
 
 const server = new Server(
   { name: '@mario.andreschak/mcp-flujo', version: '0.1.0' },
-  { capabilities: { tools: {}, resources: {} } },
+  {
+    capabilities: {
+      tools: {},
+      resources: {},
+      extensions: {
+        [MCP_SKILLS_EXTENSION_ID]: {},
+      },
+    },
+  },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => flujoRequest<ListToolsResult>('listTools'));
@@ -37,6 +53,14 @@ server.setRequestHandler(ListResourceTemplatesRequestSchema, async () =>
 );
 server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
   flujoRequest<ReadResourceResult>('readResource', { uri: request.params.uri }),
+);
+server.setRequestHandler(McpListSkillsRequestSchema, async () =>
+  flujoRequest<StandaloneListSkillsResult>('listSkills'),
+);
+server.setRequestHandler(McpGetSkillRequestSchema, async (request) =>
+  flujoRequest<StandaloneGetSkillResult>('getSkill', {
+    skillUri: request.params.uri,
+  }),
 );
 
 const transport = new StdioServerTransport();
