@@ -14,6 +14,10 @@ jest.mock('@/backend/services/mcp', () => ({
     listServerResources: jest.fn(),
     listServerResourceTemplates: jest.fn(),
     readResource: jest.fn(),
+    getServerSkillsCapability: jest.fn(),
+    listServerSkills: jest.fn(),
+    getServerSkill: jest.fn(),
+    readServerSkillDirectory: jest.fn(),
   },
 }));
 
@@ -25,6 +29,9 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
+  getProxySkillsCapability,
+  proxyGetSkill,
+  proxyListSkills,
 } from '@/backend/services/mcp/proxyForward';
 import { mcpService } from '@/backend/services/mcp';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
@@ -37,6 +44,10 @@ const svc = mcpService as unknown as {
   listServerResources: jest.Mock;
   listServerResourceTemplates: jest.Mock;
   readResource: jest.Mock;
+  getServerSkillsCapability: jest.Mock;
+  listServerSkills: jest.Mock;
+  getServerSkill: jest.Mock;
+  readServerSkillDirectory: jest.Mock;
 };
 
 beforeEach(() => jest.clearAllMocks());
@@ -233,5 +244,41 @@ describe('proxyReadResource', () => {
     }
     expect(thrown).toBeInstanceOf(McpError);
     expect((thrown as McpError).code).toBe(ErrorCode.InvalidParams);
+  });
+});
+
+
+describe('proxy Skills forwarding', () => {
+  it('advertises capability only after connection and downstream negotiation', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getServerSkillsCapability.mockResolvedValue({ directoryRead: true });
+    await expect(getProxySkillsCapability('srv')).resolves.toEqual({ directoryRead: true });
+  });
+
+  it('forwards list/get without host approval state', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.listServerSkills.mockResolvedValue({
+      resultType: 'complete',
+      skills: [],
+      serverName: 'srv',
+      availability: 'available',
+      nextCursor: 'next',
+    });
+    await expect(proxyListSkills('srv', 'cursor')).resolves.toEqual({
+      resultType: 'complete',
+      skills: [],
+      nextCursor: 'next',
+    });
+
+    const skill = {
+      resultType: 'complete',
+      skill: {
+        uri: 'skill://demo/SKILL.md',
+        frontmatter: { name: 'demo', description: 'Demo' },
+        resources: 'dynamic',
+      },
+    };
+    svc.getServerSkill.mockResolvedValue({ success: true, data: skill });
+    await expect(proxyGetSkill('srv', skill.skill.uri)).resolves.toEqual(skill);
   });
 });

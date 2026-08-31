@@ -36,6 +36,11 @@ import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import QuickChatDialog, {
+  QuickChatStartSelection,
+} from '@/frontend/components/Chat/QuickChatDialog';
+import { flowService } from '@/frontend/services/flow';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -57,6 +62,10 @@ export default function ModelClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
   const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
+  const [conversionModel, setConversionModel] = useState<
+    Pick<Model, 'id' | 'name' | 'displayName'> | null
+  >(null);
+  const [conversionCreationId, setConversionCreationId] = useState<string | null>(null);
   // In-memory draft for a brand-new model (add mode). It is NOT persisted to disk until the
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
@@ -377,6 +386,46 @@ export default function ModelClient() {
     }
   };
 
+  const handleOpenConversion = (modelId: string) => {
+    const model = models.find((candidate) => candidate.id === modelId);
+    if (!model) {
+      setError(t('models.notFound'));
+      return;
+    }
+    // Keep the conversion boundary credential-free: only public identity fields
+    // cross into dialog state, never the model's ApiKey or provider settings.
+    setConversionModel({
+      id: model.id,
+      name: model.name,
+      displayName: model.displayName,
+    });
+    setConversionCreationId(uuidv4());
+  };
+
+  const handleCloseConversion = () => {
+    setConversionModel(null);
+    setConversionCreationId(null);
+  };
+
+  const handleCreateAgent = async (selection: QuickChatStartSelection) => {
+    if (!conversionModel || !conversionCreationId || !selection.flowName) {
+      throw new Error(t('models.agent.invalidSelection'));
+    }
+    const created = await flowService.createModelAgent({
+      creationId: conversionCreationId,
+      modelId: conversionModel.id,
+      name: selection.flowName,
+      servers: selection.servers,
+      systemPrompt: selection.systemPrompt,
+    });
+    handleCloseConversion();
+    router.push(magicLinkPath({
+      kind: 'flow-editor',
+      id: created.flowId,
+      extra: { authoringMode: 'advanced' },
+    }));
+  };
+
   const handleCloseModal = async () => {
     // Nothing to clean up: an unsaved new model only ever lived in memory.
     setNewModelDraft(null);
@@ -489,10 +538,30 @@ export default function ModelClient() {
         onAdd={handleAdd}
         onUpdate={handleEdit}
         onDelete={handleDelete}
+        onConvertToAgent={handleOpenConversion}
         folders={collectFolders(models, (m) => m.folder)}
         onSetFolder={handleSetFolder}
         onToggleFavorite={handleToggleFavorite}
       />
+
+      {conversionModel && (
+        <QuickChatDialog
+          open
+          onClose={handleCloseConversion}
+          onStart={handleCreateAgent}
+          initialModelId={conversionModel.id}
+          lockModelSelection
+          initialFlowName={`${conversionModel.displayName || conversionModel.name} Agent`}
+          flowNameLabel={t('models.agent.nameLabel')}
+          title={t('models.agent.title')}
+          helpText={t('models.agent.help')}
+          serversLabel={t('models.agent.connectedApps')}
+          noServersText={t('models.agent.noApps')}
+          submitLabel={t('models.agent.saveAndOpen')}
+          submittingLabel={t('models.agent.saving')}
+          connectedServersOnly
+        />
+      )}
 
       <ModelConnectionWizard
         open={isWizardOpen}

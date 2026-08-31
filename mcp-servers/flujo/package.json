@@ -20,7 +20,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

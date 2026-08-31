@@ -37,6 +37,19 @@ export type ConvertProcessToSubflowResult =
   | { success: true; parentFlow: Flow; childFlow: Flow }
   | { success: false; error: string };
 
+export interface CreateModelAgentSelection {
+  creationId: string;
+  modelId: string;
+  name: string;
+  servers: Array<{ name: string; enabledTools?: string[] }>;
+  systemPrompt?: string;
+}
+
+export interface CreatedModelAgent {
+  flowId: string;
+  name: string;
+}
+
 /**
  * FlowService class provides a client-side API for UI components
  * This service makes API calls to the server-side API layer
@@ -225,6 +238,26 @@ class FlowService {
       log.warn(`getFlow: Failed to get flow ${flowId}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Create and persist an agent from a model + connected-app selection. The
+   * browser sends intent only; graph synthesis and validation stay backend-owned.
+   */
+  async createModelAgent(selection: CreateModelAgentSelection): Promise<CreatedModelAgent> {
+    const response = await fetch('/api/flow/model-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selection),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || typeof data?.flowId !== 'string' || typeof data?.name !== 'string') {
+      throw new Error(data?.error || 'Could not create the agent.');
+    }
+    // The endpoint persisted a new flow outside the generic addFlow path.
+    // Invalidate the list cache so /flows loads the saved record after navigation.
+    this.flowsCache = null;
+    return { flowId: data.flowId, name: data.name };
   }
 
   /**

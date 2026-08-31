@@ -15,6 +15,7 @@ import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderAction
 import ToolManager from '../MCPToolManager';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import CapabilitiesManager from '../MCPCapabilitiesManager';
+import MCPSkillsManager from '../MCPSkillsManager';
 import EnvEditor from '../MCPEnvManager/EnvEditor';
 import { EnvVarValue } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
@@ -39,7 +40,7 @@ interface ServerDetailsModalProps {
   toolPrefill?: ToolTesterPrefill;
 }
 
-type DetailsTab = 'tools' | 'resources' | 'prompts' | 'env';
+type DetailsTab = 'tools' | 'resources' | 'prompts' | 'skills' | 'env';
 
 const statusColor = (status: string) =>
   status === 'connected'
@@ -132,6 +133,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
           <Tab label={t('mcp.details.tools')} value="tools" />
           <Tab label={t('mcp.details.resources')} value="resources" />
           <Tab label={t('mcp.details.prompts')} value="prompts" />
+          <Tab label={t('mcp.details.skills')} value="skills" />
           <Tab label={t('mcp.details.env')} value="env" />
         </Tabs>
       </DialogTitle>
@@ -141,6 +143,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
         {open && tab === 'tools' && <ToolManager serverName={serverName} prefill={toolPrefill} />}
         {open && tab === 'resources' && <CapabilitiesManager serverName={serverName} show="resources" />}
         {open && tab === 'prompts' && <CapabilitiesManager serverName={serverName} show="prompts" />}
+        {open && tab === 'skills' && <MCPSkillsManager serverName={serverName} />}
         {open && tab === 'env' && (
           <Box sx={{ mt: 1 }}>
             <EnvEditor

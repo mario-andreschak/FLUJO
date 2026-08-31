@@ -35,7 +35,11 @@ import TravelExploreRoundedIcon from '@mui/icons-material/TravelExploreRounded';
 import SyncAltRoundedIcon from '@mui/icons-material/SyncAltRounded';
 import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
-import { RunRecord, RunRecordStatus } from '@/shared/types/plannedExecution';
+import {
+  normalizeStartRestrictions,
+  RunRecord,
+  RunRecordStatus,
+} from '@/shared/types/plannedExecution';
 import {
   plannedExecutionsService,
   PlannedExecutionListEntry,
@@ -146,6 +150,7 @@ const ExecutionCard = ({
   const { visualStyle } = useThemeUtils();
   const modern = visualStyle === 'modern';
   const { execution, status, lastRun } = entry;
+  const restrictions = normalizeStartRestrictions(execution);
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(false);
@@ -346,15 +351,33 @@ const ExecutionCard = ({
                     '& .MuiChip-root': { height: 22, fontSize: '0.7rem' },
                   }}
                 >
-                  {execution.exclusive && (
-                    <Tooltip title={t('automations.card.exclusiveHelp')}>
+                  {restrictions.startRestriction !== 'unrestricted' && (
+                    <Tooltip
+                      title={t(`automations.modal.restriction.${restrictions.startRestriction}.description`)}
+                    >
                       <Chip
                         size="small"
                         color="secondary"
                         variant="outlined"
-                        label={t('automations.card.exclusive')}
+                        label={t(`automations.modal.restriction.${restrictions.startRestriction}.title`)}
                       />
                     </Tooltip>
+                  )}
+                  {restrictions.superExclusive && (
+                    <Chip
+                      size="small"
+                      color="secondary"
+                      variant="outlined"
+                      label={t('automations.modal.superExclusiveTitle')}
+                    />
+                  )}
+                  {restrictions.emergency && (
+                    <Chip
+                      size="small"
+                      color="error"
+                      variant="outlined"
+                      label={t('automations.modal.emergencyTitle')}
+                    />
                   )}
                   {!execution.enabled && (
                     <Chip size="small" label={t('automations.card.off')} variant="outlined" />
@@ -600,10 +623,22 @@ const ExecutionCard = ({
               {execution.name}
             </Typography>
             <Chip size="small" label={describeTrigger(execution.trigger, t)} />
-            {execution.exclusive && (
-              <Tooltip title={t('automations.card.exclusiveHelp')}>
-                <Chip size="small" color="secondary" label={t('automations.card.exclusive')} />
+            {restrictions.startRestriction !== 'unrestricted' && (
+              <Tooltip
+                title={t(`automations.modal.restriction.${restrictions.startRestriction}.description`)}
+              >
+                <Chip
+                  size="small"
+                  color="secondary"
+                  label={t(`automations.modal.restriction.${restrictions.startRestriction}.title`)}
+                />
               </Tooltip>
+            )}
+            {restrictions.superExclusive && (
+              <Chip size="small" color="secondary" label={t('automations.modal.superExclusiveTitle')} />
+            )}
+            {restrictions.emergency && (
+              <Chip size="small" color="error" label={t('automations.modal.emergencyTitle')} />
             )}
             {!execution.enabled && <Chip size="small" label={t('automations.card.off')} variant="outlined" />}
             {execution.folder && (

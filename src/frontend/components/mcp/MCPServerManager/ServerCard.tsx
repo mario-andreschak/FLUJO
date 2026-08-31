@@ -16,6 +16,7 @@ import LoginIcon from "@mui/icons-material/Login";
 import KeyOffIcon from "@mui/icons-material/KeyOff";
 import PublicIcon from "@mui/icons-material/Public";
 import WidgetsIcon from "@mui/icons-material/Widgets";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CopyLinkButton from "@/frontend/components/shared/CopyLinkButton";
 import DataObjectIcon from "@mui/icons-material/DataObject";
@@ -97,6 +98,7 @@ interface ServerCardProps {
   stdioOAuth?: MCPStdioOAuthStatus;
   exposeAsMcpServer?: boolean; // Whether this server is re-exposed at /mcp-proxy/<name> (#17A)
   enableMcpApps?: boolean; // Whether this server may render interactive ui:// UI resources in chat (#97)
+  enableMcpSkills?: boolean; // Experimental SEP-2640 discovery and explicit loading (#492)
   updateInfo?: ServerUpdateInfo; // Git update status for locally cloned servers
   installCommand?: string; // Stored install command, re-run after a git update
   buildCommand?: string; // Stored build command, re-run after a git update
@@ -149,6 +151,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   stdioOAuth,
   exposeAsMcpServer = false,
   enableMcpApps = false,
+  enableMcpSkills = false,
   updateInfo,
   installCommand,
   buildCommand,
@@ -186,6 +189,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [exposed, setExposed] = useState(exposeAsMcpServer);
   // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
   const [appsEnabled, setAppsEnabled] = useState(enableMcpApps);
+  const [skillsEnabled, setSkillsEnabled] = useState(enableMcpSkills);
   const muiTheme = useTheme();
 
   // Keep the toggle in sync if the parent reloads configs.
@@ -196,6 +200,10 @@ const ServerCard: React.FC<ServerCardProps> = ({
   useEffect(() => {
     setAppsEnabled(enableMcpApps);
   }, [enableMcpApps]);
+
+  useEffect(() => {
+    setSkillsEnabled(enableMcpSkills);
+  }, [enableMcpSkills]);
 
   useEffect(
     () => () => {
@@ -258,6 +266,24 @@ const ServerCard: React.FC<ServerCardProps> = ({
     } else {
       setAppsEnabled(!checked); // revert
       setToastMessage(t("mcp.card.appsFailed"));
+      setToastSeverity("error");
+    }
+    setShowToast(true);
+  };
+
+  const handleToggleSkills = async (checked: boolean) => {
+    setSkillsEnabled(checked);
+    const result = await mcpService.updateServerConfig(name, {
+      enableMcpSkills: checked,
+    });
+    if ("success" in result && result.success) {
+      setToastMessage(
+        checked ? t("mcp.card.skillsEnabled") : t("mcp.card.skillsDisabled"),
+      );
+      setToastSeverity("success");
+    } else {
+      setSkillsEnabled(!checked);
+      setToastMessage(t("mcp.card.skillsFailed"));
       setToastSeverity("error");
     }
     setShowToast(true);
@@ -1087,6 +1113,48 @@ const ServerCard: React.FC<ServerCardProps> = ({
               </Box>
             </Tooltip>
 
+            <Tooltip title={t("mcp.card.skillsHelp")} placement="top">
+              <Box
+                sx={{
+                  minWidth: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.8,
+                  px: 1.15,
+                  py: 0.8,
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 2,
+                    display: "grid",
+                    placeItems: "center",
+                    flexShrink: 0,
+                    color: skillsEnabled ? "warning.main" : "text.disabled",
+                    bgcolor: alpha(muiTheme.palette.warning.main, skillsEnabled ? 0.12 : 0.045),
+                  }}
+                >
+                  <AutoAwesomeIcon sx={{ fontSize: 17 }} />
+                </Box>
+                <Typography
+                  variant="caption"
+                  noWrap
+                  sx={{ flex: 1, minWidth: 0, fontWeight: 650, color: skillsEnabled ? "text.primary" : "text.secondary" }}
+                >
+                  {t("mcp.card.skills")}
+                </Typography>
+                <Switch
+                  checked={skillsEnabled}
+                  onChange={(e) => handleToggleSkills(e.target.checked)}
+                  size="small"
+                  color="warning"
+                  inputProps={{ "aria-label": t("mcp.card.skills") }}
+                />
+              </Box>
+            </Tooltip>
+
             {exposed && (
               <Box
                 sx={{
@@ -1216,6 +1284,37 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 <Tooltip title={t("mcp.card.appsHelp")}>
                   <Typography variant="body2" sx={{ fontWeight: 500 }}>
                     {t("mcp.card.apps")}
+                  </Typography>
+                </Tooltip>
+              </Box>
+            </Box>
+
+            <Box
+              sx={{
+                mt: 1,
+                mb: 1,
+                p: 1.1,
+                borderRadius: 2.5,
+                border: "1px solid",
+                borderColor: "divider",
+                bgcolor: alpha(muiTheme.palette.background.default, 0.42),
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Box sx={{ display: "flex", alignItems: "center" }}>
+                <AutoAwesomeIcon
+                  fontSize="small"
+                  sx={{ mr: 0.5, color: skillsEnabled ? "warning.main" : "text.disabled" }}
+                />
+                <Switch
+                  checked={skillsEnabled}
+                  onChange={(e) => handleToggleSkills(e.target.checked)}
+                  size="small"
+                  color="warning"
+                />
+                <Tooltip title={t("mcp.card.skillsHelp")}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {t("mcp.card.skills")}
                   </Typography>
                 </Tooltip>
               </Box>

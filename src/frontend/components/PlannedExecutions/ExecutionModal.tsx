@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -17,6 +17,8 @@ import {
   MenuItem,
   Select,
   Switch,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material';
@@ -36,9 +38,11 @@ import {
   FileWatchTriggerConfig,
   FlowEventTriggerConfig,
   McpPollTriggerConfig,
+  normalizeStartRestrictions,
   OverlapStrategy,
   PlannedExecution,
   ScheduleTriggerConfig,
+  StartRestriction,
   TriggerConfig,
   UrlWatchTriggerConfig,
   WebhookTriggerConfig,
@@ -94,6 +98,10 @@ const DEFAULT_FLOW_EVENT: FlowEventTriggerConfig = {
 };
 
 type ExecutionTargetKind = 'flow' | 'persona';
+type ExecutionSection = 'when' | 'what' | 'restrictions';
+
+const EXECUTION_SECTIONS: ExecutionSection[] = ['when', 'what', 'restrictions'];
+const START_RESTRICTIONS: StartRestriction[] = ['unrestricted', 'singleton', 'exclusive'];
 
 interface ExecutionModalProps {
   open: boolean;
@@ -119,7 +127,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [prompt, setPrompt] = useState('');
   const [saveConversations, setSaveConversations] = useState(false);
   const [overlapStrategy, setOverlapStrategy] = useState<OverlapStrategy>('skip');
-  const [exclusive, setExclusive] = useState(false);
+  const [startRestriction, setStartRestriction] = useState<StartRestriction>('unrestricted');
+  const [superExclusive, setSuperExclusive] = useState(false);
+  const [emergency, setEmergency] = useState(false);
   const [nonExclusiveBehavior, setNonExclusiveBehavior] =
     useState<'queue' | 'skip' | 'error'>('queue');
   const [trigger, setTrigger] = useState<TriggerConfig>(DEFAULT_SCHEDULE);
@@ -136,6 +146,13 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [personaCompositionError, setPersonaCompositionError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<ExecutionSection>('when');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const whenRef = useRef<HTMLDivElement>(null);
+  const whatRef = useRef<HTMLDivElement>(null);
+  const restrictionsRef = useRef<HTMLDivElement>(null);
+  const programmaticScroll = useRef(false);
+  const restrictionCardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Reset the form from the execution being edited (or to defaults) on open.
   useEffect(() => {
@@ -149,12 +166,17 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setPrompt(execution?.prompt ?? '');
     setSaveConversations(execution?.saveConversations === true);
     setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
-    setExclusive(execution?.exclusive === true);
+    const restrictions = normalizeStartRestrictions(execution ?? {});
+    setStartRestriction(restrictions.startRestriction);
+    setSuperExclusive(restrictions.superExclusive);
+    setEmergency(restrictions.emergency);
     setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
     setTrigger(execution?.trigger ?? DEFAULT_SCHEDULE);
     setDraftId(execution ? '' : crypto.randomUUID());
     setPersonaComposition(null);
     setPersonaCompositionError(false);
+    setActiveSection('when');
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
@@ -262,6 +284,66 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       : personaComposition.core?.readiness.state === 'ready')
   );
 
+  const sectionRef = (section: ExecutionSection) => {
+    if (section === 'when') return whenRef;
+    if (section === 'what') return whatRef;
+    return restrictionsRef;
+  };
+
+  useEffect(() => {
+    if (!open || typeof IntersectionObserver === 'undefined') return;
+    const root = scrollContainerRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (programmaticScroll.current) return;
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+      const section = (visible[0]?.target as HTMLElement | undefined)
+        ?.dataset.section as ExecutionSection | undefined;
+      if (section) setActiveSection(section);
+    }, {
+      root,
+      threshold: [0.2, 0.5, 0.8],
+      rootMargin: '0px 0px -40% 0px',
+    });
+    [whenRef, whatRef, restrictionsRef].forEach((ref) => {
+      if (ref.current) observer.observe(ref.current);
+    });
+    return () => observer.disconnect();
+  }, [open, execution]);
+
+  const handleSectionClick = (section: ExecutionSection) => {
+    setActiveSection(section);
+    programmaticScroll.current = true;
+    const target = sectionRef(section).current;
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    window.setTimeout(() => {
+      programmaticScroll.current = false;
+    }, 500);
+  };
+
+  const selectStartRestriction = (restriction: StartRestriction) => {
+    setStartRestriction(restriction);
+    if (restriction === 'singleton' && overlapStrategy === 'parallel') {
+      setOverlapStrategy('skip');
+    }
+  };
+
+  const handleRestrictionKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+    const nextIndex = (index + delta + START_RESTRICTIONS.length) % START_RESTRICTIONS.length;
+    selectStartRestriction(START_RESTRICTIONS[nextIndex]);
+    restrictionCardRefs.current[nextIndex]?.focus();
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveError(null);
@@ -271,7 +353,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       prompt,
       saveConversations,
       overlapStrategy,
-      exclusive,
+      startRestriction,
+      superExclusive,
+      emergency,
       nonExclusiveBehavior,
       trigger,
       enabled: execution?.enabled ?? true,
@@ -311,8 +395,12 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         sx: {
           borderTop: 5,
           borderColor: 'primary.main',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          m: { xs: 1, sm: 4 },
+          width: { xs: 'calc(100% - 16px)', sm: '760px' },
+          height: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
+          maxWidth: { xs: 'calc(100% - 16px)', sm: '95vw' },
+          maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
+          overflow: 'hidden',
         },
       }}
     >
@@ -323,7 +411,51 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
       <Divider />
 
-      <DialogContent sx={{ p: 3 }}>
+      <DialogContent
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          p: 0,
+          overflow: 'hidden',
+          flexGrow: 1,
+          minHeight: 0,
+        }}
+      >
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: { xs: 0, sm: 2 } }}>
+          <Tabs
+            value={activeSection}
+            onChange={(_, value: ExecutionSection) => handleSectionClick(value)}
+            variant="scrollable"
+            scrollButtons="auto"
+            aria-label={t('automations.modal.sectionsAria')}
+          >
+            {EXECUTION_SECTIONS.map((section) => (
+              <Tab
+                key={section}
+                value={section}
+                label={t(`automations.modal.section.${section}`)}
+              />
+            ))}
+          </Tabs>
+        </Box>
+        <Box
+          ref={scrollContainerRef}
+          data-testid="execution-modal-scroll-container"
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            p: { xs: 2, sm: 3 },
+            scrollSnapType: 'y mandatory',
+            scrollPaddingTop: { xs: '16px', sm: '24px' },
+          }}
+        >
+          <Box
+            ref={whenRef}
+            data-section="when"
+            sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
+          >
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('automations.modal.intro')}
         </Typography>
@@ -456,66 +588,15 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           />
         )}
 
-        <FormControl fullWidth margin="normal">
-          <InputLabel id="overlap-strategy-label">{t('automations.modal.alreadyRunning')}</InputLabel>
-          <Select
-            labelId="overlap-strategy-label"
-            label={t('automations.modal.alreadyRunning')}
-            value={overlapStrategy}
-            onChange={(e) => setOverlapStrategy(e.target.value as OverlapStrategy)}
+          </Box>
+          <Box
+            ref={whatRef}
+            data-section="what"
+            sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
           >
-            <MenuItem value="skip">{t('automations.modal.overlapSkip')}</MenuItem>
-            <MenuItem value="queue">{t('automations.modal.overlapQueue')}</MenuItem>
-            <MenuItem value="parallel">{t('automations.modal.overlapParallel')}</MenuItem>
-            <MenuItem value="error">{t('automations.modal.overlapError')}</MenuItem>
-          </Select>
-          <FormHelperText>
-            {overlapStrategy === 'parallel' &&
-            (trigger.type === 'url-watch' || trigger.type === 'mcp-poll')
-              ? t('automations.modal.parallelWarning')
-              : overlapStrategy === 'queue'
-                ? t('automations.modal.queueHelp')
-                : t('automations.modal.overlapHelp')}
-          </FormHelperText>
-        </FormControl>
-
-        <FormControlLabel
-          sx={{ mt: 1 }}
-          control={
-            <Switch
-              checked={exclusive}
-              onChange={(e) => setExclusive(e.target.checked)}
-            />
-          }
-          label={t('automations.modal.exclusive')}
-        />
-        {exclusive && (
-          <FormControl fullWidth margin="normal">
-            <InputLabel id="non-exclusive-behavior-label">
-              {t('automations.modal.otherTriggers')}
-            </InputLabel>
-            <Select
-              labelId="non-exclusive-behavior-label"
-              label={t('automations.modal.otherTriggers')}
-              value={nonExclusiveBehavior}
-              onChange={(e) =>
-                setNonExclusiveBehavior(e.target.value as 'queue' | 'skip' | 'error')
-              }
-            >
-              <MenuItem value="queue">{t('automations.modal.othersQueue')}</MenuItem>
-              <MenuItem value="skip">{t('automations.modal.othersSkip')}</MenuItem>
-              <MenuItem value="error">{t('automations.modal.othersError')}</MenuItem>
-            </Select>
-            <FormHelperText>
-              {t('automations.modal.exclusiveHelp')}
-            </FormHelperText>
-          </FormControl>
-        )}
-
-        <Divider sx={{ mt: 3 }} />
-        <Typography variant="subtitle1" sx={{ mt: 2, mb: 0, fontWeight: 600 }}>
-          {t('automations.modal.what')}
-        </Typography>
+            <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
+              {t('automations.modal.what')}
+            </Typography>
 
         <Box
           role="radiogroup"
@@ -718,9 +799,222 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           }
           label={t('automations.modal.saveConversations')}
         />
+          </Box>
+
+          <Box
+            ref={restrictionsRef}
+            data-section="restrictions"
+            sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
+          >
+            <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600 }}>
+              {t('automations.modal.section.restrictions')}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              {t('automations.modal.restrictionsHelp')}
+            </Typography>
+
+            <Box
+              role="radiogroup"
+              aria-label={t('automations.modal.restrictionGroupAria')}
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+                gap: 1.5,
+              }}
+            >
+              {START_RESTRICTIONS.map((restriction, index) => {
+                const selected = startRestriction === restriction;
+                return (
+                  <Box
+                    key={restriction}
+                    component="button"
+                    type="button"
+                    ref={(element: HTMLButtonElement | null) => {
+                      restrictionCardRefs.current[index] = element;
+                    }}
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => selectStartRestriction(restriction)}
+                    onKeyDown={(event: React.KeyboardEvent<HTMLButtonElement>) =>
+                      handleRestrictionKeyDown(event, index)}
+                    sx={{
+                      appearance: 'none',
+                      textAlign: 'left',
+                      font: 'inherit',
+                      color: 'text.primary',
+                      bgcolor: selected ? 'action.selected' : 'background.paper',
+                      border: 2,
+                      borderColor: selected ? 'primary.main' : 'divider',
+                      borderRadius: 2,
+                      p: 2,
+                      minHeight: 132,
+                      cursor: 'pointer',
+                      '&:focus-visible': {
+                        outline: '3px solid',
+                        outlineColor: 'primary.light',
+                        outlineOffset: 2,
+                      },
+                    }}
+                  >
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+                      {t(`automations.modal.restriction.${restriction}.title`)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {t(`automations.modal.restriction.${restriction}.description`)}
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+
+            <FormControl fullWidth margin="normal">
+              <InputLabel id="overlap-strategy-label">
+                {t('automations.modal.alreadyRunning')}
+              </InputLabel>
+              <Select
+                labelId="overlap-strategy-label"
+                label={t('automations.modal.alreadyRunning')}
+                value={overlapStrategy}
+                onChange={(event) => setOverlapStrategy(event.target.value as OverlapStrategy)}
+              >
+                <MenuItem value="skip">{t('automations.modal.overlapSkip')}</MenuItem>
+                <MenuItem value="queue">{t('automations.modal.overlapQueue')}</MenuItem>
+                <MenuItem value="parallel" disabled={startRestriction === 'singleton'}>
+                  {t('automations.modal.overlapParallel')}
+                </MenuItem>
+                <MenuItem value="error">{t('automations.modal.overlapError')}</MenuItem>
+              </Select>
+              <FormHelperText>
+                {startRestriction === 'singleton'
+                  ? t('automations.modal.singletonOverlapHelp')
+                  : overlapStrategy === 'parallel'
+                    && (trigger.type === 'url-watch' || trigger.type === 'mcp-poll')
+                    ? t('automations.modal.parallelWarning')
+                    : overlapStrategy === 'queue'
+                      ? t('automations.modal.queueHelp')
+                      : t('automations.modal.overlapHelp')}
+              </FormHelperText>
+            </FormControl>
+
+            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, fontWeight: 600 }}>
+              {t('automations.modal.overrides')}
+            </Typography>
+            <Box sx={{ display: 'grid', gap: 1.5 }}>
+              <Box
+                role="switch"
+                aria-checked={superExclusive}
+                tabIndex={0}
+                onClick={() => setSuperExclusive((value) => !value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSuperExclusive((value) => !value);
+                  }
+                }}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2,
+                  border: 2,
+                  borderColor: superExclusive ? 'primary.main' : 'divider',
+                  borderRadius: 2,
+                  p: 2,
+                  cursor: 'pointer',
+                  '&:focus-visible': {
+                    outline: '3px solid',
+                    outlineColor: 'primary.light',
+                    outlineOffset: 2,
+                  },
+                }}
+              >
+                <Switch
+                  checked={superExclusive}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => setSuperExclusive(event.target.checked)}
+                  inputProps={{ 'aria-label': t('automations.modal.superExclusiveTitle') }}
+                />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                    {t('automations.modal.superExclusiveTitle')}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {t('automations.modal.superExclusiveDescription')}
+                  </Typography>
+                </Box>
+              </Box>
+
+              <Box
+                role="switch"
+                aria-checked={emergency}
+                tabIndex={0}
+                onClick={() => setEmergency((value) => !value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setEmergency((value) => !value);
+                  }
+                }}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2,
+                  border: 2,
+                  borderColor: emergency ? 'error.main' : 'divider',
+                  bgcolor: emergency ? 'action.hover' : 'background.paper',
+                  borderRadius: 2,
+                  p: 2,
+                  cursor: 'pointer',
+                  '&:focus-visible': {
+                    outline: '3px solid',
+                    outlineColor: 'error.light',
+                    outlineOffset: 2,
+                  },
+                }}
+              >
+                <Switch
+                  color="error"
+                  checked={emergency}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => setEmergency(event.target.checked)}
+                  inputProps={{ 'aria-label': t('automations.modal.emergencyTitle') }}
+                />
+                <Box>
+                  <Typography variant="subtitle2" color="error.main" sx={{ fontWeight: 800 }}>
+                    {t('automations.modal.emergencyTitle')}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {t('automations.modal.emergencyDescription')}
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+
+            {superExclusive && (
+              <FormControl fullWidth margin="normal">
+                <InputLabel id="non-exclusive-behavior-label">
+                  {t('automations.modal.otherTriggers')}
+                </InputLabel>
+                <Select
+                  labelId="non-exclusive-behavior-label"
+                  label={t('automations.modal.otherTriggers')}
+                  value={nonExclusiveBehavior}
+                  onChange={(event) =>
+                    setNonExclusiveBehavior(event.target.value as 'queue' | 'skip' | 'error')
+                  }
+                >
+                  <MenuItem value="queue">{t('automations.modal.othersQueue')}</MenuItem>
+                  <MenuItem value="skip">{t('automations.modal.othersSkip')}</MenuItem>
+                  <MenuItem value="error">{t('automations.modal.othersError')}</MenuItem>
+                </Select>
+                <FormHelperText>{t('automations.modal.superExclusiveBehaviorHelp')}</FormHelperText>
+              </FormControl>
+            )}
+          </Box>
+        </Box>
 
         {saveError && (
-          <Alert severity="error" sx={{ mt: 2 }}>
+          <Alert severity="error" sx={{ m: 2, mt: 1 }}>
             {saveError}
           </Alert>
         )}
@@ -734,6 +1028,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           color="primary"
           disabled={
             saving
+            || (startRestriction === 'singleton' && overlapStrategy === 'parallel')
             || !name.trim()
             || !flowId
             || (targetKind === 'persona' && (

@@ -1,7 +1,12 @@
 'use client';
 
 import type { Resource, ResourceTemplate, Tool } from '@modelcontextprotocol/sdk/types.js';
-import { MCPServerConfig } from '@/shared/types/mcp';
+import {
+  MCPServerConfig,
+  type McpGetSkillResult,
+  type McpLoadedSkill,
+  type McpServerSkillsResult,
+} from '@/shared/types/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import { createLogger } from '@/utils/logger';
@@ -24,6 +29,7 @@ class MCPService {
   // #15: parallel caches for resources/prompts listings (same TTL/eviction as tools).
   private resourcesCache: Map<string, { data: ServerResourcesResult, timestamp: number }> = new Map();
   private promptsCache: Map<string, { prompts: unknown[], timestamp: number }> = new Map();
+  private skillsCache: Map<string, { data: McpServerSkillsResult, timestamp: number }> = new Map();
   private CACHE_TTL = 60000; // 1 minute cache TTL
   // Tracks the last-seen resourceListVersion per server (from the server-status API).
   // When the version advances, checkResourceListVersion() evicts the resources cache so
@@ -185,6 +191,76 @@ class MCPService {
     }
   }
 
+  async listServerSkills(serverName: string, cursor?: string): Promise<McpServerSkillsResult> {
+    const now = Date.now();
+    const cached = cursor === undefined ? this.skillsCache.get(serverName) : undefined;
+    if (cached && now - cached.timestamp < this.CACHE_TTL) return cached.data;
+
+    try {
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const response = await fetch(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/skills${query}`,
+      );
+      const data = await response.json() as McpServerSkillsResult;
+      if (!response.ok) {
+        return {
+          resultType: 'complete',
+          skills: [],
+          serverName,
+          availability: 'available',
+          error: data.error || 'Failed to list MCP Skills.',
+        };
+      }
+      if (cursor === undefined && !data.error) {
+        this.skillsCache.set(serverName, { data, timestamp: now });
+      }
+      return data;
+    } catch (error) {
+      return {
+        resultType: 'complete',
+        skills: [],
+        serverName,
+        availability: 'available',
+        error: error instanceof Error ? error.message : 'Failed to list MCP Skills.',
+      };
+    }
+  }
+
+  async getServerSkill(
+    serverName: string,
+    uri: string,
+  ): Promise<{ success: boolean; data?: McpGetSkillResult; error?: string }> {
+    const response = await fetch(
+      `/api/mcp/servers/${encodeURIComponent(serverName)}/skills/get`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uri }),
+      },
+    );
+    return response.json();
+  }
+
+  async loadServerSkill(
+    serverName: string,
+    uri: string,
+  ): Promise<{ success: boolean; data?: McpLoadedSkill; error?: string }> {
+    const response = await fetch(
+      `/api/mcp/servers/${encodeURIComponent(serverName)}/skills/load`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uri }),
+      },
+    );
+    return response.json();
+  }
+
+  clearSkillsCache(serverName?: string): void {
+    if (serverName) this.skillsCache.delete(serverName);
+    else this.skillsCache.clear();
+  }
+
   /**
    * List prompt templates published by an MCP server (#15), with caching.
    */
@@ -241,9 +317,11 @@ class MCPService {
     if (serverName) {
       this.resourcesCache.delete(serverName);
       this.promptsCache.delete(serverName);
+      this.skillsCache.delete(serverName);
     } else {
       this.resourcesCache.clear();
       this.promptsCache.clear();
+      this.skillsCache.clear();
     }
   }
 
@@ -366,6 +444,7 @@ class MCPService {
 
       if (response.ok) {
         log.info(`Successfully updated server config for ${serverName}`);
+        if (updates.enableMcpSkills !== undefined) this.skillsCache.delete(serverName);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('flujo:mcp-server-config-changed', {
             detail: { serverName, config: { ...data, ...updates } },

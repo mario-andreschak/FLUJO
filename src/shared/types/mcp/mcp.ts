@@ -116,6 +116,8 @@ export type MCPManagerConfig = {
    * broker same-server app tool/resource requests.
    */
   enableMcpApps?: boolean;
+  /** Experimental SEP-2640 Skills support. Disabled unless explicitly true. */
+  enableMcpSkills?: boolean;
   /**
    * Optional, user-assigned folder for organizing server cards in the MCP
    * manager (#71). Absent/empty means "Ungrouped". Frontend-only organization —

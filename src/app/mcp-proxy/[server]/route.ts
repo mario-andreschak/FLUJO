@@ -31,7 +31,18 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
+  getProxySkillsCapability,
+  proxyGetSkill,
+  proxyListSkills,
+  proxyReadSkillDirectory,
 } from '@/backend/services/mcp/proxyForward';
+import {
+  MCP_SKILLS_EXTENSION_ID,
+  McpGetSkillRequestSchema,
+  McpListSkillsRequestSchema,
+  McpReadSkillDirectoryRequestSchema,
+  type McpSkillsExtensionCapability,
+} from '@/shared/types/mcp';
 import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
 import { createLogger } from '@/utils/logger';
 
@@ -54,7 +65,10 @@ function jsonError(status: number, message: string): Response {
 // is created per HTTP request), so routing is already handled by the URL path
 // (`/mcp-proxy/<server>`). The `Mcp-Method`/`Mcp-Name` headers are safely ignored by
 // the v1 Web-standard transport; no implementation is needed here.
-function buildProxyServer(serverName: string): Server {
+function buildProxyServer(
+  serverName: string,
+  skillsCapability?: McpSkillsExtensionCapability,
+): Server {
   const server = new Server(
     { name: `flujo-proxy-${serverName}`, version: PROXY_VERSION },
     // The resources capability must be declared or SDK clients won't issue
@@ -68,7 +82,19 @@ function buildProxyServer(serverName: string): Server {
     // reachable by task id alone. Advertising it would also claim partial
     // support. See docs/features/mcp-tasks.md ("Server-side status") and the
     // FEATURES.ENABLE_MCP_TASKS_SERVER flag.
-    { capabilities: { tools: {}, resources: {} } },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        ...(skillsCapability
+          ? {
+              extensions: {
+                [MCP_SKILLS_EXTENSION_ID]: skillsCapability,
+              },
+            }
+          : {}),
+      },
+    },
   );
   server.setRequestHandler(ListToolsRequestSchema, () => proxyListTools(serverName));
   server.setRequestHandler(CallToolRequestSchema, (req) =>
@@ -79,6 +105,19 @@ function buildProxyServer(serverName: string): Server {
   server.setRequestHandler(ReadResourceRequestSchema, (req) =>
     proxyReadResource(serverName, req.params.uri),
   );
+  if (skillsCapability) {
+    server.setRequestHandler(McpListSkillsRequestSchema, (req) =>
+      proxyListSkills(serverName, req.params?.cursor),
+    );
+    server.setRequestHandler(McpGetSkillRequestSchema, (req) =>
+      proxyGetSkill(serverName, req.params.uri),
+    );
+    if (skillsCapability.directoryRead === true) {
+      server.setRequestHandler(McpReadSkillDirectoryRequestSchema, (req) =>
+        proxyReadSkillDirectory(serverName, req.params.uri, req.params.cursor),
+      );
+    }
+  }
   return server;
 }
 
@@ -94,7 +133,8 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
-  const server = buildProxyServer(serverName);
+  const skillsCapability = await getProxySkillsCapability(serverName);
+  const server = buildProxyServer(serverName, skillsCapability);
 
   try {
     return await handleStatelessMcpRequest(server, request);

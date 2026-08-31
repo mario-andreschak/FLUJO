@@ -119,6 +119,7 @@ const ServerList: React.FC<ServerListProps> = ({
               stderrOutput={server.stderrOutput}
               exposeAsMcpServer={server.exposeAsMcpServer}
               enableMcpApps={server.enableMcpApps}
+              enableMcpSkills={server.enableMcpSkills}
               selectionMode={selectionMode}
               selected={selectedServers.has(server.name)}
               onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}

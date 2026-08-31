@@ -4,6 +4,7 @@ import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
   isPersonaControlledPlannedExecution,
+  normalizeStartRestrictions,
   OverlapStrategy,
   PlannedExecution,
   PlannedExecutionsFile,
@@ -13,6 +14,11 @@ import {
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
+import {
+  acquireWorkspaceRunBarrier,
+  cancelAllRunningConversations,
+  waitForWorkspaceRunAdmission,
+} from '@/backend/execution/flow/cancellationCoordinator';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { ArmedTrigger } from './triggers/types';
@@ -252,8 +258,10 @@ export class SchedulerService {
    * execution's fire is gated per `nonExclusiveBehavior`.
    */
   private exclusiveHolder: string | null = null;
-  /** nonExclusiveBehavior of the current exclusive holder (issue #171). */
+  /** nonExclusiveBehavior of the current admission/barrier holder. */
   private exclusiveHolderBehavior: 'queue' | 'skip' | 'error' = 'queue';
+  /** True only when the holder is a run-lifetime Super-Exclusive barrier. */
+  private exclusiveHolderPersistent = false;
   /**
    * Exclusive executions waiting for the scheduler to drain to idle so they
    * can acquire the lock (issue #171). FIFO; bounded by MAX_QUEUE_DEPTH.
@@ -673,7 +681,12 @@ export class SchedulerService {
     return {
       version: 1,
       paused: file.paused === true,
-      executions: Array.isArray(file.executions) ? file.executions : [],
+      executions: Array.isArray(file.executions)
+        ? file.executions.map(execution => ({
+            ...execution,
+            ...normalizeStartRestrictions(execution),
+          }))
+        : [],
     };
   }
 
@@ -860,11 +873,18 @@ export class SchedulerService {
       | 'personaRetired'
     > & { id?: string }
   ): Promise<{ execution?: PlannedExecution; error?: string; conflict?: boolean }> {
-    const error = this.validateInput(input);
+    const restrictionError = this.validateRestrictionFields(input);
+    if (restrictionError) return { error: restrictionError };
+    const normalizedInput = {
+      ...input,
+      ...normalizeStartRestrictions(input),
+      trigger: this.normalizeTrigger(input.trigger),
+    };
+    const error = this.validateInput(normalizedInput);
     if (error) {
       return { error };
     }
-    const personaTargetError = await this.validatePersonaTarget(input);
+    const personaTargetError = await this.validatePersonaTarget(normalizedInput);
     if (personaTargetError) return { error: personaTargetError };
     if (input.id !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(input.id)) {
       return {
@@ -880,11 +900,10 @@ export class SchedulerService {
     }
     const now = new Date().toISOString();
     const execution = omitUndefinedPersonaTargetFields({
-      ...input,
+      ...normalizedInput,
       // Treat a blank folder as "unfiled" and keep folder names tidy at the
       // persistence boundary, regardless of whether the caller is the UI/API.
       folder: input.folder?.trim() || undefined,
-      trigger: this.normalizeTrigger(input.trigger),
       id: input.id ?? uuidv4(),
       generationId: uuidv4(),
       createdAt: now,
@@ -947,6 +966,8 @@ export class SchedulerService {
       ) {
         return { error: 'Folder must be text' };
       }
+      const restrictionError = this.validateRestrictionFields(patch);
+      if (restrictionError) return { error: restrictionError };
       const current = file.executions[index];
       if (current.personaRetired || current.personaArchived) {
         return { error: 'A retired Persona planned execution is read-only' };
@@ -964,6 +985,7 @@ export class SchedulerService {
         generationId: this.executionGenerationId(current),
         createdAt: current.createdAt,
         updatedAt: new Date().toISOString(),
+        ...normalizeStartRestrictions({ ...current, ...patch }),
       });
       const error = this.validateInput(merged);
       if (error) return { error };
@@ -1048,6 +1070,26 @@ export class SchedulerService {
     return trigger;
   }
 
+  private validateRestrictionFields(input: Partial<PlannedExecution>): string | null {
+    const raw = input as unknown as Record<string, unknown>;
+    if (
+      raw.startRestriction !== undefined
+      && !['unrestricted', 'singleton', 'exclusive'].includes(String(raw.startRestriction))
+    ) {
+      return 'Start restriction must be one of: unrestricted, singleton, exclusive';
+    }
+    if (raw.superExclusive !== undefined && typeof raw.superExclusive !== 'boolean') {
+      return 'Super-Exclusive must be true or false';
+    }
+    if (raw.emergency !== undefined && typeof raw.emergency !== 'boolean') {
+      return 'Emergency must be true or false';
+    }
+    if (raw.exclusive !== undefined && typeof raw.exclusive !== 'boolean') {
+      return 'Exclusive must be true or false';
+    }
+    return null;
+  }
+
   private validateInput(
     input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>
   ): string | null {
@@ -1092,6 +1134,24 @@ export class SchedulerService {
     }
     if (input.exclusive !== undefined && typeof input.exclusive !== 'boolean') {
       return 'Exclusive must be true or false';
+    }
+    if (
+      input.startRestriction !== undefined
+      && !['unrestricted', 'singleton', 'exclusive'].includes(input.startRestriction)
+    ) {
+      return 'Start restriction must be one of: unrestricted, singleton, exclusive';
+    }
+    if (input.superExclusive !== undefined && typeof input.superExclusive !== 'boolean') {
+      return 'Super-Exclusive must be true or false';
+    }
+    if (input.emergency !== undefined && typeof input.emergency !== 'boolean') {
+      return 'Emergency must be true or false';
+    }
+    if (
+      normalizeStartRestrictions(input).startRestriction === 'singleton'
+      && input.overlapStrategy === 'parallel'
+    ) {
+      return 'Singleton start restriction cannot use parallel overlap';
     }
     if (
       input.nonExclusiveBehavior !== undefined &&
@@ -1458,7 +1518,10 @@ export class SchedulerService {
    * 'error' behavior without duplicating the gating logic.
    */
   exclusiveGateFor(execution: PlannedExecution): 'queue' | 'skip' | 'error' | null {
-    if (execution.exclusive === true || !this.isExclusiveActive()) {
+    if (
+      normalizeStartRestrictions(execution).startRestriction === 'exclusive'
+      || !this.isExclusiveActive()
+    ) {
       return null;
     }
     return this.currentExclusiveBehavior();
@@ -1504,9 +1567,15 @@ export class SchedulerService {
     // Provisionally claim the lock synchronously.
     this.exclusiveHolder = id;
     this.exclusiveHolderBehavior = next.execution.nonExclusiveBehavior ?? 'queue';
+    this.exclusiveHolderPersistent = normalizeStartRestrictions(next.execution).superExclusive;
     void (async () => {
       const current = await this.get(id);
-      if (!current || !current.enabled || this.pausedCache || current.exclusive !== true) {
+      if (
+        !current
+        || !current.enabled
+        || this.pausedCache
+        || normalizeStartRestrictions(current).startRestriction !== 'exclusive'
+      ) {
         const reason = !current
           ? 'execution deleted'
           : !current.enabled
@@ -1516,6 +1585,7 @@ export class SchedulerService {
               : 'no longer exclusive';
         if (this.exclusiveHolder === id) {
           this.exclusiveHolder = null;
+          this.exclusiveHolderPersistent = false;
         }
         next.resolve(this.skippedRecord(next, reason));
         // Try the next waiter, or release the blocked non-exclusive backlog.
@@ -1524,11 +1594,13 @@ export class SchedulerService {
       }
       // Hold against the freshest config.
       this.exclusiveHolderBehavior = current.nonExclusiveBehavior ?? 'queue';
+      this.exclusiveHolderPersistent = normalizeStartRestrictions(current).superExclusive;
       const record = await this.fire(current, next.payload, next.runId);
       next.resolve(record);
     })().catch(error => {
       if (this.exclusiveHolder === id) {
         this.exclusiveHolder = null;
+        this.exclusiveHolderPersistent = false;
       }
       log.error(`Exclusive acquire failed for ${id}:`, error);
       next.resolve(this.skippedRecord(next, 'exclusive acquire failed'));
@@ -1672,7 +1744,9 @@ export class SchedulerService {
     // and whether this (non-exclusive) execution is currently gated by it, so
     // the UI can show an "Exclusive" badge and a "blocked by exclusive" hint.
     const exclusiveHolderId = this.exclusiveHolder ?? undefined;
-    const blockedByExclusive = execution.exclusive !== true && this.isExclusiveActive();
+    const blockedByExclusive = execution.id !== this.exclusiveHolder
+      && normalizeStartRestrictions(execution).startRestriction !== 'exclusive'
+      && this.isExclusiveActive();
     return {
       armed,
       notArmedReason,
@@ -2275,17 +2349,48 @@ export class SchedulerService {
       };
     }
 
-    // Persona concurrency and ordering are owned by the durable mailbox. Admit
-    // before touching every process-local encryption/overlap/exclusive/running
-    // gate so a crash or a busy local scheduler cannot drop trusted work.
+    const restrictions = normalizeStartRestrictions(execution);
+    const isChainedFire = payload.kind === 'flow-event';
+    const bypassRestrictions = bypassOverlap || isChainedFire;
+    let workspaceBarrierRelease: (() => void) | null = null;
+    const prepareEmergency = async () => {
+      workspaceBarrierRelease = acquireWorkspaceRunBarrier(runId, { force: true });
+      const report = await cancelAllRunningConversations({
+        exceptRunId: runId,
+        reason: `Automation EMERGENCY initiated by planned execution ${execution.id}`,
+      });
+      if (report.failures.length > 0) {
+        log.warn(
+          `EMERGENCY cancellation for "${execution.name}" settled with ${report.failures.length} failure(s)`,
+        );
+      }
+    };
+
+    // Persona ordering remains durable-mailbox-owned. The workspace barrier is
+    // the only process-local gate applied before submission: it prevents fresh
+    // Persona work racing an EMERGENCY sweep without borrowing Flow overlap state.
     if (execution.personaId) {
-      return this.firePersonaInternal(
-        execution as PlannedExecution & { personaId: string },
-        payload,
-        runId,
-        firedAt,
-        admissionObserver,
-      );
+      if (!bypassRestrictions) {
+        if (restrictions.emergency) {
+          await prepareEmergency();
+        } else {
+          await waitForWorkspaceRunAdmission(runId);
+        }
+        if (restrictions.superExclusive && !workspaceBarrierRelease) {
+          workspaceBarrierRelease = acquireWorkspaceRunBarrier(runId);
+        }
+      }
+      try {
+        return await this.firePersonaInternal(
+          execution as PlannedExecution & { personaId: string },
+          payload,
+          runId,
+          firedAt,
+          admissionObserver,
+        );
+      } finally {
+        workspaceBarrierRelease?.();
+      }
     }
 
     // Locked USER encryption: the flow would resolve ${global:...} bindings and
@@ -2313,14 +2418,17 @@ export class SchedulerService {
       return persisted.record;
     }
 
+    if (!bypassRestrictions && restrictions.emergency) {
+      await prepareEmergency();
+    }
+
     // Exclusive-mode gating (issue #171): a scheduler-GLOBAL mutual-exclusion
     // lock, layered AFTER the encryption guard and BEFORE the per-execution
     // overlap policy. A manual run (bypassOverlap) is an explicit user override
     // and is exempt; a flow-event fire is emitted synchronously as another run
     // finishes, so gating it here could deadlock the chain — it too is exempt.
-    const isChainedFire = payload.kind === 'flow-event';
-    if (!bypassOverlap && !isChainedFire) {
-      if (execution.exclusive === true) {
+    if (!bypassRestrictions) {
+      if (restrictions.startRestriction === 'exclusive' && !restrictions.emergency) {
         // Exclusive: only start when the scheduler is globally idle AND the lock
         // is free — unless this fire already holds it (dequeued from the
         // exclusive-waiting queue by acquireNextExclusive).
@@ -2353,9 +2461,10 @@ export class SchedulerService {
           // Idle and lock free — acquire it now (synchronously, before any await).
           this.exclusiveHolder = execution.id;
           this.exclusiveHolderBehavior = execution.nonExclusiveBehavior ?? 'queue';
-          log.info(`Exclusive "${execution.name}" acquired the scheduler lock`);
+          this.exclusiveHolderPersistent = restrictions.superExclusive;
+          log.info(`Exclusive "${execution.name}" reserved the scheduler idle window`);
         }
-      } else if (this.isExclusiveActive()) {
+      } else if (!restrictions.emergency && this.isExclusiveActive()) {
         // Non-exclusive fire while an exclusive holds/awaits the lock: apply the
         // exclusive execution's nonExclusiveBehavior (default 'queue').
         const behavior = this.currentExclusiveBehavior();
@@ -2421,6 +2530,7 @@ export class SchedulerService {
     const strategy: OverlapStrategy = execution.overlapStrategy ?? 'skip';
     if (
       !bypassOverlap
+      && !restrictions.emergency
       && stablePersonaDelivery
       && this.running.get(execution.id)?.has(runId)
     ) {
@@ -2437,7 +2547,7 @@ export class SchedulerService {
         error: 'Stable delivery is already in progress',
       };
     }
-    if (!bypassOverlap && this.isRunning(execution.id)) {
+    if (!bypassOverlap && !restrictions.emergency && this.isRunning(execution.id)) {
       if (strategy === 'skip') {
         const record: RunRecord = {
           runId,
@@ -2499,7 +2609,37 @@ export class SchedulerService {
       // strategy === 'parallel' — fall through and run concurrently.
     }
 
+    // A durable Persona Super-Exclusive run can own the workspace barrier
+    // without participating in this process-local scheduler lock. Wait before
+    // registering scheduler state so cards/history never claim a blocked run is
+    // already executing. The barrier holder passes by presenting its run id.
+    if (!bypassRestrictions) {
+      await waitForWorkspaceRunAdmission(runId);
+    }
+
+    if (!bypassRestrictions && restrictions.superExclusive) {
+      this.exclusiveHolder = execution.id;
+      this.exclusiveHolderBehavior = execution.nonExclusiveBehavior ?? 'queue';
+      this.exclusiveHolderPersistent = true;
+      if (!workspaceBarrierRelease) {
+        workspaceBarrierRelease = acquireWorkspaceRunBarrier(runId);
+      }
+      log.info(`Super-Exclusive "${execution.name}" acquired the workspace start barrier`);
+    }
+
     this.addRunning(execution.id, runId, firedAt);
+    if (this.exclusiveHolder === execution.id && !this.exclusiveHolderPersistent) {
+      this.exclusiveHolder = null;
+      this.exclusiveHolderPersistent = false;
+      this.drainExclusive();
+    }
+    // EMERGENCY without Super-Exclusive protects the cancellation sweep and
+    // admission only. Once this run is dispatched, ordinary work may start.
+    if (workspaceBarrierRelease && restrictions.emergency && !restrictions.superExclusive) {
+      workspaceBarrierRelease();
+      workspaceBarrierRelease = null;
+    }
+
     const conversationId = stablePersonaDelivery
       ? `conversation-${createHash('sha256')
         .update(`${execution.id}\0${this.executionGenerationId(execution)}\0${stablePersonaDelivery}`)
@@ -2659,8 +2799,11 @@ export class SchedulerService {
       // until its LAST run drains.
       if (this.exclusiveHolder === execution.id && !this.isRunning(execution.id)) {
         this.exclusiveHolder = null;
-        log.info(`Exclusive "${execution.name}" released the scheduler lock`);
+        this.exclusiveHolderPersistent = false;
+        log.info(`Super-Exclusive "${execution.name}" released the scheduler lock`);
       }
+      workspaceBarrierRelease?.();
+      workspaceBarrierRelease = null;
       // Drain order (issue #171): a waiting exclusive claims the freshly-idle
       // window BEFORE blocked non-exclusive fires refill the scheduler; then the
       // per-execution overlap queue.

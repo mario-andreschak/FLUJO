@@ -32,6 +32,10 @@ node mcp-servers/browser/dist/index.js
 
 `mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
 
+### Experimental Skills forwarding
+
+`mcp-flujo` advertises the draft `io.modelcontextprotocol/skills` extension and implements the frozen revision `SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03`. It aggregates only downstream servers with `enableMcpSkills: true`, follows bounded pagination, and rewrites entries to server-qualified `skill+flujo://` URIs so equal source URIs on two servers cannot collide. Resource reads return only content that passes FLUJO's declared size and SHA-256 verification. Discovery is not approval, and the standalone process holds no mutable approval state. See `docs/features/mcp-skills.md`.
+
 ## Filesystem server
 
 The filesystem `search` tool keeps one small cross-platform interface for name
@@ -127,6 +131,14 @@ so they do not clutter model tool context. The terminal uses ConPTY on Windows
 and a pseudoterminal on macOS/Linux, renders ANSI/VT output with xterm, accepts
 keyboard and pasted input, and negotiates terminal size through app-only tools.
 As with a normal terminal, stdout and stderr share the PTY stream.
+
+Shell discovery, foreground/background commands, and PTY sessions share one
+resolved executable plan. On Windows, explicit `shell: "bash"` launches the
+absolute Git Bash path reported by `shell_info` and rejects WSL relay launchers;
+results expose the executable as `shellPath`. PowerShell programs use BOM-free
+UTF-16LE `-EncodedCommand` transport (and remain subject to Windows command-line
+size limits). Background `write_stdin` preserves UTF-8 input by default; opt into
+removing exactly one leading BOM with `bomPolicy: "strip-leading"`.
 
 Foreground `run` calls stream merged output as MCP progress and send a liveness
 heartbeat every ten seconds while they are silent. FLUJO forwards those updates

@@ -44,8 +44,11 @@ describe('shell_info', () => {
       if (entry.available) expect(typeof entry.path).toBe('string');
       else expect(entry.path).toBeNull();
     }
-    // The shell that "default" resolves to must be reported as available.
-    expect(shells.find((entry) => entry.shell === payload.defaultShell)?.available).toBe(true);
+    // The shell that "default" resolves to must be reported as available,
+    // and diagnostics must expose the exact executable selected for execution.
+    const defaultEntry = shells.find((entry) => entry.shell === payload.defaultShell);
+    expect(defaultEntry?.available).toBe(true);
+    expect(payload.defaultShellPath).toBe(defaultEntry?.path);
 
     const binaries = payload.binaries as Array<{ name: string; found: boolean }>;
     expect(binaries.map((entry) => entry.name)).toEqual(expect.arrayContaining(['python3', 'node', 'git']));

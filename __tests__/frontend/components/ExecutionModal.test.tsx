@@ -183,6 +183,58 @@ describe('ExecutionModal Persona targets', () => {
       personaId: persona.id,
       behaviorSlotKey: 'research',
       flowId: 'flow-research',
+      startRestriction: 'unrestricted',
+      superExclusive: false,
+      emergency: false,
+    })));
+  });
+
+  it('renders three linked sections and persists canonical restriction controls', async () => {
+    render(
+      <ExecutionModal
+        open
+        execution={null}
+        onClose={jest.fn()}
+        onSaved={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('tablist', {
+      name: 'automations.modal.sectionsAria',
+    })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    expect(screen.getByTestId('execution-modal-scroll-container')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('automations.modal.name'), {
+      target: { value: 'Restricted flow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'choose-flow' }));
+
+    const singleton = screen
+      .getByText('automations.modal.restriction.singleton.title')
+      .closest('[role="radio"]');
+    const superExclusive = screen
+      .getByText('automations.modal.superExclusiveTitle')
+      .closest('[role="switch"]');
+    const emergency = screen
+      .getByText('automations.modal.emergencyTitle')
+      .closest('[role="switch"]');
+    expect(singleton).not.toBeNull();
+    expect(superExclusive).not.toBeNull();
+    expect(emergency).not.toBeNull();
+    fireEvent.click(singleton!);
+    fireEvent.click(superExclusive!);
+    fireEvent.click(emergency!);
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'automations.modal.saveTrigger',
+    }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      startRestriction: 'singleton',
+      superExclusive: true,
+      emergency: true,
+      overlapStrategy: 'skip',
     })));
   });
 

@@ -50,6 +50,8 @@ interface ModelListProps {
   onAdd: () => void;
   onUpdate: (model: Model) => Promise<ModelResult>;
   onDelete: (id: string) => Promise<void>;
+  /** Open the saved-agent conversion dialog for this model. */
+  onConvertToAgent?: (modelId: string) => void;
   /** Existing folders on the Models surface, for the "Move to folder…" picker. */
   folders?: string[];
   /** Assign/clear a model's organizing folder (#80). When omitted the action is hidden. */
@@ -61,7 +63,17 @@ interface ModelListProps {
 /** How cards are grouped into collapsible sections: none, by user folder, or by the active sort key. */
 type GroupMode = 'none' | 'folder' | 'sort';
 
-export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folders = [], onSetFolder, onToggleFavorite }: ModelListProps) => {
+export const ModelList = ({
+    models,
+    isLoading,
+    onAdd,
+    onUpdate,
+    onDelete,
+    onConvertToAgent,
+    folders = [],
+    onSetFolder,
+    onToggleFavorite,
+}: ModelListProps) => {
     const { t, tp } = useI18n();
     const theme = useTheme();
     // Persisted view preferences (#93): retained across navigation.
@@ -148,6 +160,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
                         model={model}
                         onEdit={() => handleUpdate(model)}
                         onDelete={() => onDelete(model.id)}
+                        onConvertToAgent={onConvertToAgent}
                         folder={model.folder}
                         folders={folders}
                         onSetFolder={onSetFolder ? (folder) => onSetFolder(model.id, folder) : undefined}

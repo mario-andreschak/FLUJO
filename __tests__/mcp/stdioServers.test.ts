@@ -94,6 +94,43 @@ describe('standalone stdio MCP packages', () => {
     }
   });
 
+  it('executes BOM-prefixed source through Windows PowerShell 5.1 across the package boundary', async () => {
+    if (process.platform !== 'win32') return;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-powershell-'));
+    const client = await connectPackage('bash', { FLUJO_BASH_ROOTS: root, FLUJO_DATA_DIR: root }, [root]);
+    try {
+      const command = [
+        '\uFEFF$here = @\'',
+        'héllo',
+        '\'@',
+        '$nested = \'literal "-c" value\'',
+        'Write-Output "$($here.Trim())|$nested"',
+      ].join('\n');
+      const called = await client.callTool({
+        name: 'run',
+        arguments: { command, cwd: root, shell: 'powershell', timeout: 10 },
+      });
+      expect(called.isError).not.toBe(true);
+      const resultText = (called as { content?: Array<{ text?: unknown }> }).content?.[0]?.text;
+      expect(typeof resultText).toBe('string');
+      const payload = JSON.parse(String(resultText)) as {
+        shell?: string;
+        shellPath?: string;
+        exitCode?: number;
+        output?: string;
+      };
+      expect(payload).toEqual(expect.objectContaining({
+        shell: 'powershell',
+        exitCode: 0,
+        shellPath: expect.stringMatching(/powershell\.exe$/i),
+      }));
+      expect(payload.output?.trim()).toBe('héllo|literal "-c" value');
+    } finally {
+      await client.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   itWithRealShell('executes bash commands from an independent child process', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-bash-'));
     const client = await connectPackage('bash', { FLUJO_BASH_ROOTS: root, FLUJO_DATA_DIR: root }, [root]);

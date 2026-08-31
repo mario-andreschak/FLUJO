@@ -50,6 +50,22 @@ describe('synthesizeQuickChatFlow', () => {
     expect(mcpNodes(flow!)).toHaveLength(0);
   });
 
+  it('supports a normal saved-flow identity without changing Quick Chat defaults', () => {
+    const { flow, error } = synthesizeQuickChatFlow(
+      { modelId: 'model-1', systemPrompt: 'Be precise.' },
+      context,
+      {
+        flowId: '8e7a0b5b-cb8a-44be-9e42-a88117958da2',
+        flowName: 'GPT_Agent',
+      },
+    );
+    expect(error).toBeUndefined();
+    expect(flow?.id).toBe('8e7a0b5b-cb8a-44be-9e42-a88117958da2');
+    expect(flow?.name).toBe('GPT_Agent');
+    expect(flow?.id.startsWith('quickchat-')).toBe(false);
+    expect(chatNode(flow!).data.properties?.boundModel).toBe('model-1');
+  });
+
   it('resolves a model given by display name to its id', () => {
     const { flow } = synthesizeQuickChatFlow(
       { conversationId: 'c', modelId: 'Claude' },
