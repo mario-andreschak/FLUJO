@@ -79,7 +79,13 @@ describe('TriggerNodePropertiesModal', () => {
 
   it('updates the existing planned execution instead of creating a replacement', async () => {
     update.mockResolvedValue({ success: true, execution: { id: 'execution-123' } });
-    const onSave = renderModal(makeNode({ executionId: 'execution-123', name: 'Existing' }));
+    const onSave = renderModal(makeNode({
+      executionId: 'execution-123',
+      name: 'Existing',
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: true,
+    }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -89,7 +95,13 @@ describe('TriggerNodePropertiesModal', () => {
     ));
     expect(create).not.toHaveBeenCalled();
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    expect(onSave.mock.calls[0][1].properties.executionId).toBe('execution-123');
+    expect(onSave.mock.calls[0][1].properties).toEqual(expect.objectContaining({
+      executionId: 'execution-123',
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: true,
+    }));
+    expect(update.mock.calls[0][1]).not.toHaveProperty('startRestriction');
   });
 
   it('keeps the canvas node unchanged when planned-execution synchronization fails', async () => {

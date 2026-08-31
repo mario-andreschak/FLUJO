@@ -158,6 +158,38 @@ export type TriggerType = TriggerConfig['type'];
  */
 export type OverlapStrategy = 'skip' | 'queue' | 'parallel' | 'error';
 
+/** Cross-Automation admission policy for a planned execution (issue #495). */
+export type StartRestriction = 'unrestricted' | 'singleton' | 'exclusive';
+
+export interface NormalizedStartRestrictions {
+  startRestriction: StartRestriction;
+  superExclusive: boolean;
+  emergency: boolean;
+}
+
+/**
+ * Resolve additive restriction fields without rewriting legacy storage.
+ * Canonical fields win when present. A legacy `exclusive: true` row keeps its
+ * historical combined behavior by resolving to Exclusive + Super-Exclusive.
+ */
+export function normalizeStartRestrictions(
+  input: Partial<Pick<
+    PlannedExecution,
+    'startRestriction' | 'superExclusive' | 'emergency' | 'exclusive'
+  >>,
+): NormalizedStartRestrictions {
+  const canonical = input.startRestriction;
+  const hasCanonical = canonical === 'unrestricted'
+    || canonical === 'singleton'
+    || canonical === 'exclusive';
+  const legacyCombined = !hasCanonical && input.exclusive === true;
+  return {
+    startRestriction: hasCanonical ? canonical : legacyCombined ? 'exclusive' : 'unrestricted',
+    superExclusive: legacyCombined ? true : input.superExclusive === true,
+    emergency: input.emergency === true,
+  };
+}
+
 export interface PlannedExecution {
   id: string;
   /**
@@ -221,13 +253,23 @@ export interface PlannedExecution {
    */
   overlapStrategy?: OverlapStrategy;
   /**
-   * Exclusive mode (issue #171). When true, this execution may only START when
-   * the scheduler is globally idle (no other execution running). While it runs
-   * it holds a scheduler-global exclusive lock: no other trigger may start a
-   * run. If fired while other executions are running, it waits in the global
-   * exclusive queue and acquires the lock as soon as the scheduler drains to
-   * idle. Orthogonal to `overlapStrategy` (which only governs this execution
-   * overlapping ITSELF); the two compose independently. Defaults to false.
+   * Incoming-run restriction. Unrestricted is the default. Singleton composes
+   * with the non-parallel overlap policy; Exclusive waits for scheduler idle but
+   * does not by itself block later starts.
+   */
+  startRestriction?: StartRestriction;
+  /** Hold a workspace start barrier for this run after it is admitted. */
+  superExclusive?: boolean;
+  /**
+   * At admission, take the workspace barrier and cancel all active conversations
+   * in this workspace before starting. This is configuration, not an edit-time
+   * action. Direct Flow cancellation is process-local; Persona cancellation is
+   * durable through its dispatcher.
+   */
+  emergency?: boolean;
+  /**
+   * @deprecated Legacy combined Exclusive + Super-Exclusive flag (issue #171).
+   * New callers must persist the canonical fields above.
    */
   exclusive?: boolean;
   /**
@@ -239,7 +281,8 @@ export interface PlannedExecution {
    *  - 'skip' : drop the non-exclusive fire, recording a `skipped` run.
    *  - 'error': reject the non-exclusive fire, recording an `error` run (and,
    *             for the webhook path, a 423 Locked response).
-   * Ignored when `exclusive` is false.
+   * Ignored when neither a Super-Exclusive barrier nor an Exclusive admission
+   * reservation is active.
    */
   nonExclusiveBehavior?: 'queue' | 'skip' | 'error';
   trigger: TriggerConfig;

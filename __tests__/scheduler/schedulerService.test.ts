@@ -89,6 +89,45 @@ describe('SchedulerService', () => {
     expect(runFlowMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes legacy restrictions and lets canonical patches take precedence', async () => {
+    const created = await scheduler.create(scheduleInput({ exclusive: true }));
+    expect(created.error).toBeUndefined();
+    expect(created.execution).toMatchObject({
+      exclusive: true,
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: false,
+    });
+
+    const updated = await scheduler.update(created.execution!.id, {
+      startRestriction: 'unrestricted',
+      superExclusive: false,
+    });
+    expect(updated.error).toBeUndefined();
+    expect(updated.execution).toMatchObject({
+      exclusive: true,
+      startRestriction: 'unrestricted',
+      superExclusive: false,
+      emergency: false,
+    });
+  });
+
+  it('rejects Singleton with parallel overlap after create and patch merging', async () => {
+    const invalidCreate = await scheduler.create(scheduleInput({
+      startRestriction: 'singleton',
+      overlapStrategy: 'parallel',
+    }));
+    expect(invalidCreate.error).toMatch(/Singleton.*parallel/i);
+    expect(readFile()).toBeUndefined();
+
+    const created = await scheduler.create(scheduleInput({ overlapStrategy: 'parallel' }));
+    const invalidPatch = await scheduler.update(created.execution!.id, {
+      startRestriction: 'singleton',
+    });
+    expect(invalidPatch.error).toMatch(/Singleton.*parallel/i);
+    expect((await scheduler.get(created.execution!.id))?.startRestriction).toBe('unrestricted');
+  });
+
   it('persists folder organization without re-arming runtime triggers', async () => {
     const { execution } = await scheduler.create(scheduleInput({ folder: '  Operations  ' }));
     expect(execution?.folder).toBe('Operations');

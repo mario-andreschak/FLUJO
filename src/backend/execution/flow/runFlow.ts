@@ -75,6 +75,10 @@ import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement'
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import {
+  registerCancellableRun,
+  waitForWorkspaceRunAdmission,
+} from '@/backend/execution/flow/cancellationCoordinator';
+import {
   FlowSnapshotSchema,
   PersonaInstructionContextSchema,
   type PersonaAttribution,
@@ -541,11 +545,25 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
-  if (!input.conversationId) return runFlowUnlocked(input);
-  return withConversationExecutionLock(
-    input.conversationId,
-    () => runFlowUnlocked(input),
-  );
+  const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
+  await waitForWorkspaceRunAdmission(input.runId, ownerSignal);
+  const registration = registerCancellableRun({
+    runId: input.runId,
+    conversationId: input.conversationId,
+  });
+  const registeredInput: FlowRunInput = {
+    ...input,
+    abortSignal: combineAbortSignals(ownerSignal, registration.signal),
+  };
+  try {
+    if (!registeredInput.conversationId) return runFlowUnlocked(registeredInput);
+    return await withConversationExecutionLock(
+      registeredInput.conversationId,
+      () => runFlowUnlocked(registeredInput),
+    );
+  } finally {
+    registration.release();
+  }
 }
 
 /**

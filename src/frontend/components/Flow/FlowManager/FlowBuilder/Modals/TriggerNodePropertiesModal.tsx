@@ -168,6 +168,7 @@ const TriggerNodePropertiesModal = ({
     setSaveError(null);
 
     const properties = {
+      ...(node.data.properties || {}),
       executionId,
       name,
       enabled,
