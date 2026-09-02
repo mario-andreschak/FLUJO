@@ -321,6 +321,12 @@ export interface ExperimentalSettings {
    */
   mcpBetaProtocol?: boolean;
   /**
+   * Make workspace-managed HOME/config/cache directories the default for stdio
+   * MCP servers whose per-server runtime-home mode is `inherit`. Opt-in: a
+   * missing value is false. An operator process override remains authoritative.
+   */
+  mcpRuntimeHomeIsolation?: boolean;
+  /**
    * When true, FLUJO automatically unloads the previously-loaded Ollama model
    * from VRAM before sending a completion request for a different model on the
    * same Ollama server URL. This frees GPU memory on constrained hardware.

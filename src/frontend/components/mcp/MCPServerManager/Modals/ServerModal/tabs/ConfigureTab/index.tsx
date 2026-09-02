@@ -13,6 +13,7 @@ import ArgumentsManager from './ArgumentsManager';
 import RootsManager from './RootsManager';
 import SamplingManager from './SamplingManager';
 import ElicitationManager from './ElicitationManager';
+import RuntimeHomeManager from './RuntimeHomeManager';
 import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 import {
   handleSubmit,
@@ -822,6 +823,18 @@ const ConfigureTab: React.FC<TabProps> = ({
                       isParsingReadme={isParsingReadme}
                     />
                   </Box>
+
+                  {localConfig.transport === 'stdio' && (
+                    <Box>
+                      <RuntimeHomeManager
+                        mode={localConfig.runtimeHomeMode}
+                        onChange={(runtimeHomeMode) => setLocalConfig(prev => ({
+                          ...prev,
+                          runtimeHomeMode,
+                        }))}
+                      />
+                    </Box>
+                  )}
 
                   <Box>
                     <RootsManager

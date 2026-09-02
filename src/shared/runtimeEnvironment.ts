@@ -56,6 +56,7 @@ export const RUNTIME_ENVIRONMENT_DEFINITIONS: RuntimeEnvironmentDefinition[] = [
     FLUJO_MCP_MAX_WARM_SERVERS: 'Maximum simultaneously warm MCP servers (default 8).',
     FLUJO_MCP_BOOT_CONCURRENCY: 'MCP startup concurrency (default 2).',
     FLUJO_MCP_LAZY_START: 'Use lazy MCP startup when truthy.',
+    FLUJO_MCP_RUNTIME_HOME_ISOLATION: 'Process-wide stdio MCP runtime-home override: on/true forces isolated homes; off/false forces host homes; unset inherits server/workspace settings.',
     FLUJO_GIT_STREAM_TIMEOUT_MS: 'Git stream timeout in milliseconds (default 900000; minimum 60000).',
     FLUJO_GITHUB_INSTALL_TIMEOUT_MS: 'GitHub install timeout in milliseconds (default 900000; minimum 60000).',
   }),

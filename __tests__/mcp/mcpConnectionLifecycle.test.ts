@@ -112,6 +112,28 @@ describe("shouldRecreateClient stdio config comparison", () => {
     ).toBe(true);
   });
 
+  it("rebuilds when the effective runtime-home isolation policy changes", () => {
+    const config = stdioConfig();
+    const transport = createStdioTransport(config, {
+      isolateRuntimeHome: false,
+    });
+    const client = fakeClientFor(transport, config);
+
+    expect(
+      shouldRecreateClient(client, config, false, {
+        isolateRuntimeHome: false,
+      }),
+    ).toEqual({ needsNewClient: false });
+    expect(
+      shouldRecreateClient(client, config, false, {
+        isolateRuntimeHome: true,
+      }),
+    ).toEqual({
+      needsNewClient: true,
+      reason: "Connection parameters changed",
+    });
+  });
+
   it("rebuilds a transport that has no config key (created before the key mechanism)", () => {
     const config = stdioConfig();
     const bareTransport = new StdioClientTransport({

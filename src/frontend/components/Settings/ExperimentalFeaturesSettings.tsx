@@ -277,6 +277,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleMcpRuntimeHomeIsolationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Workspace MCP runtime-home isolation toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        mcpRuntimeHomeIsolation: event.target.checked,
+      },
+    });
+  };
+
   const handleFlowBasedGeneratorChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Flow-based generator toggled: ${event.target.checked}`);
     updateSettings({
@@ -549,6 +560,13 @@ export default function ExperimentalFeaturesSettings() {
             label={t('settings.experimental.mcpBeta')}
             name="mcpBetaProtocol"
             onChange={handleMcpBetaProtocolChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.mcpRuntimeHomeIsolation ?? false}
+            description={t('settings.experimental.mcpRuntimeHomeIsolationDescription')}
+            label={t('settings.experimental.mcpRuntimeHomeIsolation')}
+            name="mcpRuntimeHomeIsolation"
+            onChange={handleMcpRuntimeHomeIsolationChange}
           />
           <ExperimentalToggle
             checked={experimental.restrictMcpFilesystemToRoots ?? false}
