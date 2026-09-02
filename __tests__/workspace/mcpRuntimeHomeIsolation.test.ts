@@ -60,7 +60,19 @@ const config: MCPStdioConfig = {
   _installCommand: '',
 };
 
+const resolveIsolatedLaunch = (server: MCPStdioConfig) =>
+  resolveStdioLaunch(server, { isolateRuntimeHome: true });
+
 describe('stdio MCP runtime homes', () => {
+  it('does not isolate runtime homes unless the resolved policy opts in', () => {
+    const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
+
+    expect(launch.env.HOME).toBe(config.env.HOME);
+    expect(launch.env.USERPROFILE).toBe(config.env.USERPROFILE);
+    expect(launch.env.NPM_CONFIG_CACHE).toBe(config.env.NPM_CONFIG_CACHE);
+    expect(launch.cwd).not.toContain(`${path.sep}userdata${path.sep}mcp-runtime${path.sep}`);
+  });
+
   it('keeps bundled Bash attached to the live host account and removes stale config redirects', () => {
     const bash = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'bash')!;
     const tracked = ['HOME', 'USERPROFILE', 'APPDATA', 'GH_CONFIG_DIR', 'FLUJO_BASH_HOST_ENV_TEST'] as const;
@@ -87,7 +99,7 @@ describe('stdio MCP runtime homes', () => {
         GH_CONFIG_DIR: path.join(dataRoot, 'stale-gh-config'),
       };
 
-      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(shipped));
+      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(shipped));
 
       expect(launch.env.HOME).toBe(hostHome);
       expect(launch.env.USERPROFILE).toBe(hostHome);
@@ -105,8 +117,8 @@ describe('stdio MCP runtime homes', () => {
   });
 
   it('forces conventional home, config, cache, temp and FLUJO roots per workspace', () => {
-    const launchA = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
-    const launchB = runWithWorkspace('runtime-b', () => resolveStdioLaunch(config));
+    const launchA = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
+    const launchB = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(config));
     const rootA = getWorkspaceDataDir('runtime-a');
     const rootB = getWorkspaceDataDir('runtime-b');
 
@@ -136,8 +148,8 @@ describe('stdio MCP runtime homes', () => {
       rootPath: 'mcp-servers/search-mcp',
     };
 
-    const weatherLaunch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(runner));
-    const searchLaunch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(otherRunner));
+    const weatherLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(runner));
+    const searchLaunch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(otherRunner));
     const workspaceRoot = getWorkspaceDataDir('runtime-a');
     const serverRoot = path.join(workspaceRoot, 'mcp-servers', 'weather-mcp');
 
@@ -155,7 +167,7 @@ describe('stdio MCP runtime homes', () => {
   (process.platform === 'win32' ? it : it.skip)(
     'passes the Windows launch essentials a child needs to spawn its own tools',
     () => {
-      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
+      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(config));
       const comSpec = launch.env.ComSpec ?? launch.env.COMSPEC;
       expect(comSpec).toBeTruthy();
       expect(path.basename(comSpec!).toLowerCase()).toBe('cmd.exe');
@@ -175,7 +187,7 @@ describe('stdio MCP runtime homes', () => {
         name: 'server-with-blank-comspec',
         env: { ...config.env, COMSPEC: '', SYSTEMROOT: '   ' },
       };
-      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(blanked));
+      const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(blanked));
 
       for (const key of ['ComSpec', 'SystemRoot']) {
         const spellings = Object.entries(launch.env).filter(
@@ -195,7 +207,7 @@ describe('stdio MCP runtime homes', () => {
       name: 'local-node-server',
       rootPath: 'mcp-servers/local-node-server',
     };
-    const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(ordinary));
+    const launch = runWithWorkspace('runtime-a', () => resolveIsolatedLaunch(ordinary));
     expect(launch.cwd).toBe(
       path.join(getWorkspaceDataDir('runtime-a'), 'mcp-servers', 'local-node-server'),
     );
@@ -218,7 +230,7 @@ describe('stdio MCP runtime homes', () => {
       FLUJO_BROWSER_RECORD_DIR: 'C:\\shared-recordings',
     };
 
-    const launch = runWithWorkspace('runtime-b', () => resolveStdioLaunch(shipped));
+    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
     const root = getWorkspaceDataDir('runtime-b');
     expect(launch.env.FLUJO_BROWSER_PROFILE_DIR).toBe(path.join(root, 'browser-profile', 'trusted'));
     expect(launch.env.FLUJO_BROWSER_SCREENSHOT_DIR).toBe(path.join(root, 'screenshots', 'browser'));
@@ -233,7 +245,7 @@ describe('stdio MCP runtime homes', () => {
     delete (shipped.env as Record<string, unknown>).PLAYWRIGHT_BROWSERS_PATH;
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'shared-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveStdioLaunch(shipped));
+    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
 
     expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
       .toBe(path.join(dataRoot, 'shared-browser-binaries'));
@@ -249,7 +261,7 @@ describe('stdio MCP runtime homes', () => {
     });
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dataRoot, 'host-browser-binaries');
 
-    const launch = runWithWorkspace('runtime-b', () => resolveStdioLaunch(shipped));
+    const launch = runWithWorkspace('runtime-b', () => resolveIsolatedLaunch(shipped));
 
     expect(launch.env.PLAYWRIGHT_BROWSERS_PATH)
       .toBe(path.join(dataRoot, 'configured-browser-binaries'));

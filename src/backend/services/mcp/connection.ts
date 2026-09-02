@@ -289,13 +289,17 @@ function hostTerminalEnvironment(configured: Record<string, string>): Record<str
  * restart death-spiral. So the transport is keyed with the RAW config at creation time
  * and compared raw-to-raw here.
  */
-export function stdioConfigKey(config: MCPStdioConfig): string {
+export function stdioConfigKey(
+  config: MCPStdioConfig,
+  isolateRuntimeHome = false,
+): string {
   return JSON.stringify({
     command: config.command,
     args: config.args ?? [],
     env: transformEnv(config.env),
     cwd: String(config.cwd ?? ""),
     rootPath: config.rootPath ?? "",
+    isolateRuntimeHome,
   });
 }
 
@@ -416,6 +420,8 @@ export function createNewClient(config: MCPServerConfig): Client {
 export interface TransportCreationOptions {
   /** Mint sidecar registration credentials only for the managed live process. */
   enableRuntimeBroker?: boolean;
+  /** Use a private workspace-scoped HOME/config/cache tree for stdio. */
+  isolateRuntimeHome?: boolean;
 }
 
 /**
@@ -752,7 +758,10 @@ function applyWindowsSpawnEssentials(env: Record<string, string>): void {
 /**
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
-export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
+export function resolveStdioLaunch(
+  config: MCPStdioConfig,
+  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
+): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);
@@ -831,7 +840,13 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  const runtime = isHostTerminal ? undefined : isolatedStdioRuntime(config.name);
+  // Runtime-home isolation is opt-in. The caller resolves the process/server/
+  // workspace precedence before reaching this synchronous spawn boundary.
+  // Bundled Bash remains attached to the host account regardless, because it
+  // intentionally behaves like the user's terminal.
+  const runtime = !isHostTerminal && options?.isolateRuntimeHome === true
+    ? isolatedStdioRuntime(config.name)
+    : undefined;
   const resolvedCwd = remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
@@ -921,7 +936,7 @@ export function createStdioTransport(
     throw new Error("Cannot create stdio transport for non-stdio config");
   }
 
-  const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
   const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
     ? issueMcpAppRuntimeBrokerEnvironment(config.name)
     : undefined;
@@ -954,7 +969,7 @@ export function createStdioTransport(
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
   (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
-    stdioConfigKey(config);
+    stdioConfigKey(config, options?.isolateRuntimeHome === true);
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -977,6 +992,7 @@ export function shouldRecreateClient(
   client: Client,
   config: MCPServerConfig,
   useBetaProtocol = false,
+  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
 ): { needsNewClient: boolean; reason?: string } {
   log.debug("Entering shouldRecreateClient method");
 
@@ -1033,7 +1049,10 @@ export function shouldRecreateClient(
       };
     }
     if (config.transport === "stdio") {
-      if (transport.__flujoStdioKey !== stdioConfigKey(config)) {
+      if (
+        transport.__flujoStdioKey !==
+        stdioConfigKey(config, options?.isolateRuntimeHome === true)
+      ) {
         return {
           needsNewClient: true,
           reason: "Connection parameters changed",
@@ -1173,7 +1192,10 @@ export function shouldRecreateClient(
       };
     }
 
-    if (existingKey !== stdioConfigKey(config)) {
+    if (
+      existingKey !==
+      stdioConfigKey(config, options?.isolateRuntimeHome === true)
+    ) {
       return {
         needsNewClient: true,
         reason: "Connection parameters changed",

@@ -46,6 +46,28 @@ timers first so a pending retry cannot re-fork a server mid-shutdown.
 `shutdownBackendServices()` in `src/backend/init.ts` runs it for every workspace and
 is armed on `SIGINT`/`SIGTERM`/`SIGHUP` (POSIX) with a 20s cap before force exit.
 
+### Stdio runtime-home isolation is opt-in
+
+Ordinary stdio MCP servers use the host home and configured environment by default.
+Operators can opt into a private per-workspace, per-server home under
+`userdata/mcp-runtime/`. Isolation redirects conventional home, configuration,
+cache and temporary-directory variables, so it can prevent an MCP server from
+discovering credentials and tools stored in the host profile. It can also make a
+server appear newly installed or signed out, which is why it is not the default.
+
+The effective setting is resolved in this order:
+
+1. Process-wide `FLUJO_MCP_RUNTIME_HOME_ISOLATION` (`on`, `true`, `1`, or
+   `isolated`; `off`, `false`, `0`, or `host`). This is available in Settings →
+   Process environment and takes effect after an application restart.
+2. The server's Runtime home setting: inherit, isolated, or host home.
+3. The workspace-wide experimental MCP runtime-home isolation toggle.
+4. Off when none of the above opts in.
+
+Changing a workspace or server preference takes effect when that stdio server is
+next connected. The bundled Bash server is deliberately exempt: it remains
+attached to the live host account because it is FLUJO's host-terminal boundary.
+
 ### Coordinated sibling change
 
 The separate `mcp-vscode-mcpapp` repository owns its own CLI/runtime teardown

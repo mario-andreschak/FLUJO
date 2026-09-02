@@ -178,6 +178,7 @@ import {
   readMcpSkillDirectory,
   readVerifiedMcpSkillResource,
 } from "./skills";
+import { resolveRuntimeHomeIsolation } from './runtimeHomeIsolation';
 import {
   MCPResource,
   MCPResourceTemplate,
@@ -976,6 +977,11 @@ export class MCPService {
       // stay on the v1 SDK (the v2 SDK has no websocket transport).
       const useBeta =
         (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
+      const isolateRuntimeHome = await resolveRuntimeHomeIsolation(config);
+      const transportOptions = {
+        enableRuntimeBroker: true,
+        isolateRuntimeHome,
+      };
 
       // Check if we already have a client for this server
       let client = this.clients.get(config.name);
@@ -996,6 +1002,7 @@ export class MCPService {
           client,
           config,
           useBeta,
+          transportOptions,
         );
         if (!needsNewClient) {
           log.info(`connectServer: Server ${config.name} is already connected`);
@@ -1029,8 +1036,8 @@ export class MCPService {
       // existing servers keep working either way).
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
       const transport = useBeta
-        ? createBetaTransport(config, { enableRuntimeBroker: true })
-        : createTransport(config, { enableRuntimeBroker: true });
+        ? createBetaTransport(config, transportOptions)
+        : createTransport(config, transportOptions);
       if (config.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,
@@ -1506,12 +1513,14 @@ export class MCPService {
       const useBeta =
         (await isMcpBetaProtocolEnabled()) &&
         connectConfig.transport !== "websocket";
+      const isolateRuntimeHome = await resolveRuntimeHomeIsolation(connectConfig);
+      const transportOptions = { isolateRuntimeHome };
       client = useBeta
         ? createNewBetaClient(connectConfig)
         : createNewClient(connectConfig);
       transport = useBeta
-        ? createBetaTransport(connectConfig)
-        : createTransport(connectConfig);
+        ? createBetaTransport(connectConfig, transportOptions)
+        : createTransport(connectConfig, transportOptions);
       if (connectConfig.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,

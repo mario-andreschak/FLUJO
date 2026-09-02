@@ -40,6 +40,16 @@ export type MCPHeaderValue = EnvVarValue;
 export type MCPToolParameterPresets = Record<string, Record<string, unknown>>;
 
 /**
+ * Which HOME/config/cache roots a local stdio MCP server inherits.
+ *
+ * `inherit` defers to the workspace-wide preference, `isolated` opts this
+ * server into FLUJO's private workspace runtime home, and `host` explicitly
+ * keeps the MCP SDK's normal host-home inheritance. A process environment
+ * override may still take precedence over every persisted setting.
+ */
+export type MCPRuntimeHomeMode = 'inherit' | 'isolated' | 'host';
+
+/**
  * How an MCP server was installed (#193). A machine-readable, discriminated
  * record of each server's install-origin, so downstream features (notably the
  * by-reference package export, #192) can serialize *installation instructions*
@@ -170,6 +180,8 @@ export type MCPManagerConfig = {
   maxConcurrency?: number;
   /** Server-wide tool argument defaults. A node may override individual keys. */
   toolParameterPresets?: MCPToolParameterPresets;
+  /** Runtime-home policy for stdio servers. Missing means `inherit`. */
+  runtimeHomeMode?: MCPRuntimeHomeMode;
 }
 
 export type MCPElicitationPolicy = {

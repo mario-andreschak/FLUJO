@@ -287,7 +287,7 @@ export function createBetaTransport(
   }
 
   // Default: stdio, spawned from the SAME resolved parameters as the v1 path.
-  const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
   const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
     ? issueMcpAppRuntimeBrokerEnvironment(config.name)
     : undefined;
@@ -306,7 +306,10 @@ export function createBetaTransport(
   }
   const keyed = transport as unknown as TransportWithConfigKey;
   keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
-  keyed.__flujoStdioKey = stdioConfigKey(config);
+  keyed.__flujoStdioKey = stdioConfigKey(
+    config,
+    options?.isolateRuntimeHome === true,
+  );
   keyed.__flujoKind = "stdio";
   stdioOAuthControllers.set(transport, new StdioOAuthDeferredMrtrController());
   log.info(`Created v2-beta stdio transport for ${config.name}`);
