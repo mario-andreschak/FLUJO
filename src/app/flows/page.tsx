@@ -85,13 +85,20 @@ const FlowsPage = () => {
   const flowBuilderRef = useRef<FlowBuilderHandle>(null);
 
   // Opens the editor for `flowId` as a real, back-able history entry.
-  const enterEditor = useCallback((flowId: string) => {
-    log.debug('Entering flow editor', { flowId });
+  const enterEditor = useCallback((
+    flowId: string,
+    authoringMode?: FlowAuthoringMode,
+  ) => {
+    log.debug('Entering flow editor', { flowId, authoringMode });
     setSelectedFlow(flowId);
     pushedByUsRef.current = true;
     navigateWorkspaceRoute(
       router,
-      withWorkspaceUrl(magicLinkPath({ kind: 'flow-editor', id: flowId })),
+      withWorkspaceUrl(magicLinkPath({
+        kind: 'flow-editor',
+        id: flowId,
+        extra: authoringMode ? { authoringMode } : undefined,
+      })),
     );
   }, [router]);
   
@@ -182,6 +189,11 @@ const FlowsPage = () => {
     enterEditor(flowId); // Auto-enter edit mode when a flow is selected
   }, [enterEditor]);
 
+  const handleResolveFlowDeepLink = useCallback((flowId: string) => {
+    setBuilderEntryMode(requestedAuthoringMode);
+    enterEditor(flowId, requestedAuthoringMode);
+  }, [enterEditor, requestedAuthoringMode]);
+
   // Start a new chat conversation bound to a flow (#148). The Chat page reads
   // the `?flow=<id>` param, creates a conversation for it, then clears the param.
   const handleOpenInChat = useCallback((flowId: string) => {
@@ -203,7 +215,7 @@ const FlowsPage = () => {
     param: 'flow',
     ready: !isLoading,
     exists: (id) => flows.some(f => f.id === id),
-    onResolve: handleSelectFlow,
+    onResolve: handleResolveFlowDeepLink,
   });
   
   // While the editor is open, app-wide navigation (the top menu) must run

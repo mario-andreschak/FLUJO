@@ -41,6 +41,8 @@ import QuickChatDialog, {
 } from '@/frontend/components/Chat/QuickChatDialog';
 import { flowService } from '@/frontend/services/flow';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -419,11 +421,14 @@ export default function ModelClient() {
       systemPrompt: selection.systemPrompt,
     });
     handleCloseConversion();
-    router.push(magicLinkPath({
-      kind: 'flow-editor',
-      id: created.flowId,
-      extra: { authoringMode: 'advanced' },
-    }));
+    navigateWorkspaceRoute(
+      router,
+      withWorkspaceUrl(magicLinkPath({
+        kind: 'flow-editor',
+        id: created.flowId,
+        extra: { authoringMode: 'advanced' },
+      })),
+    );
   };
 
   const handleCloseModal = async () => {
