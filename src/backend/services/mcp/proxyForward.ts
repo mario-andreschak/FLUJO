@@ -17,6 +17,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { isLocked } from '@/utils/encryption/lockGate';
 import type { Tool, CallToolResult, Resource, ResourceTemplate, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { MCP_APPS_EXTENSION_ID } from './appsProtocol';
 import type {
   McpGetSkillResult,
   McpListSkillsResult,
@@ -71,7 +72,9 @@ export async function proxyListTools(serverName: string): Promise<{ tools: Tool[
   if (!connect.success) {
     throw new Error(`Failed to connect to MCP server '${serverName}': ${connect.error}`);
   }
-  const result = await mcpService.listServerTools(serverName);
+  // A transparent MCP relay must preserve app-only definitions. The outer
+  // host owns model/app visibility enforcement for its own caller.
+  const result = await mcpService.listServerTools(serverName, 'all');
   if (result.error) {
     throw new Error(`Failed to list tools for '${serverName}': ${result.error}`);
   }
@@ -109,7 +112,11 @@ export async function proxyCallTool(
     undefined,
     undefined,
     undefined,
-    'model',
+    // The proxy cannot infer whether an inbound tools/call came from the outer
+    // host's model or its MCP App iframe. That host has already authorized the
+    // call, so forward through FLUJO's neutral host path without filtering it a
+    // second time as a model invocation.
+    'host',
   );
   if (result.success) {
     return result.data as CallToolResult;
@@ -173,6 +180,22 @@ export async function getProxySkillsCapability(
   const connect = await mcpService.connectServer(serverName);
   if (!connect.success) return undefined;
   return mcpService.getServerSkillsCapability(serverName);
+}
+
+/** Preserve the downstream MCP Apps extension during proxy initialization. */
+export async function getProxyAppsCapability(
+  serverName: string,
+): Promise<Record<string, unknown> | undefined> {
+  if (await isLocked()) return undefined;
+  const connect = await mcpService.connectServer(serverName);
+  if (!connect.success) return undefined;
+  const capabilities = mcpService.getClient(serverName)?.getServerCapabilities?.() as
+    | { extensions?: Record<string, unknown> }
+    | undefined;
+  const capability = capabilities?.extensions?.[MCP_APPS_EXTENSION_ID];
+  return capability && typeof capability === 'object' && !Array.isArray(capability)
+    ? { ...(capability as Record<string, unknown>) }
+    : undefined;
 }
 
 export async function proxyListSkills(

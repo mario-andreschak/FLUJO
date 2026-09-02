@@ -15,6 +15,7 @@ jest.mock('@/backend/services/mcp', () => ({
     listServerResourceTemplates: jest.fn(),
     readResource: jest.fn(),
     getServerSkillsCapability: jest.fn(),
+    getClient: jest.fn(),
     listServerSkills: jest.fn(),
     getServerSkill: jest.fn(),
     readServerSkillDirectory: jest.fn(),
@@ -30,6 +31,7 @@ import {
   proxyListResourceTemplates,
   proxyReadResource,
   getProxySkillsCapability,
+  getProxyAppsCapability,
   proxyGetSkill,
   proxyListSkills,
 } from '@/backend/services/mcp/proxyForward';
@@ -45,6 +47,7 @@ const svc = mcpService as unknown as {
   listServerResourceTemplates: jest.Mock;
   readResource: jest.Mock;
   getServerSkillsCapability: jest.Mock;
+  getClient: jest.Mock;
   listServerSkills: jest.Mock;
   getServerSkill: jest.Mock;
   readServerSkillDirectory: jest.Mock;
@@ -102,6 +105,7 @@ describe('proxyListTools', () => {
     const r = await proxyListTools('srv');
     expect(r.tools).toHaveLength(1);
     expect(r.tools[0].name).toBe('echo');
+    expect(svc.listServerTools).toHaveBeenCalledWith('srv', 'all');
   });
 
   it('throws when the downstream connection fails', async () => {
@@ -135,7 +139,7 @@ describe('proxyCallTool', () => {
       undefined,
       undefined,
       undefined,
-      'model',
+      'host',
     );
   });
 
@@ -280,5 +284,30 @@ describe('proxy Skills forwarding', () => {
     };
     svc.getServerSkill.mockResolvedValue({ success: true, data: skill });
     await expect(proxyGetSkill('srv', skill.skill.uri)).resolves.toEqual(skill);
+  });
+});
+
+describe('proxy MCP Apps capability forwarding', () => {
+  it('preserves the negotiated downstream UI extension', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getClient.mockReturnValue({
+      getServerCapabilities: () => ({
+        extensions: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: ['text/html;profile=mcp-app'],
+          },
+        },
+      }),
+    });
+
+    await expect(getProxyAppsCapability('srv')).resolves.toEqual({
+      mimeTypes: ['text/html;profile=mcp-app'],
+    });
+  });
+
+  it('does not invent the extension when downstream omitted it', async () => {
+    svc.connectServer.mockResolvedValue({ success: true });
+    svc.getClient.mockReturnValue({ getServerCapabilities: () => ({}) });
+    await expect(getProxyAppsCapability('srv')).resolves.toBeUndefined();
   });
 });

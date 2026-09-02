@@ -31,6 +31,7 @@ import {
   proxyListResources,
   proxyListResourceTemplates,
   proxyReadResource,
+  getProxyAppsCapability,
   getProxySkillsCapability,
   proxyGetSkill,
   proxyListSkills,
@@ -45,6 +46,7 @@ import {
 } from '@/shared/types/mcp';
 import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
 import { createLogger } from '@/utils/logger';
+import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 
 // Proxy forwarding and downstream MCP services use Node APIs — never the edge runtime.
 export const runtime = 'nodejs';
@@ -68,7 +70,16 @@ function jsonError(status: number, message: string): Response {
 function buildProxyServer(
   serverName: string,
   skillsCapability?: McpSkillsExtensionCapability,
+  appsCapability?: Record<string, unknown>,
 ): Server {
+  const extensions = {
+    ...(appsCapability
+      ? { [MCP_APPS_EXTENSION_ID]: appsCapability }
+      : {}),
+    ...(skillsCapability
+      ? { [MCP_SKILLS_EXTENSION_ID]: skillsCapability }
+      : {}),
+  };
   const server = new Server(
     { name: `flujo-proxy-${serverName}`, version: PROXY_VERSION },
     // The resources capability must be declared or SDK clients won't issue
@@ -86,13 +97,7 @@ function buildProxyServer(
       capabilities: {
         tools: {},
         resources: {},
-        ...(skillsCapability
-          ? {
-              extensions: {
-                [MCP_SKILLS_EXTENSION_ID]: skillsCapability,
-              },
-            }
-          : {}),
+        ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
       },
     },
   );
@@ -133,8 +138,12 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
+  // Keep downstream connection establishment serialized. On the first proxy
+  // request, racing two connectServer calls can launch duplicate stdio
+  // processes for the same configured server.
   const skillsCapability = await getProxySkillsCapability(serverName);
-  const server = buildProxyServer(serverName, skillsCapability);
+  const appsCapability = await getProxyAppsCapability(serverName);
+  const server = buildProxyServer(serverName, skillsCapability, appsCapability);
 
   try {
     return await handleStatelessMcpRequest(server, request);
