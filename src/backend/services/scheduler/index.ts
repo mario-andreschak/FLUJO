@@ -16,6 +16,7 @@ import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
 import {
   acquireWorkspaceRunBarrier,
+  acquireWorkspaceRunBarrierWhenAvailable,
   cancelAllRunningConversations,
   waitForWorkspaceRunAdmission,
 } from '@/backend/execution/flow/cancellationCoordinator';
@@ -2373,11 +2374,10 @@ export class SchedulerService {
       if (!bypassRestrictions) {
         if (restrictions.emergency) {
           await prepareEmergency();
+        } else if (restrictions.superExclusive) {
+          workspaceBarrierRelease = await acquireWorkspaceRunBarrierWhenAvailable(runId);
         } else {
           await waitForWorkspaceRunAdmission(runId);
-        }
-        if (restrictions.superExclusive && !workspaceBarrierRelease) {
-          workspaceBarrierRelease = acquireWorkspaceRunBarrier(runId);
         }
       }
       try {
@@ -2614,16 +2614,17 @@ export class SchedulerService {
     // registering scheduler state so cards/history never claim a blocked run is
     // already executing. The barrier holder passes by presenting its run id.
     if (!bypassRestrictions) {
-      await waitForWorkspaceRunAdmission(runId);
+      if (restrictions.superExclusive && !workspaceBarrierRelease) {
+        workspaceBarrierRelease = await acquireWorkspaceRunBarrierWhenAvailable(runId);
+      } else {
+        await waitForWorkspaceRunAdmission(runId);
+      }
     }
 
     if (!bypassRestrictions && restrictions.superExclusive) {
       this.exclusiveHolder = execution.id;
       this.exclusiveHolderBehavior = execution.nonExclusiveBehavior ?? 'queue';
       this.exclusiveHolderPersistent = true;
-      if (!workspaceBarrierRelease) {
-        workspaceBarrierRelease = acquireWorkspaceRunBarrier(runId);
-      }
       log.info(`Super-Exclusive "${execution.name}" acquired the workspace start barrier`);
     }
 

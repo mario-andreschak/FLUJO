@@ -10,20 +10,55 @@ const getCompositionMock = jest.fn();
 const createMock = jest.fn();
 const updateMock = jest.fn();
 const scrollIntoViewMock = jest.fn();
-let intersectionCallback: IntersectionObserverCallback | undefined;
-let observedSections: Element[] = [];
+let intersectionObservers: MockIntersectionObserver[] = [];
 
 class MockIntersectionObserver {
-  constructor(callback: IntersectionObserverCallback) {
-    intersectionCallback = callback;
+  readonly root: Element | Document | null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
+  readonly observed = new Set<Element>();
+  disconnected = false;
+
+  constructor(
+    readonly callback: IntersectionObserverCallback,
+    options: IntersectionObserverInit = {},
+  ) {
+    this.root = options.root ?? null;
+    this.rootMargin = options.rootMargin ?? '0px';
+    this.thresholds = Array.isArray(options.threshold)
+      ? options.threshold
+      : [options.threshold ?? 0];
+    intersectionObservers.push(this);
   }
 
   observe(element: Element) {
-    observedSections.push(element);
+    this.observed.add(element);
   }
 
-  unobserve() {}
-  disconnect() {}
+  unobserve(element: Element) {
+    this.observed.delete(element);
+  }
+
+  disconnect() {
+    this.disconnected = true;
+    this.observed.clear();
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+
+  trigger(entries: IntersectionObserverEntry[]) {
+    this.callback(entries, this as unknown as IntersectionObserver);
+  }
+}
+
+function activeIntersectionObserver(): MockIntersectionObserver {
+  const observer = [...intersectionObservers]
+    .reverse()
+    .find((candidate) => !candidate.disconnected);
+  if (!observer) throw new Error('Expected an active IntersectionObserver');
+  return observer;
 }
 
 jest.mock('@/frontend/services/flow', () => ({
@@ -160,8 +195,7 @@ const personaExecution: PlannedExecution = {
 describe('ExecutionModal Persona targets', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    observedSections = [];
-    intersectionCallback = undefined;
+    intersectionObservers = [];
     Object.defineProperty(global, 'IntersectionObserver', {
       configurable: true,
       writable: true,
@@ -243,7 +277,24 @@ describe('ExecutionModal Persona targets', () => {
       name: 'automations.modal.sectionsAria',
     })).toBeInTheDocument();
     expect(screen.getAllByRole('tab')).toHaveLength(3);
-    expect(screen.getByTestId('execution-modal-scroll-container')).toBeInTheDocument();
+    const scrollContainer = screen.getByTestId('execution-modal-scroll-container');
+    expect(scrollContainer).toBeInTheDocument();
+    for (const section of ['when', 'what', 'restrictions']) {
+      const tab = screen.getByRole('tab', {
+        name: `automations.modal.section.${section}`,
+      });
+      const region = screen.getByRole('region', {
+        name: `automations.modal.section.${section}`,
+      });
+      expect(tab).toHaveAttribute('aria-controls', region.id);
+      expect(region).toHaveAttribute('aria-labelledby', tab.id);
+    }
+    await waitFor(() => {
+      const observer = activeIntersectionObserver();
+      expect(observer.root).toBe(scrollContainer);
+      expect([...observer.observed].map((element) => element.getAttribute('data-section')))
+        .toEqual(expect.arrayContaining(['when', 'what', 'restrictions']));
+    });
 
     fireEvent.change(screen.getByLabelText('automations.modal.name'), {
       target: { value: 'Restricted flow' },
@@ -352,7 +403,7 @@ describe('ExecutionModal Persona targets', () => {
     })).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('scrolls to a selected section and suppresses observer flicker during that scroll', () => {
+  it('scrolls to a selected section and suppresses observer flicker during that scroll', async () => {
     render(
       <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
     );
@@ -360,41 +411,47 @@ describe('ExecutionModal Persona targets', () => {
     const restrictionsTab = screen.getByRole('tab', {
       name: 'automations.modal.section.restrictions',
     });
+    const scrollContainer = screen.getByTestId('execution-modal-scroll-container');
+    const whenSection = scrollContainer.querySelector<HTMLElement>('[data-section="when"]');
+    expect(whenSection).not.toBeNull();
+    await waitFor(() => {
+      expect(activeIntersectionObserver().observed.has(whenSection!)).toBe(true);
+    });
+
     fireEvent.click(restrictionsTab);
 
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
-    const whenSection = observedSections.find(
-      (section) => section.getAttribute('data-section') === 'when',
-    );
-    expect(whenSection).toBeDefined();
-
     act(() => {
-      intersectionCallback?.([{
+      activeIntersectionObserver().trigger([{
         target: whenSection!,
         isIntersecting: true,
         intersectionRatio: 1,
-      } as IntersectionObserverEntry], {} as IntersectionObserver);
+      } as IntersectionObserverEntry]);
     });
 
     expect(restrictionsTab).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('updates the active tab from the most visible section', () => {
+  it('updates the active tab from the most visible observed section', async () => {
     render(
       <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
     );
 
-    const restrictionsSection = observedSections.find(
-      (section) => section.getAttribute('data-section') === 'restrictions',
+    const scrollContainer = screen.getByTestId('execution-modal-scroll-container');
+    const restrictionsSection = scrollContainer.querySelector<HTMLElement>(
+      '[data-section="restrictions"]',
     );
-    expect(restrictionsSection).toBeDefined();
+    expect(restrictionsSection).not.toBeNull();
+    await waitFor(() => {
+      expect(activeIntersectionObserver().observed.has(restrictionsSection!)).toBe(true);
+    });
 
     act(() => {
-      intersectionCallback?.([{
+      activeIntersectionObserver().trigger([{
         target: restrictionsSection!,
         isIntersecting: true,
         intersectionRatio: 0.9,
-      } as IntersectionObserverEntry], {} as IntersectionObserver);
+      } as IntersectionObserverEntry]);
     });
 
     expect(screen.getByRole('tab', {

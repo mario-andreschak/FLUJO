@@ -70,6 +70,9 @@ export async function registerCancellableRun(input: {
   // could appear after a caller finished waiting but before its controller was
   // visible to the cancellation sweep.
   while (true) {
+    if (input.signal?.aborted) {
+      throw input.signal.reason ?? new Error('Run cancelled while waiting for admission.');
+    }
     const barrier = barriers.get(barrierKey());
     if (!barrier || (input.runId && barrier.holderRunId === input.runId)) {
       const key = runsKey();
@@ -112,9 +115,11 @@ export async function waitForWorkspaceRunAdmission(
   signal?: AbortSignal,
 ): Promise<void> {
   while (true) {
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error('Run cancelled while waiting for admission.');
+    }
     const barrier = barriers.get(barrierKey());
     if (!barrier || (runId && barrier.holderRunId === runId)) return;
-    if (signal?.aborted) throw signal.reason ?? new Error('Run cancelled while waiting for admission.');
 
     await new Promise<void>((resolve, reject) => {
       const wake = () => {
@@ -128,6 +133,27 @@ export async function waitForWorkspaceRunAdmission(
       barrier.waiters.add(wake);
       signal?.addEventListener('abort', abort, { once: true });
     });
+  }
+}
+
+/**
+ * Wait for the current holder and reserve the next barrier in one event-loop
+ * step. Callers that need ownership must use this instead of separately
+ * waiting and acquiring, which would let two contenders pass the same gap.
+ */
+export async function acquireWorkspaceRunBarrierWhenAvailable(
+  holderRunId: string,
+  signal?: AbortSignal,
+): Promise<() => void> {
+  while (true) {
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error('Run cancelled while waiting for admission.');
+    }
+    const barrier = barriers.get(barrierKey());
+    if (!barrier || barrier.holderRunId === holderRunId) {
+      return acquireWorkspaceRunBarrier(holderRunId);
+    }
+    await waitForWorkspaceRunAdmission(holderRunId, signal);
   }
 }
 

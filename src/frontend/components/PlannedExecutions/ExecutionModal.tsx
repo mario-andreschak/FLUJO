@@ -103,6 +103,8 @@ type ExecutionSection = 'when' | 'what' | 'restrictions';
 
 const EXECUTION_SECTIONS: ExecutionSection[] = ['when', 'what', 'restrictions'];
 const START_RESTRICTIONS: StartRestriction[] = ['unrestricted', 'singleton', 'exclusive'];
+const sectionTabId = (section: ExecutionSection) => `automation-section-${section}-tab`;
+const sectionRegionId = (section: ExecutionSection) => `automation-section-${section}`;
 
 interface ExecutionModalProps {
   open: boolean;
@@ -469,8 +471,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             {EXECUTION_SECTIONS.map((section) => (
               <Tab
                 key={section}
+                id={sectionTabId(section)}
                 value={section}
                 label={t(`automations.modal.section.${section}`)}
+                aria-controls={sectionRegionId(section)}
               />
             ))}
           </Tabs>
@@ -490,7 +494,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         >
           <Box
             ref={whenRef}
+            id={sectionRegionId('when')}
             data-section="when"
+            role="region"
+            aria-labelledby={sectionTabId('when')}
             sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
           >
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -629,7 +636,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           </Box>
           <Box
             ref={whatRef}
+            id={sectionRegionId('what')}
             data-section="what"
+            role="region"
+            aria-labelledby={sectionTabId('what')}
             sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
           >
             <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
@@ -841,7 +851,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
           <Box
             ref={restrictionsRef}
+            id={sectionRegionId('restrictions')}
             data-section="restrictions"
+            role="region"
+            aria-labelledby={sectionTabId('restrictions')}
             sx={{ minHeight: 'calc(100% - 8px)', scrollSnapAlign: 'start', pb: 4 }}
           >
             <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600 }}>

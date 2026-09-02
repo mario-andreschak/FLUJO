@@ -321,6 +321,33 @@ describe('SchedulerService exclusive mode (#171)', () => {
     await Promise.all([exclusiveRun, laterRun]);
   });
 
+  it('serializes concurrent Super-Exclusive contenders', async () => {
+    blockRunFlow();
+    const { execution: first } = await scheduler.create(input({
+      name: 'first-super-exclusive',
+      startRestriction: 'unrestricted',
+      superExclusive: true,
+    }));
+    const { execution: second } = await scheduler.create(input({
+      name: 'second-super-exclusive',
+      startRestriction: 'unrestricted',
+      superExclusive: true,
+    }));
+
+    const firstRun = scheduler.fire(first!, { kind: 'schedule', summary: 'first' });
+    const secondRun = scheduler.fire(second!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    pendingRuns[0](completedResult);
+    await firstRun;
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+
+    pendingRuns[1](completedResult);
+    await expect(secondRun).resolves.toMatchObject({ status: 'completed' });
+  });
+
   it.each(['unrestricted', 'singleton', 'exclusive'] as const)(
     'Super-Exclusive blocks a later %s start until its run finishes',
     async (startRestriction) => {

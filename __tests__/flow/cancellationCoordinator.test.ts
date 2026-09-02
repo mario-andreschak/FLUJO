@@ -8,7 +8,13 @@ const mockConversationStates = new Map<string, {
 }>();
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
-  FlowExecutor: { conversationStates: mockConversationStates },
+  FlowExecutor: {
+    // Jest hoists the factory above this file's const initializers. Resolve the
+    // backing map lazily so the factory never reads it inside its temporal dead zone.
+    get conversationStates() {
+      return mockConversationStates;
+    },
+  },
 }));
 jest.mock('@/backend/execution/flow/toolCancelRegistry', () => ({
   cancelAllToolCalls: (...args: unknown[]) => mockCancelAllToolCalls(...args),
@@ -32,6 +38,7 @@ jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
 
 import {
   acquireWorkspaceRunBarrier,
+  acquireWorkspaceRunBarrierWhenAvailable,
   cancelAllRunningConversations,
   registerCancellableRun,
   waitForWorkspaceRunAdmission,
@@ -63,6 +70,50 @@ describe('workspace cancellation coordinator', () => {
     release();
     await waiting;
     expect(admitted).toBe(true);
+  });
+
+  it('atomically reserves the barrier for the next waiting owner', async () => {
+    const releaseFirst = await acquireWorkspaceRunBarrierWhenAvailable('first');
+    let secondAcquired = false;
+    const waiting = acquireWorkspaceRunBarrierWhenAvailable('second').then((release) => {
+      secondAcquired = true;
+      return release;
+    });
+
+    await Promise.resolve();
+    expect(secondAcquired).toBe(false);
+
+    releaseFirst();
+    const releaseSecond = await waiting;
+    expect(secondAcquired).toBe(true);
+
+    let thirdAdmitted = false;
+    const third = waitForWorkspaceRunAdmission('third').then(() => {
+      thirdAdmitted = true;
+    });
+    await Promise.resolve();
+    expect(thirdAdmitted).toBe(false);
+
+    releaseSecond();
+    await third;
+    expect(thirdAdmitted).toBe(true);
+  });
+
+  it('rejects an already-aborted run before registration', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled before admission');
+    controller.abort(reason);
+
+    await expect(registerCancellableRun({
+      runId: 'already-cancelled',
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    const report = await cancelAllRunningConversations({
+      reason: 'Emergency test',
+      timeoutMs: 0,
+    });
+    expect(report.directRunIds).not.toContain('already-cancelled');
   });
 
   it('fences a stale release when EMERGENCY replaces the current holder', async () => {
