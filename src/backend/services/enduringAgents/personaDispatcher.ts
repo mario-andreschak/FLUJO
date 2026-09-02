@@ -231,6 +231,7 @@ export type SerializablePersonaFlowRunInput = Pick<
   FlowRunInput,
   | 'messages'
   | 'mcpAppContexts'
+  | 'mcpSkillSelections'
   | 'prompt'
   | 'processNodeId'
   | 'variables'

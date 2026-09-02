@@ -8,6 +8,10 @@ import {
   PERSONA_PRIORITIES,
   PersonaInstructionContextSchema,
 } from '@/shared/types/enduringAgent';
+import {
+  MCP_SKILLS_MAX_SELECTED_PER_TURN,
+  parseMcpSkillUri,
+} from '@/shared/types/mcp';
 
 import {
   MemoryMaintenancePlanSchema,
@@ -59,9 +63,38 @@ const JsonValueSchema = z.unknown().refine(isPlainJsonValue, {
   message: 'Value must be plain JSON without cycles, undefined values, or non-finite numbers.',
 });
 
+const McpSkillSelectionSchema = z.object({
+  serverName: z.string()
+    .trim()
+    .min(1)
+    .max(512)
+    .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), {
+      message: 'MCP Skill server name must not contain control characters.',
+    }),
+  skillUri: z.string()
+    .trim()
+    .min(1)
+    .max(4_096)
+    .refine((value) => {
+      try {
+        parseMcpSkillUri(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }, { message: 'MCP Skill URI must identify a valid SKILL.md.' }),
+  manifestDigest: z.string().regex(
+    /^sha256:[0-9a-f]{64}$/,
+    'MCP Skill manifest digest must be sha256 followed by 64 lowercase hex characters.',
+  ),
+}).strict();
+
 export const SerializableFlowRunInputSchema = z.object({
   messages: z.array(JsonValueSchema).optional(),
   mcpAppContexts: JsonValueSchema.optional(),
+  mcpSkillSelections: z.array(McpSkillSelectionSchema)
+    .max(MCP_SKILLS_MAX_SELECTED_PER_TURN)
+    .optional(),
   prompt: z.string().optional(),
   processNodeId: z.string().trim().min(1).optional(),
   variables: z.record(z.string(), JsonValueSchema).optional(),

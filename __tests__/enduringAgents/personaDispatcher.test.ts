@@ -670,6 +670,45 @@ describe('Persona Flow dispatcher', () => {
     jest.restoreAllMocks();
   });
 
+  it('preserves selected MCP Skill identities across the durable Flow input boundary', async () => {
+    const harness = makeHarness(workspace('mcp-skill-selection'));
+    const selections: NonNullable<FlowRunInput['mcpSkillSelections']> = [{
+      serverName: 'skills-server',
+      skillUri: 'skill://catalog/code-review/SKILL.md',
+      manifestDigest: `sha256:${'a'.repeat(64)}` as `sha256:${string}`,
+    }];
+    const input = dispatchInput('persona_test', 'mcp-skill-selection');
+    input.flowInput.mcpSkillSelections = selections;
+
+    const submission = await harness.dispatcher.submit(input, { startPump: false });
+
+    expect(submission.dispatch.flowInput.mcpSkillSelections).toEqual(selections);
+    expect(submission.dispatch.flowInput.mcpSkillSelections).not.toBe(selections);
+
+    await harness.dispatcher.pump('persona_test');
+    const runInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0] as FlowRunInput;
+    expect(runInput.mcpSkillSelections).toEqual(selections);
+  });
+
+  it('rejects malformed MCP Skill selections before durable dispatch', async () => {
+    const harness = makeHarness(workspace('malformed-mcp-skill-selection'));
+    const malformed = {
+      ...dispatchInput('persona_test', 'malformed-mcp-skill-selection'),
+      flowInput: {
+        source: 'api',
+        mcpSkillSelections: [{
+          serverName: 'skills-server',
+          skillUri: 'skill://catalog/code-review/SKILL.md',
+          manifestDigest: 'sha256:not-a-digest',
+        }],
+      },
+    } as unknown as SubmitPersonaFlowDispatchInput;
+
+    await expect(harness.dispatcher.submit(malformed, { startPump: false }))
+      .rejects.toThrow('MCP Skill manifest digest');
+    expect(await harness.dispatcher.list('persona_test')).toHaveLength(0);
+  });
+
   it('does not invoke runtime retention when its rollout gate is disabled', async () => {
     const harness = makeHarness(workspace('retention-disabled'));
 
