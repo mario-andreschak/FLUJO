@@ -251,4 +251,31 @@ describe('easy agent creation deep link', () => {
     ));
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('FLUJO');
   });
+
+  it('preserves explicit advanced mode while resolving a saved-flow deep link', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'game-dev');
+    window.history.replaceState(
+      {},
+      '',
+      '/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev',
+    );
+    mockLoadFlows.mockResolvedValue([{
+      id: 'saved-flow',
+      name: 'Converted agent',
+      nodes: [],
+      edges: [],
+    }]);
+
+    render(<FlowsPage />);
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Converted agent');
+    expect(screen.getByTestId('flow-builder'))
+      .toHaveAttribute('data-authoring-mode', 'advanced');
+    await waitFor(() => expect(mockNavigateWorkspaceRoute).toHaveBeenCalledWith(
+      expect.anything(),
+      '/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev',
+    ));
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev');
+  });
 });
