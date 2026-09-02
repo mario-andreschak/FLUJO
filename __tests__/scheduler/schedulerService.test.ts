@@ -128,6 +128,18 @@ describe('SchedulerService', () => {
     expect((await scheduler.get(created.execution!.id))?.startRestriction).toBe('unrestricted');
   });
 
+  it.each([
+    [{ startRestriction: 'invalid' }, /Start restriction/i],
+    [{ superExclusive: 'yes' }, /Super-Exclusive/i],
+    [{ emergency: 'yes' }, /Emergency/i],
+  ])('rejects malformed canonical restriction fields %#', async (overrides, expectedError) => {
+    const result = await scheduler.create(scheduleInput(overrides));
+
+    expect(result.execution).toBeUndefined();
+    expect(result.error).toMatch(expectedError);
+    expect(readFile()).toBeUndefined();
+  });
+
   it('persists folder organization without re-arming runtime triggers', async () => {
     const { execution } = await scheduler.create(scheduleInput({ folder: '  Operations  ' }));
     expect(execution?.folder).toBe('Operations');

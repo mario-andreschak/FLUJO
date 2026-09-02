@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
 import type { PlannedExecution } from '@/shared/types/plannedExecution';
 
@@ -9,6 +9,22 @@ const listPersonasMock = jest.fn();
 const getCompositionMock = jest.fn();
 const createMock = jest.fn();
 const updateMock = jest.fn();
+const scrollIntoViewMock = jest.fn();
+let intersectionCallback: IntersectionObserverCallback | undefined;
+let observedSections: Element[] = [];
+
+class MockIntersectionObserver {
+  constructor(callback: IntersectionObserverCallback) {
+    intersectionCallback = callback;
+  }
+
+  observe(element: Element) {
+    observedSections.push(element);
+  }
+
+  unobserve() {}
+  disconnect() {}
+}
 
 jest.mock('@/frontend/services/flow', () => ({
   flowService: { loadFlows: (...args: unknown[]) => loadFlowsMock(...args) },
@@ -116,6 +132,18 @@ const composition: PersonaComposition = {
   expectedUpdatedAt: 1,
 };
 
+const legacyExclusiveExecution: PlannedExecution = {
+  id: 'execution-legacy-exclusive',
+  name: 'Legacy exclusive',
+  enabled: true,
+  flowId: 'flow-manual',
+  prompt: '',
+  trigger: { type: 'schedule', cron: '0 9 * * *' },
+  exclusive: true,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
+
 const personaExecution: PlannedExecution = {
   id: 'execution-persona',
   name: 'Daily research',
@@ -132,6 +160,18 @@ const personaExecution: PlannedExecution = {
 describe('ExecutionModal Persona targets', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    observedSections = [];
+    intersectionCallback = undefined;
+    Object.defineProperty(global, 'IntersectionObserver', {
+      configurable: true,
+      writable: true,
+      value: MockIntersectionObserver,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollIntoViewMock,
+    });
     loadFlowsMock.mockResolvedValue([
       { id: 'flow-manual', name: 'Manual flow', nodes: [], edges: [] },
     ]);
@@ -236,6 +276,190 @@ describe('ExecutionModal Persona targets', () => {
       emergency: true,
       overlapStrategy: 'skip',
     })));
+  });
+
+  it('links visible labels and descriptions to keyboard-operable restriction cards', () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    const unrestricted = screen.getByRole('radio', {
+      name: 'automations.modal.restriction.unrestricted.title',
+    });
+    const singleton = screen.getByRole('radio', {
+      name: 'automations.modal.restriction.singleton.title',
+    });
+
+    expect(unrestricted).toHaveAttribute('aria-checked', 'true');
+    expect(unrestricted).toHaveAttribute(
+      'aria-describedby',
+      'automation-restriction-unrestricted-description',
+    );
+    expect(unrestricted.querySelector('[data-testid="restriction-selected-icon"]'))
+      .not.toBeNull();
+    expect(screen.getAllByTestId('restriction-selected-icon')).toHaveLength(1);
+
+    fireEvent.keyDown(unrestricted, { key: 'ArrowRight' });
+
+    expect(singleton).toHaveAttribute('aria-checked', 'true');
+    expect(singleton).toHaveFocus();
+    expect(unrestricted).toHaveAttribute('tabindex', '-1');
+    expect(singleton).toHaveAttribute('tabindex', '0');
+  });
+
+  it('toggles both override cards from the keyboard with accessible descriptions', () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    const superExclusive = screen.getByRole('switch', {
+      name: 'automations.modal.superExclusiveTitle',
+    });
+    const emergency = screen.getByRole('switch', {
+      name: 'automations.modal.emergencyTitle',
+    });
+    expect(superExclusive).toHaveAttribute(
+      'aria-describedby',
+      'automation-super-exclusive-description',
+    );
+    expect(emergency).toHaveAttribute(
+      'aria-describedby',
+      'automation-emergency-description',
+    );
+
+    fireEvent.keyDown(superExclusive, { key: 'Enter' });
+    fireEvent.keyDown(emergency, { key: ' ' });
+
+    expect(superExclusive).toHaveAttribute('aria-checked', 'true');
+    expect(emergency).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('renders legacy Exclusive as Exclusive plus Super-Exclusive', () => {
+    render(
+      <ExecutionModal
+        open
+        execution={legacyExclusiveExecution}
+        onClose={jest.fn()}
+        onSaved={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('radio', {
+      name: 'automations.modal.restriction.exclusive.title',
+    })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch', {
+      name: 'automations.modal.superExclusiveTitle',
+    })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('scrolls to a selected section and suppresses observer flicker during that scroll', () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    const restrictionsTab = screen.getByRole('tab', {
+      name: 'automations.modal.section.restrictions',
+    });
+    fireEvent.click(restrictionsTab);
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    const whenSection = observedSections.find(
+      (section) => section.getAttribute('data-section') === 'when',
+    );
+    expect(whenSection).toBeDefined();
+
+    act(() => {
+      intersectionCallback?.([{
+        target: whenSection!,
+        isIntersecting: true,
+        intersectionRatio: 1,
+      } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+
+    expect(restrictionsTab).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('updates the active tab from the most visible section', () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    const restrictionsSection = observedSections.find(
+      (section) => section.getAttribute('data-section') === 'restrictions',
+    );
+    expect(restrictionsSection).toBeDefined();
+
+    act(() => {
+      intersectionCallback?.([{
+        target: restrictionsSection!,
+        isIntersecting: true,
+        intersectionRatio: 0.9,
+      } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+
+    expect(screen.getByRole('tab', {
+      name: 'automations.modal.section.restrictions',
+    })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('navigates to and focuses the first invalid section on save', async () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'automations.modal.saveTrigger',
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('automations.modal.name')).toHaveFocus();
+    });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('focuses target selection in the What section after the name is valid', async () => {
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('automations.modal.name'), {
+      target: { value: 'Missing target' },
+    });
+    fireEvent.click(screen.getByRole('button', {
+      name: 'automations.modal.saveTrigger',
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'choose-flow' })).toHaveFocus();
+    });
+    expect(screen.getByRole('tab', {
+      name: 'automations.modal.section.what',
+    })).toHaveAttribute('aria-selected', 'true');
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves form state after a failed save', async () => {
+    createMock.mockResolvedValueOnce({ success: false, error: 'save failed' });
+    render(
+      <ExecutionModal open execution={null} onClose={jest.fn()} onSaved={jest.fn()} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('automations.modal.name'), {
+      target: { value: 'Keep this value' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'choose-flow' }));
+    fireEvent.click(screen.getByRole('radio', {
+      name: 'automations.modal.restriction.singleton.title',
+    }));
+    fireEvent.click(screen.getByRole('button', {
+      name: 'automations.modal.saveTrigger',
+    }));
+
+    expect(await screen.findByText('save failed')).toBeInTheDocument();
+    expect(screen.getByLabelText('automations.modal.name')).toHaveValue('Keep this value');
+    expect(screen.getByRole('radio', {
+      name: 'automations.modal.restriction.singleton.title',
+    })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('sends explicit clear markers when an existing Persona Automation becomes a Flow', async () => {

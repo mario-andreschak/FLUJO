@@ -1,4 +1,25 @@
-const mockListPersonaFlowDispatches = jest.fn(async (..._args: unknown[]) => []);
+const mockCancelAllToolCalls = jest.fn();
+const mockClearPendingApprovals = jest.fn();
+const mockConversationStates = new Map<string, {
+  status: string;
+  logicalRunId?: string;
+  conversationId?: string;
+  isCancelled?: boolean;
+}>();
+
+jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
+  FlowExecutor: { conversationStates: mockConversationStates },
+}));
+jest.mock('@/backend/execution/flow/toolCancelRegistry', () => ({
+  cancelAllToolCalls: (...args: unknown[]) => mockCancelAllToolCalls(...args),
+}));
+jest.mock('@/backend/execution/flow/toolApprovalRegistry', () => ({
+  clearPendingApprovals: (...args: unknown[]) => mockClearPendingApprovals(...args),
+}));
+
+const mockListPersonaFlowDispatches = jest.fn(async (
+  ..._args: unknown[]
+): Promise<Array<{ id: string; personaId: string; state: 'queued' | 'running' | 'waiting' }>> => []);
 const mockCancelPersonaFlowDispatchById = jest.fn(async (..._args: unknown[]) => ({
   id: 'persona-dispatch',
 }));
@@ -15,8 +36,15 @@ import {
   registerCancellableRun,
   waitForWorkspaceRunAdmission,
 } from '@/backend/execution/flow/cancellationCoordinator';
+import { runWithWorkspace } from '@/utils/workspace';
 
 describe('workspace cancellation coordinator', () => {
+  beforeEach(() => {
+    mockConversationStates.clear();
+    mockListPersonaFlowDispatches.mockResolvedValue([]);
+    mockCancelPersonaFlowDispatchById.mockResolvedValue({ id: 'persona-dispatch' });
+  });
+
   afterEach(() => {
     acquireWorkspaceRunBarrier('test-cleanup', { force: true })();
     jest.clearAllMocks();
@@ -55,7 +83,7 @@ describe('workspace cancellation coordinator', () => {
   });
 
   it('actively aborts registered direct runs and reports their identities', async () => {
-    const registration = registerCancellableRun({
+    const registration = await registerCancellableRun({
       runId: 'run-a',
       conversationId: 'conversation-a',
     });
@@ -70,5 +98,128 @@ describe('workspace cancellation coordinator', () => {
     expect(report.conversationIds).toContain('conversation-a');
     expect(report.failures).toEqual([]);
     registration.release();
+  });
+
+  it('registers a direct run only after an active admission barrier releases', async () => {
+    const releaseBarrier = acquireWorkspaceRunBarrier('emergency');
+    let registered = false;
+    const pending = registerCancellableRun({ runId: 'incoming' }).then((registration) => {
+      registered = true;
+      return registration;
+    });
+
+    await Promise.resolve();
+    expect(registered).toBe(false);
+
+    releaseBarrier();
+    const registration = await pending;
+    expect(registered).toBe(true);
+    registration.release();
+  });
+
+  it('cancels multiple direct runs and active Persona dispatches', async () => {
+    const first = await registerCancellableRun({ runId: 'run-a' });
+    const second = await registerCancellableRun({ runId: 'run-b' });
+    mockListPersonaFlowDispatches.mockResolvedValueOnce([{
+      id: 'persona-dispatch',
+      personaId: 'persona-a',
+      state: 'running',
+    }]);
+
+    const report = await cancelAllRunningConversations({
+      reason: 'Emergency test',
+      timeoutMs: 0,
+    });
+
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(true);
+    expect(report.directRunIds).toEqual(expect.arrayContaining(['run-a', 'run-b']));
+    expect(report.personaDispatchIds).toContain('persona-dispatch');
+    expect(mockCancelPersonaFlowDispatchById).toHaveBeenCalledWith({
+      personaId: 'persona-a',
+      dispatchId: 'persona-dispatch',
+      reason: 'Emergency test',
+    }, {
+      waitForCompletion: true,
+      timeoutMs: 0,
+    });
+    first.release();
+    second.release();
+  });
+
+  it('does not cancel the initiating run', async () => {
+    const initiating = await registerCancellableRun({ runId: 'initiator' });
+    const other = await registerCancellableRun({ runId: 'other' });
+
+    const report = await cancelAllRunningConversations({
+      exceptRunId: 'initiator',
+      reason: 'Emergency test',
+      timeoutMs: 0,
+    });
+
+    expect(initiating.signal.aborted).toBe(false);
+    expect(other.signal.aborted).toBe(true);
+    expect(report.directRunIds).not.toContain('initiator');
+    expect(report.directRunIds).toContain('other');
+    initiating.release();
+    other.release();
+  });
+
+  it('cancels active tool calls and pending approvals for live conversations', async () => {
+    const state = {
+      status: 'awaiting_tool_approval',
+      logicalRunId: 'tool-run',
+      conversationId: 'tool-conversation',
+      isCancelled: false,
+    };
+    mockConversationStates.set('tool-conversation', state);
+
+    const report = await cancelAllRunningConversations({
+      reason: 'Emergency test',
+      timeoutMs: 0,
+    });
+
+    expect(state.isCancelled).toBe(true);
+    expect(mockCancelAllToolCalls).toHaveBeenCalledWith('tool-conversation');
+    expect(mockCancelAllToolCalls).toHaveBeenCalledWith('tool-run');
+    expect(mockClearPendingApprovals).toHaveBeenCalledWith('tool-conversation');
+    expect(report.conversationIds).toContain('tool-conversation');
+  });
+
+  it('isolates direct cancellation between workspaces', async () => {
+    const first = await runWithWorkspace('emergency-workspace-a', () =>
+      registerCancellableRun({ runId: 'workspace-a-run' }));
+    const second = await runWithWorkspace('emergency-workspace-b', () =>
+      registerCancellableRun({ runId: 'workspace-b-run' }));
+
+    const report = await runWithWorkspace('emergency-workspace-a', () =>
+      cancelAllRunningConversations({ reason: 'Emergency test', timeoutMs: 0 }));
+
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(false);
+    expect(report.directRunIds).toContain('workspace-a-run');
+    expect(report.directRunIds).not.toContain('workspace-b-run');
+    first.release();
+    second.release();
+  });
+
+  it('reports a Persona cancellation failure deterministically', async () => {
+    mockListPersonaFlowDispatches.mockResolvedValueOnce([{
+      id: 'persona-dispatch',
+      personaId: 'persona-a',
+      state: 'queued',
+    }]);
+    mockCancelPersonaFlowDispatchById.mockRejectedValueOnce(new Error('mailbox unavailable'));
+
+    const report = await cancelAllRunningConversations({
+      reason: 'Emergency test',
+      timeoutMs: 0,
+    });
+
+    expect(report.failures).toContainEqual({
+      kind: 'persona',
+      id: 'persona-dispatch',
+      error: 'mailbox unavailable',
+    });
   });
 });

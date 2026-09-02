@@ -31,6 +31,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import AltRouteIcon from '@mui/icons-material/AltRoute';
 import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
@@ -151,6 +152,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const whenRef = useRef<HTMLDivElement>(null);
   const whatRef = useRef<HTMLDivElement>(null);
   const restrictionsRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const targetSelectionRef = useRef<HTMLDivElement>(null);
   const programmaticScroll = useRef(false);
   const restrictionCardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -344,9 +347,43 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     restrictionCardRefs.current[nextIndex]?.focus();
   };
 
+  const focusFirstInvalidControl = () => {
+    let section: ExecutionSection | null = null;
+    let focusTarget: (() => HTMLElement | null | undefined) | null = null;
+
+    if (!name.trim()) {
+      section = 'when';
+      focusTarget = () => nameInputRef.current;
+    } else if (
+      !flowId
+      || selectedMissing
+      || selectedPersonaMissing
+      || selectedPersonaUnavailable
+      || (targetKind === 'persona' && (
+        loadingPersonaComposition
+        || personaCompositionError
+        || !selectedPersonaWorkReady
+      ))
+    ) {
+      section = 'what';
+      focusTarget = () => targetSelectionRef.current?.querySelector<HTMLElement>(
+        'button:not([disabled]), [role="combobox"]:not([aria-disabled="true"]), input:not([disabled])',
+      ) ?? targetSelectionRef.current;
+    } else if (startRestriction === 'singleton' && overlapStrategy === 'parallel') {
+      section = 'restrictions';
+      focusTarget = () => restrictionCardRefs.current[1];
+    }
+
+    if (!section || !focusTarget) return false;
+    handleSectionClick(section);
+    window.setTimeout(() => focusTarget?.()?.focus(), 0);
+    return true;
+  };
+
   const handleSave = async () => {
-    setSaving(true);
     setSaveError(null);
+    if (focusFirstInvalidControl()) return;
+    setSaving(true);
     const input: PlannedExecutionInput = {
       name,
       flowId,
@@ -463,6 +500,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         <TextField
           fullWidth
           label={t('automations.modal.name')}
+          inputRef={nameInputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
           margin="normal"
@@ -631,7 +669,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
         {targetKind === 'flow' ? (
           <>
-            <Box sx={{ mt: 2 }}>
+            <Box ref={targetSelectionRef} tabIndex={-1} sx={{ mt: 2 }}>
               <FlowSelector
                 selectedFlowId={flowId || null}
                 onSelectFlow={setFlowId}
@@ -647,7 +685,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             )}
           </>
         ) : (
-          <Box sx={{ mt: 1 }}>
+          <Box ref={targetSelectionRef} tabIndex={-1} sx={{ mt: 1 }}>
             <FormControl fullWidth margin="normal" required>
               <InputLabel id="automation-persona-label">
                 {t('automations.modal.persona')}
@@ -824,6 +862,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
             >
               {START_RESTRICTIONS.map((restriction, index) => {
                 const selected = startRestriction === restriction;
+                const titleId = `automation-restriction-${restriction}-title`;
+                const descriptionId = `automation-restriction-${restriction}-description`;
                 return (
                   <Box
                     key={restriction}
@@ -834,12 +874,15 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                     }}
                     role="radio"
                     aria-checked={selected}
+                    aria-labelledby={titleId}
+                    aria-describedby={descriptionId}
                     tabIndex={selected ? 0 : -1}
                     onClick={() => selectStartRestriction(restriction)}
                     onKeyDown={(event: React.KeyboardEvent<HTMLButtonElement>) =>
                       handleRestrictionKeyDown(event, index)}
                     sx={{
                       appearance: 'none',
+                      position: 'relative',
                       textAlign: 'left',
                       font: 'inherit',
                       color: 'text.primary',
@@ -857,10 +900,23 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                       },
                     }}
                   >
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+                    {selected && (
+                      <CheckCircleIcon
+                        data-testid="restriction-selected-icon"
+                        color="primary"
+                        fontSize="small"
+                        aria-hidden="true"
+                        sx={{ position: 'absolute', top: 8, right: 8 }}
+                      />
+                    )}
+                    <Typography
+                      id={titleId}
+                      variant="subtitle2"
+                      sx={{ fontWeight: 700, mb: 0.75, pr: 3 }}
+                    >
                       {t(`automations.modal.restriction.${restriction}.title`)}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography id={descriptionId} variant="body2" color="text.secondary">
                       {t(`automations.modal.restriction.${restriction}.description`)}
                     </Typography>
                   </Box>
@@ -904,6 +960,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               <Box
                 role="switch"
                 aria-checked={superExclusive}
+                aria-labelledby="automation-super-exclusive-title"
+                aria-describedby="automation-super-exclusive-description"
                 tabIndex={0}
                 onClick={() => setSuperExclusive((value) => !value)}
                 onKeyDown={(event) => {
@@ -932,13 +990,21 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                   checked={superExclusive}
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) => setSuperExclusive(event.target.checked)}
-                  inputProps={{ 'aria-label': t('automations.modal.superExclusiveTitle') }}
+                  inputProps={{ 'aria-hidden': true, tabIndex: -1 }}
                 />
                 <Box>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  <Typography
+                    id="automation-super-exclusive-title"
+                    variant="subtitle2"
+                    sx={{ fontWeight: 700 }}
+                  >
                     {t('automations.modal.superExclusiveTitle')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    id="automation-super-exclusive-description"
+                    variant="body2"
+                    color="text.secondary"
+                  >
                     {t('automations.modal.superExclusiveDescription')}
                   </Typography>
                 </Box>
@@ -947,6 +1013,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               <Box
                 role="switch"
                 aria-checked={emergency}
+                aria-labelledby="automation-emergency-title"
+                aria-describedby="automation-emergency-description"
                 tabIndex={0}
                 onClick={() => setEmergency((value) => !value)}
                 onKeyDown={(event) => {
@@ -977,13 +1045,22 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
                   checked={emergency}
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) => setEmergency(event.target.checked)}
-                  inputProps={{ 'aria-label': t('automations.modal.emergencyTitle') }}
+                  inputProps={{ 'aria-hidden': true, tabIndex: -1 }}
                 />
                 <Box>
-                  <Typography variant="subtitle2" color="error.main" sx={{ fontWeight: 800 }}>
+                  <Typography
+                    id="automation-emergency-title"
+                    variant="subtitle2"
+                    color="error.main"
+                    sx={{ fontWeight: 800 }}
+                  >
                     {t('automations.modal.emergencyTitle')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    id="automation-emergency-description"
+                    variant="body2"
+                    color="text.secondary"
+                  >
                     {t('automations.modal.emergencyDescription')}
                   </Typography>
                 </Box>
@@ -1026,17 +1103,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           onClick={handleSave}
           variant="contained"
           color="primary"
-          disabled={
-            saving
-            || (startRestriction === 'singleton' && overlapStrategy === 'parallel')
-            || !name.trim()
-            || !flowId
-            || (targetKind === 'persona' && (
-              loadingPersonaComposition
-              || selectedPersonaUnavailable
-              || !selectedPersonaWorkReady
-            ))
-          }
+          disabled={saving}
         >
           {saving ? t('automations.modal.saving') : t('automations.modal.saveTrigger')}
         </Button>

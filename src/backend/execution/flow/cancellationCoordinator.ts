@@ -60,22 +60,47 @@ export interface CancellableRunRegistration {
  * Register every runFlow invocation so workspace EMERGENCY cancellation can
  * actively abort provider/tool work instead of only preventing the next loop.
  */
-export function registerCancellableRun(input: {
+export async function registerCancellableRun(input: {
   runId?: string;
   conversationId?: string;
-}): CancellableRunRegistration {
-  const runs = currentRuns();
-  const identity = `${input.runId ?? input.conversationId ?? 'anonymous'}:${Date.now()}:${Math.random()}`;
-  const controller = new AbortController();
-  runs.set(identity, { identity, ...input, controller });
-  return {
-    signal: controller.signal,
-    release: () => {
-      const active = currentRuns();
-      active.delete(identity);
-      if (active.size === 0) runRegistries.delete(runsKey());
-    },
-  };
+  signal?: AbortSignal;
+}): Promise<CancellableRunRegistration> {
+  // Admission and registration must be one atomic event-loop step. Keeping the
+  // barrier check inside this loop closes the gap where an EMERGENCY barrier
+  // could appear after a caller finished waiting but before its controller was
+  // visible to the cancellation sweep.
+  while (true) {
+    const barrier = barriers.get(barrierKey());
+    if (!barrier || (input.runId && barrier.holderRunId === input.runId)) {
+      const key = runsKey();
+      let runs = runRegistries.get(key);
+      if (!runs) {
+        runs = new Map();
+        runRegistries.set(key, runs);
+      }
+      const identity = [
+        input.runId ?? input.conversationId ?? 'anonymous',
+        Date.now(),
+        Math.random(),
+      ].join(':');
+      const controller = new AbortController();
+      runs.set(identity, {
+        identity,
+        runId: input.runId,
+        conversationId: input.conversationId,
+        controller,
+      });
+      return {
+        signal: controller.signal,
+        release: () => {
+          const active = runRegistries.get(key);
+          active?.delete(identity);
+          if (active?.size === 0) runRegistries.delete(key);
+        },
+      };
+    }
+    await waitForWorkspaceRunAdmission(input.runId, input.signal);
+  }
 }
 
 /**

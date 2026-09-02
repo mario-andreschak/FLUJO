@@ -55,6 +55,72 @@ describe('planned-execution config serialization', () => {
     mockLockTails.clear();
   });
 
+  it('round-trips canonical restrictions across create, update, and reload', async () => {
+    const first = new SchedulerService();
+    const created = await first.create({
+      ...input('execution_restrictions', 'Restrictions'),
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: true,
+    });
+    expect(created.execution).toMatchObject({
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: true,
+    });
+
+    const second = new SchedulerService();
+    expect(await second.get('execution_restrictions')).toMatchObject({
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: true,
+    });
+
+    const updated = await second.update('execution_restrictions', {
+      startRestriction: 'singleton',
+      superExclusive: false,
+      emergency: false,
+    });
+    expect(updated.execution).toMatchObject({
+      startRestriction: 'singleton',
+      superExclusive: false,
+      emergency: false,
+    });
+
+    const third = new SchedulerService();
+    expect(await third.get('execution_restrictions')).toMatchObject({
+      startRestriction: 'singleton',
+      superExclusive: false,
+      emergency: false,
+    });
+  });
+
+  it('normalizes a legacy Exclusive record without rewriting version-1 storage', async () => {
+    mockStorage.set('planned_executions', {
+      version: 1,
+      paused: false,
+      executions: [{
+        ...input('legacy_restrictions', 'Legacy'),
+        exclusive: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }],
+    });
+
+    const scheduler = new SchedulerService();
+    expect(await scheduler.get('legacy_restrictions')).toMatchObject({
+      startRestriction: 'exclusive',
+      superExclusive: true,
+      emergency: false,
+    });
+    const raw = mockStorage.get('planned_executions') as {
+      version: number;
+      executions: Array<Record<string, unknown>>;
+    };
+    expect(raw.version).toBe(1);
+    expect(raw.executions[0]).not.toHaveProperty('startRestriction');
+  });
+
   it('preserves concurrent create/update/pause mutations from separate schedulers', async () => {
     const first = new SchedulerService();
     const second = new SchedulerService();

@@ -122,6 +122,26 @@ describe('SchedulerService overlap strategy (#121)', () => {
     expect(scheduler.isRunning(execution!.id)).toBe(false);
   });
 
+  it('enforces Singleton through the configured non-parallel overlap policy', async () => {
+    blockRunFlow();
+    const { execution } = await scheduler.create(input({
+      startRestriction: 'singleton',
+      overlapStrategy: 'skip',
+    }));
+
+    const first = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
+    await flush();
+    const second = await scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
+
+    expect(second.status).toBe('skipped');
+    expect(second.error).toBe('Previous run still in progress');
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    pendingRuns[0](completedResult);
+    await first;
+    expect(scheduler.isRunning(execution!.id)).toBe(false);
+  });
+
   it("'error' records an error run for the overlapping fire and does not run it", async () => {
     blockRunFlow();
     const { execution } = await scheduler.create(input({ overlapStrategy: 'error' }));

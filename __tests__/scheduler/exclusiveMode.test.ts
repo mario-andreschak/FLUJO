@@ -1,13 +1,11 @@
 /**
  * Tests for scheduler-global "exclusive" mode (issue #171).
  *
- * An exclusive execution may only START when the scheduler is globally idle
- * (no run in flight for ANY execution). While it runs it holds a
- * scheduler-global lock: no other trigger may start a run. If an exclusive
- * fire arrives while others are running it WAITS in a global queue and acquires
- * the lock as soon as the scheduler drains to idle. `nonExclusiveBehavior`
- * (queue | skip | error, default queue) on the exclusive execution decides what
- * OTHER (non-exclusive) fires do while it holds/awaits the lock.
+ * Canonical Exclusive waits for scheduler-wide idle without blocking later
+ * starts. Super-Exclusive owns the run-lifetime start barrier. Legacy
+ * `exclusive: true` normalizes to both behaviors so historical records retain
+ * their original mutual-exclusion semantics. `nonExclusiveBehavior`
+ * (queue | skip | error, default queue) controls blocked ordinary starts.
  *
  * Orthogonal to the per-execution `overlapStrategy` (#121): exclusivity is
  * mutual exclusion ACROSS executions; overlap is a single execution vs itself.
@@ -270,6 +268,89 @@ describe('SchedulerService exclusive mode (#171)', () => {
     const ro = await po;
     expect(ro.status).toBe('completed');
   });
+
+  it('allows separate Unrestricted executions to run together', async () => {
+    blockRunFlow();
+    const { execution: first } = await scheduler.create(input({
+      name: 'first',
+      startRestriction: 'unrestricted',
+    }));
+    const { execution: second } = await scheduler.create(input({
+      name: 'second',
+      startRestriction: 'unrestricted',
+    }));
+
+    const firstRun = scheduler.fire(first!, { kind: 'schedule', summary: 'first' });
+    const secondRun = scheduler.fire(second!, { kind: 'schedule', summary: 'second' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+
+    pendingRuns[0](completedResult);
+    pendingRuns[1](completedResult);
+    await Promise.all([firstRun, secondRun]);
+  });
+
+  it('canonical Exclusive waits for idle but does not block a later ordinary start', async () => {
+    blockRunFlow();
+    const { execution: normal } = await scheduler.create(input({ name: 'normal' }));
+    const { execution: exclusive } = await scheduler.create(input({
+      name: 'canonical-exclusive',
+      startRestriction: 'exclusive',
+      superExclusive: false,
+    }));
+    const { execution: later } = await scheduler.create(input({ name: 'later' }));
+
+    const normalRun = scheduler.fire(normal!, { kind: 'schedule', summary: 'normal' });
+    await flush();
+    const exclusiveRun = scheduler.fire(exclusive!, { kind: 'schedule', summary: 'exclusive' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+    pendingRuns[0](completedResult);
+    await normalRun;
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    expect(scheduler.getStatus(exclusive!).exclusiveHolderId).toBeUndefined();
+
+    const laterRun = scheduler.fire(later!, { kind: 'schedule', summary: 'later' });
+    await flush();
+    expect(runFlowMock).toHaveBeenCalledTimes(3);
+
+    pendingRuns[1](completedResult);
+    pendingRuns[2](completedResult);
+    await Promise.all([exclusiveRun, laterRun]);
+  });
+
+  it.each(['unrestricted', 'singleton', 'exclusive'] as const)(
+    'Super-Exclusive blocks a later %s start until its run finishes',
+    async (startRestriction) => {
+      blockRunFlow();
+      const { execution: blocker } = await scheduler.create(input({
+        name: 'super-exclusive',
+        startRestriction: 'unrestricted',
+        superExclusive: true,
+        nonExclusiveBehavior: 'queue',
+      }));
+      const { execution: candidate } = await scheduler.create(input({
+        name: `candidate-${startRestriction}`,
+        startRestriction,
+      }));
+
+      const blockerRun = scheduler.fire(blocker!, { kind: 'schedule', summary: 'blocker' });
+      await flush();
+      const candidateRun = scheduler.fire(candidate!, { kind: 'schedule', summary: 'candidate' });
+      await flush();
+      expect(runFlowMock).toHaveBeenCalledTimes(1);
+
+      pendingRuns[0](completedResult);
+      await blockerRun;
+      await flush();
+      expect(runFlowMock).toHaveBeenCalledTimes(2);
+
+      pendingRuns[1](completedResult);
+      await candidateRun;
+    },
+  );
 
   it('the encryption-locked guard takes precedence over exclusive gating', async () => {
     const { execution: exc } = await scheduler.create(input({ exclusive: true }));

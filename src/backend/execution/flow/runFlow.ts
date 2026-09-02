@@ -74,10 +74,7 @@ import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery
 import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
-import {
-  registerCancellableRun,
-  waitForWorkspaceRunAdmission,
-} from '@/backend/execution/flow/cancellationCoordinator';
+import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
 import {
   FlowSnapshotSchema,
   PersonaInstructionContextSchema,
@@ -546,10 +543,10 @@ export interface FlowRunResult {
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
-  await waitForWorkspaceRunAdmission(input.runId, ownerSignal);
-  const registration = registerCancellableRun({
+  const registration = await registerCancellableRun({
     runId: input.runId,
     conversationId: input.conversationId,
+    signal: ownerSignal,
   });
   const registeredInput: FlowRunInput = {
     ...input,
