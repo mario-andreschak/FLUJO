@@ -9,10 +9,21 @@ multi-week acceptance proof for parent epic
 
 `npm run soak:personas:quick` is a non-authoritative three-day smoke run.
 `npm run soak:personas` is the authoritative 28-day × 20-activity configuration
-with seed 459 and learning enabled. The `persona-soak` workflow runs only the
-authoritative configuration. It verifies checked-out `HEAD` against the GitHub
-workflow SHA, names evidence with the commit/run identity, validates all
-artifacts, generates SHA-256 checksum manifests, and retains them for 30 days.
+with seed 459 and learning enabled. For an explicit exact-commit invocation, run
+the entry point directly so npm cannot reinterpret `--commit` as its
+`commit-hooks` configuration option:
+
+```sh
+node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 \
+  --with-learning --seed=459 --commit="$(git rev-parse HEAD)" \
+  --run-id="local-$(git rev-parse --short HEAD)"
+```
+
+The CLI accepts both `--name=value` and `--name value`, rejects unknown or
+duplicate options, and verifies the supplied commit against checked-out `HEAD`.
+The `persona-soak` workflow invokes this Node entry point directly with exact
+arguments, validates the artifacts, generates SHA-256 checksum manifests, and
+retains them for 30 days.
 
 Acceptance evidence must identify the exact checked-out commit. Local runs
 derive it from `git rev-parse HEAD`; controlled runs set `FLUJO_SOAK_COMMIT`.

@@ -38,7 +38,10 @@ jobs:
           FLUJO_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           PERSONA_SOAK_DEBUG: '1'
         run: >-
-          npm run soak:personas --
+          node scripts/run-persona-soak.mjs
+          --days=28
+          --activities-per-day=20
+          --with-learning
           --seed="$SOAK_SEED"
           --commit="$GITHUB_SHA"
           --run-id="$FLUJO_SOAK_RUN_ID"

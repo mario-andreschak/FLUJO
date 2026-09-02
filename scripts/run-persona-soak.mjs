@@ -2,12 +2,46 @@ import { spawn, execFileSync } from 'child_process';
 import path from 'path';
 import process from 'process';
 
-const values = new Map();
-for (const argument of process.argv.slice(2)) {
-  const match = /^--([^=]+)(?:=(.*))?$/.exec(argument);
-  if (!match) throw new Error(`Unknown argument: ${argument}`);
-  values.set(match[1], match[2] ?? '1');
+const VALUE_OPTIONS = new Set([
+  'days',
+  'activities-per-day',
+  'seed',
+  'output',
+  'commit',
+  'run-id',
+]);
+const FLAG_OPTIONS = new Set(['quick', 'with-learning']);
+
+function parseArguments(argv) {
+  const values = new Map();
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    const match = /^--([^=]+)(?:=(.*))?$/.exec(argument);
+    if (!match) throw new Error(`Unknown argument: ${argument}`);
+    const [, key, inlineValue] = match;
+    if (!VALUE_OPTIONS.has(key) && !FLAG_OPTIONS.has(key)) {
+      throw new Error(`Unknown option: --${key}`);
+    }
+    if (values.has(key)) throw new Error(`Duplicate option: --${key}`);
+    if (FLAG_OPTIONS.has(key)) {
+      if (inlineValue !== undefined) {
+        throw new Error(`Flag --${key} does not accept a value.`);
+      }
+      values.set(key, '1');
+      continue;
+    }
+    const separateValue = inlineValue === undefined ? argv[index + 1] : undefined;
+    const value = inlineValue ?? separateValue;
+    if (!value || value.startsWith('--')) {
+      throw new Error(`Option --${key} requires a value.`);
+    }
+    values.set(key, value);
+    if (inlineValue === undefined) index += 1;
+  }
+  return values;
 }
+
+const values = parseArguments(process.argv.slice(2));
 
 const days = values.get('days') ?? '28';
 const activities = values.get('activities-per-day') ?? '20';

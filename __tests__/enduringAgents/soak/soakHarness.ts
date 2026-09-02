@@ -1442,7 +1442,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           observed: {
             ...workloadReconciliation,
           },
-          threshold: 'Every generated input is accepted; no missing, duplicate, nonterminal, false-success, mailbox-link, Persona, or revision mismatch.'
+          threshold: 'Every generated input is accepted; no missing, duplicate, nonterminal, false-success, mailbox-link, Persona, or revision mismatch.',
           thresholdSource: 'Issue #489 required fix 1 and acceptance criterion 2',
           provenance: ['listPersonaMailboxItems', 'listPersonaActivities', 'active Behavior binding'],
         }),
