@@ -28,6 +28,13 @@ describe('deterministic Persona soak harness', () => {
       outputDirectory: process.env.PERSONA_SOAK_OUTPUT,
       gatingMode: 'enforce',
       withLearning: process.env.PERSONA_SOAK_WITH_LEARNING === '1',
+      ...(process.env.PERSONA_SOAK_COMMIT
+        ? { commitSha: process.env.PERSONA_SOAK_COMMIT }
+        : {}),
+      ...(process.env.PERSONA_SOAK_RUN_ID
+        ? { runId: process.env.PERSONA_SOAK_RUN_ID }
+        : {}),
+      runMode: quick ? 'smoke' : 'acceptance',
     });
     expect(summary.activities).toBe(days * activitiesPerDay);
     expect(summary.splitBrainCount).toBe(0);
@@ -38,6 +45,17 @@ describe('deterministic Persona soak harness', () => {
       persistedMailboxItems: expect.any(Number),
       persistedLeaseAcquisitions: expect.any(Number),
       modelCalls: expect.any(Number),
+    });
+    expect(summary.workloadReconciliation).toMatchObject({
+      attempted: days * activitiesPerDay,
+      completed: days * activitiesPerDay,
+      failed: 0,
+      duplicate: 0,
+      unresolved: 0,
+    });
+    expect(summary.runtimeEvidence).toMatchObject({
+      behaviorBindingId: expect.any(String),
+      behaviorRevisionId: expect.any(String),
     });
     expect(summary.runtimeEvidence.persistedActivities).toBeGreaterThanOrEqual(summary.activities);
     expect(summary.runtimeEvidence.persistedMailboxItems).toBeGreaterThanOrEqual(summary.activities);
@@ -58,6 +76,12 @@ describe('deterministic Persona soak harness', () => {
   });
 
   it('fails closed across a hard process crash after a published claim', async () => {
-    await expect(exerciseHardCrashProcessBoundary(459)).resolves.toBeUndefined();
+    await expect(exerciseHardCrashProcessBoundary(459)).resolves.toMatchObject({
+      replayedClaim: false,
+      terminalStatus: 'error',
+      mailboxStatus: 'rejected',
+      leaseStatus: 'expired',
+      failClosed: true,
+    });
   });
 });

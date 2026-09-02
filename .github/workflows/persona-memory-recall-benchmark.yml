@@ -14,10 +14,13 @@ permissions:
 
 jobs:
   controlled-recall-gate:
+    name: controlled-50k-production-recall
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -27,10 +30,30 @@ jobs:
       - name: Run production-path 50k Persona recall benchmark
         env:
           FLUJO_MEMORY_BENCHMARK_OUTPUT: benchmark-artifacts/persona-memory-recall.json
+          FLUJO_BENCHMARK_COMMIT: ${{ github.sha }}
+          FLUJO_BENCHMARK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: npm run test:memory-recall-benchmark
+      - name: Validate exact-commit benchmark evidence
+        if: always()
+        env:
+          FLUJO_BENCHMARK_COMMIT: ${{ github.sha }}
+          FLUJO_BENCHMARK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: >-
+          node scripts/validate-memory-semantic-benchmark.mjs
+          --file benchmark-artifacts/persona-memory-recall.json
+          --commit "$GITHUB_SHA"
+          --run-id "$FLUJO_BENCHMARK_RUN_ID"
+      - name: Generate artifact checksum
+        if: always()
+        run: |
+          if test -f benchmark-artifacts/persona-memory-recall.json; then
+            (cd benchmark-artifacts && sha256sum \
+              persona-memory-recall.json > SHA256SUMS)
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: persona-memory-recall-${{ github.run_id }}
-          path: benchmark-artifacts/persona-memory-recall.json
+          name: persona-memory-recall-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-artifacts/
           if-no-files-found: error
+          retention-days: 30

@@ -61,6 +61,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
   });
 
   it('keeps production hybrid recall below 150ms p95 with a proven warm query cache', async () => {
+    const benchmarkStartedAt = new Date().toISOString();
     await runWithWorkspace(`semantic-memory-perf-${process.pid}`, async () => {
       const { persona } = await createPersonaFromRole({
         name: 'Recall Benchmark',
@@ -224,7 +225,12 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
       expect(hybridRecallAtK).toBeGreaterThan(lexicalRecallAtK);
       expect(hybridMrr).toBeGreaterThan(lexicalMrr);
 
+      const latencyMilliseconds = summarizeLatency(samples);
       const report = {
+        schemaVersion: 1,
+        runId: process.env.FLUJO_BENCHMARK_RUN_ID ?? process.env.GITHUB_RUN_ID ?? 'local',
+        startedAt: benchmarkStartedAt,
+        endedAt: new Date().toISOString(),
         fixture: {
           version: FIXTURE_VERSION,
           hash: FIXTURE_HASH,
@@ -234,7 +240,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
           modelId,
         },
         runtime: {
-          commit: process.env.GITHUB_SHA ?? process.env.FLUJO_BENCHMARK_COMMIT ?? 'unreported',
+          commit: process.env.FLUJO_BENCHMARK_COMMIT ?? process.env.GITHUB_SHA ?? 'unreported',
           node: process.version,
           platform: process.platform,
           architecture: process.arch,
@@ -276,7 +282,14 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
             },
           },
         },
-        latencyMilliseconds: summarizeLatency(samples),
+        latencyMilliseconds,
+        gate: {
+          criterionId: 'controlled-50k-recall-p95',
+          operator: 'strictly_less_than',
+          thresholdMilliseconds: 150,
+          observedMilliseconds: latencyMilliseconds.p95,
+          status: latencyMilliseconds.p95 < 150 ? 'passed' : 'failed',
+        },
       };
       process.stdout.write(`${JSON.stringify(report)}\n`);
       const outputPath = process.env.FLUJO_MEMORY_BENCHMARK_OUTPUT;
