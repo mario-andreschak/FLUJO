@@ -14,18 +14,28 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
+  mcpSkillCacheKey,
   type McpLoadedSkill,
   type McpServerSkillsResult,
+  type McpSkillDigest,
   type McpSkillEntry,
 } from '@/shared/types/mcp';
 import { mcpService } from '@/frontend/services/mcp';
+import {
+  getActiveMcpSkillConversation,
+  getConversationMcpSkills,
+  reconcileConversationMcpSkills,
+  recordConversationMcpSkill,
+  subscribeMcpSkillSession,
+} from '@/frontend/services/mcp/skillSessionStore';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface Props {
   serverName: string;
+  conversationId?: string;
 }
 
-function manifestDigest(entry: McpSkillEntry): string | undefined {
+function manifestDigest(entry: McpSkillEntry): McpSkillDigest | undefined {
   if (entry.resources === 'dynamic') return undefined;
   return entry.resources.find((resource) => resource.uri === entry.uri)?.digest;
 }
@@ -34,12 +44,23 @@ function manifestDigest(entry: McpSkillEntry): string | undefined {
  * Explicit, session-memory-only Skills loader. Nothing is inserted into trusted
  * Persona instructions and discovery alone never activates remote content.
  */
-const MCPSkillsManager: React.FC<Props> = ({ serverName }) => {
+const MCPSkillsManager: React.FC<Props> = ({ serverName, conversationId }) => {
   const { t } = useI18n();
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    () => getActiveMcpSkillConversation(),
+  );
+  const effectiveConversationId = conversationId ?? activeConversationId ?? undefined;
   const [result, setResult] = useState<McpServerSkillsResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingUri, setLoadingUri] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Map<string, McpLoadedSkill>>(new Map());
+
+  useEffect(() => {
+    if (conversationId) return undefined;
+    const sync = () => setActiveConversationId(getActiveMcpSkillConversation());
+    sync();
+    return subscribeMcpSkillSession(sync);
+  }, [conversationId]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -61,42 +82,80 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName }) => {
       }
       const next = { ...first, skills, nextCursor: cursor };
       setResult(next);
-      setLoaded((current) => {
-        const valid = new Map<string, McpLoadedSkill>();
-        for (const entry of skills) {
-          const prior = current.get(entry.uri);
-          if (prior && prior.manifest.digest === manifestDigest(entry)) {
-            valid.set(entry.uri, prior);
-          }
-        }
-        return valid;
-      });
+      const validKeys = new Set<string>();
+      for (const entry of skills) {
+        const digest = manifestDigest(entry);
+        if (digest) validKeys.add(mcpSkillCacheKey(serverName, entry.uri, digest));
+      }
+      if (effectiveConversationId) {
+        reconcileConversationMcpSkills(
+          effectiveConversationId,
+          serverName,
+          validKeys,
+        );
+        setLoaded(new Map(
+          getConversationMcpSkills(effectiveConversationId)
+            .filter((skill) => skill.identity.serverName === serverName)
+            .map((skill) => [
+              mcpSkillCacheKey(
+                skill.identity.serverName,
+                skill.identity.skillUri,
+                skill.manifest.digest,
+              ),
+              skill,
+            ]),
+        ));
+      } else {
+        setLoaded(new Map());
+      }
     } finally {
       setLoading(false);
     }
-  }, [serverName]);
+  }, [effectiveConversationId, serverName]);
 
   useEffect(() => {
     setResult(null);
     setLoaded(new Map());
     void refresh();
-  }, [refresh]);
+  }, [effectiveConversationId, refresh]);
 
   const load = async (entry: McpSkillEntry) => {
-    if (entry.resources === 'dynamic') return;
+    if (!effectiveConversationId || entry.resources === 'dynamic') return;
     setLoadingUri(entry.uri);
     try {
-      const response = await mcpService.loadServerSkill(serverName, entry.uri);
+      const approval = await mcpService.approveServerSkill(
+        serverName,
+        effectiveConversationId,
+        entry.uri,
+      );
+      if (!approval.success) {
+        setResult((current) =>
+          current ? { ...current, error: approval.error || t('mcp.skills.loadFailed') } : current,
+        );
+        return;
+      }
+      const response = await mcpService.loadServerSkill(
+        serverName,
+        effectiveConversationId,
+        entry.uri,
+      );
       if (!response.success || !response.data) {
         setResult((current) =>
           current ? { ...current, error: response.error || t('mcp.skills.loadFailed') } : current,
         );
         return;
       }
-      setLoaded((current) => new Map(current).set(entry.uri, response.data!));
+      const loadedSkill = response.data;
+      const key = mcpSkillCacheKey(
+        serverName,
+        loadedSkill.identity.skillUri,
+        loadedSkill.manifest.digest,
+      );
+      recordConversationMcpSkill(effectiveConversationId, loadedSkill);
+      setLoaded((current) => new Map(current).set(key, loadedSkill));
       window.dispatchEvent(
         new CustomEvent('flujo:mcp-skill-loaded', {
-          detail: response.data,
+          detail: { conversationId: effectiveConversationId, skill: loadedSkill },
         }),
       );
     } finally {
@@ -119,6 +178,9 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName }) => {
   return (
     <Stack spacing={2}>
       <Alert severity="warning">{t('mcp.skills.warning')}</Alert>
+      {!effectiveConversationId && (
+        <Alert severity="info">{t('mcp.skills.openConversation')}</Alert>
+      )}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
         <Typography variant="body2" color="text.secondary">
           {t('mcp.skills.server', { server: serverName })}
@@ -138,7 +200,9 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName }) => {
       )}
       {result.skills.map((entry) => {
         const digest = manifestDigest(entry);
-        const verified = loaded.get(entry.uri);
+        const verified = digest
+          ? loaded.get(mcpSkillCacheKey(serverName, entry.uri, digest))
+          : undefined;
         return (
           <Card variant="outlined" key={entry.uri}>
             <CardContent>
@@ -170,7 +234,7 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName }) => {
                   <Button
                     variant="contained"
                     size="small"
-                    disabled={entry.resources === 'dynamic' || loadingUri === entry.uri}
+                    disabled={!effectiveConversationId || entry.resources === 'dynamic' || loadingUri === entry.uri}
                     onClick={() => void load(entry)}
                   >
                     {loadingUri === entry.uri

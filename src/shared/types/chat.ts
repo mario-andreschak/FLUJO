@@ -40,6 +40,9 @@ export interface ChatCompletionMetadata {
    */
   mcpAppContexts?: string;
 
+  /** Explicitly approved MCP Skill references for this conversation turn. */
+  mcpSkills?: string;
+
   /** FLUJO UI extension: return large tool bodies as expansion-time references. */
   compactToolPayloads?: "true";
 

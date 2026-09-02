@@ -130,6 +130,7 @@ import {
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
   MCP_SKILLS_EXTENSION_ID,
+  parseMcpSkillUri,
   type McpGetSkillResult,
   type McpLoadedSkill,
   type McpReadSkillDirectoryResult,
@@ -178,6 +179,7 @@ import {
   readMcpSkillDirectory,
   readVerifiedMcpSkillResource,
 } from "./skills";
+import { getApprovedMcpSkill } from "./skillApprovalRegistry";
 import {
   MCPResource,
   MCPResourceTemplate,
@@ -2578,11 +2580,47 @@ export class MCPService {
   async loadVerifiedSkill(
     serverName: string,
     skillUri: string,
+    conversationId: string,
   ): Promise<MCPServiceResponse<McpLoadedSkill>> {
     const prepared = await this.prepareMcpSkillsClient(serverName);
     if (!prepared.success || !prepared.data) return mcpFailure(prepared);
     const skill = await this.getServerSkill(serverName, skillUri);
     if (!skill.success || !skill.data) return mcpFailure(skill);
+
+    if (skill.data.skill.resources === "dynamic") {
+      return {
+        success: false,
+        error: "Dynamic MCP Skills cannot be integrity-verified.",
+        statusCode: 422,
+      };
+    }
+
+    const normalizedSkillUri = parseMcpSkillUri(skill.data.skill.uri).normalizedUri;
+    const manifest = skill.data.skill.resources.find(
+      (resource) => resource.uri === normalizedSkillUri,
+    );
+    if (!manifest) {
+      return {
+        success: false,
+        error: "MCP Skill manifest metadata is missing.",
+        statusCode: 422,
+      };
+    }
+
+    const approval = getApprovedMcpSkill({
+      conversationId,
+      serverName,
+      skillUri: normalizedSkillUri,
+      manifestDigest: manifest.digest,
+    });
+    if (!approval) {
+      return {
+        success: false,
+        error: "This MCP Skill is not approved for the current conversation and manifest digest.",
+        statusCode: 403,
+        errorType: "skills_approval_required",
+      };
+    }
 
     try {
       return {

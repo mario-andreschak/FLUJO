@@ -1,3 +1,8 @@
+import {
+  McpGetSkillResultSchema,
+  McpListSkillsResultSchema,
+} from './skills.js';
+
 export type FlujoOperation =
   | 'listTools'
   | 'callTool'
@@ -171,15 +176,17 @@ export async function flujoRequest<T>(
     });
   }
   if (operation === 'listSkills') {
-    return requestJson<T>('/api/mcp/flujo/skills');
+    const result = await requestJson<unknown>('/api/mcp/flujo/skills');
+    return McpListSkillsResultSchema.parse(result) as T;
   }
   if (operation === 'getSkill') {
     const uri = payload.skillUri?.trim();
     if (!uri) throw new Error('A standalone MCP Skill URI is required.');
-    return requestJson<T>('/api/mcp/flujo/skills', {
+    const result = await requestJson<unknown>('/api/mcp/flujo/skills', {
       method: 'POST',
       body: JSON.stringify({ uri }),
     });
+    return McpGetSkillResultSchema.parse(result) as T;
   }
 
   const name = payload.name?.trim() ?? '';

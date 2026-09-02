@@ -4,7 +4,7 @@ import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/cha
 import { EmitFn, RecoveryLaneIdentity, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
-import type { MCPToolParameterPresets } from '@/shared/types/mcp';
+import type { MCPToolParameterPresets, McpSkillSelection } from '@/shared/types/mcp';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
@@ -1083,6 +1083,8 @@ export interface SharedState {
      * contexts; an app update overwrites its previous entry.
      */
     mcpAppContexts?: McpAppModelContextMap;
+    /** Exact approved remote Skill identities selected for the active user turn. */
+    mcpSkillSelections?: McpSkillSelection[];
     // Flow ID needed by some nodes
     flowId: string;
     /**

@@ -392,6 +392,8 @@ export interface FlowRunInput {
   messages?: FlowRunMessageInput[];
   /** Latest future-turn context supplied by mounted MCP Apps. */
   mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
+  /** Exact approved remote Skill identities selected for this user turn. */
+  mcpSkillSelections?: import('@/shared/types/mcp').McpSkillSelection[];
   /** Convenience: a single user message. Used when `messages` is absent. */
   prompt?: string;
   /** Internal resumable-subflow continuation. For an EXISTING conversation,
@@ -631,6 +633,7 @@ function installPersonaActivitySnapshot(
   sharedState.codexSessions = undefined;
   sharedState.turnBudgets = undefined;
   sharedState.mcpAppContexts = undefined;
+  sharedState.mcpSkillSelections = undefined;
 
   // Graph routing, subflow recovery, and detached-task handles.
   sharedState.handoffRequested = undefined;
@@ -1073,6 +1076,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // an internal resume should keep the last snapshot.
   if (input.mcpAppContexts !== undefined) {
     sharedState.mcpAppContexts = input.mcpAppContexts;
+  }
+
+  // MCP Skills are per user turn. Internal approval/debug continuations retain
+  // the active selection, while a fresh turn replaces it (including clearing
+  // an earlier selection when the client sends none).
+  if (userTurn || input.mcpSkillSelections !== undefined) {
+    sharedState.mcpSkillSelections = input.mcpSkillSelections;
   }
 
   // Never inherit a stale in-memory authority from an earlier invocation. A

@@ -28,6 +28,7 @@ import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './Ch
 import type { CapturedToolResource } from './toolCallPairing';
 import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
+import ApprovedMcpSkillsContext from './ApprovedMcpSkillsContext';
 import DevCanvasDock, { type CanvasDockLayout } from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
   DEFAULT_CANVAS_TAB_CAP,
@@ -102,6 +103,11 @@ import {
 } from '@/shared/types/chat'; // Import the shared types
 import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent, ModelDeltaEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
+import {
+  mcpSkillCacheKey,
+  type McpLoadedSkill,
+  type McpSkillSelection,
+} from '@/shared/types/mcp';
 import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import {
   LiveActivity,
@@ -131,6 +137,11 @@ import {
   observeNewMcpAppResultIds,
 } from './mcpAppProjection';
 import { applyModelDeltaBatch } from './modelDeltaBatch';
+import {
+  getConversationMcpSkills,
+  setActiveMcpSkillConversation,
+  subscribeMcpSkillSession,
+} from '@/frontend/services/mcp/skillSessionStore';
 import {
   readDismissedMcpAppKeys,
   writeMcpAppDismissed,
@@ -474,6 +485,32 @@ const Chat: React.FC = () => {
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const [loadedMcpSkills, setLoadedMcpSkills] = useState<McpLoadedSkill[]>([]);
+  const [selectedMcpSkillKeys, setSelectedMcpSkillKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const selectedMcpSkillSelections = useMemo<McpSkillSelection[]>(() => (
+    loadedMcpSkills
+      .filter((skill) => selectedMcpSkillKeys.has(mcpSkillCacheKey(
+        skill.identity.serverName,
+        skill.identity.skillUri,
+        skill.manifest.digest,
+      )))
+      .map((skill) => ({
+        serverName: skill.identity.serverName,
+        skillUri: skill.identity.skillUri,
+        manifestDigest: skill.manifest.digest,
+      }))
+  ), [loadedMcpSkills, selectedMcpSkillKeys]);
+  useEffect(() => {
+    setActiveMcpSkillConversation(currentConversationId);
+    setSelectedMcpSkillKeys(new Set());
+    const sync = () => setLoadedMcpSkills(
+      currentConversationId ? getConversationMcpSkills(currentConversationId) : [],
+    );
+    sync();
+    return subscribeMcpSkillSession(sync);
+  }, [currentConversationId]);
   const personaCreationPendingRef = useRef(false);
   const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useState<
     Record<string, CapturedToolResource>
@@ -2944,7 +2981,12 @@ const Chat: React.FC = () => {
   const handleSendMessage = async (
     content: string,
     attachments: Attachment[] = [],
-    opts?: { fromQueue?: boolean; nodeOverride?: string | null; queuedId?: string },
+    opts?: {
+      fromQueue?: boolean;
+      nodeOverride?: string | null;
+      queuedId?: string;
+      mcpSkillSelections?: McpSkillSelection[];
+    },
   ) => {
     if (!content.trim() && attachments.length === 0) return;
     if (!detailedConversation) {
@@ -3005,6 +3047,7 @@ const Chat: React.FC = () => {
           attachments,
           // Capture the one-shot node pick now so it applies only to THIS message.
           nodeOverride: nodeOverride ?? null,
+          mcpSkillSelections: selectedMcpSkillSelections,
           timestamp: Date.now(),
         };
         setQueuedMessages(prev => enqueueMsg(prev, convId, queued));
@@ -3108,7 +3151,13 @@ const Chat: React.FC = () => {
     // A Persona draft intentionally has no Flow selected; metadata.personaId
     // routes it through the trusted dispatcher instead.
     if (updatedDetailedConv.personaId || updatedDetailedConv.flowId) {
-      const success = await sendToChatCompletions(updatedDetailedConv, { appendMessage: userMessage });
+      const turnMcpSkillSelections = opts?.fromQueue
+        ? opts.mcpSkillSelections
+        : selectedMcpSkillSelections;
+      const success = await sendToChatCompletions(updatedDetailedConv, {
+        appendMessage: userMessage,
+        mcpSkillSelections: turnMcpSkillSelections,
+      });
       // Refresh conversation list after successful send? Only if title/timestamp changed significantly.
       // The backend updates the timestamp, so the list will re-sort on next fetch.
       // Let's skip explicit refetch here unless needed.
@@ -3345,7 +3394,11 @@ const Chat: React.FC = () => {
   // Returns true on success, false on error
   const sendToChatCompletions = async (
     conversation: Conversation,
-    options?: { appendMessage?: ChatMessage; processNodeId?: string },
+    options?: {
+      appendMessage?: ChatMessage;
+      processNodeId?: string;
+      mcpSkillSelections?: McpSkillSelection[];
+    },
   ): Promise<boolean> => {
     // Persona drafts intentionally carry no flowId; their trusted target is
     // sent separately in metadata and resolved only by the dispatcher.
@@ -3534,6 +3587,9 @@ const Chat: React.FC = () => {
                 mcpAppContexts: appContexts === undefined
                   ? undefined
                   : JSON.stringify(appContexts),
+                mcpSkills: options?.mcpSkillSelections?.length
+                  ? JSON.stringify(options.mcpSkillSelections)
+                  : undefined,
             };
             // Ensure only defined string values are included
             const filteredMeta: { [key: string]: string } = {};
@@ -3548,6 +3604,9 @@ const Chat: React.FC = () => {
             if (meta.behaviorSlotKey) filteredMeta.behaviorSlotKey = meta.behaviorSlotKey;
             if (meta.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = meta.mcpAppContexts;
+            }
+            if (meta.mcpSkills !== undefined) {
+              filteredMeta.mcpSkills = meta.mcpSkills;
             }
             return filteredMeta;
         })()
@@ -4835,6 +4894,7 @@ const Chat: React.FC = () => {
           fromQueue: true,
           nodeOverride: capturedHead.nodeOverride,
           queuedId: capturedHead.id,
+          mcpSkillSelections: capturedHead.mcpSkillSelections,
         });
       } catch {
         // Send failed — put it back at the front so it is the next to drain.
@@ -5919,6 +5979,15 @@ const Chat: React.FC = () => {
                 />
               ))}
             </Box>
+          )}
+
+          {currentConversationId && (
+            <ApprovedMcpSkillsContext
+              conversationId={currentConversationId}
+              skills={loadedMcpSkills}
+              selectedKeys={selectedMcpSkillKeys}
+              onSelectionChange={setSelectedMcpSkillKeys}
+            />
           )}
 
           <ChatInput

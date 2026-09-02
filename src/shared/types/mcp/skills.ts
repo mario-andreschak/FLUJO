@@ -11,6 +11,8 @@ export const MCP_SKILLS_SUPPORTED_REVISION =
   "SEP-2640@a3e147ca2710f68214247aecc729731ee1ae8d03";
 export const MCP_SKILLS_MAX_RESOURCES = 512;
 export const MCP_SKILLS_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+export const MCP_SKILLS_MAX_SELECTED_PER_TURN = 8;
+export const MCP_SKILLS_MAX_CONTEXT_BYTES = 256 * 1024;
 
 export type McpSkillDigest = `sha256:${string}`;
 
@@ -109,6 +111,24 @@ export interface McpLoadedSkill {
   resources: McpVerifiedSkillResource[];
   verification: "sha256";
   trust: "untrusted-external-content";
+}
+
+/** Process-memory approval bound to one workspace conversation and manifest. */
+export interface McpSkillApproval {
+  workspace: string;
+  conversationId: string;
+  serverName: string;
+  skillUri: string;
+  manifestDigest: McpSkillDigest;
+  approvedAt: number;
+  expiresAt: number;
+}
+
+/** Bounded reference sent by Chat; content is reloaded and verified server-side. */
+export interface McpSkillSelection {
+  serverName: string;
+  skillUri: string;
+  manifestDigest: McpSkillDigest;
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -387,9 +407,18 @@ export function validateMcpListSkillsResult(
     fail("skills/list nextCursor must be a string");
   }
 
+  const skills = result.skills.map(validateMcpSkillEntry);
+  const seenSkillUris = new Set<string>();
+  for (const skill of skills) {
+    if (seenSkillUris.has(skill.uri)) {
+      fail("skills/list skill URIs must be unique");
+    }
+    seenSkillUris.add(skill.uri);
+  }
+
   return {
     resultType: "complete",
-    skills: result.skills.map(validateMcpSkillEntry),
+    skills,
     ...(result.nextCursor === undefined
       ? {}
       : { nextCursor: result.nextCursor }),

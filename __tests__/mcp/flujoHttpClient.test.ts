@@ -1,4 +1,6 @@
 import { flujoBaseUrl, flujoRequest, toolRoute } from '../../mcp-servers/flujo/src/client';
+import { MCP_SKILLS_SUPPORTED_REVISION as STANDALONE_SKILLS_REVISION } from '../../mcp-servers/flujo/src/skills';
+import { MCP_SKILLS_SUPPORTED_REVISION as HOST_SKILLS_REVISION } from '@/shared/types/mcp';
 
 describe('standalone flujo HTTP client', () => {
   const originalBaseUrl = process.env.FLUJO_BASE_URL;
@@ -9,6 +11,10 @@ describe('standalone flujo HTTP client', () => {
     else process.env.FLUJO_BASE_URL = originalBaseUrl;
     global.fetch = originalFetch;
     jest.restoreAllMocks();
+  });
+
+  it('uses the same frozen Skills protocol revision as the host', () => {
+    expect(STANDALONE_SKILLS_REVISION).toBe(HOST_SKILLS_REVISION);
   });
 
   it('defaults to the standard local URL and honors a custom runtime URL', () => {
@@ -66,6 +72,54 @@ describe('standalone flujo HTTP client', () => {
     }) as typeof fetch;
 
     await expect(flujoRequest('listTools')).rejects.toThrow('Storage is locked');
+  });
+
+  it('validates standalone Skills responses before forwarding them', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        resultType: 'complete',
+        skills: [{
+          uri: 'skill://pdf-skill/SKILL.md',
+          frontmatter: {
+            name: 'pdf-skill',
+            description: 'Process PDF files',
+          },
+          resources: [{
+            uri: 'skill://pdf-skill/SKILL.md',
+            digest: `sha256:${'a'.repeat(64)}`,
+            size: 1,
+          }],
+        }],
+      }),
+    }) as typeof fetch;
+
+    await expect(flujoRequest('listSkills')).resolves.toMatchObject({
+      resultType: 'complete',
+      skills: [{ uri: 'skill://pdf-skill/SKILL.md' }],
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        resultType: 'complete',
+        skills: [{
+          uri: 'skill://pdf-skill/SKILL.md',
+          frontmatter: {
+            name: 'pdf-skill',
+            description: 'Process PDF files',
+          },
+          resources: [{
+            uri: 'skill://pdf-skill/SKILL.md',
+            digest: 'sha256:INVALID',
+            size: 1,
+          }],
+        }],
+      }),
+    }) as typeof fetch;
+    await expect(flujoRequest('listSkills')).rejects.toThrow(/digest/);
   });
 
   it('forwards and returns resources/list cursors', async () => {

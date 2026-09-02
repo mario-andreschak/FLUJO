@@ -3,11 +3,13 @@ import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 import { ChatCompletionMetadata } from '@/shared/types'; // Import the new shared type
 import type { McpAppModelContextMap } from '@/shared/types/chat';
+import type { McpSkillSelection } from '@/shared/types/mcp';
 import {
   BehaviorSlotKeySchema,
   EnduringAgentIdSchema,
 } from '@/shared/types/enduringAgent';
 import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
+import { parseMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { requireFunctionToolCalls, requireFunctionTools } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
@@ -99,6 +101,8 @@ export interface ChatCompletionRequest {
   processNodeId?: string;
   /** Validated, future-turn-only context supplied by mounted MCP Apps. */
   mcpAppContexts?: McpAppModelContextMap;
+  /** Exact approved MCP Skill identities selected for this conversation turn. */
+  mcpSkillSelections?: McpSkillSelection[];
   /** Parsed internal response-shaping flag; public callers should use metadata. */
   compactToolPayloads?: boolean;
   /** Parsed stateful-chat flag: append request messages to saved history. */
@@ -218,10 +222,17 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const appendMessages = data.metadata?.appendMessages === "true";
       const personaTarget = parsePersonaTarget(data.metadata);
       const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
+      const parsedSkillSelections = parseMcpSkillSelections(data.metadata?.mcpSkills);
       if (parsedAppContexts.error) {
         log.warn('Ignoring invalid MCP App model context metadata', {
           requestId,
           error: parsedAppContexts.error,
+        });
+      }
+      if (parsedSkillSelections.error) {
+        log.warn('Ignoring invalid MCP Skill selection metadata', {
+          requestId,
+          error: parsedSkillSelections.error,
         });
       }
 
@@ -255,6 +266,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         appendMessages,
         ...(personaTarget ? { personaTarget } : {}),
         mcpAppContexts: parsedAppContexts.contexts,
+        mcpSkillSelections: parsedSkillSelections.selections,
         processNodeId: data.processNodeId ?? data.metadata?.processNodeId,
       };
     } catch (error) {

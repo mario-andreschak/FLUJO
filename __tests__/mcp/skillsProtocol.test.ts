@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   MCP_SKILLS_MAX_RESOURCES,
   McpSkillsValidationError,
+  mcpSkillCacheKey,
+  type McpSkillDigest,
   parseMcpSkillUri,
   validateMcpListSkillsResult,
   validateMcpSkillEntry,
@@ -76,6 +78,27 @@ describe('MCP Skills protocol validation', () => {
     expect(() =>
       validateMcpListSkillsResult({ resultType: 'partial', skills: [] }),
     ).toThrow(/complete/);
+  });
+
+  it('rejects duplicate top-level Skill identities', () => {
+    expect(() => validateMcpListSkillsResult({
+      resultType: 'complete',
+      skills: [entry(), entry()],
+    })).toThrow(/unique/);
+  });
+
+  it('keys cached content by server, normalized URI, and digest', () => {
+    const source = validateMcpSkillEntry(entry());
+    if (source.resources === 'dynamic') throw new Error('expected static Skill');
+    const sourceDigest = source.resources[0].digest;
+    expect(mcpSkillCacheKey('server-a', source.uri, sourceDigest))
+      .not.toBe(mcpSkillCacheKey('server-b', source.uri, sourceDigest));
+    expect(mcpSkillCacheKey('server-a', source.uri, sourceDigest))
+      .not.toBe(mcpSkillCacheKey(
+        'server-a',
+        source.uri,
+        `sha256:${'f'.repeat(64)}` as McpSkillDigest,
+      ));
   });
 
   it('keeps equal source URIs distinct on the standalone server surface', () => {

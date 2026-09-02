@@ -3,15 +3,12 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import type { NextRequest } from 'next/server';
 import { mcpService } from '@/backend/services/mcp';
+import { approveMcpSkill } from '@/backend/services/mcp/skillApprovalRegistry';
 import { formatErrorResponse } from '@/utils/mcp/utils';
 import { json } from '../../../../_helpers';
 
 type RouteContext = { params: Promise<{ name: string }> };
 
-/**
- * Explicit host loading boundary. A separate digest-bound conversation
- * approval is required; discovery and generic resource reads never invoke it.
- */
 async function POST_handler(request: NextRequest, { params }: RouteContext) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
@@ -34,14 +31,39 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    const result = await mcpService.loadVerifiedSkill(
-      name,
-      uri,
-      conversationId,
+    const current = await mcpService.getServerSkill(name, uri);
+    if (!current.success || !current.data) {
+      return json(current, current.statusCode || 502);
+    }
+    const entry = current.data.skill;
+    if (entry.resources === 'dynamic') {
+      return json(
+        {
+          success: false,
+          error: 'Dynamic MCP Skills cannot be approved for verified loading.',
+        },
+        422,
+      );
+    }
+    const manifest = entry.resources.find(
+      (resource) => resource.uri === entry.uri,
     );
-    return json(result, result.success ? 200 : result.statusCode || 500);
+    if (!manifest) {
+      return json(
+        { success: false, error: 'MCP Skill manifest metadata is missing.' },
+        422,
+      );
+    }
+
+    const approval = approveMcpSkill({
+      conversationId,
+      serverName: name,
+      skillUri: entry.uri,
+      manifestDigest: manifest.digest,
+    });
+    return json({ success: true, data: approval }, 200);
   } catch (error) {
-    return json({ success: false, ...formatErrorResponse(error) }, 500);
+    return json({ success: false, ...formatErrorResponse(error) }, 400);
   }
 }
 

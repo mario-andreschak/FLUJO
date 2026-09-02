@@ -5,6 +5,7 @@ import {
   MCPServerConfig,
   type McpGetSkillResult,
   type McpLoadedSkill,
+  type McpSkillApproval,
   type McpServerSkillsResult,
 } from '@/shared/types/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
@@ -241,8 +242,25 @@ class MCPService {
     return response.json();
   }
 
+  async approveServerSkill(
+    serverName: string,
+    conversationId: string,
+    uri: string,
+  ): Promise<{ success: boolean; data?: McpSkillApproval; error?: string }> {
+    const response = await fetch(
+      `/api/mcp/servers/${encodeURIComponent(serverName)}/skills/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId, uri }),
+      },
+    );
+    return response.json();
+  }
+
   async loadServerSkill(
     serverName: string,
+    conversationId: string,
     uri: string,
   ): Promise<{ success: boolean; data?: McpLoadedSkill; error?: string }> {
     const response = await fetch(
@@ -250,7 +268,7 @@ class MCPService {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uri }),
+        body: JSON.stringify({ conversationId, uri }),
       },
     );
     return response.json();

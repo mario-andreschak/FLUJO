@@ -48,6 +48,7 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
@@ -897,6 +898,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       }
     }
 
+    const approvedMcpSkills = await loadApprovedMcpSkillSelections(
+      sharedState.conversationId,
+      sharedState.mcpSkillSelections,
+    );
+
     let materialized = finalizeModelInputMaterialization({
       ...materializationBase,
       folded: wireBase,
@@ -904,6 +910,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       inputMode,
       isolatedPrompt: resolvedIsolatedPrompt,
       mcpAppContexts: sharedState.mcpAppContexts,
+      mcpSkills: approvedMcpSkills,
     });
     prepResult.wireMessages = materialized.wireChanged
       ? materialized.scoped
@@ -1011,6 +1018,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         inputMode,
         isolatedPrompt: resolvedIsolatedPrompt,
         mcpAppContexts: sharedState.mcpAppContexts,
+        mcpSkills: approvedMcpSkills,
         additionalWireMessages,
       });
       prepResult.wireMessages = materialized.scoped;

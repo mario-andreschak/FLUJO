@@ -15,8 +15,11 @@ only when both the local opt-in and the advertised extension are present.
 FLUJO does not advertise a client-side Skills extension.
 
 The server details dialog has a Skills tab. Discovery does not load or activate
-anything. **Load for this conversation** is a separate user action and returns
-provenance-labelled content in session memory.
+anything. **Load for this conversation** is a separate user action: the host
+records a workspace- and conversation-scoped approval for the exact server,
+normalized URI, and current manifest digest before verifying the content. The
+loaded bytes remain in browser session memory. Chat then presents those loaded
+Skills in a per-turn picker whose default is no selection.
 
 ## Validation and trust
 
@@ -39,9 +42,13 @@ rewrites downstream identities to `skill+flujo://` URIs so this distinction is
 preserved on its aggregated surface.
 
 Verification is not approval. Reading a generic resource, including
-`SKILL.md`, never approves or activates a Skill. A changed manifest digest
-invalidates the UI's session-memory selection and requires another explicit
-load.
+`SKILL.md`, never approves or activates a Skill. Approvals expire with the host
+session and are scoped to one workspace and conversation. A changed manifest
+digest invalidates both approval and the UI's session-memory selection and
+requires another explicit load. When a user selects a loaded Skill for a turn,
+FLUJO reloads and verifies it server-side, then inserts a bounded, clearly
+marked untrusted data message into that turn's model wire context. It is never
+copied into durable chat history or trusted Persona instructions.
 
 ## Proxy and standalone behavior
 
@@ -53,8 +60,11 @@ approval state.
 
 The standalone `mcp-flujo` process implements the same frozen draft revision. Its
 localhost control route aggregates enabled downstream catalogs with bounded
-pagination and rewrites server-qualified URIs. Reads of rewritten Skill
-resources pass through FLUJO's size/digest verifier.
+pagination, validates the final catalog with the host schema, and rewrites
+server-qualified URIs. The standalone client also validates list/get responses
+against package-local copies of the same URI, digest, containment, duplicate,
+and size rules. Reads of rewritten Skill resources pass through FLUJO's
+size/digest verifier.
 
 ## Explicit exclusions
 

@@ -7,6 +7,7 @@
 // unblocked. Keeping this logic pure (no React) makes it trivially unit-testable
 // and keeps the Chat component wiring thin.
 
+import type { McpSkillSelection } from '@/shared/types/mcp';
 import type { Attachment } from './index';
 
 // A message the user submitted while a run was already in progress. `nodeOverride`
@@ -17,6 +18,8 @@ export interface QueuedMessage {
   content: string;
   attachments: Attachment[];
   nodeOverride: string | null;
+  /** Approved Skill identities captured with this queued turn. */
+  mcpSkillSelections?: McpSkillSelection[];
   timestamp: number;
 }
 

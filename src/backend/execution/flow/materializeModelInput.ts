@@ -1,6 +1,8 @@
 import OpenAI from 'openai';
 import type { FlujoChatMessage, McpAppModelContextMap } from '@/shared/types/chat';
+import type { McpLoadedSkill } from '@/shared/types/mcp';
 import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
+import { withMcpSkillModelContext } from '@/backend/services/mcp/skillModelContext';
 import {
   buildNodeContext,
   collapseNodeOutputs,
@@ -33,6 +35,8 @@ export interface FinalizeModelInputMaterializationArgs
    */
   wireContentByMessageId?: ReadonlyMap<string, FlujoChatMessage['content']>;
   mcpAppContexts?: McpAppModelContextMap;
+  /** Verified, approved external Skill data for this turn only. */
+  mcpSkills?: readonly McpLoadedSkill[];
   additionalWireMessages?: readonly FlujoChatMessage[];
 }
 
@@ -92,6 +96,7 @@ export function finalizeModelInputMaterialization(
   );
 
   scoped = withMcpAppModelContext(scoped, args.mcpAppContexts);
+  scoped = withMcpSkillModelContext(scoped, args.mcpSkills);
   if (args.additionalWireMessages?.length) {
     scoped = [
       ...scoped,
@@ -121,6 +126,7 @@ export function finalizeModelInputMaterialization(
       || scoped.length !== args.threaded.length
       || Boolean(args.wireContentByMessageId?.size)
       || Boolean(args.mcpAppContexts && Object.keys(args.mcpAppContexts).length)
+      || Boolean(args.mcpSkills?.length)
       || Boolean(args.additionalWireMessages?.length)
       || inputMode !== 'full-history',
   };

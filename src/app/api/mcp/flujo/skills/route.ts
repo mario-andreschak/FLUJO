@@ -7,6 +7,7 @@ import {
   rewriteMcpSkillEntryForStandalone,
 } from '@/backend/services/mcp/standaloneSkills';
 import { json } from '@/app/api/mcp/_helpers';
+import { McpListSkillsResultSchema } from '@/shared/types/mcp';
 
 const MAX_STANDALONE_SKILLS = 1024;
 const MAX_PAGES_PER_SERVER = 128;
@@ -51,7 +52,21 @@ async function GET_handler() {
     }
   }
 
-  return json({ resultType: 'complete', skills }, 200);
+  try {
+    return json(
+      McpListSkillsResultSchema.parse({ resultType: 'complete', skills }),
+      200,
+    );
+  } catch (error) {
+    return json(
+      {
+        error: error instanceof Error
+          ? error.message
+          : 'The standalone MCP Skill catalog is malformed.',
+      },
+      502,
+    );
+  }
 }
 
 async function POST_handler(request: NextRequest) {

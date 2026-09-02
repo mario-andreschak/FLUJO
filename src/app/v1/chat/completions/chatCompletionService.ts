@@ -81,6 +81,7 @@ async function processChatCompletionInternal(
     modelName: data.model,
     messages: data.messages,
     mcpAppContexts: data.mcpAppContexts,
+    mcpSkillSelections: data.mcpSkillSelections,
     processNodeId: data.processNodeId,
     mode: 'conversation',
     conversationId,
@@ -242,6 +243,7 @@ function personaIdempotencyKey(
       model: data.model,
       messages: data.messages,
       mcpAppContexts: data.mcpAppContexts,
+      mcpSkillSelections: data.mcpSkillSelections,
       processNodeId: data.processNodeId,
       conversationId,
       ...flags,
@@ -400,6 +402,7 @@ async function processPersonaChatCompletion(
     flowInput: {
       messages: data.messages,
       mcpAppContexts: data.mcpAppContexts,
+      mcpSkillSelections: data.mcpSkillSelections,
       processNodeId: data.processNodeId,
       mode: 'conversation',
       conversationId: effectiveConvId,
