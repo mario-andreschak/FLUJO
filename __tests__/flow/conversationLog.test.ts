@@ -338,6 +338,33 @@ describe('recoverConversationTranscript (durable Chat recovery)', () => {
     expect(projectModelContextMessages((await readConversationLog(convId))!).map((message) => message.id))
       .toEqual(['u1', 'u2']);
   });
+
+  it('preserves Gemini thought signatures through durable log reload', async () => {
+    const convId = 'conv-gemini-signature';
+    const state = makeState(convId);
+    const assistant = {
+      role: 'assistant',
+      content: null,
+      id: 'assistant-signature',
+      timestamp: 1,
+      tool_calls: [{
+        id: 'call-signature',
+        type: 'function',
+        function: { name: 'lookup', arguments: '{}' },
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      }],
+    } as FlujoChatMessage;
+
+    await appendRawForState(state, [{ type: 'message', message: assistant }]);
+
+    const recovered = await recoverConversationTranscript(state);
+    expect(recovered.source).toBe('durable-log');
+    expect(recovered.messages[0]).toMatchObject({
+      tool_calls: [{
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      }],
+    });
+  });
 });
 
 describe('recoverMessagesFromLog (crash recovery: snapshot behind the log)', () => {

@@ -114,6 +114,51 @@ describe('modelTurnArchive', () => {
     expect(await readModelTurnSnapshot('conversation_1', entry.id)).toBeUndefined();
   });
 
+  it('redacts opaque Gemini thought signatures from diagnostic archives', async () => {
+    const entry = await archiveModelDispatch({
+      conversationId: 'conversation_signature',
+      nodeId: 'process_signature',
+      modelId: 'model_signature',
+      modelName: 'Gemini',
+      adapter: 'gemini',
+      operation: 'models.generateContent',
+      attempt: 1,
+      canonicalMessages: [{
+        id: 'assistant_signature',
+        role: 'assistant',
+        content: null,
+        timestamp: 1,
+        tool_calls: [{
+          id: 'call_signature',
+          type: 'function',
+          function: { name: 'lookup', arguments: '{"query":"x"}' },
+          providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+        }],
+      }],
+      genericWire: [],
+      sdkRequest: {
+        contents: [{
+          role: 'model',
+          parts: [{
+            functionCall: { name: 'lookup', args: { query: 'x' } },
+            thoughtSignature: 'opaque-signature',
+          }],
+        }],
+      },
+    });
+
+    const snapshot = await readModelTurnSnapshot('conversation_signature', entry.id);
+    expect(snapshot?.canonicalMessages[0]).toMatchObject({
+      tool_calls: [{
+        providerMetadata: { gemini: { thoughtSignature: '[redacted]' } },
+      }],
+    });
+    expect(snapshot?.sdkRequest).toMatchObject({
+      contents: [{ parts: [{ thoughtSignature: '[redacted]' }] }],
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('opaque-signature');
+  });
+
   it('extracts inline base64 media from provider parameters', async () => {
     const entry = await archiveModelDispatch({
       conversationId: 'conversation_2',

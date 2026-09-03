@@ -6,7 +6,14 @@ import type OpenAI from 'openai';
  * narrower invariant explicit inside the application.
  */
 export type FlujoFunctionTool = OpenAI.ChatCompletionFunctionTool;
-export type FlujoFunctionToolCall = OpenAI.ChatCompletionMessageFunctionToolCall;
+export type FlujoFunctionToolCall = OpenAI.ChatCompletionMessageFunctionToolCall & {
+  /** Opaque provider-native metadata required to continue a tool-use turn. */
+  providerMetadata?: {
+    gemini?: {
+      thoughtSignature?: string;
+    };
+  };
+};
 
 export class UnsupportedOpenAIToolTypeError extends TypeError {
   readonly code = 'unsupported_tool_type';

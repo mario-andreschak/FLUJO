@@ -7,6 +7,7 @@ import { extractText, extractMediaParts, parseToolArgs } from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -179,11 +180,14 @@ export async function toGeminiContents(
       for (const tc of msg.tool_calls ?? []) {
         if (tc.type !== 'function') continue;
         idToName.set(tc.id, tc.function.name);
+        const thoughtSignature =
+          (tc as FlujoFunctionToolCall).providerMetadata?.gemini?.thoughtSignature;
         parts.push({
           functionCall: {
             name: tc.function.name,
             args: parseToolArgs(tc.function.arguments),
           },
+          ...(thoughtSignature !== undefined ? { thoughtSignature } : {}),
         });
       }
 
@@ -258,7 +262,7 @@ function toChatCompletion(
   const parts = candidate?.content?.parts ?? [];
 
   let text = '';
-  const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+  const toolCalls: FlujoFunctionToolCall[] = [];
   const media: ModelMediaPart[] = [];
   for (const part of parts) {
     if (typeof part.text === 'string') {
@@ -273,6 +277,9 @@ function toChatCompletion(
           name: part.functionCall.name ?? '',
           arguments: JSON.stringify(part.functionCall.args ?? {}),
         },
+        ...(part.thoughtSignature !== undefined
+          ? { providerMetadata: { gemini: { thoughtSignature: part.thoughtSignature } } }
+          : {}),
       });
     } else if (part.inlineData?.data) {
       const mimeType = part.inlineData.mimeType ?? 'application/octet-stream';
@@ -439,7 +446,7 @@ export class GeminiAdapter implements CompletionAdapter {
     let responseId = `gemini_${uuidv4()}`;
     let text = '';
     let usage: GenerateContentResponse['usageMetadata'];
-    const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+    const toolCalls: FlujoFunctionToolCall[] = [];
     const media: ModelMediaPart[] = [];
     const seenMedia = new Set<string>();
     const toolIndexById = new Map<string, number>();
@@ -455,7 +462,8 @@ export class GeminiAdapter implements CompletionAdapter {
         } else if (part.functionCall) {
           const providerId = part.functionCall.id;
           const knownIndex = providerId ? toolIndexById.get(providerId) : undefined;
-          const index = knownIndex ?? activePartialToolIndex ?? toolCalls.length;
+          const index = knownIndex
+            ?? (providerId ? toolCalls.length : activePartialToolIndex ?? toolCalls.length);
           const prior = toolCalls[index];
           const id = providerId || prior?.id || `call_${uuidv4()}`;
           const name = part.functionCall.name ?? '';
@@ -464,10 +472,15 @@ export class GeminiAdapter implements CompletionAdapter {
             part.functionCall.willContinue && Object.keys(argsObject).length === 0
               ? ''
               : JSON.stringify(argsObject);
+          const thoughtSignature =
+            part.thoughtSignature ?? prior?.providerMetadata?.gemini?.thoughtSignature;
           toolCalls[index] = {
             id,
             type: 'function',
             function: { name, arguments: args },
+            ...(thoughtSignature !== undefined
+              ? { providerMetadata: { gemini: { thoughtSignature } } }
+              : {}),
           };
           if (providerId) toolIndexById.set(providerId, index);
           activePartialToolIndex = part.functionCall.willContinue ? index : undefined;

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { toAnthropicMessages, toAnthropicTools } from '@/backend/services/model/adapters/anthropicAdapter';
 import { toGeminiContents, toGeminiTools } from '@/backend/services/model/adapters/geminiAdapter';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import {
   buildUserMessage,
   isMalformedClaudeToolCallProse,
@@ -65,7 +66,8 @@ const CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
         id: 'call_1',
         type: 'function',
         function: { name: 'mcp_get_weather_abc', arguments: '{"city":"Berlin"}' },
-      },
+        providerMetadata: { gemini: { thoughtSignature: 'opaque-signature' } },
+      } as FlujoFunctionToolCall,
     ],
   },
   { role: 'tool', tool_call_id: 'call_1', content: '{"tempC":18}' },
@@ -145,9 +147,13 @@ describe('gemini translation', () => {
     expect(contents.map(c => c.role)).toEqual(['user', 'model', 'user']);
 
     const modelParts = contents[1].parts!;
-    const fnCall = modelParts.find(p => 'functionCall' in p) as { functionCall?: { name?: string; args?: unknown } };
+    const fnCall = modelParts.find(p => 'functionCall' in p) as {
+      functionCall?: { name?: string; args?: unknown };
+      thoughtSignature?: string;
+    };
     expect(fnCall.functionCall?.name).toBe('mcp_get_weather_abc');
     expect(fnCall.functionCall?.args).toEqual({ city: 'Berlin' });
+    expect(fnCall.thoughtSignature).toBe('opaque-signature');
 
     // Gemini keys the response by function NAME (resolved from the prior call id).
     const fnResponseParts = contents[2].parts!;
@@ -156,6 +162,74 @@ describe('gemini translation', () => {
     };
     expect(fnResp.functionResponse?.name).toBe('mcp_get_weather_abc');
     expect(fnResp.functionResponse?.response).toEqual({ tempC: 18 });
+  });
+
+  it('keeps distinct signatures attached across multiple tool-use turns', async () => {
+    const signedConversation: OpenAI.ChatCompletionMessageParam[] = [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_a',
+            type: 'function',
+            function: { name: 'first_tool', arguments: '{"value":1}' },
+            providerMetadata: { gemini: { thoughtSignature: 'sig-a' } },
+          } as FlujoFunctionToolCall,
+          {
+            id: 'call_b',
+            type: 'function',
+            function: { name: 'second_tool', arguments: '{"value":2}' },
+            providerMetadata: { gemini: { thoughtSignature: 'sig-b' } },
+          } as FlujoFunctionToolCall,
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_a', content: '{"ok":true}' },
+      { role: 'tool', tool_call_id: 'call_b', content: '{"ok":true}' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_c',
+          type: 'function',
+          function: { name: 'third_tool', arguments: '{}' },
+          providerMetadata: { gemini: { thoughtSignature: 'sig-c' } },
+        } as FlujoFunctionToolCall],
+      },
+    ];
+
+    const { contents } = await toGeminiContents(signedConversation);
+    expect(contents.map(content => content.role)).toEqual(['model', 'user', 'model']);
+    expect(contents[0].parts).toEqual([
+      {
+        functionCall: { name: 'first_tool', args: { value: 1 } },
+        thoughtSignature: 'sig-a',
+      },
+      {
+        functionCall: { name: 'second_tool', args: { value: 2 } },
+        thoughtSignature: 'sig-b',
+      },
+    ]);
+    expect(contents[2].parts).toEqual([{
+      functionCall: { name: 'third_tool', args: {} },
+      thoughtSignature: 'sig-c',
+    }]);
+  });
+
+  it('keeps legacy unsigned tool calls unsigned', async () => {
+    const { contents } = await toGeminiContents([{
+      role: 'assistant',
+      content: null,
+      tool_calls: [{
+        id: 'legacy_call',
+        type: 'function',
+        function: { name: 'legacy_tool', arguments: '{}' },
+      }],
+    }]);
+
+    expect(contents[0].parts).toEqual([{
+      functionCall: { name: 'legacy_tool', args: {} },
+    }]);
   });
 
   it('converts tools to function declarations with a JSON-schema passthrough', () => {

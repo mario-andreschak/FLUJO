@@ -229,9 +229,50 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       ]);
     });
 
+    test('preserves Gemini thought signatures on unary function calls', async () => {
+      geminiGenerate.mockResolvedValueOnce({
+        candidates: [{
+          content: {
+            parts: [{
+              functionCall: { name: 'lookup', args: { query: 'x' } },
+              thoughtSignature: 'sig-unary',
+            }],
+          },
+        }],
+      });
+
+      const result = await new GeminiAdapter().createCompletion({
+        model: MODEL,
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+
+      expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
+        function: { name: 'lookup', arguments: '{"query":"x"}' },
+        providerMetadata: { gemini: { thoughtSignature: 'sig-unary' } },
+      });
+    });
+
     test('streams text and function calls with one stable assistant id', async () => {
       geminiGenerateStream.mockResolvedValueOnce((async function* () {
         yield { responseId: 'g1', candidates: [{ content: { parts: [{ text: 'hel' }] } }] };
+        yield {
+          responseId: 'g1',
+          candidates: [{
+            content: {
+              parts: [{
+                functionCall: {
+                  id: 'call_g',
+                  name: 'lookup',
+                  args: { query: 'x' },
+                  willContinue: true,
+                },
+                thoughtSignature: 'sig-stream',
+              }],
+            },
+          }],
+        };
         yield {
           responseId: 'g1',
           candidates: [{
@@ -258,6 +299,7 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({
         id: 'call_g',
         function: { name: 'lookup', arguments: '{"query":"x"}' },
+        providerMetadata: { gemini: { thoughtSignature: 'sig-stream' } },
       });
       expect(deltas).toEqual(expect.arrayContaining([
         expect.objectContaining({ contentDelta: 'hel' }),
@@ -272,6 +314,51 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
       expect(new Set(deltas.map(delta => (delta as { messageId: string }).messageId))).toEqual(
         new Set([result.liveMessageId]),
       );
+    });
+
+    test('keeps streamed signatures isolated when a new call starts mid-partial', async () => {
+      geminiGenerateStream.mockResolvedValueOnce((async function* () {
+        yield {
+          responseId: 'g-multi',
+          candidates: [{ content: { parts: [{
+            functionCall: { id: 'call_a', name: 'first_tool', args: {}, willContinue: true },
+            thoughtSignature: 'sig-a',
+          }] } }],
+        };
+        yield {
+          responseId: 'g-multi',
+          candidates: [{ content: { parts: [{
+            functionCall: { id: 'call_b', name: 'second_tool', args: { value: 2 } },
+            thoughtSignature: 'sig-b',
+          }] } }],
+        };
+        yield {
+          responseId: 'g-multi',
+          candidates: [{ content: { parts: [{
+            functionCall: { id: 'call_a', name: 'first_tool', args: { value: 1 } },
+          }] } }],
+        };
+      })());
+
+      const result = await new GeminiAdapter().createStreamCompletion({
+        model: MODEL,
+        apiKey: 'k',
+        messages: MESSAGES,
+        temperature: 0,
+      });
+
+      expect(result.completion.choices[0].message.tool_calls).toMatchObject([
+        {
+          id: 'call_a',
+          function: { name: 'first_tool', arguments: '{"value":1}' },
+          providerMetadata: { gemini: { thoughtSignature: 'sig-a' } },
+        },
+        {
+          id: 'call_b',
+          function: { name: 'second_tool', arguments: '{"value":2}' },
+          providerMetadata: { gemini: { thoughtSignature: 'sig-b' } },
+        },
+      ]);
     });
 
     test('streams complete media parts without dropping them', async () => {

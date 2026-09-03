@@ -105,7 +105,7 @@ function redactRemoteUrl(value: string): string {
 }
 
 function isSecretKey(key: string): boolean {
-  return /(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password)/i.test(key);
+  return /(api[_-]?key|authorization|cookie|(?:^|[_-])(?:access[_-]?|refresh[_-]?|oauth[_-]?)?token$|secret|password|signature)/i.test(key);
 }
 
 interface SanitizeContext {

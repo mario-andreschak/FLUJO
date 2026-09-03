@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -70,9 +71,13 @@ describe('OpenAI-compatible MCP tool-name translation', () => {
       tool_calls: [{
         id: 'call1', type: 'function',
         function: { name: 'mcp_read', arguments: '{}' },
-      }],
+        providerMetadata: { gemini: { thoughtSignature: 'gemini-only' } },
+      } as FlujoFunctionToolCall],
     }], translation);
-    expect((messages[0] as OpenAI.ChatCompletionAssistantMessageParam).tool_calls?.[0])
+    const wireCall =
+      (messages[0] as OpenAI.ChatCompletionAssistantMessageParam).tool_calls?.[0];
+    expect(wireCall)
       .toMatchObject({ function: { name: expect.stringMatching(/^read_resource_[0-9a-z]+$/) } });
+    expect(wireCall).not.toHaveProperty('providerMetadata');
   });
 });

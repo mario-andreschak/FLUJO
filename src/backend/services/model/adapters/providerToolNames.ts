@@ -117,10 +117,11 @@ export function translateMessagesForProvider(
       translated = {
         ...candidate,
         tool_calls: candidate.tool_calls.map((call) => ({
-          ...call,
+          id: call.id,
+          type: 'function',
           function: {
-            ...call.function,
             name: translation.canonicalToProvider.get(call.function.name) ?? call.function.name,
+            arguments: call.function.arguments,
           },
         })),
       };
