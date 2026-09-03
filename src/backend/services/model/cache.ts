@@ -10,9 +10,21 @@ interface CacheEntry {
   ttl: number; // Time to live in milliseconds
 }
 
+export interface ModelCacheIdentity {
+  baseUrl: string;
+  provider?: string;
+  adapter?: string;
+  profileId?: string;
+  /** One-way digest only; never the credential itself. */
+  credentialFingerprint?: string;
+}
+
+type ModelCacheTarget = string | ModelCacheIdentity;
+
 /**
- * Simple in-memory cache for provider models
- * Each provider URL gets its own cache entry with TTL
+ * Simple in-memory cache for provider models. Workspace isolation is provided
+ * by the outer map; the inner identity also separates profile, endpoint, SDK,
+ * and credential without retaining plaintext credentials.
  */
 class ModelCache {
   private caches = new Map<string, Map<string, CacheEntry>>();
@@ -28,12 +40,31 @@ class ModelCache {
     return cache;
   }
 
-  /**
-   * Generate cache key from provider URL
-   */
-  private getCacheKey(baseUrl: string): string {
-    // Normalize URL for consistent caching
-    return baseUrl.toLowerCase().replace(/\/$/, '');
+  private normalizeTarget(target: ModelCacheTarget): ModelCacheIdentity {
+    return typeof target === 'string' ? { baseUrl: target } : target;
+  }
+
+  /** Generate a stable key without exposing it through logs. */
+  private getCacheKey(target: ModelCacheTarget): string {
+    const identity = this.normalizeTarget(target);
+    const normalizedBaseUrl = identity.baseUrl.trim().toLowerCase().replace(/\/$/, '');
+    return JSON.stringify([
+      identity.profileId ?? '',
+      identity.provider ?? '',
+      identity.adapter ?? '',
+      normalizedBaseUrl,
+      identity.credentialFingerprint ?? '',
+    ]);
+  }
+
+  private logIdentity(target: ModelCacheTarget): Omit<ModelCacheIdentity, 'credentialFingerprint'> {
+    const identity = this.normalizeTarget(target);
+    return {
+      baseUrl: identity.baseUrl,
+      ...(identity.provider ? { provider: identity.provider } : {}),
+      ...(identity.adapter ? { adapter: identity.adapter } : {}),
+      ...(identity.profileId ? { profileId: identity.profileId } : {}),
+    };
   }
 
   /**
@@ -46,31 +77,35 @@ class ModelCache {
   /**
    * Get cached models for a provider
    */
-  get(baseUrl: string): NormalizedModel[] | null {
-    const key = this.getCacheKey(baseUrl);
+  get(target: ModelCacheTarget): NormalizedModel[] | null {
+    const key = this.getCacheKey(target);
     const cache = this.currentCache();
     const entry = cache.get(key);
+    const identity = this.logIdentity(target);
 
     if (!entry) {
-      log.debug('Cache miss - no entry found', { baseUrl, key });
+      log.debug('Cache miss - no entry found', identity);
       return null;
     }
 
     if (!this.isValid(entry)) {
-      log.debug('Cache miss - entry expired', { baseUrl, key, age: Date.now() - entry.timestamp });
+      log.debug('Cache miss - entry expired', {
+        ...identity,
+        age: Date.now() - entry.timestamp,
+      });
       cache.delete(key);
       return null;
     }
 
-    log.debug('Cache hit', { baseUrl, key, modelCount: entry.models.length });
+    log.debug('Cache hit', { ...identity, modelCount: entry.models.length });
     return entry.models;
   }
 
   /**
    * Store models in cache for a provider
    */
-  set(baseUrl: string, models: NormalizedModel[], ttl?: number): void {
-    const key = this.getCacheKey(baseUrl);
+  set(target: ModelCacheTarget, models: NormalizedModel[], ttl?: number): void {
+    const key = this.getCacheKey(target);
     const entry: CacheEntry = {
       models,
       timestamp: Date.now(),
@@ -78,16 +113,20 @@ class ModelCache {
     };
 
     this.currentCache().set(key, entry);
-    log.debug('Models cached', { baseUrl, key, modelCount: models.length, ttl: entry.ttl });
+    log.debug('Models cached', {
+      ...this.logIdentity(target),
+      modelCount: models.length,
+      ttl: entry.ttl,
+    });
   }
 
   /**
    * Clear cache for a specific provider
    */
-  clear(baseUrl: string): void {
-    const key = this.getCacheKey(baseUrl);
+  clear(target: ModelCacheTarget): void {
+    const key = this.getCacheKey(target);
     const deleted = this.currentCache().delete(key);
-    log.debug('Cache cleared', { baseUrl, key, deleted });
+    log.debug('Cache cleared', { ...this.logIdentity(target), deleted });
   }
 
   /**

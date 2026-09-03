@@ -1,7 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { Model } from '@/shared/types';
-import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
+import {
+  AZURE_OPENAI_DEFAULT_API_VERSION,
+  GEMINI_NATIVE_GUIDED_MODELS,
+} from '@/shared/types/model/provider';
 
 export type GuidedConnectionKind =
   | 'openrouter-free'
@@ -34,6 +37,24 @@ interface ModelTemplate {
   reasoningEffort?: Model['reasoningEffort'];
   supportsTools?: boolean;
 }
+
+const GEMINI_GUIDED_METADATA: Record<
+  (typeof GEMINI_NATIVE_GUIDED_MODELS)[number],
+  Pick<ModelTemplate, 'displayName' | 'description'>
+> = {
+  'gemini-3.5-flash-lite': {
+    displayName: 'Gemini 3.5 Flash-Lite',
+    description: 'A quick and economical native Gemini model.',
+  },
+  'gemini-3.8-flash': {
+    displayName: 'Gemini 3.8 Flash',
+    description: 'The newest stable native Gemini model for complex everyday work.',
+  },
+  'gemini-2.5-pro': {
+    displayName: 'Gemini 2.5 Pro',
+    description: 'A compatible Pro model for demanding reasoning tasks.',
+  },
+};
 
 const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, ModelTemplate[]> = {
   'openrouter-free': [
@@ -184,32 +205,13 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
       supportsTools: true,
     },
   ],
-  'gemini-native': [
-    {
-      name: 'gemini-2.5-flash-lite',
-      displayName: 'Gemini Flash Lite',
-      description: 'A quick and economical native Gemini model.',
-      provider: 'gemini',
-      adapter: 'gemini',
-      supportsTools: true,
-    },
-    {
-      name: 'gemini-2.5-flash',
-      displayName: 'Gemini Flash',
-      description: 'A balanced native Gemini model for everyday work.',
-      provider: 'gemini',
-      adapter: 'gemini',
-      supportsTools: true,
-    },
-    {
-      name: 'gemini-2.5-pro',
-      displayName: 'Gemini Pro',
-      description: 'A stronger native Gemini model for complex work.',
-      provider: 'gemini',
-      adapter: 'gemini',
-      supportsTools: true,
-    },
-  ],
+  'gemini-native': GEMINI_NATIVE_GUIDED_MODELS.map((name) => ({
+    name,
+    ...GEMINI_GUIDED_METADATA[name],
+    provider: 'gemini' as const,
+    adapter: 'gemini' as const,
+    supportsTools: true,
+  })),
 };
 
 /** Build the concrete FLUJO model records produced by a completed wizard path. */

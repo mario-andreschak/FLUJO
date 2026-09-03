@@ -16,15 +16,23 @@ export async function fetchProviderModels(
   baseUrl: string,
   modelId?: string,
   searchTerm?: string,
-  apiKey?: string
+  apiKey?: string,
+  profileId?: string,
 ): Promise<NormalizedModel[]> {
   log.debug(`fetchProviderModels: Delegating to backend service for baseUrl: ${baseUrl}`, {
     modelId,
     hasApiKey: Boolean(apiKey),
+    profileId,
     searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
   });
   try {
-    return await modelService.fetchProviderModels(baseUrl, modelId, searchTerm, apiKey);
+    return await modelService.fetchProviderModels(
+      baseUrl,
+      modelId,
+      searchTerm,
+      apiKey,
+      profileId,
+    );
   } catch (error) {
     log.warn(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
     // Return empty array instead of throwing to avoid UI errors

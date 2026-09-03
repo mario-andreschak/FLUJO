@@ -391,13 +391,15 @@ class ModelService {
     baseUrl: string,
     modelId: string,
     searchTerm?: string,
-    apiKey?: string
+    apiKey?: string,
+    profileId?: string,
   ): Promise<NormalizedModel[]> {
     try {
       log.debug('Fetching provider models', {
         baseUrl,
         modelId,
         searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+        profileId,
         apiKey: apiKey ? 'provided' : 'not provided'
       });
 
@@ -410,6 +412,7 @@ class ModelService {
           baseUrl,
           modelId,
           searchTerm,
+          profileId,
           // The key the user just typed (or a "${global:VAR}" binding). Lets us fetch the
           // provider's model list for a brand-new model WITHOUT first persisting it to disk.
           apiKey,

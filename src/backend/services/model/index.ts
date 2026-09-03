@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
@@ -13,6 +14,7 @@ import {
 import {
   ModelProvider,
   ModelAdapter,
+  getProviderProfileById,
   isSelfOrchestratingAdapter,
   normalizeModelTemperature,
   validateModelConfiguration,
@@ -380,102 +382,118 @@ class ModelService {
   }
 
   /**
-   * Fetch models from a provider with caching and optional search filtering
-   * @param baseUrl The base URL of the provider
-   * @param modelId Optional model ID for existing models
-   * @param searchTerm Optional search term to filter models
+   * Fetch models from a provider with caching and optional search filtering.
+   * A validated profile id selects native SDK discovery without relying on a
+   * user-controlled provider string or an empty URL.
    */
   async fetchProviderModels(
     baseUrl: string,
     modelId?: string,
     searchTerm?: string,
-    apiKey?: string
+    apiKey?: string,
+    profileId?: string,
   ): Promise<NormalizedModel[]> {
-    log.debug(`fetchProviderModels: Fetching models for baseUrl: ${baseUrl}`, {
+    log.debug('fetchProviderModels: Fetching provider catalogue', {
+      baseUrl,
       modelId,
+      profileId,
       hasApiKey: Boolean(apiKey),
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
     });
-    
+
     try {
-      // Check cache first
-      let allModels = modelCache.get(baseUrl);
-      
-      if (allModels) {
-        log.debug('Using cached models', { count: allModels.length });
-      } else {
-        log.debug('Cache miss - fetching from provider');
-        
-        // Determine provider from model or baseUrl
-        let provider: ModelProvider;
-        
-        if (modelId) {
-          log.debug(`Looking up model with ID: ${modelId}`);
-          const models = await this.loadModels();
-          const model = models.find(m => m.id === modelId);
-          
-          if (model && model.provider) {
-            // Use the stored provider if available
-            provider = model.provider;
-            log.debug(`Using stored provider: ${provider}`);
-          } else {
-            // Fall back to URL-based detection
-            provider = getProviderFromBaseUrl(baseUrl);
-            log.debug(`Provider determined from URL as: ${provider}`);
-          }
-        } else {
-          // For new models, determine provider from baseUrl
-          provider = getProviderFromBaseUrl(baseUrl);
-          log.debug(`Provider determined from URL as: ${provider}`);
-        }
-        
-        // Determine the API key to use. Prefer a directly-supplied key (the value the user
-        // just typed, or a "${global:VAR}" binding) so a brand-new model can list provider
-        // models WITHOUT being persisted to disk first. Fall back to the stored key of an
-        // existing model looked up by id.
-        let resolvedApiKey: string | null = null;
-
-        if (apiKey && apiKey !== MASKED_API_KEY) {
-          // resolveAndDecryptApiKey transparently handles plaintext, "${global:VAR}"
-          // references, and "encrypted:" values.
-          resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
-          log.debug('Using directly-supplied API key for provider fetch');
-        } else if (modelId) {
-          log.debug(`Looking up stored API key for model ID: ${modelId}`);
-          const model = await this.getModel(modelId);
-          if (model) {
-            resolvedApiKey = await resolveAndDecryptApiKey(model.ApiKey);
-            log.debug('Resolved stored API key for provider fetch');
-          } else {
-            log.warn(`Model with ID ${modelId} not found for API key resolution`);
-          }
-        } else {
-          log.warn('No API key supplied and no modelId provided - provider fetch will be unauthenticated');
-        }
-
-        // Fetch models from provider
-        log.info(`Fetching models from provider: ${provider}`);
-        allModels = await fetchModelsFromProvider(provider, baseUrl, resolvedApiKey);
-        log.debug(`Successfully fetched ${allModels.length} models from provider`);
-        
-        // Cache the results
-        modelCache.set(baseUrl, allModels);
+      const profile = profileId ? getProviderProfileById(profileId) : undefined;
+      if (profileId && !profile) {
+        throw new Error('Unsupported provider discovery profile');
       }
-      
-      // Apply search filtering if provided
+      if (profile?.supportsModelDiscovery === false) {
+        return [];
+      }
+
+      let storedModel: Model | undefined;
+      if (modelId) {
+        const models = await this.loadModels();
+        storedModel = models.find(model => model.id === modelId);
+      }
+
+      const provider: ModelProvider =
+        profile?.provider ?? storedModel?.provider ?? getProviderFromBaseUrl(baseUrl);
+      const adapter: ModelAdapter =
+        profile?.adapter ?? storedModel?.adapter ?? 'openai';
+      const usesNativeGemini = provider === 'gemini' && adapter === 'gemini';
+
+      if (!baseUrl.trim() && !usesNativeGemini) {
+        log.warn('Provider catalogue discovery requires a base URL', {
+          provider,
+          adapter,
+          profileId,
+        });
+        return [];
+      }
+
+      // Resolve the credential before consulting the cache because catalogue
+      // visibility can vary by account. Only its one-way digest enters the key.
+      let resolvedApiKey: string | null = null;
+      if (apiKey && apiKey !== MASKED_API_KEY) {
+        resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
+        log.debug('Using directly supplied API key for provider fetch');
+      } else if (storedModel) {
+        resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
+        log.debug('Resolved stored API key for provider fetch');
+      } else if (modelId) {
+        log.warn(`Model with ID ${modelId} not found for API key resolution`);
+      } else {
+        log.warn('Provider fetch will be unauthenticated');
+      }
+
+      const credentialFingerprint = createHash('sha256')
+        .update(resolvedApiKey ?? '')
+        .digest('hex');
+      const cacheIdentity = {
+        baseUrl,
+        provider,
+        adapter,
+        profileId: profile?.id ?? `${provider}:${adapter}`,
+        credentialFingerprint,
+      };
+
+      let allModels = modelCache.get(cacheIdentity);
+      if (allModels) {
+        log.debug('Using cached models', { count: allModels.length, provider, adapter });
+      } else {
+        log.debug('Cache miss - fetching from provider', { provider, adapter });
+        allModels = await fetchModelsFromProvider(provider, baseUrl, resolvedApiKey, adapter);
+        log.debug('Provider catalogue fetch completed', {
+          provider,
+          adapter,
+          count: allModels.length,
+        });
+
+        // Empty/invalid native responses intentionally remain uncached so they
+        // cannot displace the UI fallback and a later request may recover.
+        if (allModels.length > 0) {
+          modelCache.set(cacheIdentity, allModels);
+        }
+      }
+
       if (searchTerm && searchTerm.trim()) {
         const filteredModels = filterModels(allModels, searchTerm);
-        log.debug(`Search filtering applied`, { 
-          searchTerm: `"${searchTerm}"`, 
-          originalCount: allModels.length, 
-          filteredCount: filteredModels.length 
+        log.debug('Search filtering applied', {
+          searchTerm: `"${searchTerm}"`,
+          originalCount: allModels.length,
+          filteredCount: filteredModels.length,
         });
         return filteredModels;
       }
-      
+
       return allModels;
     } catch (error) {
-      log.error(`fetchProviderModels: Error fetching models for ${baseUrl}:`, error);
+      log.error('fetchProviderModels: Provider catalogue fetch failed', {
+        baseUrl,
+        modelId,
+        profileId,
+        message: error instanceof Error ? error.message : 'Unknown provider error',
+      });
       throw error;
     }
   }

@@ -1,4 +1,8 @@
 import { buildGuidedModels } from '@/frontend/components/models/connectionWizardCatalog';
+import {
+  GEMINI_NATIVE_FALLBACK_MODELS,
+  GEMINI_NATIVE_GUIDED_MODELS,
+} from '@/shared/types/model/provider';
 
 describe('guided model bundles', () => {
   it('uses OpenRouter’s exact free-router technical name', () => {
@@ -27,6 +31,19 @@ describe('guided model bundles', () => {
 
     expect(models.map((model) => model.name)).toEqual(['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.4-mini']);
     expect(models.every((model) => model.provider === 'codex' && model.ApiKey === '')).toBe(true);
+  });
+
+  it('derives the native Gemini bundle from the shared current catalogue', () => {
+    const models = buildGuidedModels({ kind: 'gemini-native', apiKey: 'gemini-key' });
+
+    expect(models.map(model => model.name)).toEqual([...GEMINI_NATIVE_GUIDED_MODELS]);
+    expect(models.every(model => GEMINI_NATIVE_FALLBACK_MODELS.includes(model.name))).toBe(true);
+    expect(models.every(model =>
+      model.provider === 'gemini' &&
+      model.adapter === 'gemini' &&
+      model.ApiKey === 'gemini-key'
+    )).toBe(true);
+    expect(models.map(model => model.name)).toContain('gemini-3.8-flash');
   });
 
   it('normalizes an Ollama server root to its OpenAI-compatible endpoint', () => {

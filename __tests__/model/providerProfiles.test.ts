@@ -1,7 +1,9 @@
 import {
+  GEMINI_NATIVE_FALLBACK_MODELS,
   PROVIDER_PROFILES,
   getProviderProfile,
   getProviderProfileById,
+  supportsProviderModelDiscovery,
 } from '@/shared/types/model/provider';
 
 describe('provider profiles', () => {
@@ -76,6 +78,31 @@ describe('provider profiles', () => {
     expect(getProviderProfileById('gemini-native')?.sdkLabel).toBe('GenAI SDK');
     expect(getProviderProfileById('codex')?.showBaseUrl).toBe(false);
     expect(getProviderProfileById('codex')?.sdkLabel).toBe('Codex SDK');
+  });
+
+  it('discovers native Gemini without a base URL and keeps current stable fallbacks', () => {
+    const nativeGemini = getProviderProfileById('gemini-native');
+    expect(nativeGemini).toMatchObject({
+      showBaseUrl: false,
+      supportsModelDiscovery: true,
+      baseUrl: '',
+      defaultModels: GEMINI_NATIVE_FALLBACK_MODELS,
+    });
+    expect(supportsProviderModelDiscovery(nativeGemini!, '')).toBe(true);
+    expect(supportsProviderModelDiscovery(getProviderProfileById('openai')!, '')).toBe(false);
+    expect(supportsProviderModelDiscovery(
+      getProviderProfileById('openai')!,
+      'https://api.openai.com/v1',
+    )).toBe(true);
+    expect(GEMINI_NATIVE_FALLBACK_MODELS).toEqual(expect.arrayContaining([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+    ]));
+    expect(GEMINI_NATIVE_FALLBACK_MODELS).not.toContain('gemini-2.0-flash');
   });
 
   it('offers the current Codex CLI model catalog', () => {

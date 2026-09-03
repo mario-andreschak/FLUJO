@@ -17,12 +17,14 @@ describe('provider-aware model configuration capabilities (#329)', () => {
     expect(
       getModelConfigurationCapabilities('gemini', 'gemini', 'gemini-2.5-pro')
     ).toMatchObject({ thinkingBudget: true, maxOutputTokens: true });
-    expect(
-      getModelConfigurationCapabilities('gemini', 'gemini', 'gemini-3.1-pro-preview')
-    ).toMatchObject({
-      thinkingLevels: ['minimal', 'low', 'medium', 'high'],
-      maxOutputTokens: true,
-    });
+    for (const model of ['gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']) {
+      expect(
+        getModelConfigurationCapabilities('gemini', 'gemini', model)
+      ).toMatchObject({
+        thinkingLevels: ['minimal', 'low', 'medium', 'high'],
+        maxOutputTokens: true,
+      });
+    }
   });
 
   it('replaces creativity with effort on known reasoning/adaptive models', () => {

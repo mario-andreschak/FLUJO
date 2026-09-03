@@ -338,6 +338,31 @@ export function getProvidersArray(): ProviderInfo[] {
 }
 
 /**
+ * Current native Gemini text-generation fallbacks, newest stable families
+ * first. Runtime discovery remains authoritative; these keep the free-text
+ * picker useful before a key is available or when Google's catalogue cannot
+ * be reached.
+ */
+export const GEMINI_NATIVE_FALLBACK_MODELS: string[] = [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+];
+
+/** Curated quick/balanced/complex subset used by the guided setup. */
+export const GEMINI_NATIVE_GUIDED_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-2.5-pro',
+] as const;
+
+/**
  * A selectable entry in the model modal's "Provider" dropdown.
  *
  * A profile pins down BOTH the vendor (`provider`) and the SDK/adapter that
@@ -359,16 +384,28 @@ export interface ProviderProfile {
   baseUrl: string;
   /** Whether the Base URL field is shown/editable for this profile. */
   showBaseUrl: boolean;
-  /** Whether the inference endpoint exposes an OpenAI-compatible model list. */
+  /**
+   * Whether this profile supports catalogue discovery. Explicit true allows a
+   * native SDK catalogue even when the profile has no editable base URL.
+   */
   supportsModelDiscovery?: boolean;
   /** Default Azure API version persisted when this profile is selected. */
   defaultApiVersion?: string;
   /**
-   * Suggested model names for the technical-name autocomplete. Used for native
-   * providers that have no reachable OpenAI `/models` endpoint. The field stays
-   * free-text, so these are hints, not a closed list.
+   * Suggested model names for the technical-name autocomplete. These remain
+   * visible while discovery loads or fails. The field stays free-text, so the
+   * list is a hint rather than a validation boundary.
    */
   defaultModels?: string[];
+}
+
+/** Resolve discovery independently from whether the profile shows a URL field. */
+export function supportsProviderModelDiscovery(
+  profile: ProviderProfile,
+  baseUrl?: string,
+): boolean {
+  return profile.supportsModelDiscovery !== false &&
+    (profile.supportsModelDiscovery === true || Boolean(baseUrl?.trim()));
 }
 
 /**
@@ -475,12 +512,8 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'GenAI SDK',
     baseUrl: '',
     showBaseUrl: false,
-    defaultModels: [
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
-    ],
+    supportsModelDiscovery: true,
+    defaultModels: GEMINI_NATIVE_FALLBACK_MODELS,
   },
   {
     id: 'anthropic-openai',

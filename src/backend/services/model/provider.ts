@@ -1,6 +1,7 @@
+import { GoogleGenAI } from '@google/genai';
 import { createLogger } from '@/utils/logger';
 import { NormalizedModel } from '@/shared/types/model';
-import { ModelProvider } from '@/shared/types/model/provider';
+import { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 
 // Create a logger instance for this file
 const log = createLogger('backend/services/model/provider');
@@ -19,6 +20,19 @@ interface ProviderModelRecord {
     output_modalities?: unknown;
   };
 }
+
+interface GeminiModelRecord {
+  name?: unknown;
+  displayName?: unknown;
+  description?: unknown;
+  inputTokenLimit?: unknown;
+  outputTokenLimit?: unknown;
+  supportedActions?: unknown;
+  supportedGenerationMethods?: unknown;
+}
+
+const GEMINI_SPECIALIST_MODEL =
+  /(?:^|-)(?:embedding|image|audio|tts|live|transcribe|robotics|computer-use|deep-research|omni)(?:-|$)/i;
 
 function isProviderModelRecord(value: unknown): value is ProviderModelRecord {
   return value !== null
@@ -116,6 +130,72 @@ export function isLitellmUrl(baseUrl: string): boolean {
   return false;
 }
 
+function normalizeGeminiModel(value: unknown): NormalizedModel | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const model = value as GeminiModelRecord;
+  if (typeof model.name !== 'string') return null;
+
+  const id = model.name.trim().replace(/^models\//i, '');
+  if (!/^gemini-/i.test(id) || GEMINI_SPECIALIST_MODEL.test(id)) return null;
+
+  const rawActions = Array.isArray(model.supportedActions)
+    ? model.supportedActions
+    : Array.isArray(model.supportedGenerationMethods)
+      ? model.supportedGenerationMethods
+      : [];
+  const actions = rawActions.filter((action): action is string => typeof action === 'string');
+
+  // Missing capability metadata is treated conservatively: only explicitly
+  // generateContent-capable models belong in the native text model picker.
+  if (!actions.some(action => action.toLowerCase() === 'generatecontent')) return null;
+
+  const displayName = typeof model.displayName === 'string' && model.displayName.trim()
+    ? model.displayName.trim()
+    : id;
+  const description = typeof model.description === 'string' && model.description.trim()
+    ? model.description.trim()
+    : undefined;
+  const contextWindow = typeof model.inputTokenLimit === 'number' &&
+    Number.isFinite(model.inputTokenLimit)
+    ? model.inputTokenLimit
+    : undefined;
+  const maxTokens = typeof model.outputTokenLimit === 'number' &&
+    Number.isFinite(model.outputTokenLimit)
+    ? model.outputTokenLimit
+    : undefined;
+
+  return {
+    id,
+    name: displayName,
+    ...(description ? { description } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    visionInputCapability: 'unknown',
+  };
+}
+
+/**
+ * Fetch every native Gemini model page and retain only models that explicitly
+ * support generateContent through the adapter used by FLUJO.
+ */
+export async function fetchGeminiModels(apiKey: string | null): Promise<NormalizedModel[]> {
+  if (!apiKey) return [];
+
+  const ai = new GoogleGenAI({ apiKey });
+  const pager = await ai.models.list({ config: { pageSize: 1000 } });
+  const discovered = new Map<string, NormalizedModel>();
+
+  for await (const rawModel of pager) {
+    const model = normalizeGeminiModel(rawModel);
+    if (model && !discovered.has(model.id)) {
+      discovered.set(model.id, model);
+    }
+  }
+
+  return [...discovered.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 /**
  * Fetch models from OpenRouter
  */
@@ -186,15 +266,15 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   }
   
   try {
-    // // Log headers without exposing API keys
-    // const sanitizedHeaders = { ...headers };
-    // if (sanitizedHeaders['Authorization']) {
-    //   sanitizedHeaders['Authorization'] = 'Bearer ********';
-    // }
-    // if (sanitizedHeaders['x-api-key']) {
-    //   sanitizedHeaders['x-api-key'] = '********';
-    // }
-    log.verbose(`fetching models @${modelsUrl} with ${JSON.stringify(headers)}`)
+    // Never include provider credentials in logs.
+    const sanitizedHeaders = { ...headers };
+    if (sanitizedHeaders.Authorization) {
+      sanitizedHeaders.Authorization = 'Bearer ********';
+    }
+    if (sanitizedHeaders['x-api-key']) {
+      sanitizedHeaders['x-api-key'] = '********';
+    }
+    log.verbose(`fetching models @${modelsUrl} with ${JSON.stringify(sanitizedHeaders)}`);
     const response = await fetch(modelsUrl, { headers });
     
     if (!response.ok) {
@@ -244,21 +324,24 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
     log.warn('Could not parse API response in any known format', { data });
     return [];
   } catch (error) {
-    log.error(`Error fetching models from ${modelsUrl}:`, error);
+    log.error('OpenAI-compatible model catalogue request failed', {
+      modelsUrl,
+      message: error instanceof Error ? error.message : 'Unknown provider error',
+    });
     throw error;
   }
 }
 
 
 /**
- * Fetch models from the specified provider
- * Since most providers are now OpenAI-compatible, we only need special handling
- * for OpenRouter, and use the OpenAI-compatible API for everything else
+ * Fetch models from the specified provider and adapter. Native SDK discovery is
+ * selected explicitly so an empty URL can never accidentally choose it.
  */
 export async function fetchModelsFromProvider(
-  provider: ModelProvider, 
-  baseUrl: string, 
-  apiKey: string | null
+  provider: ModelProvider,
+  baseUrl: string,
+  apiKey: string | null,
+  adapter: ModelAdapter = 'openai',
 ): Promise<NormalizedModel[]> {
   log.debug(`fetchModelsFromProvider: Fetching models for provider: ${provider}`);
   
@@ -270,16 +353,20 @@ export async function fetchModelsFromProvider(
       return [];
     }
 
-    // Only OpenRouter has a special endpoint for fetching models
+    if (provider === 'gemini' && adapter === 'gemini') {
+      return await fetchGeminiModels(apiKey);
+    }
+
+    // Only OpenRouter has a special endpoint for fetching models.
     if (provider === 'openrouter') {
       return await fetchOpenRouterModels();
     }
-    
-    // For all other providers (including Ollama), use the OpenAI-compatible API
+
+    // For all other providers (including Ollama), use the OpenAI-compatible API.
     return await fetchOpenAIModels(apiKey, baseUrl);
-  } catch (error) {
-    log.error(`fetchModelsFromProvider: Error fetching models for provider ${provider}:`, error);
-    // Return empty array instead of throwing to avoid UI errors
+  } catch {
+    log.warn('Provider model catalogue request failed', { provider, adapter });
+    // Return empty array instead of throwing to preserve picker fallbacks.
     return [];
   }
 }

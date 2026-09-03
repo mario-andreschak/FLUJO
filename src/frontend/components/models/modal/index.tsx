@@ -34,6 +34,7 @@ import {
   PROVIDER_PROFILES,
   getModelConfigurationCapabilities,
   getProviderProfile,
+  supportsProviderModelDiscovery,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
@@ -81,7 +82,17 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const discoveryRequestIdRef = useRef(0);
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
+  const canDiscoverProviderModels =
+    supportsProviderModelDiscovery(currentProfile, formState.baseUrl);
+  const discoveryCredential = isApiKeyBound && boundToGlobalVar
+    ? `\${global:${boundToGlobalVar}}`
+    : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
+  const hasDiscoveryCredential =
+    currentProfile.id !== 'gemini-native' ||
+    Boolean(discoveryCredential) ||
+    Boolean(model.name);
 
   const askEditableFields = useMemo(() => [
     'displayName',
@@ -162,49 +173,140 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     },
   }, handleAskFlujoAction, 100);
 
-  // Clear models list when modal opens
+  const fetchModels = useCallback(async (
+    baseUrl: string,
+    searchTerm?: string,
+    profileId: string = currentProfile.id,
+    apiKeyForFetch?: string,
+  ) => {
+    const requestId = ++discoveryRequestIdRef.current;
+    log.debug("fetchModels called", {
+      baseUrl,
+      profileId,
+      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      apiKey: apiKeyForFetch ? "present" : "not present",
+    });
+    setIsLoadingModels(true);
+    setErrors({});
+    try {
+      // Pass the current key directly so unsaved models can discover without
+      // persisting plaintext. A masked existing key remains undefined and is
+      // resolved from the stored model on the backend.
+      const fetchedModels = await modelService.fetchProviderModels(
+        baseUrl,
+        model.id,
+        searchTerm,
+        apiKeyForFetch,
+        profileId,
+      );
+      if (requestId !== discoveryRequestIdRef.current) return;
+      log.debug("Models fetched successfully", {
+        count: fetchedModels?.length,
+        searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      });
+
+      if (Array.isArray(fetchedModels)) {
+        setOpenRouterModels(fetchedModels);
+        // Editing an existing model should discover metadata too; requiring the
+        // user to re-select the already-exact technical name would not be
+        // automatic. Resolve against current state so typing during discovery
+        // cannot apply metadata for a superseded technical name.
+        setFormState(prev => {
+          const exactModel = fetchedModels.find(candidate => candidate.id === prev.name);
+          return exactModel ? {
+            ...prev,
+            ...discoveredModelMetadata(exactModel),
+          } : prev;
+        });
+        log.info("Models set in state", {
+          count: fetchedModels.length,
+          searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+        });
+      } else {
+        log.warn("Unexpected API response format", { models: fetchedModels });
+        setOpenRouterModels([]);
+      }
+    } catch (error) {
+      if (requestId !== discoveryRequestIdRef.current) return;
+      log.warn("Error fetching models", { baseUrl, searchTerm, error });
+      // Silently fail - don't show error messages in the UI.
+      setOpenRouterModels([]);
+    } finally {
+      if (requestId === discoveryRequestIdRef.current) {
+        setIsLoadingModels(false);
+      }
+    }
+  }, [currentProfile.id, model.id]);
+
+  // Opening or closing the modal invalidates any response still in flight.
   useEffect(() => {
+    discoveryRequestIdRef.current += 1;
+    setIsLoadingModels(false);
     if (open) {
       setOpenRouterModels([]);
     }
   }, [open]);
 
-  // Clear models when baseUrl or apiKey changes
+  // Clear provider results and invalidate in-flight work whenever the discovery
+  // identity changes. Native profiles participate without exposing a base URL.
   useEffect(() => {
-    if (currentProfile.supportsModelDiscovery !== false && formState.baseUrl) {
-      log.debug("Base URL or API Key changed", { baseUrl: formState.baseUrl });
-      // Clear cached models when baseUrl or API key changes
-      setOpenRouterModels([]);
+    discoveryRequestIdRef.current += 1;
+    setIsLoadingModels(false);
+    setOpenRouterModels([]);
+    if (canDiscoverProviderModels) {
+      log.debug('Provider discovery identity changed', {
+        baseUrl: formState.baseUrl,
+        profileId: currentProfile.id,
+      });
     }
-  }, [formState.baseUrl, formState.ApiKey]);
+  }, [
+    formState.baseUrl,
+    discoveryCredential,
+    isApiKeyBound,
+    boundToGlobalVar,
+    currentProfile.id,
+    canDiscoverProviderModels,
+  ]);
 
-  // Debounced effect for fetching models when technical name changes
+  // Load the complete catalogue once per modal/profile/endpoint/credential
+  // identity. Typing filters the in-memory list locally and does not create a
+  // provider request per keystroke.
   useEffect(() => {
-    // Clear any existing timeout
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
     }
 
-    // Only set up debounced fetch if we have the required data
-    if (formState.baseUrl) {
+    if (open && canDiscoverProviderModels && hasDiscoveryCredential) {
       debounceTimeoutRef.current = setTimeout(() => {
-        log.debug("Debounced fetchModels triggered", { 
-          name: formState.name, 
+        log.debug('Automatic provider discovery triggered', {
           baseUrl: formState.baseUrl,
-          searchTerm: formState.name ? `"${formState.name}"` : 'none'
+          profileId: currentProfile.id,
         });
-        // Pass the current input value as search term for server-side filtering
-        fetchModels(formState.baseUrl!, formState.name);
-      }, 100); // 100ms delay
+        fetchModels(
+          formState.baseUrl ?? '',
+          undefined,
+          currentProfile.id,
+          discoveryCredential,
+        );
+      }, 100);
     }
 
-    // Cleanup function
     return () => {
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [formState.name, formState.baseUrl, currentProfile.id, currentProfile.supportsModelDiscovery]);
+  }, [
+    open,
+    formState.baseUrl,
+    discoveryCredential,
+    isApiKeyBound,
+    boundToGlobalVar,
+    currentProfile.id,
+    canDiscoverProviderModels,
+    hasDiscoveryCredential,
+    fetchModels,
+  ]);
 
   // Cleanup timeout on component unmount
   useEffect(() => {
@@ -214,60 +316,6 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       }
     };
   }, []);
-
-  const fetchModels = async (baseUrl: string, searchTerm?: string) => {
-    log.debug("fetchModels called", { 
-      baseUrl, 
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
-      apiKey: formState.ApiKey ? "present" : "not present", 
-      isApiKeyBound 
-    });
-    setIsLoadingModels(true);
-    setErrors({});
-    try {
-      // Pass the key the user is currently entering directly to the backend so the provider's
-      // model list can be fetched WITHOUT persisting the model first. When the key wasn't
-      // edited (masked placeholder), send nothing and let the backend use the stored key
-      // looked up by model id (existing models only).
-      const apiKeyForFetch = isApiKeyBound && boundToGlobalVar
-        ? `\${global:${boundToGlobalVar}}`
-        : (formState.ApiKey && formState.ApiKey !== MASKED_API_KEY ? formState.ApiKey : undefined);
-
-      const fetchedModels = await modelService.fetchProviderModels(baseUrl, model.id, searchTerm, apiKeyForFetch);
-      log.debug("Models fetched successfully", { 
-        count: fetchedModels?.length,
-        searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
-      });
-      
-      if (Array.isArray(fetchedModels)) {
-        setOpenRouterModels(fetchedModels);
-        // Editing an existing model should discover metadata too; requiring the
-        // user to re-select the already-exact technical name would not be
-        // automatic. Provider values intentionally refresh stale catalogue
-        // metadata, while custom display text remains untouched.
-        const exactModel = fetchedModels.find(candidate => candidate.id === formState.name);
-        if (exactModel) {
-          setFormState(prev => prev.name === exactModel.id ? {
-            ...prev,
-            ...discoveredModelMetadata(exactModel),
-          } : prev);
-        }
-        log.info("Models set in state", { 
-          count: fetchedModels.length,
-          searchTerm: searchTerm ? `"${searchTerm}"` : 'none'
-        });
-      } else {
-        log.warn("Unexpected API response format", { models: fetchedModels });
-        setOpenRouterModels([]);
-      }
-    } catch (error) {
-      log.warn("Error fetching models", { baseUrl, searchTerm, error });
-      // Silently fail - don't show error messages in the UI
-      setOpenRouterModels([]);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
 
   // Reset form when modal opens/closes or model changes
   useEffect(() => {
@@ -675,7 +723,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   freeSolo
                   loading={isLoadingModels}
                   options={
-                    currentProfile.supportsModelDiscovery !== false && currentProfile.showBaseUrl
+                    canDiscoverProviderModels && visibleProviderModels.length > 0
                       ? visibleProviderModels.map(model => model.id)
                       : (currentProfile.defaultModels ?? [])
                   }
@@ -693,8 +741,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     setErrors(prev => ({ ...prev, name: '' }));
                   }}
                   onInputChange={(_, newValue) => {
+                    // Provider results are fetched once and filtered locally.
+                    // freeSolo deliberately preserves arbitrary manual model IDs.
                     handleChange('name', newValue);
-                    // Debounced API call is now handled by useEffect
                   }}
                   filterOptions={(options, state) => {
                     const inputValue = state.inputValue.toLowerCase();

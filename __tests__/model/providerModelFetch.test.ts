@@ -6,6 +6,14 @@
  * verify the correct URL is called and the response is normalised.
  */
 
+jest.mock('@google/genai', () => {
+  const list = jest.fn();
+  const GoogleGenAI = jest.fn().mockImplementation(() => ({
+    models: { list },
+  }));
+  return { GoogleGenAI, __list: list };
+});
+
 // Suppress the logger to keep test output clean.
 jest.mock('@/utils/logger', () => ({
   createLogger: () => ({
@@ -18,10 +26,18 @@ jest.mock('@/utils/logger', () => ({
 }));
 
 import {
+  fetchGeminiModels,
   fetchModelsFromProvider,
   fetchOpenAIModels,
   fetchOpenRouterModels,
 } from '@/backend/services/model/provider';
+
+const geminiSdkMock = jest.requireMock('@google/genai') as {
+  GoogleGenAI: jest.Mock;
+  __list: jest.Mock;
+};
+const MockGoogleGenAI = geminiSdkMock.GoogleGenAI;
+const mockGeminiList = geminiSdkMock.__list;
 
 // We need to mock global fetch since fetchOpenAIModels uses it.
 const mockFetch = jest.fn();
@@ -29,6 +45,8 @@ const mockFetch = jest.fn();
 
 beforeEach(() => {
   mockFetch.mockReset();
+  mockGeminiList.mockReset();
+  MockGoogleGenAI.mockClear();
 });
 
 describe('fetchModelsFromProvider (azure)', () => {
@@ -41,6 +59,94 @@ describe('fetchModelsFromProvider (azure)', () => {
 
     expect(models).toEqual([]);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchModelsFromProvider (native Gemini)', () => {
+  function pager(models: unknown[]) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const model of models) yield model;
+      },
+    };
+  }
+
+  it('uses the authenticated SDK pager and normalizes all usable pages', async () => {
+    mockGeminiList.mockResolvedValue(pager([
+      {
+        name: 'models/gemini-3.8-flash',
+        displayName: 'Gemini 3.8 Flash',
+        description: 'Current stable Flash model',
+        inputTokenLimit: 1_000_000,
+        outputTokenLimit: 65_536,
+        supportedActions: ['generateContent', 'countTokens'],
+      },
+      {
+        name: 'models/gemini-3.5-flash-lite',
+        displayName: 'Gemini 3.5 Flash-Lite',
+        supportedActions: ['generateContent'],
+      },
+    ]));
+
+    const models = await fetchGeminiModels('gemini-secret');
+
+    expect(MockGoogleGenAI).toHaveBeenCalledWith({ apiKey: 'gemini-secret' });
+    expect(mockGeminiList).toHaveBeenCalledWith({ config: { pageSize: 1000 } });
+    expect(models).toEqual([
+      {
+        id: 'gemini-3.5-flash-lite',
+        name: 'Gemini 3.5 Flash-Lite',
+        visionInputCapability: 'unknown',
+      },
+      {
+        id: 'gemini-3.8-flash',
+        name: 'Gemini 3.8 Flash',
+        description: 'Current stable Flash model',
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+        visionInputCapability: 'unknown',
+      },
+    ]);
+  });
+
+  it('deduplicates records and rejects malformed, specialist, and non-content models', async () => {
+    mockGeminiList.mockResolvedValue(pager([
+      { name: 'models/gemini-3.8-flash', supportedActions: ['generateContent'] },
+      { name: 'gemini-3.8-flash', supportedActions: ['generateContent'] },
+      { name: 'models/gemini-3.1-flash-image', supportedActions: ['generateContent'] },
+      { name: 'models/gemini-2.5-flash-native-audio-preview', supportedActions: ['generateContent'] },
+      { name: 'models/gemini-embedding-2', supportedActions: ['embedContent'] },
+      { name: 'models/gemini-unknown' },
+      { name: 42, supportedActions: ['generateContent'] },
+    ]));
+
+    await expect(fetchGeminiModels('gemini-secret')).resolves.toEqual([
+      {
+        id: 'gemini-3.8-flash',
+        name: 'gemini-3.8-flash',
+        visionInputCapability: 'unknown',
+      },
+    ]);
+  });
+
+  it('dispatches native Gemini without calling an OpenAI-compatible URL', async () => {
+    mockGeminiList.mockResolvedValue(pager([
+      { name: 'models/gemini-3.8-flash', supportedActions: ['generateContent'] },
+    ]));
+
+    const models = await fetchModelsFromProvider('gemini', '', 'gemini-secret', 'gemini');
+
+    expect(models.map(model => model.id)).toEqual(['gemini-3.8-flash']);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty result when the SDK fails or no key is available', async () => {
+    mockGeminiList.mockRejectedValue(new Error('provider unavailable'));
+
+    await expect(
+      fetchModelsFromProvider('gemini', '', 'gemini-secret', 'gemini'),
+    ).resolves.toEqual([]);
+    await expect(fetchGeminiModels(null)).resolves.toEqual([]);
   });
 });
 
