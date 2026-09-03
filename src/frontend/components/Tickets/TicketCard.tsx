@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  BugReportRounded,
   CheckCircleOutlineRounded,
   DeleteOutlineRounded,
   ForumRounded,
@@ -12,7 +13,13 @@ import { Box, Button, Checkbox, Chip, IconButton, Paper, Stack, Tooltip, Typogra
 import { useRouter } from 'next/navigation';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import {
+  buildBugReportContext,
+  collectBugReportContext,
+} from '@/frontend/utils/bugReportContext';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { openGitHubNewIssue } from '@/frontend/utils/openGitHubIssue';
+import { formatTicketIssueDraft } from '@/frontend/utils/ticketIssueDraft';
 import type { Ticket } from '@/shared/types/ticket';
 import {
   currentConversationStorageKey,
@@ -83,6 +90,17 @@ export function TicketCard({
     router.push(ticket.conversationId ? magicLinkPath({ kind: 'conversation', id: ticket.conversationId }) : '/chat');
   };
 
+  const reportBug = async () => {
+    let context;
+    try {
+      context = await collectBugReportContext();
+    } catch {
+      // Context collection should never prevent a ticket from being reported.
+      context = buildBugReportContext();
+    }
+    openGitHubNewIssue(formatTicketIssueDraft(ticket, context));
+  };
+
   return (
     <Paper
       component="article"
@@ -136,6 +154,13 @@ export function TicketCard({
           <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.5}>
             <Button size="small" startIcon={<SmartToyRounded />} onClick={askFlujo}>
               {t('tickets.action.askFlujo')}
+            </Button>
+            <Button
+              size="small"
+              startIcon={<BugReportRounded />}
+              onClick={() => void reportBug()}
+            >
+              {t('tickets.action.reportBug')}
             </Button>
             {ticket.conversationId && (
               <Button size="small" startIcon={<ForumRounded />} onClick={openConversation}>

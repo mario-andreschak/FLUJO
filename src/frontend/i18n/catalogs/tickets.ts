@@ -32,6 +32,7 @@ export const ticketsMessageRows = {
   'tickets.action.openConversation': ['Open conversation', 'Abrir conversación', 'Unterhaltung öffnen', 'Ouvrir la conversation', 'Apri conversazione', 'Abrir conversa', '打开对话'],
   'tickets.action.openFlow': ['Open flow', 'Abrir flujo', 'Flow öffnen', 'Ouvrir le flux', 'Apri il flusso', 'Abrir fluxo', '打开流程'],
   'tickets.action.askFlujo': ['Ask FLUJO', 'Preguntar a FLUJO', 'FLUJO fragen', 'Demander à FLUJO', 'Chiedi a FLUJO', 'Perguntar ao FLUJO', '询问 FLUJO'],
+  'tickets.action.reportBug': ['Report a bug', 'Informar de un error', 'Fehler melden', 'Signaler un bug', 'Segnala un bug', 'Relatar um bug', '报告错误'],
   'tickets.action.markDone': ['Mark as done', 'Marcar como hecho', 'Als erledigt markieren', 'Marquer comme terminé', 'Segna come completato', 'Marcar como concluído', '标记为已完成'],
   'tickets.action.reopen': ['Reopen', 'Reabrir', 'Wieder öffnen', 'Rouvrir', 'Riapri', 'Reabrir', '重新打开'],
   'tickets.action.delete': ['Delete ticket', 'Eliminar ticket', 'Ticket löschen', 'Supprimer le ticket', 'Elimina ticket', 'Excluir ticket', '删除工单'],
