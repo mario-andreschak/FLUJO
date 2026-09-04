@@ -194,7 +194,7 @@ export function getModelConfigurationCapabilities(
 
   if (resolvedAdapter === 'codex-cli') {
     const effortLevels: ModelReasoningEffort[] =
-      /^gpt-5\.6-(?:sol|terra)$/i.test(name)
+      /^(?:gpt-6-astra|gpt-5\.6-(?:sol|terra))$/i.test(name)
         ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
         : /^gpt-5\.6-/i.test(name)
           ? ['low', 'medium', 'high', 'xhigh', 'max']
@@ -568,6 +568,7 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     // Hints only — the field stays free-text. Keep this aligned with the
     // user-facing catalog bundled by the supported Codex CLI.
     defaultModels: [
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',

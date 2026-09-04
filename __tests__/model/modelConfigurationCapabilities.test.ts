@@ -2,6 +2,11 @@ import { getModelConfigurationCapabilities } from '@/shared/types/model/provider
 
 describe('provider-aware model configuration capabilities (#329)', () => {
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {
+    expect(getModelConfigurationCapabilities('codex', 'codex-cli', 'gpt-6-astra')).toEqual({
+      effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      priority: true,
+      maxOutputTokens: false,
+    });
     expect(getModelConfigurationCapabilities('codex', 'codex-cli', 'gpt-5.6-sol')).toEqual({
       effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       priority: true,

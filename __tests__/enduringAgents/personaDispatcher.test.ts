@@ -682,8 +682,8 @@ describe('Persona Flow dispatcher', () => {
 
     const submission = await harness.dispatcher.submit(input, { startPump: false });
 
-    expect(submission.dispatch.flowInput.mcpSkillSelections).toEqual(selections);
-    expect(submission.dispatch.flowInput.mcpSkillSelections).not.toBe(selections);
+    expect(submission.dispatch.flowInput?.mcpSkillSelections).toEqual(selections);
+    expect(submission.dispatch.flowInput?.mcpSkillSelections).not.toBe(selections);
 
     await harness.dispatcher.pump('persona_test');
     const runInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0] as FlowRunInput;

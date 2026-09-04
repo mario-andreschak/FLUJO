@@ -419,6 +419,19 @@ describe('CodexAdapter — transcript & usage', () => {
     await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow(/boom/);
   });
 
+  it('preserves the model rejection when the CLI exits after turn.failed', async () => {
+    const message = "The 'gpt-6-astra' model requires a newer version of Codex.";
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        yield { type: 'turn.failed', error: { message } };
+        throw new Error('Codex Exec exited with code 1: Reading prompt from stdin...');
+      })(),
+    }));
+
+    await expect(new CodexAdapter().createCompletion(baseInput())).rejects.toThrow(message);
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not fail a successful turn because of a non-fatal error item', async () => {
     runStreamedMock.mockImplementationOnce(async () => ({
       events: eventStream([

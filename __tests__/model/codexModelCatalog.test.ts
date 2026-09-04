@@ -17,7 +17,7 @@ const readFileMock = fs.readFile as unknown as jest.MockedFunction<
 const statMock = fs.stat as jest.MockedFunction<typeof fs.stat>;
 const loadItemMock = loadItem as jest.MockedFunction<typeof loadItem>;
 const compatibleCatalog = JSON.stringify({
-  client_version: '0.147.0',
+  client_version: '0.153.0',
   models: [{
     slug: 'gpt-5',
     model_messages: {},
@@ -71,6 +71,14 @@ describe('resolveCodexModelCatalogPath', () => {
   it('returns undefined when no cache exists', async () => {
     loadItemMock.mockResolvedValue({ experimental: { enabled: false, codexModelCatalogCache: true } });
     statMock.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+
+    await expect(resolveCodexModelCatalogPath()).resolves.toBeUndefined();
+  });
+
+  it('rejects a catalog from the old CLI compatibility line', async () => {
+    loadItemMock.mockResolvedValue({ experimental: { codexModelCatalogCache: true } });
+    statMock.mockResolvedValue({ isFile: () => true } as Awaited<ReturnType<typeof fs.stat>>);
+    readFileMock.mockResolvedValue(compatibleCatalog.replace('0.153.0', '0.147.0'));
 
     await expect(resolveCodexModelCatalogPath()).resolves.toBeUndefined();
   });

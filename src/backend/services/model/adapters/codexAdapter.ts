@@ -719,14 +719,7 @@ export class CodexAdapter implements CompletionAdapter {
         model: model.name,
         ...(model.reasoningEffort
           ? {
-              // The bundled SDK type currently ends at xhigh, while newer Codex
-              // catalogs also advertise max/ultra; the CLI accepts the catalog value.
-              modelReasoningEffort: model.reasoningEffort as
-                | 'minimal'
-                | 'low'
-                | 'medium'
-                | 'high'
-                | 'xhigh',
+              modelReasoningEffort: model.reasoningEffort,
             }
           : {}),
         workingDirectory: runtime.workingDirectory,
@@ -913,7 +906,10 @@ export class CodexAdapter implements CompletionAdapter {
             }
           }
         } catch (err) {
-          attemptFailure = err instanceof Error ? err : new Error(String(err));
+          // The SDK can yield turn.failed and then throw a generic CLI exit
+          // error. Preserve the provider's actionable reason (for example a
+          // model requiring a newer CLI) instead of replacing it with stderr.
+          attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {

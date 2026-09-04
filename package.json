@@ -89,7 +89,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@mui/icons-material": "^6.5.0",
     "@mui/material": "^6.5.0",
-    "@openai/codex-sdk": "^0.146.0",
+    "@openai/codex-sdk": "^0.153.3",
     "@uiw/react-md-editor": "^4.1.1",
     "@xyflow/react": "^12.11.2",
     "axios": "^1.19.0",
