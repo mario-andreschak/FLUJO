@@ -8,6 +8,13 @@ const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git']);
 
 export type ArchiveSkipReporter = (entryPath: string, reason: string) => void;
 
+export interface ArchiveTraversalOptions {
+  maxFileBytes?: number;
+  skippedDirectories?: ReadonlySet<string>;
+  allowHardLinks?: boolean;
+  onFile?: (entryPath: string, content: Buffer) => void;
+}
+
 function isInside(root: string, candidate: string, allowRoot = false): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   if (relative === '') return allowRoot;
@@ -123,7 +130,10 @@ export async function addFolderToZipLinkSafe(
   zipPath: string,
   boundaryPath: string,
   onSkip: ArchiveSkipReporter = () => undefined,
+  options: ArchiveTraversalOptions = {},
 ): Promise<void> {
+  const maxFileBytes = options.maxFileBytes ?? MAX_ARCHIVE_FILE_BYTES;
+  const skippedDirectories = options.skippedDirectories ?? SKIPPED_DIRECTORIES;
   const boundary = path.resolve(boundaryPath);
   const root = path.resolve(folderPath);
   assertPlainDirectory(await lstatOptional(boundary), 'Workspace backup boundary');
@@ -166,7 +176,7 @@ export async function addFolderToZipLinkSafe(
       }
 
       if (stats.isDirectory()) {
-        if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
+        if (skippedDirectories.has(entry.name)) continue;
         let canonicalChild: string;
         try {
           canonicalChild = await fs.realpath(fullPath);
@@ -189,11 +199,11 @@ export async function addFolderToZipLinkSafe(
       }
       // A hard link can alias a file outside the workspace without any
       // symlink bit for lstat to reveal. Never archive multiply-linked files.
-      if (stats.nlink > 1) {
+      if (stats.nlink > 1 && !options.allowHardLinks) {
         onSkip(archivePath, 'hard-linked files are not backed up');
         continue;
       }
-      if (stats.size > MAX_ARCHIVE_FILE_BYTES) {
+      if (stats.size > maxFileBytes) {
         onSkip(archivePath, 'file exceeds backup size limit');
         continue;
       }
@@ -206,15 +216,22 @@ export async function addFolderToZipLinkSafe(
         const canonicalFile = await fs.realpath(fullPath);
         if (
           !openedStats.isFile()
-          || openedStats.nlink > 1
-          || openedStats.size > MAX_ARCHIVE_FILE_BYTES
+          || (openedStats.nlink > 1 && !options.allowHardLinks)
+          || openedStats.size > maxFileBytes
           || !sameFileIdentity(stats, openedStats)
           || !isInside(canonicalRoot, canonicalFile)
         ) {
           onSkip(archivePath, 'file changed or escaped while being opened');
           continue;
         }
-        zip.file(archivePath, await readBoundedFile(handle, openedStats.size));
+        const content = await readBoundedFile(handle, openedStats.size);
+        const finalStats = await handle.stat();
+        if (content.byteLength !== openedStats.size || !sameFileIdentity(openedStats, finalStats)) {
+          onSkip(archivePath, 'file changed while being read');
+          continue;
+        }
+        options.onFile?.(archivePath, content);
+        zip.file(archivePath, content);
       } catch (error) {
         onSkip(archivePath, `file could not be read safely: ${error instanceof Error ? error.message : String(error)}`);
       } finally {

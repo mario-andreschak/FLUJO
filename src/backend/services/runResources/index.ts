@@ -16,6 +16,7 @@ import {
 } from '@/shared/types/runResources';
 import type { MCPReadResourceResult } from '@/shared/types/mcp';
 import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -308,9 +309,15 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
 
   if (replacedToUnlink) {
     // Best-effort: the replaced payload is already unreferenced by the index.
-    fs.unlink(payloadPath(input.conversationId, replacedToUnlink.id)).catch(() => { /* may not exist */ });
-    const materialized = materializedPayloadPath(replacedToUnlink);
-    if (materialized) fs.unlink(materialized).catch(() => { /* may not exist */ });
+    const replaced = replacedToUnlink;
+    await withWorkspaceMutation(async () => {
+      await fs.unlink(payloadPath(input.conversationId, replaced.id))
+        .catch(() => { /* may not exist */ });
+      const materialized = materializedPayloadPath(replaced);
+      if (materialized) {
+        await fs.unlink(materialized).catch(() => { /* may not exist */ });
+      }
+    });
   }
 
   return result;
@@ -479,7 +486,7 @@ export async function getRunResourceLocalPath(uri: string): Promise<string | nul
   if (!materialized) return canonicalPath;
   const localPath = path.resolve(materialized);
   try {
-    await fs.link(canonicalPath, localPath);
+    await withWorkspaceMutation(() => fs.link(canonicalPath, localPath));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
       log.warn(`Could not materialize extension-aware path for ${uri}; using canonical payload`, error);
@@ -609,14 +616,16 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
         ? { next: entries, result: undefined }
         : { next: keep, result: undefined };
     });
-    for (const e of toUnlink) {
-      if (e.size > 0) {
-        await fs.unlink(payloadPath(conversationId, e.id)).catch(() => { /* may not exist */ });
-        const materialized = materializedPayloadPath(e);
-        if (materialized) await fs.unlink(materialized).catch(() => { /* may not exist */ });
+    await withWorkspaceMutation(async () => {
+      for (const e of toUnlink) {
+        if (e.size > 0) {
+          await fs.unlink(payloadPath(conversationId, e.id)).catch(() => { /* may not exist */ });
+          const materialized = materializedPayloadPath(e);
+          if (materialized) await fs.unlink(materialized).catch(() => { /* may not exist */ });
+        }
+        removed++;
       }
-      removed++;
-    }
+    });
   }
 
   if (removed > 0) {
