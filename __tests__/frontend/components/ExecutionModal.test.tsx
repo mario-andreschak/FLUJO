@@ -426,7 +426,11 @@ describe('ExecutionModal Persona targets', () => {
         target: whenSection!,
         isIntersecting: true,
         intersectionRatio: 1,
-      } as IntersectionObserverEntry]);
+        boundingClientRect: whenSection!.getBoundingClientRect(),
+        intersectionRect: whenSection!.getBoundingClientRect(),
+        rootBounds: null,
+        time: 0,
+      }]);
     });
 
     expect(restrictionsTab).toHaveAttribute('aria-selected', 'true');
@@ -451,7 +455,11 @@ describe('ExecutionModal Persona targets', () => {
         target: restrictionsSection!,
         isIntersecting: true,
         intersectionRatio: 0.9,
-      } as IntersectionObserverEntry]);
+        boundingClientRect: restrictionsSection!.getBoundingClientRect(),
+        intersectionRect: restrictionsSection!.getBoundingClientRect(),
+        rootBounds: null,
+        time: 0,
+      }]);
     });
 
     expect(screen.getByRole('tab', {

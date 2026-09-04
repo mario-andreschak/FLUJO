@@ -107,6 +107,7 @@ describe('provider profiles', () => {
 
   it('offers the current Codex CLI model catalog', () => {
     expect(getProviderProfileById('codex')?.defaultModels).toEqual([
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',

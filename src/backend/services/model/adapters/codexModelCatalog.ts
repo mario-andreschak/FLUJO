@@ -12,7 +12,7 @@ const log = createLogger('backend/services/model/adapters/codexModelCatalog');
 // older bundled CLI cannot deserialize. Keep this in lockstep with the
 // @openai/codex-sdk version in package.json and only reuse catalogs produced by
 // the same CLI compatibility line.
-const CODEX_CATALOG_COMPATIBILITY_LINE = '0.147.';
+const CODEX_CATALOG_COMPATIBILITY_LINE = '0.153.';
 
 type CodexCatalog = {
   client_version?: unknown;

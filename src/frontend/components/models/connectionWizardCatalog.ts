@@ -178,6 +178,15 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
   ],
   'codex-subscription': [
     {
+      name: 'gpt-6-astra',
+      displayName: 'Codex Astra',
+      description: 'The most capable Codex model for complex reasoning and agent work.',
+      provider: 'codex',
+      adapter: 'codex-cli',
+      reasoningEffort: 'high',
+      supportsTools: true,
+    },
+    {
       name: 'gpt-5.6-terra',
       displayName: 'Codex Terra',
       description: 'A balanced Codex model for everyday agent work.',

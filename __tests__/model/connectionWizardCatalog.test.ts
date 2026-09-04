@@ -29,7 +29,7 @@ describe('guided model bundles', () => {
   it('creates keyless Codex models for the local ChatGPT login', () => {
     const models = buildGuidedModels({ kind: 'codex-subscription' });
 
-    expect(models.map((model) => model.name)).toEqual(['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.4-mini']);
+    expect(models.map((model) => model.name)).toEqual(['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.4-mini']);
     expect(models.every((model) => model.provider === 'codex' && model.ApiKey === '')).toBe(true);
   });
 
