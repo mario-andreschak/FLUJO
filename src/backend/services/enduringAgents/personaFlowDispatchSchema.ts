@@ -106,6 +106,7 @@ export const SerializableFlowRunInputSchema = z.object({
   requireApproval: z.boolean().optional(),
   debug: z.boolean().optional(),
   continueDebug: z.boolean().optional(),
+  resumeAsNewTurn: z.boolean().optional(),
   userTurn: z.boolean().optional(),
   parentRunId: EnduringAgentIdSchema.optional(),
   lane: JsonValueSchema.optional(),

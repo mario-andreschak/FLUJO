@@ -165,6 +165,7 @@ describe('Persona chat completion dispatch', () => {
       {
         model: 'flow-support',
         messages: [{ role: 'user', content: 'Help me' }],
+        appendMessages: true,
       } as any,
       true,
       false,
@@ -199,6 +200,7 @@ describe('Persona chat completion dispatch', () => {
         debug: false,
         continueDebug: false,
         userTurn: true,
+        resumeAsNewTurn: true,
         source: 'chat',
       },
     }, { waitForCompletion: false });

@@ -243,6 +243,7 @@ export type SerializablePersonaFlowRunInput = Pick<
   | 'requireApproval'
   | 'debug'
   | 'continueDebug'
+  | 'resumeAsNewTurn'
   | 'userTurn'
   | 'parentRunId'
   | 'lane'

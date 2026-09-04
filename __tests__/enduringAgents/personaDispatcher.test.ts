@@ -690,6 +690,20 @@ describe('Persona Flow dispatcher', () => {
     expect(runInput.mcpSkillSelections).toEqual(selections);
   });
 
+  it('preserves new-turn resume semantics across the durable Flow input boundary', async () => {
+    const harness = makeHarness(workspace('resume-as-new-turn'));
+    const input = dispatchInput('persona_test', 'resume-as-new-turn');
+    input.flowInput.resumeAsNewTurn = true;
+
+    const submission = await harness.dispatcher.submit(input, { startPump: false });
+
+    expect(submission.dispatch.flowInput?.resumeAsNewTurn).toBe(true);
+
+    await harness.dispatcher.pump('persona_test');
+    const runInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0] as FlowRunInput;
+    expect(runInput.resumeAsNewTurn).toBe(true);
+  });
+
   it('rejects malformed MCP Skill selections before durable dispatch', async () => {
     const harness = makeHarness(workspace('malformed-mcp-skill-selection'));
     const malformed = {
