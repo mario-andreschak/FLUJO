@@ -1,5 +1,6 @@
 import {
   formatMcpSkillModelContext,
+  loadApprovedMcpSkillSelections,
   parseMcpSkillSelections,
   withMcpSkillModelContext,
 } from '@/backend/services/mcp/skillModelContext';
@@ -54,6 +55,13 @@ const loadedSkill: McpLoadedSkill = {
 };
 
 describe('MCP Skill model context', () => {
+  it('only requires a conversation ID when a Skill is selected', async () => {
+    await expect(loadApprovedMcpSkillSelections(undefined, undefined))
+      .resolves.toBeUndefined();
+    await expect(loadApprovedMcpSkillSelections(undefined, [selection]))
+      .rejects.toThrow('Selected MCP Skills require a conversation ID.');
+  });
+
   it('accepts bounded server-qualified digest selections and rejects duplicates', () => {
     expect(parseMcpSkillSelections(JSON.stringify([selection]))).toEqual({
       selections: [selection],

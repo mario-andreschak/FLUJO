@@ -79,10 +79,13 @@ export function parseMcpSkillSelections(
 }
 
 export async function loadApprovedMcpSkillSelections(
-  conversationId: string,
+  conversationId: string | undefined,
   selections: readonly McpSkillSelection[] | undefined,
 ): Promise<McpLoadedSkill[] | undefined> {
   if (!selections?.length) return undefined;
+  if (!conversationId) {
+    throw new Error('Selected MCP Skills require a conversation ID.');
+  }
   const { mcpService } = await import('./index');
   const loaded = new Array<McpLoadedSkill>(selections.length);
   let nextIndex = 0;
