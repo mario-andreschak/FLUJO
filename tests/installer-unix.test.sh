@@ -127,6 +127,42 @@ run_test "Non-zero exit with empty output" "fail" "" 1
 run_test "Non-zero exit with valid-looking output" "fail" "22.0.0" 1
 run_test "Non-zero exit with malformed output" "fail" "not-a-version" 1
 
+# Corporate-network and explicit-browser-stage source contracts
+assert_source_contains() {
+    local description="$1"
+    local pattern="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if grep -Eq "$pattern" scripts/install.sh; then
+        echo -e "${GREEN}✓ PASS${NC}: $description"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗ FAIL${NC}: $description"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+assert_source_absent() {
+    local description="$1"
+    local pattern="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if grep -Eq "$pattern" scripts/install.sh; then
+        echo -e "${RED}✗ FAIL${NC}: $description"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    else
+        echo -e "${GREEN}✓ PASS${NC}: $description"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    fi
+}
+
+assert_source_contains "maps installer-scoped proxy variables" 'FLUJO_HTTP_PROXY.*HTTP_PROXY|HTTP_PROXY=.*FLUJO_HTTP_PROXY'
+assert_source_contains "validates and maps the custom CA" 'FLUJO_EXTRA_CA_CERTS'
+assert_source_contains "defers only the managed browser lifecycle" 'FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'
+assert_source_contains "runs an explicit Chromium stage" 'run_stage patchright-chromium'
+assert_source_contains "writes sanitized stage diagnostics" 'INSTALL_STAGE_FILE'
+assert_source_contains "ignores inherited TLS verification bypasses" 'unset NODE_TLS_REJECT_UNAUTHORIZED'
+assert_source_absent "never disables all npm lifecycle scripts" 'npm ci[^\n]*--ignore-scripts'
+assert_source_absent "never sets the TLS verification bypass" 'NODE_TLS_REJECT_UNAUTHORIZED=[\x27\x22]?0'
+
 # Summary
 echo
 echo "========================================"

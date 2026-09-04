@@ -9,10 +9,11 @@
     "flujo-mcp-browser": "dist/index.js"
   },
   "files": [
-    "dist/**/*"
+    "dist/**/*",
+    "scripts/install-browser.mjs"
   ],
   "scripts": {
-    "install": "patchright install chromium",
+    "install": "node scripts/install-browser.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"

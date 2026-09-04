@@ -312,3 +312,140 @@ Describe 'Windows installer Node.js version validation' {
         $result.Status | Should -Not -Be 'Keep'
     }
 }
+
+
+Describe 'Corporate-network installer helpers' {
+    It 'accepts only absolute HTTP(S) proxy URIs' {
+        Test-InstallerProxyUri 'https://proxy.example.test:8443' | Should -BeTrue
+        Test-InstallerProxyUri 'http://user:password@proxy.example.test' | Should -BeTrue
+        Test-InstallerProxyUri '' | Should -BeTrue
+        Test-InstallerProxyUri 'proxy.example.test:8443' | Should -BeFalse
+        Test-InstallerProxyUri 'socks5://proxy.example.test' | Should -BeFalse
+    }
+
+    It 'maps FLUJO aliases into a process-only child environment' {
+        $inputEnvironment = @{
+            FLUJO_HTTP_PROXY = 'http://proxy.example.test:8080'
+            FLUJO_HTTPS_PROXY = 'https://proxy.example.test:8443'
+            FLUJO_NO_PROXY = 'localhost,.example.test'
+            FLUJO_PLAYWRIGHT_DOWNLOAD_HOST = 'https://browser-mirror.example.test'
+            FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT = '45000'
+            NODE_OPTIONS = '--trace-warnings'
+            NODE_TLS_REJECT_UNAUTHORIZED = '0'
+        }
+        $before = $inputEnvironment | ConvertTo-Json -Compress
+
+        $mapped = Get-FlujoInstallerEnvironment -ProcessEnvironment $inputEnvironment -SupportsSystemCa $true
+
+        $mapped.HTTP_PROXY | Should -Be 'http://proxy.example.test:8080'
+        $mapped.HTTPS_PROXY | Should -Be 'https://proxy.example.test:8443'
+        $mapped.NO_PROXY | Should -Be 'localhost,.example.test'
+        $mapped.PLAYWRIGHT_DOWNLOAD_HOST | Should -Be 'https://browser-mirror.example.test'
+        $mapped.PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT | Should -Be '45000'
+        $mapped.NODE_OPTIONS | Should -Match '--trace-warnings'
+        $mapped.NODE_OPTIONS | Should -Match '--use-system-ca'
+        $mapped.ContainsKey('NODE_TLS_REJECT_UNAUTHORIZED') | Should -BeFalse
+        ($inputEnvironment | ConvertTo-Json -Compress) | Should -Be $before
+    }
+
+    It 'preserves explicitly supplied standard proxy settings when aliases are absent' {
+        $mapped = Get-FlujoInstallerEnvironment -ProcessEnvironment @{
+            HTTP_PROXY = 'http://standard-proxy.example.test:8080'
+            HTTPS_PROXY = 'https://standard-proxy.example.test:8443'
+        }
+
+        $mapped.HTTP_PROXY | Should -Be 'http://standard-proxy.example.test:8080'
+        $mapped.HTTPS_PROXY | Should -Be 'https://standard-proxy.example.test:8443'
+    }
+
+    It 'rejects missing and non-PEM custom CA files' {
+        Test-InstallerPemCertificateFile (Join-Path $TestDrive 'missing.pem') | Should -BeFalse
+        $invalidPath = Join-Path $TestDrive 'invalid.pem'
+        Set-Content -LiteralPath $invalidPath -Value 'not a certificate'
+        Test-InstallerPemCertificateFile $invalidPath | Should -BeFalse
+    }
+
+    It 'accepts a readable PEM envelope with decodable certificate bytes' {
+        $pemPath = Join-Path $TestDrive 'corporate-ca.pem'
+        Set-Content -LiteralPath $pemPath -Value @'
+-----BEGIN CERTIFICATE-----
+AQID
+-----END CERTIFICATE-----
+'@
+        Test-InstallerPemCertificateFile $pemPath -CertificateValidator { param($Bytes) $Bytes.Length -gt 0 } | Should -BeTrue
+        $mapped = Get-FlujoInstallerEnvironment -ProcessEnvironment @{
+            FLUJO_EXTRA_CA_CERTS = $pemPath
+        } -CertificateValidator { param($Bytes) $Bytes.Length -gt 0 }
+        $mapped.NODE_EXTRA_CA_CERTS | Should -Be $pemPath
+        $mapped.npm_config_cafile | Should -Be $pemPath
+    }
+
+    It 'redacts proxy credentials, authorization, npm tokens, query secrets, and CA paths' {
+        $caPath = 'C:\private\sentinel-corporate-ca.pem'
+        $diagnostic = @(
+            'https://sentinel-user:sentinel-password@proxy.example.test:8443'
+            'Authorization: Bearer sentinel-bearer'
+            '//registry.example.test/:_authToken=sentinel-npm-token'
+            'https://download.example.test/file?token=sentinel-query'
+            'API_SECRET=sentinel-env-secret'
+            $caPath
+        ) -join "`n"
+
+        $safe = Protect-InstallerDiagnostic -Text $diagnostic -SensitiveValues @($caPath)
+
+        foreach ($secret in @(
+            'sentinel-user',
+            'sentinel-password',
+            'sentinel-bearer',
+            'sentinel-npm-token',
+            'sentinel-query',
+            'sentinel-env-secret',
+            $caPath
+        )) {
+            $safe | Should -Not -Match ([regex]::Escape($secret))
+        }
+        $safe | Should -Match '\[REDACTED\]'
+    }
+}
+
+Describe 'Corporate-network installer source contracts' {
+    BeforeAll {
+        $script:InstallSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.ps1') -Raw
+        $script:UnixInstallSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.sh') -Raw
+        $script:InnoSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\installer\flujo-setup.iss') -Raw
+        $script:BrowserPackage = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\mcp-servers\browser\package.json') -Raw | ConvertFrom-Json
+    }
+
+    It 'keeps dependency lifecycles enabled and provisions managed Chromium explicitly' {
+        $script:InstallSource | Should -Match "FLUJO_SKIP_PATCHRIGHT_DOWNLOAD"
+        $script:InstallSource | Should -Match "patchright-chromium"
+        $script:UnixInstallSource | Should -Match "patchright-chromium"
+        $script:InstallSource | Should -Not -Match "npm ci --ignore-scripts"
+        $script:UnixInstallSource | Should -Not -Match "npm ci --ignore-scripts"
+        $script:BrowserPackage.scripts.install | Should -Be 'node scripts/install-browser.mjs'
+        $script:BrowserPackage.dependencies.patchright | Should -Be '1.61.1'
+    }
+
+    It 'propagates corporate-network inputs and diagnostic paths through Inno Setup' {
+        foreach ($name in @(
+            'FLUJO_HTTP_PROXY',
+            'FLUJO_HTTPS_PROXY',
+            'FLUJO_NO_PROXY',
+            'FLUJO_EXTRA_CA_CERTS',
+            'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST',
+            'FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT',
+            'FLUJO_INSTALL_LOG',
+            'FLUJO_INSTALL_STAGE_FILE'
+        )) {
+            $script:InnoSource | Should -Match ([regex]::Escape($name))
+        }
+        $script:InnoSource | Should -Match 'LoadStringFromFile'
+        $script:InnoSource | Should -Match 'sanitized diagnostic log'
+    }
+
+    It 'warns about inherited TLS bypasses without forwarding them to installer commands' {
+        $script:InstallSource | Should -Match 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED'
+        $script:UnixInstallSource | Should -Match 'unset NODE_TLS_REJECT_UNAUTHORIZED'
+        $script:InstallSource | Should -Match "Remove-Item -LiteralPath 'Env:\\NODE_TLS_REJECT_UNAUTHORIZED'"
+    }
+}
