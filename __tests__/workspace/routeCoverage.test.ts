@@ -4,6 +4,7 @@ import path from 'path';
 const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'] as const;
 const INSTALLATION_WIDE = new Set([
+  '/api/cloud/instance',
   '/api/network-exposure',
   '/api/runtime-environment',
   '/api/telemetry/daily-active',
