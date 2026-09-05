@@ -326,3 +326,164 @@ function Get-UninstallPrerequisiteDecisions {
 
     return @($decisions)
 }
+
+
+# Corporate-network configuration is deliberately installer-scoped. These helpers
+# validate and translate FLUJO_* aliases without changing npm, Git, the OS trust
+# store, or persistent user/machine environment settings.
+function Test-InstallerProxyUri {
+    param([AllowEmptyString()] [string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Value.Trim(), [UriKind]::Absolute, [ref]$uri)) {
+        return $false
+    }
+
+    return $uri.Scheme -in @('http', 'https') -and -not [string]::IsNullOrWhiteSpace($uri.Host)
+}
+
+function Test-InstallerPemCertificateFile {
+    param(
+        [AllowEmptyString()] [string]$Path,
+        [scriptblock]$FileReader = { param($FilePath) Get-Content -LiteralPath $FilePath -Raw -ErrorAction Stop },
+        [scriptblock]$CertificateValidator = {
+            param([byte[]]$CertificateBytes)
+            $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @(,$CertificateBytes)
+            try { return $certificate.Handle -ne [IntPtr]::Zero } finally { $certificate.Dispose() }
+        }
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+
+    try {
+        $content = [string](& $FileReader $Path)
+        $matches = [regex]::Matches(
+            $content,
+            '-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\r\n]+?)\s*-----END CERTIFICATE-----'
+        )
+        if ($matches.Count -eq 0) { return $false }
+
+        foreach ($match in $matches) {
+            $base64 = $match.Groups[1].Value -replace '\s', ''
+            $bytes = [Convert]::FromBase64String($base64)
+            if ($bytes.Length -eq 0 -or -not [bool](& $CertificateValidator $bytes)) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Add-InstallerNodeOption {
+    param(
+        [AllowEmptyString()] [string]$Existing,
+        [Parameter(Mandatory)] [string]$Option
+    )
+
+    if (($Existing -split '\s+') -contains $Option) { return $Existing }
+    return (@($Existing, $Option) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
+}
+
+function Get-FlujoInstallerEnvironment {
+    param(
+        [System.Collections.IDictionary]$ProcessEnvironment = ([Environment]::GetEnvironmentVariables()),
+        [bool]$SupportsSystemCa = $false,
+        [scriptblock]$CertificateValidator = $null
+    )
+
+    $result = @{}
+    $proxyMappings = @(
+        @{ Alias = 'FLUJO_HTTP_PROXY'; Standard = 'HTTP_PROXY' },
+        @{ Alias = 'FLUJO_HTTPS_PROXY'; Standard = 'HTTPS_PROXY' },
+        @{ Alias = 'FLUJO_NO_PROXY'; Standard = 'NO_PROXY' }
+    )
+
+    foreach ($mapping in $proxyMappings) {
+        $aliasValue = [string]$ProcessEnvironment[$mapping.Alias]
+        $standardValue = [string]$ProcessEnvironment[$mapping.Standard]
+        $value = if (-not [string]::IsNullOrWhiteSpace($aliasValue)) { $aliasValue.Trim() } else { $standardValue }
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if ($mapping.Standard -ne 'NO_PROXY' -and -not (Test-InstallerProxyUri $value)) {
+            throw "$($mapping.Alias) must be an absolute http:// or https:// URI."
+        }
+        $result[$mapping.Standard] = $value
+    }
+
+    $caPath = [string]$ProcessEnvironment['FLUJO_EXTRA_CA_CERTS']
+    if ([string]::IsNullOrWhiteSpace($caPath)) {
+        $caPath = [string]$ProcessEnvironment['NODE_EXTRA_CA_CERTS']
+    }
+    if (-not [string]::IsNullOrWhiteSpace($caPath)) {
+        $caPath = [Environment]::ExpandEnvironmentVariables($caPath.Trim())
+        $validCa = if ($CertificateValidator) {
+            Test-InstallerPemCertificateFile -Path $caPath -CertificateValidator $CertificateValidator
+        } else {
+            Test-InstallerPemCertificateFile -Path $caPath
+        }
+        if (-not $validCa) {
+            throw 'FLUJO_EXTRA_CA_CERTS/NODE_EXTRA_CA_CERTS must point to a readable, parseable PEM certificate file.'
+        }
+        $result['NODE_EXTRA_CA_CERTS'] = $caPath
+        $npmCaFile = [string]$ProcessEnvironment['npm_config_cafile']
+        $result['npm_config_cafile'] = if ([string]::IsNullOrWhiteSpace($npmCaFile)) { $caPath } else { $npmCaFile }
+    }
+
+    $downloadHost = [string]$ProcessEnvironment['FLUJO_PLAYWRIGHT_DOWNLOAD_HOST']
+    if ([string]::IsNullOrWhiteSpace($downloadHost)) {
+        $downloadHost = [string]$ProcessEnvironment['PLAYWRIGHT_DOWNLOAD_HOST']
+    }
+    if (-not [string]::IsNullOrWhiteSpace($downloadHost)) {
+        if (-not (Test-InstallerProxyUri $downloadHost)) {
+            throw 'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST must be an absolute http:// or https:// URI.'
+        }
+        $result['PLAYWRIGHT_DOWNLOAD_HOST'] = $downloadHost.TrimEnd('/')
+    }
+
+    $timeout = [string]$ProcessEnvironment['FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT']
+    if ([string]::IsNullOrWhiteSpace($timeout)) {
+        $timeout = [string]$ProcessEnvironment['PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT']
+    }
+    $timeoutValue = 0
+    if (-not [string]::IsNullOrWhiteSpace($timeout)) {
+        if (-not [int]::TryParse($timeout, [ref]$timeoutValue) -or $timeoutValue -le 0) {
+            throw 'FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT must be a positive number of milliseconds.'
+        }
+        $result['PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT'] = [string]$timeoutValue
+    }
+
+    if ($SupportsSystemCa) {
+        $result['NODE_OPTIONS'] = Add-InstallerNodeOption -Existing ([string]$ProcessEnvironment['NODE_OPTIONS']) -Option '--use-system-ca'
+    }
+
+    return $result
+}
+
+function Protect-InstallerDiagnostic {
+    param(
+        [AllowEmptyString()] [string]$Text,
+        [string[]]$SensitiveValues = @(),
+        [int]$MaximumLength = 4000
+    )
+
+    if ($null -eq $Text) { return '' }
+    $safe = [string]$Text
+    $safe = [regex]::Replace($safe, '(?i)(https?://)[^/@\s]+@', '$1[REDACTED]@')
+    $safe = [regex]::Replace($safe, '(?i)(authorization\s*:\s*(?:bearer|basic)\s+)\S+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)(//[^\s:=]+(?::\d+)?/:_authToken=)[^\s]+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)([?&](?:access_token|auth|key|password|secret|token)=)[^&\s]+', '$1[REDACTED]')
+    $safe = [regex]::Replace($safe, '(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY))=([^\s]+)', '$1=[REDACTED]')
+
+    foreach ($value in $SensitiveValues) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $safe = [regex]::Replace($safe, [regex]::Escape($value), '[REDACTED]')
+        }
+    }
+
+    if ($safe.Length -gt $MaximumLength) {
+        return $safe.Substring($safe.Length - $MaximumLength)
+    }
+    return $safe
+}

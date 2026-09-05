@@ -2,7 +2,10 @@
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
-import { transcribe } from '@/frontend/services/transcription';
+import {
+  startLiveTranscription,
+  type LiveTranscriptionSession,
+} from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { ticketDraftStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
@@ -137,7 +140,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const dragDepthRef = useRef(0);
@@ -145,7 +148,45 @@ const ChatInput: React.FC<ChatInputProps> = ({
   
   // For audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const liveTranscriptionRef = useRef<LiveTranscriptionSession | null>(null);
+  const transcriptionStopPromiseRef = useRef<Promise<string> | null>(null);
+  const liveTranscriptionErrorRef = useRef<Error | null>(null);
+  const recordingAttemptRef = useRef(0);
+  const mountedRef = useRef(true);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      recordingAttemptRef.current += 1;
+
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
+
+      const recorder = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.onstop = null;
+        try {
+          recorder.stop();
+        } catch (error) {
+          log.debug('Media recorder was already stopped', { error });
+        }
+      }
+
+      liveTranscriptionRef.current?.cancel();
+      liveTranscriptionRef.current = null;
+      transcriptionStopPromiseRef.current = null;
+
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+    };
+  }, []);
   
   // Visual node picker (modal) open state.
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -272,6 +313,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   // Transcription state
   const [transcriptionProgress, setTranscriptionProgress] = useState(0);
   const [transcriptionStatus, setTranscriptionStatus] = useState('');
+  const [transcriptionState, setTranscriptionState] = useState<
+    'idle' | 'processing' | 'success' | 'empty' | 'error' | 'disabled' | 'cancelled'
+  >('idle');
   
   // Handle text input change (routes to the parent while editing).
   const handleMessageChange = (value: string) => {
@@ -518,123 +562,229 @@ const ChatInput: React.FC<ChatInputProps> = ({
     };
   };
   
+  const stopRecordingResources = (): Promise<string> => {
+    if (transcriptionStopPromiseRef.current) {
+      return transcriptionStopPromiseRef.current;
+    }
+
+    const liveTranscription = liveTranscriptionRef.current;
+    liveTranscriptionRef.current = null;
+    transcriptionStopPromiseRef.current = liveTranscription
+      ? liveTranscription.stop()
+      : Promise.resolve('');
+
+    const stream = recordingStreamRef.current;
+    recordingStreamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+
+    return transcriptionStopPromiseRef.current;
+  };
+
   // Start audio recording
   const startRecording = async () => {
+    if (
+      isProcessing ||
+      mediaRecorderRef.current ||
+      recordingStreamRef.current ||
+      transcriptionStopPromiseRef.current
+    ) {
+      log.debug('Ignoring recording request while audio is being finalized');
+      return;
+    }
+
     log.debug('Starting audio recording');
+    const attemptId = ++recordingAttemptRef.current;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current || recordingAttemptRef.current !== attemptId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       log.debug('Audio stream obtained successfully');
-      
-      // Reset audio chunks
+      recordingStreamRef.current = stream;
+      liveTranscriptionRef.current = null;
+      transcriptionStopPromiseRef.current = null;
+      liveTranscriptionErrorRef.current = null;
       audioChunksRef.current = [];
-      
-      // Create media recorder
-      const mediaRecorder = new MediaRecorder(stream);
+
+      const supportedMimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ];
+      const recorderMimeType = typeof MediaRecorder.isTypeSupported === 'function'
+        ? supportedMimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType))
+        : undefined;
+
+      let mediaRecorder: MediaRecorder;
+      try {
+        mediaRecorder = recorderMimeType
+          ? new MediaRecorder(stream, { mimeType: recorderMimeType })
+          : new MediaRecorder(stream);
+      } catch (error) {
+        if (!recorderMimeType) throw error;
+        log.warn('Preferred recorder MIME type failed; using browser default', {
+          mimeType: recorderMimeType,
+          error,
+        });
+        mediaRecorder = new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = mediaRecorder;
-      
-      // Handle data available event
+
+      const speechRecognitionEnabled = settings?.speech?.enabled !== false;
+      if (speechRecognitionEnabled) {
+        try {
+          liveTranscriptionRef.current = startLiveTranscription({
+            language: navigator.language,
+          });
+        } catch (error) {
+          liveTranscriptionErrorRef.current = error instanceof Error
+            ? error
+            : new Error(String(error));
+          log.warn('Live speech recognition could not be started', { error });
+        }
+      }
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
-      
-      // Handle recording stop
+
       mediaRecorder.onstop = async () => {
-        // Create blob from chunks
-        const recordedMime = mediaRecorder.mimeType || audioChunksRef.current[0]?.type || 'audio/webm';
+        const transcriptPromise = stopRecordingResources();
+        void transcriptPromise.catch(() => undefined);
+        const isCurrentAttempt = () =>
+          mountedRef.current && recordingAttemptRef.current === attemptId;
+        const recordedMime =
+          mediaRecorder.mimeType ||
+          audioChunksRef.current[0]?.type ||
+          recorderMimeType ||
+          'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: recordedMime });
-        
-        // Start the dialog with loading state
+
+        if (!isCurrentAttempt()) return;
+
         setDialogTitle(t('chat.input.audioRecording'));
         setDialogType('audio');
-        setPendingAudioDataUrl(await readFileAsDataUrl(audioBlob));
+        setPendingAudioDataUrl(null);
         setPendingAudioMimeType(recordedMime);
-        setDialogContent(''); // Clear any previous content
+        setDialogContent('');
+        setTranscriptionProgress(0);
+        setTranscriptionStatus(t('chat.input.initializingTranscription'));
+        setTranscriptionState('processing');
         setIsProcessing(true);
         setDialogOpen(true);
-        
+
         try {
-          // Get speech settings from storage
-          const speechSettings = settings?.speech || {
-            enabled: true,
-            modelSize: 'base',
-            autoDownload: false
-          };
-          
-          if (speechSettings.enabled) {
-            // Use the new transcription service
-            setTranscriptionStatus(t('chat.input.initializingTranscription'));
-            setTranscriptionProgress(0);
-            
-            const result = await transcribe(audioBlob, {
-              onProgress: setTranscriptionProgress,
-              onStatusChange: setTranscriptionStatus,
-              language: navigator.language
+          if (audioBlob.size === 0) {
+            void transcriptPromise.catch((error) => {
+              log.debug('Speech recognition cleanup failed', { error });
             });
-            
-            if (result.success) {
-              // Set transcription result
-              const resultText = result.text;
-              
-              // Add a note that it was transcribed using Web Speech API
-              // resultText += '\n\n(Transcribed using browser speech recognition)';
-              
-              setDialogContent(resultText);
-              log.debug('Transcription successful', {
-                textLength: result.text.length,
-                engine: result.engine
-              });
-            } else {
-              // Handle error
-              setDialogContent(t('chat.input.transcriptionFailed', { error: result.error || t('common.unknownError') }));
-              log.error('Transcription failed', { error: result.error });
-            }
+            setPendingAudioMimeType(undefined);
+            setTranscriptionStatus(t('chat.input.noAudioData'));
+            setTranscriptionState('error');
+            return;
+          }
+
+          const audioDataUrl = await readFileAsDataUrl(audioBlob);
+          if (!isCurrentAttempt()) return;
+          setPendingAudioDataUrl(audioDataUrl);
+
+          if (!speechRecognitionEnabled) {
+            await transcriptPromise.catch(() => '');
+            if (!isCurrentAttempt()) return;
+            setTranscriptionStatus(t('chat.input.speechDisabled'));
+            setTranscriptionState('disabled');
+            return;
+          }
+
+          if (liveTranscriptionErrorRef.current) {
+            await transcriptPromise.catch(() => '');
+            throw liveTranscriptionErrorRef.current;
+          }
+
+          const transcript = (await transcriptPromise).trim();
+          if (!isCurrentAttempt()) return;
+
+          if (transcript) {
+            setDialogContent(transcript);
+            setTranscriptionProgress(100);
+            setTranscriptionStatus(t('chat.input.transcriptionCompleted'));
+            setTranscriptionState('success');
+            log.debug('Live transcription completed', {
+              textLength: transcript.length,
+            });
           } else {
-            // Fallback message if speech recognition is disabled
-            setDialogContent(t('chat.input.speechDisabled'));
+            setTranscriptionStatus(t('chat.input.noTranscript'));
+            setTranscriptionState('empty');
+            log.warn('No speech transcript detected');
           }
         } catch (error) {
+          if (!isCurrentAttempt()) return;
+          const message = error instanceof Error ? error.message : String(error);
           log.error('Error handling audio recording', { error });
-          setDialogContent(t('chat.input.audioFailed', { error: String(error) }));
+          setDialogContent('');
+          setTranscriptionStatus(
+            t('chat.input.transcriptionFailed', { error: message }),
+          );
+          setTranscriptionState('error');
         } finally {
-          setIsProcessing(false);
-          
-          // Stop all tracks
-          stream.getTracks().forEach(track => track.stop());
+          if (isCurrentAttempt()) {
+            setIsProcessing(false);
+            if (mediaRecorderRef.current === mediaRecorder) {
+              mediaRecorderRef.current = null;
+            }
+            transcriptionStopPromiseRef.current = null;
+            liveTranscriptionErrorRef.current = null;
+          }
         }
       };
-      
-      // Start recording
+
       mediaRecorder.start();
       setIsRecording(true);
-      
-      // Start timer
-      const interval = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
+
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime((previous) => previous + 1);
       }, 1000);
-      
-      setRecordingInterval(interval);
-      
     } catch (error) {
+      if (!mountedRef.current || recordingAttemptRef.current !== attemptId) return;
+
+      recordingAttemptRef.current += 1;
+      try {
+        await stopRecordingResources();
+      } catch (cleanupError) {
+        log.debug('Recording cleanup failed', { error: cleanupError });
+      }
+      mediaRecorderRef.current = null;
+      transcriptionStopPromiseRef.current = null;
+      liveTranscriptionErrorRef.current = null;
+      setIsRecording(false);
       log.error('Error starting recording:', error);
       alert(t('chat.input.microphoneFailed'));
     }
   };
-  
+
   // Stop audio recording
   const stopRecording = () => {
     log.debug('Stopping audio recording');
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    const mediaRecorder = mediaRecorderRef.current;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setIsProcessing(true);
+      void stopRecordingResources().catch((error) => {
+        log.debug('Speech recognition stopped with an error', { error });
+      });
       setIsRecording(false);
-      
-      // Clear timer
-      if (recordingInterval) {
-        clearInterval(recordingInterval);
-        setRecordingInterval(null);
+
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
       }
-      
+
       setRecordingTime(0);
     }
   };
@@ -646,9 +796,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
+  const handleCloseDialog = () => {
+    if (isProcessing) return;
+
+    if (dialogType === 'audio') {
+      setTranscriptionState('cancelled');
+      setPendingAudioDataUrl(null);
+      setPendingAudioMimeType(undefined);
+    }
+    setDialogOpen(false);
+  };
+
   // Add attachment from dialog
   const handleAddAttachment = () => {
     log.debug('Adding attachment', { type: dialogType, titleLength: dialogTitle.length });
+    const transcript = dialogContent.trim();
     const newAttachment: Attachment = {
       id: uuidv4(),
       type: dialogType,
@@ -657,13 +819,17 @@ const ChatInput: React.FC<ChatInputProps> = ({
         : dialogContent,
       originalName: dialogTitle,
       ...(dialogType === 'audio' && pendingAudioMimeType
-        ? { mimeType: pendingAudioMimeType, transcript: dialogContent }
+        ? {
+            mimeType: pendingAudioMimeType,
+            ...(transcript ? { transcript } : {}),
+          }
         : {}),
     };
     
     setAttachments([...attachments, newAttachment]);
     setPendingAudioDataUrl(null);
     setPendingAudioMimeType(undefined);
+    setTranscriptionState('idle');
     setDialogOpen(false);
   };
   
@@ -837,7 +1003,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             <IconButton
               color={isRecording ? "error" : "primary"}
               onClick={isRecording ? stopRecording : startRecording}
-              disabled={disabled}
+              disabled={disabled || isProcessing}
             >
               <MicIcon />
               {isRecording && (
@@ -1080,7 +1246,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       {/* Dialog for attachment preview/editing */}
       <Dialog
         open={dialogOpen}
-        onClose={() => !isProcessing && setDialogOpen(false)}
+        onClose={handleCloseDialog}
         maxWidth="md"
         fullWidth
       >
@@ -1101,7 +1267,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               <BugReportButton variant="icon" />
               <IconButton
                 aria-label={t('common.close')}
-                onClick={() => setDialogOpen(false)}
+                onClick={handleCloseDialog}
               >
                 <CloseIcon />
               </IconButton>
@@ -1129,21 +1295,34 @@ const ChatInput: React.FC<ChatInputProps> = ({
               )}
             </Box>
           ) : (
-            <TextField
-              multiline
-              fullWidth
-              minRows={10}
-              maxRows={20}
-              value={dialogContent}
-              onChange={(e) => setDialogContent(e.target.value)}
-              variant="outlined"
-              placeholder={dialogType === 'document' ? t('chat.input.documentContent') : t('chat.input.audioTranscription')}
-            />
+            <Box>
+              {dialogType === 'audio' &&
+                transcriptionState !== 'idle' &&
+                transcriptionState !== 'success' &&
+                transcriptionState !== 'cancelled' && (
+                  <Typography
+                    color={transcriptionState === 'error' ? 'error' : 'text.secondary'}
+                    sx={{ mb: 2 }}
+                  >
+                    {transcriptionStatus}
+                  </Typography>
+                )}
+              <TextField
+                multiline
+                fullWidth
+                minRows={10}
+                maxRows={20}
+                value={dialogContent}
+                onChange={(e) => setDialogContent(e.target.value)}
+                variant="outlined"
+                placeholder={dialogType === 'document' ? t('chat.input.documentContent') : t('chat.input.audioTranscription')}
+              />
+            </Box>
           )}
         </DialogContent>
         <DialogActions>
           <Button 
-            onClick={() => setDialogOpen(false)} 
+            onClick={handleCloseDialog}
             disabled={isProcessing}
           >
             {t('common.cancel')}
@@ -1151,7 +1330,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
           <Button 
             onClick={handleAddAttachment} 
             variant="contained" 
-            disabled={isProcessing || !dialogContent.trim()}
+            disabled={
+              isProcessing ||
+              (dialogType === 'audio'
+                ? !pendingAudioDataUrl
+                : !dialogContent.trim())
+            }
           >
             {t('chat.input.addToMessage')}
           </Button>

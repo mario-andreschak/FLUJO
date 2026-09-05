@@ -1,9 +1,8 @@
-import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { synchronizeCodexAuth } from './codexAuth';
 
-const AUTH_FILE = 'auth.json';
 const CONFIG_FILE = 'config.toml';
 
 export interface CodexRuntimeEnvironment {
@@ -11,11 +10,6 @@ export interface CodexRuntimeEnvironment {
   /** Stable neutral cwd for Codex; user files remain reachable only through FLUJO tools. */
   workingDirectory: string;
   env: Record<string, string>;
-}
-
-function userCodexHome(): string {
-  const configured = process.env.CODEX_HOME?.trim();
-  return configured || path.join(os.homedir(), '.codex');
 }
 
 function inheritedEnvironment(): Record<string, string> {
@@ -60,26 +54,12 @@ export async function prepareCodexRuntimeEnvironment(
 
   await fs.writeFile(
     path.join(home, CONFIG_FILE),
-    '# Managed by FLUJO. Codex runtime settings are supplied per invocation.\n',
+    '# Managed by FLUJO. Codex runtime settings are supplied per invocation.\ncli_auth_credentials_store = "file"\n',
     { encoding: 'utf8', mode: 0o600 },
   );
 
   if (useUserLogin) {
-    const source = path.join(userCodexHome(), AUTH_FILE);
-    const destination = path.join(home, AUTH_FILE);
-    if (path.resolve(source) !== path.resolve(destination)) {
-      try {
-        await fs.copyFile(source, destination);
-        await fs.chmod(destination, 0o600).catch(() => undefined);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          // Avoid silently retaining credentials after the operator logs out.
-          await fs.rm(destination, { force: true }).catch(() => undefined);
-        } else {
-          throw error;
-        }
-      }
-    }
+    await synchronizeCodexAuth(home);
   }
 
   const env: Record<string, string> = {
@@ -98,6 +78,11 @@ export async function prepareCodexRuntimeEnvironment(
     TEMP: temp,
     CODEX_HOME: home,
   };
+  if (useUserLogin) {
+    // Subscription selection must not silently become API-billed execution.
+    delete env.CODEX_API_KEY;
+    delete env.OPENAI_API_KEY;
+  }
   if (process.platform === 'win32') {
     const parsed = path.parse(home);
     env.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');

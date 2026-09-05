@@ -8,6 +8,17 @@ const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git']);
 
 export type ArchiveSkipReporter = (entryPath: string, reason: string) => void;
 
+export interface ArchiveTraversalOptions {
+  maxFileBytes?: number;
+  skippedDirectories?: ReadonlySet<string>;
+  allowHardLinks?: boolean;
+  onFile?: (entryPath: string, content: Buffer, stats: Stats) => void;
+  /** Rebuildable runtime paths can be omitted before following or inspecting them. */
+  skipPath?: (entryPath: string) => boolean;
+  signal?: AbortSignal;
+  preserveMode?: boolean;
+}
+
 function isInside(root: string, candidate: string, allowRoot = false): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   if (relative === '') return allowRoot;
@@ -36,11 +47,13 @@ function sameFileIdentity(first: Stats, second: Stats): boolean {
     && first.mtimeMs === second.mtimeMs;
 }
 
-async function readBoundedFile(handle: Awaited<ReturnType<typeof fs.open>>, size: number): Promise<Buffer> {
+async function readBoundedFile(handle: Awaited<ReturnType<typeof fs.open>>, size: number, signal?: AbortSignal): Promise<Buffer> {
+  signal?.throwIfAborted();
   const buffer = Buffer.alloc(size);
   let offset = 0;
   while (offset < size) {
-    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
+    signal?.throwIfAborted();
+    const { bytesRead } = await handle.read(buffer, offset, Math.min(size - offset, 1024 * 1024), offset);
     if (bytesRead === 0) break;
     offset += bytesRead;
   }
@@ -123,7 +136,10 @@ export async function addFolderToZipLinkSafe(
   zipPath: string,
   boundaryPath: string,
   onSkip: ArchiveSkipReporter = () => undefined,
+  options: ArchiveTraversalOptions = {},
 ): Promise<void> {
+  const maxFileBytes = options.maxFileBytes ?? MAX_ARCHIVE_FILE_BYTES;
+  const skippedDirectories = options.skippedDirectories ?? SKIPPED_DIRECTORIES;
   const boundary = path.resolve(boundaryPath);
   const root = path.resolve(folderPath);
   assertPlainDirectory(await lstatOptional(boundary), 'Workspace backup boundary');
@@ -137,6 +153,7 @@ export async function addFolderToZipLinkSafe(
   }
 
   const visit = async (directory: string, archiveDirectory: string): Promise<void> => {
+    options.signal?.throwIfAborted();
     const directoryStats = await lstatOptional(directory);
     if (!directoryStats || directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
       onSkip(archiveDirectory, 'directory is a symbolic link, junction, or no longer exists');
@@ -150,8 +167,10 @@ export async function addFolderToZipLinkSafe(
 
     const entries = await fs.readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
+      options.signal?.throwIfAborted();
       const fullPath = path.join(directory, entry.name);
       const archivePath = path.posix.join(archiveDirectory, entry.name);
+      if (options.skipPath?.(archivePath)) continue;
       let stats: Stats | null;
       try {
         stats = await lstatOptional(fullPath);
@@ -166,7 +185,7 @@ export async function addFolderToZipLinkSafe(
       }
 
       if (stats.isDirectory()) {
-        if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
+        if (skippedDirectories.has(entry.name)) continue;
         let canonicalChild: string;
         try {
           canonicalChild = await fs.realpath(fullPath);
@@ -189,11 +208,11 @@ export async function addFolderToZipLinkSafe(
       }
       // A hard link can alias a file outside the workspace without any
       // symlink bit for lstat to reveal. Never archive multiply-linked files.
-      if (stats.nlink > 1) {
+      if (stats.nlink > 1 && !options.allowHardLinks) {
         onSkip(archivePath, 'hard-linked files are not backed up');
         continue;
       }
-      if (stats.size > MAX_ARCHIVE_FILE_BYTES) {
+      if (stats.size > maxFileBytes) {
         onSkip(archivePath, 'file exceeds backup size limit');
         continue;
       }
@@ -206,16 +225,27 @@ export async function addFolderToZipLinkSafe(
         const canonicalFile = await fs.realpath(fullPath);
         if (
           !openedStats.isFile()
-          || openedStats.nlink > 1
-          || openedStats.size > MAX_ARCHIVE_FILE_BYTES
+          || (openedStats.nlink > 1 && !options.allowHardLinks)
+          || openedStats.size > maxFileBytes
           || !sameFileIdentity(stats, openedStats)
           || !isInside(canonicalRoot, canonicalFile)
         ) {
           onSkip(archivePath, 'file changed or escaped while being opened');
           continue;
         }
-        zip.file(archivePath, await readBoundedFile(handle, openedStats.size));
+        const content = await readBoundedFile(handle, openedStats.size, options.signal);
+        const finalStats = await handle.stat();
+        if (content.byteLength !== openedStats.size || !sameFileIdentity(openedStats, finalStats)) {
+          onSkip(archivePath, 'file changed while being read');
+          continue;
+        }
+        options.signal?.throwIfAborted();
+        options.onFile?.(archivePath, content, finalStats);
+        zip.file(archivePath, content, options.preserveMode
+          ? { unixPermissions: finalStats.mode & 0o100777 }
+          : undefined);
       } catch (error) {
+        options.signal?.throwIfAborted();
         onSkip(archivePath, `file could not be read safely: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         await handle?.close().catch(() => undefined);
@@ -226,10 +256,11 @@ export async function addFolderToZipLinkSafe(
   await visit(root, zipPath);
 }
 
-async function atomicWriteWithoutLinks(
+export async function atomicWriteWithoutLinks(
   boundaryPath: string,
   destination: string,
   content: Buffer,
+  options: { mode?: number } = {},
 ): Promise<void> {
   const parent = path.dirname(destination);
   await ensureLinkFreeDirectory(boundaryPath, parent, true);
@@ -244,7 +275,9 @@ async function atomicWriteWithoutLinks(
   const temporary = path.join(parent, `.flujo-restore-${randomUUID()}.tmp`);
   let created = false;
   try {
-    const handle = await fs.open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+    // Only owner permissions are restored; never import setuid or broad secret access.
+    const mode = 0o600 | ((options.mode ?? 0) & 0o100);
+    const handle = await fs.open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
     created = true;
     try {
       await handle.writeFile(content);
@@ -274,6 +307,7 @@ export async function restoreFolderFromZipLinkSafe(
   targetPath: string,
   boundaryPath: string,
   onSkip: ArchiveSkipReporter = () => undefined,
+  options: { maxFileBytes?: number; preserveMode?: boolean } = {},
 ): Promise<void> {
   const targetRoot = path.resolve(targetPath);
   await ensureLinkFreeDirectory(boundaryPath, targetRoot, true);
@@ -312,11 +346,13 @@ export async function restoreFolderFromZipLinkSafe(
     }
     try {
       const content = await item.entry.async('nodebuffer');
-      if (content.length > MAX_ARCHIVE_FILE_BYTES) {
+      if (content.length > (options.maxFileBytes ?? MAX_ARCHIVE_FILE_BYTES)) {
         onSkip(item.entryPath, 'file exceeds restore size limit');
         continue;
       }
-      await atomicWriteWithoutLinks(boundaryPath, destination, content);
+      await atomicWriteWithoutLinks(boundaryPath, destination, content, {
+        mode: options.preserveMode ? Number(item.entry.unixPermissions) : undefined,
+      });
     } catch (error) {
       onSkip(item.entryPath, error instanceof Error ? error.message : String(error));
     }

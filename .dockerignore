@@ -10,6 +10,18 @@ node_modules
 # mcp-servers/ directory is package source and must remain in the build context;
 # container user data is mounted separately below /app/data.
 db
+workspaces
+data
+userdata
+snapshots
+screenshots
+recordings
+browser-profile
+bash-utils
+artifacts
+test-outputs
+.codex
+**/node_modules
 
 # Docs / site assets not needed at runtime.
 docs/images

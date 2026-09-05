@@ -1792,6 +1792,7 @@ async function installServer(
       return;
     }
     const result = await installRegistryServer(registryName, env.values, {
+      serverName: server.name,
       preferredTransport: server.transport,
       headerOverrides: resolvedHeaders,
       ...(server.argTemplates?.length ? { argTemplates: server.argTemplates } : {}),

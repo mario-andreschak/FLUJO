@@ -79,6 +79,15 @@ begin
     RaiseException('Could not prepare the installer environment variable ' + Name + '. Setup has stopped before running PowerShell.');
 end;
 
+procedure PropagateOptionalEnvironmentVariable(Name: string);
+var
+  Value: string;
+begin
+  Value := GetEnv(Name);
+  if Value <> '' then
+    SetRequiredEnvironmentVariable(Name, Value);
+end;
+
 // install.ps1 bootstraps every prerequisite through winget, so winget itself
 // is the only thing setup must insist on up front.
 function InitializeSetup(): Boolean;
@@ -100,6 +109,9 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
+  LogPath: string;
+  StagePath: string;
+  StageName: AnsiString;
 begin
   if CurStep <> ssPostInstall then
     exit;
@@ -119,6 +131,21 @@ begin
   // Never start from inside install.ps1 (it would block this wizard forever);
   // the finish page's "Start FLUJO now" checkbox launches it detached instead.
   SetRequiredEnvironmentVariable('FLUJO_START', '0');
+
+  // Corporate-network settings are inherited from the setup process and remain
+  // scoped to this run. The bootstrapper never persists proxy credentials or CA
+  // configuration and never disables TLS certificate verification.
+  PropagateOptionalEnvironmentVariable('FLUJO_HTTP_PROXY');
+  PropagateOptionalEnvironmentVariable('FLUJO_HTTPS_PROXY');
+  PropagateOptionalEnvironmentVariable('FLUJO_NO_PROXY');
+  PropagateOptionalEnvironmentVariable('FLUJO_EXTRA_CA_CERTS');
+  PropagateOptionalEnvironmentVariable('FLUJO_PLAYWRIGHT_DOWNLOAD_HOST');
+  PropagateOptionalEnvironmentVariable('FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT');
+
+  LogPath := ExpandConstant('{localappdata}\FLUJO-cli\install.log');
+  StagePath := ExpandConstant('{localappdata}\FLUJO-cli\install-stage.txt');
+  SetRequiredEnvironmentVariable('FLUJO_INSTALL_LOG', LogPath);
+  SetRequiredEnvironmentVariable('FLUJO_INSTALL_STAGE_FILE', StagePath);
 
   // FLUJO runs npm/npx (PowerShell shims) on every start and when building MCP
   // servers on demand, so persisting the execution policy is worthwhile here.
@@ -141,8 +168,16 @@ begin
     RaiseException('Could not start PowerShell to run the installer.');
 
   if ResultCode <> 0 then
-    RaiseException('The FLUJO installer did not finish (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
-                   'The console window shows the reason. Common causes: a freshly installed prerequisite ' +
-                   '(Git/Node/Python/uv) needing a new terminal to appear on PATH, or a build failure.' + #13#10 +
-                   'Fix the issue shown, then run this setup again - it picks up where it left off.');
+  begin
+    if not LoadStringFromFile(StagePath, StageName) then
+      StageName := 'unknown';
+    WizardForm.StatusLabel.Caption :=
+      'FLUJO installation failed during stage "' + Trim(StageName) + '".';
+    RaiseException('The FLUJO installer failed during stage "' + Trim(StageName) +
+                   '" (exit code ' + IntToStr(ResultCode) + ').' + #13#10#13#10 +
+                   'A sanitized diagnostic log was saved to:' + #13#10 + LogPath + #13#10#13#10 +
+                   'Correct the reported proxy, certificate, network, or build issue and run setup again. ' +
+                   'For managed Chromium only, retry from the FLUJO directory with:' + #13#10 +
+                   'npm run install --workspace=@mario.andreschak/mcp-browser');
+  end;
 end;

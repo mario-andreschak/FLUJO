@@ -32,6 +32,7 @@ interface SpeechRecognitionLike {
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
   start(): void;
   stop(): void;
+  abort?(): void;
 }
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
@@ -40,145 +41,215 @@ type SpeechWindow = Window & {
   webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
 
-// Check if the Web Speech API is available
 const isSpeechRecognitionSupported = () => {
   return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
 };
 
-// Get the appropriate SpeechRecognition constructor based on browser support
 const getSpeechRecognition = () => {
   const speechWindow = window as SpeechWindow;
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 };
 
+export interface LiveTranscriptionOptions {
+  language?: string;
+  onInterimResult?: (text: string) => void;
+}
+
+export interface LiveTranscriptionSession {
+  stop(): Promise<string>;
+  cancel(): void;
+}
+
 /**
- * Transcribes audio data using the Web Speech API
- * This is a fallback when Whisper.js isn't working
+ * Starts browser speech recognition against the live microphone input.
+ *
+ * The Web Speech API cannot consume a prerecorded Blob. Callers must start this
+ * session while MediaRecorder is recording and stop both at the same time.
  */
-export async function transcribeWithWebSpeech(
-  audioBlob: Blob,
-  options?: {
-    language?: string;
-    onInterimResult?: (text: string) => void;
-  }
-): Promise<string> {
-  // Check if we're in a browser environment
+export function startLiveTranscription(
+  options: LiveTranscriptionOptions = {},
+): LiveTranscriptionSession {
   if (typeof window === 'undefined') {
     throw new Error('Web Speech API is only available in browser environments');
   }
-  
-  // Check if the browser supports the Web Speech API
+
   if (!isSpeechRecognitionSupported()) {
     throw new Error('Web Speech API is not supported in this browser');
   }
 
-  log.debug('Starting Web Speech API transcription');
-  
-  try {
-    // Create a URL for the audio blob
-    const audioUrl = URL.createObjectURL(audioBlob);
-    
-    // Create an audio element to play the recording
-    const audio = new Audio(audioUrl);
-    
-    // Create a SpeechRecognition instance
-    const SpeechRecognition = getSpeechRecognition();
-    if (!SpeechRecognition) throw new Error('Web Speech API is not supported in this browser');
-    const recognition = new SpeechRecognition();
-    
-    // Configure recognition
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    
-    // Set language if provided, otherwise use browser default
-    if (options?.language) {
-      recognition.lang = options.language;
+  const SpeechRecognition = getSpeechRecognition();
+  if (!SpeechRecognition) {
+    throw new Error('Web Speech API is not supported in this browser');
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  if (options.language) {
+    recognition.lang = options.language;
+  }
+
+  let finalTranscript = '';
+  let state: 'running' | 'stopping' | 'ended' | 'failed' | 'cancelled' = 'running';
+  let recognitionError: Error | null = null;
+  let stopPromise: Promise<string> | null = null;
+  let resolveStop: ((text: string) => void) | null = null;
+  let rejectStop: ((error: Error) => void) | null = null;
+
+  const detachHandlers = () => {
+    recognition.onresult = null;
+    recognition.onend = null;
+    recognition.onerror = null;
+  };
+
+  const settleStop = () => {
+    if (!stopPromise) return;
+
+    detachHandlers();
+    if (recognitionError) {
+      rejectStop?.(recognitionError);
+    } else {
+      resolveStop?.(state === 'cancelled' ? '' : finalTranscript.trim());
     }
-    
-    // Promise to handle the recognition process
-    return new Promise((resolve, reject) => {
-      let finalTranscript = '';
-      
-      // Handle recognition results
-      recognition.onresult = (event) => {
-        let interimTranscript = '';
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-        
-        // Call interim result callback if provided
-        if (options?.onInterimResult) {
-          options.onInterimResult(finalTranscript + interimTranscript);
-        }
-        
-        log.debug('Recognition interim result', { 
-          finalLength: finalTranscript.length,
-          interimLength: interimTranscript.length
-        });
-      };
-      
-      // Handle recognition end
-      recognition.onend = () => {
-        log.debug('Recognition ended', { transcriptLength: finalTranscript.length });
-        resolve(finalTranscript.trim());
-      };
-      
-      // Handle errors
-      recognition.onerror = (event) => {
-        log.error('Recognition error', { error: event.error });
-        reject(new Error(`Speech recognition error: ${event.error}`));
-      };
-      
-      // Start recognition as we play the audio
-      audio.onplay = () => {
-        recognition.start();
-        log.debug('Recognition started');
-      };
-      
-      // End recognition when audio ends
-      audio.onended = () => {
-        recognition.stop();
-        log.debug('Audio playback ended');
-      };
-      
-      // Handle audio errors
-      audio.onerror = (err) => {
-        log.error('Audio playback error', { error: err });
-        recognition.stop();
-        reject(new Error('Error playing audio'));
-      };
-      
-      // Start playing the audio
-      audio.play().catch(err => {
-        log.error('Error starting audio playback', { error: err });
-        reject(err);
-      });
+    resolveStop = null;
+    rejectStop = null;
+  };
+
+  recognition.onresult = (event) => {
+    if (state !== 'running' && state !== 'stopping') return;
+
+    let interimTranscript = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += `${transcript} `;
+      } else {
+        interimTranscript += transcript;
+      }
+    }
+
+    options.onInterimResult?.(
+      `${finalTranscript}${interimTranscript}`.trim(),
+    );
+
+    log.debug('Recognition result received', {
+      finalLength: finalTranscript.length,
+      interimLength: interimTranscript.length,
     });
+  };
+
+  recognition.onerror = (event) => {
+    if (state === 'cancelled' || state === 'failed' || state === 'ended') return;
+
+    if (event.error === 'no-speech') {
+      log.debug('No speech detected before recognition ended');
+      return;
+    }
+
+    recognitionError = new Error(`Speech recognition error: ${event.error}`);
+    state = 'failed';
+    log.error('Recognition error', { error: event.error });
+
+    try {
+      if (recognition.abort) {
+        recognition.abort();
+      } else {
+        recognition.stop();
+      }
+    } catch (error) {
+      log.debug('Speech recognition was already stopped after an error', {
+        error,
+      });
+    }
+
+    settleStop();
+  };
+
+  recognition.onend = () => {
+    if (state === 'running') {
+      try {
+        recognition.start();
+        log.debug('Live speech recognition restarted');
+        return;
+      } catch (error) {
+        recognitionError = error instanceof Error
+          ? error
+          : new Error(String(error));
+        state = 'failed';
+      }
+    } else if (state !== 'cancelled' && state !== 'failed') {
+      state = 'ended';
+    }
+
+    settleStop();
+  };
+
+  try {
+    recognition.start();
+    log.debug('Live speech recognition started');
   } catch (error) {
-    log.error('Error in Web Speech API transcription', { error });
+    detachHandlers();
     throw error;
   }
+
+  return {
+    stop: () => {
+      if (stopPromise) return stopPromise;
+
+      stopPromise = new Promise<string>((resolve, reject) => {
+        resolveStop = resolve;
+        rejectStop = reject;
+      });
+
+      if (state === 'ended' || state === 'failed' || state === 'cancelled') {
+        Promise.resolve().then(settleStop);
+        return stopPromise;
+      }
+
+      state = 'stopping';
+      try {
+        recognition.stop();
+      } catch (error) {
+        log.debug('Speech recognition was already stopped', { error });
+        state = 'ended';
+        settleStop();
+      }
+
+      return stopPromise;
+    },
+    cancel: () => {
+      if (state === 'cancelled') return;
+
+      state = 'cancelled';
+      try {
+        if (recognition.abort) {
+          recognition.abort();
+        } else {
+          recognition.stop();
+        }
+      } catch (error) {
+        log.debug('Speech recognition was already stopped', { error });
+      }
+      detachHandlers();
+      resolveStop?.('');
+      resolveStop = null;
+      rejectStop = null;
+    },
+  };
 }
 
 /**
- * Simple check to see if Web Speech API is working in this browser
+ * Simple check to see if Web Speech API is working in this browser.
  */
 export function checkWebSpeechSupport(): { supported: boolean; message?: string } {
   if (typeof window === 'undefined') {
     return { supported: false, message: 'Not in browser environment' };
   }
-  
-  return { 
+
+  return {
     supported: isSpeechRecognitionSupported(),
-    message: isSpeechRecognitionSupported() 
-      ? 'Web Speech API is supported' 
-      : 'Web Speech API is not supported in this browser'
+    message: isSpeechRecognitionSupported()
+      ? 'Web Speech API is supported'
+      : 'Web Speech API is not supported in this browser',
   };
 }

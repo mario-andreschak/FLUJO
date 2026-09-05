@@ -23,7 +23,7 @@ RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime
@@ -115,10 +115,10 @@ USER node
 # Port 4201: shared MCP Apps transport listener (`*.localhost` browser origins)
 EXPOSE 4200 4201
 
-# /api/cwd is a side-effect-free GET (returns the resolved paths), so it is a
-# safe readiness probe.
+# Worker readiness includes authenticated bootstrap/MCP status. Normal servers
+# keep the side-effect-free /api/cwd probe. Credentials stay inside process env.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=5 \
-    CMD curl -fsS http://127.0.0.1:4200/api/cwd || exit 1
+    CMD ["node", "scripts/healthcheck.mjs"]
 
 # Go through the launcher so the same TLS/CA handling as `npm start` applies.
 # -H 0.0.0.0 makes the server reachable from outside the container.

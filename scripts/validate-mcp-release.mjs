@@ -70,7 +70,7 @@ for (const entry of packages) {
   }
   if (
     entry.directory === 'browser'
-    && packageJson.scripts?.install !== 'patchright install chromium'
+    && packageJson.scripts?.install !== 'node scripts/install-browser.mjs'
   ) {
     fail(`${entry.name} must automatically install its managed Chromium binary`);
   }
@@ -78,6 +78,9 @@ for (const entry of packages) {
   const childFiles = packedFiles(`./mcp-servers/${entry.directory}`);
   if (!childFiles.has('dist/index.js') || !childFiles.has('package.json')) {
     fail(`${entry.name} tarball omits its binary or manifest`);
+  }
+  if (entry.directory === 'browser' && !childFiles.has('scripts/install-browser.mjs')) {
+    fail(`${entry.name} tarball omits its managed Chromium installer`);
   }
 }
 
@@ -93,6 +96,7 @@ for (const required of [
   'bin/flujo.mjs',
   'scripts/launch-next.mjs',
   'scripts/exposure-mode.mjs',
+  'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',
   '.next/routes-manifest.json',
   '.next/server/app-paths-manifest.json',

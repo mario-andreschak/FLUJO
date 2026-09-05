@@ -27,6 +27,7 @@ import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runt
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
 import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
+import { isWorkerMode, setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceDirs,
@@ -355,6 +356,7 @@ export function ensureBackendInitialized(): Promise<void> {
     // Allow a subsequent call (e.g. the /api/init route) to retry after a
     // failed startup instead of being stuck with a permanently rejected memo.
     setMemo('init', undefined);
+    setWorkerBootstrapStatus({ state: 'error', error: error instanceof Error ? error.message : 'Worker initialization failed.' });
     throw error;
   });
   setMemo('init', promise);
@@ -385,6 +387,13 @@ export function ensureWorkspaceInitialized(workspace: string): Promise<void> {
  */
 export async function ensureAllWorkspacesInitialized(): Promise<void> {
   await migrateWorkspaceLayout();
+  if (isWorkerMode()) {
+    const { restoreConfiguredWorkerSnapshot } = await import('@/backend/services/workspace/snapshotRestore');
+    const snapshot = await restoreConfiguredWorkerSnapshot();
+    if (!snapshot) throw new Error('Worker snapshot was not restored.');
+    await ensureWorkspaceInitialized(snapshot.workspace);
+    return;
+  }
   const workspaces = await listWorkspaces();
   for (const workspace of workspaces) {
     try {
@@ -403,6 +412,14 @@ async function runInitialization(): Promise<void> {
   // rejects on an unresolvable source/destination conflict, which correctly
   // aborts startup rather than risking two divergent copies of the user's data.
   await migrateWorkspaceLayout();
+  if (isWorkerMode()) {
+    const { restoreConfiguredWorkerSnapshot, unlockWorkerSnapshot } = await import('@/backend/services/workspace/snapshotRestore');
+    const snapshot = await restoreConfiguredWorkerSnapshot();
+    if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) {
+      throw new Error('Worker initialization is restricted to the restored workspace.');
+    }
+    await unlockWorkerSnapshot(snapshot);
+  }
 
   // Arm shutdown BEFORE anything spawns a child process, so an early Ctrl+C
   // during a slow startup sweep still tears down whatever already connected.
@@ -410,19 +427,23 @@ async function runInitialization(): Promise<void> {
 
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
-  await ensureDefaultFlujoAgent();
+  if (!isWorkerMode()) await ensureDefaultFlujoAgent();
   // Detached task execution is process-local in v1. Any persisted working task
   // left behind by a prior process is visible as a terminal restart failure.
-  reconcileOrphanedTasks().catch(error =>
-    log.warn('Detached subflow task reconciliation failed at startup:', error)
-  );
+  if (!isWorkerMode()) {
+    reconcileOrphanedTasks().catch(error =>
+      log.warn('Detached subflow task reconciliation failed at startup:', error)
+    );
+  }
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay
   // startup — the Spotlight tab just shows the previous cache until this lands.
-  refreshSpotlightServers().catch(error =>
-    log.warn('Spotlight refresh failed at startup:', error)
-  );
+  if (!isWorkerMode()) {
+    refreshSpotlightServers().catch(error =>
+      log.warn('Spotlight refresh failed at startup:', error)
+    );
+  }
 
   // MCP servers read secret env values and the scheduler fires flows that
   // resolve ${global:...} bindings and decrypt model API keys. In locked USER
@@ -430,6 +451,7 @@ async function runInitialization(): Promise<void> {
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
   // mode — or once already unlocked — it runs immediately, exactly as before.
   if (await isEncryptionLocked()) {
+    setWorkerBootstrapStatus({ state: 'locked', error: 'Worker workspace encryption is locked. Unlock this workspace before running jobs.' });
     log.info(
       'Encryption locked — deferring MCP/scheduler startup until unlock'
     );
@@ -458,11 +480,18 @@ function startSecretDependentServices(): Promise<void> {
       try {
         // Persona storage must be fully relocated after unlock and before any
         // reconciliation, dispatcher, or other runtime writer can start.
-        await migrateEnduringAgentDirectoryShards();
+        if (!isWorkerMode()) await migrateEnduringAgentDirectoryShards();
       } catch (error) {
         log.error('Failed to migrate Persona record directory shards:', error);
         setMemo('secret', undefined);
         throw error;
+      }
+
+      if (isWorkerMode()) {
+        // The snapshot plan is authoritative. Adding newly shipped configs here
+        // would change that plan and could launch tools the source had disabled.
+        await startWorkerRuntime();
+        return;
       }
 
       log.info('Initializing MCP servers');
@@ -524,11 +553,47 @@ function startSecretDependentServices(): Promise<void> {
       } catch (error) {
         log.error('Failed to arm run-resource retention sweep:', error);
       }
-    })();
+    })().catch(error => {
+      setMemo('secret', undefined);
+      setWorkerBootstrapStatus({ state: 'error', error: error instanceof Error ? error.message : 'Worker runtime initialization failed.' });
+      throw error;
+    });
     setMemo('secret', promise);
     return promise;
   }
   return existing;
+}
+
+async function startWorkerRuntime(): Promise<void> {
+  const { restoreConfiguredWorkerSnapshot, verifyWorkerCodexAuth } = await import('@/backend/services/workspace/snapshotRestore');
+  const { reinstallWorkspaceMcpServers } = await import('@/backend/services/packages/workspaceMcpTransfer');
+  const snapshot = await restoreConfiguredWorkerSnapshot();
+  if (!snapshot || snapshot.workspace !== getCurrentWorkspace()) throw new Error('Worker runtime workspace mismatch.');
+  setWorkerBootstrapStatus({ state: 'installing', error: undefined });
+  await verifyWorkerCodexAuth(snapshot);
+  const installation = await reinstallWorkspaceMcpServers(snapshot.mcpTransfer);
+  const reports = installation.servers.map(server => ({
+    name: server.name, status: server.status,
+    ...(server.status === 'failed' ? { error: 'MCP dependency could not be prepared.' } : {}),
+  }));
+  setWorkerBootstrapStatus({ servers: reports });
+  if (!installation.ok) throw new Error('Worker MCP dependency preparation failed. Check the worker server status.');
+  await mcpService.startEnabledServers();
+  const configs = await mcpService.loadServerConfigs();
+  if (!Array.isArray(configs)) throw new Error('Worker MCP configurations could not be loaded.');
+  const servers = await Promise.all(configs.map(async config => {
+    if (config.disabled) return { name: config.name, status: 'disabled' };
+    const status = await mcpService.getServerStatus(config.name);
+    return {
+      name: config.name, status: status.status === 'connected' ? 'ready' : 'failed',
+      ...(status.status !== 'connected' ? { error: 'MCP server did not connect.' } : {}),
+    };
+  }));
+  setWorkerBootstrapStatus({ servers });
+  if (servers.some(server => server.status === 'failed')) {
+    throw new Error('Worker MCP startup failed. Every enabled server must connect before jobs are accepted.');
+  }
+  setWorkerBootstrapStatus({ state: 'ready', error: undefined });
 }
 
 /**
@@ -558,7 +623,7 @@ export async function onUnlocked(): Promise<void> {
   // locked again and new Persona deliveries are admitted with startPump:false.
   // Every unlock therefore performs an idempotent durable kick/reconciliation
   // so those envelopes and scheduler projections cannot remain stranded.
-  if (!servicesAlreadyStarted) return;
+  if (!servicesAlreadyStarted || isWorkerMode()) return;
   await startPersonaFlowDispatcher().catch(error => {
     log.error('Failed to resume Persona Flow dispatcher after unlock:', error);
   });

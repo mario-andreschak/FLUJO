@@ -24,6 +24,12 @@
 #     FLUJO_START     start FLUJO after building       1/true/yes or 0/false/no
 #     FLUJO_SHORTCUT  desktop entry, Linux only        1/true/yes or 0/false/no
 #     FLUJO_OLLAMA    install Ollama for local models  1/true/yes or 0/false/no
+#     FLUJO_HTTP_PROXY / FLUJO_HTTPS_PROXY / FLUJO_NO_PROXY
+#                      installer-scoped corporate proxy settings
+#     FLUJO_EXTRA_CA_CERTS
+#                      readable PEM bundle for Node/npm/Patchright
+#     FLUJO_PLAYWRIGHT_DOWNLOAD_HOST / FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT
+#                      optional managed-browser mirror and timeout
 
 set -euo pipefail
 
@@ -45,6 +51,86 @@ step() { printf '\n%s==> %s%s\n' "$C_STEP" "$1" "$C_END" >&2; }
 ok()   { printf '%s    %s%s\n'   "$C_OK"   "$1" "$C_END" >&2; }
 warn() { printf '%s    %s%s\n'   "$C_WARN" "$1" "$C_END" >&2; }
 die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit 1; }
+
+INSTALL_LOG="${FLUJO_INSTALL_LOG:-$MANIFEST_DIR/install.log}"
+INSTALL_STAGE_FILE="${FLUJO_INSTALL_STAGE_FILE:-$MANIFEST_DIR/install-stage.txt}"
+BROWSER_RESULT_FILE="$MANIFEST_DIR/browser-install-result.json"
+mkdir -p "$MANIFEST_DIR"
+: > "$INSTALL_LOG"
+
+sanitize_diagnostic() {
+  local safe="${1:-}" secret
+  safe="$(printf '%s' "$safe" | sed -E \
+    -e 's#(https?://)[^/@[:space:]]+@#\\1[REDACTED]@#gI' \
+    -e 's#(authorization[[:space:]]*:[[:space:]]*(bearer|basic)[[:space:]]+)[^[:space:]]+#\\1[REDACTED]#gI' \
+    -e 's#([?&](access_token|auth|key|password|secret|token)=)[^&[:space:]]+#\\1[REDACTED]#gI' \
+    -e 's#([A-Z0-9_]*(TOKEN|SECRET|PASSWORD|KEY))=[^[:space:]]+#\\1=[REDACTED]#gI')"
+  for secret in "${FLUJO_HTTP_PROXY:-}" "${FLUJO_HTTPS_PROXY:-}" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${ALL_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}" "${all_proxy:-}" "${FLUJO_EXTRA_CA_CERTS:-}" "${NODE_EXTRA_CA_CERTS:-}" "${npm_config_cafile:-}"; do
+    [ -z "$secret" ] || safe="${safe//"$secret"/[REDACTED]}"
+  done
+  if [ "${#safe}" -gt 4000 ]; then
+    safe="${safe: -4000}"
+  fi
+  printf '%s' "$safe"
+}
+
+stage_marker() {
+  local name="$1" state="${2:-started}" code="${3:-0}"
+  printf '%s\n' "$name" > "$INSTALL_STAGE_FILE"
+  printf '[FLUJO_INSTALL_STAGE] name=%s state=%s exit=%s\n' "$name" "$state" "$code" | tee -a "$INSTALL_LOG" >&2
+}
+
+run_stage() {
+  local stage="$1"
+  shift
+  stage_marker "$stage" started 0
+  set +e
+  "$@" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+    safe_line="$(sanitize_diagnostic "$line")"
+    printf '%s\n' "$safe_line" | tee -a "$INSTALL_LOG" >&2
+  done
+  local code=${PIPESTATUS[0]}
+  set -e
+  if [ "$code" -ne 0 ]; then
+    stage_marker "$stage" failed "$code"
+    die "Installer stage '$stage' failed (exit $code). Sanitized log: $INSTALL_LOG"
+  fi
+  stage_marker "$stage" completed 0
+}
+
+validate_proxy_uri() {
+  [ -z "${1:-}" ] || [[ "$1" =~ ^https?://[^/[:space:]][^[:space:]]*$ ]]
+}
+
+configure_installer_network() {
+  validate_proxy_uri "${FLUJO_HTTP_PROXY:-}" || die 'FLUJO_HTTP_PROXY must be an absolute http:// or https:// URI.'
+  validate_proxy_uri "${FLUJO_HTTPS_PROXY:-}" || die 'FLUJO_HTTPS_PROXY must be an absolute http:// or https:// URI.'
+  validate_proxy_uri "${FLUJO_PLAYWRIGHT_DOWNLOAD_HOST:-}" || die 'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST must be an absolute http:// or https:// URI.'
+
+  [ -z "${FLUJO_HTTP_PROXY:-}" ] || export HTTP_PROXY="$FLUJO_HTTP_PROXY"
+  [ -z "${FLUJO_HTTPS_PROXY:-}" ] || export HTTPS_PROXY="$FLUJO_HTTPS_PROXY"
+  [ -z "${FLUJO_NO_PROXY:-}" ] || export NO_PROXY="$FLUJO_NO_PROXY"
+  if [ -n "${FLUJO_EXTRA_CA_CERTS:-}" ]; then
+    [ -f "$FLUJO_EXTRA_CA_CERTS" ] && [ -r "$FLUJO_EXTRA_CA_CERTS" ] || die 'FLUJO_EXTRA_CA_CERTS must point to a readable PEM certificate file.'
+    grep -q -- '-----BEGIN CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" &&
+      grep -q -- '-----END CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" ||
+      die 'FLUJO_EXTRA_CA_CERTS must contain PEM certificate material.'
+    export NODE_EXTRA_CA_CERTS="$FLUJO_EXTRA_CA_CERTS"
+    export npm_config_cafile="${npm_config_cafile:-$FLUJO_EXTRA_CA_CERTS}"
+  fi
+  [ -z "${FLUJO_PLAYWRIGHT_DOWNLOAD_HOST:-}" ] ||
+    export PLAYWRIGHT_DOWNLOAD_HOST="$FLUJO_PLAYWRIGHT_DOWNLOAD_HOST"
+  if [ -n "${FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT:-}" ]; then
+    [[ "$FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] ||
+      die 'FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT must be a positive number of milliseconds.'
+    export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT="$FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"
+  fi
+
+  if [ -n "${NODE_TLS_REJECT_UNAUTHORIZED:-}" ]; then
+    warn 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED is set. The installer will ignore it; configure a trusted CA instead of disabling TLS verification.'
+    unset NODE_TLS_REJECT_UNAUTHORIZED
+  fi
+}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -101,6 +187,16 @@ case "$OS" in
   Linux|Darwin) ;;
   *) die "Unsupported platform '$OS'. Use scripts/install.ps1 on Windows." ;;
 esac
+
+stage_marker preflight started 0
+configure_installer_network
+PROXY_CONFIGURED=false
+[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}" ] && PROXY_CONFIGURED=true
+CUSTOM_CA_CONFIGURED=false
+[ -n "${NODE_EXTRA_CA_CERTS:-}" ] && CUSTOM_CA_CONFIGURED=true
+ok "Corporate network preflight: proxy configured=$PROXY_CONFIGURED; custom CA supplied=$CUSTOM_CA_CONFIGURED"
+ok "Sanitized installer log: $INSTALL_LOG"
+stage_marker preflight completed 0
 
 have curl || die "curl is required to bootstrap the prerequisites. Install curl and re-run."
 
@@ -165,6 +261,7 @@ PRE_OLLAMA=$(have ollama && echo true || echo false)
 # ---------------------------------------------------------------------------
 # 2. Install prerequisites.
 # ---------------------------------------------------------------------------
+stage_marker prerequisites started 0
 PM=''
 if [ "$OS" = Darwin ]; then
   PM='brew'
@@ -372,44 +469,61 @@ if [ "$INSTALL_OLLAMA" = true ]; then
     fi
   fi
 fi
+stage_marker prerequisites completed 0
+
+if [ -n "${NODE_EXTRA_CA_CERTS:-}" ]; then
+  node -e "new (require('node:crypto').X509Certificate)(require('node:fs').readFileSync(process.env.NODE_EXTRA_CA_CERTS))" ||
+    die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
+  ok 'Custom CA certificate parsed successfully.'
+fi
+SYSTEM_CA_SUPPORTED=false
+if [ "$(node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')" 2>/dev/null || true)" = true ]; then
+  SYSTEM_CA_SUPPORTED=true
+  case " ${NODE_OPTIONS:-} " in
+    *" --use-system-ca "*) ;;
+    *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca" ;;
+  esac
+fi
+ok "Network clients: Node.js $(node -v); npm $(npm --version); Node system CA support=$SYSTEM_CA_SUPPORTED"
 
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
-  step "Existing FLUJO clone found - updating ($BRANCH)"
   # Older FLUJO installers used `npm install`, which could rewrite
   # package-lock.json and leave the tree dirty. This is an install/deploy copy,
   # not a dev checkout, so discarding tracked-file drift is safe; untracked
   # node_modules/.next/user data are preserved by reset --hard.
-  git -C "$INSTALL_DIR" fetch origin "$BRANCH"
-  git -C "$INSTALL_DIR" checkout "$BRANCH"
-  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+  run_stage repository git -C "$INSTALL_DIR" fetch origin "$BRANCH"
+  run_stage repository git -C "$INSTALL_DIR" checkout "$BRANCH"
+  run_stage repository git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
 else
-  step "Cloning FLUJO into $INSTALL_DIR"
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  run_stage repository git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
 # ---------------------------------------------------------------------------
 # 4. Install dependencies and build.
 # ---------------------------------------------------------------------------
 cd "$INSTALL_DIR"
-step "Installing npm dependencies (npm ci)"
-# --include=dev: `next build` needs typescript/webpack/postcss (all
-# devDependencies), which npm prunes when NODE_ENV=production.
-# `npm ci` honors the committed lockfile exactly and never rewrites it.
-npm ci --include=dev
+# Preserve every dependency lifecycle, but defer only the managed Chromium
+# download so it has its own diagnosable and independently retryable stage.
+export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=1
+run_stage npm-dependencies npm ci --include=dev
 
-step "Building FLUJO (npm run build)"
-npm run build
-step "Validating bundled offline MCP packages"
-npm run validate:mcp-release
+export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=0
+export FLUJO_INSTALL_RESULT_FILE="$BROWSER_RESULT_FILE"
+run_stage patchright-chromium npm run install --workspace=@mario.andreschak/mcp-browser
+unset FLUJO_INSTALL_RESULT_FILE
+
+run_stage build npm run build
+run_stage validation npm run validate:mcp-release
 ok "Build complete."
 
 # ---------------------------------------------------------------------------
 # 5. Register the global 'flujo' command.
 # ---------------------------------------------------------------------------
+stage_marker registration started 0
 mkdir -p "$BIN_DIR"
 LAUNCHER="$BIN_DIR/flujo"
 cat > "$LAUNCHER" <<EOF
@@ -501,6 +615,7 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
 }
 EOF
 ok "Uninstall manifest written: $MANIFEST_DIR/install-manifest.json"
+stage_marker registration completed 0
 
 # ---------------------------------------------------------------------------
 # 7. Done — start now or explain how to.

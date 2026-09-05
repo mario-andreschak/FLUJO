@@ -25,6 +25,7 @@ import {
   type PersonaFlowDispatchSubmission,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import type { PersonaChatCompletionTarget } from './requestParser';
+import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -91,9 +92,9 @@ async function processChatCompletionInternal(
     continueDebug,
     userTurn,
     ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
-    // This adapter is the interactive chat/completions entry point. Classify it
-    // as chat so runtime behavior stays attended even though transport is HTTP.
-    source: 'chat',
+    // The same HTTP adapter serves interactive chat and an unattended worker.
+    // Worker runs must drive forward and never wait for an absent chat user.
+    source: isWorkerMode() ? 'internal' : 'chat',
   });
 
   // --- Flow not found → 400 (OpenAI invalid_request) ---
@@ -412,7 +413,7 @@ async function processPersonaChatCompletion(
       continueDebug,
       userTurn,
       ...(data.appendMessages === true ? { resumeAsNewTurn: true } : {}),
-      source: 'chat',
+      source: isWorkerMode() ? 'internal' : 'chat',
     },
   }, { waitForCompletion: false });
 

@@ -25,6 +25,7 @@ import {
   snapshotFolderAccessActivity,
   snapshotFolderAccessSupported,
 } from './openSnapshotFolder';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('backend/services/snapshot/SnapshotStore');
 const REPOSITORY_ID = /^[a-f0-9]{16}$/i;
@@ -204,7 +205,10 @@ export class SnapshotStore {
     options?: { failIfBusy?: boolean },
   ): Promise<T> {
     try {
-      return await withSnapshotStoreLease(snapshotRoot(), operation, task, options);
+      const access = () => withSnapshotStoreLease(snapshotRoot(), operation, task, options);
+      return operation === 'read'
+        ? await access()
+        : await withWorkspaceMutation(access);
     } catch (error) {
       if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
       throw error;
@@ -221,7 +225,9 @@ export class SnapshotStore {
     operation: () => Promise<T>,
   ): Promise<T> {
     try {
-      return await withSnapshotMigrationLeases(roots, operation);
+      return await withWorkspaceMutation(
+        () => withSnapshotMigrationLeases(roots, operation),
+      );
     } catch (error) {
       if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
       throw error;

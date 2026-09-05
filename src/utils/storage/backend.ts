@@ -4,6 +4,7 @@ import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('utils/storage/backend');
 
@@ -139,46 +140,50 @@ async function renameWithRetry(tmpPath: string, filePath: string): Promise<void>
 }
 
 export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
-  const dirPath = path.dirname(filePath);
-  await fs.mkdir(dirPath, { recursive: true });
-  // Temp file lives next to the target (same filesystem) so rename is atomic.
-  const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
-  try {
-    await fs.writeFile(tmpPath, data);
-    await renameWithRetry(tmpPath, filePath);
-  } catch (error) {
-    // Best-effort cleanup so a failed write doesn't leave temp files behind.
-    try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
-    throw error;
-  }
+  await withWorkspaceMutation(async () => {
+    const dirPath = path.dirname(filePath);
+    await fs.mkdir(dirPath, { recursive: true });
+    // Temp file lives next to the target (same filesystem) so rename is atomic.
+    const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
+    try {
+      await fs.writeFile(tmpPath, data);
+      await renameWithRetry(tmpPath, filePath);
+    } catch (error) {
+      // Best-effort cleanup so a failed write doesn't leave temp files behind.
+      try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
+      throw error;
+    }
+  });
 }
 
 export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
   const filePath = getFilePath(key);
-  // Serialize against any in-flight write for the same key. We chain off the
-  // previous write (ignoring its outcome) so a failure doesn't wedge the key.
-  // The chain is keyed per workspace (#406): the same StorageKey in two
-  // workspaces is two different files and must not serialize against — or, far
-  // worse, be deduplicated with — each other.
-  const chainKey = workspaceCacheKey('item', key);
-  const previous = writeChains.get(chainKey) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior write's error is surfaced to its own caller */ })
-    .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
-  writeChains.set(chainKey, run);
+  await withWorkspaceMutation(async () => {
+    // Serialize against any in-flight write for the same key. We chain off the
+    // previous write (ignoring its outcome) so a failure doesn't wedge the key.
+    // The chain is keyed per workspace (#406): the same StorageKey in two
+    // workspaces is two different files and must not serialize against — or, far
+    // worse, be deduplicated with — each other.
+    const chainKey = workspaceCacheKey('item', key);
+    const previous = writeChains.get(chainKey) ?? Promise.resolve();
+    const run = previous
+      .catch(() => { /* prior write's error is surfaced to its own caller */ })
+      .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
+    writeChains.set(chainKey, run);
 
-  try {
-    await run;
-    log.verbose(`Successfully saved item to: ${filePath}`); // Changed to verbose
-  } catch (error) {
-    log.error(`Error saving item with key "${key}" to ${filePath}:`, error);
-    throw error; // Re-throw the error after logging
-  } finally {
-    // Drop the chain entry once it's the tail, so the map doesn't grow forever.
-    if (writeChains.get(chainKey) === run) {
-      writeChains.delete(chainKey);
+    try {
+      await run;
+      log.verbose(`Successfully saved item to: ${filePath}`); // Changed to verbose
+    } catch (error) {
+      log.error(`Error saving item with key "${key}" to ${filePath}:`, error);
+      throw error; // Re-throw the error after logging
+    } finally {
+      // Drop the chain entry once it's the tail, so the map doesn't grow forever.
+      if (writeChains.get(chainKey) === run) {
+        writeChains.delete(chainKey);
+      }
     }
-  }
+  });
 }
 
 export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> {
@@ -232,17 +237,19 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
 
 export async function clearItem(key: StorageKey): Promise<void> {
   const filePath = getFilePath(key);
-  try {
-    await fs.unlink(filePath);
-    log.verbose(`Successfully cleared item: ${filePath}`); // Added verbose log
-  } catch (error) {
-    // Ignore if file doesn't exist (ENOENT)
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        log.warn(`Error clearing item with key "${key}" at ${filePath}:`, error);
-    } else {
-        log.verbose(`Item with key "${key}" not found at ${filePath}, nothing to clear.`); // Verbose for non-existent file
+  await withWorkspaceMutation(async () => {
+    try {
+      await fs.unlink(filePath);
+      log.verbose(`Successfully cleared item: ${filePath}`); // Added verbose log
+    } catch (error) {
+      // Ignore if file doesn't exist (ENOENT)
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn(`Error clearing item with key "${key}" at ${filePath}:`, error);
+      } else {
+          log.verbose(`Item with key "${key}" not found at ${filePath}, nothing to clear.`); // Verbose for non-existent file
+      }
     }
-  }
+  });
 }
 
 // --- Per-item collections --------------------------------------------------
@@ -722,19 +729,21 @@ export async function deletePersonaCollectionShard(
 // neither can ever complete. Code already running inside a chain must call the
 // unchained form of whatever it needs.
 export function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
-  const scopedKey = workspaceCacheKey('chain', chainKey);
-  const previous = writeChains.get(scopedKey) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior task's error is surfaced to its own caller */ })
-    .then(task);
-  writeChains.set(scopedKey, run);
-  // Drop the entry once it's the tail so the map doesn't grow forever.
-  void run.catch(() => { /* handled by the caller awaiting `run` */ }).finally(() => {
-    if (writeChains.get(scopedKey) === run) {
-      writeChains.delete(scopedKey);
-    }
+  return withWorkspaceMutation(async () => {
+    const scopedKey = workspaceCacheKey('chain', chainKey);
+    const previous = writeChains.get(scopedKey) ?? Promise.resolve();
+    const run = previous
+      .catch(() => { /* prior task's error is surfaced to its own caller */ })
+      .then(task);
+    writeChains.set(scopedKey, run);
+    // Drop the entry once it's the tail so the map doesn't grow forever.
+    void run.catch(() => { /* handled by the caller awaiting `run` */ }).finally(() => {
+      if (writeChains.get(scopedKey) === run) {
+        writeChains.delete(scopedKey);
+      }
+    });
+    return run;
   });
-  return run;
 }
 
 export async function saveCollectionItem<T>(collection: string, id: string, value: T): Promise<void> {

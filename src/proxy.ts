@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest';
 import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
+import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
+import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -44,6 +46,20 @@ export function proxy(request: NextRequest): NextResponse {
 
   const { pathname } = request.nextUrl;
 
+  if (isWorkerMode()) {
+    // Private network membership and a caller-supplied Host header are not
+    // authentication. Every worker HTTP control/execution surface uses the
+    // dedicated bearer, including the normally public OpenAI and MCP routes.
+    const unauthorized = assertSnapshotBearer(request);
+    if (unauthorized) return new NextResponse(unauthorized.body, {
+      status: unauthorized.status, headers: unauthorized.headers,
+    });
+    return NextResponse.next();
+  }
+
+  // MCP routes retain their existing inline local guards outside worker mode.
+  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
+
   // The selected exposure mode is the outer boundary for every endpoint,
   // including the intentionally public webhook/OAuth/OpenAI surfaces.
   if (!isRequestHostAllowed(request.headers.get('host'))) {
@@ -76,9 +92,8 @@ export function proxy(request: NextRequest): NextResponse {
 /** Scope the proxy to the `/api` and `/v1` surfaces (see matcher-scope note
  * in `publicApiAllowlist.ts`). `/v1/:path*` is guarded too (#143), with only the
  * protocol-public OpenAI endpoints identified via `isPublicOpenAiPath`.
- * `/mcp-proxy/*`
- * and `/mcp-flows` are intentionally NOT matched here (they keep their inline
- * `isLocalRequest` guards). */
+ * MCP HTTP surfaces are also matched for worker bearer authentication; ordinary
+ * local installations retain their existing inline local-request guards. */
 export const config = {
-  matcher: ['/api/:path*', '/v1/:path*'],
+  matcher: ['/api/:path*', '/v1/:path*', '/mcp-proxy/:path*', '/mcp-flows/:path*'],
 };

@@ -12,6 +12,7 @@ import type { StorageKey } from '@/shared/types/storage';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -178,40 +179,44 @@ export async function latestSequence(conversationId: string): Promise<number> {
 }
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
-  const key = ck(conversationId);
-  const previous = appendChains.get(key) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior append's error was logged by its own caller */ })
-    .then(async () => {
-      await fs.mkdir(logDir(), { recursive: true });
-      await fs.appendFile(logFilePath(conversationId), lines);
-    });
-  appendChains.set(key, run);
-  return run.finally(() => {
-    if (appendChains.get(key) === run) {
-      appendChains.delete(key);
-    }
-  }) as Promise<void>;
+  return withWorkspaceMutation(async () => {
+    const key = ck(conversationId);
+    const previous = appendChains.get(key) ?? Promise.resolve();
+    const run = previous
+      .catch(() => { /* prior append's error was logged by its own caller */ })
+      .then(async () => {
+        await fs.mkdir(logDir(), { recursive: true });
+        await fs.appendFile(logFilePath(conversationId), lines);
+      });
+    appendChains.set(key, run);
+    return run.finally(() => {
+      if (appendChains.get(key) === run) {
+        appendChains.delete(key);
+      }
+    }) as Promise<void>;
+  });
 }
 
 // Truncating rewrite of a whole log, serialized through the SAME per-conversation
 // chain as appends so it never interleaves with an in-flight append. Used by the
 // transactional transcript-replacement path so it can roll back atomically.
 function chainWrite(conversationId: string, content: string): Promise<void> {
-  const key = ck(conversationId);
-  const previous = appendChains.get(key) ?? Promise.resolve();
-  const run = previous
-    .catch(() => { /* prior op's error was logged by its own caller */ })
-    .then(async () => {
-      await fs.mkdir(logDir(), { recursive: true });
-      await fs.writeFile(logFilePath(conversationId), content);
-    });
-  appendChains.set(key, run);
-  return run.finally(() => {
-    if (appendChains.get(key) === run) {
-      appendChains.delete(key);
-    }
-  }) as Promise<void>;
+  return withWorkspaceMutation(async () => {
+    const key = ck(conversationId);
+    const previous = appendChains.get(key) ?? Promise.resolve();
+    const run = previous
+      .catch(() => { /* prior op's error was logged by its own caller */ })
+      .then(async () => {
+        await fs.mkdir(logDir(), { recursive: true });
+        await fs.writeFile(logFilePath(conversationId), content);
+      });
+    appendChains.set(key, run);
+    return run.finally(() => {
+      if (appendChains.get(key) === run) {
+        appendChains.delete(key);
+      }
+    }) as Promise<void>;
+  });
 }
 
 /**
@@ -430,13 +435,23 @@ export async function readConversationLog(conversationId: string): Promise<Execu
 /** Remove a conversation's log file (conversation deletion). Idempotent. */
 export async function deleteConversationLog(conversationId: string): Promise<void> {
   if (!SAFE_ID.test(conversationId)) return;
-  try {
-    await fs.unlink(logFilePath(conversationId));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn(`Error deleting conversation log ${conversationId}:`, error);
+  await withWorkspaceMutation(async () => {
+    const key = ck(conversationId);
+    const previous = appendChains.get(key) ?? Promise.resolve();
+    const run = previous
+      .catch(() => { /* prior operation's error was logged by its own caller */ })
+      .then(() => fs.unlink(logFilePath(conversationId)));
+    appendChains.set(key, run);
+    try {
+      await run;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.warn(`Error deleting conversation log ${conversationId}:`, error);
+      }
+    } finally {
+      if (appendChains.get(key) === run) appendChains.delete(key);
     }
-  }
+  });
 }
 
 /**

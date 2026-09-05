@@ -38,6 +38,7 @@ jest.mock('@/backend/services/mcp', () => ({
 
 import {
   installGithubServer,
+  prepareGithubServerRuntime,
   parseGithubRepositoryReference,
 } from '@/backend/services/mcp/githubInstall';
 
@@ -122,6 +123,17 @@ describe('parseGithubRepositoryReference', () => {
 });
 
 describe('installGithubServer', () => {
+  it('prepares a target runtime without saving or connecting a partially restored server', async () => {
+    const result = await prepareGithubServerRuntime({
+      name: 'restored-server', repositoryUrl: 'https://github.com/acme/server.git', env: {},
+    });
+    expect(result.installed).toBe(true);
+    expect(result.config?.rootPath).toContain(mockWorkspaceDataDir);
+    expect(result.config?.name).toBe('restored-server');
+    expect(spawnMock).toHaveBeenCalled();
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
+
   it('runs reviewed commands portably in the requested ref/subdirectory and saves secret metadata', async () => {
     const result = await installGithubServer({
       name: 'server',

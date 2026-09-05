@@ -916,8 +916,19 @@ export function resolveStdioLaunch(
   }
   log.verbose(
     "Transformed environment variables",
-    JSON.stringify(transformedEnv),
+    process.env.FLUJO_WORKER_MODE === '1'
+      ? JSON.stringify(Object.keys(transformedEnv))
+      : JSON.stringify(transformedEnv),
   );
+
+  // Runtime-only credentials for the bundled FLUJO HTTP client. Do not put
+  // these in persisted server configs, archive metadata, or launch logs.
+  if (process.env.FLUJO_WORKER_MODE === '1' && shippedDescriptor?.defaultName === 'flujo') {
+    transformedEnv.FLUJO_WORKER_MODE = '1';
+    if (process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN) {
+      transformedEnv.FLUJO_SNAPSHOT_CONTROL_TOKEN = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    }
+  }
 
   return { command, args, env: transformedEnv, cwd };
 }

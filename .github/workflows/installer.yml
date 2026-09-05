@@ -6,11 +6,14 @@ on:
   pull_request:
     paths:
       - '.github/workflows/installer.yml'
+      - 'README.md'
       - 'installer/**'
       - 'scripts/install.ps1'
+      - 'scripts/install.sh'
       - 'scripts/installer-functions.ps1'
       - 'scripts/uninstall.ps1'
       - 'tests/installer.Tests.ps1'
+      - 'tests/installer-unix.test.sh'
       - 'package.json'
       - 'package-lock.json'
       - 'bin/flujo.mjs'
@@ -48,6 +51,7 @@ jobs:
 
       - name: Exercise MCP process boundaries
         run: |
+          node --test mcp-servers/browser/scripts/install-browser.test.mjs
           npm run test:mcp-process-boundary
           npm run validate:mcp-release
 

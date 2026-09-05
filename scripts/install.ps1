@@ -25,7 +25,10 @@
     Parameters only take effect when the script is run as a file. When piped
     through `iex` the script falls back to interactive prompts (or the
     FLUJO_DIR / FLUJO_START / FLUJO_BRANCH / FLUJO_SHORTCUT / FLUJO_OLLAMA
-    environment variables if they are set).
+    environment variables if they are set). Corporate networks may additionally
+    set FLUJO_HTTP_PROXY / FLUJO_HTTPS_PROXY / FLUJO_NO_PROXY,
+    FLUJO_EXTRA_CA_CERTS, FLUJO_PLAYWRIGHT_DOWNLOAD_HOST, and
+    FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT. These are process-scoped.
 #>
 [CmdletBinding()]
 param(
@@ -63,6 +66,125 @@ try {
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundColor Green }
 function Write-Warn2([string]$Message) { Write-Host "    $Message" -ForegroundColor Yellow }
+
+$installerDiagnosticRoot = if ($env:FLUJO_INSTALL_LOG) {
+    Split-Path -Parent $env:FLUJO_INSTALL_LOG
+} elseif ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA 'FLUJO-cli'
+} else {
+    Join-Path ([IO.Path]::GetTempPath()) 'FLUJO-cli'
+}
+if ([string]::IsNullOrWhiteSpace($installerDiagnosticRoot)) {
+    $installerDiagnosticRoot = Join-Path ([IO.Path]::GetTempPath()) 'FLUJO-cli'
+}
+New-Item -ItemType Directory -Force -Path $installerDiagnosticRoot | Out-Null
+$script:InstallerLogPath = if ($env:FLUJO_INSTALL_LOG) {
+    $env:FLUJO_INSTALL_LOG
+} else {
+    Join-Path $installerDiagnosticRoot 'install.log'
+}
+$script:InstallerStagePath = if ($env:FLUJO_INSTALL_STAGE_FILE) {
+    $env:FLUJO_INSTALL_STAGE_FILE
+} else {
+    Join-Path $installerDiagnosticRoot 'install-stage.txt'
+}
+$script:InstallerResultPath = Join-Path $installerDiagnosticRoot 'browser-install-result.json'
+$script:InstallerSensitiveValues = @(
+    $env:FLUJO_HTTP_PROXY,
+    $env:FLUJO_HTTPS_PROXY,
+    $env:HTTP_PROXY,
+    $env:HTTPS_PROXY,
+    $env:ALL_PROXY,
+    $env:http_proxy,
+    $env:https_proxy,
+    $env:all_proxy,
+    $env:FLUJO_EXTRA_CA_CERTS,
+    $env:NODE_EXTRA_CA_CERTS,
+    $env:npm_config_cafile
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+Set-Content -LiteralPath $script:InstallerLogPath -Value '' -Encoding UTF8
+
+function Write-InstallerStage {
+    param(
+        [Parameter(Mandatory)] [string]$Name,
+        [ValidateSet('started', 'completed', 'failed')] [string]$State = 'started',
+        [int]$ExitCode = 0
+    )
+
+    Set-Content -LiteralPath $script:InstallerStagePath -Value $Name -Encoding ASCII
+    $marker = "[FLUJO_INSTALL_STAGE] name=$Name state=$State exit=$ExitCode"
+    Add-Content -LiteralPath $script:InstallerLogPath -Value $marker -Encoding UTF8
+    if ($State -eq 'started') { Write-Step $Name } else { Write-Host "    $marker" }
+}
+
+function Invoke-InstallerCommand {
+    param(
+        [Parameter(Mandatory)] [string]$Stage,
+        [Parameter(Mandatory)] [string]$Command,
+        [string[]]$Arguments = @(),
+        [hashtable]$Environment = @{}
+    )
+
+    Write-InstallerStage -Name $Stage
+    $saved = @{}
+    foreach ($name in $Environment.Keys) {
+        $saved[$name] = [PSCustomObject]@{
+            Exists = Test-Path -LiteralPath "Env:\$name"
+            Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        Set-Item -LiteralPath "Env:\$name" -Value ([string]$Environment[$name])
+    }
+    $savedTls = [PSCustomObject]@{
+        Exists = Test-Path -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED'
+        Value = $env:NODE_TLS_REJECT_UNAUTHORIZED
+    }
+    Remove-Item -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED' -ErrorAction SilentlyContinue
+
+    $exitCode = 1
+    $failure = $null
+    try {
+        & $Command @Arguments 2>&1 | ForEach-Object {
+            $safeLine = Protect-InstallerDiagnostic -Text ([string]$_) -SensitiveValues $script:InstallerSensitiveValues
+            Write-Host $safeLine
+            Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8
+        }
+        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    } catch {
+        $failure = $_
+        $safeLine = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+        Add-Content -LiteralPath $script:InstallerLogPath -Value $safeLine -Encoding UTF8
+    } finally {
+        foreach ($name in $Environment.Keys) {
+            if ($saved[$name].Exists) {
+                Set-Item -LiteralPath "Env:\$name" -Value $saved[$name].Value
+            } else {
+                Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+            }
+        }
+        if ($savedTls.Exists) {
+            Set-Item -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED' -Value $savedTls.Value
+        }
+    }
+
+    if ($failure -or $exitCode -ne 0) {
+        Write-InstallerStage -Name $Stage -State failed -ExitCode $exitCode
+        $detail = if ($failure) {
+            Protect-InstallerDiagnostic -Text $failure.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+        } else {
+            "exit code $exitCode"
+        }
+        throw "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath"
+    }
+    Write-InstallerStage -Name $Stage -State completed -ExitCode 0
+}
+
+function Test-NodeSystemCaSupport {
+    try {
+        return ((& node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')" 2>$null) -eq 'true')
+    } catch {
+        return $false
+    }
+}
 
 function Test-Command([string]$Name) {
     return Test-CommandAvailable -CommandName $Name
@@ -139,12 +261,27 @@ function Install-Prereq {
 # OAuth token from `claude setup-token`. npm is available because Node.js was
 # installed above. Returns a record folded into the uninstall manifest.
 function Install-ClaudeCli {
+    param([hashtable]$Environment = @{})
+
     $preexisting = Test-Command 'claude'
     if ($preexisting) {
         Write-Ok "Claude CLI already installed ($((Get-Command claude).Source))"
     } else {
         Write-Step "Installing Claude Code CLI via npm (@anthropic-ai/claude-code)"
         Write-Warn2 "(Only needed for the 'Claude Subscription' model provider; safe to skip otherwise.)"
+        $saved = @{}
+        foreach ($name in $Environment.Keys) {
+            $saved[$name] = [PSCustomObject]@{
+                Exists = Test-Path -LiteralPath "Env:\$name"
+                Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+            Set-Item -LiteralPath "Env:\$name" -Value ([string]$Environment[$name])
+        }
+        $savedTls = [PSCustomObject]@{
+            Exists = Test-Path -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED'
+            Value = $env:NODE_TLS_REJECT_UNAUTHORIZED
+        }
+        Remove-Item -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED' -ErrorAction SilentlyContinue
         try {
             npm install -g '@anthropic-ai/claude-code' | Out-Host
             Update-SessionEnvironment
@@ -154,8 +291,22 @@ function Install-ClaudeCli {
                 Write-Warn2 "Claude CLI installed but 'claude' is not yet on PATH. Reopen the terminal."
             }
         } catch {
-            Write-Warn2 "Could not install the Claude CLI: $($_.Exception.Message)"
+            $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+            Write-Warn2 "Could not install the Claude CLI: $safeError"
             Write-Warn2 "Install it later (only for Claude Subscription) with: npm install -g @anthropic-ai/claude-code"
+        } finally {
+            foreach ($name in $Environment.Keys) {
+                if ($saved[$name].Exists) {
+                    Set-Item -LiteralPath "Env:\$name" -Value $saved[$name].Value
+                } else {
+                    Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+                }
+            }
+            if ($savedTls.Exists) {
+                Set-Item -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED' -Value $savedTls.Value
+            } else {
+                Remove-Item -LiteralPath 'Env:\NODE_TLS_REJECT_UNAUTHORIZED' -ErrorAction SilentlyContinue
+            }
         }
     }
     return [PSCustomObject]@{
@@ -318,9 +469,11 @@ Write-Host "FLUJO Installer" -ForegroundColor Magenta
 Write-Host "===============" -ForegroundColor Magenta
 
 # winget is required to bootstrap the prerequisites.
+Write-InstallerStage -Name 'bootstrap'
 if (-not (Test-WingetAvailable)) {
     throw "winget (App Installer) was not found. Install 'App Installer' from the Microsoft Store, then re-run this script."
 }
+Write-InstallerStage -Name 'bootstrap' -State completed -ExitCode 0
 
 # ---------------------------------------------------------------------------
 # 1. Gather all the user's choices up front, then run the install in one go.
@@ -348,6 +501,24 @@ if (-not $installIntent.CanProceed) {
     throw "Cannot install into '$InstallDir': $($installIntent.Reason). Choose a new folder or an existing FLUJO Git checkout."
 }
 Write-Ok "Installing into: $InstallDir ($($installIntent.Action.ToLowerInvariant()))"
+
+Write-InstallerStage -Name 'preflight'
+try {
+    $installerEnvironment = Get-FlujoInstallerEnvironment -SupportsSystemCa $false
+} catch {
+    $safeError = Protect-InstallerDiagnostic -Text $_.Exception.Message -SensitiveValues $script:InstallerSensitiveValues
+    Add-Content -LiteralPath $script:InstallerLogPath -Value $safeError -Encoding UTF8
+    Write-InstallerStage -Name 'preflight' -State failed -ExitCode 1
+    throw $safeError
+}
+if (-not [string]::IsNullOrWhiteSpace($env:NODE_TLS_REJECT_UNAUTHORIZED)) {
+    Write-Warn2 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED is set. The installer will ignore it; configure a trusted CA instead of disabling TLS verification.'
+}
+$proxyConfigured = $installerEnvironment.ContainsKey('HTTP_PROXY') -or $installerEnvironment.ContainsKey('HTTPS_PROXY')
+$customCaConfigured = $installerEnvironment.ContainsKey('NODE_EXTRA_CA_CERTS')
+Write-Ok "Corporate network preflight: proxy configured=$proxyConfigured; custom CA validated=$customCaConfigured"
+Write-Ok "Sanitized installer log: $script:InstallerLogPath"
+Write-InstallerStage -Name 'preflight' -State completed -ExitCode 0
 
 # Decide whether to create a Desktop shortcut (defaults to yes).
 if ($env:FLUJO_SHORTCUT -in @('0', 'false', 'no')) {
@@ -383,6 +554,7 @@ if ($env:FLUJO_OLLAMA -in @('1', 'true', 'yes')) {
 # ---------------------------------------------------------------------------
 # 1. Validate Node.js version BEFORE any side effects (execution policy, etc.)
 # ---------------------------------------------------------------------------
+Write-InstallerStage -Name 'prerequisites'
 Write-Step "Validating Node.js version (requires >= 22.0.0)"
 $nodeResult = Test-NodeVersion -MinMajor 22 -MinMinor 0
 switch ($nodeResult.Status) {
@@ -437,7 +609,7 @@ Update-SessionEnvironment
 
 # Claude Code CLI (npm global) — needed only by the optional "Claude Subscription"
 # model provider. Installed after Node/npm are present.
-$claudeCliResult = Install-ClaudeCli
+$claudeCliResult = Install-ClaudeCli -Environment $installerEnvironment
 
 # Ollama (optional) — the local-model runtime. Installed only when the user opted
 # in above. Uses the same winget + manifest path as the core prerequisites (its
@@ -448,26 +620,30 @@ if ($installOllama) {
     $prereqResults += Install-Prereq -CommandName 'ollama' -WingetId 'Ollama.Ollama' -DisplayName 'Ollama'
     Update-SessionEnvironment
 }
+Write-InstallerStage -Name 'prerequisites' -State completed -ExitCode 0
+
+$supportsSystemCa = Test-NodeSystemCaSupport
+$installerEnvironment = Get-FlujoInstallerEnvironment -SupportsSystemCa $supportsSystemCa
+$npmVersion = (& npm --version 2>$null)
+Write-Ok "Network clients: Node.js $($nodeResult.Version); npm $npmVersion; Node system CA support=$supportsSystemCa"
 
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
 if (Test-Path (Join-Path $InstallDir '.git')) {
-    Write-Step "Existing FLUJO clone found - updating ($Branch)"
     # Older FLUJO installers used `npm install`, which could rewrite
     # package-lock.json and leave the tree dirty. This is an install/deploy copy,
     # not a dev checkout, so discarding tracked-file drift is safe; untracked
     # node_modules/.next/user data are preserved by reset --hard.
-    git -C $InstallDir fetch origin $Branch
-    git -C $InstallDir checkout $Branch
-    git -C $InstallDir reset --hard "origin/$Branch"
+    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'fetch', 'origin', $Branch) -Environment $installerEnvironment
+    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'checkout', $Branch) -Environment $installerEnvironment
+    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'reset', '--hard', "origin/$Branch") -Environment $installerEnvironment
 } else {
-    Write-Step "Cloning FLUJO into $InstallDir"
     $parent = Split-Path -Parent $InstallDir
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
-    git clone -b $Branch $RepoUrl $InstallDir
+    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('clone', '-b', $Branch, $RepoUrl, $InstallDir) -Environment $installerEnvironment
 }
 
 # ---------------------------------------------------------------------------
@@ -475,20 +651,22 @@ if (Test-Path (Join-Path $InstallDir '.git')) {
 # ---------------------------------------------------------------------------
 Push-Location $InstallDir
 try {
-    Write-Step "Installing npm dependencies (npm ci)"
-    # --include=dev: `next build` needs typescript/webpack/postcss (all
-    # devDependencies), which npm prunes when NODE_ENV=production.
-    # `npm ci` honors the committed lockfile exactly and never rewrites it.
-    npm ci --include=dev
+    # Keep every dependency lifecycle enabled, but defer only the browser
+    # workspace's managed download so it can be diagnosed and retried separately.
+    $dependencyEnvironment = $installerEnvironment.Clone()
+    $dependencyEnvironment['FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'] = '1'
+    Invoke-InstallerCommand -Stage 'npm-dependencies' -Command 'npm' -Arguments @('ci', '--include=dev') -Environment $dependencyEnvironment
 
-    Write-Step "Building FLUJO (npm run build)"
-    npm run build
+    $browserEnvironment = $installerEnvironment.Clone()
+    $browserEnvironment['FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'] = '0'
+    $browserEnvironment['FLUJO_INSTALL_RESULT_FILE'] = $script:InstallerResultPath
+    Invoke-InstallerCommand -Stage 'patchright-chromium' -Command 'npm' -Arguments @('run', 'install', '--workspace=@mario.andreschak/mcp-browser') -Environment $browserEnvironment
 
-    Write-Step "Validating bundled offline MCP packages"
-    npm run validate:mcp-release
-
+    Invoke-InstallerCommand -Stage 'build' -Command 'npm' -Arguments @('run', 'build') -Environment $installerEnvironment
+    Invoke-InstallerCommand -Stage 'validation' -Command 'npm' -Arguments @('run', 'validate:mcp-release') -Environment $installerEnvironment
     Write-Ok "Build complete."
 
+    Write-InstallerStage -Name 'registration'
     # Register the global 'flujo' command (works from any folder).
     $flujoLauncher = Register-FlujoCommand -AppDir $InstallDir
     if ($makeShortcut) {
@@ -499,6 +677,7 @@ try {
     Write-InstallManifest -AppDir $InstallDir -Prereqs $prereqResults `
         -DesktopShortcut $makeShortcut -ExecutionPolicyChanged $policyChanged `
         -ClaudeCli $claudeCliResult
+    Write-InstallerStage -Name 'registration' -State completed -ExitCode 0
 
     if ($startAfter) {
         Write-Step "Starting FLUJO (npm start) - open http://localhost:4200"
