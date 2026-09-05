@@ -1,11 +1,75 @@
+import {
+  claimNextPersonaActivity,
+  completePersonaActivity,
+  routePersonaMailboxItem,
+} from '@/backend/services/enduringAgents';
+import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
+import { listPersonaActivities, listPersonaMailboxItems } from '@/backend/services/enduringAgents/store';
+import { runWithWorkspace } from '@/utils/workspace';
+
+import { createPersonaFromRole } from '../fixtures/personaFactory';
 import { PERSONA_INGRESS_MATRIX } from '../personaIngressMatrix';
-import { exerciseHardCrashProcessBoundary, runPersonaSoak } from './soakHarness';
+import { exerciseHardCrashProcessBoundary, reconcileWorkload, runPersonaSoak } from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
 
 jest.setTimeout(165 * 60 * 1_000);
 
 describe('deterministic Persona soak harness', () => {
+  it('reconciles the actual authored Core revision while rejecting a stale Role revision', async () => {
+    await runWithWorkspace(`soak-core-revision-${process.pid}`, async () => {
+      const bundle = await createPersonaFromRole({ name: 'Soak Core identity regression' });
+      const primary = bundle.behaviorBindings.find(binding => binding.slotKey === 'primary');
+      if (!primary) throw new Error('Expected a Primary binding.');
+      const core = await resolvePersonaCoreRevision(bundle.persona.id);
+      // The test Role deliberately authors a Core distinct from its Primary
+      // template, reproducing the preexisting smoke harness assumption.
+      expect(core.id).not.toBe(primary.activeRevisionId);
+      expect(core.behaviorId).toBe(primary.id);
+      const workload = generatePersonaSoakWorkload({ days: 1, activitiesPerDay: 1, seed: 459 });
+      const input = workload[0];
+      const sourceId = `soak-workload-${input.id}`;
+      await routePersonaMailboxItem({
+        personaId: bundle.persona.id,
+        idempotencyKey: input.id,
+        kind: input.ingress.mailboxKind,
+        source: { kind: input.ingress.sourceKind, sourceId },
+        summary: 'Verify the resolved authored Core identity.',
+      });
+      const claim = await claimNextPersonaActivity({ personaId: bundle.persona.id, ttlMs: 30_000 });
+      if (!claim) throw new Error('Expected the generated Activity to be claimed.');
+      expect(claim.activity.behaviorRevisionId).toBe(core.id);
+      await completePersonaActivity({
+        workspaceId: claim.lease.workspaceId,
+        personaId: claim.activity.personaId,
+        activityId: claim.activity.id,
+        leaseId: claim.lease.id,
+        holderId: claim.lease.holderId,
+        fencingToken: claim.lease.fencingToken,
+        status: 'completed',
+      });
+      const observation = {
+        workload,
+        personaId: bundle.persona.id,
+        behaviorBindingId: primary.id,
+        behaviorRevisionId: core.id,
+        activities: await listPersonaActivities(bundle.persona.id),
+        mailboxItems: await listPersonaMailboxItems(bundle.persona.id),
+      };
+      expect(reconcileWorkload(observation)).toMatchObject({
+        attempted: 1, accepted: 1, completed: 1, unresolved: 0,
+        identityMismatchSourceIds: [], mailboxLinkMismatchSourceIds: [],
+      });
+      expect(reconcileWorkload({ ...observation, behaviorRevisionId: primary.activeRevisionId })).toMatchObject({
+        completed: 0, unresolved: 1, identityMismatchSourceIds: [sourceId],
+      });
+      expect(reconcileWorkload({
+        ...observation,
+        mailboxItems: observation.mailboxItems.map(item => ({ ...item, claimedActivityId: 'unrelated_activity' })),
+      })).toMatchObject({ completed: 0, unresolved: 1, mailboxLinkMismatchSourceIds: [sourceId] });
+    });
+  });
+
   it('generates byte-identical seeded schedules with weekly ingress coverage', () => {
     const options = { days: 28, activitiesPerDay: 20, seed: 459 };
     const first = generatePersonaSoakWorkload(options);

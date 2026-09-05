@@ -184,8 +184,15 @@ describe('Persona runtime event log incremental state (#454)', () => {
       // Same byte length, different content: only (dev, ino) can catch this.
       const replaced = original.replace('"seq":1', '"seq":7');
       expect(Buffer.byteLength(replaced, 'utf8')).toBe(Buffer.byteLength(original, 'utf8'));
+      // Allocate the replacement before unlinking the original. An immediate
+      // unlink/write can reuse the same inode and never exercise replacement.
+      const replacementFile = `${file}.replacement`;
+      const originalIdentity = await fs.stat(file, { bigint: true });
+      await fs.writeFile(replacementFile, replaced, 'utf8');
+      const replacementIdentity = await fs.stat(replacementFile, { bigint: true });
+      expect([replacementIdentity.dev, replacementIdentity.ino]).not.toEqual([originalIdentity.dev, originalIdentity.ino]);
       await fs.unlink(file);
-      await fs.writeFile(file, replaced, 'utf8');
+      await fs.rename(replacementFile, file);
 
       _resetPersonaRuntimeEventLogStatsForTests();
       const next = await appendPersonaRuntimeEvent(personaId, completedEvent(9));

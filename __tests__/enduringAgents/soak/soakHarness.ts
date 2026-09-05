@@ -44,6 +44,7 @@ import {
   savePersonaActivity,
 } from '@/backend/services/enduringAgents/store';
 import { behaviorOutcomeMetricId } from '@/backend/services/enduringAgents/behaviorOutcome';
+import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
 import {
   compactPersonaActivities,
   compactPersonaFlowDispatches,
@@ -392,7 +393,7 @@ async function executeFaultEvidence(input: {
   }
 }
 
-function reconcileWorkload(input: {
+export function reconcileWorkload(input: {
   workload: SoakActivity[];
   personaId: string;
   behaviorBindingId: string;
@@ -1053,8 +1054,15 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       const personaId = bundle.persona.id;
       const primaryBinding = bundle.behaviorBindings.find(candidate => candidate.slotKey === 'primary');
       if (!primaryBinding) throw new Error('Runtime-backed soak Persona has no Primary binding.');
+      // Factory Role snapshots can differ from the Persona's authored Core.
+      // Resolve the same immutable revision that production admission pins,
+      // before fixing the expected identity for every generated Activity.
+      const coreRevision = await resolvePersonaCoreRevision(personaId);
+      if (coreRevision.behaviorId !== primaryBinding.id) {
+        throw new Error('Runtime-backed soak Core does not belong to its Primary binding.');
+      }
       const behaviorBindingId = primaryBinding.id;
-      const behaviorRevisionId = primaryBinding.activeRevisionId;
+      const behaviorRevisionId = coreRevision.id;
       debug(`created Persona ${personaId}`);
       const groundTruth = await createRecallFixtures(personaId, clock.now());
       const stubModel = createSeededStubModel(options.seed, [{

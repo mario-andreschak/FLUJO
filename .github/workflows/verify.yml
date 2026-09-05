@@ -113,6 +113,9 @@ jobs:
           # Hosted runners are slower than a developer laptop; the harness
           # honours this override instead of a hardcoded budget.
           FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
+          # Preserve the exact reconciliation fields when the smoke gate fails.
+          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
+          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-isolated-smoke
         run: npm run test:isolated
       - name: Verify the published test baseline
         run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
@@ -122,4 +125,11 @@ jobs:
         with:
           name: jest-results-isolated
           path: jest-results-isolated.json
+          if-no-files-found: warn
+      - name: Upload Persona smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: soak-smoke-artifacts/
           if-no-files-found: warn
