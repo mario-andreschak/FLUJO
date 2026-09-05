@@ -155,6 +155,18 @@ describe('deny-by-default coverage guard', () => {
       // Installation-wide namespace discovery contains no workspace content and
       // must remain reachable so the locked shell can validate its active tab.
       'src/app/api/workspaces/route.ts',
+      // Snapshot control has a separate strict-loopback + dedicated bearer
+      // boundary. Status/abort/finalize must remain usable during encryption
+      // transitions; USER snapshot capture itself refuses an unavailable DEK.
+      'src/app/api/snapshot/abort/route.ts',
+      'src/app/api/snapshot/begin/route.ts',
+      'src/app/api/snapshot/download/route.ts',
+      'src/app/api/snapshot/finalize/route.ts',
+      'src/app/api/snapshot/info/route.ts',
+      'src/app/api/snapshot/status/route.ts',
+      // Bearer-protected bootstrap health must report locked/error state even
+      // before workspace restoration or encryption initialization succeeds.
+      'src/app/api/worker/status/route.ts',
       // Local-models (Ollama) onboarding: capability probe, model pull, and model
       // suggestion are secret-free and must work on FIRST LAUNCH, before encryption
       // is even configured. Registering the pulled model (POST /api/model) is what
