@@ -4,6 +4,8 @@ import {
   createSoakCriterion,
   soakEnforcementFailures,
   stableJsonStringify,
+  criterionRequired,
+  SOAK_UNDEFINED_CONTRACT_IDS,
   validateSoakCriterion,
   validateSoakEvidence,
   type SoakCriterionId,
@@ -83,6 +85,29 @@ function document(): SoakEvidenceDocument {
 }
 
 describe('Persona soak evidence schema', () => {
+  it('separates a passing infrastructure gate from unresolved release contracts without hiding them', () => {
+    const evidence = document();
+    evidence.runIdentity = { ...identity(), mode: 'infrastructure', days: 28, activitiesPerDay: 20, learningEnabled: true };
+    evidence.criteria = evidence.criteria.map(record => ({
+      ...record,
+      required: criterionRequired(record.id, 'infrastructure'),
+      ...(SOAK_UNDEFINED_CONTRACT_IDS.includes(record.id) ? { status: 'not_evaluated' as const, failureReason: 'Numeric release contract remains unresolved.' } : {}),
+    }));
+    expect(soakEnforcementFailures(evidence)).toEqual([]);
+    expect(evidence.criteria.filter(record => record.status === 'not_evaluated')).toHaveLength(3);
+    evidence.runIdentity = { ...evidence.runIdentity, mode: 'acceptance', authoritative: true, commitSha: 'a'.repeat(40) };
+    evidence.criteria = evidence.criteria.map(record => ({ ...record, required: true }));
+    expect(soakEnforcementFailures(evidence).filter(message => message.includes('required criterion'))).toHaveLength(3);
+  });
+
+  it('requires full workload and denies authoritative status to infrastructure reports', () => {
+    const evidence = document();
+    evidence.runIdentity = { ...identity(), mode: 'infrastructure', authoritative: true };
+    expect(validateSoakEvidence(evidence)).toEqual(expect.arrayContaining([
+      expect.stringContaining('only acceptance'), expect.stringContaining('full 28x20'),
+    ]));
+  });
+
   it.each(['passed', 'failed', 'not_evaluated'] as const)(
     'serializes and validates the %s criterion state',
     (status) => {

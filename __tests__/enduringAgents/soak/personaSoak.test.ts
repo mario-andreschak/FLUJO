@@ -34,7 +34,7 @@ describe('deterministic Persona soak harness', () => {
       ...(process.env.PERSONA_SOAK_RUN_ID
         ? { runId: process.env.PERSONA_SOAK_RUN_ID }
         : {}),
-      runMode: quick ? 'smoke' : 'acceptance',
+      runMode: quick ? 'smoke' : process.env.PERSONA_SOAK_MODE === 'infrastructure' ? 'infrastructure' : 'acceptance',
     });
     expect(summary.activities).toBe(days * activitiesPerDay);
     expect(summary.splitBrainCount).toBe(0);

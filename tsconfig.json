@@ -39,6 +39,7 @@
     "node_modules",
     ".next/storage/**/*",
     "artifacts/**/*",
+    "goal-acceptance-artifacts/**/*",
     "bash-utils/**/*",
     "browser-profile/**/*",
     "db/**/*",

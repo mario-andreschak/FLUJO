@@ -666,6 +666,10 @@ export interface PersonaActivityOutcome {
   blockerKind?: PersonaActivityBlockerKind;
   summary?: string;
   nextAction?: string;
+  /** True only when the owning ongoing goal's success criteria were verified. */
+  goalAchieved?: boolean;
+  /** A bounded requested delay before another autonomous attempt. */
+  retryAfterMs?: number;
   decisionSource: PersonaActivityOutcomeDecisionSource;
   evidenceRefs: MemorySourceRef[];
   decidedAt: number;
@@ -714,6 +718,8 @@ export interface PersonaActivity {
   resourceRefs?: string[];
   /** Product/learning meaning; runtime status remains authoritative for execution. */
   outcome?: PersonaActivityOutcome;
+  /** Fenced model report awaiting terminal runtime validation. */
+  reportedOutcome?: PersonaActivityOutcome;
   /** Opaque link to the private dispatch outcome retained for compatibility. */
   outcomeRef?: string;
   error?: string;
@@ -824,17 +830,59 @@ export type PersonaWorkItemStatus = (typeof PERSONA_WORK_ITEM_STATUSES)[number];
 export const PERSONA_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export type PersonaPriority = (typeof PERSONA_PRIORITIES)[number];
 
+export interface PersonaGoalConfig {
+  successCriteria: string;
+  /** Omitted legacy goals retain completion on verified success criteria. */
+  completionPolicy?: 'until_stopped' | 'success_criteria';
+  continuationIntervalMs?: number;
+  maxConsecutiveFailures?: number;
+  maxRoundsPerDay?: number;
+  maxRounds?: number;
+}
+
+export interface PersonaGoalState extends PersonaGoalConfig {
+  continuationIntervalMs: number;
+  maxConsecutiveFailures: number;
+  maxRoundsPerDay: number;
+  state: 'active' | 'paused' | 'needs_input' | 'completed' | 'stopped';
+  nextRunAt?: number;
+  rounds: number;
+  consecutiveFailures: number;
+  dailyWindowStartedAt: number;
+  roundsInWindow: number;
+  recoveryCount?: number;
+  recoveryNotes?: string[];
+  lastProgressAt?: number;
+  progressSummary?: string;
+  interventionReason?: string;
+  lastActivityId?: string;
+  /** Frozen admission intent survives a crash before or after mailbox admission. */
+  pendingTaskId?: string;
+  pendingAttemptKey?: string;
+  pendingPrompt?: string;
+  pendingPriority?: PersonaPriority;
+  pendingDispatchId?: string;
+}
+
 export interface PersonaWorkItem {
   schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
   id: string;
   personaId: string;
   title: string;
   description?: string;
+  parentGoalId?: string;
+  goal?: PersonaGoalState;
   status: PersonaWorkItemStatus;
   priority: PersonaPriority;
   dependencyIds: string[];
   nextAction?: string;
   deadline?: number;
+  /** Runtime-owned retry wake for a recoverably blocked child task. */
+  deferredUntil?: number;
+  /** Exact round revoked by an owner child Pause/Stop; later attempts remain eligible. */
+  revokedGoalDispatchId?: string;
+  /** Runtime-owned child lifecycle intent, cleared only by an explicit owner retry. */
+  goalControlState?: 'paused' | 'stopped';
   createdByActivityId?: string;
   behaviorRevisionId?: string;
   sourceRefs?: MemorySourceRef[];
@@ -848,6 +896,8 @@ export interface CreatePersonaWorkItemInput {
   personaId: string;
   title: string;
   description?: string;
+  parentGoalId?: string;
+  goal?: PersonaGoalConfig;
   priority?: PersonaPriority;
   dependencyIds?: string[];
   nextAction?: string;
@@ -864,6 +914,7 @@ export interface UpdatePersonaWorkItemInput {
   dependencyIds?: string[];
   nextAction?: string | null;
   deadline?: number | null;
+  goal?: Partial<Omit<PersonaGoalConfig, 'maxRounds'>> & { maxRounds?: number | null };
   /** Optional optimistic-concurrency guard for REST and tool callers. */
   expectedUpdatedAt?: number;
 }

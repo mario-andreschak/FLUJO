@@ -50,7 +50,7 @@ import {
 } from '@mui/material';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
@@ -59,6 +59,8 @@ import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import PersonaCreationWizard from './PersonaCreationWizard';
+import PersonaGoalDialog from './PersonaGoalDialog';
+import PersonaGoalCard from './PersonaGoalCard';
 import PersonaAppToolsDialog from './PersonaAppToolsDialog';
 import PersonaDetailShell from './PersonaDetailShell';
 import PersonaFlowsArea from './PersonaFlowsArea';
@@ -136,8 +138,10 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const detailRequestSequence = useRef(0);
 
   const load = useCallback(async () => {
+    const sequence = ++detailRequestSequence.current;
     if (!initialPersonaId) {
       setLoading(false);
       setError(null);
@@ -146,7 +150,8 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
     setLoading(true);
     setError(null);
     try {
-      setSelected(await personasService.get(initialPersonaId));
+      const detail = await personasService.get(initialPersonaId);
+      if (sequence === detailRequestSequence.current) setSelected(detail);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
     } finally {
@@ -187,21 +192,31 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
 
   const refreshSelected = useCallback(async () => {
     if (!initialPersonaId) return;
-    setSelected(await personasService.get(initialPersonaId));
+    const sequence = ++detailRequestSequence.current;
+    const detail = await personasService.get(initialPersonaId);
+    if (sequence === detailRequestSequence.current) setSelected(detail);
     invalidatePersonaSummaryCache();
   }, [initialPersonaId]);
 
   useEffect(() => {
     if (!initialPersonaId || !selected) return;
-    const shouldRefresh = selected.persona.lifecycleState === 'busy'
+    const working = selected.persona.lifecycleState === 'busy'
       || selected.persona.lifecycleState === 'waiting'
       || selected.runtime.projection.mailbox.ready > 0
       || selected.runtime.projection.mailbox.queued > 0;
-    if (!shouldRefresh) return;
+    const refreshVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshSelected().catch(() => undefined);
+    };
     const timer = window.setInterval(() => {
-      void refreshSelected().catch(() => undefined);
-    }, 3_000);
-    return () => window.clearInterval(timer);
+      refreshVisible();
+    }, working ? 3_000 : 10_000);
+    window.addEventListener('focus', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
+    };
   }, [
     initialPersonaId,
     refreshSelected,
@@ -298,7 +313,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
               {area === 'improvements' && (
                 <PersonaImprovementsArea detail={selected} />
               )}
-              {area === 'settings' && subsection === 'history' && (
+              {(area === 'history' || (area === 'settings' && subsection === 'history')) && (
                 <ActivityArea detail={selected} />
               )}
               {area === 'settings' && subsection !== 'history' && (
@@ -431,19 +446,32 @@ function AreaShell({ title, icon, action, children }: { title: string; icon: Rea
   );
 }
 
+function TaskRecordLinks({ task }: { task: PersonaTaskSummary }) {
+  const { t } = useI18n();
+  return <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+    {task.recordLinks?.map((link) => <Button key={`${link.kind}:${link.id}`} size="small" component={Link}
+      href={withWorkspaceUrl(link.kind === 'conversation'
+        ? magicLinkPath({ kind: 'conversation', id: link.id })
+        : `/meetings?meeting=${encodeURIComponent(link.id)}`)}>
+      {t(link.kind === 'conversation' ? 'personas.talk.open' : 'personas.history.openMeeting')}
+    </Button>)}
+  </Stack>;
+}
+
 
 
 function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean> }) {
   const { t, formatDate } = useI18n();
   const current = detail.presentation.current;
   const queuedTasks = detail.presentation.tasks.filter((task) => task.state === 'waiting');
-  const activeTask = detail.presentation.tasks.find((task) => task.state === 'in_progress')
-    ?? queuedTasks[0];
+  const activeTask = detail.presentation.tasks.find((task) => task.state === 'in_progress');
   const activeWorkItem = activeTask
     ? detail.workItems.find((item) => item.id === activeTask.id)
     : undefined;
   const needsYou = detail.presentation.tasks.filter((task) => (
-    task.state === 'blocked' || task.state === 'overdue'
+    (task.state === 'blocked' || task.state === 'overdue')
+    && !detail.workItems.find((item) => item.id === task.id)?.goal
+    && !detail.workItems.find((item) => item.id === task.id)?.parentGoalId
   ));
   const completed = detail.presentation.tasks.filter((task) => task.state === 'completed').slice(0, 3);
   const recentMemories = [...detail.memoryItems]
@@ -452,9 +480,6 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
     .slice(0, 3);
   const runtime = detail.runtime;
   const [goalOpen, setGoalOpen] = useState(false);
-  const [goal, setGoal] = useState('');
-  const [context, setContext] = useState('');
-  const [priority, setPriority] = useState<PersonaPriority>('normal');
   const [preview, setPreview] = useState<PersonaExecutionPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
 
@@ -473,25 +498,6 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
     || runtime.projection.leaseStatus === 'expired'
     || runtime.projection.leaseStatus === 'active'
   );
-  const giveGoal = async () => {
-    if (!goal.trim()) return;
-    await mutate(async () => {
-      const created = await personasService.createWorkItem(detail.persona.id, {
-        title: goal.trim(),
-        ...(context.trim() ? { description: context.trim() } : {}),
-        priority,
-        dependencyIds: [],
-      });
-      await personasService.assignWorkItem(detail.persona.id, created.id, {
-        expectedUpdatedAt: created.updatedAt,
-        idempotencyKey: uuidv4(),
-      });
-    }, t('personas.goal.queued'));
-    setGoalOpen(false);
-    setGoal('');
-    setContext('');
-    setPriority('normal');
-  };
   const memoryRecall = preview?.nativeAbilities.includes('recall') ?? false;
   const memoryChanges = preview?.nativeAbilities.some((ability) => (
     ['remember', 'correct', 'forget', 'pin', 'unpin'] as string[]
@@ -570,6 +576,11 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           </Button>
         </Stack>
       </Paper>
+      {detail.workItems.filter((item) => item.goal && item.goal.state !== 'completed' && item.goal.state !== 'stopped').map((item) => (
+        <PersonaGoalCard key={item.id} item={item} busy={busy} mutate={mutate}>
+          {detail.presentation.tasks.find((task) => task.id === item.id) && <TaskRecordLinks task={detail.presentation.tasks.find((task) => task.id === item.id)!} />}
+        </PersonaGoalCard>
+      ))}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.25fr) minmax(320px, .75fr)' }, gap: 2 }}>
         <AreaShell title={t('personas.now.title')} icon={<BoltRounded />}>
           {current || activeTask ? (
@@ -590,7 +601,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                   {t('personas.history.when', { date: formatDate(current.occurredAt, { dateStyle: 'medium', timeStyle: 'short' }) })}
                 </Typography>
               )}
-              {activeWorkItem && (
+              {activeWorkItem && !activeWorkItem.goal && (
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   <Button
                     color="inherit"
@@ -648,9 +659,13 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                   <Typography fontWeight={720}>{task.title}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {task.state === 'blocked'
-                      ? t('personas.home.blocked', { count: task.blockerTitles.length })
+                      ? task.blockerTitles.length > 0
+                        ? t('personas.home.blocked', { count: task.blockerTitles.length })
+                        : t('personas.home.intervention')
                       : t('personas.home.overdue')}
                   </Typography>
+                  {task.nextAction && <Typography variant="body2" sx={{ mt: 0.5 }}>{task.nextAction}</Typography>}
+                  <TaskRecordLinks task={task} />
                   {task.state === 'blocked' && task.blockerTitles.length === 0 && (
                     <Button
                       size="small"
@@ -799,45 +814,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           </Box>
         )}
       </AreaShell>
-      <Dialog open={goalOpen} fullWidth maxWidth="sm" onClose={() => setGoalOpen(false)}>
-        <DialogTitle>{t('personas.goal.dialogTitle')}</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2} sx={{ pt: 0.5 }}>
-            <TextField
-              autoFocus
-              required
-              label={t('personas.goal.field.goal')}
-              placeholder={t('personas.goal.field.goalPlaceholder')}
-              value={goal}
-              onChange={(event) => setGoal(event.target.value)}
-            />
-            <TextField
-              multiline
-              minRows={3}
-              label={t('personas.goal.field.context')}
-              placeholder={t('personas.goal.field.contextPlaceholder')}
-              value={context}
-              onChange={(event) => setContext(event.target.value)}
-            />
-            <TextField
-              select
-              label={t('personas.goal.field.priority')}
-              value={priority}
-              onChange={(event) => setPriority(event.target.value as PersonaPriority)}
-            >
-              {PERSONA_PRIORITIES.map((value) => (
-                <MenuItem key={value} value={value}>{t(`personas.priority.${value}`)}</MenuItem>
-              ))}
-            </TextField>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setGoalOpen(false)}>{t('personas.action.cancel')}</Button>
-          <Button variant="contained" disabled={busy || !goal.trim()} onClick={() => void giveGoal()}>
-            {t('personas.goal.start')}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <PersonaGoalDialog open={goalOpen} personaId={detail.persona.id} busy={busy} mutate={mutate} onClose={() => setGoalOpen(false)} />
     </Stack>
   );
 }
@@ -950,6 +927,7 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
             {tasks.map((task) => {
               const item = detail.workItems.find((candidate) => candidate.id === task.id);
+              if (item?.goal) return <PersonaGoalCard key={item.id} item={item} busy={busy} mutate={mutate}><TaskRecordLinks task={task} /></PersonaGoalCard>;
               const assignable = task.state === 'ready' || task.state === 'overdue';
               const active = task.state === 'waiting' || task.state === 'in_progress';
               const samePriorityWaiting = tasks.filter((candidate) => (
@@ -973,7 +951,9 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
                       </Stack>
                     </Stack>
                     {task.description && <Typography color="text.secondary" sx={{ mt: 1 }}>{task.description}</Typography>}
+                    {item?.parentGoalId && <Typography variant="caption" color="text.secondary">{t('personas.goal.childTask', { title: detail.workItems.find((candidate) => candidate.id === item.parentGoalId)?.title ?? item.parentGoalId })}</Typography>}
                     {task.nextAction && <Typography variant="body2" sx={{ mt: 1.5 }}><strong>{t('personas.tasks.nextAction')}:</strong> {task.nextAction}</Typography>}
+                    <TaskRecordLinks task={task} />
                     {task.deadline && <Typography variant="caption" color={task.state === 'overdue' ? 'error.main' : 'text.secondary'}>{t('personas.tasks.deadline', { date: formatDate(task.deadline, { dateStyle: 'medium' }) })}</Typography>}
                     {task.blockerTitles.length > 0 && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>{task.blockerTitles.map((title) => <Chip key={title} size="small" color="warning" label={title} />)}</Stack>}
                   </CardContent>

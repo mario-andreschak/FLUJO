@@ -2721,11 +2721,15 @@ export async function completePersonaActivityWithinRuntimeLock(
     // turn such late input back into independent queued work so it is neither
     // falsely acknowledged nor orphaned against a terminal Activity.
     await requeuePendingRelatedDeliveries(lock, activity, items, now);
-    const outcome = input.outcome ?? conservativeSemanticOutcome(activity, status, now);
+    const reportedOutcome = status === 'completed' && activity.reportedOutcome?.decisionSource === 'persona_claim'
+      ? activity.reportedOutcome
+      : undefined;
+    const outcome = input.outcome ?? reportedOutcome ?? conservativeSemanticOutcome(activity, status, now);
     const completed = await saveActivity(lock, {
       ...activity,
       status,
       outcome,
+      reportedOutcome: undefined,
       ...(input.outcomeRef !== undefined ? { outcomeRef: input.outcomeRef } : {}),
       ...(input.error !== undefined ? { error: input.error } : { error: undefined }),
       updatedAt: now,

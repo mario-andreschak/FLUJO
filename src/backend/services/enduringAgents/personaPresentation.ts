@@ -124,6 +124,7 @@ function taskDisplayState(
   byId: ReadonlyMap<string, PersonaWorkItem>,
   mailboxItems: readonly PersonaMailboxItem[],
   now: number,
+  currentTaskId?: string,
 ): PersonaTaskDisplayState {
   if (item.status === 'completed') return 'completed';
   if (item.status === 'cancelled') return 'cancelled';
@@ -131,6 +132,7 @@ function taskDisplayState(
     item.status === 'blocked'
     || item.dependencyIds.some((id) => byId.get(id)?.status !== 'completed')
   ) return 'blocked';
+  if (item.id === currentTaskId) return 'in_progress';
   if (item.deadline !== undefined && item.deadline < now) return 'overdue';
   if (item.status === 'in_progress') return 'in_progress';
   if (mailboxItems.some((mailboxItem) => (
@@ -190,6 +192,12 @@ export function projectPersonaPresentation(
   const current = currentActivity
     ? historyEntry(currentActivity, byWorkItemId, options.resultByActivityId)
     : null;
+  // An ongoing goal stays open across rounds. Its currently claimed assignment
+  // is working, while separate queued child assignments still belong in Up next.
+  const currentTaskId = currentActivity && (currentActivity.status === 'running' || currentActivity.status === 'waiting')
+    ? (currentActivity.source.kind === 'assignment' ? currentActivity.source.sourceId : undefined)
+      ?? bundle.mailboxItems.find((item) => item.claimedActivityId === currentActivity.id && item.source.kind === 'assignment')?.source.sourceId
+    : undefined;
 
   const latestByConversation = new Map<string, PersonaActivity>();
   for (const activity of bundle.activities) {
@@ -223,7 +231,7 @@ export function projectPersonaPresentation(
       id: item.id,
       title: item.title,
       ...(item.description ? { description: item.description } : {}),
-      state: taskDisplayState(item, byWorkItemId, bundle.mailboxItems, now),
+      state: taskDisplayState(item, byWorkItemId, bundle.mailboxItems, now, currentTaskId),
       priority: item.priority,
       ...(item.nextAction ? { nextAction: item.nextAction } : {}),
       ...(item.deadline !== undefined ? { deadline: item.deadline } : {}),
@@ -232,11 +240,12 @@ export function projectPersonaPresentation(
         .map((id) => byWorkItemId.get(id)?.title ?? 'Unavailable task'),
       ...(item.completedAt !== undefined ? { completedAt: item.completedAt } : {}),
       ...(item.status === 'completed' && resultSummary ? { resultSummary } : {}),
-      ...(item.status === 'completed' && links.length > 0 ? { recordLinks: links } : {}),
+      ...(links.length > 0 ? { recordLinks: links } : {}),
       expectedUpdatedAt: item.updatedAt,
     };
   }).sort((left, right) => (
     TASK_STATE_RANK[left.state] - TASK_STATE_RANK[right.state]
+    || Number(right.id === currentTaskId) - Number(left.id === currentTaskId)
     || (left.state === 'waiting' && right.state === 'waiting'
       ? (queuedAssignmentRank.get(left.id) ?? Number.MAX_SAFE_INTEGER)
         - (queuedAssignmentRank.get(right.id) ?? Number.MAX_SAFE_INTEGER)

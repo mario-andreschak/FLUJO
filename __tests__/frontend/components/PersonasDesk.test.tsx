@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const listMock = jest.fn();
 const getMock = jest.fn();
@@ -16,6 +16,7 @@ const discoveryRefreshMock = jest.fn();
 const recoverRuntimeMock = jest.fn();
 const executionPreviewMock = jest.fn();
 const createWorkItemMock = jest.fn();
+const getWorkItemMock = jest.fn();
 const assignWorkItemMock = jest.fn();
 const controlWorkItemMock = jest.fn();
 
@@ -60,6 +61,7 @@ jest.mock('@/frontend/services/personas', () => ({
     pinMemory: jest.fn(),
     unpinMemoryFromCore: jest.fn(),
     createWorkItem: (...args: unknown[]) => createWorkItemMock(...args),
+    getWorkItem: (...args: unknown[]) => getWorkItemMock(...args),
     updateWorkItem: jest.fn(),
     deleteWorkItem: jest.fn(),
     assignWorkItem: (...args: unknown[]) => assignWorkItemMock(...args),
@@ -133,6 +135,7 @@ jest.mock('@/frontend/utils/quickActions', () => ({
 }));
 
 import PersonasDesk from '@/frontend/components/Personas';
+import PersonaGoalDialog from '@/frontend/components/Personas/PersonaGoalDialog';
 
 const persona = {
   schemaVersion: 1,
@@ -300,6 +303,7 @@ beforeEach(() => {
     updatedAt: 31,
   });
   assignWorkItemMock.mockResolvedValue({ admission: 'queued' });
+  getWorkItemMock.mockRejectedValue(new Error('Task not found'));
   controlWorkItemMock.mockResolvedValue({ admission: 'queued' });
   authorizeAppLaunchMock.mockResolvedValue({
     personaId: 'jim',
@@ -315,7 +319,7 @@ it('exposes the complete Phase 5 desk areas and inspectable revision/memory evid
 
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
   expect(screen.getByText('Working now')).toBeInTheDocument();
-  expect(screen.getAllByRole('tab')).toHaveLength(9);
+  expect(screen.getAllByRole('tab')).toHaveLength(10);
 
   fireEvent.click(screen.getByRole('tab', { name: /Memory/i }));
   expect(await screen.findByText('The release must preserve workspace isolation.')).toBeInTheDocument();
@@ -423,7 +427,7 @@ it('configures Persona Core tools and @-aware fixed parameters on a grant', asyn
   ));
 });
 
-it('turns a plain-language goal into durable work and immediately assigns it', async () => {
+it('keeps the one-shot option as durable work and assigns it only after creation', async () => {
   let resolveCreate!: (value: unknown) => void;
   createWorkItemMock.mockReturnValueOnce(new Promise((resolve) => {
     resolveCreate = resolve;
@@ -432,6 +436,7 @@ it('turns a plain-language goal into durable work and immediately assigns it', a
 
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Give this Persona a goal' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Keep working on this goal' }));
   fireEvent.change(await screen.findByRole('textbox', { name: /Goal/ }), {
     target: { value: '  Prepare the launch plan  ' },
   });
@@ -441,12 +446,20 @@ it('turns a plain-language goal into durable work and immediately assigns it', a
   fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
 
   await waitFor(() => expect(createWorkItemMock).toHaveBeenCalledWith('jim', {
+    id: expect.stringMatching(/^work_/),
     title: 'Prepare the launch plan',
     description: 'Include approvals and owners.',
     priority: 'normal',
     dependencyIds: [],
   }));
   expect(assignWorkItemMock).not.toHaveBeenCalled();
+
+  expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Starting…' })).toHaveAttribute('aria-busy', 'true');
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Creation could not be confirmed/)).not.toBeInTheDocument();
 
   resolveCreate({
     id: 'work_goal',
@@ -468,6 +481,140 @@ it('turns a plain-language goal into durable work and immediately assigns it', a
     },
   ));
   expect(await screen.findByText(/Goal saved and queued/)).toBeInTheDocument();
+});
+
+it('starts ongoing ownership by default without issuing a competing assignment', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Give this Persona a goal' }));
+  expect(screen.getByRole('checkbox', { name: 'Keep working on this goal' })).toBeChecked();
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Make FLUJO known on the internet' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  await waitFor(() => expect(createWorkItemMock).toHaveBeenCalledWith('jim', expect.objectContaining({
+    id: expect.stringMatching(/^work_/),
+    goal: { successCriteria: expect.stringContaining('Completing one task does not complete'), completionPolicy: 'until_stopped', continuationIntervalMs: 60_000 },
+  })));
+  expect(await screen.findByText(/Goal saved\. This Persona will keep working/)).toBeInTheDocument();
+  expect(assignWorkItemMock).not.toHaveBeenCalled();
+});
+
+it('does not present the next queued task as already working', async () => {
+  getMock.mockResolvedValue({
+    ...detail,
+    presentation: { ...detail.presentation, tasks: [{
+      id: 'next_child', title: 'Publish the next article', state: 'waiting',
+      priority: 'normal', blockerTitles: [], expectedUpdatedAt: 10,
+    }] },
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByText('This Persona is idle and ready for work.')).toBeInTheDocument();
+  expect(screen.getAllByText('Publish the next article')).toHaveLength(1);
+});
+
+it('freezes an uncertain creation across attempted edits and reopening, then recovers the original id', async () => {
+  createWorkItemMock.mockRejectedValueOnce(new Error('Connection lost'));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Give this Persona a goal' }));
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Build an audience' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  expect(await screen.findByText('Connection lost')).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toHaveValue('Build an audience');
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: 'Success criteria (optional)' })).toBeDisabled();
+  expect(screen.getByRole('checkbox', { name: 'Keep working on this goal' })).toBeDisabled();
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'A different goal' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Success criteria (optional)' }), { target: { value: 'A different finish condition' } });
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toHaveValue('Build an audience');
+  expect(screen.getByRole('textbox', { name: 'Success criteria (optional)' })).toHaveValue('');
+  const createdInput = createWorkItemMock.mock.calls[0][1];
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Give this Persona a goal' }));
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toHaveValue('Build an audience');
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toBeDisabled();
+  getWorkItemMock.mockResolvedValueOnce({ ...createdInput, personaId: 'jim', updatedAt: 31 });
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(/Goal saved\. This Persona will keep working/)).toBeInTheDocument();
+  expect(createWorkItemMock).toHaveBeenCalledTimes(1);
+  expect(getWorkItemMock).toHaveBeenLastCalledWith('jim', createdInput.id);
+  expect(assignWorkItemMock).not.toHaveBeenCalled();
+});
+
+it('unlocks rejected input for correction when the server definitively refused creation', async () => {
+  createWorkItemMock.mockRejectedValueOnce(Object.assign(new Error('Invalid goal'), { status: 400 }));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Give this Persona a goal' }));
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Draft a goal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  expect(await screen.findByText('Invalid goal')).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toBeEnabled();
+  expect(getWorkItemMock).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Corrected goal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  expect(await screen.findByText(/Goal saved\. This Persona will keep working/)).toBeInTheDocument();
+  expect(createWorkItemMock).toHaveBeenLastCalledWith('jim', expect.objectContaining({ title: 'Corrected goal' }));
+});
+
+it('resets the submission guard after an unexpected mutation-wrapper rejection', async () => {
+  const onClose = jest.fn();
+  const mutation = jest.fn()
+    .mockRejectedValueOnce(new Error('Mutation wrapper unavailable'))
+    .mockImplementationOnce(async (action: () => Promise<unknown>) => { await action(); return true; });
+  render(<PersonaGoalDialog open personaId="jim" busy={false} mutate={mutation} onClose={onClose} />);
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Build an audience' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  expect(await screen.findByText('Mutation wrapper unavailable')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  expect(mutation).toHaveBeenCalledTimes(2);
+  expect(createWorkItemMock).toHaveBeenCalledTimes(1);
+});
+
+it('retries assignment of the saved one-shot task without creating a duplicate', async () => {
+  assignWorkItemMock.mockRejectedValueOnce(new Error('Assignment unavailable'));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Give this Persona a goal' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Keep working on this goal' }));
+  fireEvent.change(screen.getByRole('textbox', { name: /^Goal/ }), { target: { value: 'Prepare launch copy' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+  expect(await screen.findByText('Assignment unavailable')).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: /^Goal/ })).toHaveValue('Prepare launch copy');
+  expect(screen.getByText(/Your task is saved/)).toBeInTheDocument();
+  const firstAssignment = assignWorkItemMock.mock.calls[0];
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(/Goal saved and queued/)).toBeInTheDocument();
+  expect(createWorkItemMock).toHaveBeenCalledTimes(1);
+  expect(assignWorkItemMock).toHaveBeenLastCalledWith(...firstAssignment);
+});
+
+it('makes full activity history reachable from the persona tabs', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity history' }));
+  expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();
+  expect(replaceMock).toHaveBeenLastCalledWith(expect.stringContaining('area=history'));
+});
+
+it('discovers externally started work while the persona detail was idle', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  getMock.mockResolvedValue({ ...detail, persona: { ...persona, lifecycleState: 'busy' } });
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(await screen.findByText('Working', { selector: '.MuiChip-label' })).toBeInTheDocument();
+  expect(getMock).toHaveBeenCalledTimes(2);
+});
+
+it('shows a blocked task next step and evidence instead of a zero-blocker message', async () => {
+  getMock.mockResolvedValue({
+    ...detail,
+    workItems: [{ id: 'work_blocked', personaId: 'jim', title: 'Publish launch post', status: 'blocked', updatedAt: 44 }],
+    presentation: { ...detail.presentation, tasks: [{
+      id: 'work_blocked', title: 'Publish launch post', state: 'blocked', priority: 'normal', blockerTitles: [],
+      nextAction: 'The posting service is unavailable. A draft is saved for retry.',
+      recordLinks: [{ kind: 'conversation', id: 'conversation_blocked' }], expectedUpdatedAt: 44,
+    }] },
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByText('The posting service is unavailable. A draft is saved for retry.')).toBeInTheDocument();
+  expect(screen.queryByText('Waiting on 0 blocker(s).')).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Open chat' })).toHaveAttribute('href', expect.stringContaining('conversation_blocked'));
 });
 
 it('shows what finished work produced and a plain route back to its record', async () => {

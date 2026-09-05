@@ -10,7 +10,7 @@ const VALUE_OPTIONS = new Set([
   'commit',
   'run-id',
 ]);
-const FLAG_OPTIONS = new Set(['quick', 'with-learning']);
+const FLAG_OPTIONS = new Set(['quick', 'infrastructure', 'with-learning']);
 
 function parseArguments(argv) {
   const values = new Map();
@@ -48,7 +48,8 @@ const activities = values.get('activities-per-day') ?? '20';
 const seed = values.get('seed') ?? '459';
 const output = path.resolve(values.get('output') ?? 'soak-artifacts');
 const quick = values.has('quick');
-const mode = quick ? 'smoke' : 'acceptance';
+if (quick && values.has('infrastructure')) throw new Error('--quick and --infrastructure are mutually exclusive.');
+const mode = quick ? 'smoke' : values.has('infrastructure') ? 'infrastructure' : 'acceptance';
 const learningEnabled = values.has('with-learning');
 if (!quick && (days !== '28' || activities !== '20')) {
   throw new Error('Acceptance mode requires exactly --days=28 --activities-per-day=20; use --quick for a smoke run.');

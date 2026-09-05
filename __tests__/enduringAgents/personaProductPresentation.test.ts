@@ -36,6 +36,25 @@ function mailbox(
 }
 
 describe('Persona product Task ordering', () => {
+  it.each([true, false])('keeps the current open goal out of the waiting queue without hiding its queued child (direct source: %s)', (directSource) => {
+    const bundle = {
+      persona: { id: 'persona_queue' },
+      workItems: [workItem('goal', 'normal', 20), { ...workItem('child', 'urgent', 30), parentGoalId: 'goal' }],
+      mailboxItems: [
+        { ...mailbox('mail_goal', 'goal', 'normal', 1), status: 'claimed', claimedActivityId: 'activity_goal' },
+        { ...mailbox('mail_child', 'child', 'urgent', 2), targetActivityId: 'activity_goal' },
+      ],
+      activities: [{
+        schemaVersion: 1, id: 'activity_goal', personaId: 'persona_queue', kind: 'assignment', status: 'running',
+        source: { kind: 'assignment', ...(directSource ? { sourceId: 'goal' } : {}) }, createdAt: 20, updatedAt: 30,
+      }],
+    } as unknown as Parameters<typeof projectPersonaPresentation>[0];
+
+    const presentation = projectPersonaPresentation(bundle, { activeActivityId: 'activity_goal' });
+    expect(presentation.tasks.find((task) => task.id === 'goal')?.state).toBe('in_progress');
+    expect(presentation.tasks.filter((task) => task.state === 'waiting').map((task) => task.id)).toEqual(['child']);
+  });
+
   it('shows queued Tasks in the same priority/sequence order the runtime will use', () => {
     const bundle = {
       persona: { id: 'persona_queue' },

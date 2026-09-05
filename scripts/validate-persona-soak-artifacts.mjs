@@ -29,6 +29,10 @@ const SMOKE_REQUIRED_IDS = new Set([
   'zero-stranded-or-stuck',
 ]);
 
+const UNDEFINED_CONTRACT_IDS = new Set([
+  'bounded-detailed-runtime-state', 'flat-event-append-cost', 'resident-memory-bound',
+]);
+
 function parseArguments(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 1) {
@@ -98,7 +102,8 @@ function validateCriterion(criterion, mode, errors) {
   if (!['passed', 'failed', 'not_evaluated'].includes(criterion.status)) {
     errors.push(`${criterion.id}: invalid status`);
   }
-  const expectedRequired = mode === 'acceptance' || SMOKE_REQUIRED_IDS.has(criterion.id);
+  const expectedRequired = mode === 'acceptance'
+    || (mode === 'infrastructure' ? !UNDEFINED_CONTRACT_IDS.has(criterion.id) : SMOKE_REQUIRED_IDS.has(criterion.id));
   if (typeof criterion.required !== 'boolean') {
     errors.push(`${criterion.id}: required policy is missing`);
   } else if (criterion.required !== expectedRequired) {
@@ -232,7 +237,10 @@ export async function validatePersonaSoakArtifacts({
         errors.push('acceptance identity is not the authoritative 28x20 learning configuration');
       }
     } else if (identity.authoritative !== false) {
-      errors.push('smoke evidence must be non-authoritative');
+      errors.push('infrastructure and smoke evidence must be non-authoritative');
+    }
+    if (expectedMode === 'infrastructure' && (identity.days !== 28 || identity.activitiesPerDay !== 20 || identity.learningEnabled !== true)) {
+      errors.push('infrastructure identity requires the full 28x20 learning configuration');
     }
   }
 
@@ -444,7 +452,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     ?? process.env.GITHUB_SHA;
   const expectedMode = values.get('mode') ?? 'acceptance';
   if (!expectedCommit) throw new Error('Expected commit is required.');
-  if (!['smoke', 'acceptance'].includes(expectedMode)) throw new Error('Mode must be smoke or acceptance.');
+  if (!['smoke', 'infrastructure', 'acceptance'].includes(expectedMode)) throw new Error('Mode must be smoke, infrastructure or acceptance.');
   await validatePersonaSoakArtifacts({ directory, expectedCommit, expectedMode });
   process.stdout.write(`Validated Persona soak evidence for ${expectedCommit} (${expectedMode}).\n`);
 }

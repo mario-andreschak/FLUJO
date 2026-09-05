@@ -1008,7 +1008,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
     && options.activitiesPerDay === FULL_GATE_ACTIVITIES_PER_DAY;
   const runMode = options.runMode
     ?? (exactAcceptanceConfiguration ? 'acceptance' : 'smoke');
-  const fullGate = runMode === 'acceptance';
+  const fullGate = runMode !== 'smoke';
   const wallStartedAt = Date.now();
   const startedAt = wallStartedAt + 1_000;
   const commitSha = options.commitSha
@@ -1339,7 +1339,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         schemaVersion: PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
         runId,
         mode: runMode,
-        authoritative: fullGate
+        authoritative: runMode === 'acceptance'
           && exactAcceptanceConfiguration
           && Boolean(options.withLearning)
           && commitSha !== 'unreported',

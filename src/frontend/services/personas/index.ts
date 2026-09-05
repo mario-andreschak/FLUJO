@@ -423,6 +423,10 @@ class PersonasService {
     return jsonRequest(personaPath(personaId, '/work-items'), 'POST', input);
   }
 
+  getWorkItem(personaId: string, workItemId: string): Promise<PersonaWorkItem> {
+    return parse(fetch(withWorkspaceUrl(personaPath(personaId, `/work-items/${encodeURIComponent(workItemId)}`))));
+  }
+
   assignWorkItem(
     personaId: string,
     workItemId: string,

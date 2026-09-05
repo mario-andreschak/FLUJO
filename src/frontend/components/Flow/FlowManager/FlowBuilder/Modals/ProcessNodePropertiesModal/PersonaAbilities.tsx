@@ -46,10 +46,12 @@ const MEMORY_ABILITIES = [
 ] as const;
 
 const WORK_ABILITIES = [
+  { id: 'work_item_list', label: 'flows.process.personaAbilities.listWork' },
   { id: 'work_item_create', label: 'flows.process.personaAbilities.createWork' },
   { id: 'work_item_update', label: 'flows.process.personaAbilities.updateWork' },
   { id: 'work_item_complete', label: 'flows.process.personaAbilities.completeWork' },
   { id: 'work_item_promote_todo', label: 'flows.process.personaAbilities.keepChecklistItem' },
+  { id: 'report_activity_outcome', label: 'flows.process.personaAbilities.reportOutcome' },
   { id: 'suggest_improvement', label: 'flows.process.personaAbilities.suggestImprovement' },
 ] as const;
 
