@@ -48,6 +48,7 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/enduringAgents/soak/personaSoak.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
+  '__tests__/packages/workspaceMcpTransfer.test.ts',
 ];
 
 // Environment switch consulted by jest.config.mjs. scripts/run-local-jest.cjs
