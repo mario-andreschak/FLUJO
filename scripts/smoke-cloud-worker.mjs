@@ -172,6 +172,9 @@ try {
     sourceHandle: `${source.type}-bottom`, targetHandle: `${target.type}-top`, type: 'custom', data: { edgeType: 'standard' } });
   const flow = { id: 'smoke-flow', name: 'CloudSmoke', nodes, edges: [edge(nodes[0], nodes[1]), edge(nodes[1], nodes[2])], updatedAt: Date.now() };
   const files = {
+    // Configured MCP roots are an opt-in restriction; enable it so the smoke
+    // verifies Windows-to-worker root remapping instead of the default host root.
+    'db/speech_settings.json': JSON.stringify({ experimental: { restrictMcpFilesystemToRoots: true } }),
     'db/mcp_servers.json': JSON.stringify({ filesystem: {
       name: 'filesystem', transport: 'stdio', command: 'node',
       args: [`${sourceFilesystemRoot}\\dist\\index.js`], rootPath: sourceFilesystemRoot,
