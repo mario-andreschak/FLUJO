@@ -1,3 +1,4 @@
+/** @jest-environment jsdom */
 import { transcribe } from '@/frontend/services/transcription';
 import {
   startLiveTranscription,

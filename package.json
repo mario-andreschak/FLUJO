@@ -38,6 +38,7 @@
     "mcp-servers/README.md",
     "mcp-servers/*/dist/**/*",
     "mcp-servers/*/package.json",
+    "mcp-servers/browser/scripts/install-browser.mjs",
     "next.config.mjs"
   ],
   "scripts": {
