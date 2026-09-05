@@ -262,7 +262,7 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
       // Create env object with resolved values
       const envObject = variables.reduce(
         (acc, variable) => {
-          const { key, value, isBound, boundTo, isSecret, isEncrypted } = variable;
+          const { key, value, isBound, boundTo, isSecret } = variable;
           
           if (!key) return acc; // Skip empty keys
 
@@ -273,13 +273,12 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
               metadata: { isSecret }
             };
           } else {
-            // For all other values, store with metadata, unless it is secret and the value is masked.
-            if (!(isSecret && value === MASKED_STRING)) {
-              acc[key] = {
-                value,
-                metadata: { isSecret }
-              };
-            }
+            // MCP env is a replacement map. Send the mask so the backend can retain
+            // an unchanged encrypted value; only deleted rows should disappear.
+            acc[key] = {
+              value,
+              metadata: { isSecret }
+            };
           }
           return acc;
         },

@@ -19,6 +19,7 @@
  */
 
 import { MCPServerConfig, EnvVarValue, MCPServerIcon, MCPServerSource, MCPLaunchSpec } from '@/shared/types/mcp/mcp';
+import { mergeMcpValues, plainMcpValues } from './values';
 
 // ---------------------------------------------------------------------------
 // Registry API shapes (subset of server.schema.json that we consume)
@@ -923,18 +924,10 @@ export function firstServerFromResponse(body: unknown): RegistryServerResult | n
  */
 export function applySpotlightEnvDefaults(
   config: Partial<MCPServerConfig>,
-  overrides?: Record<string, string>
+  overrides?: Record<string, EnvVarValue>
 ): Partial<MCPServerConfig> {
   if (!overrides || Object.keys(overrides).length === 0) return config;
-  const env: Record<string, EnvVarValue> = { ...(config.env ?? {}) };
-  for (const [name, value] of Object.entries(overrides)) {
-    const existing = env[name];
-    if (existing && typeof existing === 'object' && existing.metadata?.isSecret) {
-      env[name] = { value, metadata: { isSecret: true } };
-    } else {
-      env[name] = value;
-    }
-  }
+  const env = mergeMcpValues(config.env, overrides);
   // Same cast the config builders above use: MCPServerConfig types env as an
   // intersection that a plain Record<string, EnvVarValue> can't satisfy.
   return { ...config, env } as Partial<MCPServerConfig>;
@@ -947,14 +940,15 @@ export function applySpotlightEnvDefaults(
  */
 export function missingRequiredInputs(
   option: InstallOption,
-  envOverrides?: Record<string, string>
+  envOverrides?: Record<string, EnvVarValue>
 ): string[] {
+  const supplied = plainMcpValues(envOverrides);
   if (option.kind === 'remote') {
     return (option.remote.headers ?? [])
-      .filter(h => h.isRequired && !(h.value ?? h.default) && !envOverrides?.[h.name])
+      .filter(h => h.isRequired && !(h.value ?? h.default) && !supplied[h.name])
       .map(h => h.name);
   }
   return (option.pkg.environmentVariables ?? [])
-    .filter(v => v.isRequired && !(v.value ?? v.default) && !envOverrides?.[v.name])
+    .filter(v => v.isRequired && !(v.value ?? v.default) && !supplied[v.name])
     .map(v => v.name);
 }

@@ -42,7 +42,7 @@ import { GITHUB_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/git
 import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDownloads';
 import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
 import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
-import type { MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
+import type { EnvVarValue, MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -352,7 +352,7 @@ export async function resolveRegistryEntry(registryName: string): Promise<Regist
  */
 export async function prepareRegistryServerRuntime(
   registryName: string,
-  envOverrides?: Record<string, string>,
+  envOverrides?: Record<string, EnvVarValue>,
   options?: InstallOptions
 ): Promise<InstallResult & { config?: Partial<MCPServerConfig> }> {
   if (!registryName || typeof registryName !== 'string') {
@@ -500,7 +500,7 @@ export async function prepareRegistryServerRuntime(
 /** Prepare once, then apply normal adopt-existing and installation semantics. */
 export async function installRegistryServer(
   registryName: string,
-  envOverrides?: Record<string, string>,
+  envOverrides?: Record<string, EnvVarValue>,
   options?: InstallOptions,
 ): Promise<InstallResult> {
   const prepared = await prepareRegistryServerRuntime(registryName, envOverrides, options);

@@ -15,6 +15,7 @@ import {
   parseGithubRepositoryReference,
 } from '@/backend/services/mcp/githubInstall';
 import type { EnvVarValue, MCPServerConfig } from '@/shared/types/mcp';
+import { mcpValueRecord, mergeMcpValues, plainMcpValues } from '@/utils/mcp/values';
 import {
   applySpotlightEnvDefaults,
   buildConfigFromOption,
@@ -34,8 +35,9 @@ export interface DirectInstallInput {
   source: unknown;
   serverName?: string;
   transport?: 'stdio' | 'streamable' | 'sse' | 'websocket';
-  env?: Record<string, string>;
-  headers?: Record<string, string>;
+  env?: Record<string, EnvVarValue>;
+  headers?: Record<string, EnvVarValue>;
+  secretEnvNames?: string[];
   ref?: string;
   subdirectory?: string;
   installCommand?: string;
@@ -92,14 +94,6 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function stringRecord(value: unknown): Record<string, string> {
-  const record = objectRecord(value);
-  if (!record) return {};
-  return Object.fromEntries(
-    Object.entries(record).flatMap(([name, item]) => typeof item === 'string' ? [[name, item]] : []),
-  );
 }
 
 function envValue(value: EnvVarValue | undefined): string {
@@ -324,7 +318,7 @@ function normalizeConfig(
   const common = {
     name,
     disabled: false,
-    env: { ...stringRecord(raw.env), ...(input.env ?? {}) },
+    env: mergeMcpValues(mcpValueRecord(raw.env, input.secretEnvNames), mcpValueRecord(input.env, input.secretEnvNames)),
     _buildCommand: '',
     _installCommand: '',
     rootPath: typeof raw.rootPath === 'string' && raw.rootPath.trim() ? raw.rootPath : transport === 'stdio' ? '.' : `mcp-servers/${name}`,
@@ -346,7 +340,7 @@ function normalizeConfig(
       ...common,
       transport,
       serverUrl: parsed.toString(),
-      headers: { ...stringRecord(raw.headers), ...(input.headers ?? {}) },
+      headers: mergeMcpValues(mcpValueRecord(raw.headers), mcpValueRecord(input.headers)),
       source: { type: 'remote' },
     } as Partial<MCPServerConfig>;
   }
@@ -384,7 +378,7 @@ function planFromConfig(kind: DirectInstallKind, reference: string, config: Part
 
 function assertSecretsOutsidePlan(plan: ResolvedInstallPlan, input: DirectInstallInput): void {
   const serialized = JSON.stringify(plan);
-  const suppliedValues = [...Object.values(input.env ?? {}), ...Object.values(input.headers ?? {})]
+  const suppliedValues = [...Object.values(plainMcpValues(input.env)), ...Object.values(plainMcpValues(input.headers))]
     .filter((value) => value.length >= 4 && !value.startsWith('${global:'));
   if (suppliedValues.some((value) => serialized.includes(value))) {
     throw new Error('Credential values must be passed only through env or headers, never embedded in a command, argument, URL, or install/build command.');
@@ -503,11 +497,11 @@ export async function resolveDirectMcpInstall(input: DirectInstallInput): Promis
     let config = buildConfigFromOption(server, option);
     if (config.transport === 'stdio') assertSupportedCommand(String(config.command ?? ''));
     const serverName = normalizedName(input.serverName, server.name);
-    config = applySpotlightEnvDefaults({ ...config, name: serverName }, input.env);
+    config = applySpotlightEnvDefaults({ ...config, name: serverName }, mcpValueRecord(input.env, input.secretEnvNames));
     if (option.kind === 'remote' && input.headers) {
-      config = { ...config, headers: { ...('headers' in config ? config.headers ?? {} : {}), ...input.headers } } as Partial<MCPServerConfig>;
+      config = { ...config, headers: mergeMcpValues('headers' in config ? config.headers ?? {} : {}, mcpValueRecord(input.headers)) } as Partial<MCPServerConfig>;
     }
-    const supplied = { ...(input.env ?? {}), ...(input.headers ?? {}) };
+    const supplied = { ...plainMcpValues(input.env), ...plainMcpValues(input.headers) };
     const missingInputs = missingRequiredInputs(option, supplied);
     const plan = { ...resolvedPlanFrom(server.name, server, option, 'unverified-direct-server-json'), serverName };
     assertSecretsOutsidePlan(plan, input);
@@ -551,10 +545,12 @@ export async function installResolvedDirectMcp(
   if (existing) return { ...existing, plan: resolved.plan };
 
   if (resolved.kind === 'github' && resolved.github) {
+    const env = mcpValueRecord(input.env, input.secretEnvNames);
     const result = await installGithubServer({
       name: resolved.plan.serverName,
       repositoryUrl: resolved.github.repositoryUrl,
-      env: input.env ?? {},
+      env: plainMcpValues(env),
+      secretEnvNames: Object.entries(env).flatMap(([name, value]) => typeof value === 'object' && value.metadata.isSecret ? [name] : []),
       ...(resolved.github.ref ? { ref: resolved.github.ref } : {}),
       ...(resolved.github.subdirectory ? { subdirectory: resolved.github.subdirectory } : {}),
       ...(resolved.github.installCommand !== undefined ? { installCommand: resolved.github.installCommand } : {}),

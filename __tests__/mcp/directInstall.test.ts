@@ -171,6 +171,57 @@ describe('specific MCP source resolution', () => {
 });
 
 describe('specific MCP source installation', () => {
+  it('passes explicit env secrecy through the existing GitHub installer without including values in the plan', async () => {
+    const secret = 'synthetic-github-token';
+    const input = {
+      source: 'https://github.com/acme/mcp-server', serverName: 'github-test',
+      env: { TOKEN: { value: secret, metadata: { isSecret: true } }, OTHER: 'synthetic-other-key', MODE: 'validation-mode' },
+      secretEnvNames: ['OTHER'],
+    };
+    const resolved = await resolveDirectMcpInstall(input);
+    const result = await installResolvedDirectMcp(resolved, input);
+    expect(result.installed).toBe(true);
+    expect(installGithubServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      env: { TOKEN: secret, OTHER: 'synthetic-other-key', MODE: 'validation-mode' },
+      secretEnvNames: ['TOKEN', 'OTHER'],
+      ref: 'a'.repeat(40),
+    }));
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain('synthetic-other-key');
+  });
+
+  it('preserves wrapped config values and secret flags when overriding env and headers', async () => {
+    const input = {
+      source: {
+        name: 'hosted-secrets', url: 'https://mcp.example.com',
+        env: { TOKEN: { value: 'old-env-secret', metadata: { isSecret: true } } },
+        headers: { 'X-Custom': { value: 'old-header-secret', metadata: { isSecret: true } } },
+      },
+      env: { TOKEN: 'synthetic-env-secret', EXTRA: { value: 'synthetic-extra-secret', metadata: { isSecret: true } } },
+      headers: { 'X-Custom': 'synthetic-header-secret' },
+    };
+    const resolved = await resolveDirectMcpInstall(input);
+    await installResolvedDirectMcp(resolved, input);
+    expect(updateServerConfigMock).toHaveBeenCalledWith('hosted-secrets', expect.objectContaining({
+      env: {
+        TOKEN: { value: 'synthetic-env-secret', metadata: { isSecret: true } },
+        EXTRA: { value: 'synthetic-extra-secret', metadata: { isSecret: true } },
+      },
+      headers: { 'X-Custom': { value: 'synthetic-header-secret', metadata: { isSecret: true } } },
+    }));
+    expect(JSON.stringify(resolved.plan)).not.toContain('synthetic-');
+  });
+
+  it('rejects malformed value metadata without echoing its contents', async () => {
+    await expect(resolveDirectMcpInstall({
+      source: { command: 'npx', args: ['example'], env: { TOKEN: { value: 'synthetic-secret', metadata: { isSecret: 'yes' } } } },
+    })).rejects.toThrow('boolean secret metadata');
+    await expect(resolveDirectMcpInstall({
+      source: 'npx example --token synthetic-secret',
+      env: { TOKEN: { value: 'synthetic-secret', metadata: { isSecret: true } } },
+    })).rejects.toThrow('Credential values must be passed only through env or headers');
+  });
+
   it('saves, connects, and returns the tools for a direct command', async () => {
     const input = { source: 'npx -y @acme/mcp', serverName: 'acme' };
     const resolved = await resolveDirectMcpInstall(input);

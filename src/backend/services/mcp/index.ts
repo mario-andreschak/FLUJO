@@ -126,6 +126,7 @@ import {
   MCPStreamableConfig,
   MCPSSEConfig,
   MCPHeaderValue,
+  EnvVarValue,
   MCPServiceResponse,
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
@@ -198,7 +199,8 @@ import {
   isTransientStreamError,
 } from "@/utils/mcp/utils";
 import { encryptApiKey } from "@/backend/services/model/encryption";
-import { MASKED_API_KEY } from "@/shared/types/constants";
+import { isSecretEnvVar } from "@/utils/shared/common";
+import { mcpValueRecord } from "@/utils/mcp/values";
 import {
   normalizeHeaderValue,
   isMaskedHeaderValue,
@@ -2686,7 +2688,7 @@ export class MCPService {
    * API-key handling so the two behave identically:
    *   - MASKED_API_KEY        -> keep the existing stored secret (the UI never saw the real one)
    *   - "${global:VAR}"       -> a global-variable binding; store the reference verbatim
-   *   - "encrypted[_failed]:"  -> already encrypted; store as-is (idempotent, no double-encrypt)
+   *   - "encrypted:"         -> already encrypted; store as-is (idempotent, no double-encrypt)
    *   - "" (empty)            -> cleared/unbound; store empty
    *   - anything else         -> a freshly typed plaintext secret; encrypt it at rest
    */
@@ -2694,15 +2696,56 @@ export class MCPService {
     incoming: string,
     existing: string | undefined,
   ): Promise<string> {
-    if (incoming === MASKED_API_KEY) return existing ?? "";
+    if (isMaskedHeaderValue(incoming)) incoming = existing ?? "";
     if (!incoming) return "";
     if (incoming.startsWith("${global:")) return incoming;
-    if (
-      incoming.startsWith("encrypted:") ||
-      incoming.startsWith("encrypted_failed:")
-    )
-      return incoming;
-    return await encryptApiKey(incoming);
+    return this.encryptSecretForSave(incoming);
+  }
+
+  /** Never persist the legacy encryption-failure marker, which contains plaintext. */
+  private async encryptSecretForSave(value: string): Promise<string> {
+    if (value.startsWith("encrypted_failed:")) {
+      throw new Error("MCP credential encryption failed");
+    }
+    if (value.startsWith("encrypted:") && value.length > "encrypted:".length) {
+      return value;
+    }
+    const encrypted = await encryptApiKey(value);
+    if (!encrypted.startsWith("encrypted:") || encrypted.length <= "encrypted:".length) {
+      throw new Error("MCP credential encryption failed");
+    }
+    return encrypted;
+  }
+
+  /** Env maps replace the prior map; explicit masks retain secrets, omitted keys delete them. */
+  private async resolveEnvForSave(
+    incoming: Record<string, EnvVarValue>,
+    existing: Record<string, EnvVarValue> | undefined,
+  ): Promise<Record<string, EnvVarValue>> {
+    const result: Record<string, EnvVarValue> = {};
+    for (const [key, raw] of Object.entries(mcpValueRecord(incoming))) {
+      let value = typeof raw === "string" ? raw : raw.value;
+      const previous = existing?.[key];
+      const wasSecret = typeof previous === "object" && previous.metadata.isSecret;
+      const isSecret = typeof raw === "string"
+        ? wasSecret || isSecretEnvVar(key)
+        : raw.metadata.isSecret;
+      if (!isSecret) {
+        result[key] = raw;
+        continue;
+      }
+      if (isMaskedHeaderValue(value)) {
+        if (previous === undefined) continue;
+        value = typeof previous === "string" ? previous : previous.value;
+        // A placeholder without a stored credential must never become a runtime password.
+        if (isMaskedHeaderValue(value)) continue;
+      }
+      result[key] = {
+        value: !value || isGlobalBinding(value) ? value : await this.encryptSecretForSave(value),
+        metadata: { isSecret: true },
+      };
+    }
+    return result;
   }
 
   /**
@@ -2712,7 +2755,7 @@ export class MCPService {
    * they behave identically:
    *   - MASKED_API_KEY / MASKED_STRING -> keep the existing stored value (UI never saw the real one)
    *   - "${global:VAR}"                -> a global-variable binding; store the reference verbatim
-   *   - "encrypted[_failed]:"           -> already encrypted; store as-is (no double-encrypt)
+   *   - "encrypted:"                  -> already encrypted; store as-is (no double-encrypt)
    *   - "" (empty)                     -> cleared; drop the header
    *   - anything else                  -> a freshly typed plaintext secret; encrypt it at rest
    */
@@ -2723,7 +2766,8 @@ export class MCPService {
     const result: Record<string, MCPHeaderValue> = {};
     for (const [key, raw] of Object.entries(incoming || {})) {
       if (!key) continue;
-      const { value, isSecret } = normalizeHeaderValue(raw, key);
+      let { value } = normalizeHeaderValue(raw, key);
+      const { isSecret } = normalizeHeaderValue(raw, key);
 
       if (!isSecret) {
         // Non-secret header: store verbatim (drop empties). Keep the object shape so the
@@ -2737,20 +2781,17 @@ export class MCPService {
       // Secret header handling, mirroring resolveOAuthSecretForSave.
       if (isMaskedHeaderValue(value)) {
         const prev = existing?.[key];
-        if (prev !== undefined) result[key] = prev; // keep the stored (encrypted/bound) value
-        continue;
+        if (prev === undefined) continue;
+        value = normalizeHeaderValue(prev, key).value;
+        if (isMaskedHeaderValue(value)) continue;
       }
       if (!value) continue; // cleared
-      if (
-        isGlobalBinding(value) ||
-        value.startsWith("encrypted:") ||
-        value.startsWith("encrypted_failed:")
-      ) {
+      if (isGlobalBinding(value)) {
         result[key] = { value, metadata: { isSecret: true } };
         continue;
       }
       result[key] = {
-        value: await encryptApiKey(value),
+        value: await this.encryptSecretForSave(value),
         metadata: { isSecret: true },
       };
     }
@@ -2864,39 +2905,32 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
-    // Keep env `${global:VAR}` bindings verbatim in storage. They are resolved
-    // (and encrypted values decrypted) immediately before each connection in
-    // resolveConfigHeaders, matching custom-header behaviour. Baking globals at
-    // save time made bindings non-portable and prevented rotations from taking
-    // effect until the server was edited again.
+    // Encrypt all credential updates before saving or changing a live connection.
+    // Bindings remain references and are resolved/decrypted at connect time.
+    updates = { ...updates };
+    try {
+      if (updates.env !== undefined) {
+        updates.env = await this.resolveEnvForSave(updates.env, config.env);
+      }
+      const incomingSecret = (updates as Partial<MCPStreamableConfig>).oauthClientSecret;
+      if (incomingSecret !== undefined) {
+        const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
+        (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
+          await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
+      }
 
-    // OAuth client secret handling, mirroring model API-key semantics. The browser only ever
-    // sends MASKED_API_KEY (meaning "keep the stored secret"), a "${global:VAR}" binding, or a
-    // freshly typed plaintext secret — never the real stored value. Encrypt plaintext at rest;
-    // keep bindings and already-encrypted values as-is; an empty value clears it.
-    const incomingSecret = (updates as Partial<MCPStreamableConfig>)
-      .oauthClientSecret;
-    if (incomingSecret !== undefined) {
-      const existingSecret = (config as MCPStreamableConfig).oauthClientSecret;
-      (updates as Partial<MCPStreamableConfig>).oauthClientSecret =
-        await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
+      const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
+      if (incomingHeaders !== undefined) {
+        const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+        (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
+          await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
+      }
+    } catch {
+      // Do not log the original error: encryption failures may contain credential input.
+      return { success: false, error: "Failed to encrypt MCP credentials; configuration was not saved" };
     }
 
-    // Custom-header secret handling (#84), mirroring the OAuth secret contract above. Unlike
-    // env vars (resolved/baked in at save above), header ${global:} bindings are stored
-    // verbatim and resolved fresh at connect time (resolveConfigHeaders) so rotating the bound
-    // global takes effect without re-saving the server.
-    const incomingHeaders = (
-      updates as Partial<MCPSSEConfig | MCPStreamableConfig>
-    ).headers;
-    if (incomingHeaders !== undefined) {
-      const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig)
-        .headers;
-      (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
-        await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
-    }
-
-    // Update the config with the new values (including resolved env variables)
+    // Update the config with the protected values.
     let updatedConfig: MCPServerConfig = { ...config };
     updatedConfig = {
       ...config,
