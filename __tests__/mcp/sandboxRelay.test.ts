@@ -20,14 +20,26 @@ interface ViewFrame {
  * Boot the inlined proxy script in a VM with a minimal DOM, exposing the frames
  * it creates plus hooks to drive host/View messages through the relay.
  */
-function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameOriginView?: boolean } = {}) {
-  const html = buildSandboxProxyHtml([], false, options.csp);
+function bootProxy(options: {
+  csp?: Parameters<typeof buildSandboxCsp>[0];
+  sameOriginView?: boolean;
+  allowAll?: boolean;
+  hostOrigin?: string;
+} = {}) {
+  const hostOrigin = options.hostOrigin ?? HOST_ORIGIN;
+  const html = buildSandboxProxyHtml([], false, options.csp, options.allowAll);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   expect(script).toBeDefined();
 
   const parentMessages: unknown[] = [];
+  const parentTargetOrigins: string[] = [];
   const frames: ViewFrame[] = [];
-  const parentWindow = { postMessage: (message: unknown) => parentMessages.push(message) };
+  const parentWindow = {
+    postMessage: (message: unknown, targetOrigin: string) => {
+      parentMessages.push(message);
+      parentTargetOrigins.push(targetOrigin);
+    },
+  };
   let messageHandler: ((event: any) => void) | undefined;
   const replaceState = jest.fn();
 
@@ -76,7 +88,7 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
     URL,
     console,
     document: {
-      referrer: `${HOST_ORIGIN}/`,
+      referrer: `${hostOrigin}/`,
       body: { appendChild: jest.fn() },
       createElement,
     },
@@ -86,17 +98,56 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
   expect(messageHandler).toBeDefined();
   return {
     parentMessages,
+    parentTargetOrigins,
     frames,
     replaceState,
     view: () => frames[frames.length - 1],
-    fromHost: (data: unknown, origin = HOST_ORIGIN) =>
+    fromHost: (data: unknown, origin = hostOrigin) =>
       messageHandler!({ source: parentWindow, origin, data }),
+    fromOtherWindow: (data: unknown, origin = hostOrigin) =>
+      messageHandler!({ source: {}, origin, data }),
     fromView: (data: unknown, origin = SANDBOX_ORIGIN) =>
       messageHandler!({ source: frames[frames.length - 1].contentWindow, origin, data }),
   };
 }
 
 describe('MCP App sandbox proxy relay', () => {
+  it.each([HOST_ORIGIN, 'https://hosted.example.com'])(
+    'loads and relays the View with allow-all enabled for %s',
+    (hostOrigin) => {
+      const proxy = bootProxy({ allowAll: true, hostOrigin });
+      const resourceReady = {
+        jsonrpc: '2.0',
+        method: 'ui/notifications/sandbox-resource-ready',
+        params: { html: '<title>app</title>' },
+      };
+
+      // Allow-all relaxes the origin policy, never the parent Window check.
+      proxy.fromOtherWindow(resourceReady);
+      expect(proxy.frames).toHaveLength(0);
+      proxy.fromHost(resourceReady);
+      expect(proxy.frames).toHaveLength(1);
+      expect(proxy.view().written).toContain('<title>app</title>');
+
+      const initialize = { jsonrpc: '2.0', method: 'ui/initialize', id: 1 };
+      proxy.fromView(initialize);
+      expect(proxy.parentMessages).toHaveLength(2);
+      expect(proxy.parentMessages[1]).toEqual(initialize);
+      expect(proxy.parentTargetOrigins).toEqual(['*', '*']);
+
+      const response = { jsonrpc: '2.0', id: 1, result: {} };
+      proxy.fromHost(response);
+      expect(proxy.view().messages).toEqual([response]);
+
+      proxy.fromOtherWindow(response);
+      proxy.fromHost({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-custom' });
+      proxy.fromView(resourceReady);
+      proxy.fromView(initialize, 'https://unrelated.example.com');
+      expect(proxy.view().messages).toEqual([response]);
+      expect(proxy.parentMessages).toHaveLength(2);
+    },
+  );
+
   it('consumes host resource-ready and blocks every other reserved sandbox message', () => {
     const resourceCsp = {
       connectDomains: ['https://api.example.com'],
