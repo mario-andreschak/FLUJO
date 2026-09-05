@@ -29,10 +29,24 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 
+# CI supplies these from the checked-out source before building. Empty defaults
+# deliberately do not claim compatibility or a published revision for an
+# unlabelled local build. The worker resolver requires the complete labels.
+ARG FLUJO_APPLICATION_VERSION=""
+ARG FLUJO_BUILD_REVISION=""
+LABEL io.flujo.application.version="${FLUJO_APPLICATION_VERSION}" \
+      io.flujo.snapshot.format="2" \
+      io.flujo.workspace.layout="2" \
+      io.flujo.worker.protocol="1" \
+      org.opencontainers.image.version="${FLUJO_APPLICATION_VERSION}" \
+      org.opencontainers.image.revision="${FLUJO_BUILD_REVISION}" \
+      org.opencontainers.image.source="https://github.com/mario-andreschak/FLUJO"
+
 # Mark the install so /api/update reports "pull a new image" instead of a
 # broken in-app git updater. The MCP Apps sandbox is a second browser origin;
 # containers listen beyond loopback while publication remains runner-controlled.
 ENV NODE_ENV=production \
+    FLUJO_BUILD_REVISION=${FLUJO_BUILD_REVISION} \
     FLUJO_CONTAINER=1 \
     FLUJO_APP_ROOT=/app \
     FLUJO_DATA_DIR=/app/data \
@@ -72,6 +86,13 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
 # packages before npm ci so their exact root dependency pins become local links;
 # `npx --no-install` can then resolve every shipped binary without a registry.
 COPY --from=builder /app/package.json /app/package-lock.json ./
+# A mistyped build argument must not advertise a version this image cannot restore.
+RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
+      node -e 'if (require("./package.json").version !== process.argv[1]) process.exit(1)' "$FLUJO_APPLICATION_VERSION"; \
+    fi \
+    && if [ -n "$FLUJO_BUILD_REVISION" ]; then \
+      node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION)) process.exit(1)'; \
+    fi
 COPY --from=builder /app/mcp-servers ./mcp-servers
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.

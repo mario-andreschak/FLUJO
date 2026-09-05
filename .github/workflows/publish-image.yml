@@ -41,6 +41,10 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Read package.json version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Build local image for process-boundary smoke
         uses: docker/build-push-action@v6
         with:
@@ -48,6 +52,9 @@ jobs:
           load: true
           push: false
           tags: flujo-process-boundary-smoke:${{ github.sha }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
           cache-from: type=gha
 
       - name: Exercise MCP proxy in the local image
@@ -74,10 +81,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Read package.json version
-        id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
       - name: Docker metadata (tags + OCI labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -95,5 +98,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

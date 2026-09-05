@@ -5,6 +5,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { WORKSPACE_SUBTREES, getWorkspaceDataDir } from '@/utils/workspace';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
+import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { addFolderToZipLinkSafe } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
@@ -26,7 +27,7 @@ export interface SnapshotManifestFile {
 }
 
 export interface WorkspaceSnapshotManifest {
-  formatVersion: 2;
+  formatVersion: typeof WORKER_SNAPSHOT_FORMAT_VERSION;
   layoutVersion: number;
   workspace: string;
   generation: number;
@@ -345,7 +346,7 @@ export async function captureWorkspaceSnapshot(
 
   files.sort((left, right) => left.path.localeCompare(right.path));
   const manifest: WorkspaceSnapshotManifest = {
-    formatVersion: 2,
+    formatVersion: WORKER_SNAPSHOT_FORMAT_VERSION,
     layoutVersion: WORKSPACE_LAYOUT_VERSION,
     workspace,
     generation,
