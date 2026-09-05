@@ -1110,10 +1110,18 @@ describe('Persona deletion policy', () => {
         enabled: false,
         personaRetired: true,
         personaArchived: true,
+        emergency: false,
+        superExclusive: false,
+        startRestriction: 'unrestricted',
       }));
       expect(archivedExecution).not.toHaveProperty('personaId');
       expect(configs.executions.find((execution) => execution.id === seeded.otherExecution.id))
-        .toEqual(seeded.otherExecution);
+        .toEqual({
+          ...seeded.otherExecution,
+          emergency: false,
+          superExclusive: false,
+          startRestriction: 'unrestricted',
+        });
 
       const runs = await loadRunRecords(seeded.historyId);
       expect(runs).toEqual([
@@ -1240,10 +1248,18 @@ describe('Persona deletion policy', () => {
         ...seeded.targetExecution,
         enabled: false,
         personaRetired: true,
+        emergency: false,
+        superExclusive: false,
+        startRestriction: 'unrestricted',
       });
       expect(retainedSnapshot.configs.executions.find(
         (execution) => execution.id === seeded.otherExecution.id,
-      )).toEqual(seeded.otherExecution);
+      )).toEqual({
+        ...seeded.otherExecution,
+        emergency: false,
+        superExclusive: false,
+        startRestriction: 'unrestricted',
+      });
       await expect(loadRunRecords(seeded.historyId)).resolves.toEqual(seeded.runRecords);
       await expect(loadItem('scheduler-terminal-publication-outbox' as StorageKey, {}))
         .resolves.toEqual(seeded.terminalOutbox);

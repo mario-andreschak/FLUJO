@@ -47,6 +47,13 @@ jest.mock('@/backend/services/mcp/betaClient', () => ({
   negotiatedProtocolVersion: jest.fn(() => undefined),
 }));
 
+// This second connection preference also reads workspace Settings. Keep real
+// filesystem I/O outside the fake-timer reconnect test; the policy itself is
+// covered by runtimeHomeIsolation.test.ts.
+jest.mock('@/backend/services/mcp/runtimeHomeIsolation', () => ({
+  resolveRuntimeHomeIsolation: jest.fn(async () => false),
+}));
+
 import { MCPService } from '@/backend/services/mcp';
 import {
   createNewClient,
