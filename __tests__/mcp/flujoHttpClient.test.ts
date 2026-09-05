@@ -5,11 +5,17 @@ import { MCP_SKILLS_SUPPORTED_REVISION as HOST_SKILLS_REVISION } from '@/shared/
 describe('standalone flujo HTTP client', () => {
   const originalBaseUrl = process.env.FLUJO_BASE_URL;
   const originalFetch = global.fetch;
+  const originalWorkerMode = process.env.FLUJO_WORKER_MODE;
+  const originalWorkerToken = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
 
   afterEach(() => {
     if (originalBaseUrl === undefined) delete process.env.FLUJO_BASE_URL;
     else process.env.FLUJO_BASE_URL = originalBaseUrl;
     global.fetch = originalFetch;
+    if (originalWorkerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+    else process.env.FLUJO_WORKER_MODE = originalWorkerMode;
+    if (originalWorkerToken === undefined) delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    else process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = originalWorkerToken;
     jest.restoreAllMocks();
   });
 
@@ -72,6 +78,22 @@ describe('standalone flujo HTTP client', () => {
     }) as typeof fetch;
 
     await expect(flujoRequest('listTools')).rejects.toThrow('Storage is locked');
+  });
+
+  it('authenticates internal worker requests and refuses to send that token off-host', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-token';
+    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200';
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{"tools":[]}' });
+    global.fetch = fetchMock as typeof fetch;
+    await flujoRequest('listTools');
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: expect.objectContaining({ authorization: 'Bearer synthetic-worker-token' }),
+    }));
+    fetchMock.mockClear();
+    process.env.FLUJO_BASE_URL = 'https://original-host.example';
+    await expect(flujoRequest('listTools')).rejects.toThrow('loopback');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('validates standalone Skills responses before forwarding them', async () => {

@@ -275,7 +275,9 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         requestId,
         error,
         duration: `${duration}ms`,
-        headers: Object.fromEntries(request.headers)
+        // Worker control tokens and other credentials arrive in headers.
+        // Header names are sufficient for request-shape diagnostics.
+        headerNames: Array.from(request.headers.keys())
       });
       throw error;
     }
@@ -289,7 +291,7 @@ export async function _logRequestDetails(request: NextRequest) {
   log.debug('Request details', { 
     url: request.url,
     method: request.method,
-    headers: Object.fromEntries(request.headers)
+    headerNames: Array.from(request.headers.keys())
   });
   
   if (request.nextUrl.search) {

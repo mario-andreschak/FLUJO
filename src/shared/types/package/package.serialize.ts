@@ -63,6 +63,11 @@ export function collectFlowReferences(flow: Flow): PackagedFlowReferences {
     if (nodeType === 'subflow' && typeof flowRef === 'string' && flowRef) {
       flowIds.add(flowRef);
     }
+    if (nodeType === 'subflow' && Array.isArray(props.parallelSubflowIds)) {
+      for (const id of props.parallelSubflowIds) {
+        if (typeof id === 'string' && id) flowIds.add(id);
+      }
+    }
 
     const modelRef = props.boundModel ?? props.modelId ?? props.model;
     if (typeof modelRef === 'string' && modelRef) modelIds.add(modelRef);

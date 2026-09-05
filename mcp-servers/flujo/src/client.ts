@@ -76,7 +76,16 @@ const STATE_TOOLS = new Set([
 
 export function flujoBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.FLUJO_BASE_URL?.trim();
-  return (configured || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+  const result = (configured || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+  if (env.FLUJO_WORKER_MODE === '1') {
+    const url = new URL(result);
+    if (!['http:', 'https:'].includes(url.protocol)
+        || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+        || url.username || url.password) {
+      throw new Error('The worker FLUJO MCP client requires a loopback FLUJO_BASE_URL.');
+    }
+  }
+  return result;
 }
 
 export function flujoWorkspace(env: NodeJS.ProcessEnv = process.env): string {
@@ -111,6 +120,9 @@ async function requestJson<T>(
       headers: {
         accept: 'application/json',
         'x-flujo-workspace': flujoWorkspace(),
+        ...(process.env.FLUJO_WORKER_MODE === '1' && process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN
+          ? { authorization: `Bearer ${process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN}` }
+          : {}),
         ...(init.body ? { 'content-type': 'application/json' } : {}),
         ...init.headers,
       },

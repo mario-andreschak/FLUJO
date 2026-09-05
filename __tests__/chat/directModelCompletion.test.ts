@@ -169,6 +169,22 @@ describe('model- routing on /v1/chat/completions', () => {
 });
 
 describe('flow- regression on /v1/chat/completions', () => {
+  it('uses unattended engine behavior only in worker mode', async () => {
+    const originalMode = process.env.FLUJO_WORKER_MODE;
+    try {
+      for (const [mode, source] of [['1', 'internal'], ['0', 'chat']]) {
+        process.env.FLUJO_WORKER_MODE = mode;
+        runFlowMock.mockResolvedValue({ flowNotFound: { name: 'Test' } });
+        await processChatCompletion({ model: 'flow-Test', messages: [{ role: 'user', content: 'Hi' }] } as any,
+          true, false, false, 'worker-conversation');
+        expect(runFlowMock).toHaveBeenLastCalledWith(expect.objectContaining({ source }));
+      }
+    } finally {
+      if (originalMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+      else process.env.FLUJO_WORKER_MODE = originalMode;
+    }
+  });
+
   it.each(['flow-Test', 'Test'])('still routes %s into runFlow with identical arguments', async (modelId) => {
     // flowNotFound is the cheapest complete runFlow result — the assertion is
     // about the arguments reaching runFlow, not about flow execution itself.

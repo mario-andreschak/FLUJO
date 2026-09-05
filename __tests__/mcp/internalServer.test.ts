@@ -162,6 +162,28 @@ describe('normal stdio delivery', () => {
     expect(launch.args).toEqual(config.args);
   });
 
+  it('adds the worker HTTP bearer only to the live bundled FLUJO launch', () => {
+    const mode = process.env.FLUJO_WORKER_MODE;
+    const token = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    try {
+      process.env.FLUJO_WORKER_MODE = '1';
+      process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-worker-token';
+      const flujo = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'flujo')!);
+      const filesystem = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'filesystem')!);
+      expect(flujo.env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
+      expect(resolveStdioLaunch(flujo).env).toMatchObject({
+        FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'synthetic-worker-token',
+      });
+      expect(flujo.env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
+      expect(resolveStdioLaunch(filesystem).env).not.toHaveProperty('FLUJO_SNAPSHOT_CONTROL_TOKEN');
+    } finally {
+      if (mode === undefined) delete process.env.FLUJO_WORKER_MODE;
+      else process.env.FLUJO_WORKER_MODE = mode;
+      if (token === undefined) delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+      else process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = token;
+    }
+  });
+
   it('forwards only documented environment controls by default', () => {
     const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
     const env = shippedServerEnv(descriptor, {

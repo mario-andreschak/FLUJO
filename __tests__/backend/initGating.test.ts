@@ -30,6 +30,29 @@ const reconcilePersonaRoleBehaviorsMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
 const startPersonaFlowDispatcherMock = jest.fn();
 const reconcilePersonaSchedulerProjectionsMock = jest.fn();
+const restoreWorkerSnapshotMock = jest.fn();
+const unlockWorkerSnapshotMock = jest.fn();
+const verifyWorkerCodexAuthMock = jest.fn();
+const reinstallWorkspaceMcpServersMock = jest.fn();
+const loadServerConfigsMock = jest.fn();
+const getServerStatusMock = jest.fn();
+const reconcileOrphanedTasksMock = jest.fn();
+const resumeRemoteMcpTasksMock = jest.fn();
+
+jest.mock('@/backend/services/workspace/snapshotRestore', () => ({
+  restoreConfiguredWorkerSnapshot: (...a: unknown[]) => restoreWorkerSnapshotMock(...a),
+  unlockWorkerSnapshot: (...a: unknown[]) => unlockWorkerSnapshotMock(...a),
+  verifyWorkerCodexAuth: (...a: unknown[]) => verifyWorkerCodexAuthMock(...a),
+}));
+jest.mock('@/backend/services/packages/workspaceMcpTransfer', () => ({
+  reinstallWorkspaceMcpServers: (...a: unknown[]) => reinstallWorkspaceMcpServersMock(...a),
+}));
+jest.mock('@/backend/services/subflowTasks', () => ({
+  reconcileOrphanedTasks: (...a: unknown[]) => reconcileOrphanedTasksMock(...a),
+}));
+jest.mock('@/backend/services/mcp/remoteTaskResume', () => ({
+  resumeRemoteMcpTasks: (...a: unknown[]) => resumeRemoteMcpTasksMock(...a),
+}));
 
 jest.mock('@/utils/storage/backend', () => ({
   verifyStorage: (...a: unknown[]) => verifyStorageMock(...a),
@@ -42,7 +65,11 @@ jest.mock('@/backend/services/enduringAgents/directoryShardingMigration', () => 
     migrateEnduringAgentDirectoryShardsMock(...a),
 }));
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
+  mcpService: {
+    startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a),
+    loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...a),
+    getServerStatus: (...a: unknown[]) => getServerStatusMock(...a),
+  },
 }));
 jest.mock('@/backend/services/mcp/shippedServerMigration', () => ({
   migrateShippedMcpServers: (...a: unknown[]) => migrateInternalMcpServersMock(...a),
@@ -77,6 +104,7 @@ import {
   onUnlocked,
 } from '@/backend/init';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
+import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 
 function clearGlobals(): void {
   (global as any).__flujo_init_promise = undefined;
@@ -86,6 +114,7 @@ function clearGlobals(): void {
 }
 
 describe('backend init startup gating (#78)', () => {
+  const originalWorkerMode = process.env.FLUJO_WORKER_MODE;
   beforeEach(() => {
     jest.clearAllMocks();
     clearGlobals();
@@ -104,6 +133,23 @@ describe('backend init startup gating (#78)', () => {
     schedulerStartMock.mockResolvedValue(undefined);
     isEncryptionLockedMock.mockResolvedValue(false);
     isUserEncryptionEnabledMock.mockResolvedValue(false);
+    delete process.env.FLUJO_WORKER_MODE;
+    global.__flujo_worker_bootstrap_status = undefined;
+    restoreWorkerSnapshotMock.mockResolvedValue({ workspace: 'default-workspace', codexAuth: 'none', encryption: 'default',
+      mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot: '/source', servers: [] } });
+    unlockWorkerSnapshotMock.mockResolvedValue(undefined);
+    verifyWorkerCodexAuthMock.mockResolvedValue(undefined);
+    reinstallWorkspaceMcpServersMock.mockResolvedValue({ ok: true, servers: [{ name: 'server-one', status: 'ready' }] });
+    loadServerConfigsMock.mockResolvedValue([{ name: 'server-one' }]);
+    getServerStatusMock.mockResolvedValue({ status: 'connected' });
+    reconcileOrphanedTasksMock.mockResolvedValue(undefined);
+    resumeRemoteMcpTasksMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    if (originalWorkerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+    else process.env.FLUJO_WORKER_MODE = originalWorkerMode;
+    global.__flujo_worker_bootstrap_status = undefined;
   });
 
   it('DEFAULT mode: verifies storage, then starts MCP servers, then arms the scheduler at boot', async () => {
@@ -237,5 +283,44 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock).toHaveBeenCalledTimes(2);
     expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(2);
     expect(schedulerStartMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('worker boot unlocks and prepares MCP dependencies without replaying copied background work', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    await ensureBackendInitialized();
+    expect(unlockWorkerSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(reinstallWorkspaceMcpServersMock).toHaveBeenCalledTimes(1);
+    expect(reinstallWorkspaceMcpServersMock.mock.invocationCallOrder[0]).toBeLessThan(startEnabledServersMock.mock.invocationCallOrder[0]);
+    expect(reconcileOrphanedTasksMock).not.toHaveBeenCalled();
+    expect(resumeRemoteMcpTasksMock).not.toHaveBeenCalled();
+    expect(reconcilePersonaRoleBehaviorsMock).not.toHaveBeenCalled();
+    expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+    expect(migrateEnduringAgentDirectoryShardsMock).not.toHaveBeenCalled();
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
+    expect(getWorkerBootstrapStatus().state).toBe('ready');
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    await onUnlocked();
+    expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
+    expect(reconcilePersonaSchedulerProjectionsMock).not.toHaveBeenCalled();
+  });
+
+  it('worker startup failure stays unready and can be retried', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    reinstallWorkspaceMcpServersMock.mockResolvedValueOnce({ ok: false, servers: [{ name: 'broken', status: 'failed' }] });
+    await expect(ensureBackendInitialized()).rejects.toThrow('MCP dependency');
+    expect(getWorkerBootstrapStatus().state).toBe('error');
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    await ensureBackendInitialized();
+    expect(getWorkerBootstrapStatus().state).toBe('ready');
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+  });
+
+  it('worker readiness rejects a server whose startup silently failed', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    getServerStatusMock.mockResolvedValue({ status: 'error', message: 'credential-bearing diagnostic' });
+    await expect(ensureBackendInitialized()).rejects.toThrow('MCP startup failed');
+    expect(getWorkerBootstrapStatus().state).toBe('error');
+    expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('credential-bearing diagnostic');
   });
 });

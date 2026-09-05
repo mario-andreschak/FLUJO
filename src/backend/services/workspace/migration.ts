@@ -19,6 +19,7 @@ import {
   setWorkspaceLayoutPreparation,
 } from './layoutReadiness';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
+import { isWorkerMode } from './workerMode';
 import {
   reportWorkspaceMigration as migrationConsole,
   resetWorkspaceMigrationProgress,
@@ -789,7 +790,13 @@ export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {
     workspaceRoot: getWorkspaceDir(DEFAULT_WORKSPACE),
     strategy: 'direct rename/merge',
   });
-  const promise = runDirectMigration().catch(error => {
+  const preparation = isWorkerMode()
+    ? import('./snapshotRestore').then(async ({ restoreConfiguredWorkerSnapshot }) => {
+      await restoreConfiguredWorkerSnapshot();
+      return runDirectMigration();
+    })
+    : runDirectMigration();
+  const promise = preparation.catch(error => {
     migrationConsole('FAILED - no conflicting data was overwritten', {
       elapsed: `${((Date.now() - startedAt) / 1_000).toFixed(1)}s`,
       error: error instanceof Error ? error.message : String(error),

@@ -19,6 +19,8 @@ import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_CAPTURE_TIMEOUT_MS = 30_000;
+const MAX_CAPTURE_TIMEOUT_MS = 60_000;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -42,6 +44,7 @@ export interface SnapshotInfo {
   archiveBytes?: number;
   sha256?: string;
   errorCode?: string;
+  error?: string;
 }
 
 interface SnapshotSessionRecord {
@@ -58,7 +61,10 @@ interface SnapshotSessionRecord {
   archivePath?: string;
   stagingDir?: string;
   errorCode?: string;
+  error?: string;
   abortRequested: boolean;
+  controller: AbortController;
+  flowIds?: string[];
   expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -93,6 +99,12 @@ function sessionTtlMs(): number {
   return Math.min(configured, MAX_SESSION_TTL_MS);
 }
 
+function captureTimeoutMs(): number {
+  const configured = Number.parseInt(process.env.FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS ?? '', 10);
+  if (!Number.isSafeInteger(configured) || configured <= 0) return DEFAULT_CAPTURE_TIMEOUT_MS;
+  return Math.min(configured, MAX_CAPTURE_TIMEOUT_MS);
+}
+
 function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
   return {
     sessionId: session.sessionId,
@@ -106,6 +118,7 @@ function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
     archiveBytes: session.archiveBytes,
     sha256: session.sha256,
     errorCode: session.errorCode,
+    error: session.error,
   };
 }
 
@@ -134,6 +147,7 @@ async function expireSession(session: SnapshotSessionRecord): Promise<void> {
   session.abortRequested = true;
   session.state = 'aborted';
   session.errorCode = 'SNAPSHOT_EXPIRED';
+  session.controller.abort(new Error('Snapshot session expired.'));
   await removeStaging(session);
 }
 
@@ -169,19 +183,32 @@ function requireSession(workspace: string, sessionId: string): SnapshotSessionRe
 
 async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
   let boundary: WorkspaceSnapshotBoundary | undefined;
+  const { signal } = session.controller;
+  // Bound the whole write pause, including draining existing writers. The
+  // boundary listens to this signal itself, so cancellation releases it even
+  // if a filesystem operation has not returned to this function yet.
+  const pauseBudget = captureTimeoutMs();
+  const captureTimer = setTimeout(() => {
+    if (signal.aborted) return;
+    session.abortRequested = true;
+    session.state = 'failed';
+    session.errorCode = 'SNAPSHOT_TIMEOUT';
+    clearExpiryTimer(session);
+    session.controller.abort(new Error('Workspace snapshot exceeded its capture time limit.'));
+  }, pauseBudget);
+  captureTimer.unref?.();
   try {
-    boundary = await beginWorkspaceSnapshotBoundary(session.workspace);
+    boundary = await beginWorkspaceSnapshotBoundary(session.workspace, pauseBudget, signal);
     session.generation = boundary.generation;
-    if (session.abortRequested) {
-      session.state = 'aborted';
-      return;
-    }
+    signal.throwIfAborted();
     session.state = 'staging';
 
     const captured = await captureWorkspaceSnapshot(
       session.workspace,
       session.generation,
+      { signal, flowIds: session.flowIds },
     );
+    signal.throwIfAborted();
     session.bytesStaged = captured.bytes;
     session.filesStaged = captured.files;
 
@@ -189,27 +216,23 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     // managed writes before compression and archive persistence.
     boundary.release();
     boundary = undefined;
+    clearTimeout(captureTimer);
 
-    if (session.abortRequested) {
-      session.state = 'aborted';
-      return;
-    }
-
-    const archive = await writeWorkspaceSnapshotArchive(captured);
+    const archive = await writeWorkspaceSnapshotArchive(captured, { signal });
     session.archivePath = archive.archivePath;
     session.stagingDir = archive.stagingDir;
     session.archiveBytes = archive.size;
     session.sha256 = archive.sha256;
 
     if (session.abortRequested) {
-      session.state = 'aborted';
+      if (session.errorCode !== 'SNAPSHOT_TIMEOUT') session.state = 'aborted';
       await removeStaging(session);
       return;
     }
     session.state = 'ready';
   } catch (error) {
     if (session.abortRequested) {
-      session.state = 'aborted';
+      if (session.errorCode !== 'SNAPSHOT_TIMEOUT') session.state = 'aborted';
     } else {
       session.state = 'failed';
       clearExpiryTimer(session);
@@ -220,9 +243,13 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
           : error instanceof Error && error.name === 'WorkspaceSnapshotTimeoutError'
             ? 'SNAPSHOT_TIMEOUT'
             : 'SNAPSHOT_FAILED';
+      // Archive errors are deliberately credential-free, actionable preflight
+      // messages. Never expose arbitrary filesystem/parser/provider exceptions.
+      session.error = error instanceof SnapshotArchiveError ? error.message : undefined;
     }
     await removeStaging(session);
   } finally {
+    clearTimeout(captureTimer);
     boundary?.release();
   }
 }
@@ -250,10 +277,13 @@ export const snapshotCoordinator = {
     };
   },
 
-  async begin(workspace = getCurrentWorkspace()): Promise<SnapshotInfo> {
+  async begin(workspace = getCurrentWorkspace(), options: { flowIds?: string[] } = {}): Promise<SnapshotInfo> {
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
-    const existing = await currentSession(normalizedWorkspace);
-    if (existing && !isTerminal(existing.state)) {
+    // Admission must be synchronous through sessions.set(). An await while
+    // checking or cleaning the old record lets two callers reserve the same
+    // workspace and makes one operation's archive inaccessible.
+    const existing = sessions.get(normalizedWorkspace);
+    if (existing && !isTerminal(existing.state) && Date.now() <= existing.expiresAtMs) {
       throw new SnapshotCoordinatorError(
         'SNAPSHOT_BUSY',
         409,
@@ -261,8 +291,13 @@ export const snapshotCoordinator = {
       );
     }
     if (existing) {
-      await removeStaging(existing);
-      sessions.delete(normalizedWorkspace);
+      // Each operation owns its cleanup even after its map entry is replaced.
+      // Late archive completion observes the same abort signal and cleans up.
+      if (!isTerminal(existing.state)) void expireSession(existing);
+      else {
+        clearExpiryTimer(existing);
+        void removeStaging(existing);
+      }
     }
 
     const now = Date.now();
@@ -277,13 +312,13 @@ export const snapshotCoordinator = {
       bytesStaged: 0,
       filesStaged: 0,
       abortRequested: false,
+      controller: new AbortController(),
+      flowIds: options.flowIds ? [...options.flowIds] : undefined,
     };
     sessions.set(normalizedWorkspace, session);
     const expiryTimer = setTimeout(() => {
       void runWithWorkspace(normalizedWorkspace, async () => {
-        if (sessions.get(normalizedWorkspace) === session) {
-          await expireSession(session);
-        }
+        await expireSession(session);
       });
     }, ttlMs);
     expiryTimer.unref?.();
@@ -382,6 +417,7 @@ export const snapshotCoordinator = {
     clearExpiryTimer(session);
     session.abortRequested = true;
     session.state = 'aborted';
+    session.controller.abort(new Error('Snapshot session was aborted.'));
     await removeStaging(session);
     return publicInfo(session);
   },

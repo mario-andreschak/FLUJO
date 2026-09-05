@@ -346,15 +346,15 @@ export async function resolveRegistryEntry(registryName: string): Promise<Regist
 }
 
 /**
- * Install a registry server end-to-end: resolve → build config → save (which
- * connects) → list tools. Idempotent-ish: an existing server of the same name is
- * left untouched and reported with its tools.
+ * Resolve and prepare a Registry configuration without saving, connecting, or
+ * adopting an existing server. Both package installation and workspace restore
+ * use this preparation step before applying their different persistence rules.
  */
-export async function installRegistryServer(
+export async function prepareRegistryServerRuntime(
   registryName: string,
   envOverrides?: Record<string, string>,
   options?: InstallOptions
-): Promise<InstallResult> {
+): Promise<InstallResult & { config?: Partial<MCPServerConfig> }> {
   if (!registryName || typeof registryName !== 'string') {
     return { installed: false, error: 'A registry server name is required' };
   }
@@ -494,6 +494,21 @@ export async function installRegistryServer(
   const config = templatedConfig;
   const serverName = config.name as string;
 
+  return { installed: false, serverName, plan, config };
+}
+
+/** Prepare once, then apply normal adopt-existing and installation semantics. */
+export async function installRegistryServer(
+  registryName: string,
+  envOverrides?: Record<string, string>,
+  options?: InstallOptions,
+): Promise<InstallResult> {
+  const prepared = await prepareRegistryServerRuntime(registryName, envOverrides, options);
+  const { config, ...result } = prepared;
+  if (!config) return result;
+  const serverName = config.name as string;
+  const plan = prepared.plan!;
+
   // Never clobber an existing server: report it as available instead.
   const existing = await mcpService.loadServerConfigs();
   if (Array.isArray(existing) && existing.some((c) => c.name === serverName)) {
@@ -509,7 +524,7 @@ export async function installRegistryServer(
     };
   }
 
-  log.info(`installRegistryServer: installing "${server.name}" as "${serverName}" (${option.kind})`);
+  log.info(`installRegistryServer: installing "${registryName}" as "${serverName}" (${config.transport})`);
   const saved = await mcpService.updateServerConfig(serverName, config);
   if (!Array.isArray(saved) && saved && 'success' in saved && saved.success === false) {
     return { installed: false, error: `Saving the server failed: ${saved.error ?? 'unknown error'}` };
@@ -540,8 +555,8 @@ export async function installRegistryServer(
       serverName,
       plan,
       error: error
-        ? `"${server.name}" failed to start: ${error}`
-        : `"${server.name}" connected but exposed no tools — rejected by the works-gate. Try a different server.`,
+        ? `"${registryName}" failed to start: ${error}`
+        : `"${registryName}" connected but exposed no tools — rejected by the works-gate. Try a different server.`,
     };
   }
 

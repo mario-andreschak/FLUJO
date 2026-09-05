@@ -8,6 +8,7 @@ const INSTALLATION_WIDE = new Set([
   '/api/runtime-environment',
   '/api/telemetry/daily-active',
   '/api/update',
+  '/api/worker/status',
   '/api/workspaces',
 ]);
 const MARKER = 'FLUJO_INSTALLATION_WIDE_ROUTE:';

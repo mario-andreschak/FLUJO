@@ -21,7 +21,7 @@ jest.mock('@/backend/services/mcp', () => ({
   },
 }));
 
-import { searchRegistry, installRegistryServer } from '@/backend/services/mcp/registryInstall';
+import { searchRegistry, installRegistryServer, prepareRegistryServerRuntime } from '@/backend/services/mcp/registryInstall';
 import type { RegistryServerResult } from '@/utils/mcp/registry';
 
 /** A registry entry with an npm stdio package (installable, no required env). */
@@ -79,6 +79,17 @@ describe('searchRegistry', () => {
 });
 
 describe('installRegistryServer', () => {
+  it('prepares a runtime even for an existing server without adopting, saving or connecting it', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    loadServerConfigsMock.mockResolvedValue([{ name: 'custom-voice', rootPath: 'C:\\old-path' }]);
+    const result = await prepareRegistryServerRuntime('io.github.acme/voice', undefined, { serverName: 'custom-voice' });
+    expect(result.config).toMatchObject({ name: 'custom-voice', command: 'npx', rootPath: 'mcp-servers/custom-voice' });
+    expect(result.alreadyExisted).toBeUndefined();
+    expect(loadServerConfigsMock).not.toHaveBeenCalled();
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+    expect(listServerToolsMock).not.toHaveBeenCalled();
+  });
+
   it('restores an exported remote transport even when a local package is listed first', async () => {
     const entry = npmEntry('io.github.github/github-mcp-server');
     entry.server.remotes = [

@@ -7,6 +7,7 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
+import { assertWorkerRequestReady } from '@/backend/services/workspace/workerMode';
 
 const log = createLogger('app/api/_workspace');
 
@@ -146,6 +147,8 @@ export async function withWorkspace<T>(
       ));
     }
 
+    const workerUnavailable = assertWorkerRequestReady(request, workspace);
+    if (workerUnavailable) return workerUnavailable;
     return handler(workspace);
   });
 }

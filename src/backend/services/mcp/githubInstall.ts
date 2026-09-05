@@ -32,6 +32,11 @@ export interface GithubInstallResult {
   error?: string;
 }
 
+export interface PreparedGithubServerRuntime extends GithubInstallResult {
+  /** Runtime configuration only; preparation never saves or connects a server. */
+  config?: Partial<MCPServerConfig>;
+}
+
 
 const INSTALL_TIMEOUT_MS = Math.max(
   60_000,
@@ -324,7 +329,7 @@ async function prepareRepository(
  * package.json. Package secrets are persisted in the server config but are
  * deliberately never exposed to the repository's install/build processes.
  */
-export async function installGithubServer(input: GithubInstallInput): Promise<GithubInstallResult> {
+export async function prepareGithubServerRuntime(input: GithubInstallInput): Promise<PreparedGithubServerRuntime> {
   let parsed: ParsedRepositoryReference;
   try {
     parsed = parseGithubRepositoryReference(input.repositoryUrl, input.ref);
@@ -396,13 +401,27 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
       _installCommand: installCommand,
       _buildCommand: buildCommand,
     } as unknown as Partial<MCPServerConfig>;
-    const saved = await mcpService.updateServerConfig(input.name, config);
+    return { installed: true, serverName: input.name, config };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { installed: false, error: redact(message, secretValues) };
+  }
+}
+
+/** Install using the same runtime preparation used when restoring a workspace. */
+export async function installGithubServer(input: GithubInstallInput): Promise<GithubInstallResult> {
+  const prepared = await prepareGithubServerRuntime(input);
+  if (!prepared.installed || !prepared.config) {
+    return { installed: false, ...(prepared.error ? { error: prepared.error } : {}) };
+  }
+  try {
+    const saved = await mcpService.updateServerConfig(input.name, prepared.config);
     if (!Array.isArray(saved) && saved && 'success' in saved && saved.success === false) {
       return { installed: false, error: saved.error ?? 'Saving the GitHub server failed' };
     }
     return { installed: true, serverName: input.name };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { installed: false, error: redact(message, secretValues) };
+    const secretValues = (input.secretEnvNames ?? []).map(name => input.env[name]).filter(Boolean);
+    return { installed: false, error: redact(error instanceof Error ? error.message : String(error), secretValues) };
   }
 }

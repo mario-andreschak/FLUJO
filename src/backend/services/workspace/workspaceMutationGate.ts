@@ -45,12 +45,6 @@ function stateFor(workspace: string): WorkspaceGateState {
   return state;
 }
 
-async function waitForAdmission(state: WorkspaceGateState): Promise<void> {
-  while (state.blocked) {
-    await new Promise<void>((resolve) => state.admissionWaiters.add(resolve));
-  }
-}
-
 function notifyDrain(state: WorkspaceGateState): void {
   if (state.activeMutations !== 0) return;
   const waiters = [...state.drainWaiters];
@@ -84,7 +78,12 @@ export async function withWorkspaceMutation<T>(
   const state = stateFor(normalizedWorkspace);
   // Avoid yielding between observing an open gate and incrementing the active
   // count; beginWorkspaceSnapshotBoundary() must see this admission atomically.
-  if (state.blocked) await waitForAdmission(state);
+  // Keep the final open-gate check and admission in this same continuation.
+  // An async helper returning after its check would allow another snapshot to
+  // close the gate before this continuation increments the active count.
+  while (state.blocked) {
+    await new Promise<void>((resolve) => state.admissionWaiters.add(resolve));
+  }
   state.activeMutations += 1;
 
   const nextContext: WorkspaceMutationContext = {
@@ -107,7 +106,9 @@ export async function withWorkspaceMutation<T>(
 export async function beginWorkspaceSnapshotBoundary(
   workspace = getCurrentWorkspace(),
   timeoutMs = 30_000,
+  signal?: AbortSignal,
 ): Promise<WorkspaceSnapshotBoundary> {
+  signal?.throwIfAborted();
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
   if (current?.workspaces.has(normalizedWorkspace)) {
@@ -124,6 +125,19 @@ export async function beginWorkspaceSnapshotBoundary(
   state.blocked = true;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let drainWaiter: (() => void) | undefined;
+  let rejectAbort: ((reason: unknown) => void) | undefined;
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    signal?.removeEventListener('abort', onAbort);
+    unblock(state);
+  };
+  const onAbort = (): void => {
+    release();
+    rejectAbort?.(signal?.reason ?? new Error('Workspace snapshot was aborted.'));
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
     if (state.activeMutations > 0) {
@@ -139,10 +153,12 @@ export async function beginWorkspaceSnapshotBoundary(
             reject(error);
           }, timeoutMs);
         }),
+        new Promise<never>((_resolve, reject) => { rejectAbort = reject; }),
       ]);
     }
+    signal?.throwIfAborted();
   } catch (error) {
-    unblock(state);
+    release();
     throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
@@ -150,14 +166,9 @@ export async function beginWorkspaceSnapshotBoundary(
   }
 
   state.generation += 1;
-  let released = false;
   return {
     generation: state.generation,
-    release(): void {
-      if (released) return;
-      released = true;
-      unblock(state);
-    },
+    release,
   };
 }
 
