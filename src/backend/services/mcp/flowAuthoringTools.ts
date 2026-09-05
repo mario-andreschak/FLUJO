@@ -56,6 +56,7 @@ import {
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { isVerifiedStatus } from '@/utils/mcp/registry';
+import { mcpValueRecord } from '@/utils/mcp/values';
 import { modelService } from '@/backend/services/model';
 import {
   assertAllowedArguments,
@@ -66,6 +67,23 @@ import {
 } from './listQuery';
 
 const log = createLogger('backend/services/mcp/flowAuthoringTools');
+
+const installValueSchema = {
+  oneOf: [
+    { type: 'string' },
+    {
+      type: 'object', additionalProperties: false,
+      properties: {
+        value: { type: 'string' },
+        metadata: {
+          type: 'object', additionalProperties: false,
+          properties: { isSecret: { type: 'boolean' } }, required: ['isSecret'],
+        },
+      },
+      required: ['value', 'metadata'],
+    },
+  ],
+};
 
 export const AUTHORING_TOOL_NAMES = [
   'list_flow_building_blocks',
@@ -327,9 +345,10 @@ export function authoringToolDefinitions(): Tool[] {
           env: {
             type: 'object',
             description: 'Optional env var values for the server (e.g. required API keys). Omit them to get needsEnv listing exactly which keys are required.',
-            additionalProperties: { type: 'string' },
+            additionalProperties: installValueSchema,
           },
-          headers: { type: 'object', description: 'Optional headers for a hosted endpoint.', additionalProperties: { type: 'string' } },
+          secretEnvNames: { type: 'array', minItems: 1, items: { type: 'string' }, description: 'Env names whose values must be stored as secrets; alternatively use {value, metadata:{isSecret:true}}.' },
+          headers: { type: 'object', description: 'Optional headers for a hosted endpoint.', additionalProperties: installValueSchema },
           ref: { type: 'string', description: 'Optional Git ref for a GitHub source.' },
           subdirectory: { type: 'string', description: 'Optional GitHub repository subdirectory containing package.json.' },
           installCommand: { type: 'string', description: 'Optional reviewed GitHub dependency-install command.' },
@@ -527,10 +546,8 @@ export async function authoringCallTool(
 
     if (toolName === 'install_mcp_server') {
       const source = args?.source ?? args?.name;
-      const env =
-        args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
-          ? (args.env as Record<string, string>)
-          : undefined;
+      const secretEnvNames = optionalStringArray(args, 'secretEnvNames');
+      const env = args.env === undefined ? undefined : mcpValueRecord(args.env, secretEnvNames);
 
       if (source === undefined || source === null || source === '') {
         return textResult({ error: 'Pass source (or the legacy exact Registry name field).' }, true);
@@ -544,8 +561,9 @@ export async function authoringCallTool(
             ? { transport: args.transport }
             : {}),
           ...(env ? { env } : {}),
-          ...(args.headers && typeof args.headers === 'object' && !Array.isArray(args.headers)
-            ? { headers: args.headers as Record<string, string> }
+          ...(secretEnvNames ? { secretEnvNames } : {}),
+          ...(args.headers !== undefined
+            ? { headers: mcpValueRecord(args.headers) }
             : {}),
           ...(typeof args.ref === 'string' ? { ref: args.ref } : {}),
           ...(typeof args.subdirectory === 'string' ? { subdirectory: args.subdirectory } : {}),

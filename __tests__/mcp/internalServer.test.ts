@@ -5,6 +5,15 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(),
 }));
 
+jest.mock('@/utils/logger', () => {
+  const log = jest.fn();
+  return {
+    ...jest.requireActual('@/utils/logger'),
+    __testLog: log,
+    createLogger: () => ({ debug: log, verbose: log, info: log, warn: log, error: log }),
+  };
+});
+
 import path from 'node:path';
 import { mcpService } from '@/backend/services/mcp';
 import { resolveStdioLaunch } from '@/backend/services/mcp/connection';
@@ -16,11 +25,12 @@ import {
 } from '@/backend/services/mcp/shippedServers';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
+const logMock = jest.requireMock('@/utils/logger').__testLog as jest.Mock;
 let storage: Map<StorageKey, unknown>;
 
 beforeAll(async () => {
@@ -121,6 +131,32 @@ describe('persisted shipped server configs', () => {
 });
 
 describe('normal stdio delivery', () => {
+  it.each([undefined, '1'])('never logs configured or resolved env values in worker mode %s', (workerMode) => {
+    const priorMode = process.env.FLUJO_WORKER_MODE;
+    try {
+      if (workerMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+      else process.env.FLUJO_WORKER_MODE = workerMode;
+      const config = {
+        name: 'secret-env-test', transport: 'stdio', command: 'node', args: ['server.js'],
+        rootPath: '.', disabled: false, _installCommand: '', _buildCommand: '',
+        env: {
+          TOKEN: { value: 'synthetic-wrapped-secret', metadata: { isSecret: true } },
+          LEGACY_TOKEN: 'synthetic-legacy-secret',
+        },
+      } as MCPStdioConfig;
+      const launch = resolveStdioLaunch(config);
+      expect(launch.env.TOKEN).toBe('synthetic-wrapped-secret');
+      expect(launch.env.LEGACY_TOKEN).toBe('synthetic-legacy-secret');
+      const logs = JSON.stringify(logMock.mock.calls);
+      expect(logs).toContain('TOKEN');
+      expect(logs).not.toContain('synthetic-wrapped-secret');
+      expect(logs).not.toContain('synthetic-legacy-secret');
+    } finally {
+      if (priorMode === undefined) delete process.env.FLUJO_WORKER_MODE;
+      else process.env.FLUJO_WORKER_MODE = priorMode;
+    }
+  });
+
   it('resolves Patchright\'s installation-wide browser cache on supported platforms', () => {
     expect(resolvePlaywrightBrowsersPath({ PLAYWRIGHT_BROWSERS_PATH: ' /shared/browsers ' }, 'linux'))
       .toBe('/shared/browsers');

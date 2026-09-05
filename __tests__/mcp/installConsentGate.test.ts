@@ -65,6 +65,29 @@ beforeEach(() => {
 });
 
 describe('install_mcp_server consent gate', () => {
+  it.each(['registry', 'command', 'server-json'])('retains caller secret metadata for %s installation and keeps values out of audit', async (kind) => {
+    loadAutoInstallSettingsMock.mockResolvedValue({ ...DEFAULT_MCP_AUTO_INSTALL_SETTINGS });
+    const secret = 'synthetic-api-secret';
+    const source = kind === 'registry' ? 'ai.example/web-search'
+      : kind === 'command' ? 'npx -y @example/direct-mcp'
+        : npmEntry('ai.example/web-search').server;
+    const result = payload(await authoringCallTool('install_mcp_server', {
+      source,
+      env: { TOKEN: { value: secret, metadata: { isSecret: true } }, OTHER: 'synthetic-second-secret' },
+      secretEnvNames: ['OTHER'],
+    }));
+    expect(result.installed).toBe(true);
+    expect(updateServerConfigMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      env: {
+        TOKEN: { value: secret, metadata: { isSecret: true } },
+        OTHER: { value: 'synthetic-second-secret', metadata: { isSecret: true } },
+      },
+    }));
+    expect(JSON.stringify(appendInstallAuditMock.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(appendInstallAuditMock.mock.calls)).not.toContain('synthetic-second-secret');
+  });
+
   it('does NOT spawn when consent is required (untrusted) — returns the plan + consentRequired, audits first', async () => {
     // Untrusted authoring tool: brain-stem trust off, consent required, empty allowlist.
     loadAutoInstallSettingsMock.mockResolvedValue({

@@ -864,7 +864,7 @@ export function resolveStdioLaunch(
     ? resolvedCwd
     : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
-  log.debug(`env: ${JSON.stringify(config.env)}`);
+  log.debug(`Environment variable names: ${JSON.stringify(Object.keys(config.env ?? {}))}`);
 
   // Transform the env object to extract only the value part from each key.
   const configuredEnv = transformEnv(config.env);
@@ -915,10 +915,8 @@ export function resolveStdioLaunch(
     );
   }
   log.verbose(
-    "Transformed environment variables",
-    process.env.FLUJO_WORKER_MODE === '1'
-      ? JSON.stringify(Object.keys(transformedEnv))
-      : JSON.stringify(transformedEnv),
+    "Transformed environment variable names",
+    JSON.stringify(Object.keys(transformedEnv)),
   );
 
   // Runtime-only credentials for the bundled FLUJO HTTP client. Do not put
