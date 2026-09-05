@@ -54,10 +54,17 @@ class MockIntersectionObserver {
 }
 
 function activeIntersectionObserver(): MockIntersectionObserver {
+  const root = screen.getByTestId('execution-modal-scroll-container');
+  const sections = ['when', 'what', 'restrictions'].map((section) => (
+    root.querySelector(`[data-section="${section}"]`)
+  ));
+  // MUI's scrollable Tabs also create observers for their first/last buttons.
+  // Select the modal's section observer by ownership, not creation order.
   const observer = [...intersectionObservers]
     .reverse()
-    .find((candidate) => !candidate.disconnected);
-  if (!observer) throw new Error('Expected an active IntersectionObserver');
+    .find((candidate) => !candidate.disconnected && candidate.root === root
+      && sections.every((section) => section !== null && candidate.observed.has(section)));
+  if (!observer) throw new Error('Expected an active modal observer covering all three sections');
   return observer;
 }
 
@@ -465,6 +472,39 @@ describe('ExecutionModal Persona targets', () => {
     expect(screen.getByRole('tab', {
       name: 'automations.modal.section.restrictions',
     })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('disconnects the portal observer on close and observes the new sections after reopening', async () => {
+    const onClose = jest.fn();
+    const onSaved = jest.fn();
+    const view = render(<ExecutionModal open execution={null} onClose={onClose} onSaved={onSaved} />);
+    await waitFor(() => expect(activeIntersectionObserver().observed.size).toBe(3));
+    const firstObserver = activeIntersectionObserver();
+
+    view.rerender(<ExecutionModal open={false} execution={null} onClose={onClose} onSaved={onSaved} />);
+    expect(firstObserver.disconnected).toBe(true);
+    expect(firstObserver.observed.size).toBe(0);
+    await waitFor(() => expect(screen.queryByTestId('execution-modal-scroll-container')).not.toBeInTheDocument());
+
+    view.rerender(<ExecutionModal open execution={null} onClose={onClose} onSaved={onSaved} />);
+    await waitFor(() => expect(activeIntersectionObserver().observed.size).toBe(3));
+    const reopenedObserver = activeIntersectionObserver();
+    expect(reopenedObserver).not.toBe(firstObserver);
+    expect(reopenedObserver.root).toBe(screen.getByTestId('execution-modal-scroll-container'));
+    expect(reopenedObserver.root).not.toBe(firstObserver.root);
+    const restrictionsSection = screen.getByRole('region', { name: 'automations.modal.section.restrictions' });
+    act(() => {
+      reopenedObserver.trigger([{
+        target: restrictionsSection, isIntersecting: true, intersectionRatio: 0.9,
+        boundingClientRect: restrictionsSection.getBoundingClientRect(),
+        intersectionRect: restrictionsSection.getBoundingClientRect(), rootBounds: null, time: 0,
+      }]);
+    });
+    expect(screen.getByRole('tab', { name: 'automations.modal.section.restrictions' })).toHaveAttribute('aria-selected', 'true');
+
+    view.unmount();
+    expect(reopenedObserver.disconnected).toBe(true);
+    expect(reopenedObserver.observed.size).toBe(0);
   });
 
   it('navigates to and focuses the first invalid section on save', async () => {

@@ -150,7 +150,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<ExecutionSection>('when');
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Dialog mounts its portal after the first render. Track the actual element
+  // so observer setup also runs when that delayed content becomes available.
+  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
   const whenRef = useRef<HTMLDivElement>(null);
   const whatRef = useRef<HTMLDivElement>(null);
   const restrictionsRef = useRef<HTMLDivElement>(null);
@@ -181,7 +183,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     setPersonaComposition(null);
     setPersonaCompositionError(false);
     setActiveSection('when');
-    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+    if (scrollContainer) scrollContainer.scrollTop = 0;
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
@@ -297,7 +299,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
   useEffect(() => {
     if (!open || typeof IntersectionObserver === 'undefined') return;
-    const root = scrollContainerRef.current;
+    const root = scrollContainer;
     if (!root) return;
     const observer = new IntersectionObserver((entries) => {
       if (programmaticScroll.current) return;
@@ -316,7 +318,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       if (ref.current) observer.observe(ref.current);
     });
     return () => observer.disconnect();
-  }, [open, execution]);
+  }, [open, execution, scrollContainer]);
 
   const handleSectionClick = (section: ExecutionSection) => {
     setActiveSection(section);
@@ -480,7 +482,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           </Tabs>
         </Box>
         <Box
-          ref={scrollContainerRef}
+          ref={setScrollContainer}
           data-testid="execution-modal-scroll-container"
           sx={{
             flexGrow: 1,
