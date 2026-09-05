@@ -228,14 +228,16 @@ describe('standalone stdio MCP packages', () => {
         name: 'browser_screenshot',
         arguments: {},
       });
-      const screenshotPath = (screenshot.structuredContent as { path: string }).path;
+      const screenshotArtifact = screenshot.structuredContent as { path: string; artifactId: string };
+      const screenshotPath = screenshotArtifact.path;
       expect(path.isAbsolute(screenshotPath)).toBe(true);
+      expect(screenshotArtifact.artifactId).toMatch(/^[0-9a-f-]{36}$/);
       expect(screenshotPath).toBe(path.join(
         path.resolve(dataDir),
         'screenshots',
         'browser',
         secondSessionId,
-        'viewport.png',
+        `${screenshotArtifact.artifactId}-viewport.png`,
       ));
       expect((await fs.stat(screenshotPath)).isFile()).toBe(true);
     } finally {

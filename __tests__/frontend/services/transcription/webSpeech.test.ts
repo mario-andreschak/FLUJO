@@ -36,12 +36,10 @@ describe('live Web Speech transcription', () => {
   beforeEach(() => {
     Object.defineProperty(window, 'SpeechRecognition', {
       configurable: true,
-      value: class extends MockSpeechRecognition {
-        constructor() {
-          super();
-          recognition = this;
-        }
-      },
+      value: jest.fn(() => {
+        recognition = new MockSpeechRecognition();
+        return recognition;
+      }),
     });
   });
 
