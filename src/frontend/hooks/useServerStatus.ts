@@ -469,7 +469,7 @@ export function useServerStatus() {
     serverName: string, 
     env: Record<string, { value: string, metadata: { isSecret: boolean } } | string>
   ) => {
-    log.debug(`Saving environment variables for server: ${serverName}`, env);
+    log.debug(`Saving environment variables for server: ${serverName}`, { variableNames: Object.keys(env) });
     try {
       const server = servers.find((s) => s.name === serverName);
       if (!server) {
