@@ -886,7 +886,9 @@ export function buildSandboxProxyHtml(
 
   window.addEventListener("message", function (event) {
     if (event.source === window.parent) {
-      if (event.origin !== EXPECTED_HOST_ORIGIN) { return; }
+      // "*" is a postMessage target, never a MessageEvent origin. In allow-all
+      // mode keep the parent Window check above without rejecting its messages.
+      if (!ALLOW_ALL && event.origin !== EXPECTED_HOST_ORIGIN) { return; }
       var data = event.data;
       if (data && data.method === RESOURCE_READY) {
         var params = data.params || {};
