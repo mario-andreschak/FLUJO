@@ -100,12 +100,23 @@ const url = `http://localhost:${port}`;
 console.log(`[FLUJO] Starting on ${url} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`);
 console.log(`[FLUJO] Data directory: ${process.env.FLUJO_DATA_DIR}`);
 
-const nextArgs = withExposureHostname(['start', '-p', String(port)], env);
+const { prepareLocalInstance, withLocalInstanceHostname } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'local-instance.mjs')).href);
+const nextArgs = withLocalInstanceHostname(withExposureHostname(['start', '-p', String(port)], env), env);
+let instance;
+try { instance = await prepareLocalInstance({ env, args: nextArgs, appRoot: packageRoot }); }
+catch {
+  console.error('[FLUJO] Could not prepare a private local instance.');
+  process.exit(1);
+}
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   stdio: 'inherit',
   cwd: packageRoot,
-  env,
+  env: instance.env,
 });
+const registered = instance.register(child.pid).catch(() => {
+  console.error('[FLUJO] Could not register private local instance discovery.');
+});
+process.once('exit', instance.cleanup);
 
 let requestedSignal;
 let forceKillTimer;
@@ -113,6 +124,7 @@ let openerTimer;
 
 function forwardShutdown(signal) {
   requestedSignal ??= signal;
+  instance.cleanup();
   if (openerTimer) clearTimeout(openerTimer);
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
@@ -137,7 +149,9 @@ child.on('error', (error) => {
   process.exit(1);
 });
 
-child.on('exit', (code, signal) => {
+child.on('exit', async (code, signal) => {
+  await registered;
+  instance.cleanup();
   if (forceKillTimer) clearTimeout(forceKillTimer);
   const exitSignal = requestedSignal ?? signal;
   // Preserve signal semantics on POSIX after the child is gone. Windows does

@@ -16,6 +16,7 @@ import {
   type WorkspaceSnapshotBoundary,
 } from './workspaceMutationGate';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
+import { getWorkerCompatibility, type WorkerCompatibility } from './workerCompatibility';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -258,6 +259,7 @@ export const snapshotCoordinator = {
   async info(workspace = getCurrentWorkspace()): Promise<{
     workspace: string;
     layoutVersion: number;
+    workerCompatibility: WorkerCompatibility;
     capability: 'available' | 'busy';
     coherence: 'registered-flujo-writers';
     externalRootsIncluded: false;
@@ -270,6 +272,7 @@ export const snapshotCoordinator = {
     return {
       workspace: normalizedWorkspace,
       layoutVersion: WORKSPACE_LAYOUT_VERSION,
+      workerCompatibility: getWorkerCompatibility(),
       capability: active || mutation.blocked ? 'busy' : 'available',
       coherence: 'registered-flujo-writers',
       externalRootsIncluded: false,

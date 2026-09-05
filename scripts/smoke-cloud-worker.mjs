@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Real Next/engine smoke test. Uses private temp data and a loopback mock model only. */
+/** Real Next/engine/MCP smoke. --production tests the packaged Docker application. */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
@@ -10,16 +10,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import JSZip from 'jszip';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
 
 const application = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const production = process.argv.includes('--production');
+if (process.argv.slice(2).some(argument => argument !== '--production')) throw new Error('Usage: smoke-cloud-worker.mjs [--production]');
 const packageJson = JSON.parse(await fs.readFile(path.join(application, 'package.json'), 'utf8'));
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-'));
-const runtimeApplication = path.join(root, 'application');
+const runtimeApplication = production ? application : path.join(root, 'application');
 const overlayLinks = ['public', 'mcp-servers', 'node_modules', 'scripts'];
 const workspace = 'cloud-smoke';
 const conversationId = 'cloud-smoke-conversation';
 const answer = 'cloud-worker-smoke-response';
+const sourceWorkspaceRoot = 'C:\\synthetic-source\\workspaces\\cloud-smoke';
+const sourceFilesystemRoot = `${sourceWorkspaceRoot}\\mcp-servers\\filesystem`;
 const subtrees = ['db', 'mcp-servers', 'userdata', 'snapshots', 'screenshots', 'recordings', 'browser-profile', 'bash-utils', 'artifacts'];
 const controlToken = randomBytes(32).toString('hex');
 const key = randomBytes(32);
@@ -95,7 +101,8 @@ function safeEnvironment() {
   for (const [name, value] of Object.entries(process.env)) {
     if (/^(path|systemroot|windir|comspec|pathext|systemdrive|programfiles(?:\(x86\))?)$/i.test(name) && value) safe[name] = value;
   }
-  return { ...safe, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1',
+  return { ...safe, NODE_ENV: production ? 'production' : 'development', NEXT_TELEMETRY_DISABLED: '1',
+    ...(production ? { FLUJO_CONTAINER: '1', FLUJO_BUILD_REVISION: process.env.FLUJO_BUILD_REVISION } : {}),
     HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'),
     TMP: path.join(root, 'temp'), TEMP: path.join(root, 'temp'), TMPDIR: path.join(root, 'temp') };
 }
@@ -103,11 +110,15 @@ function safeEnvironment() {
 async function startWorker(port, archivePath, archiveHash, harness) {
   childLog = '';
   const sandboxPort = await unusedPort();
-  child = spawn(process.execPath, [harness], {
+  const args = production
+    ? [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(port), '-H', '127.0.0.1']
+    : [harness];
+  child = spawn(process.execPath, args, {
     cwd: runtimeApplication, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...safeEnvironment(), FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archivePath,
       FLUJO_WORKER_SNAPSHOT_SHA256: archiveHash, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
       FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_DATA_DIR: path.join(root, 'data'),
+      FLUJO_APP_ROOT: runtimeApplication,
       FLUJO_PORT: String(port), FLUJO_BASE_URL: `http://127.0.0.1:${port}`,
       FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
       FLUJO_EXPOSURE_MODE: 'localhost', SMOKE_PORT: String(port) },
@@ -139,17 +150,19 @@ try {
   // Next's programmatic custom server ignores conf.distDir in dev startup.
   // A private app overlay keeps its cache/lock/config writes away from any
   // concurrently running user server, without copying dependencies or secrets.
-  await fs.mkdir(runtimeApplication);
-  // Next's route discovery does not walk a junctioned src directory on Windows.
-  // Copy only repository source code; runtime workspaces and .env files are absent.
-  await fs.cp(path.join(application, 'src'), path.join(runtimeApplication, 'src'), { recursive: true });
-  for (const name of ['package.json', 'package-lock.json', 'next.config.mjs', 'tsconfig.json', 'next-env.d.ts',
-    'postcss.config.mjs', 'postcss.config.js', 'tailwind.config.ts', 'tailwind.config.js']) {
-    try { await fs.copyFile(path.join(application, name), path.join(runtimeApplication, name)); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  for (const name of overlayLinks) {
-    await fs.symlink(path.join(application, name), path.join(runtimeApplication, name), process.platform === 'win32' ? 'junction' : 'dir');
+  if (!production) {
+    await fs.mkdir(runtimeApplication);
+    // Next's route discovery does not walk a junctioned src directory on Windows.
+    // Copy only repository source code; runtime workspaces and .env files are absent.
+    await fs.cp(path.join(application, 'src'), path.join(runtimeApplication, 'src'), { recursive: true });
+    for (const name of ['package.json', 'package-lock.json', 'next.config.mjs', 'tsconfig.json', 'next-env.d.ts',
+      'postcss.config.mjs', 'postcss.config.js', 'tailwind.config.ts', 'tailwind.config.js']) {
+      try { await fs.copyFile(path.join(application, name), path.join(runtimeApplication, name)); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    for (const name of overlayLinks) {
+      await fs.symlink(path.join(application, name), path.join(runtimeApplication, name), process.platform === 'win32' ? 'junction' : 'dir');
+    }
   }
   const modelPort = await listen(modelServer);
   const workerPort = await unusedPort();
@@ -159,9 +172,15 @@ try {
     sourceHandle: `${source.type}-bottom`, targetHandle: `${target.type}-top`, type: 'custom', data: { edgeType: 'standard' } });
   const flow = { id: 'smoke-flow', name: 'CloudSmoke', nodes, edges: [edge(nodes[0], nodes[1]), edge(nodes[1], nodes[2])], updatedAt: Date.now() };
   const files = {
-    'db/mcp_servers.json': '{}',
+    'db/mcp_servers.json': JSON.stringify({ filesystem: {
+      name: 'filesystem', transport: 'stdio', command: 'node',
+      args: [`${sourceFilesystemRoot}\\dist\\index.js`], rootPath: sourceFilesystemRoot,
+      env: {}, roots: [`${sourceWorkspaceRoot}\\userdata`], disabled: false,
+      exposeAsMcpServer: true, source: { type: 'marketplace', id: '@mario.andreschak/mcp-filesystem' },
+    } }),
     'db/models.json': JSON.stringify([{ id: 'smoke-model', name: 'cloud-smoke-model', provider: 'openai', adapter: 'openai', ApiKey: 'synthetic-smoke-key', baseUrl: `http://127.0.0.1:${modelPort}/v1` }]),
     'db/flows/smoke-flow.json': JSON.stringify(flow),
+    'userdata/mcp-smoke-input.txt': 'restored filesystem smoke input',
   };
   const zip = new JSZip();
   for (const [name, content] of Object.entries(files)) zip.file(name, content);
@@ -169,7 +188,8 @@ try {
     createdAt: new Date().toISOString(), coherence: 'registered-flujo-writers', externalRootsIncluded: false, subtrees,
     files: Object.entries(files).map(([name, content]) => ({ path: name, size: Buffer.byteLength(content), sha256: sha256(content) })),
     source: { version: packageJson.version, platform: process.platform },
-    runtime: { codexAuth: 'none', encryption: 'default', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot: '/synthetic-source', servers: [] } },
+    runtime: { codexAuth: 'none', encryption: 'default', mcpTransfer: { formatVersion: 1, sourceWorkspaceRoot,
+      servers: [{ name: 'filesystem', kind: 'bundled', sourceRootPath: sourceFilesystemRoot }] } },
   }));
   const plaintext = await zip.generateAsync({ type: 'nodebuffer' });
   const iv = randomBytes(12);
@@ -179,7 +199,7 @@ try {
   await fs.writeFile(archivePath, JSON.stringify({ format: 'flujo-workspace-encrypted', version: 1, iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') }), { mode: 0o600 });
   const harness = path.join(root, 'next-harness.mjs');
-  await fs.writeFile(harness, `import {createRequire} from 'node:module';
+  if (!production) await fs.writeFile(harness, `import {createRequire} from 'node:module';
 import http from 'node:http';
 const require=createRequire(${JSON.stringify(path.join(runtimeApplication, 'package.json'))});
 const next=require('next');
@@ -189,15 +209,43 @@ await app.prepare();
 const server=http.createServer((req,res)=>handler(req,res));
 server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
 `);
-  console.log('Starting isolated Next worker with an encrypted synthetic snapshot...');
+  console.log(`Starting ${production ? 'packaged production' : 'isolated development'} worker with an encrypted synthetic snapshot...`);
   const ready = await startWorker(workerPort, archivePath, sha256(plaintext), harness);
   assert.equal(ready.workspace, workspace);
+  assert.deepEqual(ready.servers, [{ name: 'filesystem', status: 'ready' }]);
   assert.equal(await checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_PORT: String(workerPort) } }), true);
   assert.equal(await checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'incorrect-synthetic-token', FLUJO_PORT: String(workerPort) } }), false);
   assert.equal(providerCalls, 0, 'Bootstrap must not execute flows.');
-  for (const route of ['/api/worker/status', '/api/env', '/v1/chat/completions', '/mcp-flows']) {
+  for (const route of ['/api/worker/status', '/api/env', '/api/snapshot/info', '/v1/chat/completions', '/mcp-flows', '/mcp-proxy/filesystem']) {
     const result = await fetch(`http://127.0.0.1:${workerPort}${route}`, { signal: AbortSignal.timeout(15_000) });
     assert.equal(result.status, 401, `Unauthenticated ${route} must be denied.`);
+  }
+  const infoResponse = await fetch(`http://127.0.0.1:${workerPort}/api/snapshot/info?workspace=${workspace}`, {
+    headers: { authorization: `Bearer ${controlToken}` }, signal: AbortSignal.timeout(15_000),
+  });
+  assert.equal(infoResponse.status, 200);
+  const info = await infoResponse.json();
+  assert.deepEqual(info.workerCompatibility, {
+    applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1,
+    ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),
+  });
+  const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
+  try {
+    await filesystem.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${workerPort}/mcp-proxy/filesystem?workspace=${workspace}`), {
+      requestInit: { headers: { authorization: `Bearer ${controlToken}` } },
+    }));
+    const targetRoot = path.join(root, 'data', 'workspaces', workspace, 'userdata');
+    const allowed = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
+    assert.notEqual(allowed.isError, true);
+    assert.ok(allowed.structuredContent?.directories?.includes(targetRoot), 'MCP roots must move from the Windows snapshot to this worker.');
+    const read = await filesystem.callTool({ name: 'read_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-input.txt') } });
+    assert.notEqual(read.isError, true);
+    assert.ok(JSON.stringify(read).includes('restored filesystem smoke input'));
+    const written = await filesystem.callTool({ name: 'write_file', arguments: { path: path.join(targetRoot, 'mcp-smoke-output.txt'), content: 'worker MCP write succeeded' } });
+    assert.notEqual(written.isError, true);
+    assert.equal(await fs.readFile(path.join(targetRoot, 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
+  } finally {
+    await filesystem.close();
   }
   const result = await fetch(`http://127.0.0.1:${workerPort}/v1/chat/completions?workspace=${workspace}`, {
     method: 'POST', headers: { authorization: `Bearer ${controlToken}`, 'content-type': 'application/json' },
@@ -219,8 +267,9 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   await stopChild();
   await startWorker(workerPort, archivePath, sha256(plaintext), harness);
   assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
+  assert.equal(await fs.readFile(path.join(root, 'data', 'workspaces', workspace, 'userdata', 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
   assert.equal(providerCalls, callsBeforeRestart, 'Restart must not replay the completed flow.');
-  console.log('PASS: encrypted restore, private ingress, real ExecutionEngine/model dispatch, unattended flow, and restart preservation.');
+  console.log('PASS: encrypted restore, compatibility metadata, private ingress, restored MCP read/write, real ExecutionEngine/model dispatch, unattended flow, and restart preservation.');
 } catch (error) {
   console.error(error.stack ?? error.message);
   if (childLog) console.error(childLog.slice(-16_000));
@@ -231,7 +280,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   await new Promise(resolve => modelServer.close(resolve));
   const expectedPrefix = path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-');
   if (!path.resolve(root).startsWith(path.resolve(expectedPrefix))) throw new Error('Refusing unsafe smoke cleanup path.');
-  for (const name of overlayLinks) {
+  for (const name of production ? [] : overlayLinks) {
     const link = path.join(runtimeApplication, name);
     const stat = await fs.lstat(link).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (stat?.isSymbolicLink()) await fs.unlink(link);

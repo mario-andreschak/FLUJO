@@ -155,6 +155,9 @@ describe('deny-by-default coverage guard', () => {
       // Installation-wide namespace discovery contains no workspace content and
       // must remain reachable so the locked shell can validate its active tab.
       'src/app/api/workspaces/route.ts',
+      // Strict-loopback instance proof contains no workspace data or bearer and
+      // must permit discovery before storage migration/unlock has completed.
+      'src/app/api/cloud/instance/route.ts',
       // Snapshot control has a separate strict-loopback + dedicated bearer
       // boundary. Status/abort/finalize must remain usable during encryption
       // transitions; USER snapshot capture itself refuses an unavailable DEK.

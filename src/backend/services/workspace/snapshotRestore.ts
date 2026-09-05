@@ -13,6 +13,7 @@ import type { WorkspaceMcpTransferPlan } from '@/backend/services/packages/works
 import { isChatGptAuthCache } from '@/backend/services/model/adapters/codexAuth';
 import { atomicWriteWithoutLinks } from './backupRestoreFs';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
+import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { isWorkerMode, setWorkerBootstrapStatus } from './workerMode';
 
 const MANIFEST_PATH = 'snapshot-manifest.json';
@@ -151,7 +152,7 @@ function inspectArchive(bytes: Buffer, maxFileBytes: number, maxBytes: number): 
 }
 
 function validateManifest(value: unknown): WorkerManifest {
-  if (!record(value) || value.formatVersion !== 2 || value.layoutVersion !== WORKSPACE_LAYOUT_VERSION
+  if (!record(value) || value.formatVersion !== WORKER_SNAPSHOT_FORMAT_VERSION || value.layoutVersion !== WORKSPACE_LAYOUT_VERSION
       || value.externalRootsIncluded !== false || !record(value.source)
       || value.source.version !== applicationPackage.version || typeof value.source.platform !== 'string'
       || !record(value.runtime) || !record(value.runtime.mcpTransfer)

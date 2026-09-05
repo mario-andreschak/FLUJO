@@ -62,6 +62,15 @@ describe('snapshot coordinator cancellation and ownership', () => {
     delete process.env.FLUJO_SNAPSHOT_SESSION_TTL_MS;
   });
 
+  it('advertises worker compatibility in authenticated snapshot information', async () => {
+    const info = await snapshotCoordinator.info('compatibility');
+    expect(info.workerCompatibility).toMatchObject({
+      applicationVersion: expect.any(String), snapshotFormatVersion: 2,
+      layoutVersion: 2, workerProtocolVersion: 1,
+    });
+    expect(info.capability).toBe('available');
+  });
+
   it('reserves a workspace atomically for concurrent begin requests', async () => {
     const pendingCapture = deferred<CapturedWorkspaceSnapshot>();
     mockCapture.mockReturnValue(pendingCapture.promise);

@@ -27,6 +27,7 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import nextEnv from '@next/env';
 import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
+import { prepareLocalInstance, withLocalInstanceHostname } from './local-instance.mjs';
 
 const require = createRequire(import.meta.url);
 const { loadEnvConfig } = nextEnv;
@@ -99,8 +100,38 @@ function withPort(args) {
   return hasPort ? [...args] : [...args, '-p', portFromNextArgs(args)];
 }
 
+/** Forward native launcher shutdown and remove only this launch's registration. */
+export function forwardNextShutdown(child, instance, registered, { parent = process, graceMs = 10_000 } = {}) {
+  let requestedSignal;
+  let forceKillTimer;
+  const forwardShutdown = (signal) => {
+    requestedSignal ??= signal;
+    instance.cleanup();
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { child.kill(signal); } catch { child.kill(); }
+    forceKillTimer ??= setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, graceMs);
+    forceKillTimer.unref();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) parent.on(signal, () => forwardShutdown(signal));
+  parent.once('exit', instance.cleanup);
+  child.on('exit', async (code, signal) => {
+    await registered;
+    instance.cleanup();
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+    const exitSignal = requestedSignal ?? signal;
+    if (exitSignal && parent.platform !== 'win32') {
+      parent.removeAllListeners(exitSignal);
+      parent.kill(parent.pid, exitSignal);
+      return;
+    }
+    parent.exit(code ?? (exitSignal ? 1 : 0));
+  });
+}
+
 /** Spawn `next <passthroughArgs>` with the TLS-configured env and forward its exit. */
-function launchNext(passthroughArgs) {
+async function launchNext(passthroughArgs) {
   const runtimeEnvDirectory = process.env.FLUJO_CONTAINER ? '/app/data' : process.cwd();
   process.env.FLUJO_RUNTIME_ENV_DIR = runtimeEnvDirectory;
   loadLaunchEnvironment(runtimeEnvDirectory, passthroughArgs[0] === 'dev');
@@ -110,7 +141,8 @@ function launchNext(passthroughArgs) {
     FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
   };
   const env = applyExposureRuntimeEnv(buildLaunchEnv(baseEnv), process.cwd());
-  const nextArgs = withExposureHostname(withPort(passthroughArgs), env);
+  const nextArgs = withLocalInstanceHostname(withExposureHostname(withPort(passthroughArgs), env), env);
+  const instance = await prepareLocalInstance({ env, args: nextArgs });
 
   const tlsSummary = [
     env.NODE_OPTIONS ? `NODE_OPTIONS="${env.NODE_OPTIONS}"` : null,
@@ -136,21 +168,18 @@ function launchNext(passthroughArgs) {
 
   const child = spawn(process.execPath, [nextBin, ...nextArgs], {
     stdio: 'inherit',
-    env,
+    env: instance.env,
   });
+  const registered = instance.register(child.pid).catch(() => {
+    console.error('[FLUJO] Could not register private local instance discovery.');
+  });
+  forwardNextShutdown(child, instance, registered);
 
   child.on('error', error => {
     console.error('[FLUJO] Failed to launch next:', error);
     process.exit(1);
   });
 
-  child.on('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-    } else {
-      process.exit(code ?? 0);
-    }
-  });
 }
 
 // Only launch when run directly (`node scripts/launch-next.mjs start -p 4200`), not when
@@ -158,5 +187,8 @@ function launchNext(passthroughArgs) {
 // Next.js command, e.g. ["start", "-p", "4200"].
 const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
 if (isMain) {
-  launchNext(process.argv.slice(2));
+  launchNext(process.argv.slice(2)).catch(() => {
+    console.error('[FLUJO] Could not prepare a private local instance.');
+    process.exitCode = 1;
+  });
 }
