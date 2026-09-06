@@ -21,7 +21,7 @@ describe('chat audio API content', () => {
       type: 'audio',
       content: `data:${mimeType};base64,YXVkaW8=`,
       mimeType,
-    })) as Array<Record<string, unknown>>;
+    })) as unknown as Array<Record<string, unknown>>;
 
     expect(content).toEqual([
       {
@@ -40,7 +40,7 @@ describe('chat audio API content', () => {
       type: 'audio',
       content: 'data:audio/webm;codecs=opus;base64,YXVkaW8=',
       mimeType: 'audio/webm;codecs=opus',
-    })) as Array<Record<string, unknown>>;
+    })) as unknown as Array<Record<string, unknown>>;
 
     expect(content).toEqual([
       {
@@ -60,14 +60,14 @@ describe('chat audio API content', () => {
       content: 'data:audio/webm;base64,YXVkaW8=',
       mimeType: 'audio/webm',
       transcript: 'spoken words',
-    })) as Array<Record<string, unknown>>;
+    })) as unknown as Array<Record<string, unknown>>;
     const withoutTranscript = buildApiContent(audioMessage({
       id: 'audio',
       type: 'audio',
       content: 'data:audio/webm;base64,YXVkaW8=',
       mimeType: 'audio/webm',
       transcript: '',
-    })) as Array<Record<string, unknown>>;
+    })) as unknown as Array<Record<string, unknown>>;
 
     expect(withTranscript).toContainEqual({
       type: 'text',
