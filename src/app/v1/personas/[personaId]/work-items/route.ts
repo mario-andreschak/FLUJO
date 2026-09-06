@@ -6,7 +6,7 @@ import {
   createPersonaWorkItem,
   queryPersonaWorkItems,
 } from '@/backend/services/enduringAgents';
-import { EnduringAgentIdSchema, PERSONA_PRIORITIES, PERSONA_WORK_ITEM_STATUSES } from '@/shared/types/enduringAgent';
+import { CreatePersonaWorkItemInputSchema, EnduringAgentIdSchema, PERSONA_PRIORITIES, PERSONA_WORK_ITEM_STATUSES } from '@/shared/types/enduringAgent';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
@@ -52,7 +52,8 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
   }
   const body = await request.json().catch(() => null);
   try {
-    return NextResponse.json(await createPersonaWorkItem({ ...body, personaId }), { status: 201 });
+    const input = CreatePersonaWorkItemInputSchema.parse({ ...body, personaId });
+    return NextResponse.json(await createPersonaWorkItem(input), { status: 201 });
   } catch (error) {
     const response = personaDomainErrorResponse(error); if (response) return response;
     log.error('Failed to create Persona WorkItem', error);

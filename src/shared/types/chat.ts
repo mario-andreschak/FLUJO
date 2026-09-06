@@ -159,6 +159,8 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
      * was a forwarding wrapper such as FLUJO's call_mcp_tool.
      */
     toolArgs?: string;
+    /** Host-derived owner of the originating tool call, independent of later runs. */
+    toolOwnerScope?: string;
     /**
      * Present when this invocation ended through MCP cancellation. The host
      * sends tool-input followed by tool-cancelled instead of tool-result.

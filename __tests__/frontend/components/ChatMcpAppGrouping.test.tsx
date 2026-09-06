@@ -19,12 +19,14 @@ jest.mock('@/frontend/components/Chat/McpAppFrame', () => ({
     defaultExpanded,
     linkedToolCallCount,
     toolUpdateId,
+    toolOwnerScope,
   }: {
     serverName: string;
     uri: string;
     defaultExpanded?: boolean;
     linkedToolCallCount?: number;
     toolUpdateId?: string;
+    toolOwnerScope?: string;
   }) => (
     <div
       data-testid="mcp-app-frame"
@@ -33,6 +35,7 @@ jest.mock('@/frontend/components/Chat/McpAppFrame', () => ({
       data-expanded={String(Boolean(defaultExpanded))}
       data-call-count={String(linkedToolCallCount ?? 1)}
       data-update-id={toolUpdateId}
+      data-tool-owner-scope={toolOwnerScope}
     />
   ),
 }));
@@ -145,6 +148,8 @@ describe('Chat MCP App grouping', () => {
   it('assigns one conversation-wide View owner to the latest result for a resource', () => {
     const first = appPair('navigate', 'result-1');
     const second = appPair('click', 'result-2');
+    first.result!.ui!.toolOwnerScope = 'run:first';
+    second.result!.ui!.toolOwnerScope = 'run:second';
     const messages: FlujoChatMessage[] = [
       {
         id: 'assistant-1',
@@ -176,5 +181,6 @@ describe('Chat MCP App grouping', () => {
     const frames = screen.getAllByTestId('mcp-app-frame');
     expect(frames).toHaveLength(1);
     expect(frames[0]).toHaveAttribute('data-update-id', 'result-2');
+    expect(frames[0]).toHaveAttribute('data-tool-owner-scope', 'run:second');
   });
 });

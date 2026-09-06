@@ -299,7 +299,7 @@ export class ModelHandler {
     resultData: unknown,
     advertisedUri?: string,
     invocationArgs?: Record<string, unknown>,
-  ): Promise<{ uri: string; serverName: string; toolName: string; toolArgs?: string } | undefined> {
+  ): Promise<{ uri: string; serverName: string; toolName: string; toolArgs?: string; toolOwnerScope?: string } | undefined> {
     // New conversations carry the advertised URI in their tool identity map.
     // Older persisted maps do not, so re-read the model-visible definition as a
     // compatibility fallback. Never select a URI solely from the call result.

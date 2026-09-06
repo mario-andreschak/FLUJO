@@ -27,6 +27,7 @@ import {
   serverSupportsExternalAuthorization,
 } from "./externalAuthorization";
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
+import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
 
 const log = createLogger("backend/services/mcp/tools");
 
@@ -336,7 +337,7 @@ export async function callTool(
       const serverIdentity = persist
         ? await resolveServerIdentity(serverName)
         : "unnegotiated";
-      return await runRemoteTaskLifecycle({
+      const taskResult = await runRemoteTaskLifecycle({
         client,
         serverName,
         serverIdentity,
@@ -360,11 +361,15 @@ export async function callTool(
           taskDecision.negotiation.supportsCancel ||
           !taskDecision.negotiation.supported,
       });
+      return taskResult.data === undefined ? taskResult : {
+        ...taskResult,
+        data: stampMcpAppOwnerScope(taskResult.data, ownerScope),
+      };
     }
 
     return {
       success: true,
-      data: response,
+      data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);

@@ -20,9 +20,22 @@ const PersonaToolNameSchema = z.enum(PERSONA_TOOL_NAMES);
 
 const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
   ...PERSONA_MEMORY_TOOL_DEFINITIONS,
+  work_item_list: {
+    name: 'work_item_list',
+    description: 'Read this Persona\'s durable goals and tasks, including progress, next actions, dependencies and blocked work. Use this to continue an existing plan instead of creating duplicate tasks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        statuses: { type: 'array', items: { type: 'string', enum: ['open', 'in_progress', 'blocked', 'completed', 'cancelled'] } },
+        parent_goal_id: { type: 'string', description: 'Optionally show only the tasks belonging to this ongoing goal.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        offset: { type: 'integer', minimum: 0, default: 0, description: 'Continue from next_offset when a previous list was truncated.' },
+      },
+    },
+  },
   work_item_create: {
     name: 'work_item_create',
-    description: 'Create an explicit durable Persona commitment. Run todos remain scratch-scoped unless promoted separately.',
+    description: 'Create a durable task. During ongoing-goal work it automatically belongs to that goal and runs when ready; outside an ongoing goal it is saved for assignment. List existing tasks first to avoid duplicates. Run todos remain scratch-scoped unless promoted separately.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -32,6 +45,7 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
         dependency_ids: { type: 'array', items: { type: 'string' } },
         next_action: { type: 'string' },
         deadline: { type: 'number' },
+        parent_goal_id: { type: 'string', description: 'The owning ongoing goal. Inherited from the current goal Activity when omitted.' },
       },
       required: ['title'],
     },
@@ -80,6 +94,22 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
         deadline: { type: 'number' },
       },
       required: ['todo_id'],
+    },
+  },
+  report_activity_outcome: {
+    name: 'report_activity_outcome',
+    description: 'Before ending this Activity, persist what was actually achieved and verified, remaining work and the next action. Succeeded means this Activity succeeded; set goal_achieved only when the entire ongoing goal\'s success criteria are met. A plan or draft alone is not evidence of a published result. Reporting does not end the current run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resolution: { type: 'string', enum: ['succeeded', 'partial', 'blocked', 'failed', 'unknown'] },
+        summary: { type: 'string', maxLength: 2000, description: 'Verified results with concrete evidence such as artifact paths, source URLs or observed tool results; distinguish completed actions from plans.' },
+        next_action: { type: 'string', maxLength: 2000, description: 'Required when work is unfinished. State the next executable step or the exact human input needed.' },
+        blocker_kind: { type: 'string', enum: ['information', 'approval', 'permission', 'capability', 'dependency', 'external', 'transient', 'policy', 'unknown'] },
+        goal_achieved: { type: 'boolean', description: 'True only when the entire ongoing goal is achieved, all necessary tasks are complete and its success criteria have been verified.' },
+        retry_after_ms: { type: 'integer', minimum: 0, maximum: 604800000, description: 'Optional wait before the next attempt, for example when a service is temporarily unavailable or an external result needs time.' },
+      },
+      required: ['resolution', 'summary'],
     },
   },
   suggest_improvement: {
@@ -172,6 +202,40 @@ export async function executePersonaTool(
       ...(ctx.conversationId ? { uri: `flujo://conversation/${ctx.conversationId}` } : {}),
     }];
     switch (toolName) {
+      case 'work_item_list': {
+        const { queryPersonaWorkItems, withPersonaDomainMutation } = await import(
+          '@/backend/services/enduringAgents'
+        );
+        const limit = z.number().int().min(1).max(100).parse(args.limit ?? 50);
+        const offset = z.number().int().min(0).max(1_000_000).parse(args.offset ?? 0);
+        const records = await withPersonaDomainMutation(trusted.personaId, options, async ({ activity }) => {
+          if (activity?.id !== trusted.activityId) throw new Error('Task access crossed Activity ownership.');
+          return queryPersonaWorkItems(trusted.personaId, {
+            ...(args.statuses !== undefined ? { statuses: args.statuses as never } : {}),
+          });
+        });
+        const parentGoalId = stringArg(args, 'parent_goal_id');
+        const matching = parentGoalId ? records.filter((item) => item.parentGoalId === parentGoalId) : records;
+        const truncated = matching.length > offset + limit;
+        return { success: true, data: {
+          items: matching.slice(offset, offset + limit), total: matching.length, truncated,
+          ...(truncated ? { next_offset: offset + limit } : {}),
+        } };
+      }
+      case 'report_activity_outcome': {
+        const { reportPersonaActivityOutcome } = await import(
+          '@/backend/services/enduringAgents/activityOutcomes'
+        );
+        const outcome = await reportPersonaActivityOutcome(trusted.personaId, trusted.activityId, {
+          resolution: args.resolution as never,
+          summary: args.summary as string,
+          ...(args.next_action !== undefined ? { nextAction: args.next_action as string } : {}),
+          ...(args.blocker_kind !== undefined ? { blockerKind: args.blocker_kind as never } : {}),
+          ...(args.goal_achieved !== undefined ? { goalAchieved: args.goal_achieved as boolean } : {}),
+          ...(args.retry_after_ms !== undefined ? { retryAfterMs: args.retry_after_ms as number } : {}),
+        }, options);
+        return { success: true, data: { reported: true, outcome } };
+      }
       case 'work_item_create': {
         const { createPersonaWorkItem } = await import(
           '@/backend/services/enduringAgents'
@@ -184,6 +248,7 @@ export async function executePersonaTool(
           ...(Array.isArray(args.dependency_ids) ? { dependencyIds: args.dependency_ids as string[] } : {}),
           ...(stringArg(args, 'next_action') ? { nextAction: stringArg(args, 'next_action') } : {}),
           ...(typeof args.deadline === 'number' ? { deadline: args.deadline } : {}),
+          ...(stringArg(args, 'parent_goal_id') ? { parentGoalId: stringArg(args, 'parent_goal_id') } : {}),
           sourceRefs: activitySource,
         }, options);
         return { success: true, data: { created: true, item } };

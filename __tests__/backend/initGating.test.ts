@@ -29,6 +29,7 @@ const listPersonasMock = jest.fn();
 const reconcilePersonaRoleBehaviorsMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
 const startPersonaFlowDispatcherMock = jest.fn();
+const startPersonaGoalRuntimeMock = jest.fn();
 const reconcilePersonaSchedulerProjectionsMock = jest.fn();
 const restoreWorkerSnapshotMock = jest.fn();
 const unlockWorkerSnapshotMock = jest.fn();
@@ -96,6 +97,8 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   reconcilePersonaRoleBehaviors: (...a: unknown[]) => reconcilePersonaRoleBehaviorsMock(...a),
   inspectAndReconcilePersonaRuntime: (...a: unknown[]) => inspectPersonaRuntimeMock(...a),
   startPersonaFlowDispatcher: (...a: unknown[]) => startPersonaFlowDispatcherMock(...a),
+  startPersonaGoalRuntime: (...a: unknown[]) => startPersonaGoalRuntimeMock(...a),
+  stopPersonaGoalRuntime: jest.fn(),
 }));
 
 import {
@@ -126,6 +129,7 @@ describe('backend init startup gating (#78)', () => {
     reconcilePersonaRoleBehaviorsMock.mockResolvedValue(undefined);
     inspectPersonaRuntimeMock.mockResolvedValue(undefined);
     startPersonaFlowDispatcherMock.mockResolvedValue(undefined);
+    startPersonaGoalRuntimeMock.mockResolvedValue(undefined);
     reconcilePersonaSchedulerProjectionsMock.mockResolvedValue(undefined);
     migrateInternalMcpServersMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
@@ -164,6 +168,7 @@ describe('backend init startup gating (#78)', () => {
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+    expect(startPersonaGoalRuntimeMock).toHaveBeenCalledTimes(1);
     // Ordering: migration completes before the MCP sweep, which completes before
     // the scheduler arms.
     expect(migrateInternalMcpServersMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -217,6 +222,7 @@ describe('backend init startup gating (#78)', () => {
     expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
+    expect(startPersonaGoalRuntimeMock).not.toHaveBeenCalled();
   });
 
   it('onUnlocked starts services once and re-kicks durable Persona work on later unlocks', async () => {
@@ -238,6 +244,9 @@ describe('backend init startup gating (#78)', () => {
       startPersonaFlowDispatcherMock.mock.invocationCallOrder[0]
     );
     expect(startPersonaFlowDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
+      startPersonaGoalRuntimeMock.mock.invocationCallOrder[0]
+    );
+    expect(startPersonaGoalRuntimeMock.mock.invocationCallOrder[0]).toBeLessThan(
       schedulerStartMock.mock.invocationCallOrder[0]
     );
 
@@ -247,6 +256,7 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
     expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(2);
+    expect(startPersonaGoalRuntimeMock).toHaveBeenCalledTimes(2);
     expect(reconcilePersonaSchedulerProjectionsMock).toHaveBeenCalledWith(false);
   });
 
@@ -256,6 +266,7 @@ describe('backend init startup gating (#78)', () => {
 
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
+    expect(startPersonaGoalRuntimeMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 

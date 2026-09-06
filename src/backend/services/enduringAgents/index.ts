@@ -36,3 +36,4 @@ export * from './runtimeStorageStats';
 export * from './store';
 
 export * from './runtimeClock';
+export * from './goalRuntime';

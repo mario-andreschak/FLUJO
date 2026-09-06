@@ -36,6 +36,8 @@ export interface CanvasAppEntry {
   latestToolArgs?: string;
   /** JSON string / text of the latest tool result pushed to the app. */
   latestResultContent?: string;
+  /** Owner of the latest tool invocation, separate from potentially bounded text. */
+  latestToolOwnerScope?: string;
   /** Cancellation outcome pushed instead of a result, when applicable. */
   latestToolCancelledReason?: string;
   /** Whether the latest completed tool invocation failed. */
@@ -110,6 +112,7 @@ export interface CanvasAppInput {
   toolArgs?: string;
   /** JSON string / text of the tool result content. */
   resultContent?: string;
+  toolOwnerScope?: string;
   /** Cancellation outcome sent instead of `resultContent`. */
   cancelledReason?: string;
   /** Whether the completed invocation failed. */
@@ -200,6 +203,9 @@ export function openCanvasApp(
     uri: input.uri,
     toolName: input.toolName ?? existing?.toolName,
     latestToolArgs: input.toolArgs ?? existing?.latestToolArgs,
+    latestToolOwnerScope: input.updateId !== undefined || input.resultContent !== undefined || input.cancelledReason !== undefined
+      ? input.toolOwnerScope
+      : input.toolOwnerScope ?? existing?.latestToolOwnerScope,
     latestResultContent: input.cancelledReason !== undefined
       ? undefined
       : input.resultContent ?? existing?.latestResultContent,
@@ -248,6 +254,9 @@ export function updateCanvasApp(
     ...existing,
     toolName: input.toolName ?? existing.toolName,
     latestToolArgs: input.toolArgs ?? existing.latestToolArgs,
+    latestToolOwnerScope: input.updateId !== undefined || input.resultContent !== undefined || input.cancelledReason !== undefined
+      ? input.toolOwnerScope
+      : input.toolOwnerScope ?? existing.latestToolOwnerScope,
     latestResultContent: input.cancelledReason !== undefined
       ? undefined
       : input.resultContent ?? existing.latestResultContent,

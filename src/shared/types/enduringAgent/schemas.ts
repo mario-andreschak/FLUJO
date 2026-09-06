@@ -772,6 +772,8 @@ export const PersonaActivityOutcomeSchema = z.object({
   blockerKind: z.enum(PERSONA_ACTIVITY_BLOCKER_KINDS).optional(),
   summary: NonEmptyText(2_000).optional(),
   nextAction: NonEmptyText(2_000).optional(),
+  goalAchieved: z.boolean().optional(),
+  retryAfterMs: z.number().int().min(0).max(7 * 24 * 60 * 60 * 1_000).optional(),
   decisionSource: z.enum(PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES),
   evidenceRefs: z.array(MemorySourceRefSchema).max(24),
   decidedAt: TimestampSchema,
@@ -810,6 +812,7 @@ export const PersonaActivitySchema = z.object({
   meetingId: EnduringAgentIdSchema.optional(),
   resourceRefs: z.array(NonEmptyText(4096)).max(1_000).optional(),
   outcome: PersonaActivityOutcomeSchema.optional(),
+  reportedOutcome: PersonaActivityOutcomeSchema.optional(),
   outcomeRef: z.string().max(4096).optional(),
   error: z.string().max(20_000).optional(),
   interruptionRequestedAt: TimestampSchema.optional(),
@@ -1156,17 +1159,54 @@ export const BehaviorMaintenanceRunSchema = z.object({
   }
 });
 
+export const PersonaGoalConfigSchema = z.object({
+  successCriteria: NonEmptyText(20_000),
+  completionPolicy: z.enum(['until_stopped', 'success_criteria']).optional(),
+  continuationIntervalMs: z.number().int().min(10_000).max(7 * 24 * 60 * 60 * 1_000).optional(),
+  maxConsecutiveFailures: z.number().int().min(1).max(10).optional(),
+  maxRoundsPerDay: z.number().int().min(1).max(10_000).optional(),
+  maxRounds: z.number().int().positive().optional(),
+}).strict();
+
+export const PersonaGoalStateSchema = PersonaGoalConfigSchema.extend({
+  continuationIntervalMs: z.number().int().min(10_000).max(7 * 24 * 60 * 60 * 1_000),
+  maxConsecutiveFailures: z.number().int().min(1).max(10),
+  maxRoundsPerDay: z.number().int().min(1).max(10_000),
+  state: z.enum(['active', 'paused', 'needs_input', 'completed', 'stopped']),
+  nextRunAt: TimestampSchema.optional(),
+  rounds: z.number().int().nonnegative(),
+  consecutiveFailures: z.number().int().nonnegative(),
+  dailyWindowStartedAt: TimestampSchema,
+  roundsInWindow: z.number().int().nonnegative(),
+  recoveryCount: z.number().int().nonnegative().optional(),
+  recoveryNotes: z.array(z.string().max(2_000)).max(10).optional(),
+  lastProgressAt: TimestampSchema.optional(),
+  progressSummary: z.string().trim().max(20_000).optional(),
+  interventionReason: z.string().trim().max(20_000).optional(),
+  lastActivityId: EnduringAgentIdSchema.optional(),
+  pendingTaskId: EnduringAgentIdSchema.optional(),
+  pendingAttemptKey: EnduringAgentIdSchema.optional(),
+  pendingPrompt: z.string().max(100_000).optional(),
+  pendingPriority: z.enum(PERSONA_PRIORITIES).optional(),
+  pendingDispatchId: EnduringAgentIdSchema.optional(),
+}).strict();
+
 export const PersonaWorkItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
   personaId: EnduringAgentIdSchema,
   title: NonEmptyText(500),
   description: z.string().trim().max(100_000).optional(),
+  parentGoalId: EnduringAgentIdSchema.optional(),
+  goal: PersonaGoalStateSchema.optional(),
   status: z.enum(PERSONA_WORK_ITEM_STATUSES),
   priority: z.enum(PERSONA_PRIORITIES),
   dependencyIds: UniqueIdsSchema,
   nextAction: z.string().trim().max(20_000).optional(),
   deadline: TimestampSchema.optional(),
+  deferredUntil: TimestampSchema.optional(),
+  revokedGoalDispatchId: EnduringAgentIdSchema.optional(),
+  goalControlState: z.enum(['paused', 'stopped']).optional(),
   createdByActivityId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
   sourceRefs: z.array(MemorySourceRefSchema).max(100).optional(),
@@ -1174,6 +1214,9 @@ export const PersonaWorkItemSchema = z.object({
   updatedAt: TimestampSchema,
   completedAt: TimestampSchema.optional(),
 }).strict().superRefine((record, ctx) => {
+  if (record.parentGoalId === record.id || (record.goal && record.parentGoalId)) {
+    ctx.addIssue({ code: 'custom', message: 'An ongoing goal cannot be its own child or a nested goal.', path: ['parentGoalId'] });
+  }
   if (record.dependencyIds.includes(record.id)) {
     ctx.addIssue({
       code: 'custom',
@@ -1223,6 +1266,8 @@ export const CreatePersonaWorkItemInputSchema = z.object({
   personaId: EnduringAgentIdSchema,
   title: NonEmptyText(500),
   description: z.string().trim().max(100_000).optional(),
+  parentGoalId: EnduringAgentIdSchema.optional(),
+  goal: PersonaGoalConfigSchema.optional(),
   priority: z.enum(PERSONA_PRIORITIES).optional(),
   dependencyIds: UniqueIdsSchema.optional(),
   nextAction: z.string().trim().max(20_000).optional(),
@@ -1239,6 +1284,7 @@ export const UpdatePersonaWorkItemInputSchema = z.object({
   dependencyIds: UniqueIdsSchema.optional(),
   nextAction: z.string().trim().max(20_000).nullable().optional(),
   deadline: TimestampSchema.nullable().optional(),
+  goal: PersonaGoalConfigSchema.partial().extend({ maxRounds: z.number().int().positive().nullable().optional() }).strict().optional(),
   expectedUpdatedAt: TimestampSchema.optional(),
 }).strict();
 

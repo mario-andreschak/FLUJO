@@ -13,10 +13,12 @@ export const PERSONA_NATIVE_ABILITY_IDS = [
   'forget',
   'pin',
   'unpin',
+  'work_item_list',
   'work_item_create',
   'work_item_update',
   'work_item_complete',
   'work_item_promote_todo',
+  'report_activity_outcome',
   'suggest_improvement',
 ] as const;
 

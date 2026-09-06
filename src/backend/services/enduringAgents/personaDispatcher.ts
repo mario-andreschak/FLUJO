@@ -30,6 +30,7 @@ import {
   PERSONA_ACTIVITY_BLOCKER_KINDS,
   PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS,
   PERSONA_PRIORITIES,
+  PersonaActivityOutcomeSchema,
   PersonaInstructionContextSchema,
   type BehaviorMaintenanceRun,
   type BehaviorRevision,
@@ -169,6 +170,8 @@ const PersonaOutcomeClaimSchema = z.object({
   blockerKind: z.enum(PERSONA_ACTIVITY_BLOCKER_KINDS).optional(),
   summary: z.string().trim().min(1).max(2_000).optional(),
   nextAction: z.string().trim().min(1).max(2_000).optional(),
+  goalAchieved: z.boolean().optional(),
+  retryAfterMs: z.number().int().nonnegative().max(604800000).optional(),
   evidenceRefs: z.array(MemorySourceRefSchema).max(24).default([]),
 }).strict();
 
@@ -177,6 +180,8 @@ export function semanticOutcomeFromDispatch(input: {
   outcome?: PersonaFlowDispatchOutcome;
   activityId: string;
   decidedAt: number;
+  /** Fenced native report persisted on the owning running Activity. */
+  reportedOutcome?: PersonaActivityOutcome;
 }): PersonaActivityOutcome {
   const fallbackResolution = input.status === 'error' ? 'failed' : 'unknown';
   const fallback = (summary: string): PersonaActivityOutcome => ({
@@ -188,6 +193,15 @@ export function semanticOutcomeFromDispatch(input: {
     evidenceRefs: [{ kind: 'activity', id: input.activityId }],
     decidedAt: input.decidedAt,
   });
+  if (input.status === 'completed' && input.reportedOutcome) {
+    const reported = PersonaActivityOutcomeSchema.safeParse(input.reportedOutcome);
+    if (reported.success
+      && reported.data.decisionSource === 'persona_claim'
+      && reported.data.evidenceRefs.length > 0
+      && reported.data.evidenceRefs.every((ref) => ref.kind === 'activity' && ref.id === input.activityId)) {
+      return { ...reported.data, decidedAt: Math.max(input.decidedAt, reported.data.decidedAt) };
+    }
+  }
   if (input.status !== 'completed' || !input.outcome?.outputText) {
     return fallback(input.status === 'error'
       ? 'The Activity ended with an execution error.'
@@ -202,18 +216,20 @@ export function semanticOutcomeFromDispatch(input: {
     if (claim.evidenceRefs.some((ref) => ref.kind !== 'activity' || ref.id !== input.activityId)) {
       return fallback('The Activity outcome claim referenced evidence outside the owning Activity.');
     }
-    return {
+    return PersonaActivityOutcomeSchema.parse({
       schemaVersion: 1,
       resolution: claim.resolution,
       ...(claim.blockerKind ? { blockerKind: claim.blockerKind } : {}),
       ...(claim.summary ? { summary: claim.summary } : {}),
       ...(claim.nextAction ? { nextAction: claim.nextAction } : {}),
+      ...(claim.goalAchieved !== undefined ? { goalAchieved: claim.goalAchieved } : {}),
+      ...(claim.retryAfterMs !== undefined ? { retryAfterMs: claim.retryAfterMs } : {}),
       decisionSource: 'persona_claim',
       evidenceRefs: claim.evidenceRefs.length > 0
         ? claim.evidenceRefs
         : [{ kind: 'activity', id: input.activityId }],
       decidedAt: input.decidedAt,
-    };
+    }) as PersonaActivityOutcome;
   } catch {
     return fallback('The Activity outcome claim was malformed and was downgraded to unknown.');
   }
@@ -513,6 +529,23 @@ export class PersonaFlowDispatchStateError extends Error {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** Compute the durable admission identity before reserving a goal round. */
+export function personaFlowDispatchId(
+  personaId: string,
+  idempotencyKey: string,
+  workspaceId = getCurrentWorkspace(),
+): string {
+  EnduringAgentIdSchema.parse(personaId);
+  const rawKey = idempotencyKey.trim();
+  if (!rawKey || rawKey.length > 512) throw new TypeError('idempotencyKey must contain 1-512 characters.');
+  return stableEnduringAgentId('dispatch', {
+    purpose: 'persona-flow-dispatch-v1',
+    workspaceId,
+    personaId,
+    idempotencyDigest: sha256(rawKey),
+  });
 }
 
 function assertInstructionContextMatchesClaim(
@@ -982,6 +1015,17 @@ export class PersonaFlowDispatcher {
         if (isTerminalDispatch(latest.state) || latest.cancellationRequestedAt) {
           return { record: latest, entered: false };
         }
+        try {
+          await this.assertGoalDispatchCurrent(latest, true);
+        } catch (error) {
+          if (!(error instanceof Error) || !('code' in error) || error.code !== 'PERSONA_GOAL_NOT_CURRENT') throw error;
+          const now = Math.max(runtimeClock.now(), latest.updatedAt + 1);
+          return { record: await this.save({ ...latest,
+            cancellationRequestedAt: now,
+            cancellationReason: 'The ongoing goal no longer authorizes this round.',
+            updatedAt: now,
+          }), entered: false };
+        }
         const running = await this.save(transition(latest));
         if (activation) {
           activation.control.activeAbort = activation.abortController;
@@ -1368,7 +1412,10 @@ export class PersonaFlowDispatcher {
     try {
       const routed = await this.inWorkspace(() => this.dependencies.routePersonaMailboxItem(
         this.routeInput(record),
-        { validateAdmission: options.validateAdmission },
+        { validateAdmission: async () => {
+          await this.assertGoalDispatchCurrent(record, true);
+          await options.validateAdmission?.();
+        } },
       ));
       return {
         dispatch: await this.applyRouteResult(record, routed),
@@ -1378,6 +1425,15 @@ export class PersonaFlowDispatcher {
       await this.inWorkspace(() => withPersonaRuntimeLock(record.personaId, async () => {
         const current = (await this.get(record.id)) ?? record;
         if (isTerminalDispatch(current.state)) return current;
+        if (error instanceof Error && 'code' in error && error.code === 'PERSONA_GOAL_NOT_CURRENT'
+          && !current.mailboxItemId && !current.activityId) {
+          const now = Math.max(runtimeClock.now(), current.updatedAt + 1);
+          return this.save({ ...current, state: 'cancelled',
+            cancellationRequestedAt: now,
+            cancellationReason: 'The ongoing goal no longer authorizes this round.',
+            completedAt: now, updatedAt: now, lastError: undefined,
+          });
+        }
         return this.save({
           ...current,
           lastError: dispatchError('ROUTING_FAILED', error, 'Mailbox routing failed.'),
@@ -1386,6 +1442,18 @@ export class PersonaFlowDispatcher {
       }));
       throw error;
     }
+  }
+
+  /** Persisted goal ownership also applies during replay, when submit callbacks are gone. */
+  private async assertGoalDispatchCurrent(record: PersonaFlowDispatchRecord, requireReady: boolean): Promise<void> {
+    if (record.admission.kind !== 'assignment' || !record.admission.source.sourceId) return;
+    const { assertPersonaGoalDispatchCurrent } = await import('./goalRuntime');
+    await assertPersonaGoalDispatchCurrent({
+      personaId: record.personaId,
+      taskId: record.admission.source.sourceId,
+      dispatchId: record.id,
+      requireReady,
+    });
   }
 
   async submit(
@@ -1421,12 +1489,7 @@ export class PersonaFlowDispatcher {
       flowInput,
       maintenancePlan,
     );
-    const id = stableEnduringAgentId('dispatch', {
-      purpose: 'persona-flow-dispatch-v1',
-      workspaceId: this.workspaceId,
-      personaId: input.personaId,
-      idempotencyDigest,
-    });
+    const id = personaFlowDispatchId(input.personaId, rawKey, this.workspaceId);
 
     const record = await this.inWorkspace(() => withPersonaRuntimeLock(
       input.personaId,
@@ -2088,11 +2151,13 @@ export class PersonaFlowDispatcher {
             'An errored terminal dispatch requires a sanitized error.',
           );
         }
+        const reportedActivity = await this.dependencies.getPersonaActivity(record.personaId, fence.activityId);
         const semanticOutcome = semanticOutcomeFromDispatch({
           status: effectiveStatus,
           outcome: requested.outcome,
           activityId: fence.activityId,
           decidedAt: runtimeClock.now(),
+          reportedOutcome: reportedActivity?.reportedOutcome,
         });
         completion = await this.dependencies.completePersonaActivityWithinRuntimeLock({
           ...fence,
@@ -2576,21 +2641,31 @@ export class PersonaFlowDispatcher {
       signal: abortController.signal,
       assertCurrent: async () => {
         if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
-        await this.inWorkspace(() => this.dependencies.assertPersonaActivityLease(fence));
+        await this.inWorkspace(async () => {
+          await this.dependencies.assertPersonaActivityLease(fence);
+          await this.assertGoalDispatchCurrent(record, false);
+        });
       },
       authorizePersonaCoreMcp: async (serverName, nodeId) => {
         if (!isPersonaCoreAppNodeId(nodeId)) return;
         if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
         await this.inWorkspace(async () => {
           await this.dependencies.assertPersonaActivityLease(fence);
+          await this.assertGoalDispatchCurrent(record, false);
           await authorizePersonaCoreAppAccess(record.personaId, coreAppRefs, serverName);
         });
       },
       commitWhileCurrent: <T>(task: () => Promise<T>) => this.inWorkspace(() => (
-        this.dependencies.commitWithPersonaActivityLease(fence, task)
+        this.dependencies.commitWithPersonaActivityLease(fence, async () => {
+          await this.assertGoalDispatchCurrent(record, false);
+          return task();
+        })
       )),
       commitPersonaMutation: <T>(task: Parameters<typeof commitPersonaActivityMutation<T>>[1]) => (
-        this.inWorkspace(() => commitPersonaActivityMutation(fence, task))
+        this.inWorkspace(() => commitPersonaActivityMutation(fence, async (context) => {
+          await this.assertGoalDispatchCurrent(record, false);
+          return task(context);
+        }))
       ),
       ...(record.maintenancePlan && claim.activity.kind === 'maintenance' ? {
         commitPersonaMemoryMaintenance: (outputText: string) => {

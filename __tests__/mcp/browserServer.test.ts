@@ -92,6 +92,8 @@ describe('bundled browser MCP', () => {
       'browser_record_start',
       'browser_record_stop',
       'browser_record_status',
+      'browser_list_sessions',
+      'browser_release_owner',
       'browser_diagnostics',
       'browser_extensions',
       'browser_close',
@@ -251,8 +253,9 @@ describe('bundled browser MCP', () => {
     }
   });
 
-  it('propagates the useful browser failure after recovery is exhausted', async () => {
+  it('propagates the useful browser failure when screenshot capture fails', async () => {
     const page = {
+      evaluate: jest.fn(async () => 1),
       isClosed: jest.fn(() => false),
       mainFrame: jest.fn(() => ({})),
       on: jest.fn(),
@@ -279,6 +282,8 @@ describe('bundled browser MCP', () => {
       success: false,
       error: { message: expect.stringContaining('Chromium encoder rejected the requested frame size') },
     });
+    expect(page.screenshot).toHaveBeenCalledTimes(1);
+    expect(page.evaluate).toHaveBeenCalledWith('window.devicePixelRatio');
   });
 
   it('retries deterministic capture at a safer resolution and reports the recovery', async () => {
@@ -286,6 +291,8 @@ describe('bundled browser MCP', () => {
     process.env.FLUJO_BROWSER_SCREENSHOT_DIR = dataDir;
     const png = Buffer.alloc(26);
     Buffer.from('89504e470d0a1a0a', 'hex').copy(png);
+    png.writeUInt32BE(1920, 16);
+    png.writeUInt32BE(1080, 20);
     png[25] = 6;
     const page = (fail: boolean) => ({
       evaluate: jest.fn(async () => undefined),
@@ -297,6 +304,7 @@ describe('bundled browser MCP', () => {
         : jest.fn(async () => png),
       setContent: jest.fn(async () => undefined),
       setViewportSize: jest.fn(async () => undefined),
+      viewportSize: jest.fn(() => ({ width: 1280, height: 720 })),
       waitForLoadState: jest.fn(async () => undefined),
     });
     const firstPage = page(true);
@@ -316,22 +324,31 @@ describe('bundled browser MCP', () => {
       once: jest.fn(),
     });
 
-    const result = await browserCallTool(
-      'browser_capture_page',
-      { source: '<h1>capture</h1>', resolution: '4k' },
-      new AbortController().signal,
-    );
-    expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
-      success: true,
-      requestedResolution: { width: 3840, height: 2160 },
-      effectiveResolution: { width: 1920, height: 1080 },
-      attempts: [expect.stringContaining('GPU rejected')],
-      warnings: expect.arrayContaining([expect.stringContaining('Capture recovered')]),
-    });
-    expect(contexts[0].close).toHaveBeenCalled();
-    expect(contexts[1].close).toHaveBeenCalled();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      const result = await browserCallTool(
+        'browser_capture_page',
+        { source: '<h1>capture</h1>', resolution: '4k' },
+        new AbortController().signal,
+      );
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        success: true,
+        requestedResolution: { width: 3840, height: 2160 },
+        effectiveResolution: { width: 1920, height: 1080 },
+        attempts: [expect.stringContaining('GPU rejected')],
+        warnings: expect.arrayContaining([expect.stringContaining('Capture recovered')]),
+      });
+      expect(newContext).toHaveBeenCalledTimes(2);
+      expect(firstPage.setViewportSize).toHaveBeenCalledWith({ width: 3840, height: 2160 });
+      expect(secondPage.setViewportSize).toHaveBeenCalledWith({ width: 1920, height: 1080 });
+      expect(firstPage.screenshot).toHaveBeenCalledTimes(1);
+      expect(secondPage.screenshot).toHaveBeenCalledTimes(1);
+      expect(contexts[0].close).toHaveBeenCalledTimes(1);
+      expect(contexts[1].close).toHaveBeenCalledTimes(1);
+      await expect(fs.readFile((result.structuredContent as { path: string }).path)).resolves.toEqual(png);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('creates an isolated live session when sessionId is omitted', async () => {

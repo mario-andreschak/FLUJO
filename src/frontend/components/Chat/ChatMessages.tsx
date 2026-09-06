@@ -249,6 +249,7 @@ export interface CanvasLaunchInfo {
   toolName?: string;
   toolArgs?: string;
   resultContent?: string;
+  toolOwnerScope?: string;
   /** Cancellation outcome sent instead of the result, when present. */
   cancelledReason?: string;
   /** Whether the tool invocation failed. */
@@ -908,6 +909,7 @@ export const ToolCallTimeline: React.FC<{
           toolName: latest.toolName,
           toolArgs: latest.toolArgs,
           resultContent: latest.resultContent,
+          toolOwnerScope: latest.toolOwnerScope,
           cancelledReason: latest.cancelledReason,
           isError: latest.isError,
           updateId: latest.updateId,
@@ -924,6 +926,7 @@ export const ToolCallTimeline: React.FC<{
             toolName={launchInfo.toolName}
             toolArgs={launchInfo.toolArgs}
             toolResultContent={launchInfo.resultContent}
+            toolOwnerScope={launchInfo.toolOwnerScope}
             toolCancelledReason={launchInfo.cancelledReason}
             toolIsError={launchInfo.isError}
             toolUpdateId={launchInfo.updateId}

@@ -56,7 +56,12 @@ export const SOAK_CRITERION_REGISTRY = {
 } as const;
 
 export type SoakCriterionId = keyof typeof SOAK_CRITERION_REGISTRY;
-export type SoakRunMode = 'smoke' | 'acceptance';
+export type SoakRunMode = 'smoke' | 'infrastructure' | 'acceptance';
+
+/** Explicitly unresolved #448 contracts; never treat these as release proof. */
+export const SOAK_UNDEFINED_CONTRACT_IDS: readonly SoakCriterionId[] = [
+  'bounded-detailed-runtime-state', 'flat-event-append-cost', 'resident-memory-bound',
+];
 export type SoakCriterionStatus = 'passed' | 'failed' | 'not_evaluated';
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -178,6 +183,7 @@ function hasOnlyJsonValues(value: unknown): boolean {
 
 export function criterionRequired(id: SoakCriterionId, mode: SoakRunMode): boolean {
   const policy = SOAK_CRITERION_REGISTRY[id];
+  if (mode === 'infrastructure') return !SOAK_UNDEFINED_CONTRACT_IDS.includes(id);
   return mode === 'acceptance' ? policy.requiredInAcceptance : policy.requiredInSmoke;
 }
 
@@ -258,11 +264,11 @@ export function validateSoakEvidence(document: SoakEvidenceDocument): string[] {
   if (!identity.runId || !identity.commitSha) {
     errors.push('run identity is missing runId or commitSha');
   }
-  if (!['smoke', 'acceptance'].includes(identity.mode)) {
+  if (!['smoke', 'infrastructure', 'acceptance'].includes(identity.mode)) {
     errors.push('run identity mode is invalid');
   }
-  if (identity.mode === 'smoke' && identity.authoritative) {
-    errors.push('smoke run identity cannot be authoritative');
+  if (identity.mode !== 'acceptance' && identity.authoritative) {
+    errors.push('only acceptance run identity can be authoritative');
   }
   if (
     identity.mode === 'acceptance'
@@ -275,6 +281,9 @@ export function validateSoakEvidence(document: SoakEvidenceDocument): string[] {
     )
   ) {
     errors.push('acceptance run identity does not match the authoritative 28x20 contract');
+  }
+  if (identity.mode === 'infrastructure' && (identity.days !== 28 || identity.activitiesPerDay !== 20 || !identity.learningEnabled)) {
+    errors.push('infrastructure run identity requires the full 28x20 learning configuration');
   }
   if (
     !Number.isSafeInteger(identity.seed)

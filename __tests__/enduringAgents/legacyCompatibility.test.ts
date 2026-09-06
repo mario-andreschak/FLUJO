@@ -254,18 +254,27 @@ describe('pre-Persona persistence compatibility', () => {
 
   it('loads and round-trips a legacy PlannedExecutionsFile through SchedulerService', async () => {
     const fixture = jsonRoundTrip(legacyPlannedExecutionsFixture) as unknown as PlannedExecutionsFile;
+    const normalizedFixture = {
+      ...fixture,
+      executions: fixture.executions.map((execution) => ({
+        ...execution,
+        emergency: false,
+        superExclusive: false,
+        startRestriction: 'unrestricted',
+      })),
+    };
     mockPersistenceStore.set('planned_executions', jsonRoundTrip(fixture));
     const scheduler = new SchedulerService();
 
     expect(await scheduler.isPaused()).toBe(false);
-    expect(await scheduler.get('legacy-scheduled-run')).toEqual(fixture.executions[0]);
+    expect(await scheduler.get('legacy-scheduled-run')).toEqual(normalizedFixture.executions[0]);
 
     // setPaused is the public scheduler write path; writing the existing value
     // gives this disabled fixture a side-effect-free storage round trip.
     await scheduler.setPaused(fixture.paused);
 
-    expect(mockPersistenceStore.get('planned_executions')).toEqual(fixture);
-    expect(await scheduler.get('legacy-scheduled-run')).toEqual(fixture.executions[0]);
+    expect(mockPersistenceStore.get('planned_executions')).toEqual(normalizedFixture);
+    expect(await scheduler.get('legacy-scheduled-run')).toEqual(normalizedFixture.executions[0]);
     expectPersonaLess(mockPersistenceStore.get('planned_executions'));
   });
 });

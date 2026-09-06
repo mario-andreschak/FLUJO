@@ -18,6 +18,8 @@ import {
   reconcilePersonaRoleBehaviors,
   runPersonaRuntimeRetentionSweep,
   startPersonaFlowDispatcher,
+  startPersonaGoalRuntime,
+  stopPersonaGoalRuntime,
   sweepMemoryCandidates,
   sweepPersonaRuntimeEventSegments,
 } from '@/backend/services/enduringAgents';
@@ -111,6 +113,7 @@ export function shutdownBackendServices(reason: string): Promise<void> {
     }
     for (const workspace of workspaces) {
       try {
+        runWithWorkspace(workspace, () => stopPersonaGoalRuntime());
         await runWithWorkspace(workspace, () => mcpService.disconnectAll(reason));
       } catch (error) {
         log.warn(`MCP teardown failed for workspace ${workspace}:`, error);
@@ -535,6 +538,7 @@ function startSecretDependentServices(): Promise<void> {
           })
         ));
         await startPersonaFlowDispatcher();
+        await startPersonaGoalRuntime();
       } catch (error) {
         log.error('Failed to start Persona Flow dispatcher:', error);
       }
@@ -626,6 +630,9 @@ export async function onUnlocked(): Promise<void> {
   if (!servicesAlreadyStarted || isWorkerMode()) return;
   await startPersonaFlowDispatcher().catch(error => {
     log.error('Failed to resume Persona Flow dispatcher after unlock:', error);
+  });
+  await startPersonaGoalRuntime().catch(error => {
+    log.error('Failed to resume ongoing Persona goals after unlock:', error);
   });
   await getSchedulerService().reconcilePersonaSchedulerProjections(false).catch(error => {
     log.error('Failed to reconcile Persona scheduler projections after unlock:', error);

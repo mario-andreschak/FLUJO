@@ -7,7 +7,7 @@ import {
   getPersonaWorkItem,
   updatePersonaWorkItem,
 } from '@/backend/services/enduringAgents';
-import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
+import { EnduringAgentIdSchema, UpdatePersonaWorkItemInputSchema } from '@/shared/types/enduringAgent';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
@@ -44,7 +44,7 @@ async function PATCH_handler(request: NextRequest, { params }: RouteContext) {
   if (!validIds(personaId, workItemId)) return NextResponse.json({ error: 'WorkItem not found.' }, { status: 404 });
   const body = await request.json().catch(() => null);
   try {
-    return NextResponse.json(await updatePersonaWorkItem(personaId, workItemId, body));
+    return NextResponse.json(await updatePersonaWorkItem(personaId, workItemId, UpdatePersonaWorkItemInputSchema.parse(body)));
   } catch (error) {
     const response = personaDomainErrorResponse(error); if (response) return response;
     log.error('Failed to update Persona WorkItem', error);

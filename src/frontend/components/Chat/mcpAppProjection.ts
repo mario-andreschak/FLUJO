@@ -10,6 +10,7 @@ export interface McpAppOccurrence {
   toolName?: string;
   toolArgs?: string;
   resultContent?: string;
+  toolOwnerScope?: string;
   cancelledReason?: string;
   isError?: boolean;
   /** Stable delivery identity; result ids win because they identify completion. */
@@ -55,6 +56,7 @@ export function groupMcpAppOccurrences<TMessage extends FlujoChatMessage>(
       toolName: ui.toolName ?? pair.toolCall.function.name,
       toolArgs: ui.toolArgs ?? pair.toolCall.function.arguments,
       resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
+      toolOwnerScope: ui.toolOwnerScope,
       cancelledReason: ui.cancelledReason,
       isError: ui.isError,
       updateId: resultMessageId ?? toolCallId,

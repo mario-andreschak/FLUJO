@@ -576,7 +576,12 @@ describe('legacy persona-less compatibility fixtures', () => {
       });
 
       const loaded = await new SchedulerService().get(legacyExecution.id);
-      expect(loaded).toEqual(legacyExecution);
+      expect(loaded).toEqual({
+        ...legacyExecution,
+        emergency: false,
+        superExclusive: false,
+        startRestriction: 'unrestricted',
+      });
       expect(loaded).not.toHaveProperty('personaId');
       expect(loaded).not.toHaveProperty('activityId');
       expect(loaded).not.toHaveProperty('behaviorRevisionId');

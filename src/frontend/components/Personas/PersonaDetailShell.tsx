@@ -9,6 +9,7 @@ import {
   ChatBubbleOutlineRounded,
   GroupsRounded,
   HubRounded,
+  HistoryRounded,
   MemoryRounded,
   RefreshRounded,
   SettingsRounded,
@@ -52,6 +53,7 @@ const PERSONA_NAVIGATION_AREAS = [
   'memory',
   'conversations',
   'tasks',
+  'history',
   'improvements',
   'settings',
 ] as const satisfies readonly PersonaNavigationArea[];
@@ -64,6 +66,7 @@ const AREA_ICON = {
   memory: MemoryRounded,
   conversations: ChatBubbleOutlineRounded,
   tasks: WorkOutlineRounded,
+  history: HistoryRounded,
   improvements: AutoAwesomeRounded,
   settings: SettingsRounded,
 } satisfies Record<PersonaNavigationArea, typeof BoltRounded>;

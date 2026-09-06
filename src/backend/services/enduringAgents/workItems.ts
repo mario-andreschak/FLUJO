@@ -23,6 +23,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 
 import {
   cancelPersonaFlowDispatchById,
+  getPersonaFlowDispatch,
   listPersonaFlowDispatches,
   movePersonaWorkItemDispatch,
   reprioritizePersonaWorkItemDispatches,
@@ -37,6 +38,12 @@ import {
 } from './domainMutation';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
 import { normalizeMemorySourceRefs } from './provenance';
+import {
+  clearPersonaGoalPending,
+  initialPersonaGoalState,
+  notifyPersonaGoalChanged,
+  projectPersonaGoalOutcome,
+} from './goalRuntime';
 import {
   withPersonaRuntimeLock,
   type PersonaRuntimeLock,
@@ -113,15 +120,30 @@ function assertDependencyGraph(
     }
   }
 
+  // Goal completion waits for its children, and every child inherits the
+  // root's prerequisites. Include both implicit edges in cycle detection:
+  // ordinary dependencyIds alone misses impossible parent/child waits.
+  const childrenByGoal = new Map<string, string[]>();
+  for (const item of graph.values()) {
+    if (item.parentGoalId) {
+      childrenByGoal.set(item.parentGoalId, [...(childrenByGoal.get(item.parentGoalId) ?? []), item.id]);
+    }
+  }
   const visiting = new Set<string>();
   const visited = new Set<string>();
   const visit = (id: string): void => {
     if (visiting.has(id)) {
-      throw new PersonaDomainConflictError('WorkItem dependencies must remain acyclic.');
+      throw new PersonaDomainConflictError('WorkItem dependencies must remain acyclic, including ongoing goal completion and inherited prerequisites.');
     }
     if (visited.has(id)) return;
     visiting.add(id);
-    for (const dependencyId of graph.get(id)?.dependencyIds ?? []) visit(dependencyId);
+    const item = graph.get(id);
+    const dependencies = [
+      ...(item?.dependencyIds ?? []),
+      ...(item?.goal ? childrenByGoal.get(item.id) ?? [] : []),
+      ...(item?.parentGoalId ? graph.get(item.parentGoalId)?.dependencyIds ?? [] : []),
+    ];
+    for (const dependencyId of dependencies) visit(dependencyId);
     visiting.delete(id);
     visited.add(id);
   };
@@ -144,7 +166,7 @@ export async function createPersonaWorkItem(
   options: PersonaDomainMutationOptions = {},
 ): Promise<PersonaWorkItem> {
   const parsed = CreatePersonaWorkItemInputSchema.parse(input) as CreatePersonaWorkItemInput;
-  return withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
+  const created = await withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
     const now = Date.now();
     const id = parsed.id ?? randomEnduringAgentId('work');
     const existing = await getPersonaWorkItem(parsed.personaId, id);
@@ -152,12 +174,27 @@ export async function createPersonaWorkItem(
     if (parsed.createdByActivityId && activity && parsed.createdByActivityId !== activity.id) {
       throw new PersonaDomainConflictError('A Flow cannot attribute a WorkItem to another Activity.');
     }
+    const assigned = activity?.kind === 'assignment' && activity.source.sourceId
+      ? await getPersonaWorkItem(parsed.personaId, activity.source.sourceId) : null;
+    const inheritedGoalId = assigned?.goal ? assigned.id : assigned?.parentGoalId;
+    if (inheritedGoalId && parsed.parentGoalId && parsed.parentGoalId !== inheritedGoalId) {
+      throw new PersonaDomainConflictError('Tasks created during an ongoing goal must belong to that goal.');
+    }
+    const parentGoalId = parsed.parentGoalId ?? inheritedGoalId;
+    if (parentGoalId) {
+      const parent = await getPersonaWorkItem(parsed.personaId, parentGoalId);
+      if (!parent?.goal || parent.goal.state !== 'active' || parsed.goal) {
+        throw new PersonaDomainConflictError('A child Task requires an active ongoing goal in this Persona.');
+      }
+    }
     const record = PersonaWorkItemSchema.parse({
       schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
       id,
       personaId: parsed.personaId,
       title: parsed.title,
       ...(parsed.description ? { description: parsed.description } : {}),
+      ...(parentGoalId ? { parentGoalId } : {}),
+      ...(parsed.goal ? { goal: initialPersonaGoalState(parsed.goal, now) } : {}),
       status: 'open',
       priority: parsed.priority ?? 'normal',
       dependencyIds: parsed.dependencyIds ?? [],
@@ -178,6 +215,8 @@ export async function createPersonaWorkItem(
     assertDependencyGraph(parsed.personaId, record, await listStoredPersonaWorkItems(parsed.personaId));
     return savePersonaWorkItem(record);
   });
+  if (created.goal || created.parentGoalId) notifyPersonaGoalChanged(created.personaId);
+  return created;
 }
 
 export async function updatePersonaWorkItem(
@@ -193,6 +232,12 @@ export async function updatePersonaWorkItem(
     const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== existing.updatedAt) {
       throw new PersonaDomainConflictError('WorkItem changed since it was inspected.');
+    }
+    if (existing.parentGoalId && existing.goalControlState && parsed.status !== undefined && parsed.status !== existing.status) {
+      throw new PersonaDomainConflictError(
+        `This goal Task was ${existing.goalControlState} by its owner. Only an explicit owner control can change its lifecycle.`,
+        'PERSONA_GOAL_TASK_OWNER_CONTROLLED',
+      );
     }
     if (
       !options.executionAuthority
@@ -210,20 +255,57 @@ export async function updatePersonaWorkItem(
       );
     }
     const now = Math.max(Date.now(), existing.updatedAt + 1);
-    const status = parsed.status ?? existing.status;
+    const status = existing.goal && options.executionAuthority && parsed.status === 'blocked'
+      ? 'open' : parsed.status ?? existing.status;
+    const records = await listStoredPersonaWorkItems(personaId);
+    if (parsed.goal && !existing.goal) {
+      throw new PersonaDomainConflictError('Only an ongoing goal has continuation settings.');
+    }
+    if (existing.goal && parsed.status !== undefined && parsed.status !== existing.status) {
+      if (existing.goal.state === 'completed' || existing.goal.state === 'stopped') {
+        throw new PersonaDomainConflictError('A completed or stopped ongoing goal cannot be reopened.');
+      }
+      if (!options.executionAuthority && parsed.status !== 'completed') {
+        throw new PersonaDomainConflictError('Use the ongoing goal Pause, Stop, or Resume controls to change its lifecycle safely.');
+      }
+      if (options.executionAuthority && parsed.status === 'cancelled') {
+        throw new PersonaDomainConflictError('Keep an ongoing goal active and report blockers. Only its owner can stop it.');
+      }
+      if (options.executionAuthority && parsed.status === 'completed') {
+        throw new PersonaDomainConflictError('Report verified goal success with report_activity_outcome and finish the Activity. The runtime completes the goal only after the Activity ends successfully.');
+      }
+    }
+    if (existing.goal && status === 'completed'
+      && records.some((item) => item.parentGoalId === existing.id && !['completed', 'cancelled'].includes(item.status))) {
+      throw new PersonaDomainConflictError('Finish or cancel this goal’s remaining Tasks before completing the goal.');
+    }
+    const patchedGoal = existing.goal ? {
+      ...existing.goal,
+      ...(parsed.goal ?? {}),
+      maxRounds: parsed.goal?.maxRounds === null ? undefined : parsed.goal?.maxRounds ?? existing.goal.maxRounds,
+    } : undefined;
+    const goal = patchedGoal ? {
+      ...patchedGoal,
+      ...(parsed.status === 'completed' ? { ...clearPersonaGoalPending(patchedGoal), state: 'completed' as const, nextRunAt: undefined } : {}),
+      ...(parsed.status === 'cancelled' ? { ...clearPersonaGoalPending(patchedGoal), state: 'stopped' as const, nextRunAt: undefined } : {}),
+      ...(!options.executionAuthority && parsed.status === 'blocked' ? { state: 'paused' as const, nextRunAt: undefined } : {}),
+      ...(!options.executionAuthority && parsed.status === 'open' ? { state: 'active' as const, nextRunAt: now } : {}),
+    } : undefined;
     const candidate = PersonaWorkItemSchema.parse({
       ...existing,
       ...(parsed.title !== undefined ? { title: parsed.title } : {}),
       description: parsed.description === null ? undefined : parsed.description ?? existing.description,
       status,
+      ...(goal ? { goal } : {}),
       ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
       ...(parsed.dependencyIds !== undefined ? { dependencyIds: parsed.dependencyIds } : {}),
       nextAction: parsed.nextAction === null ? undefined : parsed.nextAction ?? existing.nextAction,
       deadline: parsed.deadline === null ? undefined : parsed.deadline ?? existing.deadline,
+      ...(parsed.status !== undefined ? { deferredUntil: undefined } : {}),
       updatedAt: now,
       completedAt: status === 'completed' ? existing.completedAt ?? now : undefined,
     }) as PersonaWorkItem;
-    assertDependencyGraph(personaId, candidate, await listStoredPersonaWorkItems(personaId));
+    assertDependencyGraph(personaId, candidate, records);
     return savePersonaWorkItem(candidate);
   });
   if (parsed.priority !== undefined) {
@@ -233,6 +315,7 @@ export async function updatePersonaWorkItem(
       priority: updated.priority,
     });
   }
+  if (updated.goal || updated.parentGoalId) notifyPersonaGoalChanged(personaId);
   return updated;
 }
 
@@ -311,11 +394,37 @@ export async function assignPersonaWorkItem(
   EnduringAgentIdSchema.parse(workItemId);
   const parsed = AssignPersonaWorkItemInputSchema.parse(input) as AssignPersonaWorkItemInput;
   const inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+  if (inspected.goal || inspected.parentGoalId) {
+    const workItem = await withPersonaRuntimeLock(personaId, async (lock) => {
+      const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+      const records = await listStoredPersonaWorkItems(personaId);
+      assertAssignableWorkItem(current, records, parsed.expectedUpdatedAt);
+      const root = current.goal ? current : records.find((item) => item.id === current.parentGoalId);
+      if (!root?.goal || root.goal.state !== 'active') {
+        throw new PersonaDomainConflictError('Resume this ongoing goal before assigning its work.');
+      }
+      const now = Math.max(Date.now(), current.updatedAt + 1, root.updatedAt + 1);
+      const selected = current.deferredUntil !== undefined
+        ? { ...current, deferredUntil: undefined, updatedAt: now } : current;
+      await lock.assertOwned();
+      if (selected !== current) await savePersonaWorkItem(selected);
+      if (!root.goal.pendingAttemptKey) {
+        const awakened = await savePersonaWorkItem({ ...root, updatedAt: now, goal: { ...root.goal, nextRunAt: now } });
+        return root.id === selected.id ? awakened : selected;
+      }
+      return selected;
+    });
+    notifyPersonaGoalChanged(personaId);
+    return { workItem, admission: 'queued' };
+  }
   let workItem: PersonaWorkItem | undefined;
   const validateAdmission = async (): Promise<void> => {
     const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     const records = await listStoredPersonaWorkItems(personaId);
     assertAssignableWorkItem(current, records, parsed.expectedUpdatedAt);
+    if (current.parentGoalId && records.find((item) => item.id === current.parentGoalId)?.goal?.state !== 'active') {
+      throw new PersonaDomainConflictError('This Task belongs to a goal that is not active.');
+    }
     workItem = current;
   };
 
@@ -410,8 +519,14 @@ async function persistWorkItemControlStatus(
   return withPersonaRuntimeLock(personaId, async (lock) => {
     await lock.assertOwned();
     const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
-    if (existing.status === status) return existing;
-    if (existing.status === 'completed' || existing.status === 'cancelled') {
+    const root = existing.parentGoalId ? await getPersonaWorkItem(personaId, existing.parentGoalId) : null;
+    const revokedDispatchId = (status === 'blocked' || status === 'cancelled') && root?.goal?.pendingTaskId === existing.id
+      ? root.goal.pendingDispatchId : undefined;
+    const goalControlState = existing.parentGoalId
+      ? status === 'blocked' ? 'paused' : status === 'cancelled' ? 'stopped' : undefined
+      : existing.goalControlState;
+    if (existing.status === status && !revokedDispatchId && existing.goalControlState === goalControlState) return existing;
+    if (existing.status !== status && (existing.status === 'completed' || existing.status === 'cancelled')) {
       throw new PersonaDomainConflictError(
         'This Task is already finished and cannot be changed with a work control.',
         'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
@@ -435,12 +550,22 @@ async function persistWorkItemControlStatus(
     const candidate = PersonaWorkItemSchema.parse({
       ...existing,
       status,
+      ...(revokedDispatchId ? { revokedGoalDispatchId: revokedDispatchId } : {}),
+      goalControlState,
       updatedAt: now,
       completedAt: undefined,
     }) as PersonaWorkItem;
     assertDependencyGraph(personaId, candidate, records);
     await lock.assertOwned();
-    return savePersonaWorkItem(candidate);
+    const saved = await savePersonaWorkItem(candidate);
+    if (revokedDispatchId && root?.goal?.state === 'active') {
+      // Child first: its exact revocation fences live commits even if the
+      // process exits before releasing this pending round. Native Task updates
+      // do not write this marker, so their outcome reporting remains valid.
+      await savePersonaWorkItem({ ...root, updatedAt: Math.max(now, root.updatedAt + 1),
+        goal: { ...clearPersonaGoalPending(root.goal), nextRunAt: now } });
+    }
+    return saved;
   });
 }
 
@@ -462,6 +587,51 @@ export async function controlPersonaWorkItem(
   }
 
   const inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+  if (inspected.goal && action !== 'move_earlier' && action !== 'move_later') {
+    const { workItem, dispatches } = await withPersonaRuntimeLock(personaId, async (lock) => {
+      const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+      if (!current.goal) throw new PersonaDomainConflictError('This ongoing goal no longer exists.');
+      if ((current.goal.state === 'completed' || current.goal.state === 'stopped')
+        && !(action === 'stop' && current.goal.state === 'stopped')) {
+        throw new PersonaDomainConflictError('A completed or stopped goal cannot be resumed.');
+      }
+      const records = await listStoredPersonaWorkItems(personaId);
+      const ownedTaskIds = new Set([workItemId, ...records.filter((item) => item.parentGoalId === workItemId).map((item) => item.id)]);
+      const dispatches = (await listPersonaFlowDispatches(personaId)).filter((record) => (
+        record.admission.kind === 'assignment' && ownedTaskIds.has(record.admission.source.sourceId ?? '')
+        && !['completed', 'error', 'cancelled'].includes(record.state)
+      ));
+      if (dispatches.length === 0 && ((action === 'stop' && current.goal.state === 'stopped')
+        || (action === 'pause' && current.goal.state === 'paused'))) return { workItem: current, dispatches };
+      if (action === 'retry' && dispatches.length > 0) {
+        if (current.goal.state === 'active') return { workItem: current, dispatches: [] };
+        throw new PersonaDomainConflictError('The previous goal round is still stopping. Try again shortly.');
+      }
+      const now = Math.max(Date.now(), current.updatedAt + 1);
+      const workItem = PersonaWorkItemSchema.parse({
+        ...current,
+        status: action === 'stop' ? 'cancelled' : action === 'pause' ? 'blocked' : 'open',
+        goal: {
+          ...clearPersonaGoalPending(current.goal),
+          state: action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'active',
+          nextRunAt: action === 'retry' ? now : undefined,
+          ...(action === 'retry' ? { consecutiveFailures: 0, interventionReason: undefined } : {}),
+        },
+        updatedAt: now,
+        completedAt: undefined,
+      }) as PersonaWorkItem;
+      await lock.assertOwned();
+      await savePersonaWorkItem(workItem);
+      return { workItem, dispatches };
+    });
+    if (action === 'pause' || action === 'stop') {
+      await Promise.all(dispatches.map((dispatch) => cancelPersonaFlowDispatchById({
+        personaId, dispatchId: dispatch.id,
+        reason: action === 'pause' ? 'The ongoing goal was paused.' : 'The ongoing goal was stopped.',
+      }, { waitForCompletion: true })));
+    } else notifyPersonaGoalChanged(personaId);
+    return { action, workItem, ...(action === 'retry' ? { admission: 'queued' as const } : {}) };
+  }
   const activeDispatches = await listActiveWorkItemDispatches(personaId, workItemId);
 
   if (action === 'move_earlier' || action === 'move_later') {
@@ -481,13 +651,15 @@ export async function controlPersonaWorkItem(
   }
 
   if (action === 'pause' || action === 'stop') {
-    if (action === 'pause' && inspected.status === 'blocked' && activeDispatches.length === 0) {
+    if (action === 'pause' && inspected.status === 'blocked' && activeDispatches.length === 0
+      && (!inspected.parentGoalId || inspected.goalControlState === 'paused')) {
       return { action, workItem: inspected };
     }
-    if (action === 'stop' && inspected.status === 'cancelled') {
+    if (action === 'stop' && inspected.status === 'cancelled' && activeDispatches.length === 0
+      && (!inspected.parentGoalId || inspected.goalControlState === 'stopped')) {
       return { action, workItem: inspected };
     }
-    if (activeDispatches.length === 0) {
+    if (activeDispatches.length === 0 && !inspected.parentGoalId) {
       throw new PersonaDomainConflictError(
         'This Task is no longer active. Refresh the desk to see its latest state.',
         'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
@@ -506,6 +678,7 @@ export async function controlPersonaWorkItem(
           : 'This Task was stopped from the Persona desk.',
       }, { waitForCompletion: true })
     )));
+    if (inspected.parentGoalId) notifyPersonaGoalChanged(personaId);
     const workItem = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     return { action, workItem };
   }
@@ -577,6 +750,30 @@ async function synchronizeAssignedWorkItemRecord(
 ): Promise<PersonaWorkItem | null> {
   const existing = await getPersonaWorkItem(activity.personaId, activity.source.sourceId!);
   if (!existing || existing.personaId !== activity.personaId) return null;
+  if (existing.goal || existing.parentGoalId) {
+    const root = existing.goal ? existing : await getPersonaWorkItem(activity.personaId, existing.parentGoalId!);
+    if (!root?.goal || root.goal.state !== 'active' || root.goal.pendingTaskId !== existing.id) return existing;
+    const dispatchId = root.goal.pendingDispatchId;
+    if (!dispatchId || (activity.entryPointPayloadRef !== dispatchId
+      && (await getPersonaFlowDispatch(dispatchId))?.activityId !== activity.id)) return existing;
+    const records = await listStoredPersonaWorkItems(activity.personaId);
+    const now = Math.max(Date.now(), root.updatedAt + 1, existing.updatedAt + 1, activity.completedAt ?? 0);
+    const projected = projectPersonaGoalOutcome(root, existing, activity, records, now);
+    if (projected.root === root) return existing;
+    let task = existing;
+    if (existing.id !== root.id && !['completed', 'cancelled', 'blocked'].includes(existing.status)) {
+      task = PersonaWorkItemSchema.parse({ ...existing, status: projected.taskStatus,
+        nextAction: activity.outcome?.nextAction ?? existing.nextAction,
+        deferredUntil: projected.taskDeferredUntil,
+        updatedAt: now, completedAt: projected.taskStatus === 'completed' ? now : undefined }) as PersonaWorkItem;
+      assertDependencyGraph(activity.personaId, task, records);
+      await savePersonaWorkItem(task);
+    }
+    // Child first, root last: replaying a crash prefix reuses the same pending dispatch.
+    await savePersonaWorkItem(projected.root);
+    notifyPersonaGoalChanged(activity.personaId);
+    return existing.id === root.id ? projected.root : task;
+  }
   if (
     existing.status === 'completed'
     || existing.status === 'cancelled'
@@ -659,7 +856,16 @@ export async function deletePersonaWorkItem(
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
   await withPersonaDomainMutation(personaId, options, async () => {
-    requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+    const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+    const root = existing.goal ? existing : existing.parentGoalId
+      ? await getPersonaWorkItem(personaId, existing.parentGoalId) : null;
+    if (existing.goal?.state === 'active' || root?.goal?.pendingTaskId === workItemId) {
+      throw new PersonaDomainConflictError(
+        'Stop this ongoing goal before deleting its active or reserved Task.',
+        'PERSONA_WORK_ITEM_ACTIVE',
+        { reason: 'active_goal_round' },
+      );
+    }
     if ((await listActiveWorkItemDispatches(personaId, workItemId)).length > 0) {
       throw new PersonaDomainConflictError(
         'This Task is still active. Stop it before deleting it.',
@@ -668,7 +874,7 @@ export async function deletePersonaWorkItem(
       );
     }
     const dependent = (await listStoredPersonaWorkItems(personaId)).find(
-      (item) => item.id !== workItemId && item.dependencyIds.includes(workItemId),
+      (item) => item.id !== workItemId && (item.dependencyIds.includes(workItemId) || item.parentGoalId === workItemId),
     );
     if (dependent) {
       throw new PersonaDomainConflictError(
@@ -751,11 +957,22 @@ export async function promoteRunTodoToWorkItem(
       uri: `flujo://activity/${activity.id}/todo/${todo.id}`,
       observedAt: todo.updatedAt,
     }], { now, producer: 'explicit-todo-promotion', digestMaterial: todo });
+    const assigned = activity.kind === 'assignment' && activity.source.sourceId
+      ? await getPersonaWorkItem(personaId, activity.source.sourceId) : null;
+    const parentGoalId = assigned?.goal ? assigned.id : assigned?.parentGoalId;
+    if (parentGoalId) {
+      const parent = await getPersonaWorkItem(personaId, parentGoalId);
+      if (parent?.goal?.state !== 'active') {
+        throw new PersonaDomainConflictError('The ongoing goal is no longer active.');
+      }
+      notifyPersonaGoalChanged(personaId);
+    }
     return savePersonaWorkItem(PersonaWorkItemSchema.parse({
       schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
       id,
       personaId,
       title: parsed.title ?? todo.content,
+      ...(parentGoalId ? { parentGoalId } : {}),
       ...(parsed.description ? { description: parsed.description } : {}),
       status: todo.status === 'in_progress' ? 'in_progress' : 'open',
       priority: parsed.priority ?? 'normal',
