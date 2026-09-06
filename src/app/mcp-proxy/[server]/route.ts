@@ -52,7 +52,7 @@ import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-proxy/[server]/route');
-const PROXY_VERSION = '3.45.0';
+const PROXY_VERSION = '3.45.1';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
