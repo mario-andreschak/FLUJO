@@ -137,7 +137,7 @@ export async function startPublicFixtureServer({
     };
     try {
       if (url.pathname === '/health') {
-        sendJson(response, 200, { ready: true, serviceId: manifest.id });
+        sendJson(response, 200, { ready: true, serviceId: manifest.id, runId });
         return;
       }
       const requestAt = Date.now();
@@ -162,11 +162,6 @@ export async function startPublicFixtureServer({
           + ',rendered:document.querySelector("main").innerText})})</script></html>');
         return;
       }
-      if (url.pathname === '/research.json' && request.method === 'GET') {
-        await appendAudit('research_read', requestIdentity);
-        sendJson(response, 200, { serviceId: manifest.id, facts });
-        return;
-      }
       if (url.pathname === '/browser-observed' && request.method === 'POST') {
         const body = await readBody(request, manifest.limits.maxPayloadBytes);
         await appendAudit('browser_observed', { ...requestIdentity, sourceId: body.sourceId, renderedSha256: sha256(String(body.rendered ?? '')) });
@@ -176,6 +171,11 @@ export async function startPublicFixtureServer({
       if (!authenticate(request)) {
         await appendAudit('authorization_rejected', requestIdentity);
         sendJson(response, 401, { error: 'Controlled-service authorization is required.' });
+        return;
+      }
+      if (url.pathname === '/research.json' && request.method === 'GET') {
+        await appendAudit('research_read', requestIdentity);
+        sendJson(response, 200, { serviceId: manifest.id, runId, facts });
         return;
       }
       if (url.pathname === '/artifact-observation' && request.method === 'POST') {

@@ -170,11 +170,12 @@ node scripts/validate-persona-goal-endurance.mjs \
   --attestation-key-sha256=<fingerprint-from-runner-log>
 ```
 
-The validator rejects wrong revision/mode/profile, manifest drift, forged checkpoint
-chains, process identity reuse, unsafe Activity replay, duplicate effects, missing
-read-back, tampered artifacts, zero denominators, inconsistent intervention or duration
-math, clock gaps, incomplete cleanup, checksum changes, unsigned evidence and an
-attestation key that does not match the externally preserved runner fingerprint.
+The validator rejects missing evidence, wrong revision/mode/profile/model identity,
+manifest drift, forged or stale checkpoint chains, cancelled runs, process identity
+reuse, unsafe Activity replay, duplicate effects, missing read-back, tampered artifacts,
+zero denominators, inconsistent intervention or duration math, clock gaps, incomplete
+cleanup, checksum changes, unsigned evidence and an attestation key that does not match
+the externally preserved runner fingerprint.
 
 ## Claims and unresolved gates
 
@@ -183,9 +184,15 @@ reported model and profile completed this bounded disposable scenario for the re
 real duration. Each failed or cancelled run remains explicit and retains its partial
 checkpoints.
 
-This tier does not resolve the soak's three numeric release contracts: detailed runtime
-state caps, append-cost flatness, and resident-memory bounds remain
-`not_evaluated` until the release owner approves a versioned policy. It also does not
-justify “99% unattended”; that population claim needs preregistered sampling and
-confidence rules. Report the observed rate, sample size, duration, stalled work and
-interventions without extrapolation.
+The numeric runtime policy is versioned in the companion 28-day × 20-activity Persona
+soak and must pass for the same exact release commit before this endurance evidence can
+support release acceptance. Its committed contracts cap total detailed runtime records
+at `2 × generated activities + 128`, uncompacted mailbox/Activity/dispatch/lease-history
+records at 500/200/200/50, final-to-baseline seven-day append median ratio at 2 with a
+20 ms floor and daily p95 strictly below 150 ms, final RSS growth at 256 MiB, and peak
+RSS at 768 MiB. This business-goal tier does not duplicate or infer those measurements;
+a missing, failed or `not_evaluated` companion soak criterion remains fatal.
+
+Neither tier alone justifies “99% unattended”; that population claim needs preregistered
+sampling and confidence rules. Report the observed rate, sample size, duration, stalled
+work and interventions without extrapolation.

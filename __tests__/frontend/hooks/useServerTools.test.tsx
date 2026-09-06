@@ -76,9 +76,10 @@ describe('useServerTools', () => {
       tools: [tool('search')],
     } as ToolListResult);
 
+    const initialProps: { server: string | null } = { server: null };
     const { result, rerender } = renderHook(
       ({ server }: { server: string | null }) => useServerTools(server),
-      { initialProps: { server: null } },
+      { initialProps },
     );
 
     expect(mockListServerTools).not.toHaveBeenCalled();
@@ -300,9 +301,10 @@ describe('useServerTools', () => {
     const pending = deferred<ToolListResult>();
     mockListServerTools.mockImplementation(() => pending.promise);
 
+    const initialProps: { server: string | null } = { server: 'records' };
     const { result, rerender } = renderHook(
       ({ server }: { server: string | null }) => useServerTools(server),
-      { initialProps: { server: 'records' } },
+      { initialProps },
     );
     await waitFor(() => expect(mockListServerTools).toHaveBeenCalledTimes(1));
 

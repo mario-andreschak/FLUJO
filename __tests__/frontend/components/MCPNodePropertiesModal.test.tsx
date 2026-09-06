@@ -226,7 +226,7 @@ describe('MCPNodePropertiesModal', () => {
 
       const errorText = screen.getByText('Tool discovery failed');
       const errorAlert = errorText.closest('[role="alert"]') as HTMLElement;
-      fireEvent.click(within(errorAlert).getByRole('button', { name: 'Retry' }));
+      fireEvent.click(within(errorAlert).getByRole('button', { name: 'Retry connection' }));
       expect(retryLoadTools).toHaveBeenCalledTimes(1);
 
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));

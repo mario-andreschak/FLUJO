@@ -593,3 +593,78 @@ test('validates chained endurance evidence and rejects semantic tampering', asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function withSyntheticEvidence(assertion) {
+  const root = await mkdtemp(path.join(tmpdir(), 'flujo-goal-endurance-rejection-'));
+  try {
+    const evidence = await createSyntheticEvidence(root);
+    await assertion({
+      root,
+      ...evidence,
+      options: validationOptions(root, evidence.expectedAttestationKeySha256),
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('independently rejects incomplete or mismatched endurance evidence', async t => {
+  await t.test('missing evidence', async () => withSyntheticEvidence(async ({ root, options }) => {
+    await rm(path.join(root, 'persona-goal-endurance.json'));
+    await assert.rejects(validatePersonaGoalEndurance(options), { code: 'ENOENT' });
+  }));
+
+  await t.test('forged evidence', async () => withSyntheticEvidence(async ({ root, options }) => {
+    const statePath = path.join(root, 'trusted-verifier', 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    state.effects[0].contentSha256 = 'f'.repeat(64);
+    await writeFile(statePath, JSON.stringify(state, null, 2) + '\n');
+    await writeChecksums(root);
+    await assert.rejects(validatePersonaGoalEndurance(options));
+  }));
+
+  await t.test('stale run identity', async () => withSyntheticEvidence(
+    async ({ root, report, keys, options }) => {
+      const changed = structuredClone(report);
+      changed.runIdentity.runId = 'stale-unit-run';
+      await writeReport(root, changed, keys);
+      await assert.rejects(
+        validatePersonaGoalEndurance(options),
+        /Run identity does not match trusted service evidence/,
+      );
+    },
+  ));
+
+  await t.test('wrong commit SHA', async () => withSyntheticEvidence(
+    async ({ options }) => {
+      await assert.rejects(
+        validatePersonaGoalEndurance({ ...options, expectedCommit: 'c'.repeat(40) }),
+        /Commit identity mismatch/,
+      );
+    },
+  ));
+
+  await t.test('wrong model identity', async () => withSyntheticEvidence(
+    async ({ root, report, keys, options }) => {
+      const changed = structuredClone(report);
+      changed.configuration.model.id = 'wrong-model';
+      await writeReport(root, changed, keys);
+      await assert.rejects(
+        validatePersonaGoalEndurance(options),
+        /Runtime-owned model dispatch archives are invalid/,
+      );
+    },
+  ));
+
+  await t.test('cancelled run', async () => withSyntheticEvidence(
+    async ({ root, report, keys, options }) => {
+      const changed = structuredClone(report);
+      changed.status = 'cancelled';
+      await writeReport(root, changed, keys);
+      await assert.rejects(
+        validatePersonaGoalEndurance(options),
+        /Evidence is not a completed schema-v1 run/,
+      );
+    },
+  ));
+});

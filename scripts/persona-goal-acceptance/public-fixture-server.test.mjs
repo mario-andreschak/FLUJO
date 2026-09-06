@@ -28,7 +28,14 @@ test('controlled service reconciles commit-before-ack with one idempotent effect
       'Content-Type': 'application/json',
       'Idempotency-Key': 'publication:fixture-unit-run',
     };
-    const research = await (await fetch(fixture.baseUrl + '/research.json')).json();
+    const unauthorizedResearch = await fetch(fixture.baseUrl + '/research.json');
+    assert.equal(unauthorizedResearch.status, 401);
+    const researchResponse = await fetch(fixture.baseUrl + '/research.json', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    assert.equal(researchResponse.status, 200);
+    const research = await researchResponse.json();
+    assert.equal(research.runId, 'fixture-unit-run');
     const content = name => '# ' + name + '\nSource: ' + research.facts.sourceId
       + '\nAudience: ' + research.facts.audience
       + '\nBenefit: ' + research.facts.benefit

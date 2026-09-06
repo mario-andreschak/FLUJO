@@ -24,6 +24,7 @@ import {
   startPersonaFlowDispatcher,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { readPersonaRuntimeEvents } from '@/backend/services/enduringAgents/runtimeEvents';
+import type { PersonaRuntimeEvent } from '@/backend/services/enduringAgents/runtimeEvents';
 import { inspectAndReconcilePersonaRuntime } from '@/backend/services/enduringAgents/runtimeObservability';
 import {
   createRoleVersion,
@@ -90,6 +91,17 @@ jest.setTimeout(timeoutMs + 60_000);
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const iso = (value: number) => new Date(value).toISOString();
 const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+
+type GoalControlRuntimeEvent = Extract<PersonaRuntimeEvent, { type: 'goal:control' }>;
+type GoalRoundRuntimeEvent = Extract<PersonaRuntimeEvent, { type: 'goal:round' }>;
+
+function isGoalControlRuntimeEvent(event: PersonaRuntimeEvent): event is GoalControlRuntimeEvent {
+  return event.type === 'goal:control';
+}
+
+function isGoalRoundRuntimeEvent(event: PersonaRuntimeEvent): event is GoalRoundRuntimeEvent {
+  return event.type === 'goal:round';
+}
 
 interface Checkpoint {
   schemaVersion: 1;
@@ -194,6 +206,36 @@ async function serviceRequest(relativePath: string, options: RequestInit = {}) {
   return body;
 }
 
+async function assertFixturePreconditions(requireEmpty: boolean) {
+  const [health, evidence, research] = await Promise.all([
+    serviceRequest('/health'),
+    serviceRequest('/evidence'),
+    serviceRequest('/research.json'),
+  ]);
+  const state = evidence.state ?? {};
+  const validIdentity = health.ready === true
+    && health.serviceId === state.serviceId
+    && health.runId === runId
+    && state.runId === runId
+    && research.serviceId === state.serviceId
+    && research.facts?.sourceId === state.facts?.sourceId;
+  if (!validIdentity) {
+    throw new Error('The controlled fixture preflight returned mismatched service or run identity.');
+  }
+  if (requireEmpty && (state.effects?.length !== 0
+    || Object.keys(state.artifacts ?? {}).length !== 0
+    || state.publicationAttempts !== 0
+    || state.acknowledgementState !== 'not_started')) {
+    throw new Error('The controlled fixture is not empty at bootstrap.');
+  }
+  return {
+    serviceId: state.serviceId,
+    runId: state.runId,
+    sourceId: state.facts.sourceId,
+    emptyAtBootstrap: requireEmpty,
+  };
+}
+
 function completion(
   content: string | null,
   toolCall?: OpenAI.ChatCompletionMessageFunctionToolCall,
@@ -268,7 +310,7 @@ function offlineCompletion() {
       }
       if (state.step === 1) {
         state.step += 1;
-        const research = await (await fetch(baseUrl + '/research.json')).json() as {
+        const research = await serviceRequest('/research.json') as {
           facts: { sourceId: string; audience: string; benefit: string };
         };
         if (!JSON.stringify(input.messages).includes(research.facts.sourceId)) {
@@ -434,6 +476,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
     if (profile !== 'structured-tools') {
       throw new Error('Endurance acceptance only supports the contained structured-tools profile.');
     }
+    const fixturePreflight = await assertFixturePreconditions(phase === 'bootstrap');
     const model: Model = {
       id: 'goal-endurance-model',
       name: mode === 'live'
@@ -527,11 +570,20 @@ async function browserObservation(external: { state: any; audit: any[] }) {
       if (phase === 'bootstrap') {
         const configured = await createConfiguration(model);
         await startProductionRuntime(configured.personaId);
-        const current = await waitFor(
-          () => getPersonaWorkItem(configured.personaId, configured.goal.id),
-          value => Boolean(value && (value.goal?.rounds ?? 0) >= 1 && !value.goal?.pendingTaskId),
-          'the first autonomous goal round to persist',
+        const bootstrap = await waitFor(
+          async () => ({
+            current: await getPersonaWorkItem(configured.personaId, configured.goal.id),
+            external: await serviceRequest('/evidence'),
+          }),
+          value => Boolean(value.current
+            && (value.current.goal?.rounds ?? 0) >= 1
+            && !value.current.goal?.pendingTaskId
+            && value.external.audit.some((event: any) => event.type === 'research_read')
+            && value.external.audit.some((event: any) =>
+              event.type === 'artifact_verified' && event.artifact?.name === 'research.md')),
+          'the first authenticated structured-tool round to persist',
         );
+        const current = bootstrap.current;
         if (!current) throw new Error('The configured goal disappeared.');
         snapshots.push({ at: Date.now(), status: current.status, goal: current.goal });
         await stopProductionRuntime(configured.personaId);
@@ -554,6 +606,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           modelCalls,
           observations: {
             startupAttempts,
+            fixturePreflight,
             initialAgentEntries: configured.initialEntries,
             rounds: current.goal?.rounds ?? 0,
             state: current.goal?.state,
@@ -579,6 +632,8 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           },
           value => value.external.state.effects.length === 1
             && value.external.state.acknowledgementState === 'withheld_after_commit'
+            && value.external.audit.some((event: any) =>
+              event.type === 'publication_committed_ack_withheld')
             && value.activities.some((activity: any) => activity.status === 'running'),
           'a committed external effect with its acknowledgement withheld',
         );
@@ -610,6 +665,8 @@ async function browserObservation(external: { state: any; audit: any[] }) {
             startupAttempts,
             effect: crashWindow.external.state.effects[0],
             acknowledgementState: crashWindow.external.state.acknowledgementState,
+            authenticatedCommitAuditSequence: crashWindow.external.audit.find((event: any) =>
+              event.type === 'publication_committed_ack_withheld')?.sequence,
             goalState: crashWindow.current?.goal?.state,
             goalRounds: crashWindow.current?.goal?.rounds,
           },
@@ -631,6 +688,9 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           return { external, activities, current };
         },
         value => value.external.state.acknowledgementState === 'reconciled'
+          && value.external.state.effects.length === 1
+          && value.external.audit.some((event: any) =>
+            event.type === 'publication_uncertain_effect_reconciled')
           && Boolean(value.external.state.artifacts['backlog.md'])
           && value.activities.some((activity: any) =>
             activity.id !== second.processEpoch.crashActivityId
@@ -641,15 +701,15 @@ async function browserObservation(external: { state: any; audit: any[] }) {
       await controlPersonaWorkItem(personaId, goalId, 'pause');
       const paused = await getPersonaWorkItem(personaId, goalId);
       const pauseEvent = (await readPersonaRuntimeEvents(personaId))
-        .filter(event => event.type === 'goal:control'
-          && event.goalId === goalId && event.action === 'pause')
+        .filter(isGoalControlRuntimeEvent)
+        .filter(event => event.goalId === goalId && event.action === 'pause')
         .sort((left, right) => right.seq - left.seq)[0];
       if (!pauseEvent) throw new Error('Pause control did not persist a runtime event.');
       await sleep(pauseMs);
       await controlPersonaWorkItem(personaId, goalId, 'retry');
       const retryEvent = (await readPersonaRuntimeEvents(personaId))
-        .filter(event => event.type === 'goal:control'
-          && event.goalId === goalId && event.action === 'retry'
+        .filter(isGoalControlRuntimeEvent)
+        .filter(event => event.goalId === goalId && event.action === 'retry'
           && event.seq > pauseEvent.seq)
         .sort((left, right) => right.seq - left.seq)[0];
       if (!retryEvent) throw new Error('Continue control did not persist a retry runtime event.');
@@ -660,11 +720,11 @@ async function browserObservation(external: { state: any; audit: any[] }) {
             listPersonaFlowDispatches(personaId),
             listPersonaActivities(personaId),
           ]);
-          const round = events.find(event => event.type === 'goal:round'
-            && event.goalId === goalId
+          const round = events.filter(isGoalRoundRuntimeEvent).find(event =>
+            event.goalId === goalId
             && event.cause === 'manual_retry'
             && event.controlId === retryEvent.controlId);
-          const dispatch = round?.type === 'goal:round'
+          const dispatch = round
             ? dispatches.find(value => value.id === round.dispatchId)
             : undefined;
           const activity = dispatch?.activityId
@@ -699,8 +759,8 @@ async function browserObservation(external: { state: any; audit: any[] }) {
       const beforeStop = current;
       await controlPersonaWorkItem(personaId, goalId, 'stop');
       const stopEvent = (await readPersonaRuntimeEvents(personaId))
-        .filter(event => event.type === 'goal:control'
-          && event.goalId === goalId && event.action === 'stop'
+        .filter(isGoalControlRuntimeEvent)
+        .filter(event => event.goalId === goalId && event.action === 'stop'
           && event.seq > retryEvent.seq)
         .sort((left, right) => right.seq - left.seq)[0];
       if (!stopEvent) throw new Error('Stop control did not persist a runtime event.');
@@ -725,10 +785,12 @@ async function browserObservation(external: { state: any; audit: any[] }) {
       const activityById = new Map(activities.map(activity => [activity.id, activity]));
       const dispatchById = new Map(dispatches.map(dispatch => [dispatch.id, dispatch]));
       const goalControlEvents = runtimeEvents
-        .filter(event => event.type === 'goal:control' && event.goalId === goalId)
+        .filter(isGoalControlRuntimeEvent)
+        .filter(event => event.goalId === goalId)
         .sort((left, right) => left.seq - right.seq);
       const goalRoundEvents = runtimeEvents
-        .filter(event => event.type === 'goal:round' && event.goalId === goalId)
+        .filter(isGoalRoundRuntimeEvent)
+        .filter(event => event.goalId === goalId)
         .sort((left, right) => left.seq - right.seq);
       const roundAdmissions = goalRoundEvents.map(event => {
         const dispatch = dispatchById.get(event.dispatchId);
@@ -971,7 +1033,6 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           retainedBlockers: unscheduledRequests.map(item => ({
             id: item.id,
             reason: item.goal?.interventionReason,
-            nextAction: item.nextAction,
           })),
           crashActivityId: second.processEpoch.crashActivityId,
           postCrashActivityIds: postCrashActivities.map(activity => activity.id),
