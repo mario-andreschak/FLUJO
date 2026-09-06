@@ -4,6 +4,20 @@ import type {
   WorkloadReconciliationEvidence,
 } from './evidence';
 
+export interface LeaseHistoryPruningMetric {
+  beforeCount: number;
+  afterCount: number;
+  examined: number;
+  deleted: number;
+  retainedProtected: number;
+  retainedUnverifiable: number;
+  observedAcquisitionCount: number;
+  observedFencingTokenCount: number;
+  minFencingToken: number | null;
+  maxFencingToken: number | null;
+  prePruneSnapshotSha256: string;
+}
+
 export interface DailySoakMetric {
   day: number;
   activitiesAttempted: number;
@@ -24,6 +38,7 @@ export interface DailySoakMetric {
   eventIdsUnique: boolean;
   collectionCounts: Record<string, number>;
   collectionUncompactedCounts: Record<string, number>;
+  leaseHistoryPruning: LeaseHistoryPruningMetric;
   faultsScheduled: string[];
   faultsExecuted: string[];
   faultEvidenceIds: string[];

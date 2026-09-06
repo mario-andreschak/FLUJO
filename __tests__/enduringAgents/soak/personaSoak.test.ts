@@ -114,6 +114,9 @@ describe('deterministic Persona soak harness', () => {
       persistedActivities: expect.any(Number),
       persistedMailboxItems: expect.any(Number),
       persistedLeaseAcquisitions: expect.any(Number),
+      retainedLeaseRecords: expect.any(Number),
+      observedFencingTokenCount: expect.any(Number),
+      leaseAcquisitionProofSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
       modelCalls: expect.any(Number),
     });
     expect(summary.workloadReconciliation).toMatchObject({
@@ -130,6 +133,16 @@ describe('deterministic Persona soak harness', () => {
     expect(summary.runtimeEvidence.persistedActivities).toBeGreaterThanOrEqual(summary.activities);
     expect(summary.runtimeEvidence.persistedMailboxItems).toBeGreaterThanOrEqual(summary.activities);
     expect(summary.runtimeEvidence.persistedLeaseAcquisitions).toBeGreaterThanOrEqual(summary.activities);
+    expect(summary.runtimeEvidence.retainedLeaseRecords).toBeLessThanOrEqual(50);
+    expect(summary.runtimeEvidence.observedFencingTokenCount)
+      .toBe(summary.runtimeEvidence.persistedLeaseAcquisitions);
+    expect(summary.metrics.every(metric => (
+      metric.leaseHistoryPruning.afterCount <= 50
+      && metric.leaseHistoryPruning.retainedUnverifiable === 0
+      && metric.leaseHistoryPruning.observedAcquisitionCount
+        === metric.leaseHistoryPruning.observedFencingTokenCount
+      && /^[0-9a-f]{64}$/.test(metric.leaseHistoryPruning.prePruneSnapshotSha256)
+    ))).toBe(true);
     expect(summary.runtimeEvidence.modelCalls).toBeGreaterThan(0);
     expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
     expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);

@@ -1369,6 +1369,31 @@ describe('Persona Flow dispatcher', () => {
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(2);
   });
 
+  it('reconciles durable history once around a multi-claim pump', async () => {
+    const harness = makeHarness(workspace('bounded-batch'));
+    const submissions = [];
+    for (let index = 0; index < 8; index += 1) {
+      submissions.push(await harness.dispatcher.submit(
+        dispatchInput('persona_test', `bounded-batch-${index}`),
+        { startPump: false },
+      ));
+    }
+
+    const listSpy = jest.spyOn(harness.dispatcher, 'list');
+    await harness.dispatcher.pump('persona_test');
+
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(submissions.length);
+    await expect(Promise.all(submissions.map(({ dispatch }) => (
+      harness.dispatcher.wait(dispatch.id, { timeoutMs: 2_000 })
+    )))).resolves.toEqual(
+      expect.arrayContaining(submissions.map(() => expect.objectContaining({
+        state: 'completed',
+        activityId: expect.any(String),
+      }))),
+    );
+  });
+
   it('yields approval/debug pauses without completing or immediately replaying them', async () => {
     const harness = makeHarness(workspace('pause'));
     (harness.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => ({

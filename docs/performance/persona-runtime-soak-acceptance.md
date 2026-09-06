@@ -73,10 +73,13 @@ outcome-metric, and automatic-rollback APIs. The model boundary is deterministic
 and offline; persistence, routing, fencing, reconciliation, search, and learning
 are not simulated.
 
-Each ordinary workload item is first persisted with automatic pumping disabled,
-then driven by one explicit dispatcher pump and verified by the dispatcher's durable
-completion waiter. Both pump and waiter use real 30-second wall-clock bounds while
-sharing the run's overall budget; virtual simulated time cannot stall these bounds.
+Ordinary workload items are persisted with automatic pumping disabled and drained
+in bounded, order-preserving batches between steering inputs. A pump reconciles the
+durable dispatch history once, serially claims and executes every queued Activity,
+and performs a final reconciliation. Every individual dispatch is still verified by
+the dispatcher's durable completion waiter. The batch pump and each waiter use real
+30-second wall-clock bounds while sharing the run's overall budget; virtual simulated
+time cannot stall these bounds.
 The dispatcher is quiesced in `finally`, including after a timeout, so active work and
 wake timers cannot contaminate later regression suites.
 
@@ -119,9 +122,11 @@ Each registered criterion records:
 - the contract source and runtime provenance;
 - a failure reason for every non-passing verdict.
 
-The validator rejects unknown, missing, duplicate, or malformed criteria,
-identity/configuration mismatch, non-canonical JSON, inconsistent JSONL, or
-missing Markdown identity. In an acceptance run every criterion is required, so
+Evidence schema version 2 is required by both the producer and standalone validator;
+older or future versions fail closed. The validator rejects unknown, missing,
+duplicate, or malformed criteria, identity/configuration mismatch, non-canonical
+JSON, inconsistent JSONL, malformed lease-pruning proofs, or missing Markdown
+identity. In an acceptance run every criterion is required, so
 both `failed` and `not_evaluated` are fatal. Smoke-only optional criteria remain
 visible and cannot be mistaken for acceptance.
 
@@ -133,9 +138,14 @@ percentage points from day 1. Recall and append latency use raw
 `performance.now()` samples and nearest-rank percentiles. Event continuity
 requires unique event IDs, internally adjacent retained sequence numbers, and
 daily retained ranges that overlap or directly follow the prior checkpoint so
-retention cannot conceal a gap. Split-brain is
-derived from overlapping persisted lease intervals observed before pruning.
-Stranding and stuck state come from final lease and runtime projections.
+retention cannot conceal a gap. Split-brain is derived from overlapping persisted
+lease intervals observed before pruning. Before each guarded deletion sweep, the
+harness records a SHA-256 snapshot of the full recovery-state view and keeps a
+cumulative proof of immutable acquisition/fencing fields; duplicate tokens or
+changed immutable fields fail immediately. The strict pruning reference view covers both current Persona-sharded
+Activities and legacy flat records, rejects unverifiable candidates, and asserts the
+retained history is at most 50 after every sweep. Stranding and stuck state come from
+final lease and runtime projections.
 
 The #489 acceptance repair commits the following numeric contracts for the fixed
 28 × 20 workload:

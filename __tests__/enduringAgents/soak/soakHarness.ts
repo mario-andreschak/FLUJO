@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import { cpus, release } from 'os';
 import path from 'path';
@@ -131,6 +132,9 @@ export interface PersonaSoakSummary {
     persistedActivities: number;
     persistedMailboxItems: number;
     persistedLeaseAcquisitions: number;
+    retainedLeaseRecords: number;
+    observedFencingTokenCount: number;
+    leaseAcquisitionProofSha256: string;
     persistedDispatches: number;
     modelCalls: number;
   };
@@ -592,11 +596,10 @@ async function routeSteeringActivity(
   await completePersonaActivity({ ...fenceForClaim(claim), status: 'completed' });
 }
 
-async function dispatchWorkloadActivity(
+async function submitWorkloadActivity(
   dispatcher: PersonaFlowDispatcher,
   personaId: string,
   activity: SoakActivity,
-  runDeadlineMs: number,
 ): Promise<PersonaFlowDispatchRecord> {
   const submission = await dispatcher.submit({
     personaId,
@@ -614,58 +617,114 @@ async function dispatchWorkloadActivity(
       mode: 'conversation',
     },
   }, { startPump: false, waitForCompletion: false });
+  return submission.dispatch;
+}
+
+async function completeWorkloadBatch(
+  dispatcher: PersonaFlowDispatcher,
+  personaId: string,
+  dispatches: PersonaFlowDispatchRecord[],
+  runDeadlineMs: number,
+): Promise<void> {
+  if (dispatches.length === 0) return;
+  const description = `Dispatch batch ${dispatches[0].id}..${dispatches.at(-1)!.id}`;
   const pumpTimeoutMs = remainingWallClockBudget(
     runDeadlineMs,
     SOAK_DISPATCH_WALL_TIMEOUT_MS,
-    `Dispatch ${submission.dispatch.id} pump`,
+    `${description} pump`,
   );
   await withWallClockTimeout(
     dispatcher.pump(personaId),
     pumpTimeoutMs,
-    `Dispatch ${submission.dispatch.id} pump`,
+    `${description} pump`,
   );
-  const waitTimeoutMs = remainingWallClockBudget(
-    runDeadlineMs,
-    SOAK_DISPATCH_WALL_TIMEOUT_MS,
-    `Dispatch ${submission.dispatch.id} durable completion wait`,
-  );
-  const waitController = new AbortController();
-  let completed: PersonaFlowDispatchRecord;
-  try {
-    completed = await withWallClockTimeout(
-      dispatcher.wait(submission.dispatch.id, {
-        timeoutMs: waitTimeoutMs,
-        signal: waitController.signal,
-      }),
-      waitTimeoutMs,
-      `Dispatch ${submission.dispatch.id} durable completion wait`,
+
+  await Promise.all(dispatches.map(async (dispatch) => {
+    const waitTimeoutMs = remainingWallClockBudget(
+      runDeadlineMs,
+      SOAK_DISPATCH_WALL_TIMEOUT_MS,
+      `Dispatch ${dispatch.id} durable completion wait`,
     );
-  } finally {
-    waitController.abort(new Error(`Dispatch ${submission.dispatch.id} completion wait ended.`));
-  }
-  if (completed.state !== 'completed' || !completed.activityId) {
-    throw new Error(`Dispatch ${submission.dispatch.id} did not complete a persisted Activity: ${JSON.stringify({
-      state: completed?.state ?? 'missing',
-      activityId: completed?.activityId ?? null,
-      lastError: completed?.lastError ?? null,
-    })}`);
-  }
-  return completed;
+    const waitController = new AbortController();
+    let completed: PersonaFlowDispatchRecord;
+    try {
+      completed = await withWallClockTimeout(
+        dispatcher.wait(dispatch.id, {
+          timeoutMs: waitTimeoutMs,
+          signal: waitController.signal,
+        }),
+        waitTimeoutMs,
+        `Dispatch ${dispatch.id} durable completion wait`,
+      );
+    } finally {
+      waitController.abort(new Error(`Dispatch ${dispatch.id} completion wait ended.`));
+    }
+    if (completed.state !== 'completed' || !completed.activityId) {
+      throw new Error(`Dispatch ${dispatch.id} did not complete a persisted Activity: ${JSON.stringify({
+        state: completed?.state ?? 'missing',
+        activityId: completed?.activityId ?? null,
+        lastError: completed?.lastError ?? null,
+      })}`);
+    }
+  }));
 }
 
-async function compactRuntime(personaId: string, now: number): Promise<void> {
+async function compactRuntime(personaId: string, now: number) {
   await withPersonaRuntimeLock(personaId, async () => {
     await compactPersonaMailboxItems(personaId, now);
     await compactPersonaActivities(personaId, now);
     await compactPersonaFlowDispatches(personaId, now);
   });
-  FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
-  await prunePersonaLeaseHistory(personaId, {
-    retainedCount: LEASE_HISTORY_SOAK_CAP,
-    maxDeletesPerSweep: 10_000,
-  });
-  FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
+
+  const before = await listPersonaLeaseRecords(personaId);
+  const proofRecords = before
+    .map(lease => ({
+      id: lease.id,
+      activityId: lease.activityId,
+      holderId: lease.holderId,
+      fencingToken: lease.fencingToken,
+      acquiredAt: lease.acquiredAt,
+      expiresAt: lease.expiresAt,
+      releasedAt: lease.releasedAt ?? null,
+      status: lease.status,
+    }))
+    .sort((left, right) => left.fencingToken - right.fencingToken || left.id.localeCompare(right.id));
+  const prePruneSnapshotSha256 = createHash('sha256')
+    .update(stableJsonStringify(proofRecords))
+    .digest('hex');
+
+  const previousLeasePruning = FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING;
+  let pruning: Awaited<ReturnType<typeof prunePersonaLeaseHistory>>;
+  try {
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    pruning = await prunePersonaLeaseHistory(personaId, {
+      retainedCount: LEASE_HISTORY_SOAK_CAP,
+      maxDeletesPerSweep: 10_000,
+    });
+  } finally {
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = previousLeasePruning;
+  }
+  const after = await listPersonaLeaseRecords(personaId);
+  if (pruning.retainedUnverifiable > 0) {
+    throw new Error(
+      `Lease-history pruning retained ${pruning.retainedUnverifiable} unverifiable records.`,
+    );
+  }
+  if (after.length > LEASE_HISTORY_SOAK_CAP) {
+    throw new Error(
+      `Lease-history pruning retained ${after.length} records; cap is ${LEASE_HISTORY_SOAK_CAP}.`,
+    );
+  }
+
   await sweepPersonaRuntimeEventSegments();
+  return {
+    beforeCount: before.length,
+    afterCount: after.length,
+    ...pruning,
+    minFencingToken: proofRecords[0]?.fencingToken ?? null,
+    maxFencingToken: proofRecords.at(-1)?.fencingToken ?? null,
+    prePruneSnapshotSha256,
+  };
 }
 
 async function exerciseLeaseExpiry(
@@ -1089,6 +1148,46 @@ function overlappingLeasePairs(leases: PersonaLease[]): string[] {
   return overlaps;
 }
 
+function observeLeaseAcquisitions(
+  leases: PersonaLease[],
+  acquisitionsById: Map<string, string>,
+  acquisitionIdByToken: Map<number, string>,
+  overlapPairs: Set<string>,
+): void {
+  for (const pair of overlappingLeasePairs(leases)) overlapPairs.add(pair);
+  for (const lease of leases) {
+    const proof = stableJsonStringify({
+      id: lease.id,
+      workspaceId: lease.workspaceId,
+      personaId: lease.personaId,
+      activityId: lease.activityId,
+      holderId: lease.holderId,
+      fencingToken: lease.fencingToken,
+      acquiredAt: lease.acquiredAt,
+    });
+    const previousProof = acquisitionsById.get(lease.id);
+    if (previousProof && previousProof !== proof) {
+      throw new Error(`Lease acquisition ${lease.id} changed immutable proof fields.`);
+    }
+    const tokenOwner = acquisitionIdByToken.get(lease.fencingToken);
+    if (tokenOwner && tokenOwner !== lease.id) {
+      throw new Error(
+        `Fencing token ${lease.fencingToken} belongs to both ${tokenOwner} and ${lease.id}.`,
+      );
+    }
+    acquisitionsById.set(lease.id, proof);
+    acquisitionIdByToken.set(lease.fencingToken, lease.id);
+  }
+}
+
+function leaseAcquisitionProofDigest(acquisitionsById: Map<string, string>): string {
+  return createHash('sha256')
+    .update(stableJsonStringify([...acquisitionsById.entries()].sort(([left], [right]) => (
+      left.localeCompare(right)
+    ))))
+    .digest('hex');
+}
+
 async function createRecallFixtures(personaId: string, now: number): Promise<MemoryItem> {
   const item = MemoryItemSchema.parse({
     schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
@@ -1248,6 +1347,8 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       let hardCrashExecuted = false;
       const faultEvidence: SoakFaultEvidence[] = [];
       const persistedLeaseOverlapPairs = new Set<string>();
+      const observedLeaseAcquisitions = new Map<string, string>();
+      const observedLeaseIdByFencingToken = new Map<number, string>();
 
       try {
       for (let day = 1; day <= options.days; day += 1) {
@@ -1255,6 +1356,14 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         progressPhase = `day-${day}:workload`;
         debug(`day ${day} started`);
         const dailyWorkload = workload.filter((activity) => activity.day === day);
+        const pendingDispatches: PersonaFlowDispatchRecord[] = [];
+        const flushPendingDispatches = async (): Promise<void> => {
+          if (pendingDispatches.length === 0) return;
+          const batch = pendingDispatches.splice(0, pendingDispatches.length);
+          progressActivityId = batch.at(-1)?.id ?? progressActivityId;
+          progressPhase = `day-${day}:dispatch-batch`;
+          await completeWorkloadBatch(dispatcher, personaId, batch, runDeadlineMs);
+        };
         for (const activity of dailyWorkload) {
           remainingWallClockBudget(
             runDeadlineMs,
@@ -1266,11 +1375,15 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           debugActivity(`day ${day} dispatching ${activity.id} via ${activity.ingress.admission}`);
           await clock.advanceTo(activity.scheduledAt);
           if (activity.ingress.admission === 'steering') {
+            await flushPendingDispatches();
             await routeSteeringActivity(personaId, activity);
           } else {
-            await dispatchWorkloadActivity(dispatcher, personaId, activity, runDeadlineMs);
+            pendingDispatches.push(
+              await submitWorkloadActivity(dispatcher, personaId, activity),
+            );
           }
         }
+        await flushPendingDispatches();
 
         progressActivityId = null;
         const scheduledFaults = faults.filter((fault) => fault.day === day);
@@ -1354,10 +1467,14 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
 
         await clock.advanceTo(startedAt + day * DAY_MS);
         await createDailyNoiseMemory(personaId, day, clock.now());
-        for (const pair of overlappingLeasePairs(await listPersonaLeaseRecords(personaId))) {
-          persistedLeaseOverlapPairs.add(pair);
-        }
-        await compactRuntime(personaId, clock.now());
+        const prePruneLeases = await listPersonaLeaseRecords(personaId);
+        observeLeaseAcquisitions(
+          prePruneLeases,
+          observedLeaseAcquisitions,
+          observedLeaseIdByFencingToken,
+          persistedLeaseOverlapPairs,
+        );
+        const leaseHistoryPruning = await compactRuntime(personaId, clock.now());
 
         const recallSamples: number[] = [];
         const recallObservations = [];
@@ -1432,6 +1549,11 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           collectionUncompactedCounts: Object.fromEntries(
             Object.entries(storage.kinds).map(([key, value]) => [key, value.uncompacted]),
           ),
+          leaseHistoryPruning: {
+            ...leaseHistoryPruning,
+            observedAcquisitionCount: observedLeaseAcquisitions.size,
+            observedFencingTokenCount: observedLeaseIdByFencingToken.size,
+          },
           faultsScheduled: scheduledFaults.map((fault) => fault.kind),
           faultsExecuted: executedFaults,
           faultEvidenceIds: faultEvidence
@@ -1483,7 +1605,13 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         activities,
         mailboxItems,
       });
-      for (const pair of overlappingLeasePairs(leases)) persistedLeaseOverlapPairs.add(pair);
+      observeLeaseAcquisitions(
+        leases,
+        observedLeaseAcquisitions,
+        observedLeaseIdByFencingToken,
+        persistedLeaseOverlapPairs,
+      );
+      const leaseAcquisitionProofSha256 = leaseAcquisitionProofDigest(observedLeaseAcquisitions);
       const splitBrainCount = persistedLeaseOverlapPairs.size;
       const strandedLeaseCount = leases.filter(lease => lease.status === 'active').length;
       const stuckPersonaCount = runtime?.projection.stuck ? 1 : 0;
@@ -1520,9 +1648,17 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           count > (uncompactedCaps[kind] ?? -1)
         )),
       );
+      const leaseHistoryPruningPassed = metrics.every(metric => (
+        metric.leaseHistoryPruning.afterCount <= LEASE_HISTORY_SOAK_CAP
+        && metric.leaseHistoryPruning.retainedUnverifiable === 0
+        && metric.leaseHistoryPruning.observedAcquisitionCount
+          === metric.leaseHistoryPruning.observedFencingTokenCount
+        && /^[0-9a-f]{64}$/.test(metric.leaseHistoryPruning.prePruneSnapshotSha256)
+      ));
       const detailedRuntimeStatePassed = missingCollectionKinds.length === 0
         && Object.keys(collectionCountViolations).length === 0
-        && Object.keys(uncompactedCountViolations).length === 0;
+        && Object.keys(uncompactedCountViolations).length === 0
+        && leaseHistoryPruningPassed;
       const appendWindowDays = Math.min(
         numericContracts.eventAppendCost.windowDays,
         metrics.length,
@@ -1735,11 +1871,16 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
             missingCollectionKinds,
             collectionCountViolations,
             uncompactedCountViolations,
+            leaseHistoryPruningPassed,
+            leaseHistoryPruning: metrics.map(metric => ({
+              day: metric.day,
+              ...metric.leaseHistoryPruning,
+            })),
             finalEventLogSegments: lastMetric.eventLogSegments,
           },
           threshold: `Every reported collection has at most ${totalCollectionCap} total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50; missing or new uncontracted collections fail closed.`,
           thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
-          provenance: ['getPersonaStorageStats daily observations', 'production compaction and lease-pruning policies'],
+          provenance: ['getPersonaStorageStats daily observations', 'strict sharded Activity scan', 'production lease-history pruning', 'daily pre-pruning SHA-256 proofs'],
         }),
         criterion({
           id: 'flat-event-append-cost',
@@ -1787,12 +1928,19 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         criterion({
           id: 'zero-split-brain',
           mode: runMode,
-          passed: splitBrainCount === 0,
-          summary: `${splitBrainCount} overlapping lease acquisitions were found in persisted history.`,
-          observed: { splitBrainCount },
-          threshold: 'Zero overlapping live lease intervals for one Persona.',
+          passed: splitBrainCount === 0
+            && observedLeaseAcquisitions.size === observedLeaseIdByFencingToken.size,
+          summary: `${splitBrainCount} overlapping acquisitions were found across daily pre-pruning lease snapshots.`,
+          observed: {
+            splitBrainCount,
+            observedLeaseAcquisitions: observedLeaseAcquisitions.size,
+            observedFencingTokens: observedLeaseIdByFencingToken.size,
+            retainedLeaseRecords: leases.length,
+            leaseAcquisitionProofSha256,
+          },
+          threshold: 'Zero overlapping live lease intervals and one unique fencing token per observed acquisition for one Persona.',
           thresholdSource: 'Issue #459 acceptance criterion 6',
-          provenance: ['listPersonaLeaseRecords', 'pre-pruning overlap observations'],
+          provenance: ['listPersonaLeaseRecords', 'daily pre-pruning overlap observations', 'immutable acquisition proof digest'],
         }),
         criterion({
           id: 'zero-stranded-or-stuck',
@@ -1904,7 +2052,10 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           behaviorRevisionId,
           persistedActivities: activities.length,
           persistedMailboxItems: mailboxItems.length,
-          persistedLeaseAcquisitions: leases.length,
+          persistedLeaseAcquisitions: observedLeaseAcquisitions.size,
+          retainedLeaseRecords: leases.length,
+          observedFencingTokenCount: observedLeaseIdByFencingToken.size,
+          leaseAcquisitionProofSha256,
           persistedDispatches: dispatches.length,
           modelCalls,
         },

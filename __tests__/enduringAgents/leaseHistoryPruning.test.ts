@@ -9,6 +9,11 @@ import {
 } from '@/backend/services/enduringAgents/leaseHistoryPruning';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
+  getPersonaLeaseRecord,
+  savePersonaActivity,
+  savePersonaLease,
+} from '@/backend/services/enduringAgents/store';
+import {
   loadCollectionItem,
   saveCollectionItem,
 } from '@/utils/storage/backend';
@@ -155,6 +160,41 @@ describe('guarded Persona lease-history pruning', () => {
         retainedCount: 1,
         maxDeletesPerSweep: 10,
       })).resolves.toEqual(expect.objectContaining({ deleted: 0 }));
+    });
+  });
+
+  it('prunes production-sharded lease history using the complete sharded Activity view', async () => {
+    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    const workspaceId = freshWorkspace('sharded');
+
+    await runWithWorkspace(workspaceId, async () => {
+      const expired = lease(workspaceId, 1, 'expired');
+      const released = lease(workspaceId, 2, 'released');
+      const active = lease(workspaceId, 3, 'active');
+      for (const record of [expired, released, active]) {
+        await savePersonaLease(record);
+      }
+      for (const record of [
+        activity(expired),
+        activity(released),
+        activity(active, 'running'),
+      ]) {
+        await savePersonaActivity(record);
+      }
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, personaId, active);
+
+      await expect(prunePersonaLeaseHistory(personaId, {
+        retainedCount: 1,
+        maxDeletesPerSweep: 10,
+      })).resolves.toEqual({
+        examined: 3,
+        deleted: 1,
+        retainedProtected: 2,
+        retainedUnverifiable: 0,
+      });
+      await expect(getPersonaLeaseRecord(expired.id)).resolves.toBeNull();
+      await expect(getPersonaLeaseRecord(released.id)).resolves.toEqual(released);
+      await expect(getPersonaLeaseRecord(active.id)).resolves.toEqual(active);
     });
   });
 

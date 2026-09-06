@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import path from 'path';
+
 import {
   PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
   SOAK_ACCEPTANCE_NUMERIC_CONTRACTS,
@@ -86,6 +89,34 @@ function document(): SoakEvidenceDocument {
 }
 
 describe('Persona soak evidence schema', () => {
+  it('requires the current schema version at both document and run-identity boundaries', () => {
+    expect(PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION).toBe(2);
+    const stale = document();
+    const staleVersions = stale as unknown as {
+      schemaVersion: number;
+      runIdentity: { schemaVersion: number };
+    };
+    staleVersions.schemaVersion = 1;
+    staleVersions.runIdentity.schemaVersion = 1;
+    expect(validateSoakEvidence(stale)).toEqual(expect.arrayContaining([
+      expect.stringContaining('unsupported soak evidence schema version'),
+      expect.stringContaining('run identity is missing or malformed'),
+    ]));
+  });
+
+  it('keeps the standalone validator on the producer schema and required policy', () => {
+    const validator = readFileSync(
+      path.resolve(process.cwd(), 'scripts/validate-persona-soak-artifacts.mjs'),
+      'utf8',
+    );
+    expect(validator).toContain(
+      `const PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION = ${PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION};`,
+    );
+    expect(validator).toContain(
+      "const expectedRequired = mode !== 'smoke' || SMOKE_REQUIRED_IDS.has(criterion.id);",
+    );
+  });
+
   it('commits explicit numeric collection, append-cost, and RSS contracts', () => {
     expect(SOAK_ACCEPTANCE_NUMERIC_CONTRACTS).toEqual({
       detailedRuntimeState: {

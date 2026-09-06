@@ -1442,16 +1442,18 @@ export async function listPersonaActivities(
 
 /**
  * Complete workspace-wide Activity scan used only by guarded lease-history pruning.
- * Unlike the indexed query path, this fails closed on any malformed or mismatched
- * storage entry so an incomplete reference view can never authorize deletion.
+ * This bypasses the mutable sidecar index but covers both current Persona shards and
+ * legacy flat records. The collision-aware storage scan and schema parser fail closed
+ * on malformed, mismatched, duplicated, or symlinked entries so an incomplete
+ * reference view can never authorize deletion.
  */
-export function listActivitiesStrictForLeasePruning(): Promise<PersonaActivity[]> {
-  return listRecords({
-    collection: ENDURING_AGENT_COLLECTIONS.activities,
-    recordKind: 'PersonaActivity',
-    schema: PersonaActivitySchema,
-    strict: true,
-  });
+export async function listActivitiesStrictForLeasePruning(): Promise<PersonaActivity[]> {
+  const values = await listAllShardedCollectionItems<unknown>(
+    ENDURING_AGENT_COLLECTIONS.activities,
+  );
+  return values
+    .map(value => parseRecord('PersonaActivity', PersonaActivitySchema, value))
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {

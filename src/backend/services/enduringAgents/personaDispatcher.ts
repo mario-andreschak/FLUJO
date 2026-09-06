@@ -3413,28 +3413,41 @@ export class PersonaFlowDispatcher {
     return reconciled;
   }
 
+  private async reconcilePersonaDispatches(
+    personaId: string,
+    control: PumpControl,
+  ): Promise<boolean> {
+    const records = await this.list(personaId);
+    let waiting = false;
+    for (const candidate of records) {
+      if (control.cancelRequested || this.quiescedPersonas.has(personaId)) return true;
+      const reconciled = await this.reconcileRecord(candidate);
+      if (reconciled.state === 'completed') {
+        try {
+          await this.ensurePostActivityMaintenance(reconciled);
+        } catch (error) {
+          log.warn(`Could not reconcile post-Activity maintenance for ${reconciled.id}:`, error);
+        }
+      }
+      if (
+        reconciled.state === 'waiting'
+        && reconciled.waitingReason !== 'delivery'
+        && reconciled.waitingReason !== 'interrupted'
+      ) waiting = true;
+    }
+    return waiting;
+  }
+
   private async drain(personaId: string, control: PumpControl): Promise<void> {
+    if (control.cancelRequested || this.quiescedPersonas.has(personaId)) return;
+    // Reconcile the durable history once per pump. Claims and executeClaim both
+    // commit their own authoritative state transitions, so rescanning every
+    // terminal dispatch before every claim only adds quadratic work as history
+    // grows without strengthening recovery or fencing guarantees.
+    if (await this.reconcilePersonaDispatches(personaId, control)) return;
+
     for (;;) {
       if (control.cancelRequested || this.quiescedPersonas.has(personaId)) return;
-      const records = await this.list(personaId);
-      let waiting = false;
-      for (const candidate of records) {
-        const reconciled = await this.reconcileRecord(candidate);
-        if (reconciled.state === 'completed') {
-          try {
-            await this.ensurePostActivityMaintenance(reconciled);
-          } catch (error) {
-            log.warn(`Could not reconcile post-Activity maintenance for ${reconciled.id}:`, error);
-          }
-        }
-        if (
-          reconciled.state === 'waiting'
-          && reconciled.waitingReason !== 'delivery'
-          && reconciled.waitingReason !== 'interrupted'
-        ) waiting = true;
-      }
-      if (waiting) return;
-
       let claim: PersonaActivityClaim | null;
       try {
         claim = await this.inWorkspace(() => this.dependencies.claimNextPersonaActivity({
@@ -3457,8 +3470,7 @@ export class PersonaFlowDispatcher {
         throw error;
       }
       if (!claim) {
-        const current = await this.list(personaId);
-        await Promise.all(current.map((record) => this.reconcileRecord(record)));
+        await this.reconcilePersonaDispatches(personaId, control);
         return;
       }
       if (claim.lease.workspaceId !== this.workspaceId || claim.activity.personaId !== personaId) {

@@ -3,6 +3,8 @@ import path from 'path';
 import process from 'process';
 import { fileURLToPath } from 'url';
 
+const PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION = 2;
+
 const CRITERION_IDS = [
   'unattended-runtime-throughput',
   'persisted-workload-reconciliation',
@@ -27,10 +29,6 @@ const SMOKE_REQUIRED_IDS = new Set([
   'runtime-event-continuity',
   'zero-split-brain',
   'zero-stranded-or-stuck',
-]);
-
-const UNDEFINED_CONTRACT_IDS = new Set([
-  'bounded-detailed-runtime-state', 'flat-event-append-cost', 'resident-memory-bound',
 ]);
 
 function parseArguments(argv) {
@@ -102,8 +100,7 @@ function validateCriterion(criterion, mode, errors) {
   if (!['passed', 'failed', 'not_evaluated'].includes(criterion.status)) {
     errors.push(`${criterion.id}: invalid status`);
   }
-  const expectedRequired = mode === 'acceptance'
-    || (mode === 'infrastructure' ? !UNDEFINED_CONTRACT_IDS.has(criterion.id) : SMOKE_REQUIRED_IDS.has(criterion.id));
+  const expectedRequired = mode !== 'smoke' || SMOKE_REQUIRED_IDS.has(criterion.id);
   if (typeof criterion.required !== 'boolean') {
     errors.push(`${criterion.id}: required policy is missing`);
   } else if (criterion.required !== expectedRequired) {
@@ -174,8 +171,13 @@ export async function validatePersonaSoakArtifacts({
   if (jsonText !== `${stableStringify(report, 2)}\n`) {
     errors.push('persona-soak.json is not in deterministic canonical form');
   }
-  if (report.schemaVersion !== 1 || report.runIdentity?.schemaVersion !== 1) {
-    errors.push('unsupported or missing evidence schema version');
+  if (
+    report.schemaVersion !== PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION
+    || report.runIdentity?.schemaVersion !== PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION
+  ) {
+    errors.push(
+      `unsupported or missing evidence schema version; expected ${PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION}`,
+    );
   }
   const identity = report.runIdentity;
   if (!isObject(identity)) {
@@ -217,6 +219,8 @@ export async function validatePersonaSoakArtifacts({
       || configuration.recallSamplesPerDay <= 0
       || !Number.isInteger(configuration.eventAppendSamplesPerDay)
       || configuration.eventAppendSamplesPerDay <= 0
+      || !Number.isSafeInteger(configuration.wallClockBudgetMs)
+      || configuration.wallClockBudgetMs <= 0
       || configuration.percentileMethod !== 'nearest-rank'
       || !Array.isArray(configuration.scheduledFaultIds)
       || configuration.scheduledFaultIds.some(
@@ -298,6 +302,29 @@ export async function validatePersonaSoakArtifacts({
       ) {
         errors.push(`daily metric ${index + 1} has malformed event continuity evidence`);
       }
+      const pruning = metric?.leaseHistoryPruning;
+      if (
+        !isObject(pruning)
+        || !Number.isInteger(pruning.beforeCount)
+        || pruning.beforeCount < 0
+        || !Number.isInteger(pruning.afterCount)
+        || pruning.afterCount < 0
+        || pruning.afterCount > 50
+        || !Number.isInteger(pruning.examined)
+        || pruning.examined !== pruning.beforeCount
+        || !Number.isInteger(pruning.deleted)
+        || pruning.deleted < 0
+        || pruning.afterCount !== pruning.beforeCount - pruning.deleted
+        || !Number.isInteger(pruning.retainedProtected)
+        || pruning.retainedProtected < 0
+        || pruning.retainedUnverifiable !== 0
+        || !Number.isInteger(pruning.observedAcquisitionCount)
+        || pruning.observedAcquisitionCount < pruning.beforeCount
+        || pruning.observedAcquisitionCount !== pruning.observedFencingTokenCount
+        || !/^[0-9a-f]{64}$/.test(pruning.prePruneSnapshotSha256 ?? '')
+      ) {
+        errors.push(`daily metric ${index + 1} has malformed or unbounded lease-pruning evidence`);
+      }
       if (index > 0) {
         const previous = report.metrics[index - 1];
         if (
@@ -320,6 +347,33 @@ export async function validatePersonaSoakArtifacts({
       errors.push('daily attempted count does not match workload reconciliation');
     }
   }
+  const runtimeEvidence = report.runtimeEvidence;
+  if (
+    !isObject(runtimeEvidence)
+    || !Number.isInteger(runtimeEvidence.persistedLeaseAcquisitions)
+    || runtimeEvidence.persistedLeaseAcquisitions < 0
+    || !Number.isInteger(runtimeEvidence.retainedLeaseRecords)
+    || runtimeEvidence.retainedLeaseRecords < 0
+    || runtimeEvidence.retainedLeaseRecords > 50
+    || runtimeEvidence.persistedLeaseAcquisitions !== runtimeEvidence.observedFencingTokenCount
+    || !/^[0-9a-f]{64}$/.test(runtimeEvidence.leaseAcquisitionProofSha256 ?? '')
+  ) {
+    errors.push('runtime lease-acquisition proof is missing, inconsistent, or unbounded');
+  } else {
+    const finalPruning = Array.isArray(report.metrics)
+      ? report.metrics.at(-1)?.leaseHistoryPruning
+      : undefined;
+    if (
+      runtimeEvidence.retainedLeaseRecords > runtimeEvidence.persistedLeaseAcquisitions
+      || !isObject(finalPruning)
+      || finalPruning.afterCount !== runtimeEvidence.retainedLeaseRecords
+      || finalPruning.observedAcquisitionCount !== runtimeEvidence.persistedLeaseAcquisitions
+      || finalPruning.observedFencingTokenCount !== runtimeEvidence.observedFencingTokenCount
+    ) {
+      errors.push('final runtime lease proof does not match the final daily pruning checkpoint');
+    }
+  }
+
   if (!Array.isArray(report.faultEvidence)) {
     errors.push('fault evidence array is missing');
   } else {
