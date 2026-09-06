@@ -9,7 +9,12 @@ import { runWithWorkspace } from '@/utils/workspace';
 
 import { createPersonaFromRole } from '../fixtures/personaFactory';
 import { PERSONA_INGRESS_MATRIX } from '../personaIngressMatrix';
-import { exerciseHardCrashProcessBoundary, reconcileWorkload, runPersonaSoak } from './soakHarness';
+import {
+  assertValidFaultResult,
+  exerciseHardCrashProcessBoundary,
+  reconcileWorkload,
+  runPersonaSoak,
+} from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
 
@@ -128,6 +133,26 @@ describe('deterministic Persona soak harness', () => {
     expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
     expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);
     expect(summary.criteria.filter((criterion) => criterion.status === 'failed')).toEqual([]);
+    expect(summary.faultEvidence.find((fault) => fault.kind === 'lease-expiry')).toMatchObject({
+      status: 'passed',
+      fault: {
+        recovered: true,
+        holderChanged: true,
+        terminalStatus: 'completed',
+        staleCompletionRejected: true,
+        terminalActivityCount: 1,
+        terminalMailboxCount: 1,
+        terminalSuccessEventCount: 1,
+      },
+    });
+  });
+
+  it('rejects a non-recovery result even when the fault handler returned normally', () => {
+    expect(() => assertValidFaultResult('lease-expiry', {
+      recovered: false,
+      terminalStatus: 'error',
+      staleCompletionRejected: true,
+    })).toThrow(/invalid lease-expiry recovery evidence/i);
   });
 
   it('absorbs real restart windows without losing deterministic timer order', async () => {

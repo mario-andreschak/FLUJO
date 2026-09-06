@@ -42,6 +42,7 @@ import {
   listPersonaMailboxItems,
   saveMemoryItem,
   savePersonaActivity,
+  savePersonaMailboxItem,
 } from '@/backend/services/enduringAgents/store';
 import { behaviorOutcomeMetricId } from '@/backend/services/enduringAgents/behaviorOutcome';
 import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
@@ -346,6 +347,23 @@ async function captureRuntimeEvidenceSafely(personaId: string): Promise<JsonObje
   }
 }
 
+export function assertValidFaultResult(kind: SoakFaultKind, fault: JsonObject): void {
+  if (kind !== 'lease-expiry') return;
+  if (
+    fault.recovered !== true
+    || fault.holderChanged !== true
+    || fault.terminalStatus !== 'completed'
+    || fault.staleCompletionRejected !== true
+    || fault.terminalActivityCount !== 1
+    || fault.terminalMailboxCount !== 1
+    || fault.terminalSuccessEventCount !== 1
+  ) {
+    throw new Error(
+      `Fault handler returned invalid lease-expiry recovery evidence: ${JSON.stringify(fault)}`,
+    );
+  }
+}
+
 async function executeFaultEvidence(input: {
   personaId: string;
   day: number;
@@ -354,9 +372,11 @@ async function executeFaultEvidence(input: {
 }): Promise<SoakFaultEvidence> {
   const id = `day-${input.day}:${input.kind}`;
   let before: JsonObject = { captured: false };
+  let fault: JsonObject | undefined;
   try {
     before = await captureRuntimeEvidence(input.personaId);
-    const fault = await input.run();
+    fault = await input.run();
+    assertValidFaultResult(input.kind, fault);
     const after = await captureRuntimeEvidence(input.personaId);
     return {
       id,
@@ -379,7 +399,7 @@ async function executeFaultEvidence(input: {
       kind: input.kind,
       status: 'failed',
       before,
-      fault: {
+      fault: fault ?? {
         attempted: true,
       },
       after: await captureRuntimeEvidenceSafely(input.personaId),
@@ -582,15 +602,26 @@ async function exerciseLeaseExpiry(
   clock: VirtualPersonaRuntimeClock,
   token: string,
 ): Promise<JsonObject> {
+  const sourceId = `soak-fault-lease-expiry-${token}`;
   await routePersonaMailboxItem({
     personaId,
     idempotencyKey: `fault-lease-expiry-${token}`,
     kind: 'assignment',
-    source: { kind: 'assignment', sourceId: `soak-fault-lease-expiry-${token}` },
+    source: { kind: 'assignment', sourceId },
     summary: 'Exercise expired-lease recovery.',
   });
   const first = await claimNextPersonaActivity({ personaId, ttlMs: 1_000 });
   if (!first) throw new Error('Lease-expiry fault could not claim its Activity.');
+
+  // Inject the durable prefix of a crash before the mailbox claim marker.
+  // The production runtime can prove this fence was never published, so the
+  // same Activity is safe to reclaim instead of being fail-closed as uncertain.
+  await savePersonaMailboxItem({
+    ...first.mailboxItem,
+    status: 'queued',
+    claimedActivityId: undefined,
+  });
+
   await clock.advanceBy(1_001);
   const recovered = await claimNextPersonaActivity({ personaId, ttlMs: 1_000 });
   if (!recovered) {
@@ -598,34 +629,16 @@ async function exerciseLeaseExpiry(
       getPersonaActivity(personaId, first.activity.id),
       getPersonaLeaseRecord(first.lease.id),
     ]);
-    if (
-      (activity?.status !== 'error' && activity?.status !== 'cancelled')
-      || expiredLease?.status === 'active'
-    ) {
-      throw new Error('Lease-expiry reconciliation neither recovered nor safely terminalized the Activity.');
-    }
-    let staleCompletionRejected = false;
-    try {
-      await completePersonaActivity({ ...fenceForClaim(first), status: 'completed' });
-    } catch {
-      staleCompletionRejected = true;
-    }
-    if (!staleCompletionRejected) {
-      throw new Error('An expired lease owner completed work after fail-closed recovery.');
-    }
-    return {
+    throw new Error(`Lease-expiry fault did not transfer the Activity to a later owner: ${JSON.stringify({
       activityId: first.activity.id,
-      firstLeaseId: first.lease.id,
-      firstFencingToken: first.lease.fencingToken,
-      recovered: false,
-      terminalStatus: activity.status,
+      terminalStatus: activity?.status ?? 'missing',
       expiredLeaseStatus: expiredLease?.status ?? 'missing',
-      staleCompletionRejected,
-    };
+    })}`);
   }
   if (
     !recovered.recovered
     || recovered.activity.id !== first.activity.id
+    || recovered.lease.holderId === first.lease.holderId
     || recovered.lease.fencingToken <= first.lease.fencingToken
   ) {
     throw new Error(`Lease-expiry fault did not recover the Activity with a higher fence: ${JSON.stringify({
@@ -652,15 +665,53 @@ async function exerciseLeaseExpiry(
     throw new Error('The stale lease owner completed work after a higher fence was acquired.');
   }
   await completePersonaActivity({ ...fenceForClaim(recovered), status: 'completed' });
+
+  const [activities, mailboxItems, events] = await Promise.all([
+    listPersonaActivities(personaId),
+    listPersonaMailboxItems(personaId),
+    readPersonaRuntimeEvents(personaId),
+  ]);
+  const terminalActivities = activities.filter((activity) => (
+    activity.id === first.activity.id && activity.status === 'completed'
+  ));
+  const terminalMailboxItems = mailboxItems.filter((item) => (
+    item.source.sourceId === sourceId
+    && item.claimedActivityId === first.activity.id
+    && item.status === 'completed'
+  ));
+  const completedEventId = `activity:${first.activity.id}:completed:completed`;
+  const terminalSuccessEvents = events.filter((event) => (
+    event.eventId === completedEventId
+    && event.type === 'activity:completed'
+    && event.activityId === first.activity.id
+  ));
+  if (
+    terminalActivities.length !== 1
+    || terminalMailboxItems.length !== 1
+    || terminalSuccessEvents.length !== 1
+  ) {
+    throw new Error(`Lease-expiry fault did not persist exactly one terminal success: ${JSON.stringify({
+      activityId: first.activity.id,
+      terminalActivityCount: terminalActivities.length,
+      terminalMailboxCount: terminalMailboxItems.length,
+      terminalSuccessEventCount: terminalSuccessEvents.length,
+    })}`);
+  }
   return {
     activityId: first.activity.id,
     firstLeaseId: first.lease.id,
     recoveredLeaseId: recovered.lease.id,
+    firstHolderId: first.lease.holderId,
+    recoveredHolderId: recovered.lease.holderId,
     firstFencingToken: first.lease.fencingToken,
     recoveredFencingToken: recovered.lease.fencingToken,
     recovered: true,
+    holderChanged: recovered.lease.holderId !== first.lease.holderId,
     staleCompletionRejected,
-    terminalStatus: 'completed',
+    terminalStatus: terminalActivities[0].status,
+    terminalActivityCount: terminalActivities.length,
+    terminalMailboxCount: terminalMailboxItems.length,
+    terminalSuccessEventCount: terminalSuccessEvents.length,
   };
 }
 
