@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawnSync, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export type DiagnosticLogger = {
@@ -105,10 +105,15 @@ export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void
   if (pid === undefined) return () => undefined;
   if (process.platform === 'win32') {
     try {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F']);
-      killer.on('error', () => undefined);
+      // taskkill reports only after the target tree has been terminated. Waiting
+      // here keeps kill/status and temporary-directory cleanup from racing it.
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        timeout: Math.max(graceMs, 5_000),
+        windowsHide: true,
+      });
     } catch {
-      // The target is already gone.
+      // The target is already gone or taskkill could not be started.
     }
     return () => undefined;
   }

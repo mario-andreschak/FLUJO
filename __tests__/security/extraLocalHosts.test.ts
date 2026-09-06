@@ -16,11 +16,24 @@ import { isLocalRequest } from '@/utils/http/localRequest';
 import { proxy as middleware } from '@/proxy';
 
 const ENV = 'FLUJO_EXTRA_LOCAL_HOSTS';
+const EXPOSURE_MODE_ENV = 'FLUJO_EXPOSURE_MODE';
+const EXPOSURE_SOURCE_ENV = 'FLUJO_EXPOSURE_MODE_SOURCE';
 const savedEnv = process.env[ENV];
+const savedExposureMode = process.env[EXPOSURE_MODE_ENV];
+const savedExposureSource = process.env[EXPOSURE_SOURCE_ENV];
+
+beforeEach(() => {
+  delete process.env[EXPOSURE_MODE_ENV];
+  process.env[EXPOSURE_SOURCE_ENV] = 'legacy';
+});
 
 afterEach(() => {
   if (savedEnv === undefined) delete process.env[ENV];
   else process.env[ENV] = savedEnv;
+  if (savedExposureMode === undefined) delete process.env[EXPOSURE_MODE_ENV];
+  else process.env[EXPOSURE_MODE_ENV] = savedExposureMode;
+  if (savedExposureSource === undefined) delete process.env[EXPOSURE_SOURCE_ENV];
+  else process.env[EXPOSURE_SOURCE_ENV] = savedExposureSource;
 });
 
 describe('FLUJO_EXTRA_LOCAL_HOSTS unset (standalone default)', () => {

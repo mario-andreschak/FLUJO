@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 let testRoot = '';
+const savedRuntimeEnvironmentDir = process.env.FLUJO_RUNTIME_ENV_DIR;
 
 jest.mock('@/utils/paths', () => ({
   getAppDir: () => testRoot,
@@ -19,11 +20,14 @@ import {
 
 describe('runtime environment settings file', () => {
   beforeEach(async () => {
+    delete process.env.FLUJO_RUNTIME_ENV_DIR;
     testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-runtime-env-'));
   });
 
   afterEach(async () => {
     await fs.rm(testRoot, { recursive: true, force: true });
+    if (savedRuntimeEnvironmentDir === undefined) delete process.env.FLUJO_RUNTIME_ENV_DIR;
+    else process.env.FLUJO_RUNTIME_ENV_DIR = savedRuntimeEnvironmentDir;
   });
 
   it('writes and reads quoted values while preserving unmanaged dotenv content', async () => {

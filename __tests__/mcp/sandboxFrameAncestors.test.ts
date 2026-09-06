@@ -44,6 +44,24 @@ function request(headers: Record<string, string>): http.IncomingMessage {
 
 describe('sandbox frame-ancestors resolution', () => {
   const HOST_ORIGINS_ENV = 'FLUJO_MCP_APP_HOST_ORIGINS';
+  const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
+  const originalExposureSource = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+  const originalAllowAll = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+
+  beforeEach(() => {
+    delete process.env.FLUJO_EXPOSURE_MODE;
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  });
+
+  afterEach(() => {
+    if (originalExposure === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
+    if (originalExposureSource === undefined) delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    else process.env.FLUJO_EXPOSURE_MODE_SOURCE = originalExposureSource;
+    if (originalAllowAll === undefined) delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    else process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = originalAllowAll;
+  });
 
   it('names the FLUJO host origin registered when the token was minted', () => {
     const sandbox = loadSandboxModule({ [HOST_ORIGINS_ENV]: undefined });

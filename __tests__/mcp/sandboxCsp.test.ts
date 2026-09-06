@@ -352,6 +352,15 @@ describe('hosted sandbox endpoint configuration', () => {
   const originalHostOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV];
   const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
   const originalExposureSource = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+  const originalAllowAll = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+
+  beforeEach(() => {
+    delete process.env[SANDBOX_PUBLIC_URL_ENV];
+    delete process.env[SANDBOX_HOST_ORIGINS_ENV];
+    delete process.env.FLUJO_EXPOSURE_MODE;
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  });
 
   afterEach(() => {
     if (originalPublicUrl === undefined) delete process.env[SANDBOX_PUBLIC_URL_ENV];
@@ -362,6 +371,8 @@ describe('hosted sandbox endpoint configuration', () => {
     else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
     if (originalExposureSource === undefined) delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     else process.env.FLUJO_EXPOSURE_MODE_SOURCE = originalExposureSource;
+    if (originalAllowAll === undefined) delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    else process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = originalAllowAll;
   });
 
   it('normalizes a separately hosted public URL and rejects credentialed URLs', () => {
