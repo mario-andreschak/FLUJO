@@ -26,14 +26,41 @@ node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 \
 ```
 
 The CLI accepts both `--name=value` and `--name value`, rejects unknown or
-duplicate options, and verifies the supplied commit against checked-out `HEAD`.
-The `persona-soak` workflow invokes this Node entry point directly with exact
-arguments, validates the artifacts, generates SHA-256 checksum manifests, and
-retains them for 30 days.
+duplicate options, requires a full 40-character lowercase commit SHA, and
+verifies it against checked-out `HEAD`.
+
+For retained exact-commit proof, dispatch `persona-soak.yml` from the default
+branch and provide the implementation commit separately:
+
+```sh
+IMPLEMENTATION_SHA=<full-40-character-lowercase-sha>
+gh workflow run persona-soak.yml \
+  --repo mario-andreschak/FLUJO \
+  --ref main \
+  -f commit_sha="$IMPLEMENTATION_SHA" \
+  -f seed=459
+```
+
+Here `--ref main` selects the trusted workflow definition; it does not select
+the implementation under test. The required `commit_sha` input does that. The
+workflow rejects manual dispatches from a non-default workflow ref, checks out
+the selected commit with full history, proves that it belongs to the trusted
+workflow history, and verifies this invariant before dependency installation:
+
+```text
+commit_sha input == checked-out HEAD == runner evidence SHA
+                 == validator expected SHA == retained artifact-name SHA
+```
+
+It then invokes the Node entry point with the authoritative 28 × 20
+configuration and learning enabled, validates the artifacts, generates SHA-256
+checksum manifests, and retains them for 90 days. Scheduled runs continue to
+target the exact default-branch tip identified by `github.sha`.
 
 Acceptance evidence must identify the exact checked-out commit. Local runs
-derive it from `git rev-parse HEAD`; controlled runs set `FLUJO_SOAK_COMMIT`.
-A smoke artifact always records `authoritative: false` and cannot close #448.
+derive it from `git rev-parse HEAD`; controlled runs set `FLUJO_SOAK_COMMIT`
+from the selected target. A smoke artifact always records
+`authoritative: false` and cannot close #448.
 
 ## Runtime provenance
 

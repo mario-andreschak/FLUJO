@@ -5,13 +5,18 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
+      commit_sha:
+        description: Full 40-character lowercase implementation commit SHA
+        required: true
+        type: string
       seed:
         description: Deterministic seed
         default: '459'
         required: true
+        type: string
 
 concurrency:
-  group: persona-soak-${{ github.ref }}
+  group: persona-soak-${{ inputs.commit_sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -23,9 +28,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      - name: Authorize manually selected commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TARGET_COMMIT: ${{ inputs.commit_sha }}
+        run: |
+          expected_ref="refs/heads/$DEFAULT_BRANCH"
+          if test "$GITHUB_REF" != "$expected_ref"; then
+            echo "Manual acceptance runs must use the default-branch workflow definition: $expected_ref" >&2
+            exit 1
+          fi
+          if ! [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full 40-character lowercase commit SHA." >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
-      - name: Verify exact checkout
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+          fetch-depth: 0
+      - name: Verify exact trusted checkout
+        env:
+          TARGET_COMMIT: ${{ inputs.commit_sha || github.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          if ! [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The selected commit must be a full 40-character lowercase SHA." >&2
+            exit 1
+          fi
+          checkout_sha="$(git rev-parse HEAD)"
+          if test "$checkout_sha" != "$TARGET_COMMIT"; then
+            echo "Checked out $checkout_sha instead of selected commit $TARGET_COMMIT." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET_COMMIT" "$WORKFLOW_SHA"; then
+            echo "Selected commit $TARGET_COMMIT is not in the trusted workflow history at $WORKFLOW_SHA." >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,7 +73,7 @@ jobs:
       - name: Run authoritative Persona soak
         env:
           SOAK_SEED: ${{ inputs.seed || '459' }}
-          FLUJO_SOAK_COMMIT: ${{ github.sha }}
+          FLUJO_SOAK_COMMIT: ${{ inputs.commit_sha || github.sha }}
           FLUJO_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           PERSONA_SOAK_DEBUG: '1'
         run: >-
@@ -43,16 +82,16 @@ jobs:
           --activities-per-day=20
           --with-learning
           --seed="$SOAK_SEED"
-          --commit="$GITHUB_SHA"
+          --commit="$FLUJO_SOAK_COMMIT"
           --run-id="$FLUJO_SOAK_RUN_ID"
       - name: Validate exact-commit evidence
         if: always()
         env:
-          FLUJO_SOAK_COMMIT: ${{ github.sha }}
+          FLUJO_SOAK_COMMIT: ${{ inputs.commit_sha || github.sha }}
         run: >-
           node scripts/validate-persona-soak-artifacts.mjs
           --directory soak-artifacts
-          --commit "$GITHUB_SHA"
+          --commit "$FLUJO_SOAK_COMMIT"
           --mode acceptance
       - name: Generate artifact checksums
         if: always()
@@ -72,7 +111,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: persona-soak-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: persona-soak-${{ inputs.commit_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: soak-artifacts/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90

@@ -65,6 +65,9 @@ const expectedCommit = values.get('commit')
   ?? process.env.FLUJO_SOAK_COMMIT
   ?? process.env.GITHUB_SHA
   ?? head;
+if (!/^[0-9a-f]{40}$/.test(expectedCommit)) {
+  throw new Error('Soak commit must be a full 40-character lowercase SHA.');
+}
 if (expectedCommit !== head) {
   throw new Error(`Requested soak commit ${expectedCommit} does not match checked-out HEAD ${head}.`);
 }
