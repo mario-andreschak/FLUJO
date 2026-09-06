@@ -413,6 +413,7 @@ Describe 'Corporate-network installer source contracts' {
         $script:InstallSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.ps1') -Raw
         $script:UnixInstallSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\install.sh') -Raw
         $script:InnoSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\installer\flujo-setup.iss') -Raw
+        $script:ReleaseValidatorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\scripts\validate-mcp-release.mjs') -Raw
         $script:BrowserPackage = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\mcp-servers\browser\package.json') -Raw | ConvertFrom-Json
     }
 
@@ -424,6 +425,58 @@ Describe 'Corporate-network installer source contracts' {
         $script:UnixInstallSource | Should -Not -Match "npm ci --ignore-scripts"
         $script:BrowserPackage.scripts.install | Should -Be 'node scripts/install-browser.mjs'
         $script:BrowserPackage.dependencies.patchright | Should -Be '1.61.1'
+        $script:InstallSource | Should -Match "-Stage 'patchright-chromium' -Command 'node' -Arguments @\('mcp-servers/browser/scripts/install-browser\.mjs'\)"
+        $script:UnixInstallSource | Should -Match 'run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser\.mjs'
+        $script:InstallSource | Should -Not -Match "-Stage 'patchright-chromium' -Command 'npm'"
+        $script:UnixInstallSource | Should -Not -Match 'run_stage patchright-chromium npm run'
+    }
+
+    It 'validates and packages the browser lifecycle wrapper' {
+        $script:ReleaseValidatorSource | Should -Match "packageJson\.scripts\?\.install !== 'node scripts/install-browser\.mjs'"
+        $script:ReleaseValidatorSource | Should -Match "childFiles\.has\('scripts/install-browser\.mjs'\)"
+    }
+
+    It 'preserves failed stage exit codes through script and Inno process boundaries' {
+        $script:InstallSource | Should -Match 'Stop-Installer[\s\S]+exit \$ExitCode'
+        $script:UnixInstallSource | Should -Match 'Sanitized log: \$INSTALL_LOG" "\$code"'
+        $script:InnoSource | Should -Match 'ResultCode <> 0[\s\S]+IntToStr\(ResultCode\)'
+        $script:InnoSource | Should -Match 'node mcp-servers/browser/scripts/install-browser\.mjs'
+    }
+
+    It 'returns a fake child exit 37 from the PowerShell process boundary' {
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+            $script:InstallSource,
+            [ref]$tokens,
+            [ref]$errors
+        )
+        $errors | Should -HaveCount 0
+
+        $definitions = foreach ($name in @('Stop-Installer', 'Invoke-InstallerCommand')) {
+            $definition = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Name -eq $name
+            }, $true)
+            $definition | Should -Not -BeNullOrEmpty
+            $definition.Extent.Text
+        }
+
+        $probePath = Join-Path $TestDrive 'installer-exit-probe.ps1'
+        $logPath = Join-Path $TestDrive 'installer-exit-probe.log'
+        $probeSource = @(
+            'function Write-InstallerStage { param([string]$Name, [string]$State = ''started'', [int]$ExitCode = 0) }'
+            'function Protect-InstallerDiagnostic { param([string]$Text, [string[]]$SensitiveValues = @()); $Text }'
+            $definitions
+            '$script:InstallerSensitiveValues = @()'
+            "`$script:InstallerLogPath = '$($logPath.Replace("'", "''"))'"
+            "Invoke-InstallerCommand -Stage 'patchright-chromium' -Command `$env:ComSpec -Arguments @('/d', '/c', 'exit 37')"
+        ) -join "`r`n"
+        Set-Content -LiteralPath $probePath -Value $probeSource -Encoding UTF8
+
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probePath *> $null
+        $LASTEXITCODE | Should -Be 37
     }
 
     It 'propagates corporate-network inputs and diagnostic paths through Inno Setup' {

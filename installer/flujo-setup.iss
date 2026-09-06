@@ -178,6 +178,6 @@ begin
                    'A sanitized diagnostic log was saved to:' + #13#10 + LogPath + #13#10#13#10 +
                    'Correct the reported proxy, certificate, network, or build issue and run setup again. ' +
                    'For managed Chromium only, retry from the FLUJO directory with:' + #13#10 +
-                   'npm run install --workspace=@mario.andreschak/mcp-browser');
+                   'node mcp-servers/browser/scripts/install-browser.mjs');
   end;
 end;

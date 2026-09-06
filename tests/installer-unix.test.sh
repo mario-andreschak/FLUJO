@@ -157,11 +157,72 @@ assert_source_absent() {
 assert_source_contains "maps installer-scoped proxy variables" 'FLUJO_HTTP_PROXY.*HTTP_PROXY|HTTP_PROXY=.*FLUJO_HTTP_PROXY'
 assert_source_contains "validates and maps the custom CA" 'FLUJO_EXTRA_CA_CERTS'
 assert_source_contains "defers only the managed browser lifecycle" 'FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'
-assert_source_contains "runs an explicit Chromium stage" 'run_stage patchright-chromium'
+assert_source_contains "runs Chromium through the direct exit-preserving wrapper" 'run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser\.mjs'
+assert_source_contains "propagates the failed stage exit code" 'Sanitized log: \$INSTALL_LOG" "\$code"'
 assert_source_contains "writes sanitized stage diagnostics" 'INSTALL_STAGE_FILE'
 assert_source_contains "ignores inherited TLS verification bypasses" 'unset NODE_TLS_REJECT_UNAUTHORIZED'
+assert_source_absent "never wraps the explicit browser stage in npm" 'run_stage patchright-chromium npm run'
 assert_source_absent "never disables all npm lifecycle scripts" 'npm ci[^\n]*--ignore-scripts'
 assert_source_absent "never sets the TLS verification bypass" 'NODE_TLS_REJECT_UNAUTHORIZED=[\x27\x22]?0'
+
+echo "Running test: Custom CA parsing occurs before prerequisite network work"
+TESTS_RUN=$((TESTS_RUN + 1))
+ca_parse_line=$(grep -nF "FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate." scripts/install.sh | head -n 1 | cut -d: -f1)
+prerequisite_line=$(grep -nF "stage_marker prerequisites started 0" scripts/install.sh | head -n 1 | cut -d: -f1)
+if [ -n "$ca_parse_line" ] && [ -n "$prerequisite_line" ] && [ "$ca_parse_line" -lt "$prerequisite_line" ]; then
+    echo -e "${GREEN}✓ PASS${NC}: Custom CA parsing occurs before prerequisite network work"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "${RED}✗ FAIL${NC}: Custom CA parsing must occur before prerequisites"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+echo "Running test: Failed Unix stages retain the child process exit code"
+TESTS_RUN=$((TESTS_RUN + 1))
+DIE_FUNC=$(sed -n '/^die()/p' scripts/install.sh)
+SANITIZE_FUNC=$(sed -n '/^sanitize_diagnostic()/,/^}/p' scripts/install.sh)
+STAGE_MARKER_FUNC=$(sed -n '/^stage_marker()/,/^}/p' scripts/install.sh)
+RUN_STAGE_FUNC=$(sed -n '/^run_stage()/,/^}/p' scripts/install.sh)
+temp_dir=$(mktemp -d)
+set +e
+bash -c "
+    set -uo pipefail
+    C_WARN=''
+    C_END=''
+    INSTALL_LOG='$temp_dir/install.log'
+    INSTALL_STAGE_FILE='$temp_dir/install-stage.txt'
+    $DIE_FUNC
+    $SANITIZE_FUNC
+    $STAGE_MARKER_FUNC
+    $RUN_STAGE_FUNC
+    run_stage patchright-chromium sh -c 'exit 37'
+" >/dev/null 2>&1
+result=$?
+set -e
+rm -rf "$temp_dir"
+if [ "$result" -eq 37 ]; then
+    echo -e "${GREEN}✓ PASS${NC}: Failed Unix stages retain the child process exit code"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "${RED}✗ FAIL${NC}: Failed Unix stage returned $result instead of 37"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+echo "Running test: Unix diagnostics preserve prefixes while redacting secrets"
+TESTS_RUN=$((TESTS_RUN + 1))
+SANITIZE_FUNC=$(sed -n '/^sanitize_diagnostic()/,/^}/p' scripts/install.sh)
+eval "$SANITIZE_FUNC"
+safe_output=$(sanitize_diagnostic 'https://sentinel-user:sentinel-password@proxy.example.test Authorization: Bearer sentinel-bearer https://download.example.test/file?token=sentinel-query API_SECRET=sentinel-env-secret')
+if [[ "$safe_output" == *'https://[REDACTED]@proxy.example.test'* ]] &&
+   [[ "$safe_output" == *'Authorization: Bearer [REDACTED]'* ]] &&
+   [[ "$safe_output" != *'sentinel-'* ]] &&
+   [[ "$safe_output" != *'\1'* ]]; then
+    echo -e "${GREEN}✓ PASS${NC}: Unix diagnostics preserve prefixes while redacting secrets"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    echo -e "${RED}✗ FAIL${NC}: Unix diagnostic redaction corrupted a prefix or exposed a secret"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
 
 # Summary
 echo

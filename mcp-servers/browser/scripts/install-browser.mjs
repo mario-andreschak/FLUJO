@@ -150,7 +150,7 @@ export function runBrowserInstall({
       '\n',
   );
   stderr.write(
-    '[FLUJO installer] Retry from the FLUJO directory with: npm run install --workspace=@mario.andreschak/mcp-browser\n',
+    '[FLUJO installer] Retry from the FLUJO directory with: node mcp-servers/browser/scripts/install-browser.mjs\n',
   );
   writeResultFile(result, env);
   return result;

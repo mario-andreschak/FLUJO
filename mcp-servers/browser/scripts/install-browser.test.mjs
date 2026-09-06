@@ -64,6 +64,8 @@ test('preserves the browser installer exit code and emits a retryable structured
   assert.equal(result.retryable, true);
   assert.equal(result.category, 'PROXY_AUTH');
   assert.match(diagnostic, /retry/i);
+  assert.match(diagnostic, /node mcp-servers\/browser\/scripts\/install-browser\.mjs/);
+  assert.doesNotMatch(diagnostic, /npm run install/);
 });
 
 test('dependency installation can defer only managed Chromium provisioning', () => {

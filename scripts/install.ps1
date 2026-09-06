@@ -67,6 +67,23 @@ function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundC
 function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundColor Green }
 function Write-Warn2([string]$Message) { Write-Host "    $Message" -ForegroundColor Yellow }
 
+function Stop-Installer {
+    param(
+        [Parameter(Mandatory)] [string]$Message,
+        [int]$ExitCode = 1
+    )
+
+    Write-Host "`nERROR: $Message" -ForegroundColor Red
+    if ($PSCommandPath) {
+        exit $ExitCode
+    }
+
+    # `irm ... | iex` runs inside the caller's interactive session. Preserve the
+    # native status for automation without closing that session.
+    $global:LASTEXITCODE = $ExitCode
+    throw $Message
+}
+
 $installerDiagnosticRoot = if ($env:FLUJO_INSTALL_LOG) {
     Split-Path -Parent $env:FLUJO_INSTALL_LOG
 } elseif ($env:LOCALAPPDATA) {
@@ -173,7 +190,7 @@ function Invoke-InstallerCommand {
         } else {
             "exit code $exitCode"
         }
-        throw "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath"
+        Stop-Installer -Message "Installer stage '$Stage' failed ($detail). Sanitized log: $script:InstallerLogPath" -ExitCode $exitCode
     }
     Write-InstallerStage -Name $Stage -State completed -ExitCode 0
 }
@@ -660,7 +677,7 @@ try {
     $browserEnvironment = $installerEnvironment.Clone()
     $browserEnvironment['FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'] = '0'
     $browserEnvironment['FLUJO_INSTALL_RESULT_FILE'] = $script:InstallerResultPath
-    Invoke-InstallerCommand -Stage 'patchright-chromium' -Command 'npm' -Arguments @('run', 'install', '--workspace=@mario.andreschak/mcp-browser') -Environment $browserEnvironment
+    Invoke-InstallerCommand -Stage 'patchright-chromium' -Command 'node' -Arguments @('mcp-servers/browser/scripts/install-browser.mjs') -Environment $browserEnvironment
 
     Invoke-InstallerCommand -Stage 'build' -Command 'npm' -Arguments @('run', 'build') -Environment $installerEnvironment
     Invoke-InstallerCommand -Stage 'validation' -Command 'npm' -Arguments @('run', 'validate:mcp-release') -Environment $installerEnvironment

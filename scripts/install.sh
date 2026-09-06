@@ -50,7 +50,7 @@ fi
 step() { printf '\n%s==> %s%s\n' "$C_STEP" "$1" "$C_END" >&2; }
 ok()   { printf '%s    %s%s\n'   "$C_OK"   "$1" "$C_END" >&2; }
 warn() { printf '%s    %s%s\n'   "$C_WARN" "$1" "$C_END" >&2; }
-die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit 1; }
+die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit "${2:-1}"; }
 
 INSTALL_LOG="${FLUJO_INSTALL_LOG:-$MANIFEST_DIR/install.log}"
 INSTALL_STAGE_FILE="${FLUJO_INSTALL_STAGE_FILE:-$MANIFEST_DIR/install-stage.txt}"
@@ -61,10 +61,10 @@ mkdir -p "$MANIFEST_DIR"
 sanitize_diagnostic() {
   local safe="${1:-}" secret
   safe="$(printf '%s' "$safe" | sed -E \
-    -e 's#(https?://)[^/@[:space:]]+@#\\1[REDACTED]@#gI' \
-    -e 's#(authorization[[:space:]]*:[[:space:]]*(bearer|basic)[[:space:]]+)[^[:space:]]+#\\1[REDACTED]#gI' \
-    -e 's#([?&](access_token|auth|key|password|secret|token)=)[^&[:space:]]+#\\1[REDACTED]#gI' \
-    -e 's#([A-Z0-9_]*(TOKEN|SECRET|PASSWORD|KEY))=[^[:space:]]+#\\1=[REDACTED]#gI')"
+    -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#gI' \
+    -e 's#(authorization[[:space:]]*:[[:space:]]*(bearer|basic)[[:space:]]+)[^[:space:]]+#\1[REDACTED]#gI' \
+    -e 's#([?&](access_token|auth|key|password|secret|token)=)[^&[:space:]]+#\1[REDACTED]#gI' \
+    -e 's#([A-Z0-9_]*(TOKEN|SECRET|PASSWORD|KEY))=[^[:space:]]+#\1=[REDACTED]#gI')"
   for secret in "${FLUJO_HTTP_PROXY:-}" "${FLUJO_HTTPS_PROXY:-}" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${ALL_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}" "${all_proxy:-}" "${FLUJO_EXTRA_CA_CERTS:-}" "${NODE_EXTRA_CA_CERTS:-}" "${npm_config_cafile:-}"; do
     [ -z "$secret" ] || safe="${safe//"$secret"/[REDACTED]}"
   done
@@ -93,7 +93,7 @@ run_stage() {
   set -e
   if [ "$code" -ne 0 ]; then
     stage_marker "$stage" failed "$code"
-    die "Installer stage '$stage' failed (exit $code). Sanitized log: $INSTALL_LOG"
+    die "Installer stage '$stage' failed (exit $code). Sanitized log: $INSTALL_LOG" "$code"
   fi
   stage_marker "$stage" completed 0
 }
@@ -107,6 +107,11 @@ configure_installer_network() {
   validate_proxy_uri "${FLUJO_HTTPS_PROXY:-}" || die 'FLUJO_HTTPS_PROXY must be an absolute http:// or https:// URI.'
   validate_proxy_uri "${FLUJO_PLAYWRIGHT_DOWNLOAD_HOST:-}" || die 'FLUJO_PLAYWRIGHT_DOWNLOAD_HOST must be an absolute http:// or https:// URI.'
 
+  if [ -n "${NODE_TLS_REJECT_UNAUTHORIZED:-}" ]; then
+    warn 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED is set. The installer will ignore it; configure a trusted CA instead of disabling TLS verification.'
+    unset NODE_TLS_REJECT_UNAUTHORIZED
+  fi
+
   [ -z "${FLUJO_HTTP_PROXY:-}" ] || export HTTP_PROXY="$FLUJO_HTTP_PROXY"
   [ -z "${FLUJO_HTTPS_PROXY:-}" ] || export HTTPS_PROXY="$FLUJO_HTTPS_PROXY"
   [ -z "${FLUJO_NO_PROXY:-}" ] || export NO_PROXY="$FLUJO_NO_PROXY"
@@ -115,6 +120,16 @@ configure_installer_network() {
     grep -q -- '-----BEGIN CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" &&
       grep -q -- '-----END CERTIFICATE-----' "$FLUJO_EXTRA_CA_CERTS" ||
       die 'FLUJO_EXTRA_CA_CERTS must contain PEM certificate material.'
+    if have node && node -e "process.exit(typeof require('node:crypto').X509Certificate === 'function' ? 0 : 1)" >/dev/null 2>&1; then
+      node -e "new (require('node:crypto').X509Certificate)(require('node:fs').readFileSync(process.argv[1]))" "$FLUJO_EXTRA_CA_CERTS" >/dev/null 2>&1 ||
+        die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
+    elif have openssl; then
+      openssl x509 -in "$FLUJO_EXTRA_CA_CERTS" -noout >/dev/null 2>&1 ||
+        die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
+    else
+      die 'Validating FLUJO_EXTRA_CA_CERTS requires Node.js or OpenSSL before network access.'
+    fi
+    ok 'Custom CA certificate parsed successfully.'
     export NODE_EXTRA_CA_CERTS="$FLUJO_EXTRA_CA_CERTS"
     export npm_config_cafile="${npm_config_cafile:-$FLUJO_EXTRA_CA_CERTS}"
   fi
@@ -126,10 +141,6 @@ configure_installer_network() {
     export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT="$FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT"
   fi
 
-  if [ -n "${NODE_TLS_REJECT_UNAUTHORIZED:-}" ]; then
-    warn 'Security warning: NODE_TLS_REJECT_UNAUTHORIZED is set. The installer will ignore it; configure a trusted CA instead of disabling TLS verification.'
-    unset NODE_TLS_REJECT_UNAUTHORIZED
-  fi
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -471,11 +482,6 @@ if [ "$INSTALL_OLLAMA" = true ]; then
 fi
 stage_marker prerequisites completed 0
 
-if [ -n "${NODE_EXTRA_CA_CERTS:-}" ]; then
-  node -e "new (require('node:crypto').X509Certificate)(require('node:fs').readFileSync(process.env.NODE_EXTRA_CA_CERTS))" ||
-    die 'FLUJO_EXTRA_CA_CERTS could not be parsed as an X.509 PEM certificate.'
-  ok 'Custom CA certificate parsed successfully.'
-fi
 SYSTEM_CA_SUPPORTED=false
 if [ "$(node -p "process.allowedNodeEnvironmentFlags.has('--use-system-ca')" 2>/dev/null || true)" = true ]; then
   SYSTEM_CA_SUPPORTED=true
@@ -513,7 +519,7 @@ run_stage npm-dependencies npm ci --include=dev
 
 export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=0
 export FLUJO_INSTALL_RESULT_FILE="$BROWSER_RESULT_FILE"
-run_stage patchright-chromium npm run install --workspace=@mario.andreschak/mcp-browser
+run_stage patchright-chromium node mcp-servers/browser/scripts/install-browser.mjs
 unset FLUJO_INSTALL_RESULT_FILE
 
 run_stage build npm run build

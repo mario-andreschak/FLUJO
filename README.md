@@ -386,7 +386,7 @@ The initial `irm`/`curl` request must itself be able to reach GitHub, so configu
 Managed Chromium is installed as the named `patchright-chromium` stage. After correcting a proxy, CA, DNS, or timeout problem, retry only that version-matched browser download from the FLUJO directory:
 
 ```bash
-npm run install --workspace=@mario.andreschak/mcp-browser
+node mcp-servers/browser/scripts/install-browser.mjs
 ```
 
 Never use `NODE_TLS_REJECT_UNAUTHORIZED=0`, `npm strict-ssl=false`, or another TLS-verification bypass. The installers ignore an inherited Node TLS bypass and direct you to secure proxy/CA configuration instead.
