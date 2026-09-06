@@ -1,4 +1,4 @@
-export const PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION = 1 as const;
+export const PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION = 2 as const;
 
 export const SOAK_CRITERION_REGISTRY = {
   'unattended-runtime-throughput': {
@@ -55,13 +55,33 @@ export const SOAK_CRITERION_REGISTRY = {
   },
 } as const;
 
+/** Committed numeric #489 acceptance contracts for the fixed 28 x 20 workload. */
+export const SOAK_ACCEPTANCE_NUMERIC_CONTRACTS = {
+  detailedRuntimeState: {
+    maxRecordsPerGeneratedActivity: 2,
+    collectionHeadroomRecords: 128,
+    maxUncompactedByKind: {
+      mailboxItems: 500,
+      activities: 200,
+      flowDispatches: 200,
+      leaseHistory: 50,
+    },
+  },
+  eventAppendCost: {
+    windowDays: 7,
+    maxFinalToBaselineMedianRatio: 2,
+    finalMedianFloorMs: 20,
+    maxDailyP95Ms: 150,
+  },
+  residentMemory: {
+    maxFinalGrowthBytes: 256 * 1024 * 1024,
+    maxPeakBytes: 768 * 1024 * 1024,
+  },
+} as const;
+
 export type SoakCriterionId = keyof typeof SOAK_CRITERION_REGISTRY;
 export type SoakRunMode = 'smoke' | 'infrastructure' | 'acceptance';
 
-/** Explicitly unresolved #448 contracts; never treat these as release proof. */
-export const SOAK_UNDEFINED_CONTRACT_IDS: readonly SoakCriterionId[] = [
-  'bounded-detailed-runtime-state', 'flat-event-append-cost', 'resident-memory-bound',
-];
 export type SoakCriterionStatus = 'passed' | 'failed' | 'not_evaluated';
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -91,6 +111,7 @@ export interface SoakRunIdentity {
     gatingMode: 'enforce' | 'warn' | 'report';
     recallSamplesPerDay: number;
     eventAppendSamplesPerDay: number;
+    wallClockBudgetMs: number;
     percentileMethod: 'nearest-rank';
     scheduledFaultIds: string[];
   };
@@ -183,8 +204,7 @@ function hasOnlyJsonValues(value: unknown): boolean {
 
 export function criterionRequired(id: SoakCriterionId, mode: SoakRunMode): boolean {
   const policy = SOAK_CRITERION_REGISTRY[id];
-  if (mode === 'infrastructure') return !SOAK_UNDEFINED_CONTRACT_IDS.includes(id);
-  return mode === 'acceptance' ? policy.requiredInAcceptance : policy.requiredInSmoke;
+  return mode === 'smoke' ? policy.requiredInSmoke : policy.requiredInAcceptance;
 }
 
 export function createSoakCriterion(input: Omit<SoakCriterionResult, 'required'> & {
@@ -323,6 +343,8 @@ export function validateSoakEvidence(document: SoakEvidenceDocument): string[] {
     || configuration.recallSamplesPerDay <= 0
     || !Number.isSafeInteger(configuration.eventAppendSamplesPerDay)
     || configuration.eventAppendSamplesPerDay <= 0
+    || !Number.isSafeInteger(configuration.wallClockBudgetMs)
+    || configuration.wallClockBudgetMs <= 0
     || configuration.percentileMethod !== 'nearest-rank'
     || !Array.isArray(configuration.scheduledFaultIds)
     || configuration.scheduledFaultIds.some(id => typeof id !== 'string' || id.length === 0)

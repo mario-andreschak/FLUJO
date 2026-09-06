@@ -10,9 +10,8 @@ multi-week acceptance proof for parent epic
 `npm run soak:personas:quick` is a non-authoritative three-day smoke run.
 `node scripts/run-persona-soak.mjs --infrastructure --days=28 --activities-per-day=20 --with-learning`
 executes the full workload, learning and fault matrix as a **non-authoritative infrastructure gate**.
-It requires every supported runtime criterion. The three undefined numeric contracts
-remain visible as optional `not_evaluated` verdicts in this mode; they are still
-required and fatal in release acceptance mode. An infrastructure pass cannot close #448.
+It requires every runtime criterion, including the explicit collection, append-cost,
+and resident-memory numeric contracts. An infrastructure pass cannot close #448.
 
 `npm run soak:personas` is the authoritative 28-day × 20-activity configuration
 with seed 459 and learning enabled. For an explicit exact-commit invocation, run
@@ -54,8 +53,11 @@ commit_sha input == checked-out HEAD == runner evidence SHA
 
 It then invokes the Node entry point with the authoritative 28 × 20
 configuration and learning enabled, validates the artifacts, generates SHA-256
-checksum manifests, and retains them for 90 days. Scheduled runs continue to
-target the exact default-branch tip identified by `github.sha`.
+checksum manifests, and retains them for 90 days. The harness has a 45-minute
+overall wall-clock budget inside a 60-minute job limit, leaving bounded time for
+teardown, validation, checksum generation, and upload. Smoke runs have a 10-minute
+budget. Scheduled runs continue to target the exact default-branch tip identified
+by `github.sha`.
 
 Acceptance evidence must identify the exact checked-out commit. Local runs
 derive it from `git rev-parse HEAD`; controlled runs set `FLUJO_SOAK_COMMIT`
@@ -70,6 +72,13 @@ reconciliation, segmented event log, memory store/search, Behavior proposal,
 outcome-metric, and automatic-rollback APIs. The model boundary is deterministic
 and offline; persistence, routing, fencing, reconciliation, search, and learning
 are not simulated.
+
+Each ordinary workload item is first persisted with automatic pumping disabled,
+then driven by one explicit dispatcher pump and verified by the dispatcher's durable
+completion waiter. Both pump and waiter use real 30-second wall-clock bounds while
+sharing the run's overall budget; virtual simulated time cannot stall these bounds.
+The dispatcher is quiesced in `finally`, including after a timeout, so active work and
+wake timers cannot contaminate later regression suites.
 
 Every generated workload source ID is reconciled to exactly one terminal
 Activity and the exact ingress-specific mailbox shape. Ordinary ingress expects
@@ -95,7 +104,12 @@ Administrative recovery must leave an idle coherent runtime.
 
 `persona-soak.json` is canonical, key-sorted evidence.
 `persona-soak.jsonl` contains typed run, daily metric, reconciliation, fault, and
-criterion records. `persona-soak.md` is the reviewer summary.
+criterion records. `persona-soak.md` is the reviewer summary. The harness creates
+`persona-soak-progress.jsonl` before runtime work begins, checkpoints it after every
+simulated day, and records the active phase/activity on failure. Completed-run
+checksums cover this progress log as well as the three final artifacts. The final three
+artifacts are still written only for a complete run, so partial progress can never
+be validated as acceptance evidence.
 
 Each registered criterion records:
 
@@ -123,17 +137,26 @@ retention cannot conceal a gap. Split-brain is
 derived from overlapping persisted lease intervals observed before pruning.
 Stranding and stuck state come from final lease and runtime projections.
 
-Issue #459 specifies that collection state, event-append cost, and resident
-memory must be bounded/flat, but it does not provide numeric collection caps,
-flatness tolerance, or resident-memory ceiling. The harness records the actual
-daily observations and marks these three acceptance criteria
-`not_evaluated`. This is deliberately fatal for authoritative runs until a
-reviewer commits the missing numeric contracts; the implementation does not
-invent passing defaults.
+The #489 acceptance repair commits the following numeric contracts for the fixed
+28 × 20 workload:
 
-The infrastructure mode is a separate executable regression gate, not a relaxation
-of that release contract. It was introduced in #505 after reviewing #448, #459 and
-#489 and the explicit prior decision not to manufacture numeric acceptance bounds.
+- Every detailed runtime collection stays at or below `2 × generated activities +
+  128` total records (1,248 records for the authoritative workload). Daily maximum
+  uncompacted counts are `mailboxItems <= 500`, `activities <= 200`,
+  `flowDispatches <= 200`, and `leaseHistory <= 50`. Missing collections and new
+  uncontracted collections fail closed. These values include deterministic fault
+  overhead while matching the production compaction and soak lease-pruning policies.
+- Event append flatness compares the median daily p95 over the first seven days with
+  the final seven days. The final median must be no more than twice the baseline,
+  with a 20 ms noise floor, and every daily p95 must remain strictly below 150 ms.
+  The windowed median tolerates a single noisy CI checkpoint without hiding sustained
+  degradation; the absolute ceiling prevents a slow-but-flat run from passing.
+- Final RSS growth from day 1 is at most 256 MiB and peak RSS is at most 768 MiB.
+  The growth limit detects accumulation while the peak ceiling bounds allocator/GC
+  excursions on the pinned Node 22 controlled runner.
+
+All three criteria are evaluated from daily runtime observations in infrastructure
+and acceptance modes. A missing, failed, or `not_evaluated` verdict is fatal.
 
 ## What this soak does not prove
 
@@ -153,7 +176,8 @@ external effects from one initial goal. The opt-in
 [Persona goal endurance tier](persona-goal-endurance-acceptance.md) adds real elapsed
 time, three OS-process epochs, scheduled controls and independently audited effect
 reconciliation. Neither controlled scenario proves weeks of unattended operation on
-the public internet, and neither resolves the three numeric soak contracts.
+the public internet; the numeric contracts above apply only to the deterministic
+runtime-backed soak on the pinned controlled runner.
 
 The soak-scale recall observation uses the same production search boundary. The
 separate controlled 50,000-item gate, documented in

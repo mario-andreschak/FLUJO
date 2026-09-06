@@ -1,11 +1,11 @@
 import {
   PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+  SOAK_ACCEPTANCE_NUMERIC_CONTRACTS,
   SOAK_CRITERION_REGISTRY,
   createSoakCriterion,
   soakEnforcementFailures,
   stableJsonStringify,
   criterionRequired,
-  SOAK_UNDEFINED_CONTRACT_IDS,
   validateSoakCriterion,
   validateSoakEvidence,
   type SoakCriterionId,
@@ -39,6 +39,7 @@ function identity(): SoakRunIdentity {
       gatingMode: 'enforce',
       recallSamplesPerDay: 5,
       eventAppendSamplesPerDay: 5,
+      wallClockBudgetMs: 10 * 60_000,
       percentileMethod: 'nearest-rank',
       scheduledFaultIds: [],
     },
@@ -85,19 +86,63 @@ function document(): SoakEvidenceDocument {
 }
 
 describe('Persona soak evidence schema', () => {
-  it('separates a passing infrastructure gate from unresolved release contracts without hiding them', () => {
+  it('commits explicit numeric collection, append-cost, and RSS contracts', () => {
+    expect(SOAK_ACCEPTANCE_NUMERIC_CONTRACTS).toEqual({
+      detailedRuntimeState: {
+        maxRecordsPerGeneratedActivity: 2,
+        collectionHeadroomRecords: 128,
+        maxUncompactedByKind: {
+          mailboxItems: 500,
+          activities: 200,
+          flowDispatches: 200,
+          leaseHistory: 50,
+        },
+      },
+      eventAppendCost: {
+        windowDays: 7,
+        maxFinalToBaselineMedianRatio: 2,
+        finalMedianFloorMs: 20,
+        maxDailyP95Ms: 150,
+      },
+      residentMemory: {
+        maxFinalGrowthBytes: 256 * 1024 * 1024,
+        maxPeakBytes: 768 * 1024 * 1024,
+      },
+    });
+  });
+
+  it('requires every resolved acceptance contract in infrastructure and acceptance modes', () => {
     const evidence = document();
     evidence.runIdentity = { ...identity(), mode: 'infrastructure', days: 28, activitiesPerDay: 20, learningEnabled: true };
     evidence.criteria = evidence.criteria.map(record => ({
       ...record,
       required: criterionRequired(record.id, 'infrastructure'),
-      ...(SOAK_UNDEFINED_CONTRACT_IDS.includes(record.id) ? { status: 'not_evaluated' as const, failureReason: 'Numeric release contract remains unresolved.' } : {}),
     }));
+    expect(evidence.criteria.every(record => record.required)).toBe(true);
     expect(soakEnforcementFailures(evidence)).toEqual([]);
-    expect(evidence.criteria.filter(record => record.status === 'not_evaluated')).toHaveLength(3);
-    evidence.runIdentity = { ...evidence.runIdentity, mode: 'acceptance', authoritative: true, commitSha: 'a'.repeat(40) };
-    evidence.criteria = evidence.criteria.map(record => ({ ...record, required: true }));
-    expect(soakEnforcementFailures(evidence).filter(message => message.includes('required criterion'))).toHaveLength(3);
+
+    for (const mode of ['infrastructure', 'acceptance'] as const) {
+      const failed = document();
+      failed.runIdentity = {
+        ...identity(),
+        mode,
+        authoritative: mode === 'acceptance',
+        commitSha: 'a'.repeat(40),
+        days: 28,
+        activitiesPerDay: 20,
+        learningEnabled: true,
+      };
+      failed.criteria = failed.criteria.map(record => ({
+        ...record,
+        required: criterionRequired(record.id, mode),
+        ...(record.id === 'resident-memory-bound'
+          ? { status: 'not_evaluated' as const, failureReason: 'Fixture omitted the resolved contract.' }
+          : {}),
+      }));
+      expect(soakEnforcementFailures(failed)).toEqual(expect.arrayContaining([
+        expect.stringContaining('required criterion resident-memory-bound is not_evaluated'),
+      ]));
+    }
   });
 
   it('requires full workload and denies authoritative status to infrastructure reports', () => {

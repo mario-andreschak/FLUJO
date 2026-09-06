@@ -26,7 +26,7 @@ jobs:
   runtime-backed-acceptance:
     name: runtime-backed-28x20-acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     steps:
       - name: Authorize manually selected commit
         if: github.event_name == 'workflow_dispatch'
@@ -100,7 +100,8 @@ jobs:
              test -f soak-artifacts/persona-soak.jsonl && \
              test -f soak-artifacts/persona-soak.md; then
             (cd soak-artifacts && sha256sum \
-              persona-soak.json persona-soak.jsonl persona-soak.md > SHA256SUMS)
+              persona-soak.json persona-soak.jsonl persona-soak.md \
+              persona-soak-progress.jsonl > SHA256SUMS)
           fi
       - name: Publish report to job summary
         if: always()

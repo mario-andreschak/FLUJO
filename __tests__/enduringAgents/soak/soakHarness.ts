@@ -76,6 +76,7 @@ import {
 import { createPersonaFromRole } from '../fixtures/personaFactory';
 import {
   PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+  SOAK_ACCEPTANCE_NUMERIC_CONTRACTS,
   createSoakCriterion,
   soakEnforcementFailures,
   stableJsonStringify,
@@ -180,7 +181,44 @@ const APPEND_SAMPLES_PER_DAY = 5;
 const FULL_GATE_DAYS = 28;
 const FULL_GATE_ACTIVITIES_PER_DAY = 20;
 const LEASE_HISTORY_SOAK_CAP = 50;
+const SOAK_DISPATCH_WALL_TIMEOUT_MS = 30_000;
+const SOAK_SMOKE_WALL_BUDGET_MS = 10 * 60_000;
+const SOAK_ACCEPTANCE_WALL_BUDGET_MS = 45 * 60_000;
+const SOAK_TEARDOWN_WALL_TIMEOUT_MS = 30_000;
 let workspaceSequence = 0;
+
+function remainingWallClockBudget(
+  deadlineMs: number,
+  operationCapMs: number,
+  description: string,
+): number {
+  const remainingMs = Math.floor(deadlineMs - Date.now());
+  if (remainingMs <= 0) {
+    throw new Error(`${description} exceeded the overall Persona soak wall-clock budget.`);
+  }
+  return Math.min(operationCapMs, remainingMs);
+}
+
+async function withWallClockTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  description: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${description} exceeded ${timeoutMs} ms of wall-clock time.`));
+        }, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function debug(message: string): void {
   if (
@@ -558,6 +596,7 @@ async function dispatchWorkloadActivity(
   dispatcher: PersonaFlowDispatcher,
   personaId: string,
   activity: SoakActivity,
+  runDeadlineMs: number,
 ): Promise<PersonaFlowDispatchRecord> {
   const submission = await dispatcher.submit({
     personaId,
@@ -574,12 +613,44 @@ async function dispatchWorkloadActivity(
       prompt: `Complete deterministic soak input ${activity.id}.`,
       mode: 'conversation',
     },
-  }, { waitForCompletion: true, timeoutMs: 30_000 });
-  if (submission.dispatch.state !== 'completed' || !submission.dispatch.activityId) {
-    throw new Error(`Dispatch ${submission.dispatch.id} did not complete a persisted Activity.`);
+  }, { startPump: false, waitForCompletion: false });
+  const pumpTimeoutMs = remainingWallClockBudget(
+    runDeadlineMs,
+    SOAK_DISPATCH_WALL_TIMEOUT_MS,
+    `Dispatch ${submission.dispatch.id} pump`,
+  );
+  await withWallClockTimeout(
+    dispatcher.pump(personaId),
+    pumpTimeoutMs,
+    `Dispatch ${submission.dispatch.id} pump`,
+  );
+  const waitTimeoutMs = remainingWallClockBudget(
+    runDeadlineMs,
+    SOAK_DISPATCH_WALL_TIMEOUT_MS,
+    `Dispatch ${submission.dispatch.id} durable completion wait`,
+  );
+  const waitController = new AbortController();
+  let completed: PersonaFlowDispatchRecord;
+  try {
+    completed = await withWallClockTimeout(
+      dispatcher.wait(submission.dispatch.id, {
+        timeoutMs: waitTimeoutMs,
+        signal: waitController.signal,
+      }),
+      waitTimeoutMs,
+      `Dispatch ${submission.dispatch.id} durable completion wait`,
+    );
+  } finally {
+    waitController.abort(new Error(`Dispatch ${submission.dispatch.id} completion wait ended.`));
   }
-  await dispatcher.pump(personaId);
-  return submission.dispatch;
+  if (completed.state !== 'completed' || !completed.activityId) {
+    throw new Error(`Dispatch ${submission.dispatch.id} did not complete a persisted Activity: ${JSON.stringify({
+      state: completed?.state ?? 'missing',
+      activityId: completed?.activityId ?? null,
+      lastError: completed?.lastError ?? null,
+    })}`);
+  }
+  return completed;
 }
 
 async function compactRuntime(personaId: string, now: number): Promise<void> {
@@ -1062,6 +1133,10 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
     ?? (exactAcceptanceConfiguration ? 'acceptance' : 'smoke');
   const fullGate = runMode !== 'smoke';
   const wallStartedAt = Date.now();
+  const wallClockBudgetMs = fullGate
+    ? SOAK_ACCEPTANCE_WALL_BUDGET_MS
+    : SOAK_SMOKE_WALL_BUDGET_MS;
+  const runDeadlineMs = wallStartedAt + wallClockBudgetMs;
   const startedAt = wallStartedAt + 1_000;
   const commitSha = options.commitSha
     ?? process.env.PERSONA_SOAK_COMMIT
@@ -1085,9 +1160,41 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
   });
   workspaceSequence += 1;
   const workspaceId = `persona-soak-${process.pid}-${options.seed}-${workspaceSequence}`;
+  const progressPath = options.outputDirectory
+    ? path.join(options.outputDirectory, 'persona-soak-progress.jsonl')
+    : undefined;
+  let progressPhase = 'initializing';
+  let progressDay = 0;
+  let progressActivityId: string | null = null;
+  const appendProgress = async (record: Record<string, unknown>): Promise<void> => {
+    if (!progressPath) return;
+    await fs.appendFile(progressPath, `${stableJsonStringify(record)}\n`);
+  };
   let summary: PersonaSoakSummary | undefined;
 
   try {
+    if (options.outputDirectory) {
+      await fs.mkdir(options.outputDirectory, { recursive: true });
+      await Promise.all([
+        'persona-soak.json',
+        'persona-soak.jsonl',
+        'persona-soak.md',
+        'persona-soak-progress.jsonl',
+        'SHA256SUMS',
+      ].map(filename => fs.rm(path.join(options.outputDirectory!, filename), { force: true })));
+      await appendProgress({
+        recordType: 'run_started',
+        runId,
+        commitSha,
+        mode: runMode,
+        days: options.days,
+        activitiesPerDay: options.activitiesPerDay,
+        learningEnabled: Boolean(options.withLearning),
+        wallClockBudgetMs,
+        wallClockDeadlineAt: new Date(runDeadlineMs).toISOString(),
+        startedAt: new Date(wallStartedAt).toISOString(),
+      });
+    }
     summary = await runWithWorkspace(workspaceId, async () => {
       FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
       FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
@@ -1142,22 +1249,34 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       const faultEvidence: SoakFaultEvidence[] = [];
       const persistedLeaseOverlapPairs = new Set<string>();
 
+      try {
       for (let day = 1; day <= options.days; day += 1) {
+        progressDay = day;
+        progressPhase = `day-${day}:workload`;
         debug(`day ${day} started`);
         const dailyWorkload = workload.filter((activity) => activity.day === day);
         for (const activity of dailyWorkload) {
+          remainingWallClockBudget(
+            runDeadlineMs,
+            SOAK_DISPATCH_WALL_TIMEOUT_MS,
+            `Day ${day} Activity ${activity.id}`,
+          );
+          progressActivityId = activity.id;
+          progressPhase = `day-${day}:activity`;
           debugActivity(`day ${day} dispatching ${activity.id} via ${activity.ingress.admission}`);
           await clock.advanceTo(activity.scheduledAt);
           if (activity.ingress.admission === 'steering') {
             await routeSteeringActivity(personaId, activity);
           } else {
-            await dispatchWorkloadActivity(dispatcher, personaId, activity);
+            await dispatchWorkloadActivity(dispatcher, personaId, activity, runDeadlineMs);
           }
         }
 
+        progressActivityId = null;
         const scheduledFaults = faults.filter((fault) => fault.day === day);
         const executedFaults: string[] = [];
         for (const fault of scheduledFaults) {
+          progressPhase = `day-${day}:fault:${fault.kind}`;
           debug(`day ${day} executing fault ${fault.kind}`);
           const token = `${day}-${fault.kind}`;
           let evidence: SoakFaultEvidence;
@@ -1319,9 +1438,19 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
             .filter(item => item.day === day)
             .map(item => item.id),
         });
+        progressPhase = `day-${day}:checkpoint`;
+        await appendProgress({
+          recordType: 'day_completed',
+          runId,
+          commitSha,
+          day,
+          completedAt: new Date().toISOString(),
+          metric: metrics.at(-1),
+        });
         debug(`day ${day} completed`);
       }
 
+      progressPhase = 'learning-rollback';
       _setPersonaRuntimeClockForTests(previousClock);
       debug(`starting learning rollback=${Boolean(options.withLearning)}`);
       const learningEvidence: LearningRollbackEvidence = options.withLearning
@@ -1338,6 +1467,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       debug(`learning rollback completed=${learning}`);
       _setPersonaRuntimeClockForTests(clock);
 
+      progressPhase = 'final-runtime-evidence';
       const [activities, mailboxItems, leases, dispatches, runtime] = await Promise.all([
         listPersonaActivities(personaId),
         listPersonaMailboxItems(personaId),
@@ -1359,9 +1489,64 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       const stuckPersonaCount = runtime?.projection.stuck ? 1 : 0;
       const firstMetric = metrics[0];
       const lastMetric = metrics.at(-1)!;
-      const firstAppend = firstMetric.eventAppendP95Ms;
+      const numericContracts = SOAK_ACCEPTANCE_NUMERIC_CONTRACTS;
+      const uncompactedCaps: Record<string, number> = {
+        ...numericContracts.detailedRuntimeState.maxUncompactedByKind,
+      };
+      const maxCollectionCounts = metrics.reduce<Record<string, number>>((maximums, metric) => {
+        for (const [kind, count] of Object.entries(metric.collectionCounts)) {
+          maximums[kind] = Math.max(maximums[kind] ?? 0, count);
+        }
+        return maximums;
+      }, {});
+      const maxUncompacted = metrics.reduce<Record<string, number>>((maximums, metric) => {
+        for (const [kind, count] of Object.entries(metric.collectionUncompactedCounts)) {
+          maximums[kind] = Math.max(maximums[kind] ?? 0, count);
+        }
+        return maximums;
+      }, {});
+      const requiredCollectionKinds = Object.keys(uncompactedCaps);
+      const missingCollectionKinds = requiredCollectionKinds.filter(kind => (
+        !(kind in maxCollectionCounts) || !(kind in maxUncompacted)
+      ));
+      const totalCollectionCap = workload.length
+        * numericContracts.detailedRuntimeState.maxRecordsPerGeneratedActivity
+        + numericContracts.detailedRuntimeState.collectionHeadroomRecords;
+      const collectionCountViolations = Object.fromEntries(
+        Object.entries(maxCollectionCounts).filter(([, count]) => count > totalCollectionCap),
+      );
+      const uncompactedCountViolations = Object.fromEntries(
+        Object.entries(maxUncompacted).filter(([kind, count]) => (
+          count > (uncompactedCaps[kind] ?? -1)
+        )),
+      );
+      const detailedRuntimeStatePassed = missingCollectionKinds.length === 0
+        && Object.keys(collectionCountViolations).length === 0
+        && Object.keys(uncompactedCountViolations).length === 0;
+      const appendWindowDays = Math.min(
+        numericContracts.eventAppendCost.windowDays,
+        metrics.length,
+      );
+      const baselineAppendMedian = percentile(
+        metrics.slice(0, appendWindowDays).map(metric => metric.eventAppendP95Ms),
+        0.5,
+      );
+      const finalAppendMedian = percentile(
+        metrics.slice(-appendWindowDays).map(metric => metric.eventAppendP95Ms),
+        0.5,
+      );
+      const allowedFinalAppendMedian = Math.max(
+        numericContracts.eventAppendCost.finalMedianFloorMs,
+        baselineAppendMedian * numericContracts.eventAppendCost.maxFinalToBaselineMedianRatio,
+      );
+      const maxDailyAppendP95 = Math.max(...metrics.map(metric => metric.eventAppendP95Ms));
+      const eventAppendPassed = finalAppendMedian <= allowedFinalAppendMedian
+        && maxDailyAppendP95 < numericContracts.eventAppendCost.maxDailyP95Ms;
       const residentGrowth = lastMetric.residentMemoryBytes - firstMetric.residentMemoryBytes;
-      const maxUncompacted = lastMetric.collectionUncompactedCounts;
+      const residentPeak = Math.max(...metrics.map(metric => metric.residentMemoryBytes));
+      const residentMemoryPassed = residentGrowth
+        <= numericContracts.residentMemory.maxFinalGrowthBytes
+        && residentPeak <= numericContracts.residentMemory.maxPeakBytes;
       const runtimeEvents = await readPersonaRuntimeEvents(personaId);
       const retainedEventSequenceContinuous = runtimeEvents.every((event, index) => (
         index === 0 || event.seq === runtimeEvents[index - 1].seq + 1
@@ -1421,6 +1606,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           gatingMode: options.gatingMode ?? 'report',
           recallSamplesPerDay: RECALL_SAMPLES_PER_DAY,
           eventAppendSamplesPerDay: APPEND_SAMPLES_PER_DAY,
+          wallClockBudgetMs,
           percentileMethod: 'nearest-rank',
           scheduledFaultIds: expectedFaultIds,
         },
@@ -1534,33 +1720,44 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           thresholdSource: 'Issue #459 acceptance criterion 3 and issue #489 required fix 6',
           provenance: ['performance.now', 'searchPersonaMemory', 'nearest-rank percentile'],
         }),
-        notEvaluated({
+        criterion({
           id: 'bounded-detailed-runtime-state',
           mode: runMode,
-          summary: 'Actual collection totals and uncompacted counts were recorded without inventing an acceptance cap.',
+          passed: detailedRuntimeStatePassed,
+          summary: detailedRuntimeStatePassed
+            ? 'All detailed runtime collections stayed within their committed total and uncompacted-record caps.'
+            : 'One or more detailed runtime collections exceeded a committed cap or was not reported.',
           observed: {
-            finalCollectionCounts: lastMetric.collectionCounts,
-            finalUncompactedCounts: maxUncompacted,
-            eventLogSegments: lastMetric.eventLogSegments,
+            maxCollectionCounts,
+            maxUncompactedCounts: maxUncompacted,
+            totalCollectionCap,
+            maxUncompactedByKind: uncompactedCaps,
+            missingCollectionKinds,
+            collectionCountViolations,
+            uncompactedCountViolations,
+            finalEventLogSegments: lastMetric.eventLogSegments,
           },
-          threshold: 'Reviewer-approved numeric steady-state bounds for every applicable collection.',
-          thresholdSource: 'Issue #459 says bounded steady state but supplies no numeric collection contract.',
-          provenance: ['getPersonaStorageStats', 'runtime-event manifest'],
-          failureReason: 'No committed numeric collection-bound contract exists.',
+          threshold: `Every reported collection has at most ${totalCollectionCap} total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50; missing or new uncontracted collections fail closed.`,
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+          provenance: ['getPersonaStorageStats daily observations', 'production compaction and lease-pruning policies'],
         }),
-        notEvaluated({
+        criterion({
           id: 'flat-event-append-cost',
           mode: runMode,
-          summary: `Observed day-1 p95=${firstAppend.toFixed(2)} ms and final p95=${lastMetric.eventAppendP95Ms.toFixed(2)} ms.`,
+          passed: eventAppendPassed,
+          summary: `Baseline-window median p95=${baselineAppendMedian.toFixed(2)} ms, final-window median p95=${finalAppendMedian.toFixed(2)} ms, maximum daily p95=${maxDailyAppendP95.toFixed(2)} ms.`,
           observed: {
-            day1P95Ms: firstAppend,
-            finalP95Ms: lastMetric.eventAppendP95Ms,
+            windowDays: appendWindowDays,
+            baselineMedianP95Ms: baselineAppendMedian,
+            finalMedianP95Ms: finalAppendMedian,
+            allowedFinalMedianP95Ms: allowedFinalAppendMedian,
+            maxDailyP95Ms: maxDailyAppendP95,
+            absoluteDailyLimitMs: numericContracts.eventAppendCost.maxDailyP95Ms,
             samplesPerDay: APPEND_SAMPLES_PER_DAY,
           },
-          threshold: 'Reviewer-approved numeric definition of flat append cost.',
-          thresholdSource: 'Issue #459 says flat but supplies no tolerance or statistical contract.',
-          provenance: ['performance.now', 'appendPersonaRuntimeEvent', 'nearest-rank percentile'],
-          failureReason: 'No committed numeric event-append flatness contract exists.',
+          threshold: 'The final seven-day median append p95 is no more than 2x the first seven-day median (with a 20 ms noise floor), and every daily p95 is strictly below 150 ms.',
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+          provenance: ['performance.now', 'appendPersonaRuntimeEvent', 'nearest-rank percentile', 'daily-window median'],
         }),
         criterion({
           id: 'runtime-event-continuity',
@@ -1607,19 +1804,22 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           thresholdSource: 'Issue #459 acceptance criterion 7',
           provenance: ['listPersonaLeaseRecords', 'inspectAndReconcilePersonaRuntime'],
         }),
-        notEvaluated({
+        criterion({
           id: 'resident-memory-bound',
           mode: runMode,
-          summary: `Observed resident-memory growth=${residentGrowth} bytes.`,
+          passed: residentMemoryPassed,
+          summary: `Resident-memory final growth=${residentGrowth} bytes; peak=${residentPeak} bytes.`,
           observed: {
             day1Bytes: firstMetric.residentMemoryBytes,
             finalBytes: lastMetric.residentMemoryBytes,
-            growthBytes: residentGrowth,
+            finalGrowthBytes: residentGrowth,
+            peakBytes: residentPeak,
+            maxFinalGrowthBytes: numericContracts.residentMemory.maxFinalGrowthBytes,
+            maxPeakBytes: numericContracts.residentMemory.maxPeakBytes,
           },
-          threshold: 'Reviewer-approved resident-memory ceiling or growth tolerance.',
-          thresholdSource: 'Issue #459 says bounded but supplies no numeric memory contract.',
+          threshold: 'Final RSS growth is at most 256 MiB from day 1 and peak RSS is at most 768 MiB.',
+          thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
           provenance: ['process.memoryUsage().rss at daily checkpoints'],
-          failureReason: 'No committed numeric resident-memory bound exists.',
         }),
         options.withLearning
           ? criterion({
@@ -1714,7 +1914,26 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         criteria,
         metrics,
       } satisfies PersonaSoakSummary;
+      } finally {
+        await withWallClockTimeout(
+          dispatcher.quiesce(personaId),
+          SOAK_TEARDOWN_WALL_TIMEOUT_MS,
+          `Persona ${personaId} dispatcher teardown`,
+        );
+      }
     });
+  } catch (error) {
+    await appendProgress({
+      recordType: 'run_failed',
+      runId,
+      commitSha,
+      failedAt: new Date().toISOString(),
+      phase: progressPhase,
+      day: progressDay,
+      lastActivityId: progressActivityId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   } finally {
     _setPersonaRuntimeClockForTests(previousClock);
     _setPersonaRuntimeEventLogConfigForTests(previousEventConfig);
@@ -1757,6 +1976,14 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         summary.workloadReconciliation,
       ),
     );
+    await appendProgress({
+      recordType: 'run_completed',
+      runId,
+      commitSha,
+      completedAt: summary.runIdentity.endedAt,
+      daysCompleted: summary.metrics.length,
+      activitiesCompleted: summary.workloadReconciliation.completed,
+    });
   }
 
   const enforcementFailures = soakEnforcementFailures(summary);

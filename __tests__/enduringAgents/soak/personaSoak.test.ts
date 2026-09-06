@@ -18,7 +18,8 @@ import {
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
 
-jest.setTimeout(165 * 60 * 1_000);
+// Keep Jest below the 60-minute workflow cap so harness teardown and artifact upload can finish.
+jest.setTimeout(50 * 60 * 1_000);
 
 describe('deterministic Persona soak harness', () => {
   it('reconciles the actual authored Core revision while rejecting a stale Role revision', async () => {
@@ -133,6 +134,19 @@ describe('deterministic Persona soak harness', () => {
     expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
     expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);
     expect(summary.criteria.filter((criterion) => criterion.status === 'failed')).toEqual([]);
+    for (const id of [
+      'bounded-detailed-runtime-state',
+      'flat-event-append-cost',
+      'resident-memory-bound',
+    ]) {
+      expect(summary.criteria.find(criterion => criterion.id === id)).toMatchObject({
+        status: 'passed',
+        threshold: {
+          description: expect.any(String),
+          source: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
+        },
+      });
+    }
     expect(summary.faultEvidence.find((fault) => fault.kind === 'lease-expiry')).toMatchObject({
       status: 'passed',
       fault: {

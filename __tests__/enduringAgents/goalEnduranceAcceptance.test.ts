@@ -971,7 +971,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           retainedBlockers: unscheduledRequests.map(item => ({
             id: item.id,
             reason: item.goal?.interventionReason,
-            nextAction: item.goal?.nextAction,
+            nextAction: item.nextAction,
           })),
           crashActivityId: second.processEpoch.crashActivityId,
           postCrashActivityIds: postCrashActivities.map(activity => activity.id),
