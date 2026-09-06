@@ -34,9 +34,8 @@ export class ToolHandler {
   /**
    * Sanitizes a JSON Schema to ensure compatibility with all LLM providers
    * Specifically removes unsupported 'format' fields from string properties
-   * and filters 'required' arrays to only reference keys defined in 'properties'
-   * (Google AI Studio / Gemini via OpenRouter rejects schemas where required
-   * contains keys not present in properties).
+   * and removes invalid entries from 'required' arrays without changing their
+   * JSON Schema scope.
    */
   static sanitizeSchema(schema: unknown): SanitizedToolSchema {
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return {};
@@ -65,21 +64,15 @@ export class ToolHandler {
       });
     }
 
-    // Google AI Studio (and other strict providers) reject schemas where `required`
-    // references property names not defined in `properties`. Filter required so it
-    // only contains keys that are actually declared. Remove `required` entirely when
-    // it would become empty or when there are no `properties` at all.
+    // A `required` entry does not need a matching property declaration in the
+    // same schema node. Composition branches commonly declare only `required`
+    // while their properties live on an enclosing schema, so preserve all valid
+    // names independently of local `properties`.
     if (Array.isArray(result.required)) {
-      if (result.properties) {
-        const definedKeys = new Set(Object.keys(result.properties));
-        result.required = (result.required as unknown[]).filter(
-          (k): k is string => typeof k === 'string' && definedKeys.has(k)
-        );
-        if (result.required.length === 0) {
-          delete result.required;
-        }
-      } else {
-        // No properties declared → `required` can only be invalid; drop it.
+      result.required = (result.required as unknown[]).filter(
+        (k): k is string => typeof k === 'string' && k.length > 0
+      );
+      if (result.required.length === 0) {
         delete result.required;
       }
     }
