@@ -22,6 +22,13 @@ const PROCESS_BIRTH_CACHE_TTL_MS = 1_000;
 // Keep the Windows OS lookup well inside the 15-second acquisition budget.
 // A timeout is uncertainty and must never be treated as stale-owner evidence.
 const WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 900;
+// Establishing our own identity happens once, before lock acquisition begins.
+// Allow cold Windows PowerShell startup more time without slowing foreign-PID
+// observations in the contention loop. All supported platforms share a bounded
+// retry sequence; only the Windows per-probe timeout changes for our own PID.
+const OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS = 3_000;
+const OWN_PROCESS_BIRTH_PROBE_ATTEMPTS = 3;
+const OWN_PROCESS_BIRTH_PROBE_RETRY_MS = 100;
 const PROCESS_BIRTH_MARKER_SUPPORTED = ['darwin', 'linux', 'win32'].includes(process.platform);
 const UUID_FILE_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const execFileAsync = promisify(execFile);
@@ -363,82 +370,129 @@ async function queryWindowsProcessBirthMarker(pid: number): Promise<string | nul
     `$p=Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`,
   ], {
     encoding: 'utf8',
-    timeout: WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
+    timeout: pid === process.pid
+      ? OWN_WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS
+      : WINDOWS_PROCESS_BIRTH_PROBE_TIMEOUT_MS,
     windowsHide: true,
   });
   const value = stdout.trim();
-  return value ? `win32-v2:${value}` : null;
+  // Only an actual positive decimal tick count is comparable across processes.
+  // Reject warnings, partial output, and other unexpected PowerShell text.
+  return /^[1-9]\d*$/.test(value) ? `win32-v2:${value}` : null;
 }
 
 async function queryPlatformProcessBirthMarker(pid: number): Promise<string | null> {
-  try {
-    if (process.platform === 'linux') {
-      const [stat, bootId] = await Promise.all([
-        fs.readFile(`/proc/${pid}/stat`, 'utf8'),
-        getLinuxBootId(),
-      ]);
-      if (!bootId) return null;
-      const closeParen = stat.lastIndexOf(')');
-      if (closeParen < 0) return null;
-      // Fields after the executable name begin at proc field 3; starttime is 22.
-      const fields = stat.slice(closeParen + 1).trim().split(/\s+/);
-      if (fields[0] === 'Z') return 'dead:linux-zombie';
-      const startTime = fields[19];
-      return startTime ? `linux-v2:${bootId}:${startTime}` : null;
-    }
-    if (process.platform === 'win32') {
-      return await queryWindowsProcessBirthMarker(pid);
-    }
-    if (process.platform === 'darwin') {
-      const { stdout } = await processBirthProbeRunner('/bin/ps', [
-        '-o',
-        'state=',
-        '-o',
-        'lstart=',
-        '-p',
-        String(pid),
-      ], {
-        encoding: 'utf8',
-        timeout: 3_000,
-        env: { ...process.env, LANG: 'C', LC_ALL: 'C', TZ: 'UTC' },
-      });
-      const value = stdout.trim();
-      const parsed = /^(\S+)\s+(.+)$/.exec(value);
-      if (!parsed) return null;
-      if (parsed[1].includes('Z')) return 'dead:darwin-zombie';
-      return `darwin-v2:${parsed[2].trim()}`;
-    }
-  } catch {
-    // A failed birth lookup is uncertainty. PID liveness remains fail-closed.
+  if (process.platform === 'linux') {
+    const [stat, bootId] = await Promise.all([
+      fs.readFile(`/proc/${pid}/stat`, 'utf8'),
+      getLinuxBootId(),
+    ]);
+    if (!bootId) return null;
+    const closeParen = stat.lastIndexOf(')');
+    if (closeParen < 0) return null;
+    // Fields after the executable name begin at proc field 3; starttime is 22.
+    const fields = stat.slice(closeParen + 1).trim().split(/\s+/);
+    if (fields[0] === 'Z') return 'dead:linux-zombie';
+    const startTime = fields[19];
+    return startTime ? `linux-v2:${bootId}:${startTime}` : null;
+  }
+  if (process.platform === 'win32') {
+    return queryWindowsProcessBirthMarker(pid);
+  }
+  if (process.platform === 'darwin') {
+    const { stdout } = await processBirthProbeRunner('/bin/ps', [
+      '-o',
+      'state=',
+      '-o',
+      'lstart=',
+      '-p',
+      String(pid),
+    ], {
+      encoding: 'utf8',
+      timeout: 3_000,
+      env: { ...process.env, LANG: 'C', LC_ALL: 'C', TZ: 'UTC' },
+    });
+    const value = stdout.trim();
+    const parsed = /^(\S+)\s+(.+)$/.exec(value);
+    if (!parsed) return null;
+    if (parsed[1].includes('Z')) return 'dead:darwin-zombie';
+    return `darwin-v2:${parsed[2].trim()}`;
   }
   return null;
 }
 
 let processBirthMarkerProbe = queryPlatformProcessBirthMarker;
 
-async function queryProcessBirthMarker(pid: number): Promise<string | null> {
+interface ProcessBirthObservation {
+  marker: string | null;
+  failure?: string;
+}
+
+async function observeProcessBirthMarker(pid: number): Promise<ProcessBirthObservation> {
   try {
-    return await processBirthMarkerProbe(pid);
-  } catch {
+    const marker = await processBirthMarkerProbe(pid);
+    return marker ? { marker } : { marker: null, failure: 'probe returned no valid birth identity' };
+  } catch (error) {
     // Probe failures and timeouts are uncertainty. Callers must remain fail
     // closed and may only recover a lock from explicit stale-owner evidence.
-    return null;
+    const details = error as { code?: unknown; killed?: unknown } | null;
+    const code = typeof details?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(details.code)
+      ? details.code
+      : undefined;
+    const failure = details?.killed === true || code === 'ETIMEDOUT'
+      ? 'process birth probe timed out'
+      : `process birth probe failed${code ? ` (${code})` : ''}`;
+    return { marker: null, failure };
   }
+}
+
+async function queryProcessBirthMarker(pid: number): Promise<string | null> {
+  return (await observeProcessBirthMarker(pid)).marker;
+}
+
+async function establishOwnProcessBirthMarkerV2(): Promise<string | null> {
+  if (!PROCESS_BIRTH_MARKER_SUPPORTED) return queryProcessBirthMarker(process.pid);
+  let failure = 'probe returned no valid birth identity';
+  for (let attempt = 0; attempt < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS; attempt += 1) {
+    const observation = await observeProcessBirthMarker(process.pid);
+    if (observation.marker && birthMarkerVersion(observation.marker)) return observation.marker;
+    failure = observation.failure ?? 'probe returned an invalid birth identity';
+    if (attempt + 1 < OWN_PROCESS_BIRTH_PROBE_ATTEMPTS) {
+      await delay(OWN_PROCESS_BIRTH_PROBE_RETRY_MS);
+    }
+  }
+  throw new Error(
+    'Unable to establish this process birth identity for Persona locking. '
+    + `Failed after ${OWN_PROCESS_BIRTH_PROBE_ATTEMPTS} attempts: ${failure}.`,
+  );
 }
 
 async function getOwnProcessBirthMarkerV2(): Promise<string | null> {
   const lookup = global.__flujo_enduring_agent_process_birth_marker_v2
-    ??= queryProcessBirthMarker(process.pid);
-  const marker = await lookup;
-  if (!marker && global.__flujo_enduring_agent_process_birth_marker_v2 === lookup) {
-    // A transient probe failure must not disable PID-reuse protection for the
-    // lifetime of the server. The next lock attempt gets a fresh observation.
-    global.__flujo_enduring_agent_process_birth_marker_v2 = undefined;
+    ??= establishOwnProcessBirthMarkerV2();
+  try {
+    const marker = await lookup;
+    // Older route/dev bundles share this global key but used a single nullable
+    // probe. Validate their result too: no supported-platform owner may be
+    // issued without a comparable OS identity, regardless of who cached it.
+    if (PROCESS_BIRTH_MARKER_SUPPORTED && (!marker || !birthMarkerVersion(marker))) {
+      throw new Error(
+        'Unable to establish this process birth identity for Persona locking. '
+        + 'Shared process birth identity is missing or invalid.',
+      );
+    }
+    if (!marker && global.__flujo_enduring_agent_process_birth_marker_v2 === lookup) {
+      global.__flujo_enduring_agent_process_birth_marker_v2 = undefined;
+    }
+    return marker;
+  } catch (error) {
+    // Every waiter observes the same exhausted sequence. A later lock attempt
+    // can retry, without an old waiter clearing a successor's shared promise.
+    if (global.__flujo_enduring_agent_process_birth_marker_v2 === lookup) {
+      global.__flujo_enduring_agent_process_birth_marker_v2 = undefined;
+    }
+    throw error;
   }
-  if (!marker && PROCESS_BIRTH_MARKER_SUPPORTED) {
-    throw new Error('Unable to establish this process birth identity for Persona locking.');
-  }
-  return marker;
 }
 
 /**
