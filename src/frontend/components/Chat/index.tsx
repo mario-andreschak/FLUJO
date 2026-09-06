@@ -169,9 +169,8 @@ function useStableCallback<Args extends unknown[], Result>(
 export interface Attachment {
   id: string;
   type: 'document' | 'audio' | 'image' | 'video';
-  // For document/audio this is text (the contents / transcription). For an
-  // image it is a `data:` URL (e.g. `data:image/png;base64,...`) — the form a
-  // pasted screenshot is read into.
+  // Plain documents contain text. Binary audio/image/video attachments use a
+  // `data:` URL; audio transcription text is kept separately below.
   content: string;
   originalName?: string;
   mimeType?: string;
@@ -190,7 +189,7 @@ export type ChatMessage = FlujoChatMessage & {
 // multipart array carrying `image_url` parts so vision-capable models actually
 // receive the image. Content that is already multipart (a prior turn replayed
 // from the backend) is passed through untouched.
-function buildApiContent(msg: ChatMessage): OpenAI.ChatCompletionUserMessageParam['content'] {
+export function buildApiContent(msg: ChatMessage): OpenAI.ChatCompletionUserMessageParam['content'] {
   if (Array.isArray(msg.content)) {
     return msg.content as OpenAI.ChatCompletionUserMessageParam['content'];
   }

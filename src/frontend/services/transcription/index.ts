@@ -1,4 +1,10 @@
 import { checkWebSpeechSupport } from './webSpeech';
+import {
+  createTranscriptionFile,
+  transcribeFile,
+  type FileTranscriptionResult,
+  type TranscriptionFailureCode,
+} from './fileTranscription';
 
 export {
   startLiveTranscription,
@@ -6,18 +12,24 @@ export {
   type LiveTranscriptionOptions,
 } from './webSpeech';
 
+export {
+  createTranscriptionFile,
+  transcribeFile,
+  type FileTranscriptionOptions,
+  type FileTranscriptionResult,
+  type TranscriptionFailureCode,
+} from './fileTranscription';
+
 export interface TranscriptionOptions {
+  modelId?: string;
   onProgress?: (progress: number) => void;
   onStatusChange?: (status: string) => void;
   language?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
-export interface TranscriptionResult {
-  text: string;
-  success: boolean;
-  error?: string;
-  engine?: 'webspeech';
-}
+export type TranscriptionResult = FileTranscriptionResult;
 
 export const isSpeechSupported = checkWebSpeechSupport;
 
@@ -26,25 +38,45 @@ export function checkSpeechSupport() {
 }
 
 /**
- * Prerecorded audio is intentionally not routed through Web Speech.
- *
- * Web Speech recognizes the live microphone only. Keep this compatibility
- * boundary as an explicit failure until a file-capable provider is configured.
+ * Transcribe a prerecorded Blob through the configured file-capable provider.
+ * Browser Web Speech remains available only through startLiveTranscription().
  */
 export async function transcribe(
-  _audioBlob: Blob,
+  audioBlob: Blob,
   options: TranscriptionOptions = {},
 ): Promise<TranscriptionResult> {
-  const error = typeof window === 'undefined'
-    ? 'Server-side transcription is not supported'
-    : 'Pre-recorded audio transcription requires a file-capable provider';
+  if (!options.modelId?.trim()) {
+    return {
+      text: '',
+      success: false,
+      error: 'A transcription model is not configured',
+      code: 'missing-model',
+      engine: 'provider',
+    };
+  }
 
-  options.onProgress?.(0);
-  options.onStatusChange?.('Transcription unavailable');
+  const file = createTranscriptionFile(audioBlob);
+  if (!file) {
+    const code: TranscriptionFailureCode = audioBlob.type
+      ? 'unsupported-format'
+      : 'request-failed';
+    return {
+      text: '',
+      success: false,
+      error: audioBlob.type
+        ? 'The recording format is not supported by the transcription provider'
+        : 'This browser cannot prepare the recording for transcription',
+      code,
+      engine: 'provider',
+    };
+  }
 
-  return {
-    text: '',
-    success: false,
-    error,
-  };
+  return transcribeFile(file, {
+    modelId: options.modelId,
+    language: options.language,
+    onProgress: options.onProgress,
+    onStatusChange: options.onStatusChange,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
 }

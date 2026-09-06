@@ -1,5 +1,4 @@
 /** @jest-environment jsdom */
-import { transcribe } from '@/frontend/services/transcription';
 import {
   startLiveTranscription,
 } from '@/frontend/services/transcription/webSpeech';
@@ -133,34 +132,5 @@ describe('live Web Speech transcription', () => {
 
     expect(recognition.abortCount).toBe(1);
     await expect(session.stop()).resolves.toBe('');
-  });
-});
-
-describe('prerecorded transcription boundary', () => {
-  it('does not report a prerecorded Blob as a successful Web Speech transcript', async () => {
-    const onStatusChange = jest.fn();
-
-    await expect(
-      transcribe(new Blob(['audio'], { type: 'audio/webm' }), {
-        onStatusChange,
-      }),
-    ).resolves.toEqual({
-      text: '',
-      success: false,
-      error: 'Pre-recorded audio transcription requires a file-capable provider',
-    });
-    expect(onStatusChange).toHaveBeenCalledWith('Transcription unavailable');
-  });
-
-  it('returns a rejected promise when a callback fails', async () => {
-    const callbackError = new Error('status callback failed');
-
-    await expect(
-      transcribe(new Blob(['audio']), {
-        onStatusChange: () => {
-          throw callbackError;
-        },
-      }),
-    ).rejects.toBe(callbackError);
   });
 });

@@ -2,10 +2,7 @@
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
-import {
-  startLiveTranscription,
-  type LiveTranscriptionSession,
-} from '@/frontend/services/transcription';
+import { transcribe } from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { ticketDraftStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
@@ -149,9 +146,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   // For audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
-  const liveTranscriptionRef = useRef<LiveTranscriptionSession | null>(null);
-  const transcriptionStopPromiseRef = useRef<Promise<string> | null>(null);
-  const liveTranscriptionErrorRef = useRef<Error | null>(null);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const pendingAudioBlobRef = useRef<Blob | null>(null);
   const recordingAttemptRef = useRef(0);
   const mountedRef = useRef(true);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -172,6 +168,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       mediaRecorderRef.current = null;
       if (recorder && recorder.state !== 'inactive') {
         recorder.onstop = null;
+        recorder.onerror = null;
         try {
           recorder.stop();
         } catch (error) {
@@ -179,9 +176,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
         }
       }
 
-      liveTranscriptionRef.current?.cancel();
-      liveTranscriptionRef.current = null;
-      transcriptionStopPromiseRef.current = null;
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      pendingAudioBlobRef.current = null;
 
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
@@ -562,22 +559,94 @@ const ChatInput: React.FC<ChatInputProps> = ({
     };
   };
   
-  const stopRecordingResources = (): Promise<string> => {
-    if (transcriptionStopPromiseRef.current) {
-      return transcriptionStopPromiseRef.current;
-    }
-
-    const liveTranscription = liveTranscriptionRef.current;
-    liveTranscriptionRef.current = null;
-    transcriptionStopPromiseRef.current = liveTranscription
-      ? liveTranscription.stop()
-      : Promise.resolve('');
-
+  const stopRecordingResources = () => {
     const stream = recordingStreamRef.current;
     recordingStreamRef.current = null;
     stream?.getTracks().forEach((track) => track.stop());
+  };
 
-    return transcriptionStopPromiseRef.current;
+  const transcribeRecording = async (audioBlob: Blob, attemptId: number) => {
+    const isCurrentAttempt = () =>
+      mountedRef.current && recordingAttemptRef.current === attemptId;
+
+    if (!isCurrentAttempt()) return;
+
+    if (settings?.speech?.enabled === false) {
+      setTranscriptionStatus(t('chat.input.speechDisabled'));
+      setTranscriptionState('disabled');
+      setIsProcessing(false);
+      return;
+    }
+
+    const modelId = settings?.speech?.transcriptionModelId;
+    if (!modelId) {
+      setTranscriptionStatus(t('chat.input.transcriptionModelMissing'));
+      setTranscriptionState('error');
+      setIsProcessing(false);
+      return;
+    }
+
+    transcriptionAbortRef.current?.abort();
+    const controller = new AbortController();
+    transcriptionAbortRef.current = controller;
+    setDialogContent('');
+    setTranscriptionProgress(0);
+    setTranscriptionStatus(t('chat.input.transcriptionUploading'));
+    setTranscriptionState('processing');
+    setIsProcessing(true);
+
+    try {
+      const result = await transcribe(audioBlob, {
+        modelId,
+        language: settings?.speech?.language || navigator.language,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (isCurrentAttempt()) setTranscriptionProgress(progress);
+        },
+      });
+      if (!isCurrentAttempt()) return;
+
+      const transcript = result.text.trim();
+      if (result.success && transcript) {
+        setDialogContent(transcript);
+        setTranscriptionProgress(100);
+        setTranscriptionStatus(t('chat.input.transcriptionCompleted'));
+        setTranscriptionState('success');
+        log.debug('Prerecorded audio transcription completed', {
+          textLength: transcript.length,
+        });
+      } else if (result.code === 'empty-transcript') {
+        setTranscriptionStatus(t('chat.input.noTranscript'));
+        setTranscriptionState('empty');
+        log.warn('The transcription provider returned no speech');
+      } else if (result.code === 'cancelled') {
+        setTranscriptionStatus('');
+        setTranscriptionState('cancelled');
+      } else {
+        setTranscriptionStatus(
+          t('chat.input.transcriptionFailed', {
+            error: result.error || t('chat.input.transcriptionUnavailable'),
+          }),
+        );
+        setTranscriptionState('error');
+      }
+    } catch (error) {
+      if (!isCurrentAttempt()) return;
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Error handling prerecorded audio transcription', { error });
+      setDialogContent('');
+      setTranscriptionStatus(
+        t('chat.input.transcriptionFailed', { error: message }),
+      );
+      setTranscriptionState('error');
+    } finally {
+      if (isCurrentAttempt()) {
+        if (transcriptionAbortRef.current === controller) {
+          transcriptionAbortRef.current = null;
+        }
+        setIsProcessing(false);
+      }
+    }
   };
 
   // Start audio recording
@@ -585,8 +654,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     if (
       isProcessing ||
       mediaRecorderRef.current ||
-      recordingStreamRef.current ||
-      transcriptionStopPromiseRef.current
+      recordingStreamRef.current
     ) {
       log.debug('Ignoring recording request while audio is being finalized');
       return;
@@ -604,11 +672,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
       log.debug('Audio stream obtained successfully');
       recordingStreamRef.current = stream;
-      liveTranscriptionRef.current = null;
-      transcriptionStopPromiseRef.current = null;
-      liveTranscriptionErrorRef.current = null;
+      pendingAudioBlobRef.current = null;
       audioChunksRef.current = [];
 
+      // Prefer formats accepted directly by OpenAI-compatible transcription
+      // endpoints. Chrome normally selects WebM/Opus; Safari can use MP4.
       const supportedMimeTypes = [
         'audio/webm;codecs=opus',
         'audio/webm',
@@ -634,29 +702,56 @@ const ChatInput: React.FC<ChatInputProps> = ({
       }
       mediaRecorderRef.current = mediaRecorder;
 
-      const speechRecognitionEnabled = settings?.speech?.enabled !== false;
-      if (speechRecognitionEnabled) {
-        try {
-          liveTranscriptionRef.current = startLiveTranscription({
-            language: navigator.language,
-          });
-        } catch (error) {
-          liveTranscriptionErrorRef.current = error instanceof Error
-            ? error
-            : new Error(String(error));
-          log.warn('Live speech recognition could not be started', { error });
-        }
-      }
-
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
+      mediaRecorder.onerror = (event) => {
+        const recorderError = 'error' in event && event.error instanceof Error
+          ? event.error
+          : new Error('MediaRecorder failed');
+        stopRecordingResources();
+        mediaRecorder.onstop = null;
+        if (mediaRecorder.state !== 'inactive') {
+          try {
+            mediaRecorder.stop();
+          } catch (error) {
+            log.debug('Media recorder was already stopped after an error', {
+              error,
+            });
+          }
+        }
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+        if (
+          mountedRef.current &&
+          recordingAttemptRef.current === attemptId
+        ) {
+          recordingAttemptRef.current += 1;
+          if (recordingIntervalRef.current) {
+            clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+          }
+          setRecordingTime(0);
+          setIsRecording(false);
+          setIsProcessing(false);
+          log.error('Media recorder failed', { error: recorderError });
+          alert(t('chat.input.audioFailed', {
+            error: recorderError.message,
+          }));
+        }
+      };
+
       mediaRecorder.onstop = async () => {
-        const transcriptPromise = stopRecordingResources();
-        void transcriptPromise.catch(() => undefined);
+        // Release the microphone before FileReader or any remote request starts.
+        stopRecordingResources();
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+
         const isCurrentAttempt = () =>
           mountedRef.current && recordingAttemptRef.current === attemptId;
         const recordedMime =
@@ -679,68 +774,31 @@ const ChatInput: React.FC<ChatInputProps> = ({
         setIsProcessing(true);
         setDialogOpen(true);
 
-        try {
-          if (audioBlob.size === 0) {
-            void transcriptPromise.catch((error) => {
-              log.debug('Speech recognition cleanup failed', { error });
-            });
-            setPendingAudioMimeType(undefined);
-            setTranscriptionStatus(t('chat.input.noAudioData'));
-            setTranscriptionState('error');
-            return;
-          }
+        if (audioBlob.size === 0) {
+          pendingAudioBlobRef.current = null;
+          setPendingAudioMimeType(undefined);
+          setTranscriptionStatus(t('chat.input.noAudioData'));
+          setTranscriptionState('error');
+          setIsProcessing(false);
+          return;
+        }
 
+        pendingAudioBlobRef.current = audioBlob;
+
+        try {
           const audioDataUrl = await readFileAsDataUrl(audioBlob);
           if (!isCurrentAttempt()) return;
           setPendingAudioDataUrl(audioDataUrl);
-
-          if (!speechRecognitionEnabled) {
-            await transcriptPromise.catch(() => '');
-            if (!isCurrentAttempt()) return;
-            setTranscriptionStatus(t('chat.input.speechDisabled'));
-            setTranscriptionState('disabled');
-            return;
-          }
-
-          if (liveTranscriptionErrorRef.current) {
-            await transcriptPromise.catch(() => '');
-            throw liveTranscriptionErrorRef.current;
-          }
-
-          const transcript = (await transcriptPromise).trim();
-          if (!isCurrentAttempt()) return;
-
-          if (transcript) {
-            setDialogContent(transcript);
-            setTranscriptionProgress(100);
-            setTranscriptionStatus(t('chat.input.transcriptionCompleted'));
-            setTranscriptionState('success');
-            log.debug('Live transcription completed', {
-              textLength: transcript.length,
-            });
-          } else {
-            setTranscriptionStatus(t('chat.input.noTranscript'));
-            setTranscriptionState('empty');
-            log.warn('No speech transcript detected');
-          }
+          await transcribeRecording(audioBlob, attemptId);
         } catch (error) {
           if (!isCurrentAttempt()) return;
           const message = error instanceof Error ? error.message : String(error);
-          log.error('Error handling audio recording', { error });
-          setDialogContent('');
+          log.error('Could not prepare the recorded audio', { error });
           setTranscriptionStatus(
-            t('chat.input.transcriptionFailed', { error: message }),
+            t('chat.input.audioFailed', { error: message }),
           );
           setTranscriptionState('error');
-        } finally {
-          if (isCurrentAttempt()) {
-            setIsProcessing(false);
-            if (mediaRecorderRef.current === mediaRecorder) {
-              mediaRecorderRef.current = null;
-            }
-            transcriptionStopPromiseRef.current = null;
-            liveTranscriptionErrorRef.current = null;
-          }
+          setIsProcessing(false);
         }
       };
 
@@ -754,15 +812,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
       if (!mountedRef.current || recordingAttemptRef.current !== attemptId) return;
 
       recordingAttemptRef.current += 1;
-      try {
-        await stopRecordingResources();
-      } catch (cleanupError) {
-        log.debug('Recording cleanup failed', { error: cleanupError });
-      }
+      stopRecordingResources();
       mediaRecorderRef.current = null;
-      transcriptionStopPromiseRef.current = null;
-      liveTranscriptionErrorRef.current = null;
       setIsRecording(false);
+      setIsProcessing(false);
       log.error('Error starting recording:', error);
       alert(t('chat.input.microphoneFailed'));
     }
@@ -773,22 +826,33 @@ const ChatInput: React.FC<ChatInputProps> = ({
     log.debug('Stopping audio recording');
     const mediaRecorder = mediaRecorderRef.current;
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
       setIsProcessing(true);
-      void stopRecordingResources().catch((error) => {
-        log.debug('Speech recognition stopped with an error', { error });
-      });
-      setIsRecording(false);
+      try {
+        mediaRecorder.stop();
+      } catch (error) {
+        log.error('Could not stop media recorder', { error });
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
+        setIsProcessing(false);
+        alert(t('chat.input.audioFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      } finally {
+        stopRecordingResources();
+        setIsRecording(false);
 
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-        recordingIntervalRef.current = null;
+        if (recordingIntervalRef.current) {
+          clearInterval(recordingIntervalRef.current);
+          recordingIntervalRef.current = null;
+        }
+
+        setRecordingTime(0);
       }
-
-      setRecordingTime(0);
     }
   };
   
+
   // Format recording time
   const formatRecordingTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -796,10 +860,22 @@ const ChatInput: React.FC<ChatInputProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
   
-  const handleCloseDialog = () => {
-    if (isProcessing) return;
+  const handleRetryTranscription = () => {
+    const audioBlob = pendingAudioBlobRef.current;
+    if (!audioBlob) return;
 
+    const attemptId = ++recordingAttemptRef.current;
+    void transcribeRecording(audioBlob, attemptId);
+  };
+
+  const handleCloseDialog = () => {
     if (dialogType === 'audio') {
+      recordingAttemptRef.current += 1;
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      pendingAudioBlobRef.current = null;
+      stopRecordingResources();
+      setIsProcessing(false);
       setTranscriptionState('cancelled');
       setPendingAudioDataUrl(null);
       setPendingAudioMimeType(undefined);
@@ -827,6 +903,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
     };
     
     setAttachments([...attachments, newAttachment]);
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
+    pendingAudioBlobRef.current = null;
     setPendingAudioDataUrl(null);
     setPendingAudioMimeType(undefined);
     setTranscriptionState('idle');
@@ -1004,6 +1083,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               color={isRecording ? "error" : "primary"}
               onClick={isRecording ? stopRecording : startRecording}
               disabled={disabled || isProcessing}
+              aria-label={isRecording ? t('chat.input.stopRecording') : t('chat.input.recordAudio')}
             >
               <MicIcon />
               {isRecording && (
@@ -1321,19 +1401,25 @@ const ChatInput: React.FC<ChatInputProps> = ({
           )}
         </DialogContent>
         <DialogActions>
-          <Button 
-            onClick={handleCloseDialog}
-            disabled={isProcessing}
-          >
+          <Button onClick={handleCloseDialog}>
             {t('common.cancel')}
           </Button>
+          {dialogType === 'audio' &&
+            !isProcessing &&
+            (transcriptionState === 'empty' || transcriptionState === 'error') &&
+            pendingAudioBlobRef.current !== null && (
+              <Button onClick={handleRetryTranscription}>
+                {t('chat.input.retryTranscription')}
+              </Button>
+            )}
           <Button 
             onClick={handleAddAttachment} 
             variant="contained" 
             disabled={
               isProcessing ||
               (dialogType === 'audio'
-                ? !pendingAudioDataUrl
+                ? !pendingAudioDataUrl ||
+                  (transcriptionState !== 'disabled' && !dialogContent.trim())
                 : !dialogContent.trim())
             }
           >

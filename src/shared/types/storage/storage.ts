@@ -133,6 +133,11 @@ export const StorageKeys = {
 export interface SpeechSettings {
   enabled: boolean;
   language?: string;
+  /**
+   * ID of an existing OpenAI-format model used for prerecorded audio.
+   * The model's endpoint and encrypted credentials remain in the model store.
+   */
+  transcriptionModelId?: string;
 }
 
 /**
