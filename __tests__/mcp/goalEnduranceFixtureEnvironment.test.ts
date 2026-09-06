@@ -20,6 +20,26 @@ const runnerEnv: Record<string, string | undefined> = {
   UNRELATED_PARENT_SECRET: 'must-not-be-inherited',
 };
 
+function withProcessEnvironment<T>(
+  env: Record<string, string | undefined>,
+  run: () => T,
+): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [name, value] of Object.entries(env)) {
+    previous.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  try {
+    return run();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 function fixtureConfig(
   overrides: Partial<MCPStdioConfig> = {},
 ): MCPStdioConfig {
@@ -56,9 +76,9 @@ describe('goal endurance fixture runtime authorization', () => {
     expect(config.env).toEqual({});
     expect(JSON.stringify(config)).not.toContain(token);
 
-    const launch = resolveStdioLaunch(config, {
-      goalEnduranceFixtureToken: runtimeToken,
-    });
+    const launch = withProcessEnvironment(runnerEnv, () =>
+      resolveStdioLaunch(config),
+    );
 
     expect(launch.env[GOAL_ENDURANCE_FIXTURE_TOKEN_ENV]).toBe(token);
     expect(launch.env).not.toHaveProperty('UNRELATED_PARENT_SECRET');
@@ -68,12 +88,19 @@ describe('goal endurance fixture runtime authorization', () => {
   it.each(['terminal-only', 'public-services', ''])(
     'does not authorize unsupported profile %p',
     (profile) => {
+      const unsupportedEnvironment = {
+        ...runnerEnv,
+        PERSONA_GOAL_ENDURANCE_PROFILE: profile,
+      };
+      const config = fixtureConfig();
       expect(
-        resolveGoalEnduranceFixtureToken(fixtureConfig(), {
-          ...runnerEnv,
-          PERSONA_GOAL_ENDURANCE_PROFILE: profile,
-        }),
+        resolveGoalEnduranceFixtureToken(config, unsupportedEnvironment),
       ).toBeUndefined();
+
+      const launch = withProcessEnvironment(unsupportedEnvironment, () =>
+        resolveStdioLaunch(config),
+      );
+      expect(launch.env).not.toHaveProperty(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV);
     },
   );
 

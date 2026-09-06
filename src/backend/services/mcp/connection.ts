@@ -66,6 +66,10 @@ import {
   issueMcpAppRuntimeBrokerEnvironment,
   revokeMcpAppRuntimeBrokerLease,
 } from '@/backend/mcpApps/runtimeBroker';
+import {
+  GOAL_ENDURANCE_FIXTURE_TOKEN_ENV,
+  resolveGoalEnduranceFixtureToken,
+} from './goalEnduranceFixtureEnvironment';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -422,8 +426,6 @@ export interface TransportCreationOptions {
   enableRuntimeBroker?: boolean;
   /** Use a private workspace-scoped HOME/config/cache tree for stdio. */
   isolateRuntimeHome?: boolean;
-  /** Runtime-only authorization for the exact controlled endurance fixture. */
-  goalEnduranceFixtureToken?: string;
 }
 
 /**
@@ -762,10 +764,7 @@ function applyWindowsSpawnEssentials(env: Record<string, string>): void {
  */
 export function resolveStdioLaunch(
   config: MCPStdioConfig,
-  options?: Pick<
-    TransportCreationOptions,
-    'isolateRuntimeHome' | 'goalEnduranceFixtureToken'
-  >,
+  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
 ): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
@@ -924,12 +923,13 @@ export function resolveStdioLaunch(
     JSON.stringify(Object.keys(transformedEnv)),
   );
 
-  // The endurance fixture token is selected by an exact runner/config allowlist
-  // and attached only at the final spawn boundary. Keep it out of persisted
-  // configs, archive metadata, provenance and launch logging.
-  if (options?.goalEnduranceFixtureToken) {
-    transformedEnv.PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN =
-      options.goalEnduranceFixtureToken;
+  // Select the endurance authorization here, at the final spawn boundary,
+  // through the exact runner/config allowlist. It is never accepted from a
+  // caller or persisted config and is attached only to the matching fixture.
+  const goalEnduranceFixtureToken = resolveGoalEnduranceFixtureToken(config);
+  if (goalEnduranceFixtureToken) {
+    transformedEnv[GOAL_ENDURANCE_FIXTURE_TOKEN_ENV] =
+      goalEnduranceFixtureToken;
   }
 
   // Runtime-only credentials for the bundled FLUJO HTTP client. Do not put
