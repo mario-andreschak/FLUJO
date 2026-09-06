@@ -229,12 +229,16 @@ export function getModelConfigurationCapabilities(
   }
 
   if (resolvedAdapter === 'gemini') {
+    const thinkingLevels: GeminiThinkingLevel[] = /^gemini-3\.[78]-flash$/i.test(name)
+      ? ['low', 'medium', 'high']
+      : ['minimal', 'low', 'medium', 'high'];
+
     return {
       creativity: { min: 0, max: 2, step: 0.1 },
       ...(/^gemini-2\.5/i.test(name)
         ? { thinkingBudget: true }
         : !/^gemini-2\.0/i.test(name)
-          ? { thinkingLevels: ['minimal', 'low', 'medium', 'high'] as GeminiThinkingLevel[] }
+          ? { thinkingLevels }
           : {}),
       maxOutputTokens: true,
     };

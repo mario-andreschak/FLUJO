@@ -67,6 +67,20 @@ describe('generation settings validation (#329)', () => {
     })).toMatch(/Thinking budget/);
   });
 
+  it('rejects minimal thinking for Gemini 3.7 and 3.8 Flash', () => {
+    for (const name of ['gemini-3.7-flash', 'gemini-3.8-flash']) {
+      expect(validateModelConfiguration({
+        provider: 'gemini', adapter: 'gemini', name, thinkingLevel: 'minimal',
+      })).toMatch(/thinking level is not supported/);
+
+      for (const thinkingLevel of ['low', 'medium', 'high']) {
+        expect(validateModelConfiguration({
+          provider: 'gemini', adapter: 'gemini', name, thinkingLevel,
+        })).toBeUndefined();
+      }
+    }
+  });
+
   it('rejects a malformed thinking budget on a budget-capable model', () => {
     for (const thinkingBudget of [-2, 12.5, '1024']) {
       expect(validateModelConfiguration({
