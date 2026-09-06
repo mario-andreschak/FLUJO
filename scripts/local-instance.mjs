@@ -16,28 +16,41 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 try {
   $p = [Environment]::GetEnvironmentVariable('FLUJO_PRIVATE_PATH')
-  $item = Get-Item -LiteralPath $p -Force
-  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
-  $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-  $acl = Get-Acl -LiteralPath $p
-  if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'unsafe' }
-  if ([Environment]::GetEnvironmentVariable('FLUJO_PRIVATE_ACTION') -eq 'protect') {
-    if ($item.PSIsContainer) {
+  # Avoid filesystem-provider cmdlet initialization: Get-Item can stall on a
+  # hosted Windows runner with this deliberately reduced child environment.
+  $attributes = [IO.File]::GetAttributes($p)
+  if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
+  $isDirectory = ($attributes -band [IO.FileAttributes]::Directory) -ne 0
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $sid = $identity.User
+  $acl = if ($isDirectory) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+  $protect = [Environment]::GetEnvironmentVariable('FLUJO_PRIVATE_ACTION') -eq 'protect'
+  if ($owner.Value -ne $sid.Value) {
+    # Elevated Windows processes can create files owned by their token's
+    # default owner (Administrators). Normalize only that exact token owner
+    # while protecting; existing private-file reads still require the user.
+    if (-not $protect -or $owner.Value -ne $identity.Owner.Value) { throw 'unsafe' }
+    $acl.SetOwner($sid)
+  }
+  if ($protect) {
+    if ($isDirectory) {
       $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     } else {
       $inherit = [Security.AccessControl.InheritanceFlags]::None
     }
-    # Modify only the DACL. Replacing the entire descriptor or resetting its
-    # owner can require SeSecurityPrivilege on an already protected directory.
+    # Modify the DACL and, only when needed above, its effective token owner.
+    # Do not replace the full security descriptor or request its audit section.
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($oldRule in @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) { $acl.RemoveAccessRuleSpecific($oldRule) }
     $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, [Security.AccessControl.FileSystemRights]::FullControl, $inherit, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
     $acl.SetAccessRule($rule)
     # The PowerShell provider's Set-Acl can request SeSecurityPrivilege when
-    # reapplying a protected ACL. Persist only .NET's modified access section.
-    if ($item.PSIsContainer) { [IO.Directory]::SetAccessControl($p, $acl) } else { [IO.File]::SetAccessControl($p, $acl) }
-    $acl = Get-Acl -LiteralPath $p
+    # reapplying a protected ACL. Persist only .NET's modified sections.
+    if ($isDirectory) { [IO.Directory]::SetAccessControl($p, $acl) } else { [IO.File]::SetAccessControl($p, $acl) }
+    $acl = if ($isDirectory) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }
   }
+  if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'unsafe' }
   if (-not $acl.AreAccessRulesProtected) { throw 'unsafe' }
   $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
   if ($rules.Count -eq 0) { throw 'unsafe' }
