@@ -422,6 +422,8 @@ export interface TransportCreationOptions {
   enableRuntimeBroker?: boolean;
   /** Use a private workspace-scoped HOME/config/cache tree for stdio. */
   isolateRuntimeHome?: boolean;
+  /** Runtime-only authorization for the exact controlled endurance fixture. */
+  goalEnduranceFixtureToken?: string;
 }
 
 /**
@@ -760,7 +762,10 @@ function applyWindowsSpawnEssentials(env: Record<string, string>): void {
  */
 export function resolveStdioLaunch(
   config: MCPStdioConfig,
-  options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
+  options?: Pick<
+    TransportCreationOptions,
+    'isolateRuntimeHome' | 'goalEnduranceFixtureToken'
+  >,
 ): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
@@ -918,6 +923,14 @@ export function resolveStdioLaunch(
     "Transformed environment variable names",
     JSON.stringify(Object.keys(transformedEnv)),
   );
+
+  // The endurance fixture token is selected by an exact runner/config allowlist
+  // and attached only at the final spawn boundary. Keep it out of persisted
+  // configs, archive metadata, provenance and launch logging.
+  if (options?.goalEnduranceFixtureToken) {
+    transformedEnv.PERSONA_GOAL_ENDURANCE_FIXTURE_TOKEN =
+      options.goalEnduranceFixtureToken;
+  }
 
   // Runtime-only credentials for the bundled FLUJO HTTP client. Do not put
   // these in persisted server configs, archive metadata, or launch logs.

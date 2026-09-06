@@ -181,6 +181,7 @@ import {
   readVerifiedMcpSkillResource,
 } from "./skills";
 import { getApprovedMcpSkill } from "./skillApprovalRegistry";
+import { resolveGoalEnduranceFixtureToken } from "./goalEnduranceFixtureEnvironment";
 import { resolveRuntimeHomeIsolation } from "./runtimeHomeIsolation";
 import {
   MCPResource,
@@ -985,6 +986,7 @@ export class MCPService {
       const transportOptions = {
         enableRuntimeBroker: true,
         isolateRuntimeHome,
+        goalEnduranceFixtureToken: resolveGoalEnduranceFixtureToken(config),
       };
 
       // Check if we already have a client for this server
