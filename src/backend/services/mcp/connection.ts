@@ -868,7 +868,6 @@ export function resolveStdioLaunch(
     ? resolvedCwd
     : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
-  log.debug(`Environment variable names: ${JSON.stringify(Object.keys(config.env ?? {}))}`);
 
   // Transform the env object to extract only the value part from each key.
   const configuredEnv = transformEnv(config.env);
