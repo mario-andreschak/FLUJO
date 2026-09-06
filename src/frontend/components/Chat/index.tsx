@@ -28,6 +28,8 @@ import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './Ch
 import type { CapturedToolResource } from './toolCallPairing';
 import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
+import { buildApiContent, type Attachment, type ChatMessage } from './chatApiContent';
+export { buildApiContent, type Attachment, type ChatMessage } from './chatApiContent';
 import ApprovedMcpSkillsContext from './ApprovedMcpSkillsContext';
 import DevCanvasDock, { type CanvasDockLayout } from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
@@ -163,98 +165,6 @@ function useStableCallback<Args extends unknown[], Result>(
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
   return useCallback((...args: Args) => callbackRef.current(...args), []);
-}
-
-// Define types for our chat data
-export interface Attachment {
-  id: string;
-  type: 'document' | 'audio' | 'image' | 'video';
-  // Plain documents contain text. Binary audio/image/video attachments use a
-  // `data:` URL; audio transcription text is kept separately below.
-  content: string;
-  originalName?: string;
-  mimeType?: string;
-  /** Optional text transcript retained alongside a raw audio attachment. */
-  transcript?: string;
-}
-
-// Use the shared FlujoChatMessage type and extend it with UI-specific fields
-export type ChatMessage = FlujoChatMessage & {
-  attachments?: Attachment[];
-};
-
-// Build the OpenAI-wire `content` for a message about to be sent to the API.
-// Text-only messages (and document/audio attachments, which are inlined as
-// text as before) collapse to a plain string; image attachments produce a
-// multipart array carrying `image_url` parts so vision-capable models actually
-// receive the image. Content that is already multipart (a prior turn replayed
-// from the backend) is passed through untouched.
-export function buildApiContent(msg: ChatMessage): OpenAI.ChatCompletionUserMessageParam['content'] {
-  if (Array.isArray(msg.content)) {
-    return msg.content as OpenAI.ChatCompletionUserMessageParam['content'];
-  }
-  let text = typeof msg.content === 'string' ? msg.content : '';
-  const attachments = msg.attachments ?? [];
-  const textAttachments = attachments.filter(
-    attachment =>
-      attachment.type === 'document' &&
-      !attachment.content.startsWith('data:'),
-  );
-  const images = attachments.filter(a => a.type === 'image');
-  const binary = attachments.filter(
-    attachment => attachment.type !== 'image' && !textAttachments.includes(attachment),
-  );
-  if (textAttachments.length > 0) {
-    text += '\n\n' + textAttachments
-      .map(a => `[DOCUMENT]: ${a.content}`)
-      .join('\n\n');
-  }
-  if (images.length === 0 && binary.length === 0) {
-    return text;
-  }
-  const parts: Array<Record<string, unknown>> = [];
-  if (text.trim()) parts.push({ type: 'text', text });
-  for (const img of images) {
-    parts.push({ type: 'image_url', image_url: { url: img.content } });
-  }
-  for (const attachment of binary) {
-    if (attachment.type === 'audio') {
-      const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(attachment.content);
-      const mimeType = attachment.mimeType ?? match?.[1];
-      if (match && (mimeType === 'audio/wav' || mimeType === 'audio/mpeg')) {
-        parts.push({
-          type: 'input_audio',
-          input_audio: {
-            data: match[2],
-            format: mimeType === 'audio/mpeg' ? 'mp3' : 'wav',
-          },
-        });
-      } else {
-        parts.push({
-          type: 'audio_url',
-          audio_url: { url: attachment.content, mime_type: mimeType },
-        });
-      }
-      if (attachment.transcript) {
-        parts.push({ type: 'text', text: `[Audio transcript]: ${attachment.transcript}` });
-      }
-    } else if (attachment.type === 'video') {
-      parts.push({
-        type: 'video_url',
-        video_url: { url: attachment.content, mime_type: attachment.mimeType },
-      });
-    } else {
-      parts.push({
-        type: 'file',
-        file: {
-          file_data: attachment.content,
-          filename: attachment.originalName,
-          mime_type: attachment.mimeType,
-        },
-      });
-    }
-  }
-  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
 }
 
 // Represents the full conversation details including messages

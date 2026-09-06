@@ -2,14 +2,14 @@ import {
   buildApiContent,
   type Attachment,
   type ChatMessage,
-} from '@/frontend/components/Chat';
+} from '@/frontend/components/Chat/chatApiContent';
 
 const audioMessage = (attachment: Attachment): ChatMessage => ({
   id: 'message',
   role: 'user',
   content: '',
   attachments: [attachment],
-} as ChatMessage);
+} as unknown as ChatMessage);
 
 describe('chat audio API content', () => {
   it.each([

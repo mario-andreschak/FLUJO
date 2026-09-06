@@ -75,7 +75,7 @@ describe('POST /api/transcription', () => {
   it('requires a non-empty supported audio file and model ID', async () => {
     const missingFile = await POST(requestWith({
       modelId: configuredModel.id,
-    }), {} as never);
+    }));
     expect(missingFile.status).toBe(400);
     await expect(missingFile.json()).resolves.toMatchObject({
       code: 'empty-audio',
@@ -83,7 +83,7 @@ describe('POST /api/transcription', () => {
 
     const missingModel = await POST(requestWith({
       file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
-    }), {} as never);
+    }));
     expect(missingModel.status).toBe(400);
     await expect(missingModel.json()).resolves.toMatchObject({
       code: 'missing-model',
@@ -92,7 +92,7 @@ describe('POST /api/transcription', () => {
     const unsupported = await POST(requestWith({
       file: new File(['audio'], 'recording.aac', { type: 'audio/aac' }),
       modelId: configuredModel.id,
-    }), {} as never);
+    }));
     expect(unsupported.status).toBe(415);
     await expect(unsupported.json()).resolves.toMatchObject({
       code: 'unsupported-format',
@@ -106,7 +106,7 @@ describe('POST /api/transcription', () => {
       }),
       modelId: configuredModel.id,
       language: 'es-CO',
-    }), {} as never);
+    }));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ text: 'hello' });
@@ -135,7 +135,7 @@ describe('POST /api/transcription', () => {
     const unknown = await POST(requestWith({
       file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
       modelId: 'missing',
-    }), {} as never);
+    }));
     expect(unknown.status).toBe(404);
 
     getModelMock.mockResolvedValueOnce({
@@ -145,7 +145,7 @@ describe('POST /api/transcription', () => {
     const incompatible = await POST(requestWith({
       file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
       modelId: configuredModel.id,
-    }), {} as never);
+    }));
     expect(incompatible.status).toBe(400);
     expect(resolveApiKeyMock).not.toHaveBeenCalled();
   });
@@ -156,7 +156,7 @@ describe('POST /api/transcription', () => {
     const response = await POST(requestWith({
       file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
       modelId: configuredModel.id,
-    }), {} as never);
+    }));
 
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toEqual({
@@ -173,7 +173,7 @@ describe('POST /api/transcription', () => {
     const response = await POST(requestWith({
       file: new File(['audio'], 'recording.webm', { type: 'audio/webm' }),
       modelId: configuredModel.id,
-    }), {} as never);
+    }));
     const body = await response.text();
 
     expect(response.status).toBe(502);

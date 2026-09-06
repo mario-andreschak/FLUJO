@@ -41,7 +41,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import FlowNodePicker from './FlowNodePicker';
 import { v4 as uuidv4 } from 'uuid';
-import { Attachment } from './index';
+import type { Attachment } from './chatApiContent';
 import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '@/frontend/components/shared/GlobalReferenceEditor';
 import { mcpService } from '@/frontend/services/mcp';
 import {
