@@ -1189,7 +1189,43 @@ export const PersonaGoalStateSchema = PersonaGoalConfigSchema.extend({
   pendingPrompt: z.string().max(100_000).optional(),
   pendingPriority: z.enum(PERSONA_PRIORITIES).optional(),
   pendingDispatchId: EnduringAgentIdSchema.optional(),
-}).strict();
+  pendingRoundCause: z.enum(['autonomous', 'manual_retry']).optional(),
+  pendingRoundControlId: EnduringAgentIdSchema.optional(),
+  pendingControlId: EnduringAgentIdSchema.optional(),
+  pendingControlAction: z.enum(['pause', 'retry', 'stop']).optional(),
+  pendingControlFromState: z.enum(['active', 'paused', 'needs_input', 'completed', 'stopped']).optional(),
+  pendingControlToState: z.enum(['active', 'paused', 'needs_input', 'completed', 'stopped']).optional(),
+  pendingControlRequestedAt: TimestampSchema.optional(),
+  pendingControlAppliedAt: TimestampSchema.optional(),
+  pendingControlDispatchIds: z.array(EnduringAgentIdSchema).max(10_000).optional(),
+}).strict().superRefine((goal, ctx) => {
+  const fields = [
+    goal.pendingControlId,
+    goal.pendingControlAction,
+    goal.pendingControlFromState,
+    goal.pendingControlToState,
+    goal.pendingControlRequestedAt,
+    goal.pendingControlAppliedAt,
+    goal.pendingControlDispatchIds,
+  ];
+  if (fields.some(value => value !== undefined)
+    && fields.some(value => value === undefined)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A pending goal control requires its complete durable outbox identity.',
+      path: ['pendingControlId'],
+    });
+  }
+  if (goal.pendingControlRequestedAt !== undefined
+    && goal.pendingControlAppliedAt !== undefined
+    && goal.pendingControlAppliedAt < goal.pendingControlRequestedAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A pending goal control cannot be applied before it was requested.',
+      path: ['pendingControlAppliedAt'],
+    });
+  }
+});
 
 export const PersonaWorkItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),

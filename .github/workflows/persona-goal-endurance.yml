@@ -1,0 +1,120 @@
+name: persona-goal-endurance
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Capability profile (reported separately)
+        required: true
+        type: choice
+        options:
+          - structured-tools
+      duration_seconds:
+        description: Real wall-clock duration (60-10800 on hosted runners)
+        required: true
+        default: '3600'
+      active_seconds:
+        description: Minimum active time excluding scheduled pause/downtime
+        required: true
+        default: '3540'
+      round_seconds:
+        description: Goal continuation interval
+        required: true
+        default: '60'
+      round_limit:
+        description: Hard autonomous round limit
+        required: true
+        default: '100'
+      max_model_calls:
+        description: Hard provider-call limit across all process epochs
+        required: true
+        default: '1600'
+      budget_usd:
+        description: Pre-approved provider budget ceiling
+        required: true
+        default: '25'
+      model:
+        description: Genuine Codex model
+        required: true
+        default: gpt-6-astra
+      fixture:
+        description: Only the controlled disposable service is authorized here
+        required: true
+        type: choice
+        options:
+          - controlled
+      run_id:
+        description: Unique reviewer-assigned run identity
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persona-goal-endurance-${{ inputs.profile }}-${{ inputs.fixture }}
+  cancel-in-progress: false
+
+jobs:
+  controlled-live-endurance:
+    name: controlled live endurance (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: persona-goal-endurance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Enforce hosted-runner and input bounds
+        env:
+          PROFILE: ${{ inputs.profile }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          ACTIVE_SECONDS: ${{ inputs.active_seconds }}
+          FIXTURE: ${{ inputs.fixture }}
+        run: |
+          node -e "const d=Number(process.env.DURATION_SECONDS),a=Number(process.env.ACTIVE_SECONDS);if(process.env.PROFILE!=='structured-tools'||!Number.isSafeInteger(d)||d<60||d>10800||!Number.isSafeInteger(a)||a<1||a>d||process.env.FIXTURE!=='controlled')process.exit(1)"
+      - run: npm ci --include=dev --no-audit --no-fund
+      - run: npm run build:mcp
+      - name: Verify fixture and semantic tamper rejection
+        run: npm run test:persona-goal-endurance-evidence
+      - name: Verify exact checked-out workflow identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: node -e "const{execFileSync}=require('node:child_process');if(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()!==process.env.EXPECTED_SHA)process.exit(1)"
+      - name: Run explicitly approved live endurance scenario
+        env:
+          PROFILE: ${{ inputs.profile }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          ACTIVE_SECONDS: ${{ inputs.active_seconds }}
+          ROUND_SECONDS: ${{ inputs.round_seconds }}
+          ROUND_LIMIT: ${{ inputs.round_limit }}
+          MAX_MODEL_CALLS: ${{ inputs.max_model_calls }}
+          BUDGET_USD: ${{ inputs.budget_usd }}
+          MODEL: ${{ inputs.model }}
+          FIXTURE: ${{ inputs.fixture }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          node scripts/run-persona-goal-endurance.mjs \
+            --mode=live \
+            "--profile=$PROFILE" \
+            "--duration-seconds=$DURATION_SECONDS" \
+            "--active-seconds=$ACTIVE_SECONDS" \
+            "--round-seconds=$ROUND_SECONDS" \
+            "--round-limit=$ROUND_LIMIT" \
+            "--max-model-calls=$MAX_MODEL_CALLS" \
+            "--budget-usd=$BUDGET_USD" \
+            "--model=$MODEL" \
+            "--fixture=$FIXTURE" \
+            "--run-id=$RUN_ID" \
+            "--output=goal-endurance-artifacts/$RUN_ID" \
+            --total-timeout-seconds=11400 \
+            --confirm=controlled-effects
+      - name: Preserve checkpoints, incomplete runs and trusted evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persona-goal-endurance-${{ inputs.profile }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: goal-endurance-artifacts/
+          if-no-files-found: error
+          retention-days: 30

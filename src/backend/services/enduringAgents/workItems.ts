@@ -40,6 +40,7 @@ import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
   clearPersonaGoalPending,
+  reconcilePendingPersonaGoalControls,
   initialPersonaGoalState,
   notifyPersonaGoalChanged,
   projectPersonaGoalOutcome,
@@ -586,9 +587,15 @@ export async function controlPersonaWorkItem(
     throw new TypeError('Unknown Task control.');
   }
 
-  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+  let inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+  if (inspected.goal) {
+    await reconcilePendingPersonaGoalControls(personaId, workItemId);
+    inspected = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
+  }
   if (inspected.goal && action !== 'move_earlier' && action !== 'move_later') {
-    const { workItem, dispatches } = await withPersonaRuntimeLock(personaId, async (lock) => {
+    const requestedAt = Date.now();
+    const controlId = randomEnduringAgentId('goalcontrol');
+    await withPersonaRuntimeLock(personaId, async (lock) => {
       const current = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
       if (!current.goal) throw new PersonaDomainConflictError('This ongoing goal no longer exists.');
       if ((current.goal.state === 'completed' || current.goal.state === 'stopped')
@@ -608,6 +615,7 @@ export async function controlPersonaWorkItem(
         throw new PersonaDomainConflictError('The previous goal round is still stopping. Try again shortly.');
       }
       const now = Math.max(Date.now(), current.updatedAt + 1);
+      const fromState = current.goal.state;
       const workItem = PersonaWorkItemSchema.parse({
         ...current,
         status: action === 'stop' ? 'cancelled' : action === 'pause' ? 'blocked' : 'open',
@@ -615,22 +623,34 @@ export async function controlPersonaWorkItem(
           ...clearPersonaGoalPending(current.goal),
           state: action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'active',
           nextRunAt: action === 'retry' ? now : undefined,
-          ...(action === 'retry' ? { consecutiveFailures: 0, interventionReason: undefined } : {}),
+          ...(action === 'retry' ? {
+            consecutiveFailures: 0,
+            interventionReason: undefined,
+            pendingRoundCause: 'manual_retry' as const,
+            pendingRoundControlId: controlId,
+          } : {}),
+          pendingControlId: controlId,
+          pendingControlAction: action,
+          pendingControlFromState: fromState,
+          pendingControlToState: action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'active',
+          pendingControlRequestedAt: requestedAt,
+          pendingControlAppliedAt: now,
+          pendingControlDispatchIds: dispatches.map(dispatch => dispatch.id),
         },
         updatedAt: now,
         completedAt: undefined,
       }) as PersonaWorkItem;
       await lock.assertOwned();
-      await savePersonaWorkItem(workItem);
-      return { workItem, dispatches };
+      const pendingControl = await savePersonaWorkItem(workItem);
+      return { workItem: pendingControl, dispatches };
     });
-    if (action === 'pause' || action === 'stop') {
-      await Promise.all(dispatches.map((dispatch) => cancelPersonaFlowDispatchById({
-        personaId, dispatchId: dispatch.id,
-        reason: action === 'pause' ? 'The ongoing goal was paused.' : 'The ongoing goal was stopped.',
-      }, { waitForCompletion: true })));
-    } else notifyPersonaGoalChanged(personaId);
-    return { action, workItem, ...(action === 'retry' ? { admission: 'queued' as const } : {}) };
+    await reconcilePendingPersonaGoalControls(personaId, workItemId);
+    const settled = requireOwnedWorkItem(
+      await getPersonaWorkItem(personaId, workItemId),
+      personaId,
+    );
+    if (action === 'retry') notifyPersonaGoalChanged(personaId);
+    return { action, workItem: settled, ...(action === 'retry' ? { admission: 'queued' as const } : {}) };
   }
   const activeDispatches = await listActiveWorkItemDispatches(personaId, workItemId);
 

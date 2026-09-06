@@ -167,6 +167,32 @@ const StuckDetectedEventSchema = z.object({
   activityId: ReferenceSchema.optional(),
 }).strict();
 
+const GoalControlEventSchema = z.object({
+  eventId: EventIdSchema,
+  type: z.literal('goal:control'),
+  goalId: ReferenceSchema,
+  controlId: ReferenceSchema,
+  action: z.enum(['pause', 'retry', 'stop']),
+  fromState: z.enum(['active', 'paused', 'needs_input', 'completed', 'stopped']),
+  toState: z.enum(['active', 'paused', 'needs_input', 'completed', 'stopped']),
+  requestedAt: TimestampSchema,
+  appliedAt: TimestampSchema,
+}).strict();
+
+const GoalRoundEventSchema = z.object({
+  eventId: EventIdSchema,
+  type: z.literal('goal:round'),
+  goalId: ReferenceSchema,
+  round: z.number().int().positive(),
+  attemptKey: ReferenceSchema,
+  taskId: ReferenceSchema,
+  cause: z.enum(['autonomous', 'manual_retry']),
+  controlId: ReferenceSchema.optional(),
+  dueAt: TimestampSchema,
+  reservedAt: TimestampSchema,
+  dispatchId: ReferenceSchema,
+}).strict();
+
 export const RawPersonaRuntimeEventSchema = z.discriminatedUnion('type', [
   MailboxAdmittedEventSchema,
   MailboxRoutedEventSchema,
@@ -183,6 +209,8 @@ export const RawPersonaRuntimeEventSchema = z.discriminatedUnion('type', [
   RecoveryCompletedEventSchema,
   RecoveryFailedEventSchema,
   StuckDetectedEventSchema,
+  GoalControlEventSchema,
+  GoalRoundEventSchema,
 ]);
 
 export type RawPersonaRuntimeEvent = z.infer<typeof RawPersonaRuntimeEventSchema>;
@@ -211,6 +239,8 @@ export const PersonaRuntimeEventSchema = z.discriminatedUnion('type', [
   RecoveryCompletedEventSchema.extend(persistedFields),
   RecoveryFailedEventSchema.extend(persistedFields),
   StuckDetectedEventSchema.extend(persistedFields),
+  GoalControlEventSchema.extend(persistedFields),
+  GoalRoundEventSchema.extend(persistedFields),
 ]);
 
 export type PersonaRuntimeEvent = z.infer<typeof PersonaRuntimeEventSchema>;

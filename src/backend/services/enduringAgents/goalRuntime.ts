@@ -11,6 +11,7 @@ import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { workspaceMutationStatus } from '@/backend/services/workspace/workspaceMutationGate';
 import { PersonaDomainConflictError } from './domainMutation';
 import { stableEnduringAgentId } from './ids';
+import { appendPersonaRuntimeEvent } from './runtimeEvents';
 import {
   getPersonaFlowDispatch,
   personaFlowDispatchId,
@@ -19,7 +20,7 @@ import {
   submitPersonaFlowDispatch,
 } from './personaDispatcher';
 import { getPersonaRuntimeClock, type PersonaRuntimeTimer } from './runtimeClock';
-import { withPersonaRuntimeLock } from './runtimeLock';
+import { withPersonaRuntimeLock, type PersonaRuntimeLock } from './runtimeLock';
 import {
   getPersona,
   getPersonaActivity,
@@ -62,6 +63,8 @@ export function clearPersonaGoalPending(goal: PersonaGoalState): PersonaGoalStat
     pendingPrompt: undefined,
     pendingPriority: undefined,
     pendingDispatchId: undefined,
+    pendingRoundCause: undefined,
+    pendingRoundControlId: undefined,
   };
 }
 
@@ -218,6 +221,130 @@ function runtime(): GoalWorkspaceRuntime {
   return current;
 }
 
+export function clearPersonaGoalPendingControl(goal: PersonaGoalState): PersonaGoalState {
+  const cleared = { ...goal };
+  delete cleared.pendingControlId;
+  delete cleared.pendingControlAction;
+  delete cleared.pendingControlFromState;
+  delete cleared.pendingControlToState;
+  delete cleared.pendingControlRequestedAt;
+  delete cleared.pendingControlAppliedAt;
+  delete cleared.pendingControlDispatchIds;
+  return cleared;
+}
+
+interface PendingPersonaGoalControlPlan {
+  goalId: string;
+  controlId: string;
+  action: 'pause' | 'retry' | 'stop';
+  dispatchIds: string[];
+}
+
+async function appendPendingPersonaGoalControl(
+  lock: PersonaRuntimeLock,
+  root: PersonaWorkItem,
+): Promise<PendingPersonaGoalControlPlan | null> {
+  const goal = root.goal;
+  if (!goal?.pendingControlId) return null;
+  if (!goal.pendingControlAction
+    || !goal.pendingControlFromState
+    || !goal.pendingControlToState
+    || goal.pendingControlRequestedAt === undefined
+    || goal.pendingControlAppliedAt === undefined
+    || !Array.isArray(goal.pendingControlDispatchIds)) {
+    throw new PersonaDomainConflictError('The ongoing goal has an incomplete pending control record.');
+  }
+  await appendPersonaRuntimeEvent(root.personaId, {
+    eventId: goal.pendingControlId,
+    type: 'goal:control',
+    goalId: root.id,
+    controlId: goal.pendingControlId,
+    action: goal.pendingControlAction,
+    fromState: goal.pendingControlFromState,
+    toState: goal.pendingControlToState,
+    requestedAt: goal.pendingControlRequestedAt,
+    appliedAt: goal.pendingControlAppliedAt,
+  });
+  await lock.assertOwned();
+  return {
+    goalId: root.id,
+    controlId: goal.pendingControlId,
+    action: goal.pendingControlAction,
+    dispatchIds: [...goal.pendingControlDispatchIds],
+  };
+}
+
+/**
+ * Reconcile the durable control outbox across state, event and cancellation
+ * stores. The marker is cleared only after all effects are durable; every step
+ * is idempotent across process termination and ambiguous acknowledgements.
+ */
+export async function reconcilePendingPersonaGoalControls(
+  personaId: string,
+  goalId?: string,
+): Promise<void> {
+  const plans = await withPersonaRuntimeLock(personaId, async (lock) => {
+    const records = await listPersonaWorkItems(personaId);
+    const pending = records.filter(item => item.goal?.pendingControlId
+      && (!goalId || item.id === goalId));
+    const values: PendingPersonaGoalControlPlan[] = [];
+    for (const root of pending) {
+      const value = await appendPendingPersonaGoalControl(lock, root);
+      if (value) values.push(value);
+    }
+    return values;
+  });
+  for (const plan of plans) {
+    if (plan.action === 'retry') continue;
+    for (const dispatchId of plan.dispatchIds) {
+      await cancelPersonaFlowDispatchById({
+        personaId,
+        dispatchId,
+        controlId: plan.controlId,
+        reason: plan.action === 'pause'
+          ? 'The ongoing goal was paused.'
+          : 'The ongoing goal was stopped.',
+      }, { waitForCompletion: true });
+    }
+  }
+  await withPersonaRuntimeLock(personaId, async (lock) => {
+    for (const plan of plans) {
+      const current = await getPersonaWorkItem(personaId, plan.goalId);
+      if (!current?.goal || current.goal.pendingControlId !== plan.controlId) continue;
+      await lock.assertOwned();
+      await savePersonaWorkItem(PersonaWorkItemSchema.parse({
+        ...current,
+        goal: clearPersonaGoalPendingControl(current.goal),
+        updatedAt: Math.max(clock.now(), current.updatedAt + 1),
+      }) as PersonaWorkItem);
+    }
+  });
+}
+
+async function appendGoalRoundReservation(root: PersonaWorkItem): Promise<void> {
+  const goal = root.goal;
+  if (!goal?.pendingAttemptKey || !goal.pendingTaskId || !goal.pendingDispatchId) return;
+  const cause = goal.pendingRoundCause ?? 'autonomous';
+  await appendPersonaRuntimeEvent(root.personaId, {
+    eventId: stableEnduringAgentId('goalround-event', {
+      workspaceId: getCurrentWorkspace(),
+      personaId: root.personaId,
+      goalId: root.id,
+      attemptKey: goal.pendingAttemptKey,
+    }),
+    type: 'goal:round',
+    goalId: root.id,
+    round: goal.rounds,
+    attemptKey: goal.pendingAttemptKey,
+    taskId: goal.pendingTaskId,
+    cause,
+    ...(goal.pendingRoundControlId ? { controlId: goal.pendingRoundControlId } : {}),
+    dueAt: goal.nextRunAt ?? root.updatedAt,
+    reservedAt: root.updatedAt,
+    dispatchId: goal.pendingDispatchId,
+  });
+}
+
 async function reserveRound(personaId: string): Promise<PersonaWorkItem | null> {
   return withPersonaRuntimeLock(personaId, async (lock) => {
     const persona = await getPersona(personaId);
@@ -235,7 +362,10 @@ async function reserveRound(personaId: string): Promise<PersonaWorkItem | null> 
       const dispatch = pending.goal!.pendingDispatchId ? await getPersonaFlowDispatch(pending.goal!.pendingDispatchId!) : null;
       const admitted = dispatch && (dispatch.state === 'running' || dispatch.state === 'waiting'
         || (dispatch.state === 'queued' && dispatch.mailboxItemId));
-      if (admitted || (pending.goal!.nextRunAt ?? 0) <= now) return pending;
+      if (admitted || (pending.goal!.nextRunAt ?? 0) <= now) {
+        await appendGoalRoundReservation(pending);
+        return pending;
+      }
     }
     for (const root of roots) {
       const goal = { ...root.goal! };
@@ -264,6 +394,7 @@ async function reserveRound(personaId: string): Promise<PersonaWorkItem | null> 
       if (task === root && !ready(root, records)) continue;
       const round = goal.rounds + 1;
       const attemptKey = stableEnduringAgentId('goalround', { workspaceId: getCurrentWorkspace(), personaId, goalId: root.id, round });
+      const roundCause = goal.pendingRoundCause ?? 'autonomous';
       const reserved = PersonaWorkItemSchema.parse({
         ...root,
         updatedAt: Math.max(now, root.updatedAt + 1),
@@ -276,10 +407,16 @@ async function reserveRound(personaId: string): Promise<PersonaWorkItem | null> 
           pendingDispatchId: personaFlowDispatchId(personaId, attemptKey),
           pendingPrompt: roundPrompt(root, task, records),
           pendingPriority: task.priority,
+          pendingRoundCause: roundCause,
+          ...(goal.pendingRoundControlId
+            ? { pendingRoundControlId: goal.pendingRoundControlId }
+            : {}),
         },
       }) as PersonaWorkItem;
       await lock.assertOwned();
-      return savePersonaWorkItem(reserved);
+      const saved = await savePersonaWorkItem(reserved);
+      await appendGoalRoundReservation(saved);
+      return saved;
     }
     return null;
   });
@@ -287,6 +424,7 @@ async function reserveRound(personaId: string): Promise<PersonaWorkItem | null> 
 
 async function advancePersona(personaId: string): Promise<void> {
   if (workspaceMutationStatus().blocked || runtime().stopped) return;
+  await reconcilePendingPersonaGoalControls(personaId);
   const root = await reserveRound(personaId);
   if (!root?.goal?.pendingAttemptKey || !root.goal.pendingTaskId || !root.goal.pendingPrompt) return;
   try { await advanceReservedGoal(root); }

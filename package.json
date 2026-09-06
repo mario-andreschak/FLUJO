@@ -53,6 +53,8 @@
     "test:mcp": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp",
     "test:mcp-process-boundary": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts",
     "test:persona-process-boundary": "node scripts/run-local-jest.cjs --selectProjects node --runInBand __tests__/enduringAgents/personaProcessBoundary.test.ts",
+    "test:persona-goal-endurance-evidence": "node --test scripts/persona-goal-acceptance/endurance-evidence.test.mjs scripts/persona-goal-acceptance/public-fixture-server.test.mjs",
+    "validate:persona-goal-endurance": "node scripts/validate-persona-goal-endurance.mjs",
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
     "smoke:mcp-artifacts": "node scripts/smoke-mcp-artifacts.mjs",
     "start": "node scripts/launch-next.mjs start",
@@ -72,6 +74,7 @@
     "prepublishOnly": "npm run build && npm run validate:mcp-release",
     "version": "node scripts/sync-version.mjs && git add -u -- src README.md githubpages/index.html mcp-servers package.json package-lock.json",
     "release": "node scripts/release.mjs",
+    "endurance:personas": "node scripts/run-persona-goal-endurance.mjs --mode=live --profile=structured-tools --duration-seconds=3600 --active-seconds=3540 --budget-usd=25 --confirm=controlled-effects",
     "soak:personas": "node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning",
     "soak:personas:quick": "node scripts/run-persona-soak.mjs --quick --days=3 --activities-per-day=5 --with-learning"
   },

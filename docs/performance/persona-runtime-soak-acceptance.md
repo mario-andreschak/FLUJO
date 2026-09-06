@@ -149,8 +149,11 @@ one-goal autonomous continuation, or marketing outcomes.
 
 The separate [ongoing-goal acceptance](persona-goal-acceptance.md) uses actual
 flow execution and MCP tools, supports a live Codex model, and verifies concrete
-external effects from one initial goal. Its bounded scenario also does not prove
-weeks of unattended operation on the public internet.
+external effects from one initial goal. The opt-in
+[Persona goal endurance tier](persona-goal-endurance-acceptance.md) adds real elapsed
+time, three OS-process epochs, scheduled controls and independently audited effect
+reconciliation. Neither controlled scenario proves weeks of unattended operation on
+the public internet, and neither resolves the three numeric soak contracts.
 
 The soak-scale recall observation uses the same production search boundary. The
 separate controlled 50,000-item gate, documented in

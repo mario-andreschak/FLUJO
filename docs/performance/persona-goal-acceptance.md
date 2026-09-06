@@ -1,6 +1,11 @@
 # One-goal Persona acceptance
 
 Issue #505 adds a product acceptance scenario separate from the runtime soak.
+The longer [Persona goal endurance acceptance](persona-goal-endurance-acceptance.md)
+is a third, opt-in tier for real elapsed time, OS-process recovery, scheduled owner
+controls and independently audited idempotent effects; it does not change the finite
+scenario or turn controlled evidence into a public-service claim.
+
 It creates an isolated workspace, persisted Marketing Role, Frederik Persona,
 model configuration and one ongoing goal through production service APIs.
 The production goal controller, mailbox/dispatcher, `runFlow`, model handler,

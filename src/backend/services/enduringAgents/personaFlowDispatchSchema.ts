@@ -203,6 +203,7 @@ export const PersonaFlowDispatchRecordSchema = z.object({
   waitingReason: z.enum(['delivery', 'approval', 'debug', 'running', 'interrupted']).optional(),
   cancellationRequestedAt: z.number().int().nonnegative().optional(),
   cancellationReason: z.string().trim().min(1).max(512).optional(),
+  cancellationControlId: EnduringAgentIdSchema.optional(),
   resumeRequestedAt: z.number().int().nonnegative().optional(),
   resumeSettledAt: z.number().int().nonnegative().optional(),
   resumeReason: z.enum(['approval', 'debug', 'manual']).optional(),
@@ -256,6 +257,13 @@ export const PersonaFlowDispatchRecordSchema = z.object({
       code: 'custom',
       message: 'Only a maintenance dispatch may carry a maintenance result.',
       path: ['maintenanceResult'],
+    });
+  }
+  if (record.cancellationControlId && record.cancellationRequestedAt === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A cancellation control identity requires a durable cancellation request.',
+      path: ['cancellationControlId'],
     });
   }
   if (record.state === 'waiting' && !record.waitingReason) {

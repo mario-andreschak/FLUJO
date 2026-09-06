@@ -840,11 +840,14 @@ export interface PersonaGoalConfig {
   maxRounds?: number;
 }
 
+export type PersonaGoalLifecycleState =
+  'active' | 'paused' | 'needs_input' | 'completed' | 'stopped';
+
 export interface PersonaGoalState extends PersonaGoalConfig {
   continuationIntervalMs: number;
   maxConsecutiveFailures: number;
   maxRoundsPerDay: number;
-  state: 'active' | 'paused' | 'needs_input' | 'completed' | 'stopped';
+  state: PersonaGoalLifecycleState;
   nextRunAt?: number;
   rounds: number;
   consecutiveFailures: number;
@@ -862,6 +865,17 @@ export interface PersonaGoalState extends PersonaGoalConfig {
   pendingPrompt?: string;
   pendingPriority?: PersonaPriority;
   pendingDispatchId?: string;
+  /** Provenance for an owner retry that schedules the next durable round. */
+  pendingRoundCause?: 'autonomous' | 'manual_retry';
+  pendingRoundControlId?: string;
+  /** Durable outbox intent for an owner control until its audit event is appended. */
+  pendingControlId?: string;
+  pendingControlAction?: 'pause' | 'retry' | 'stop';
+  pendingControlFromState?: PersonaGoalLifecycleState;
+  pendingControlToState?: PersonaGoalLifecycleState;
+  pendingControlRequestedAt?: number;
+  pendingControlAppliedAt?: number;
+  pendingControlDispatchIds?: string[];
 }
 
 export interface PersonaWorkItem {

@@ -333,6 +333,8 @@ export interface PersonaFlowDispatchRecord {
   /** Durable, scoped lifecycle intent. No lease, holder, or fencing data lives here. */
   cancellationRequestedAt?: number;
   cancellationReason?: string;
+  /** Owner control that first requested cancellation, when applicable. */
+  cancellationControlId?: string;
   /** Resume metadata makes a lost process-local preparation fail closed. */
   resumeRequestedAt?: number;
   resumeSettledAt?: number;
@@ -429,6 +431,7 @@ export interface CancelPersonaFlowDispatchByIdInput {
   personaId: string;
   dispatchId: string;
   reason?: string;
+  controlId?: string;
 }
 
 export interface ReprioritizePersonaWorkItemDispatchInput {
@@ -1199,6 +1202,7 @@ export class PersonaFlowDispatcher {
   private async cancelExisting(
     existing: PersonaFlowDispatchRecord,
     reason: string | undefined,
+    controlId: string | undefined,
     options: CancelPersonaFlowDispatchOptions = {},
   ): Promise<PersonaFlowDispatchRecord> {
     if (isTerminalDispatch(existing.state)) return existing;
@@ -1210,6 +1214,7 @@ export class PersonaFlowDispatcher {
           throw new PersonaFlowDispatchIdNotFoundError(existing.personaId, existing.id);
         }
         if (isTerminalDispatch(current.state)) return current;
+        const cancellationAlreadyRequested = current.cancellationRequestedAt !== undefined;
         const requestedAt = current.cancellationRequestedAt
           ?? Math.max(runtimeClock.now(), current.updatedAt + 1);
         return this.save({
@@ -1218,11 +1223,12 @@ export class PersonaFlowDispatcher {
             ? { state: 'queued' as const, waitingReason: undefined }
             : {}),
           cancellationRequestedAt: requestedAt,
-          cancellationReason: sanitizeText(
-            reason,
-            512,
-            'Execution was cancelled by the user.',
-          ),
+          cancellationReason: cancellationAlreadyRequested
+            ? current.cancellationReason
+            : sanitizeText(reason, 512, 'Execution was cancelled by the user.'),
+          cancellationControlId: cancellationAlreadyRequested
+            ? current.cancellationControlId
+            : controlId,
           resumePreparationRequired: false,
           resumeSettledAt: requestedAt,
           lastError: undefined,
@@ -1249,7 +1255,7 @@ export class PersonaFlowDispatcher {
     options: CancelPersonaFlowDispatchOptions = {},
   ): Promise<PersonaFlowDispatchRecord> {
     const existing = await this.findOwningDispatch(input);
-    return this.cancelExisting(existing, input.reason, options);
+    return this.cancelExisting(existing, input.reason, undefined, options);
   }
 
   /**
@@ -1263,11 +1269,12 @@ export class PersonaFlowDispatcher {
   ): Promise<PersonaFlowDispatchRecord> {
     EnduringAgentIdSchema.parse(input.personaId);
     EnduringAgentIdSchema.parse(input.dispatchId);
+    if (input.controlId !== undefined) EnduringAgentIdSchema.parse(input.controlId);
     const existing = await this.get(input.dispatchId);
     if (!existing || existing.personaId !== input.personaId) {
       throw new PersonaFlowDispatchIdNotFoundError(input.personaId, input.dispatchId);
     }
-    return this.cancelExisting(existing, input.reason, options);
+    return this.cancelExisting(existing, input.reason, input.controlId, options);
   }
 
   /** Keep the durable dispatch and mailbox ordering bucket aligned with its Task. */
