@@ -104,6 +104,47 @@ describe('goal endurance fixture runtime authorization', () => {
     },
   );
 
+  it.each([
+    [
+      'an unrelated server',
+      { name: 'unrelated-server' },
+      runnerEnv,
+    ],
+    [
+      'an unsupported profile',
+      {},
+      {
+        ...runnerEnv,
+        PERSONA_GOAL_ENDURANCE_PROFILE: 'terminal-only',
+      },
+    ],
+  ])(
+    'strips persisted spellings of the reserved token for %s',
+    (_description, overrides, environment) => {
+      const configuredToken = 'persisted-token-must-not-reach-child';
+      const lowerCaseName = GOAL_ENDURANCE_FIXTURE_TOKEN_ENV.toLowerCase();
+      const config = fixtureConfig({
+        ...overrides,
+        env: {
+          [GOAL_ENDURANCE_FIXTURE_TOKEN_ENV]: configuredToken,
+          [lowerCaseName]: configuredToken,
+        },
+      });
+
+      const launch = withProcessEnvironment(environment, () =>
+        resolveStdioLaunch(config),
+      );
+
+      expect(
+        Object.keys(launch.env).filter(
+          (name) =>
+            name.toUpperCase() === GOAL_ENDURANCE_FIXTURE_TOKEN_ENV,
+        ),
+      ).toEqual([]);
+      expect(JSON.stringify(launch.env)).not.toContain(configuredToken);
+    },
+  );
+
   it('fails closed for missing authorization or mismatched fixture identity', () => {
     const base = fixtureConfig();
     const wrongArgs = [...(base.args ?? [])];

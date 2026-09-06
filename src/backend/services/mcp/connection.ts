@@ -918,6 +918,15 @@ export function resolveStdioLaunch(
       'browser',
     );
   }
+  // This name is reserved for runner-owned, runtime-only authorization.
+  // Strip every case variant so persisted config or an inherited host
+  // environment cannot smuggle a value around the controlled-fixture allowlist.
+  for (const name of Object.keys(transformedEnv)) {
+    if (name.toUpperCase() === GOAL_ENDURANCE_FIXTURE_TOKEN_ENV) {
+      delete transformedEnv[name];
+    }
+  }
+
   log.verbose(
     "Transformed environment variable names",
     JSON.stringify(Object.keys(transformedEnv)),
