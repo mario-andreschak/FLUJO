@@ -135,3 +135,34 @@ admissions, model identity and checksums. To validate a preserved report directl
 ```sh
 node scripts/validate-persona-goal-acceptance.mjs --directory=<run-directory> --commit=<reported-sha> --mode=live
 ```
+
+## Observed production UI acceptance
+
+On 2026-09-06 UTC, the production UI at commit
+`8960664be87de8f56a5bb66e0e584fba8f04c552` was exercised with Frederik,
+the Marketing Agent Role, genuine Codex Astra, and browser/filesystem tools.
+The paused goal survived application restart. The operator saved
+`until_stopped`, verified it after a page reload, and selected Continue.
+Astra read a local README snapshot, created and verified three campaign files,
+saved a child task, and reported progress. The controller started that child
+60.567 seconds after the first round finished without another work prompt.
+
+Selecting Stop during the child round cancelled its Activity and dispatch within
+648 ms. No further admissions appeared during 292 seconds of observation.
+The root remained stopped, with no pending admission or next wake; the unfinished
+child commitment and campaign files remained saved. New-goal defaults, operating
+limits, Activity history, and saved Tasks were also inspected in the browser.
+
+The local report is
+`goal-acceptance-artifacts/production-ui-2026-09-06/production-ui-observation.json`
+(SHA-256 `08d302ee41e72868e43255a643da5a6e558535d0983651cc4bef85eb86bd2961`).
+Its accompanying clarifications distinguish the manual server launch and
+operator policy/Continue/Stop controls from zero additional work prompts or
+approval replies during autonomous execution. Two earlier development-server
+lease failures are retained in the evidence. This short local-drafts run does
+not establish public marketing effectiveness or a 99% unattended rate.
+
+The walkthrough also exposed a browser App preview ownership mismatch: browser
+research succeeded, but the App reconnected using the conversation ID instead
+of the originating logical run ID. That observed failure is retained separately
+from the successful Persona continuation and Stop evidence in issue #505.

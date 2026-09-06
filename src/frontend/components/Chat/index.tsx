@@ -3942,6 +3942,7 @@ const Chat: React.FC = () => {
           toolName: ui.toolName ?? (call?.type === 'function' ? call.function.name : undefined),
           toolArgs: ui.toolArgs ?? (call?.type === 'function' ? call.function.arguments : undefined),
           resultContent: m.content,
+          toolOwnerScope: ui.toolOwnerScope,
           cancelledReason: ui.cancelledReason,
           isError: ui.isError,
           updateId: m.id,
@@ -3960,6 +3961,7 @@ const Chat: React.FC = () => {
           && input
           && (
             input.updateId !== entry.latestToolUpdateId
+            || input.toolOwnerScope !== entry.latestToolOwnerScope
             || input.toolArgs !== entry.latestToolArgs
             || (
               input.cancelledReason === undefined

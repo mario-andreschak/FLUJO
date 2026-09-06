@@ -4,6 +4,7 @@ import {
   isUiResourceUri,
 } from '@/shared/utils/mcpApps';
 import { createLogger } from '@/utils/logger';
+import { mcpAppOwnerScopeFromResult } from '@/shared/utils/mcpAppOwnerScope';
 
 const log = createLogger('backend/mcpApps/toolUi');
 
@@ -16,6 +17,8 @@ export interface McpAppToolUiLink {
    * outer tool call (for example FLUJO's call_mcp_tool forwarding envelope).
    */
   toolArgs?: string;
+  /** Host-stamped originating call owner; retained outside bounded result text. */
+  toolOwnerScope?: string;
 }
 
 const FLUJO_CONTROL_PACKAGE_ID = '@mario.andreschak/mcp-flujo';
@@ -84,7 +87,11 @@ export async function resolveAdvertisedToolUiLink(
     );
   }
 
-  const link = { uri: advertisedUri, serverName, toolName };
+  const toolOwnerScope = mcpAppOwnerScopeFromResult(resultData);
+  const link = {
+    uri: advertisedUri, serverName, toolName,
+    ...(toolOwnerScope ? { toolOwnerScope } : {}),
+  };
 
   try {
     return await mcpService.isMcpAppAccessEnabled(serverName)

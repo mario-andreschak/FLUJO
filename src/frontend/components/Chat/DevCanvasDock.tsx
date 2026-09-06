@@ -867,6 +867,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 toolName={e.toolName}
                 toolArgs={e.latestToolArgs}
                 toolResultContent={e.latestResultContent}
+                toolOwnerScope={e.latestToolOwnerScope}
                 toolCancelledReason={e.latestToolCancelledReason}
                 toolIsError={e.latestToolIsError}
                 toolUpdateId={e.latestToolUpdateId ?? e.updatedAt}

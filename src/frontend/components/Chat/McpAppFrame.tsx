@@ -44,6 +44,7 @@ import {
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { resolveMcpAppOwnerScope } from '@/shared/utils/mcpAppOwnerScope';
 import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
@@ -109,6 +110,8 @@ export interface McpAppFrameProps {
   toolArgs?: string;
   /** JSON string of the tool result content (pushed as tool-result). */
   toolResultContent?: string;
+  /** Host-authored transcript provenance, also present when result text was bounded. */
+  toolOwnerScope?: string;
   /**
    * Stable identity for this particular tool delivery. Persistent hosts use it
    * to deliver a new input/result pair even when the serialized values happen
@@ -909,6 +912,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   toolName,
   toolArgs,
   toolResultContent,
+  toolOwnerScope,
   toolUpdateId,
   toolCancelledReason,
   toolIsError,
@@ -938,13 +942,13 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const consentRequired = settings?.experimental?.requireMcpAppLaunchClick === true;
   const theme = useTheme();
   const frameInstanceId = useId();
+  // A model-created resource belongs to its originating run. The transcript's
+  // host-stamped result retains that owner across hydration and later runs.
   const ownerScope = useMemo(
-    () => conversationId
-      ? `conversation:${conversationId}`
-      : ownerScopeId?.trim()
-        ? `app:${ownerScopeId.trim().slice(0, 500)}`
-        : `app:${serverName}:${uri}:${frameInstanceId}`,
-    [conversationId, frameInstanceId, ownerScopeId, serverName, uri],
+    () => resolveMcpAppOwnerScope({
+      toolOwnerScope, toolResultContent, conversationId, ownerScopeId, serverName, uri, frameInstanceId,
+    }),
+    [conversationId, frameInstanceId, ownerScopeId, serverName, toolOwnerScope, toolResultContent, uri],
   );
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
@@ -1048,6 +1052,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const hostDisplayModesRef = useRef(hostDisplayModes);
   const toolNameRef = useRef(toolName);
   const previousToolNameRef = useRef(toolName);
+  const ownerScopeRef = useRef(ownerScope);
+  const previousOwnerScopeRef = useRef(ownerScope);
+  ownerScopeRef.current = ownerScope;
   const toolDeliveryChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastDeliveryRef = useRef<string | number | undefined>(undefined);
   const latestToolDeliveryRef = useRef({
@@ -1390,7 +1397,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         });
       };
       const bridge = new AppBridge(
-        makeClientShim(serverName, ownerScope, revokeAccess),
+        makeClientShim(serverName, ownerScopeRef.current, revokeAccess),
         HOST_INFO,
         {
           openLinks: {},
@@ -1761,19 +1768,20 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     iframe.style.borderRadius = chromeless ? '0' : '4px';
   }, [chromeless, docked, effectiveDisplayMode]);
 
-  // A linked-tool switch can happen while the initial handshake is still in
+  // A linked-tool or originating-owner switch can happen while the handshake is
   // flight. Restart that in-flight View as well as an initialized one; every
-  // (even older) restart callback reads toolNameRef so it mounts the latest
+  // (even older) restart callback reads toolNameRef and ownerScopeRef for the latest
   // requested tool context after the shared teardown settles.
   useEffect(() => {
-    if (previousToolNameRef.current === toolName) return;
+    if (previousToolNameRef.current === toolName && previousOwnerScopeRef.current === ownerScope) return;
     previousToolNameRef.current = toolName;
+    previousOwnerScopeRef.current = ownerScope;
     if (!mountedRef.current && !teardownPromiseRef.current) return;
     void teardown().then(() => {
       if (!componentAliveRef.current) return;
       if (dockedRef.current || expanded) void mount();
     });
-  }, [expanded, mount, teardown, toolName]);
+  }, [expanded, mount, ownerScope, teardown, toolName]);
 
   // Stable MCP Apps delivers at most one input/outcome pair to a View. A later
   // invocation for the same canvas identity therefore gets a fresh View, after
