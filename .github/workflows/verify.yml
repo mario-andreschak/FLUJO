@@ -23,6 +23,20 @@ permissions:
   contents: read
 
 jobs:
+  release-safety:
+    name: Release safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Built-in-only tests intercept every release subprocess before execution.
+      - run: node --test scripts/release-arguments.test.mjs
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest

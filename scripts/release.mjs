@@ -4,7 +4,7 @@
 //   npm run release patch           patch bump
 //   npm run release major           major bump
 //   npm run release 4.0.0           exact version
-//   npm run release -- --dry-run    preflight only; changes nothing
+//   node scripts/release.mjs --dry-run    preflight only (refreshes refs/builds)
 //
 // Publishing comes before pushing. The standalone MCP packages are
 // published first at the exact flujo-ai version, then the application package.
@@ -15,6 +15,7 @@
 
 import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { parseReleaseArguments, releaseUsage } from './release-arguments.mjs';
 
 const run = (command) =>
   execSync(command, {
@@ -54,19 +55,23 @@ async function waitForWorkflow(workflow, sha, label) {
   }
 }
 
-const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run');
-const bump = args.find((arg) => !arg.startsWith('--')) ?? 'minor';
+let releaseOptions;
+try {
+  releaseOptions = parseReleaseArguments(process.argv.slice(2), process.env);
+} catch (error) {
+  fail(error.message);
+}
+if (releaseOptions.help) {
+  console.log(releaseUsage);
+  process.exit(0);
+}
+const { dryRun, bump } = releaseOptions;
 const publicMcpPackages = [
   '@mario.andreschak/mcp-flujo',
   '@mario.andreschak/mcp-filesystem',
   '@mario.andreschak/mcp-bash',
   '@mario.andreschak/mcp-browser',
 ];
-
-if (!/^(patch|minor|major|\d+\.\d+\.\d+)$/.test(bump)) {
-  fail(`unknown version '${bump}'; use patch, minor, major, or an exact x.y.z version.`);
-}
 
 // Preflight before npm version creates a commit and tag.
 const branch = run('git rev-parse --abbrev-ref HEAD');
