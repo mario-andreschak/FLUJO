@@ -67,6 +67,26 @@ function fixtureConfig(
   };
 }
 
+const configuredTokenRejectionCases: Array<{
+  description: string;
+  overrides: Partial<MCPStdioConfig>;
+  environment: Record<string, string | undefined>;
+}> = [
+  {
+    description: 'an unrelated server',
+    overrides: { name: 'unrelated-server' },
+    environment: runnerEnv,
+  },
+  {
+    description: 'an unsupported profile',
+    overrides: {},
+    environment: {
+      ...runnerEnv,
+      PERSONA_GOAL_ENDURANCE_PROFILE: 'terminal-only',
+    },
+  },
+];
+
 describe('goal endurance fixture runtime authorization', () => {
   it('attaches only the fixture token at the final stdio launch boundary', () => {
     const config = fixtureConfig();
@@ -104,23 +124,9 @@ describe('goal endurance fixture runtime authorization', () => {
     },
   );
 
-  it.each([
-    [
-      'an unrelated server',
-      { name: 'unrelated-server' },
-      runnerEnv,
-    ],
-    [
-      'an unsupported profile',
-      {},
-      {
-        ...runnerEnv,
-        PERSONA_GOAL_ENDURANCE_PROFILE: 'terminal-only',
-      },
-    ],
-  ])(
-    'strips persisted spellings of the reserved token for %s',
-    (_description, overrides, environment) => {
+  it.each(configuredTokenRejectionCases)(
+    'strips persisted spellings of the reserved token for $description',
+    ({ overrides, environment }) => {
       const configuredToken = 'persisted-token-must-not-reach-child';
       const lowerCaseName = GOAL_ENDURANCE_FIXTURE_TOKEN_ENV.toLowerCase();
       const config = fixtureConfig({
