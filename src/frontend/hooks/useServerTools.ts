@@ -24,18 +24,36 @@ export function useServerTools(serverName: string | null) {
   const [tools, setTools] = useState<ServerTool[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [currentServerName, setCurrentServerName] = useState<string | null>(null);
   const [toolsServerName, setToolsServerName] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const selectedServerRef = useRef(serverName);
+  const requestGenerationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const lastRefreshRef = useRef<{
+    serverName: string;
+    timestamp: number;
+    toolCount: number;
+  } | null>(null);
 
-  // Clear timeout on unmount
+  // Invalidate requests as soon as a render selects a different server. This
+  // prevents a completion from an earlier A -> B -> A request from taking
+  // ownership again just because the server names happen to match.
+  if (selectedServerRef.current !== serverName) {
+    selectedServerRef.current = serverName;
+    requestGenerationRef.current += 1;
+    lastRefreshRef.current = null;
+  }
+
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
       }
     };
   }, []);
@@ -44,109 +62,132 @@ export function useServerTools(serverName: string | null) {
    * Load tools for the specified server
    */
   const loadTools = useCallback(async (force: boolean = false) => {
-    if (!serverName) {
+    const requestedServer = serverName;
+    if (selectedServerRef.current !== requestedServer) return;
+
+    if (!requestedServer) {
       setTools([]);
       setToolsServerName(null);
       setError(null);
+      setIsLoading(false);
       return;
     }
 
-    // Update current server name
-    setCurrentServerName(serverName);
-
-    // Simple rate limiting to prevent excessive API calls
+    const lastRefresh = lastRefreshRef.current;
     if (
-      !force && 
-      lastRefresh && 
-      (new Date().getTime() - lastRefresh.getTime() < 200) && 
-      tools.length > 0 &&
-      serverName === currentServerName // Only apply rate limiting if the server hasn't changed
+      !force
+      && lastRefresh?.serverName === requestedServer
+      && Date.now() - lastRefresh.timestamp < 200
+      && lastRefresh.toolCount > 0
     ) {
-      log.debug(`Rate limiting tool refresh for server: ${serverName}`);
-      return; // Return early to prevent the API call entirely
+      log.debug(`Rate limiting tool refresh for server: ${requestedServer}`);
+      return;
     }
 
-    log.debug(`Loading tools for server: ${serverName}`);
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+    setIsRetrying(false);
+
+    const requestGeneration = requestGenerationRef.current + 1;
+    requestGenerationRef.current = requestGeneration;
+    const ownsRequest = () => (
+      mountedRef.current
+      && selectedServerRef.current === requestedServer
+      && requestGenerationRef.current === requestGeneration
+    );
+
+    if (force) mcpService.clearToolsCache(requestedServer);
+    lastRefreshRef.current = null;
+
+    log.debug(`Loading tools for server: ${requestedServer}`);
     setIsLoading(true);
     setTools([]);
     setToolsServerName(null);
     setError(null);
 
     try {
-      const result = await mcpService.listServerTools(serverName);
-      
-      // Check if the server name has changed while we were loading
-      if (serverName !== currentServerName) {
-        log.debug(`Server changed during tool loading from ${serverName} to ${currentServerName}`);
+      const result = await mcpService.listServerTools(requestedServer);
+
+      if (!ownsRequest()) {
+        log.debug(`Ignoring stale tool load for server: ${requestedServer}`);
         return;
       }
-      
+
       if (result.error) {
-        log.warn(`Error loading tools for ${serverName}:`, result.error);
+        log.warn(`Error loading tools for ${requestedServer}:`, result.error);
         setError(result.error);
-        // Clear tools when there's an error to prevent showing tools from a previously selected server
         setTools([]);
+        setToolsServerName(null);
       } else {
-        // Ensure tools is always an array
         const toolsArray: ServerTool[] = (result.tools || []).map((tool: MCPToolResponse) => ({
           ...tool,
           description: tool.description || '',
         }));
-        log.debug(`Loaded ${toolsArray.length} tools for ${serverName}`);
+        log.debug(`Loaded ${toolsArray.length} tools for ${requestedServer}`);
         setTools(toolsArray);
-        setToolsServerName(serverName);
-        setLastRefresh(new Date());
-        // Reset retry count on success
+        setToolsServerName(requestedServer);
+        lastRefreshRef.current = {
+          serverName: requestedServer,
+          timestamp: Date.now(),
+          toolCount: toolsArray.length,
+        };
         setRetryCount(0);
       }
-    } catch (error) {
-      // Check if the server name has changed while we were loading
-      if (serverName !== currentServerName) {
-        log.debug(`Server changed during tool loading from ${serverName} to ${currentServerName}`);
+    } catch (loadError) {
+      if (!ownsRequest()) {
+        log.debug(`Ignoring stale tool load failure for server: ${requestedServer}`);
         return;
       }
-      
-      log.warn(`Failed to load tools for server ${serverName}:`, error);
-      setError(`Failed to load tools: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      // Clear tools when there's an exception to prevent showing tools from a previously selected server
+
+      log.warn(`Failed to load tools for server ${requestedServer}:`, loadError);
+      setError(`Failed to load tools: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
       setTools([]);
       setToolsServerName(null);
     } finally {
-      // Only update loading state if this is still the current server
-      if (serverName === currentServerName) {
-        setIsLoading(false);
-      }
+      if (ownsRequest()) setIsLoading(false);
     }
-  }, [serverName, lastRefresh, tools.length, currentServerName]);
+  }, [serverName]);
 
   /**
    * Retry loading tools with exponential backoff
    */
   const retryLoadTools = useCallback(() => {
     if (!serverName) return;
-    
-    // Clear any existing timeout
+    const retryServerName = serverName;
+    if (selectedServerRef.current !== retryServerName) return;
+
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
-    
+
+    const retryGeneration = requestGenerationRef.current + 1;
+    requestGenerationRef.current = retryGeneration;
     setIsRetrying(true);
-    
-    // Calculate backoff time (exponential with max of 10 seconds)
+
     const backoff = Math.min(Math.pow(2, retryCount) * 1000, 10000);
-    log.debug(`Retrying tool load for ${serverName} in ${backoff}ms (attempt ${retryCount + 1})`);
-    
-    // Set timeout for retry
+    log.debug(`Retrying tool load for ${retryServerName} in ${backoff}ms (attempt ${retryCount + 1})`);
+
     retryTimeoutRef.current = setTimeout(() => {
+      retryTimeoutRef.current = null;
+      const ownsRetry = (
+        mountedRef.current
+        && selectedServerRef.current === retryServerName
+        && requestGenerationRef.current === retryGeneration
+      );
+      if (!ownsRetry) return;
+
       setRetryCount(prev => prev + 1);
-      loadTools(true);
       setIsRetrying(false);
+      void loadTools(true);
     }, backoff);
-    
+
     return () => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
       }
     };
   }, [serverName, retryCount, loadTools]);
@@ -201,21 +242,19 @@ export function useServerTools(serverName: string | null) {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
-    
-    // Reset retry count when server changes
+
     setRetryCount(0);
     setIsRetrying(false);
-    
+
     if (serverName) {
-      // Update current server name immediately
-      setCurrentServerName(serverName);
-      loadTools();
+      void loadTools();
     } else {
       log.debug('Clearing tools as no server is selected');
+      requestGenerationRef.current += 1;
       setTools([]);
       setToolsServerName(null);
       setError(null);
-      setCurrentServerName(null);
+      setIsLoading(false);
     }
   }, [serverName, loadTools]);
 

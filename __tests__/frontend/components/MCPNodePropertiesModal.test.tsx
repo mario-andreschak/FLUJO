@@ -104,6 +104,7 @@ beforeEach(() => {
     isLoading: false,
     error: null,
     loadTools: jest.fn(),
+    retryLoadTools: jest.fn(),
   } as any);
 });
 
@@ -196,6 +197,62 @@ describe('MCPNodePropertiesModal', () => {
 
     await waitFor(() => expect(onQuickServerSelect).toHaveBeenCalledWith(quickNode, 'search'));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it.each(['connected', 'connecting', 'disconnected', 'error'] as const)(
+    'shows tool-loading errors and preserves configured tools when the server is %s',
+    (status) => {
+      const retryLoadTools = jest.fn();
+      const onSave = jest.fn();
+      mockUseServerStatus.mockReturnValue({
+        servers: [
+          { name: 'records', status, transport: 'stdio' },
+          { name: 'search', status: 'connected', transport: 'stdio' },
+        ],
+        isLoading: false,
+        loadError: null,
+        retryServer: jest.fn(),
+      } as any);
+      mockUseServerTools.mockReturnValue({
+        tools: [],
+        toolsServerName: null,
+        isLoading: false,
+        error: 'Tool discovery failed',
+        loadTools: jest.fn(),
+        retryLoadTools,
+      } as any);
+
+      renderModal({ onSave });
+
+      const errorText = screen.getByText('Tool discovery failed');
+      const errorAlert = errorText.closest('[role="alert"]') as HTMLElement;
+      fireEvent.click(within(errorAlert).getByRole('button', { name: 'Retry' }));
+      expect(retryLoadTools).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      expect(onSave).toHaveBeenCalledWith(
+        'mcp-one',
+        expect.objectContaining({
+          properties: expect.objectContaining({ enabledTools: ['read_record'] }),
+        }),
+      );
+    },
+  );
+
+  it('renders a successful empty tool list as the normal empty state', () => {
+    mockUseServerTools.mockReturnValue({
+      tools: [],
+      toolsServerName: 'records',
+      isLoading: false,
+      error: null,
+      loadTools: jest.fn(),
+      retryLoadTools: jest.fn(),
+    } as any);
+
+    renderModal();
+
+    expect(screen.getByText('This MCP server has no available tools.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('replaces inline server cards with a subflow-style picker on compact screens', () => {

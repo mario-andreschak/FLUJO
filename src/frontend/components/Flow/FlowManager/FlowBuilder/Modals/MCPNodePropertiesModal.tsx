@@ -121,6 +121,7 @@ export const MCPNodePropertiesModal = ({
     isLoading: isLoadingTools,
     error: toolsError,
     loadTools,
+    retryLoadTools,
   } = useServerTools(selectedServer);
 
   useEffect(() => {
@@ -396,7 +397,16 @@ export const MCPNodePropertiesModal = ({
               <Typography color="text.secondary">{t('flows.mcpNode.loadingTools')}</Typography>
             </Box>
           ) : toolsError ? (
-            <Alert severity="error">{toolsError}</Alert>
+            <Alert
+              severity="error"
+              action={(
+                <Button color="inherit" size="small" onClick={retryLoadTools}>
+                  {t('flows.mcpNode.retry')}
+                </Button>
+              )}
+            >
+              {toolsError}
+            </Alert>
           ) : mcpTools.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 3 }}>
               {selectedServerConfig?.status === 'connected'
