@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   classifyBrowserInstallFailure,
+  installBrowserDependencies,
   runBrowserInstall,
   sanitizeInstallOutput,
+  verifyBrowser,
 } from './install-browser.mjs';
 
 test('sanitizes credentials, tokens, query secrets, and explicit CA paths', () => {
@@ -36,6 +38,52 @@ test('sanitizes credentials, tokens, query secrets, and explicit CA paths', () =
     assert.equal(output.includes(secret), false);
   }
   assert.match(output, /\[REDACTED\]/);
+});
+
+test('system dependency installation uses the pinned CLI and propagates apt failure', () => {
+  let invocation;
+  const code = installBrowserDependencies({
+    env: { NODE_TLS_REJECT_UNAUTHORIZED: '0', HTTPS_PROXY: 'https://proxy.example.test' },
+    spawn: (...args) => { invocation = args; return { status: 100 }; },
+  });
+  assert.equal(code, 100);
+  assert.equal(invocation[0], process.execPath);
+  assert.deepEqual(invocation[1].slice(1), ['install-deps', 'chromium']);
+  assert.equal(invocation[2].stdio, 'inherit');
+  assert.equal(invocation[2].env.NODE_TLS_REJECT_UNAUTHORIZED, undefined);
+  assert.equal(invocation[2].env.HTTPS_PROXY, 'https://proxy.example.test');
+});
+
+test('browser verification launches full headless Chromium and closes it', async () => {
+  let options;
+  let closed = false;
+  let content;
+  await verifyBrowser({ loadChromium: async () => ({ launch: async (value) => {
+    options = value;
+    return {
+      newPage: async () => ({ setContent: async (html) => { content = html; }, title: async () => 'FLUJO browser verification' }),
+      close: async () => { closed = true; },
+    };
+  } }) });
+  assert.equal(options.channel, 'chromium');
+  assert.equal(options.headless, true);
+  assert.match(content, /FLUJO browser verification/);
+  assert.equal(closed, true);
+});
+
+test('browser verification fails on missing libraries rather than accepting a downloaded binary', async () => {
+  const error = new Error('error while loading shared libraries: libglib-2.0.so.0');
+  await assert.rejects(verifyBrowser({ loadChromium: async () => ({ launch: async () => { throw error; } }) }), error);
+  assert.equal(classifyBrowserInstallFailure(error.message).category, 'OS_DEPENDENCY');
+});
+
+test('browser verification closes the process when rendering fails', async () => {
+  let closed = false;
+  await assert.rejects(verifyBrowser({ loadChromium: async () => ({ launch: async () => ({
+    newPage: async () => { throw new Error('page failed'); },
+    close: async () => { closed = true; },
+  }) }) }), /page failed/);
+  assert.equal(closed, true);
 });
 
 test('classifies corporate-network browser download failures', () => {

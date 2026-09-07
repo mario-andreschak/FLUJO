@@ -10,6 +10,11 @@ const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   /* config options here */
+  // Production installs check application code; CI's root config still checks
+  // the test suite. Next otherwise checks tests before hiding their diagnostics.
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
+  },
   experimental: {
     // This project needs a custom webpack hook for native modules/WASM, which
     // makes Next opt out of its build worker by default. Keeping the whole
