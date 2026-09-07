@@ -338,7 +338,7 @@ function offlineCompletion() {
       state.reported = true;
       const evidence = await serviceRequest('/evidence');
       const published = evidence.state.effects.length === 1;
-      return call('report_activity_outcome', {
+      const outcome = call('report_activity_outcome', {
         resolution: 'partial',
         summary: published
           ? 'The controlled publication is independently visible; useful backlog and monitoring work continue.'
@@ -352,6 +352,11 @@ function offlineCompletion() {
               ? 'Publish through the approved service and recover from retryable failures.'
               : 'Read back the service before retrying the stable idempotent publication.',
       });
+      // A partial outcome ends this scripted round. Drop only the in-memory
+      // conversation cursor so autonomous continuation derives its next phase
+      // from durable artifacts and independently observed fixture state.
+      conversations.delete(key);
+      return outcome;
     }
     return completion('The partial outcome and next action were recorded for automatic continuation.');
   };
