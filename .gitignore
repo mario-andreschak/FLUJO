@@ -201,3 +201,5 @@ memory-experiment-results.json
 # Persona endurance test artifacts
 soak-artifacts/
 goal-acceptance-artifacts/
+/docs/outreach
+/test-outputs

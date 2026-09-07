@@ -1,0 +1,345 @@
+{
+  "schemaVersion": 1,
+  "fixture": {
+    "path": "__tests__/fixtures/memory-ranking/golden-v1.json",
+    "version": "golden-v1",
+    "sha256": "9cc8ed8649100f8da6743ffb76767eb006e53c85b1d14382c9983ae3c76d01b0"
+  },
+  "repositoryCommit": "0fa4e5346083ccf827a025ac60a096f91db5c33a",
+  "deterministic": true,
+  "results": [
+    {
+      "variantId": "current",
+      "fixtureVersion": "golden-v1",
+      "mode": "lexical-only",
+      "effectiveSettings": {
+        "ranking": {
+          "importanceWeight": 0.25,
+          "confidenceWeight": 0.15,
+          "exactContentMatchBonus": 4,
+          "termHitBonus": 1,
+          "termCoverageBonus": 1.5,
+          "lengthNormalisationChars": 280,
+          "lengthNormalisationFloor": 0.6,
+          "recencyHalfLifeDays": 90,
+          "recencyFloor": 0.15,
+          "trustWeights": {
+            "explicit_user": 1.3,
+            "verified_tool": 1.15,
+            "model_inference": 1,
+            "external_untrusted": 0.8
+          },
+          "coreBonus": 2,
+          "coreExemptFromDecay": true,
+          "lexicalWeight": 0.6,
+          "semanticWeight": 0.4
+        },
+        "dedup": {
+          "enabled": true,
+          "shingleSize": 3,
+          "nearDuplicateThreshold": 0.82,
+          "comparisonWindow": 200,
+          "confidenceReinforcementStep": 0.05,
+          "importanceReinforcementStep": 0.02,
+          "maxSourceRefsPerItem": 64
+        }
+      },
+      "metrics": {
+        "recallHitRate": {
+          "value": 1,
+          "numerator": 8,
+          "denominator": 8
+        },
+        "recallAtK": {
+          "value": 1,
+          "numerator": 10,
+          "denominator": 10
+        },
+        "meanReciprocalRank": {
+          "value": 1,
+          "numerator": 8,
+          "denominator": 8
+        },
+        "rankingAccuracy": {
+          "value": 1,
+          "numerator": 8,
+          "denominator": 8
+        },
+        "duplicateMergePrecision": {
+          "value": 1,
+          "numerator": 4,
+          "denominator": 4
+        },
+        "duplicateRecall": {
+          "value": 1,
+          "numerator": 4,
+          "denominator": 4
+        },
+        "duplicateCounts": {
+          "truePositives": 4,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "trueNegatives": 4
+        }
+      },
+      "queryOutcomes": [
+        {
+          "caseId": "exact-match",
+          "expectedRelevantIds": [
+            "r-exact"
+          ],
+          "expectedOrder": [
+            "r-exact",
+            "r-phrase"
+          ],
+          "actualIds": [
+            "r-exact",
+            "r-phrase"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "term-coverage",
+          "expectedRelevantIds": [
+            "r-phrase"
+          ],
+          "expectedOrder": [
+            "r-phrase",
+            "coverage-one"
+          ],
+          "actualIds": [
+            "r-phrase",
+            "coverage-one"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "importance-confidence",
+          "expectedRelevantIds": [
+            "priority-importance"
+          ],
+          "expectedOrder": [
+            "priority-importance",
+            "priority-confidence"
+          ],
+          "actualIds": [
+            "priority-importance",
+            "priority-confidence"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "recency",
+          "expectedRelevantIds": [
+            "roadmap-fresh"
+          ],
+          "expectedOrder": [
+            "roadmap-fresh",
+            "roadmap-stale"
+          ],
+          "actualIds": [
+            "roadmap-fresh",
+            "roadmap-stale"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "trust-order",
+          "expectedRelevantIds": [
+            "trust-user",
+            "trust-tool"
+          ],
+          "expectedOrder": [
+            "trust-user",
+            "trust-tool",
+            "trust-model",
+            "trust-external"
+          ],
+          "actualIds": [
+            "trust-user",
+            "trust-tool",
+            "trust-model",
+            "trust-external"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 2,
+            "denominator": 2
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "length-normalisation",
+          "expectedRelevantIds": [
+            "length-short"
+          ],
+          "expectedOrder": [
+            "length-short",
+            "length-long"
+          ],
+          "actualIds": [
+            "length-short",
+            "length-long"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "stable-tie",
+          "expectedRelevantIds": [
+            "tie-a",
+            "tie-b"
+          ],
+          "expectedOrder": [
+            "tie-a",
+            "tie-b"
+          ],
+          "actualIds": [
+            "tie-a",
+            "tie-b"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 2,
+            "denominator": 2
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        },
+        {
+          "caseId": "core-decay",
+          "expectedRelevantIds": [
+            "core-old"
+          ],
+          "expectedOrder": [
+            "core-old",
+            "core-fresh"
+          ],
+          "actualIds": [
+            "core-old",
+            "core-fresh"
+          ],
+          "hit": true,
+          "recallAtK": {
+            "value": 1,
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reciprocalRank": 1,
+          "exactOrderMatch": true
+        }
+      ],
+      "duplicateOutcomes": [
+        {
+          "caseId": "duplicate-newest-tie",
+          "expectedDuplicate": true,
+          "expectedSurvivorId": "d-new",
+          "predictedDuplicate": true,
+          "actualSurvivorId": "d-new",
+          "similarity": 1,
+          "correct": true
+        },
+        {
+          "caseId": "non-duplicate",
+          "expectedDuplicate": false,
+          "expectedSurvivorId": null,
+          "predictedDuplicate": false,
+          "actualSurvivorId": null,
+          "similarity": null,
+          "correct": true
+        },
+        {
+          "caseId": "kind-boundary",
+          "expectedDuplicate": false,
+          "expectedSurvivorId": null,
+          "predictedDuplicate": false,
+          "actualSurvivorId": null,
+          "similarity": null,
+          "correct": true
+        },
+        {
+          "caseId": "scope-boundary",
+          "expectedDuplicate": false,
+          "expectedSurvivorId": null,
+          "predictedDuplicate": false,
+          "actualSurvivorId": null,
+          "similarity": null,
+          "correct": true
+        },
+        {
+          "caseId": "status-boundary",
+          "expectedDuplicate": false,
+          "expectedSurvivorId": null,
+          "predictedDuplicate": false,
+          "actualSurvivorId": null,
+          "similarity": null,
+          "correct": true
+        },
+        {
+          "caseId": "comparison-window-source",
+          "expectedDuplicate": true,
+          "expectedSurvivorId": "d-old",
+          "predictedDuplicate": true,
+          "actualSurvivorId": "d-old",
+          "similarity": 1,
+          "correct": true
+        },
+        {
+          "caseId": "empty-normalised",
+          "expectedDuplicate": true,
+          "expectedSurvivorId": "d-empty",
+          "predictedDuplicate": true,
+          "actualSurvivorId": "d-empty",
+          "similarity": 1,
+          "correct": true
+        },
+        {
+          "caseId": "short-shingle",
+          "expectedDuplicate": true,
+          "expectedSurvivorId": "d-short",
+          "predictedDuplicate": true,
+          "actualSurvivorId": "d-short",
+          "similarity": 1,
+          "correct": true
+        }
+      ]
+    }
+  ]
+}
