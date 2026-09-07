@@ -389,6 +389,19 @@ Managed Chromium is installed as the named `patchright-chromium` stage. After co
 npm run install --workspace=@mario.andreschak/mcp-browser
 ```
 
+On Ubuntu/Debian, the Unix installer also installs Chromium's Linux libraries
+and fonts in the `patchright-system-dependencies` stage, then checks a real
+headless browser launch in `patchright-verification`. After updating FLUJO, retry
+a failed browser setup from the FLUJO directory:
+
+```bash
+node mcp-servers/browser/scripts/install-browser.mjs --install-deps
+node mcp-servers/browser/scripts/install-browser.mjs --verify
+```
+
+The dependency step may request sudo. Production builds use `tsconfig.build.json`
+to check application code; `npm run typecheck` still checks the full test suite.
+
 Never use `NODE_TLS_REJECT_UNAUTHORIZED=0`, `npm strict-ssl=false`, or another TLS-verification bypass. The installers ignore an inherited Node TLS bypass and direct you to secure proxy/CA configuration instead.
 
 ### One-line install (Linux / macOS)

@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next/storage/**/*",
+    "artifacts/**/*",
+    "goal-acceptance-artifacts/**/*",
+    "bash-utils/**/*",
+    "browser-profile/**/*",
+    "db/**/*",
+    "mcp-servers/**/*",
+    "recordings/**/*",
+    "screenshots/**/*",
+    "snapshots/**/*",
+    "storage/**/*",
+    "workspaces/**/*",
+    "userdata/**/*",
+    "**/__tests__/**",
+    "**/__mocks__/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ]
+}
