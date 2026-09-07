@@ -201,3 +201,7 @@ memory-experiment-results.json
 # Persona endurance test artifacts
 soak-artifacts/
 goal-acceptance-artifacts/
+/test-outputs
+/soak-smoke-artifacts
+/benchmark-artifacts
+fresh-memory-experiment-results.json
