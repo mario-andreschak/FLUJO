@@ -33,10 +33,14 @@ describe('browser audio stream integration', () => {
     delete process.env.FLUJO_BROWSER_STREAM_ENABLED;
     delete process.env.FLUJO_BROWSER_STREAM_AUDIO;
     session = await openSession('preinstalled-audio-test', new AbortController().signal);
+    const gatewayToken = session.gatewayToken;
+    if (!gatewayToken) {
+      throw new Error('Browser session did not provide a gateway token.');
+    }
 
     // This is the ordering browser navigation now uses: install the main-world
     // hook first, then allow page code to construct its audio graph.
-    await prepareBrowserAudioStream(session.id, session.gatewayToken);
+    await prepareBrowserAudioStream(session.id, gatewayToken);
     const cdp = await session.context.newCDPSession(session.page);
     await cdp.send('Runtime.enable');
     const created = await cdp.send('Runtime.evaluate', {
@@ -67,7 +71,7 @@ describe('browser audio stream integration', () => {
       fetch(
         `${endpoint!.origin}/audio?s=${session.id}`
           + `&t=${encodeURIComponent(endpoint!.token)}`
-          + `&k=${encodeURIComponent(session.gatewayToken)}`,
+          + `&k=${encodeURIComponent(gatewayToken)}`,
         { signal: abort.signal },
       ),
       failAfter(8_000, 'Audio response did not start.'),

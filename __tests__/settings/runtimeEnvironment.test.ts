@@ -70,7 +70,11 @@ describe('runtime environment settings file', () => {
     `;
     const cleanEnv = {
       ...Object.fromEntries(
-        Object.entries(process.env).filter(([name, value]) => name !== 'FLUJO_PORT' && value !== undefined),
+        Object.entries(process.env).filter(([name, value]) => (
+          name !== 'FLUJO_PORT'
+          && name !== '__NEXT_PROCESSED_ENV'
+          && value !== undefined
+        )),
       ),
       NODE_ENV: 'production',
     } as NodeJS.ProcessEnv;
