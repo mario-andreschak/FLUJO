@@ -511,10 +511,18 @@ cd "$INSTALL_DIR"
 export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=1
 run_stage npm-dependencies npm ci --include=dev
 
+# A downloaded Chromium binary is not usable on a minimal Ubuntu/Debian host
+# until its shared libraries and fonts are installed. Use the pinned browser
+# package's dependency list and the same sudo choice as other prerequisites.
+if [ "$OS" = Linux ] && [ "$PM" = apt ]; then
+  run_stage patchright-system-dependencies $SUDO "$(command -v node)" mcp-servers/browser/scripts/install-browser.mjs --install-deps
+fi
+
 export FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=0
 export FLUJO_INSTALL_RESULT_FILE="$BROWSER_RESULT_FILE"
 run_stage patchright-chromium npm run install --workspace=@mario.andreschak/mcp-browser
 unset FLUJO_INSTALL_RESULT_FILE
+run_stage patchright-verification node mcp-servers/browser/scripts/install-browser.mjs --verify
 
 run_stage build npm run build
 run_stage validation npm run validate:mcp-release

@@ -8,6 +8,37 @@ import { pathToFileURL } from 'node:url';
 const MAX_DIAGNOSTIC_CHARS = 12_000;
 const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
 
+function browserCli() {
+  const require = createRequire(import.meta.url);
+  return join(dirname(require.resolve('patchright/package.json')), 'cli.js');
+}
+
+export function installBrowserDependencies({ spawn = spawnSync, env = process.env } = {}) {
+  const childEnv = { ...env };
+  delete childEnv.NODE_TLS_REJECT_UNAUTHORIZED;
+  // Inherit the terminal so Patchright can request sudo and stream apt output.
+  const child = spawn(process.execPath, [browserCli(), 'install-deps', 'chromium'], {
+    env: childEnv,
+    stdio: 'inherit',
+  });
+  if (child.error) throw child.error;
+  return Number.isInteger(child.status) ? child.status : 1;
+}
+
+export async function verifyBrowser({ loadChromium = async () => (await import('patchright')).chromium } = {}) {
+  const chromium = await loadChromium();
+  const browser = await chromium.launch({ headless: true, channel: 'chromium', timeout: 30_000 });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<title>FLUJO browser verification</title>', { timeout: 10_000 });
+    if (await page.title() !== 'FLUJO browser verification') {
+      throw new Error('Managed Chromium could not render the verification page.');
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
 export function sanitizeInstallOutput(input, env = process.env) {
   let safe = String(input ?? '');
   safe = safe.replace(/(https?:\/\/)[^/@\s]+@/gi, '$1[REDACTED]@');
@@ -55,7 +86,7 @@ export function classifyBrowserInstallFailure(output) {
       remediation: 'Check proxy reachability or increase FLUJO_PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT.',
     };
   }
-  if (/host system is missing dependencies|missing librar|install-deps/.test(text)) {
+  if (/host system is missing dependencies|missing librar|error while loading shared libraries|install-deps/.test(text)) {
     return {
       category: 'OS_DEPENDENCY',
       remediation: 'Install the operating-system browser dependencies reported above, then retry.',
@@ -156,11 +187,26 @@ export function runBrowserInstall({
   return result;
 }
 
-function main() {
-  const result = runBrowserInstall();
-  process.exitCode = result.exitCode;
+async function main() {
+  try {
+    if (process.argv[2] === '--install-deps') {
+      process.exitCode = installBrowserDependencies();
+    } else if (process.argv[2] === '--verify') {
+      await verifyBrowser();
+      process.stderr.write('[FLUJO installer] Managed Chromium launch and rendering verified.\n');
+    } else {
+      const result = runBrowserInstall();
+      process.exitCode = result.exitCode;
+    }
+  } catch (error) {
+    process.stderr.write(sanitizeInstallOutput(error?.message) + '\n');
+    if (process.platform === 'linux') {
+      process.stderr.write('[FLUJO installer] Check the system browser dependencies. On Ubuntu/Debian, retry as root (using sudo when needed): node mcp-servers/browser/scripts/install-browser.mjs --install-deps\n');
+    }
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  main();
+  await main();
 }

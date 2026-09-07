@@ -89,15 +89,15 @@ run_test "Node 18.20.0" "fail" "18.20.0" 0
 run_test "Node 20.18.0" "fail" "20.18.0" 0
 run_test "Node 21.7.3" "fail" "21.7.3" 0
 
-# Missing command (no node in PATH)
+# Missing command, even when the test host has a real /usr/bin/node.
 echo "Running test: Missing node command"
 TESTS_RUN=$((TESTS_RUN + 1))
 temp_dir=$(mktemp -d)
-# Use a completely clean PATH with only our temp dir
 set +e
 PATH="$temp_dir:/usr/bin:/bin" bash -c "
     $HAVE_FUNC
     $NODE_VERSION_OK_FUNC
+    have() { [ \"\$1\" != node ] && command -v \"\$1\" >/dev/null 2>&1; }
     MIN_NODE_MAJOR=22
     MIN_NODE_MINOR=0
     node_version_ok
@@ -158,6 +158,8 @@ assert_source_contains "maps installer-scoped proxy variables" 'FLUJO_HTTP_PROXY
 assert_source_contains "validates and maps the custom CA" 'FLUJO_EXTRA_CA_CERTS'
 assert_source_contains "defers only the managed browser lifecycle" 'FLUJO_SKIP_PATCHRIGHT_DOWNLOAD'
 assert_source_contains "runs an explicit Chromium stage" 'run_stage patchright-chromium'
+assert_source_contains "installs Linux Chromium system dependencies" 'run_stage patchright-system-dependencies'
+assert_source_contains "verifies that the downloaded browser can launch" 'run_stage patchright-verification'
 assert_source_contains "writes sanitized stage diagnostics" 'INSTALL_STAGE_FILE'
 assert_source_contains "ignores inherited TLS verification bypasses" 'unset NODE_TLS_REJECT_UNAUTHORIZED'
 assert_source_absent "never disables all npm lifecycle scripts" 'npm ci[^\n]*--ignore-scripts'
