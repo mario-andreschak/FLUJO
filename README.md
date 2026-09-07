@@ -395,11 +395,12 @@ headless browser launch in `patchright-verification`. After updating FLUJO, retr
 a failed browser setup from the FLUJO directory:
 
 ```bash
-node mcp-servers/browser/scripts/install-browser.mjs --install-deps
+sudo "$(command -v node)" mcp-servers/browser/scripts/install-browser.mjs --install-deps
 node mcp-servers/browser/scripts/install-browser.mjs --verify
 ```
 
-The dependency step may request sudo. Production builds use `tsconfig.build.json`
+The dependency step requires root (omit `sudo` when already root); browser
+verification runs as your regular user. Production builds use `tsconfig.build.json`
 to check application code; `npm run typecheck` still checks the full test suite.
 
 Never use `NODE_TLS_REJECT_UNAUTHORIZED=0`, `npm strict-ssl=false`, or another TLS-verification bypass. The installers ignore an inherited Node TLS bypass and direct you to secure proxy/CA configuration instead.

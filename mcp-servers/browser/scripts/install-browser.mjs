@@ -201,7 +201,7 @@ async function main() {
   } catch (error) {
     process.stderr.write(sanitizeInstallOutput(error?.message) + '\n');
     if (process.platform === 'linux') {
-      process.stderr.write('[FLUJO installer] Check the system browser dependencies. On Ubuntu/Debian, retry: node mcp-servers/browser/scripts/install-browser.mjs --install-deps\n');
+      process.stderr.write('[FLUJO installer] Check the system browser dependencies. On Ubuntu/Debian, retry as root (using sudo when needed): node mcp-servers/browser/scripts/install-browser.mjs --install-deps\n');
     }
     process.exitCode = 1;
   }
