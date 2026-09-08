@@ -81,6 +81,7 @@ function completedDispatch(): PersonaFlowDispatchRecord {
     updatedAt: 200,
     startedAt: 150,
     completedAt: 200,
+    terminalProjectionsSettledAt: 200,
   };
 }
 
@@ -221,6 +222,7 @@ describe('Persona runtime compaction', () => {
       createdAt: original.createdAt,
       updatedAt: original.updatedAt,
       completedAt: original.completedAt,
+      terminalProjectionsSettledAt: original.terminalProjectionsSettledAt,
       compactedAt: 300,
     }));
     expect(compacted.flowInput).toBeUndefined();

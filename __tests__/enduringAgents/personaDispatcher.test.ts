@@ -1369,7 +1369,7 @@ describe('Persona Flow dispatcher', () => {
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(2);
   });
 
-  it('reconciles durable history once around a multi-claim pump', async () => {
+  it('keeps terminal evidence queryable without reconciling settled history again', async () => {
     const harness = makeHarness(workspace('bounded-batch'));
     const submissions = [];
     for (let index = 0; index < 8; index += 1) {
@@ -1379,10 +1379,10 @@ describe('Persona Flow dispatcher', () => {
       ));
     }
 
-    const listSpy = jest.spyOn(harness.dispatcher, 'list');
+    const fullHistorySpy = jest.spyOn(harness.dispatcher, 'list');
     await harness.dispatcher.pump('persona_test');
 
-    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(fullHistorySpy).not.toHaveBeenCalled();
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(submissions.length);
     await expect(Promise.all(submissions.map(({ dispatch }) => (
       harness.dispatcher.wait(dispatch.id, { timeoutMs: 2_000 })
@@ -1390,8 +1390,56 @@ describe('Persona Flow dispatcher', () => {
       expect.arrayContaining(submissions.map(() => expect.objectContaining({
         state: 'completed',
         activityId: expect.any(String),
+        terminalProjectionsSettledAt: expect.any(Number),
       }))),
     );
+
+    const history = await harness.dispatcher.list('persona_test');
+    expect(history).toHaveLength(submissions.length);
+    expect(history.every(record => record.terminalProjectionsSettledAt !== undefined)).toBe(true);
+
+    (harness.dependencies.synchronizeAssignedWorkItemFromActivity as jest.Mock).mockClear();
+    (harness.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock as jest.Mock)
+      .mockClear();
+    await harness.dispatcher.pump('persona_test');
+    expect(harness.dependencies.synchronizeAssignedWorkItemFromActivity).not.toHaveBeenCalled();
+    expect(harness.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock)
+      .not.toHaveBeenCalled();
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(submissions.length);
+  });
+
+  it('retries interrupted terminal projections before removing them from reconciliation', async () => {
+    const harness = makeHarness(workspace('terminal-projection-retry'));
+    const taskProjection = harness.dependencies
+      .synchronizeAssignedWorkItemFromActivity as jest.Mock;
+    const atomicTaskProjection = harness.dependencies
+      .synchronizeAssignedWorkItemFromActivityWithinRuntimeLock as jest.Mock;
+    atomicTaskProjection.mockRejectedValueOnce(new Error('atomic projection interrupted'));
+    taskProjection.mockRejectedValueOnce(new Error('fallback projection interrupted'));
+
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'terminal-projection-retry'),
+      { startPump: false },
+    );
+    await harness.dispatcher.pump('persona_test');
+    expect(await harness.dispatcher.get(submission.dispatch.id)).toMatchObject({
+      state: 'completed',
+      terminalProjectionsSettledAt: undefined,
+    });
+
+    taskProjection.mockClear();
+    atomicTaskProjection.mockClear();
+    await harness.dispatcher.pump('persona_test');
+    expect(taskProjection).toHaveBeenCalledTimes(1);
+    expect(atomicTaskProjection).not.toHaveBeenCalled();
+    expect(await harness.dispatcher.get(submission.dispatch.id)).toMatchObject({
+      state: 'completed',
+      terminalProjectionsSettledAt: expect.any(Number),
+    });
+
+    taskProjection.mockClear();
+    await harness.dispatcher.pump('persona_test');
+    expect(taskProjection).not.toHaveBeenCalled();
   });
 
   it('yields approval/debug pauses without completing or immediately replaying them', async () => {

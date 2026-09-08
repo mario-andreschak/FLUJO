@@ -1,3 +1,7 @@
+import { promises as fs } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
+
 import {
   claimNextPersonaActivity,
   completePersonaActivity,
@@ -14,6 +18,7 @@ import {
   exerciseHardCrashProcessBoundary,
   reconcileWorkload,
   runPersonaSoak,
+  writePersonaSoakFailureDiagnostic,
 } from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
@@ -172,6 +177,62 @@ describe('deterministic Persona soak harness', () => {
         terminalSuccessEventCount: 1,
       },
     });
+  });
+
+  it('writes schema-v2 failure diagnostics that cannot be mistaken for acceptance evidence', async () => {
+    const outputDirectory = await fs.mkdtemp(path.join(tmpdir(), 'persona-soak-failure-'));
+    try {
+      await writePersonaSoakFailureDiagnostic({
+        outputDirectory,
+        runId: 'failure-regression',
+        commitSha: 'a'.repeat(40),
+        mode: 'acceptance',
+        seed: 459,
+        days: 28,
+        activitiesPerDay: 20,
+        learningEnabled: true,
+        startedAt: '2026-09-07T00:00:00.000Z',
+        phase: 'day-checkpoint',
+        day: 21,
+        lastActivityId: 'soak-21-20',
+        error: new Error('wall-clock budget exceeded'),
+        failedAt: '2026-09-07T00:45:00.000Z',
+      });
+      const files = await fs.readdir(outputDirectory);
+      expect(files).toEqual(['persona-soak-failure.json']);
+      const failure = JSON.parse(await fs.readFile(
+        path.join(outputDirectory, 'persona-soak-failure.json'),
+        'utf8',
+      ));
+      expect(failure).toMatchObject({
+        schemaVersion: 2,
+        authoritative: false,
+        acceptanceEligible: false,
+        runIdentity: {
+          runId: 'failure-regression',
+          commitSha: 'a'.repeat(40),
+          mode: 'acceptance',
+        },
+        failure: {
+          phase: 'day-checkpoint',
+          day: 21,
+          message: 'wall-clock budget exceeded',
+        },
+      });
+      expect(failure.criteria).toBeUndefined();
+    } finally {
+      await fs.rm(outputDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed acceptance provenance before starting runtime work', async () => {
+    await expect(runPersonaSoak({
+      days: 1,
+      activitiesPerDay: 1,
+      seed: 459,
+      runMode: 'infrastructure',
+      commitSha: 'A'.repeat(40),
+    })).rejects.toThrow(/full 40-character lowercase commit SHA/);
   });
 
   it('rejects a non-recovery result even when the fault handler returned normally', () => {

@@ -45,6 +45,36 @@ export async function listPersonaFlowDispatchRecordsForRetention(
 }
 
 /**
+ * Return only dispatches that can still require crash-recovery work. Every
+ * envelope is still parsed strictly before filtering, so corrupt durable
+ * history remains fail-closed while settled terminal evidence stays out of the
+ * operational reconciliation loop.
+ */
+export async function listPersonaFlowDispatchRecordsForReconciliation(
+  personaId: string,
+): Promise<PersonaFlowDispatchRecord[]> {
+  assertSafeCollectionId(personaId);
+  const workspaceId = getCurrentWorkspace();
+  const entries = await listCollectionItemEntriesStrict<unknown>(
+    ENDURING_AGENT_COLLECTIONS.flowDispatches,
+  );
+  const records: PersonaFlowDispatchRecord[] = [];
+  for (const { id, item } of entries) {
+    const record = parseStoredDispatch(id, item, workspaceId);
+    const terminal = record.state === 'completed'
+      || record.state === 'error'
+      || record.state === 'cancelled';
+    if (
+      record.personaId === personaId
+      && (!terminal || record.terminalProjectionsSettledAt === undefined)
+    ) records.push(record);
+  }
+  return records.sort((left, right) => (
+    left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+  ));
+}
+
+/**
  * Persist a compacted terminal envelope without notifying dispatcher waiters.
  * Retention is maintenance, not a second lifecycle transition.
  */

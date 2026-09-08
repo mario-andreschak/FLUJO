@@ -1225,6 +1225,55 @@ async function createDailyNoiseMemory(personaId: string, day: number, now: numbe
   }) as MemoryItem);
 }
 
+export async function writePersonaSoakFailureDiagnostic(input: {
+  outputDirectory: string;
+  runId: string;
+  commitSha: string;
+  mode: SoakRunMode;
+  seed: number;
+  days: number;
+  activitiesPerDay: number;
+  learningEnabled: boolean;
+  startedAt: string;
+  phase: string;
+  day: number;
+  lastActivityId: string | null;
+  error: unknown;
+  failedAt?: string;
+}): Promise<{ filename: string; failedAt: string; message: string }> {
+  const filename = 'persona-soak-failure.json';
+  const failedAt = input.failedAt ?? new Date().toISOString();
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const failure = {
+    schemaVersion: PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
+    authoritative: false,
+    acceptanceEligible: false,
+    runIdentity: {
+      runId: input.runId,
+      commitSha: input.commitSha,
+      mode: input.mode,
+      seed: input.seed,
+      days: input.days,
+      activitiesPerDay: input.activitiesPerDay,
+      learningEnabled: input.learningEnabled,
+      startedAt: input.startedAt,
+    },
+    failure: {
+      phase: input.phase,
+      day: input.day,
+      lastActivityId: input.lastActivityId,
+      message,
+      failedAt,
+    },
+  };
+  await fs.mkdir(input.outputDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(input.outputDirectory, filename),
+    `${stableJsonStringify(failure, 2)}\n`,
+  );
+  return { filename, failedAt, message };
+}
+
 export async function runPersonaSoak(options: PersonaSoakOptions): Promise<PersonaSoakSummary> {
   const exactAcceptanceConfiguration = options.days === FULL_GATE_DAYS
     && options.activitiesPerDay === FULL_GATE_ACTIVITIES_PER_DAY;
@@ -1237,10 +1286,15 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
     : SOAK_SMOKE_WALL_BUDGET_MS;
   const runDeadlineMs = wallStartedAt + wallClockBudgetMs;
   const startedAt = wallStartedAt + 1_000;
-  const commitSha = options.commitSha
+  const suppliedCommitSha = options.commitSha
     ?? process.env.PERSONA_SOAK_COMMIT
-    ?? process.env.GITHUB_SHA
-    ?? 'unreported';
+    ?? process.env.GITHUB_SHA;
+  if (runMode !== 'smoke' && !/^[0-9a-f]{40}$/.test(suppliedCommitSha ?? '')) {
+    throw new Error(
+      'Acceptance and infrastructure soak runs require a full 40-character lowercase commit SHA.',
+    );
+  }
+  const commitSha = suppliedCommitSha ?? 'unreported';
   const runId = options.runId
     ?? process.env.PERSONA_SOAK_RUN_ID
     ?? `local-${process.pid}-${options.seed}-${wallStartedAt}`;
@@ -1279,6 +1333,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         'persona-soak.jsonl',
         'persona-soak.md',
         'persona-soak-progress.jsonl',
+        'persona-soak-failure.json',
         'SHA256SUMS',
       ].map(filename => fs.rm(path.join(options.outputDirectory!, filename), { force: true })));
       await appendProgress({
@@ -1295,6 +1350,9 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       });
     }
     summary = await runWithWorkspace(workspaceId, async () => {
+      // The harness executes one explicit, evidence-captured sweep per simulated
+      // day. Per-terminal retention would rescan the same growing collections
+      // after every Activity and turn the acceptance harness quadratic again.
       FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
       FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
       FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
@@ -2074,15 +2132,37 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       }
     });
   } catch (error) {
+    const diagnostic = options.outputDirectory
+      ? await writePersonaSoakFailureDiagnostic({
+        outputDirectory: options.outputDirectory,
+        runId,
+        commitSha,
+        mode: runMode,
+        seed: options.seed,
+        days: options.days,
+        activitiesPerDay: options.activitiesPerDay,
+        learningEnabled: Boolean(options.withLearning),
+        startedAt: new Date(wallStartedAt).toISOString(),
+        phase: progressPhase,
+        day: progressDay,
+        lastActivityId: progressActivityId,
+        error,
+      })
+      : {
+        filename: undefined,
+        failedAt: new Date().toISOString(),
+        message: error instanceof Error ? error.message : String(error),
+      };
     await appendProgress({
       recordType: 'run_failed',
       runId,
       commitSha,
-      failedAt: new Date().toISOString(),
+      failedAt: diagnostic.failedAt,
       phase: progressPhase,
       day: progressDay,
       lastActivityId: progressActivityId,
-      error: error instanceof Error ? error.message : String(error),
+      error: diagnostic.message,
+      diagnosticArtifact: diagnostic.filename,
     });
     throw error;
   } finally {
