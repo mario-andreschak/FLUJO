@@ -667,6 +667,7 @@ function takeWorkspaceSteering(workspaceId: string, conversationId: string): voi
 describe('Persona Flow dispatcher', () => {
   afterEach(() => {
     FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();
   });
 
@@ -1029,7 +1030,38 @@ describe('Persona Flow dispatcher', () => {
     );
   });
 
+  it('settles completed work without admitting maintenance when admission is disabled', async () => {
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
+    const harness = makeHarness(workspace('memory-maintenance-disabled'), {
+      enableMemoryMaintenance: true,
+    });
+
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'memory-maintenance-disabled'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+
+    expect(submission.dispatch).toMatchObject({
+      state: 'completed',
+      memoryCandidateLimit: 3,
+      terminalProjectionsSettledAt: expect.any(Number),
+    });
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+    const records = await harness.dispatcher.list('persona_test');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      id: submission.dispatch.id,
+      terminalProjectionsSettledAt: expect.any(Number),
+    });
+    expect(records.some((record) => record.admission.kind === 'maintenance')).toBe(false);
+
+    await harness.dispatcher.pump('persona_test');
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+    expect(await harness.dispatcher.list('persona_test')).toHaveLength(1);
+  });
+
   it('runs one restricted memory-maintenance Activity after an authored Activity completes', async () => {
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance'), {
       enableMemoryMaintenance: true,
     });
@@ -1099,6 +1131,7 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('returns maintenance validation failures to the tool call and records them in the conversation', async () => {
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-invalid-proposal'), {
       enableMemoryMaintenance: true,
     });
@@ -1157,6 +1190,7 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('lets the deterministic maintenance node commit through the dispatcher gateway exactly once', async () => {
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-gateway'), {
       enableMemoryMaintenance: true,
     });
@@ -1202,6 +1236,7 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('does not learn automatically when the Persona learning control is off', async () => {
+    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-off'), {
       enableMemoryMaintenance: true,
       autonomyLevel: 'locked',
@@ -1415,7 +1450,9 @@ describe('Persona Flow dispatcher', () => {
     const atomicTaskProjection = harness.dependencies
       .synchronizeAssignedWorkItemFromActivityWithinRuntimeLock as jest.Mock;
     atomicTaskProjection.mockRejectedValueOnce(new Error('atomic projection interrupted'));
-    taskProjection.mockRejectedValueOnce(new Error('fallback projection interrupted'));
+    taskProjection
+      .mockRejectedValueOnce(new Error('fallback projection interrupted'))
+      .mockRejectedValueOnce(new Error('fallback projection interrupted'));
 
     const submission = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'terminal-projection-retry'),

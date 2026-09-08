@@ -2376,6 +2376,7 @@ export class PersonaFlowDispatcher {
   private async ensurePostActivityMaintenance(
     source: PersonaFlowDispatchRecord,
   ): Promise<PersonaFlowDispatchRecord | null> {
+    if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION) return null;
     if (
       source.state !== 'completed'
       || source.admission.kind === 'maintenance'
