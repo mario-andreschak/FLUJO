@@ -66,8 +66,8 @@ beforeEach(async () => {
   mockedRoots.mockResolvedValue([dataDir]);
 });
 
-afterEach(() => {
-  _resetBashSessionsForTests();
+afterEach(async () => {
+  await _resetBashSessionsForTests();
   _resetBashShellCacheForTests();
   mockedSpawn.mockClear();
   mockedRoots.mockReset();

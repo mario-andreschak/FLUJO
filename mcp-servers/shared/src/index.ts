@@ -105,8 +105,9 @@ export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void
   if (pid === undefined) return () => undefined;
   if (process.platform === 'win32') {
     try {
-      // taskkill reports only after the target tree has been terminated. Waiting
-      // here keeps kill/status and temporary-directory cleanup from racing it.
+      // Wait for taskkill itself so the tree-termination request is complete.
+      // Node may publish the child's close event later; callers that must
+      // synchronize observable liveness use killProcessTreeAndWait below.
       spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
         stdio: 'ignore',
         timeout: Math.max(graceMs, 5_000),
@@ -131,4 +132,68 @@ export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void
   }, graceMs);
   escalation.unref?.();
   return () => clearTimeout(escalation);
+}
+
+export interface ProcessTreeTerminationResult {
+  pid?: number;
+  /** True only after the ChildProcess close event has been observed. */
+  exited: boolean;
+  durationMs: number;
+}
+
+/**
+ * Terminate a process tree and wait for Node to observe the tracked child as
+ * closed. On Windows, synchronous taskkill completion is not sufficient: the
+ * child close event (and inherited stdio handle release) can arrive later under
+ * load. Subscribe before requesting termination so that transition cannot be
+ * missed, then bound the final observation wait.
+ */
+export async function killProcessTreeAndWait(
+  child: ChildProcess,
+  graceMs = 2_000,
+  finalWaitMs = 5_000,
+): Promise<ProcessTreeTerminationResult> {
+  const startedAt = Date.now();
+  const pid = child.pid;
+  if (pid === undefined) {
+    return { pid, exited: false, durationMs: Date.now() - startedAt };
+  }
+
+  let closeObserved = false;
+  let resolveClose: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClose = resolve;
+  });
+  const onClose = () => {
+    closeObserved = true;
+    resolveClose?.();
+  };
+  child.once('close', onClose);
+
+  let cancelEscalation: () => void = () => undefined;
+  try {
+    cancelEscalation = killProcessTree(child, graceMs);
+  } catch {
+    child.removeListener('close', onClose);
+    return { pid, exited: false, durationMs: Date.now() - startedAt };
+  }
+
+  // Windows taskkill already force-terminates the tree. POSIX may need the
+  // grace interval before killProcessTree escalates from SIGTERM to SIGKILL.
+  const observationMs = Math.max(0, finalWaitMs)
+    + (process.platform === 'win32' ? 0 : Math.max(0, graceMs));
+  let timeout: NodeJS.Timeout | undefined;
+  if (!closeObserved) {
+    await Promise.race([
+      closed,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, observationMs);
+      }),
+    ]);
+  }
+  if (timeout) clearTimeout(timeout);
+  if (!closeObserved) child.removeListener('close', onClose);
+  cancelEscalation();
+
+  return { pid, exited: closeObserved, durationMs: Date.now() - startedAt };
 }

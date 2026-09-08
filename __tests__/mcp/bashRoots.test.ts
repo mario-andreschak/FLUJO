@@ -53,7 +53,7 @@ describe('bash cwd confinement (issue #175)', () => {
     mockedRoots.mockReset();
   });
   afterEach(async () => {
-    _resetBashSessionsForTests();
+    await _resetBashSessionsForTests();
     await fsp.rm(dir, { recursive: true, force: true });
     if (prevFsEnv === undefined) delete process.env.FLUJO_FS_ROOTS; else process.env.FLUJO_FS_ROOTS = prevFsEnv;
     if (prevBashEnv === undefined) delete process.env.FLUJO_BASH_ROOTS; else process.env.FLUJO_BASH_ROOTS = prevBashEnv;
@@ -125,7 +125,7 @@ describe('bash host environment inheritance', () => {
     process.env.FLUJO_WORKSPACE = 'bash-owner';
   });
   afterEach(async () => {
-    _resetBashSessionsForTests();
+    await _resetBashSessionsForTests();
     await fsp.rm(dir, { recursive: true, force: true });
     if (prevSecret === undefined) delete process.env.FAKE_SECRET; else process.env.FAKE_SECRET = prevSecret;
     if (prevParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = prevParentDataDir;

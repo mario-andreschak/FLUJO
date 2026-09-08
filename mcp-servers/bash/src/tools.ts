@@ -39,7 +39,9 @@ import {
   getDataDir,
   isInside,
   killProcessTree,
+  killProcessTreeAndWait,
   loadEffectiveRoots,
+  type ProcessTreeTerminationResult,
 } from '@flujo-ai/mcp-shared';
 
 const BASH_SERVER_NAME = 'bash';
@@ -490,6 +492,8 @@ interface BashSession {
   startedAt: number;
   endedAt?: number;
   cancelEscalation?: () => void;
+  /** Shared by concurrent kill calls so a process tree is terminated once. */
+  terminationPromise?: Promise<ProcessTreeTerminationResult>;
   reapTimer?: NodeJS.Timeout;
   /** Preflight found a command head that cannot be resolved on PATH. */
   missingExecutableWarning?: boolean;
@@ -592,7 +596,7 @@ function ownerLiveSessionCount(ownerScope: string): number {
 
 /** Terminate one background session's whole process tree and drop its timers. */
 function terminateSession(session: BashSession): void {
-  if (session.running) {
+  if (session.running && !session.terminationPromise) {
     try {
       session.cancelEscalation = killProcessTree(session.child);
     } catch {
@@ -602,6 +606,23 @@ function terminateSession(session: BashSession): void {
   if (session.reapTimer) {
     clearTimeout(session.reapTimer);
     session.reapTimer = undefined;
+  }
+}
+
+/** Terminate once and wait until the tracked child is observably closed. */
+async function terminateSessionAndWait(session: BashSession): Promise<ProcessTreeTerminationResult> {
+  if (!session.running) {
+    return { pid: session.child.pid, exited: true, durationMs: 0 };
+  }
+  const existing = session.terminationPromise;
+  if (existing) return await existing;
+
+  const termination = killProcessTreeAndWait(session.child);
+  session.terminationPromise = termination;
+  try {
+    return await termination;
+  } finally {
+    if (session.terminationPromise === termination) session.terminationPromise = undefined;
   }
 }
 
@@ -783,26 +804,17 @@ function terminalMeta(visibility: Array<'model' | 'app'> = ['model', 'app']): To
  * cleared too, so a repeated call cannot leave a handle keeping the event loop
  * alive after "shutdown".
  */
-export function shutdownBashSessions(): void {
+export async function shutdownBashSessions(): Promise<void> {
   if (global.__flujo_bash_sweep_timer) {
     clearInterval(global.__flujo_bash_sweep_timer);
     global.__flujo_bash_sweep_timer = undefined;
   }
+  const terminations: Array<Promise<ProcessTreeTerminationResult>> = [];
   for (const child of foregroundChildren()) {
-    try {
-      killProcessTree(child);
-    } catch {
-      /* best-effort */
-    }
+    terminations.push(killProcessTreeAndWait(child));
   }
   for (const s of sessions().values()) {
-    if (s.running) {
-      try {
-        killProcessTree(s.child);
-      } catch {
-        /* best-effort */
-      }
-    }
+    if (s.running) terminations.push(terminateSessionAndWait(s));
     if (s.reapTimer) {
       clearTimeout(s.reapTimer);
       s.reapTimer = undefined;
@@ -822,6 +834,7 @@ export function shutdownBashSessions(): void {
       terminal.reapTimer = undefined;
     }
   }
+  await Promise.allSettled(terminations);
 }
 
 function registerExitCleanup(): void {
@@ -840,7 +853,7 @@ function registerExitCleanup(): void {
   }
   if (global.__flujo_bash_cleanup_registered) return;
   global.__flujo_bash_cleanup_registered = true;
-  const handler = () => shutdownBashSessions();
+  const handler = () => { void shutdownBashSessions(); };
   process.on('exit', handler);
   process.on('SIGINT', handler);
   process.on('SIGTERM', handler);
@@ -2332,12 +2345,16 @@ async function startTool(
     appendSessionOutput(`\n${err.message}`);
     session.running = false;
     session.endedAt = Date.now();
+    session.cancelEscalation?.();
+    session.cancelEscalation = undefined;
     scheduleReap(session);
   });
   child.on('close', (code: number | null) => {
     session.running = false;
     session.exitCode = code;
     session.endedAt = Date.now();
+    session.cancelEscalation?.();
+    session.cancelEscalation = undefined;
     spool.close();
     scheduleReap(session);
   });
@@ -2569,15 +2586,25 @@ function writeStdinTool(args: Record<string, unknown>, ownerScope: string): Call
   return textResult({ sessionId: id, written: payload.length, bomPolicy });
 }
 
-function killTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
+async function killTool(args: Record<string, unknown>, ownerScope: string): Promise<CallToolResult> {
   const id = String(args?.sessionId ?? '');
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
-  if (session.running) {
-    session.cancelEscalation = killProcessTree(session.child);
-  }
+
+  const wasRunning = session.running;
+  const termination = await terminateSessionAndWait(session);
   touchSession(session);
-  return textResult({ sessionId: id, killed: true });
+  const killed = termination.exited && !session.running;
+  return textResult({
+    sessionId: id,
+    killed,
+    running: session.running,
+    terminationWaitMs: termination.durationMs,
+    ...(!wasRunning ? { alreadyExited: true } : {}),
+    ...(!killed ? {
+      error: `Session "${id}" is still observable as running after process-tree termination.`,
+    } : {}),
+  }, !killed);
 }
 
 function listSessionsTool(ownerScope: string): CallToolResult {
@@ -2866,7 +2893,7 @@ export async function bashCallTool(
       case 'write_stdin':
         return writeStdinTool(args, scope);
       case 'kill':
-        return killTool(args, scope);
+        return await killTool(args, scope);
       case 'list_sessions':
         return listSessionsTool(scope);
       case 'release_owner':
@@ -2881,8 +2908,8 @@ export async function bashCallTool(
 }
 
 /** Test-only: force-kill and clear all sessions. */
-export function _resetBashSessionsForTests(): void {
-  shutdownBashSessions();
+export async function _resetBashSessionsForTests(): Promise<void> {
+  await shutdownBashSessions();
   foregroundChildren().clear();
   sessions().clear();
   terminalSessions().clear();

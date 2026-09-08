@@ -109,7 +109,7 @@ async function shutdown(reason: string): Promise<void> {
   // Stop accepting new work BEFORE tearing anything down, so a request that
   // arrives mid-shutdown cannot start a process nothing will ever kill.
   configureRootsProvider(undefined);
-  shutdownBashSessions();
+  await shutdownBashSessions();
   await server.close().catch(() => undefined);
 }
 process.once('SIGINT', () => void shutdown('SIGINT'));
@@ -124,8 +124,8 @@ process.stdin.once('close', () => void shutdown('stdin close'));
 // silently overwritten by server.connect() below.
 server.onclose = () => void shutdown('transport close');
 
-server.connect(transport).catch((error) => {
-  shutdownBashSessions();
+server.connect(transport).catch(async (error) => {
+  await shutdownBashSessions();
   process.stderr.write(`@mario.andreschak/mcp-bash failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });
