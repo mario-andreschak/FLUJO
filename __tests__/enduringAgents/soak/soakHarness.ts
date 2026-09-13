@@ -189,6 +189,9 @@ const FULL_GATE_DAYS = 28;
 const FULL_GATE_ACTIVITIES_PER_DAY = 20;
 const LEASE_HISTORY_SOAK_CAP = 50;
 const SOAK_DISPATCH_WALL_TIMEOUT_MS = 30_000;
+// Each foreground dispatch can also create a memory-maintenance Activity.
+// Bound work per pump independently of the random placement of steering inputs.
+const SOAK_DISPATCH_BATCH_SIZE = 4;
 const SOAK_SMOKE_WALL_BUDGET_MS = 10 * 60_000;
 const SOAK_ACCEPTANCE_WALL_BUDGET_MS = 45 * 60_000;
 const SOAK_TEARDOWN_WALL_TIMEOUT_MS = 30_000;
@@ -1413,6 +1416,9 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
             pendingDispatches.push(
               await submitWorkloadActivity(dispatcher, personaId, activity),
             );
+            if (pendingDispatches.length >= SOAK_DISPATCH_BATCH_SIZE) {
+              await flushPendingDispatches();
+            }
           }
         }
         await flushPendingDispatches();

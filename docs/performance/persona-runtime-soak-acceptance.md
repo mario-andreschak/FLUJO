@@ -94,7 +94,10 @@ generation, so the optimization cannot serve an older record after a commit.
 This avoids repeatedly loading and parsing the full history during each Activity.
 
 Ordinary workload items are persisted with automatic pumping disabled and drained
-in bounded, order-preserving batches between steering inputs. A pump reconciles the
+in order-preserving batches of at most four, flushing before steering inputs.
+Each foreground dispatch can also create a memory-maintenance Activity; limiting
+the batch prevents a random stretch without steering from putting an entire day's
+work under one 30-second pump deadline. A pump reconciles the
 durable dispatch history once, serially claims and executes every queued Activity,
 and performs a final reconciliation. Every individual dispatch is still verified by
 the dispatcher's durable completion waiter. The batch pump and each waiter use real
