@@ -20,7 +20,7 @@ import {
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { invalidatePersonaRecordCache } from './personaRecordCache';
+import { advancePersonaRecordCache, invalidatePersonaRecordCache } from './personaRecordCache';
 import { PERSONA_RECORD_INDEX_SCHEMA_VERSION } from './recordMigrations';
 
 const log = createLogger('backend/services/enduringAgents/indexing');
@@ -432,6 +432,7 @@ async function mutateIndex<T extends IndexEntry>(
   config: Config<T>,
   mutateRecord: () => Promise<void>,
   mutateEntries: (entries: T[]) => T[],
+  onCommitted?: (previousRevision: number, revision: number) => void,
 ): Promise<void> {
   await runInWriteChain(config.chainKey, async () => {
     const generation = await loadGeneration(config);
@@ -468,6 +469,7 @@ async function mutateIndex<T extends IndexEntry>(
       dirty: false,
     });
     await rememberIndex(config, next);
+    onCommitted?.(baselineRevision, revision);
   });
 }
 
@@ -491,11 +493,15 @@ export async function saveIndexedCollectionItem(
         }
         return [...entries.filter(candidate => candidate.id !== entry.id), entry];
       },
+      (previousRevision, revision) => advancePersonaRecordCache(
+        collection, record.personaId, record.id, previousRevision, revision,
+      ),
     );
-  } finally {
+  } catch (error) {
     // A record may have committed before a later index write failed. The dirty
     // generation guarantees rebuild; dropping cached records completes recovery.
     invalidatePersonaRecordCache(collection, record.personaId);
+    throw error;
   }
 }
 

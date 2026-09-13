@@ -87,6 +87,12 @@ Dispatcher reconciliation reuses an existing maintenance envelope and its frozen
 evidence, repairing an incomplete mailbox admission without rebuilding historical
 requests on every pump.
 
+Single-record index commits also carry unchanged parsed records into the next
+cache revision. The changed record is invalidated even when compaction preserves
+its timestamp. Revision gaps discard the cache, and late reads retain their own
+generation, so the optimization cannot serve an older record after a commit.
+This avoids repeatedly loading and parsing the full history during each Activity.
+
 Ordinary workload items are persisted with automatic pumping disabled and drained
 in bounded, order-preserving batches between steering inputs. A pump reconciles the
 durable dispatch history once, serially claims and executes every queued Activity,

@@ -57,18 +57,15 @@ export async function loadPersonaRecords<T>(options: {
   const target = cache();
   const cacheKey = key(options.collection, options.personaId);
   let bucket = target.get(cacheKey);
-  if (!bucket) {
-    bucket = { revision: -1, records: new Map(), touchedAt: Date.now() };
-    target.set(cacheKey, bucket);
+  if (!bucket || bucket.revision !== options.revision) {
+    const currentRevision = bucket?.revision ?? -1;
+    bucket = { revision: options.revision, records: new Map(), touchedAt: Date.now() };
+    // An in-flight read of an older revision must not replace a newer cache or
+    // fill its records after a mutation has committed.
+    if (currentRevision <= options.revision) target.set(cacheKey, bucket);
   }
 
   const selected = options.entries.slice(0, PERSONA_RECORD_CACHE_MAX_RECORDS_PER_PERSONA);
-  if (bucket.revision !== options.revision) {
-    // Entries outside the current page may also have changed. Clearing avoids
-    // serving one of those stale records when a later call selects that page.
-    bucket.records.clear();
-    bucket.revision = options.revision;
-  }
   await Promise.all(selected.map(async (entry) => {
     const cached = bucket!.records.get(entry.id);
     if (!cached || cached.updatedAt !== entry.updatedAt) {
@@ -85,6 +82,30 @@ export async function loadPersonaRecords<T>(options: {
 
 export function invalidatePersonaRecordCache(collection: string, personaId: string): void {
   cache().delete(key(collection, personaId));
+}
+
+/** Called under the index write chain after a single-record mutation commits. */
+export function advancePersonaRecordCache(
+  collection: string,
+  personaId: string,
+  changedId: string,
+  previousRevision: number,
+  revision: number,
+): void {
+  const target = cache();
+  const cacheKey = key(collection, personaId);
+  const bucket = target.get(cacheKey);
+  if (!bucket) return;
+  if (bucket.revision !== previousRevision) {
+    // A revision gap may include external writes to any record, so no cached
+    // record from that older generation is safe to carry forward.
+    if (bucket.revision < revision) target.delete(cacheKey);
+    return;
+  }
+  const records = new Map(bucket.records);
+  // Compaction can change content without changing updatedAt.
+  records.delete(changedId);
+  target.set(cacheKey, { revision, records, touchedAt: Date.now() });
 }
 
 export function _clearPersonaRecordCache(): void {
