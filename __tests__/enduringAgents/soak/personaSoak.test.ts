@@ -11,6 +11,7 @@ import { createPersonaFromRole } from '../fixtures/personaFactory';
 import { PERSONA_INGRESS_MATRIX } from '../personaIngressMatrix';
 import {
   assertValidFaultResult,
+  assertSoakDispatchesDrained,
   exerciseHardCrashProcessBoundary,
   reconcileWorkload,
   runPersonaSoak,
@@ -22,6 +23,21 @@ import { generatePersonaSoakWorkload } from './workloadGenerator';
 jest.setTimeout(50 * 60 * 1_000);
 
 describe('deterministic Persona soak harness', () => {
+  it('rejects a hidden maintenance backlog even when foreground dispatches completed', () => {
+    const record = (id: string, kind: string, state: string, message?: string) => ({
+      id, state, admission: { kind }, ...(message ? { error: { message } } : {}),
+    }) as Parameters<typeof assertSoakDispatchesDrained>[0][number];
+    const foreground = record('dispatch_source', 'interactive_chat', 'completed');
+    const maintenance = record('dispatch_maintenance', 'maintenance', 'completed');
+    expect(() => assertSoakDispatchesDrained([foreground, maintenance])).not.toThrow();
+    expect(() => assertSoakDispatchesDrained([
+      foreground, record('dispatch_queued', 'maintenance', 'queued'),
+    ])).toThrow('1 unfinished');
+    expect(() => assertSoakDispatchesDrained([
+      foreground, record('dispatch_failed', 'maintenance', 'error', 'Conversation missing'),
+    ])).toThrow('Conversation missing');
+  });
+
   it('reconciles the actual authored Core revision while rejecting a stale Role revision', async () => {
     await runWithWorkspace(`soak-core-revision-${process.pid}`, async () => {
       const bundle = await createPersonaFromRole({ name: 'Soak Core identity regression' });

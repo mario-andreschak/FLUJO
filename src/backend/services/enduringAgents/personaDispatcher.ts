@@ -2369,6 +2369,26 @@ export class PersonaFlowDispatcher {
       || !source.activityId
       || !source.completedAt
     ) return null;
+    const idempotencyKey = `post-activity-maintenance:${source.id}`;
+    const existing = await this.get(personaFlowDispatchId(
+      source.personaId, idempotencyKey, this.workspaceId,
+    ));
+    if (existing) {
+      if (
+        existing.personaId !== source.personaId
+        || existing.admission.kind !== 'maintenance'
+        || existing.admission.source.kind !== 'maintenance'
+        || existing.admission.source.sourceId !== source.activityId
+      ) {
+        throw new PersonaFlowDispatchCorruptionError(existing.id, 'Post-Activity maintenance has mismatched source identity.');
+      }
+      // The original envelope already freezes the maintenance evidence. Do not
+      // rebuild it from potentially changed/compacted conversation history on
+      // every pump. Still repair an admission interrupted before mailbox save.
+      return existing.mailboxItemId && existing.routingDecision
+        ? existing
+        : (await this.routeStored(existing)).dispatch;
+    }
     const persona = await this.inWorkspace(() => this.dependencies.getPersona(source.personaId));
     if (!persona || persona.autonomyLevel === 'locked') return null;
     const candidateLimit = source.memoryCandidateLimit ?? 0;
@@ -2386,13 +2406,13 @@ export class PersonaFlowDispatcher {
     const submission = await this.submit({
       workspaceId: this.workspaceId,
       personaId: source.personaId,
-      idempotencyKey: `post-activity-maintenance:${source.id}`,
+      idempotencyKey,
       kind: 'maintenance',
       priority: 'low',
       source: {
         kind: 'maintenance',
         sourceId: source.activityId,
-        idempotencyKey: `post-activity-maintenance:${source.id}`,
+        idempotencyKey,
       },
       behaviorSlotKey: 'maintain_memory',
       relationKey: `activity:${source.activityId}:maintenance`,

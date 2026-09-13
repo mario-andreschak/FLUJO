@@ -5,6 +5,9 @@ import path from 'path';
 import { performance } from 'perf_hooks';
 
 import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { StorageKey } from '@/shared/types/storage';
 import {
   BEHAVIOR_OUTCOME_MIN_SAMPLES,
   PersonaFlowDispatcher,
@@ -270,15 +273,44 @@ function fenceForClaim(claim: PersonaActivityClaim) {
   };
 }
 
-function flowResult(input: FlowRunInput, outputText: string): FlowRunResult {
+async function flowResult(input: FlowRunInput, outputText: string, now: number): Promise<FlowRunResult> {
+  // Replacing runFlow must still provide its durable conversation boundary:
+  // the real dispatcher appends memory-maintenance results after it returns.
+  const sharedState: SharedState = {
+    conversationId: input.conversationId!,
+    flowId: input.flowDefinition!.id,
+    title: 'Persona soak',
+    createdAt: now,
+    updatedAt: now,
+    status: 'completed',
+    messages: [],
+    lastResponse: outputText,
+    trackingInfo: { executionId: input.runId!, startTime: now, nodeExecutionTracker: [] },
+    personaAttribution: input.personaAttribution,
+    executionAuthority: input.executionAuthority,
+  };
+  await persistConversationState(`conversations/${input.conversationId}` as StorageKey, sharedState);
   return {
     status: 'completed',
     conversationId: input.conversationId!,
     runId: input.runId!,
     outputText,
     messages: [],
-    sharedState: {} as FlowRunResult['sharedState'],
+    sharedState,
   };
+}
+
+export function assertSoakDispatchesDrained(records: PersonaFlowDispatchRecord[]): void {
+  const unfinished = records.filter(record => !['completed', 'error', 'cancelled'].includes(record.state));
+  const failedMaintenance = records.filter(record => (
+    record.admission.kind === 'maintenance' && record.state !== 'completed'
+  ));
+  if (unfinished.length || failedMaintenance.length) {
+    const failures = [...new Map([...unfinished, ...failedMaintenance].map(record => [record.id, record])).values()];
+    throw new Error(`Soak dispatch queue did not drain: ${unfinished.length} unfinished, `
+      + `${failedMaintenance.length} unsuccessful maintenance dispatches. `
+      + failures.slice(0, 5).map(record => `${record.id}: ${record.state}${record.error ? ` (${record.error.message})` : ''}`).join('; '));
+  }
 }
 
 function processNode(flow: Flow): FlowNode {
@@ -1333,7 +1365,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         modelCalls += 1;
         const completion = await stubModel.createCompletion({} as never);
         const output = completion.completion.choices[0]?.message.content;
-        const result = flowResult(input, typeof output === 'string' ? output : '');
+        const result = await flowResult(input, typeof output === 'string' ? output : '', clock.now());
         debugActivity(`runFlow completed for ${input.personaAttribution?.activityId ?? 'unknown Activity'}`);
         return result;
       };
@@ -1385,6 +1417,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         }
         await flushPendingDispatches();
 
+        assertSoakDispatchesDrained(await dispatcher.list(personaId));
         progressActivityId = null;
         const scheduledFaults = faults.filter((fault) => fault.day === day);
         const executedFaults: string[] = [];
@@ -1514,6 +1547,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
         const checkpointSequenceContinuous = checkpointEvents.every((event, index) => (
           index === 0 || event.seq === checkpointEvents[index - 1].seq + 1
         ));
+        debug(`day ${day} storage ${JSON.stringify(storage.kinds)} memory ${JSON.stringify(process.memoryUsage())} timers ${clock.pendingTimerCount()}`);
         const checkpointEventIdsUnique = new Set(checkpointEvents.map(event => event.eventId)).size
           === checkpointEvents.length;
         const dailyReconciliation = reconcileWorkload({

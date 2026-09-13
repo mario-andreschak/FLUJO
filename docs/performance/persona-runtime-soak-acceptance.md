@@ -56,8 +56,9 @@ configuration and learning enabled, validates the artifacts, generates SHA-256
 checksum manifests, and retains them for 90 days. The harness has a 45-minute
 overall wall-clock budget inside a 60-minute job limit, leaving bounded time for
 teardown, validation, checksum generation, and upload. Smoke runs have a 10-minute
-budget. Scheduled runs continue to target the exact default-branch tip identified
-by `github.sha`.
+budget. The workflow is manual-only: the daily schedule was removed after repeated
+failures. If GitHub reports the workflow as disabled, enable it before an intentional
+manual run; enabling it does not restore a schedule.
 
 Acceptance evidence must identify the exact checked-out commit. Local runs
 derive it from `git rev-parse HEAD`; controlled runs set `FLUJO_SOAK_COMMIT`
@@ -72,6 +73,19 @@ reconciliation, segmented event log, memory store/search, Behavior proposal,
 outcome-metric, and automatic-rollback APIs. The model boundary is deterministic
 and offline; persistence, routing, fencing, reconciliation, search, and learning
 are not simulated.
+
+The scripted Flow persists an attributed conversation through the production
+fenced persistence API before returning. Post-Activity memory maintenance uses
+that conversation to append its result. Omitting it causes maintenance failures
+and leaves queued work that cannot be compacted. Each workload day now checks
+that all dispatches drained and all memory-maintenance dispatches completed,
+so a foreground-only success cannot hide that backlog.
+
+The virtual clock removes cancelled and fired timers, including their captured
+callbacks, rather than keeping an ever-growing history in the test process.
+Dispatcher reconciliation reuses an existing maintenance envelope and its frozen
+evidence, repairing an incomplete mailbox admission without rebuilding historical
+requests on every pump.
 
 Ordinary workload items are persisted with automatic pumping disabled and drained
 in bounded, order-preserving batches between steering inputs. A pump reconciles the
