@@ -2385,7 +2385,9 @@ export class PersonaFlowDispatcher {
       // The original envelope already freezes the maintenance evidence. Do not
       // rebuild it from potentially changed/compacted conversation history on
       // every pump. Still repair an admission interrupted before mailbox save.
-      return existing.mailboxItemId && existing.routingDecision
+      // Compaction deliberately removes routingDecision from terminal records.
+      // Their completion is already durable; never re-admit them as new work.
+      return isTerminalDispatch(existing.state) || (existing.mailboxItemId && existing.routingDecision)
         ? existing
         : (await this.routeStored(existing)).dispatch;
     }

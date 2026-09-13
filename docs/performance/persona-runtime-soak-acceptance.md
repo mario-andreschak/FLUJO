@@ -86,6 +86,8 @@ callbacks, rather than keeping an ever-growing history in the test process.
 Dispatcher reconciliation reuses an existing maintenance envelope and its frozen
 evidence, repairing an incomplete mailbox admission without rebuilding historical
 requests on every pump.
+Compacted terminal maintenance records remain terminal even though their routing
+details have been removed; reconciliation must not re-admit those records.
 
 Single-record index commits also carry unchanged parsed records into the next
 cache revision. The changed record is invalidated even when compaction preserves
