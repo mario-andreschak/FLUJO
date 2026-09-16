@@ -169,15 +169,20 @@ class ModelService {
    * overwriting (and destroying) a real stored key.
    */
   private async resolveApiKeyForSave(incomingApiKey: string | undefined, existingApiKey: string | undefined): Promise<string> {
-    const incoming = incomingApiKey ?? '';
+    let incoming = incomingApiKey ?? '';
 
     if (incoming === MASKED_API_KEY) {
-      return existingApiKey ?? '';
+      incoming = existingApiKey ?? '';
     }
     if (incoming.startsWith('${global:')) {
       return incoming;
     }
-    if (incoming.startsWith('encrypted:') || incoming.startsWith('encrypted_failed:')) {
+    // Re-saving an affected record explicitly upgrades the old plaintext marker.
+    // If encryption fails the surrounding save aborts before changing storage.
+    if (incoming.startsWith('encrypted_failed:')) {
+      return await encryptApiKey(incoming.substring('encrypted_failed:'.length));
+    }
+    if (incoming.startsWith('encrypted:')) {
       return incoming;
     }
     if (incoming.trim() === '') {

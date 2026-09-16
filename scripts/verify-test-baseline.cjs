@@ -66,33 +66,51 @@ function summarizeJestResults(results, root = REPOSITORY_ROOT) {
   if (!results || typeof results !== 'object') {
     throw baselineError('Jest results JSON is empty or not an object.');
   }
-  const suiteResults = Array.isArray(results.testResults) ? results.testResults : [];
+  if (!Array.isArray(results.testResults)) throw baselineError('Jest results must contain per-suite testResults.');
+  const suiteResults = results.testResults;
   const failedToRun = [];
   const failedTests = [];
+  const skippedTests = [];
+  const invalidResults = results.wasInterrupted ? ['Jest run was interrupted.'] : [];
+  const suites = { total: suiteResults.length, passed: 0, failed: 0, executed: 0 };
+  const tests = { total: 0, passed: 0, failed: 0, executed: 0 };
   for (const suite of suiteResults) {
-    const status = suite.status
-      ?? (suite.testExecError || (suite.message && !Array.isArray(suite.assertionResults))
-        ? 'failed'
-        : 'passed');
-    if (status !== 'failed') continue;
     const relative = suite.name ? toPosixRelative(suite.name, root) : '<unknown suite>';
     const assertions = Array.isArray(suite.assertionResults) ? suite.assertionResults : [];
-    if (assertions.length === 0) failedToRun.push(relative);
-    else failedTests.push(relative);
+    const completed = assertions.filter((assertion) => ['passed', 'failed'].includes(assertion.status));
+    tests.total += assertions.length;
+    tests.passed += completed.filter((assertion) => assertion.status === 'passed').length;
+    tests.failed += completed.filter((assertion) => assertion.status === 'failed').length;
+    tests.executed += completed.length;
+    for (const assertion of assertions) {
+      if (['pending', 'todo', 'skipped', 'disabled'].includes(assertion.status)) {
+        skippedTests.push({ suite: relative, name: assertion.fullName || assertion.title || '<unnamed test>', status: assertion.status });
+      } else if (!['passed', 'failed'].includes(assertion.status)) {
+        invalidResults.push(`Unknown assertion status in ${relative}: ${assertion.status}`);
+      }
+    }
+    if (suite.testExecError || (suite.status === 'failed' && completed.length === 0)) {
+      failedToRun.push(relative);
+      suites.failed += 1;
+    } else if (completed.length > 0) {
+      suites.executed += 1;
+      if (suite.status === 'failed' || completed.some((assertion) => assertion.status === 'failed')) {
+        suites.failed += 1;
+        failedTests.push(relative);
+      } else {
+        suites.passed += 1;
+      }
+    } else if (assertions.length === 0) {
+      invalidResults.push(`Suite contains no assertion results: ${relative}`);
+    }
   }
   return {
-    suites: {
-      total: Number(results.numTotalTestSuites ?? suiteResults.length),
-      passed: Number(results.numPassedTestSuites ?? 0),
-      failed: Number(results.numFailedTestSuites ?? failedToRun.length + failedTests.length),
-    },
-    tests: {
-      total: Number(results.numTotalTests ?? 0),
-      passed: Number(results.numPassedTests ?? 0),
-      failed: Number(results.numFailedTests ?? 0),
-    },
+    suites,
+    tests,
     failedToRun,
     failedTests,
+    skippedTests,
+    invalidResults,
   };
 }
 
@@ -137,25 +155,33 @@ function compareToBaseline({ stage, baseline, summary }) {
   ]);
   const failures = [];
   const warnings = [];
+  const executedSuites = summary.suites.executed ?? summary.suites.passed + summary.suites.failed;
+  const executedTests = summary.tests.executed ?? summary.tests.passed + summary.tests.failed;
+  failures.push(...(summary.invalidResults || []));
+  for (const skip of summary.skippedTests || []) {
+    const allowed = (entry.intentionalSkips || []).some((expected) =>
+      expected.suite === skip.suite && expected.name === skip.name && expected.reason
+      && (!expected.platforms || expected.platforms.includes(process.platform)));
+    if (!allowed) failures.push(`Unapproved skipped test: ${skip.suite} — ${skip.name}`);
+  }
 
-  if (typeof entry.minSuites === 'number' && summary.suites.total < entry.minSuites) {
+  if (!Number.isInteger(entry.minSuites) || entry.minSuites < 1 || !Number.isInteger(entry.minTests) || entry.minTests < 1) {
+    failures.push(`Stage "${stage}" must declare positive minSuites and minTests for executed work.`);
+  }
+  if (typeof entry.minSuites === 'number' && executedSuites < entry.minSuites) {
     failures.push(
-      `Executed suite count dropped: ${summary.suites.total} < ${entry.minSuites} recorded for stage "${stage}". `
+      `Executed suite count dropped: ${executedSuites} < ${entry.minSuites} recorded for stage "${stage}". `
       + 'A test file stopped being collected or stopped existing.',
     );
   }
-  if (typeof entry.minTests === 'number' && summary.tests.total < entry.minTests) {
+  if (typeof entry.minTests === 'number' && executedTests < entry.minTests) {
     failures.push(
-      `Executed test count dropped: ${summary.tests.total} < ${entry.minTests} recorded for stage "${stage}". `
+      `Executed test count dropped: ${executedTests} < ${entry.minTests} recorded for stage "${stage}". `
       + 'Tests were removed, skipped, or a suite failed to run.',
     );
   }
 
   for (const suite of summary.failedToRun) {
-    if (quarantined.has(suite)) {
-      warnings.push(`Quarantined suite failed to run: ${suite}`);
-      continue;
-    }
     failures.push(`Test suite failed to run (never executed): ${suite}`);
   }
   for (const suite of summary.failedTests) {
@@ -164,12 +190,6 @@ function compareToBaseline({ stage, baseline, summary }) {
       continue;
     }
     failures.push(`Test suite failed: ${suite}`);
-  }
-
-  if (entry.minTests === null || entry.minTests === undefined) {
-    warnings.push(
-      `Stage "${stage}" has no recorded minTests yet; run with --update after a known-good run to lock it in.`,
-    );
   }
 
   return {
@@ -188,9 +208,9 @@ function formatReport(verdict) {
     '',
     '| Metric | Observed | Baseline minimum |',
     '| --- | --- | --- |',
-    `| Suites executed | ${verdict.observed.suites.total} | ${verdict.expected.minSuites ?? '—'} |`,
+    `| Suites executed | ${verdict.observed.suites.executed ?? verdict.observed.suites.passed + verdict.observed.suites.failed} | ${verdict.expected.minSuites ?? '—'} |`,
     `| Suites failed | ${verdict.observed.suites.failed} | 0 outside quarantine |`,
-    `| Tests executed | ${verdict.observed.tests.total} | ${verdict.expected.minTests ?? '—'} |`,
+    `| Tests executed | ${verdict.observed.tests.executed ?? verdict.observed.tests.passed + verdict.observed.tests.failed} | ${verdict.expected.minTests ?? '—'} |`,
     `| Tests failed | ${verdict.observed.tests.failed} | 0 outside quarantine |`,
   ];
   if (verdict.failures.length > 0) {
@@ -204,8 +224,8 @@ function formatReport(verdict) {
 
 function updatedBaseline(baseline, stage, summary, { allowLower = false } = {}) {
   const entry = { ...stageBaseline(baseline, stage) };
-  const nextSuites = summary.suites.total;
-  const nextTests = summary.tests.total;
+  const nextSuites = summary.suites.executed ?? summary.suites.passed + summary.suites.failed;
+  const nextTests = summary.tests.executed ?? summary.tests.passed + summary.tests.failed;
   entry.minSuites = allowLower || typeof entry.minSuites !== 'number'
     ? nextSuites
     : Math.max(entry.minSuites, nextSuites);
@@ -237,6 +257,7 @@ function main(argv) {
   writeStepSummary(report);
 
   if (options.update) {
+    if (!verdict.ok) throw baselineError('Refusing to record a failed or unapproved test run as the new baseline.');
     const next = updatedBaseline(baseline, options.stage, summary, { allowLower: options.allowLower });
     fs.writeFileSync(baselinePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     process.stdout.write(`Recorded stage "${options.stage}" baseline in ${baselinePath}.\n`);

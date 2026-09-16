@@ -2,10 +2,15 @@
 
 import type { NextRequest } from 'next/server';
 
-import { POST } from '@/app/api/setup/ai-cli/route';
+import { GET, POST } from '@/app/api/setup/ai-cli/route';
 import { AI_CLI_PACKAGES, buildWingetArgs } from '@/app/api/setup/ai-cli/winget';
 
 describe('AI CLI setup route', () => {
+  it('reports the server platform and installation mode without installing anything', async () => {
+    const response = await GET(new Request('http://localhost:4200/api/setup/ai-cli') as unknown as NextRequest);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ platform: process.platform, oneClickInstall: process.platform === 'win32' });
+  });
   it('builds a non-shell WinGet invocation from an allow-listed package', () => {
     expect(AI_CLI_PACKAGES.codex.id).toBe('OpenAI.Codex');
     expect(buildWingetArgs('claude')).toEqual([

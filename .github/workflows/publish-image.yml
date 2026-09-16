@@ -23,6 +23,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +31,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Require exact-commit main verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-release-verification.mjs image
 
       - name: Build and validate synchronized MCP release artifacts
         run: |

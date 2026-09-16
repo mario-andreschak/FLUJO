@@ -50,15 +50,16 @@ function Get-InstallIntent {
         [Parameter(Mandatory)] [string]$InstallDirectory,
         [Parameter(Mandatory)] [bool]$PathExists,
         [Parameter(Mandatory)] [bool]$GitDirectoryExists,
-        [bool]$DirectoryIsEmpty = $false
+        [bool]$DirectoryIsEmpty = $false,
+        [bool]$RepositoryVerified = $false
     )
 
     if ($GitDirectoryExists) {
         return [PSCustomObject]@{
             InstallDirectory = $InstallDirectory
-            Action           = 'Update'
-            CanProceed       = $true
-            Reason           = 'Existing FLUJO Git checkout'
+            Action           = if ($RepositoryVerified) { 'Update' } else { 'Reject' }
+            CanProceed       = $RepositoryVerified
+            Reason           = if ($RepositoryVerified) { 'Verified clean FLUJO Git checkout' } else { 'Existing Git target has not passed repository safety checks' }
         }
     }
 
@@ -77,6 +78,26 @@ function Get-InstallIntent {
         CanProceed       = $true
         Reason           = if ($PathExists) { 'Existing empty install target' } else { 'New install target' }
     }
+}
+
+function Get-RepositoryUpdateDecision {
+    param(
+        [AllowEmptyString()] [string]$OriginUrl,
+        [AllowEmptyString()] [string]$WorkingTreeStatus,
+        [AllowEmptyString()] [string]$PackageName,
+        [AllowEmptyString()] [string]$CurrentBranch,
+        [Parameter(Mandatory)] [string]$RequestedRef
+    )
+
+    $reason = $null
+    if ($OriginUrl -notmatch '^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)mario-andreschak/flujo(?:\.git)?/?$' -or $PackageName -ne 'flujo-ai') {
+        $reason = 'Target is not the official FLUJO repository. Choose a new installation directory.'
+    } elseif (-not [string]::IsNullOrWhiteSpace($WorkingTreeStatus)) {
+        $reason = 'Checkout contains local changes or untracked files. Commit or back them up before updating; the installer never discards them.'
+    } elseif ($RequestedRef -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -and $CurrentBranch -cne $RequestedRef) {
+        $reason = 'Checkout is on a different branch. Select the intended branch yourself before updating.'
+    }
+    return [PSCustomObject]@{ CanProceed = ($null -eq $reason); Reason = $reason }
 }
 
 function New-PrerequisiteRecord {
@@ -145,6 +166,7 @@ function ConvertTo-InstallManifest {
         [Parameter(Mandatory)] [string]$BinDir,
         [Parameter(Mandatory)] [string]$Branch,
         [Parameter(Mandatory)] [string]$RepoUrl,
+        [string]$Revision = '',
         [object[]]$Prerequisites = @(),
         [Parameter(Mandatory)] [bool]$DesktopShortcut,
         [Parameter(Mandatory)] [bool]$ExecutionPolicyChanged,
@@ -156,6 +178,8 @@ function ConvertTo-InstallManifest {
         installDir             = $AppDir
         binDir                 = $BinDir
         branch                 = $Branch
+        channel                = if ($Branch -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { 'stable' } else { 'development' }
+        revision               = $Revision
         repoUrl                = $RepoUrl
         desktopShortcut        = $DesktopShortcut
         executionPolicyChanged = $ExecutionPolicyChanged

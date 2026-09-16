@@ -568,7 +568,7 @@ async function resolveManagedWorkspace(workspace: string): Promise<string> {
   return dir;
 }
 
-/** Create a new, empty workspace namespace. */
+/** Create a workspace namespace with independent copies of shipped MCP packages. */
 export async function createWorkspace(workspace: string): Promise<WorkspaceInfo> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
@@ -604,6 +604,8 @@ export async function createWorkspace(workspace: string): Promise<WorkspaceInfo>
 
   try {
     await ensureWorkspaceDirs(name);
+    const { ensureShippedWorkspacePackages } = await import('@/backend/services/mcp/shippedWorkspacePackages');
+    await ensureShippedWorkspacePackages(dir);
   } catch (error) {
     // This call created `dir`, so a failed layout initialization can safely
     // roll it back without touching any pre-existing workspace.

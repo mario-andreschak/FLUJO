@@ -82,10 +82,18 @@ function isPrivateIpv4(hostname: string): boolean {
 }
 
 function isPrivateIpv6(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized.startsWith('fc')
-    || normalized.startsWith('fd')
-    || /^fe[89ab]/.test(normalized);
+  // A DNS name such as fc.example must never inherit an IP address's trust.
+  // URL validates and canonicalizes bracketed IPv6 without a Node-only import,
+  // keeping this helper usable by both the request proxy and route handlers.
+  if (!hostname.includes(':')) return false;
+  try {
+    const literal = new URL(`http://[${hostname}]/`).hostname.slice(1, -1);
+    const firstHextet = Number.parseInt(literal.split(':')[0], 16);
+    return (firstHextet & 0xfe00) === 0xfc00 // unique-local fc00::/7
+      || (firstHextet & 0xffc0) === 0xfe80; // link-local fe80::/10
+  } catch {
+    return false;
+  }
 }
 
 function matchesLegacyHost(hostname: string): boolean {

@@ -1,0 +1,636 @@
+{
+  "date": "2026-09-16T20:28:56.369Z",
+  "baseRevision": "26cd39856fd8a5580c77025ee0ec95732572045d",
+  "packageVersion": "3.45.2",
+  "published": false,
+  "userRunningInstanceUpgraded": false,
+  "finalBuildId": "ArSIS-l3naGYQvxNtiX3n",
+  "parallelTask": {
+    "preservedFiles": 16,
+    "allHashesMatch": true,
+    "identity": "Private concurrent task identifier omitted; file preservation results are unchanged."
+  },
+  "sourceChanges": [
+    {
+      "path": ".github/workflows/installer.yml",
+      "sha256": "00e9f38d9184c2a6ad2c0b6e2c93db8cf93c7da3b3a629f576340443c0902239"
+    },
+    {
+      "path": ".github/workflows/publish-image.yml",
+      "sha256": "c0f739887c026539660bf598bc703d7ba4801c6c63be5a3c2c32bd4018d39c8a"
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "sha256": "4a1b17cc9f29ac6989fd516d0ad36d1d91c6c37d1026abf0f842f00176051077"
+    },
+    {
+      "path": "__tests__/encryption/apiKeyRoundTrip.test.ts",
+      "sha256": "75e496a3df5da8dd92bc9a8a43e10c0b1cda5dfe0996c58f2ccaf651652e217c"
+    },
+    {
+      "path": "__tests__/encryption/credentialFailure.test.ts",
+      "sha256": "188dfd2ccfcb831775032d7ab88c139a8e7f3b522dd3df31e8bd6234fac98cfd"
+    },
+    {
+      "path": "__tests__/encryption/dekInvariant.test.ts",
+      "sha256": "1775b38af6b5b29e35f568cb0ea5ef97ba8edd40434099b8a1c2206751b952fb"
+    },
+    {
+      "path": "__tests__/encryption/envCredentialFailure.test.ts",
+      "sha256": "7362a9807bfb86ffd4a185c15938fe6c0acf92af54696e60463ea42f8731ff36"
+    },
+    {
+      "path": "__tests__/frontend/components/BigTutorialOverlay.test.tsx",
+      "sha256": "346fe3126643f801a9adc0322f8c4f4edd60e7e9f4f543c298819e20a9008123"
+    },
+    {
+      "path": "__tests__/frontend/components/ModelClientConversion.test.tsx",
+      "sha256": "ca408cf33f711cbc15d0297ca0b6d805a876741a05a35dbdfff24ede5190453c"
+    },
+    {
+      "path": "__tests__/frontend/components/ModelClientNavigation.test.tsx",
+      "sha256": "bb28055aac98f3ac2ac546caee4c76df9f7ca5e03419c7754c7f32e12f47a363"
+    },
+    {
+      "path": "__tests__/frontend/components/ModelConnectionWizard.test.tsx",
+      "sha256": "cc06adcebf2a4da989fd1738a9272e660c9591427b5713e4d07a42dcdedcd644"
+    },
+    {
+      "path": "__tests__/frontend/components/TourContext.test.tsx",
+      "sha256": "20ccf0d516601ad0f91a765e22110807a79a8e485157dbb7f1814c1277a9ffa8"
+    },
+    {
+      "path": "__tests__/frontend/components/UpdateSettings.test.tsx",
+      "sha256": "353279f3f21e78e5957b0005a198b2fb19e700ecd3eed474b7e82bd3a5d0276c"
+    },
+    {
+      "path": "__tests__/mcp/browserCaptureRecording.test.ts",
+      "sha256": "7a99cea89b3d0fab8f956dbf1b2008a1da6955117a9a3e8504c141b7a5297786"
+    },
+    {
+      "path": "__tests__/mcp/internalServer.test.ts",
+      "sha256": "60d6b63527d569b41b26bfe669806e18c496e4091ab014ad5804a86496acd79d"
+    },
+    {
+      "path": "__tests__/mcp/internalServerMigration.test.ts",
+      "sha256": "f5653e632978f4595d30d605508a52a03a54c06bddcd842564753be2ad50aa50"
+    },
+    {
+      "path": "__tests__/mcp/remoteRootPathDefault.test.ts",
+      "sha256": "bff501cf25659619dcc3bbce865b04afced9952f44b5f4f150828c116bd45d96"
+    },
+    {
+      "path": "__tests__/model/aiCliSetupRoute.test.ts",
+      "sha256": "e0929103cfc2dc0264a650942d1635b0f97340a4f33a8919ff47b2af75a63019"
+    },
+    {
+      "path": "__tests__/model/codexAdapter.test.ts",
+      "sha256": "91243302a2198250e97266692951ffad83fa6ccc63e6f804568f8e9cba2b4a4a"
+    },
+    {
+      "path": "__tests__/packages/workspaceMcpTransfer.test.ts",
+      "sha256": "530444d6e506d41e22781e4d7beaf64d57280403ea0c9ef94dd8a3234a5cef26"
+    },
+    {
+      "path": "__tests__/phase3/bigTutorialStage1.test.ts",
+      "sha256": "982c3faeacc231355e61ab7d9b246fad611286f529f98f17e29af67e3db1d5cb"
+    },
+    {
+      "path": "__tests__/scripts/verifyTestBaseline.test.ts",
+      "sha256": "7c12f0e68bb901b8b7ab4ec7c45ace72c15e774804b644d4a535ceb2026a63b4"
+    },
+    {
+      "path": "__tests__/security/networkExposure.test.ts",
+      "sha256": "03c9bcc581e67ff89ecfd626334161e1aa798daa7ef5028a3d7e49991d7ddcd5"
+    },
+    {
+      "path": "__tests__/settings/updateRoute.test.ts",
+      "sha256": "431157042b2d34d9ffb96ba9e62583b3c62fd1c39d6c4f8f4807e60d40c91b85"
+    },
+    {
+      "path": "__tests__/workspace/mcpRuntimeHomeIsolation.test.ts",
+      "sha256": "3ed06d245da2626b3912ecaa292643d5a61ef6481c928ea3d3a6a8b95c0f4b6d"
+    },
+    {
+      "path": "__tests__/workspace/migration.test.ts",
+      "sha256": "db013725e45479011435fb27eda860a69b802135ee5ba5e45b36be9ae5c66a8d"
+    },
+    {
+      "path": "__tests__/workspace/shippedWorkspacePackages.test.ts",
+      "sha256": "ee31f5e53833f44699061382659368b3ca8370516dcde32ee3262249bdb52201"
+    },
+    {
+      "path": "__tests__/workspace/snapshotRestore.test.ts",
+      "sha256": "2ad82468a33fdd3cb99bbaee16a1ad18cf56f6b1466a588ed9e37e3854db2ec4"
+    },
+    {
+      "path": "installer/flujo-setup.iss",
+      "sha256": "242b8a04c4f700e1149a9568975a4c172d50ec272007962ebada5f3530ad91b8"
+    },
+    {
+      "path": "jest.testMatch.mjs",
+      "sha256": "8714059fb110744abe5e0eaa84d997e312f174fda1b48052080575da5eeb49ab"
+    },
+    {
+      "path": "next-env.d.ts",
+      "sha256": "1b59d4c6b83807db275d43f3cf2cc8e9323f465fab764eea091cc5becd5bad37"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "d3216b4115b4f9ceb2af43ec70ece9e96f07b7a13a9505c347277ba688ab27bd"
+    },
+    {
+      "path": "package.json",
+      "sha256": "efa5244edee0042fa58d13fd3ffe4e2dd3d161e8ac4762767373e36156b4cfb2"
+    },
+    {
+      "path": "scripts/fixtures/release-command-stubs.mjs",
+      "sha256": "869377472b140c3850c99d29eb975220bab444f72135c6229bb3b197b3508516"
+    },
+    {
+      "path": "scripts/generate-api-inventory.mjs",
+      "sha256": "d7cbdcbf582ac41c231b95a020c2e9e222cfbdc89c564f08510ee985134e9d62"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "sha256": "f85ba1c6ef58fd48dcbfa824835dc94a2a25a2c9add2caef3360c3e096c2e294"
+    },
+    {
+      "path": "scripts/install.sh",
+      "sha256": "332a8b4d351caec20a98af7a8fa7e42d69baba2c62a6f23e60f67d9b38e477eb"
+    },
+    {
+      "path": "scripts/installer-functions.ps1",
+      "sha256": "6d21d673eba0acee061eaf87ebb762372abb37b65c4338634211f99780d8024c"
+    },
+    {
+      "path": "scripts/release-arguments.test.mjs",
+      "sha256": "422ce747647924bd7dba41fab5ae9f898a7a69b5af99ad2abd4a019e785f0423"
+    },
+    {
+      "path": "scripts/release-verification.mjs",
+      "sha256": "66123f891bcd42cee929929bae6dd9f8018098edb2fbbf9e634f0df34bd16576"
+    },
+    {
+      "path": "scripts/release-verification.test.mjs",
+      "sha256": "2da32e2635efa05836e9f5088f7b9cb1a3e0a3563cb9010f99b62b55c02be146"
+    },
+    {
+      "path": "scripts/release.mjs",
+      "sha256": "bdbdcb39197e385ba508f5b393f340453484764e622d50f6b464ada22d959972"
+    },
+    {
+      "path": "scripts/require-release-verification.mjs",
+      "sha256": "df5a44b26793136cd7537ef165600388cc7e37456eb4e7595f87c52200a50e8e"
+    },
+    {
+      "path": "scripts/require-release-verification.test.mjs",
+      "sha256": "c7481e22bd6e239d019836bdb27376e0e4bd284d65547fc1e286c0eebc9c55b4"
+    },
+    {
+      "path": "scripts/update.ps1",
+      "sha256": "5820e1de1e9d81075398422be78d24db41e612d46b55a83795cf83c798f65fe0"
+    },
+    {
+      "path": "scripts/verify-test-baseline.cjs",
+      "sha256": "20db399026533231547b958a3915bf8b0e8bd11ff9d38166268bcc155557351a"
+    },
+    {
+      "path": "src/app/api/env/route.ts",
+      "sha256": "81a8d45ecddf7cffc0c4dd01dbb38ec9ed6a95ec1dedf10da16a05fdbe8f8397"
+    },
+    {
+      "path": "src/app/api/setup/ai-cli/route.ts",
+      "sha256": "7c8a8f98280a56b6e79a1eef946e1c339e364b77f75a00886123690b1d0c4511"
+    },
+    {
+      "path": "src/app/api/update/route.ts",
+      "sha256": "a91b0d9e5a01a951d822f97e7d59089e2b1eac7a1d53a924b1e38e93e78e0e8b"
+    },
+    {
+      "path": "src/app/models/ModelClient.tsx",
+      "sha256": "ebb3f10978b6a823b1e4d6d5030b4168e16f9808b44f0eb291f622cd962a461e"
+    },
+    {
+      "path": "src/app/page.tsx",
+      "sha256": "f4e4d44d3824ce1a98aa78b0d6ee870dda9b5924c48630857803491c91daf46a"
+    },
+    {
+      "path": "src/backend/services/mcp/betaClient.ts",
+      "sha256": "0dd62a7ea0bdac30a7b260366e0907ff216f1de70f88a61634481122ff85eddf"
+    },
+    {
+      "path": "src/backend/services/mcp/connection.ts",
+      "sha256": "d7c078597a61a5d22cebb8fdca9f7c3979f353b625a4fc57973634635730e406"
+    },
+    {
+      "path": "src/backend/services/mcp/shippedServerMigration.ts",
+      "sha256": "f3c640c0477b68a1b1ed622af22952126e9de94e16df5e266a96ac4557c10dce"
+    },
+    {
+      "path": "src/backend/services/mcp/shippedServers.ts",
+      "sha256": "3b41962eec9a585fe30e9b95aba13a4e46b015e72a440910b74f83b530535601"
+    },
+    {
+      "path": "src/backend/services/mcp/shippedWorkspacePackages.ts",
+      "sha256": "92cc9731695a07b67c1a88621e58098c17d4029997edf5c58be164fe6c3c7618"
+    },
+    {
+      "path": "src/backend/services/model/adapters/codexAdapter.ts",
+      "sha256": "8dbf1d0c60469b4c4b3d39a6b9e54ba789abe0d36abf926679caf4e0e5e5247b"
+    },
+    {
+      "path": "src/backend/services/model/encryption.ts",
+      "sha256": "e1412d6cffae6bea30257639ea23d07533d796b4dac447bc9740572b7e514213"
+    },
+    {
+      "path": "src/backend/services/model/index.ts",
+      "sha256": "64d5170281e9a1e70106f8a76c24d30bd9c879256c916130b49a7e739227308c"
+    },
+    {
+      "path": "src/backend/services/packages/workspaceMcpTransfer.ts",
+      "sha256": "bd7b6a08f9be6ceedd14e39b2fc6136f4cecf5a51664e01a1a3a709803f949b6"
+    },
+    {
+      "path": "src/backend/services/workspace/migration.ts",
+      "sha256": "d6c031ec98633e23b21826d466c5c713ecafe0da335a54ea3f4b593851730e3b"
+    },
+    {
+      "path": "src/backend/services/workspace/snapshotRestore.ts",
+      "sha256": "298f2209f1e82734b1e4972c0634a73c7f49cec64ec70d4719b822b73e4cff6c"
+    },
+    {
+      "path": "src/config/features.ts",
+      "sha256": "340072038fe42e693c71439dd4dfc9abded27024dd732074044080283db27956"
+    },
+    {
+      "path": "src/frontend/components/Chat/index.tsx",
+      "sha256": "b913cca814775fb9ff74860a414a4beb9417008ef0843a5eb9f035cb7f2d6de8"
+    },
+    {
+      "path": "src/frontend/components/Docs/apiReference.ts",
+      "sha256": "06ba4278164350aadc17f8ee20cf589a3c365ba66c0541783d2d9734edf4424a"
+    },
+    {
+      "path": "src/frontend/components/Roles/RoleActionMenu.tsx",
+      "sha256": "33c8e76b6a63f4d6f29deefe46d8c3065581ffb0509e679f690d455308516518"
+    },
+    {
+      "path": "src/frontend/components/Settings/UpdateSettings.tsx",
+      "sha256": "065433710500e8d9375b1d7646bb0d32267efa64485105510d63ca60690ad2a6"
+    },
+    {
+      "path": "src/frontend/components/Tour/BigTutorialOverlay.tsx",
+      "sha256": "9b4f15f35a3879485779714777011fa8159f47f5349a0d546a4727a8495b2e40"
+    },
+    {
+      "path": "src/frontend/components/Tour/bigTutorialEvents.ts",
+      "sha256": "eff4173ef77e4d701c76730710660d8ee15c39795a20ec04518450a16cbacb33"
+    },
+    {
+      "path": "src/frontend/components/Tour/bigTutorialFlow.ts",
+      "sha256": "6b7a6cc96e92d97e9a3ac4edfd8df62a74b5c816a8018532a112a69af424c376"
+    },
+    {
+      "path": "src/frontend/components/Tour/bigTutorialSteps.ts",
+      "sha256": "63d8afae61444305ea50a5e82cd5c95a9762be23d7aca73f49eebd63fb76bfc5"
+    },
+    {
+      "path": "src/frontend/components/models/ModelConnectionWizard.tsx",
+      "sha256": "2dedb0ca1524de92e584dd5e2867920d9f69a7d4e6f724f0edd311a0a282b4c5"
+    },
+    {
+      "path": "src/frontend/contexts/TourContext.tsx",
+      "sha256": "147bd8a064383a17b86b1adfae94825f0e49f23faec1cde0e263606a620abfdd"
+    },
+    {
+      "path": "src/frontend/i18n/catalogs/docs.ts",
+      "sha256": "2c95f917ed34284d89100e9b12d15bdb8182fcdae3c544824e4b5fbd5b02b077"
+    },
+    {
+      "path": "src/frontend/i18n/catalogs/models.ts",
+      "sha256": "bf1a30851867f20c82a4466d30bea1620f38709214ea495f8b402af0cb0c16e8"
+    },
+    {
+      "path": "src/frontend/i18n/catalogs/settings.ts",
+      "sha256": "9cc26c48f19be5780408160135150172f8f1932dea2e5b51148e55993ad63a17"
+    },
+    {
+      "path": "src/frontend/i18n/messages.ts",
+      "sha256": "9b1c1ad3bffaf4f8fde2e9b6acdb1978ab9e21bb5c8a9e8ba4fdc5d6b4741798"
+    },
+    {
+      "path": "src/utils/encryption/format.ts",
+      "sha256": "85192522c0323b88f6dfd03e62d0b4edb4e41288db51f8a12f77363487bb9f99"
+    },
+    {
+      "path": "src/utils/encryption/index.ts",
+      "sha256": "f2b15a9f36fc92d5b3fea91ab8b7e3b2540f708e75718ea23695c006122421f4"
+    },
+    {
+      "path": "src/utils/encryption/secure.ts",
+      "sha256": "cd25d422b4933fac0c67421fab1519217996d4a095f12bc768962e495cb612c7"
+    },
+    {
+      "path": "src/utils/encryption/session.ts",
+      "sha256": "0c3addc6e7192f7a603d99d109ad709f4ad3d30250ab37a2316d4815a5431591"
+    },
+    {
+      "path": "src/utils/http/localRequest.ts",
+      "sha256": "828b82ffb1edac2d19150c6f800bdeee86d52c7e36331d0ad9d8a1fd0f1fed7a"
+    },
+    {
+      "path": "src/utils/workspace.ts",
+      "sha256": "1dc9a0942302d36411812bbba6c8a1cf3cbae0d5bed30a448b11bd0283f7b19c"
+    },
+    {
+      "path": "test-baseline.json",
+      "sha256": "f3ceb4620d4764d5da77ecd0cc1ec59f623f9f0de5edc619b264b4c3f1c7629a"
+    },
+    {
+      "path": "tests/installer-repository.test.mjs",
+      "sha256": "a1ed4e65d64f1ff214bb440d7b155fc973d3fc5a52a1a332c3a731cfb727a437"
+    },
+    {
+      "path": "tests/installer.Tests.ps1",
+      "sha256": "ee6edae3cf0c5033e4ca9c047a46d3ed1fec7352b469744e55b26ac0cc48b441"
+    }
+  ],
+  "validation": {
+    "main": {
+      "path": "remediation/jest-results-final.json",
+      "success": true,
+      "passedSuites": 763,
+      "failedSuites": 0,
+      "skippedSuites": 4,
+      "passedTests": 6874,
+      "failedTests": 0,
+      "skippedTests": 6,
+      "seconds": 512.644,
+      "originalRawSha256": "4fb3b1d47beb9a826c152fe087ec9b6409457602755988ee6187664f29ba43bc"
+    },
+    "isolated": {
+      "path": "remediation/jest-results-isolated.json",
+      "success": true,
+      "passedSuites": 9,
+      "failedSuites": 0,
+      "skippedSuites": 0,
+      "passedTests": 101,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "seconds": 149.076,
+      "originalRawSha256": "1db81f56094546073734f3e6f4daab35253d02bfafaacd42811933dbe95ef90f"
+    },
+    "finalCryptoEnvRegistrySecurity": {
+      "path": "remediation/jest-results-env-final.json",
+      "success": true,
+      "passedSuites": 9,
+      "failedSuites": 0,
+      "skippedSuites": 0,
+      "passedTests": 140,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "seconds": 44.882,
+      "originalRawSha256": "50057f9739ff9b0d8e2e0284f5e4db3f44bd71b597ceb228f137bbc0b3db75e4"
+    },
+    "scopeNote": "Main and isolated completed before the final env-write and installer/release refinements. The final env route and its dependent encryption/security/registry suites then passed targeted validation; final release/installer tests, typecheck, lint, production build and artifact smoke passed after those refinements. Counts overlap and must not be summed as unique tests.",
+    "postMainSourceDelta": {
+      "path": "remediation/post-main-source-delta.json",
+      "originalRawSha256": "53f4fc08a3bfe75e9d2422a85f618aafbaed43faf5b9e65a0f4043cbcccc75b5"
+    },
+    "typecheck": {
+      "passed": true,
+      "path": "remediation/validation-typecheck-complete.log",
+      "originalRawSha256": "99cadfd23f22d669ec538b6b6dab6bad68d0a992b2d6ffb4e3a13fbd0c4ac071"
+    },
+    "lint": {
+      "passed": true,
+      "path": "remediation/validation-lint-complete.log",
+      "originalRawSha256": "03d61847c35ea125c6466a8e3c707c390da59cc8a6a9d3e6ab8cb7c519b6ffd7"
+    },
+    "productionBuild": {
+      "passed": true,
+      "path": "remediation/validation-build-complete.log",
+      "originalRawSha256": "0dd5b531378289aef9f4a3ce5bf2d655ada4b0a53c009b3be5be1e6b2ffd1c35"
+    },
+    "mcpArtifactInventory": {
+      "passed": true,
+      "path": "remediation/validation-mcp-artifacts-complete.log",
+      "originalRawSha256": "5d35b5fb84884f6b766a16f5e14b1e104c2372e0b03788bee176f9f49bf830cd"
+    },
+    "packedConsumerSmoke": {
+      "passed": true,
+      "path": "remediation/validation-packed-smoke-complete.log",
+      "originalRawSha256": "dfc253680361b2d4dc09528a8601a2df57143601da3504c77d2927a7ace544dd"
+    },
+    "installerAndRelease": {
+      "recordedAt": "2026-09-16T20:04:35.999Z",
+      "node": "v22.13.1",
+      "stage": "toolchain/flujo-remediation-20260916",
+      "tests": [
+        {
+          "runner": "Node built-in",
+          "passed": 73,
+          "failed": 0,
+          "skipped": 0,
+          "durationMs": 38899.9277,
+          "command": "node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs tests/installer-repository.test.mjs"
+        },
+        {
+          "runner": "Pester5.7.1 / Windows PowerShell",
+          "passed": 52,
+          "failed": 0,
+          "skipped": 0,
+          "durationMs": 3080,
+          "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File validation-installer-pester.ps1"
+        }
+      ],
+      "files": [
+        {
+          "path": "scripts/install.ps1",
+          "stageSha256": "f85ba1c6ef58fd48dcbfa824835dc94a2a25a2c9add2caef3360c3e096c2e294",
+          "rootSha256": "f85ba1c6ef58fd48dcbfa824835dc94a2a25a2c9add2caef3360c3e096c2e294"
+        },
+        {
+          "path": "scripts/update.ps1",
+          "stageSha256": "5820e1de1e9d81075398422be78d24db41e612d46b55a83795cf83c798f65fe0",
+          "rootSha256": "5820e1de1e9d81075398422be78d24db41e612d46b55a83795cf83c798f65fe0"
+        },
+        {
+          "path": "scripts/release.mjs",
+          "stageSha256": "bdbdcb39197e385ba508f5b393f340453484764e622d50f6b464ada22d959972",
+          "rootSha256": "bdbdcb39197e385ba508f5b393f340453484764e622d50f6b464ada22d959972"
+        },
+        {
+          "path": "scripts/release-verification.mjs",
+          "stageSha256": "66123f891bcd42cee929929bae6dd9f8018098edb2fbbf9e634f0df34bd16576",
+          "rootSha256": "66123f891bcd42cee929929bae6dd9f8018098edb2fbbf9e634f0df34bd16576"
+        },
+        {
+          "path": "scripts/release-verification.test.mjs",
+          "stageSha256": "2da32e2635efa05836e9f5088f7b9cb1a3e0a3563cb9010f99b62b55c02be146",
+          "rootSha256": "2da32e2635efa05836e9f5088f7b9cb1a3e0a3563cb9010f99b62b55c02be146"
+        },
+        {
+          "path": "scripts/release-arguments.test.mjs",
+          "stageSha256": "422ce747647924bd7dba41fab5ae9f898a7a69b5af99ad2abd4a019e785f0423",
+          "rootSha256": "422ce747647924bd7dba41fab5ae9f898a7a69b5af99ad2abd4a019e785f0423"
+        },
+        {
+          "path": "scripts/require-release-verification.mjs",
+          "stageSha256": "df5a44b26793136cd7537ef165600388cc7e37456eb4e7595f87c52200a50e8e",
+          "rootSha256": "df5a44b26793136cd7537ef165600388cc7e37456eb4e7595f87c52200a50e8e"
+        },
+        {
+          "path": "scripts/require-release-verification.test.mjs",
+          "stageSha256": "c7481e22bd6e239d019836bdb27376e0e4bd284d65547fc1e286c0eebc9c55b4",
+          "rootSha256": "c7481e22bd6e239d019836bdb27376e0e4bd284d65547fc1e286c0eebc9c55b4"
+        },
+        {
+          "path": "scripts/fixtures/release-command-stubs.mjs",
+          "stageSha256": "869377472b140c3850c99d29eb975220bab444f72135c6229bb3b197b3508516",
+          "rootSha256": "869377472b140c3850c99d29eb975220bab444f72135c6229bb3b197b3508516"
+        },
+        {
+          "path": "tests/installer-repository.test.mjs",
+          "stageSha256": "a1ed4e65d64f1ff214bb440d7b155fc973d3fc5a52a1a332c3a731cfb727a437",
+          "rootSha256": "a1ed4e65d64f1ff214bb440d7b155fc973d3fc5a52a1a332c3a731cfb727a437"
+        },
+        {
+          "path": "tests/installer.Tests.ps1",
+          "stageSha256": "ee6edae3cf0c5033e4ca9c047a46d3ed1fec7352b469744e55b26ac0cc48b441",
+          "rootSha256": "ee6edae3cf0c5033e4ca9c047a46d3ed1fec7352b469744e55b26ac0cc48b441"
+        },
+        {
+          "path": "scripts/installer-functions.ps1",
+          "stageSha256": "6d21d673eba0acee061eaf87ebb762372abb37b65c4338634211f99780d8024c",
+          "rootSha256": "6d21d673eba0acee061eaf87ebb762372abb37b65c4338634211f99780d8024c"
+        }
+      ],
+      "evidence": [
+        {
+          "path": "remediation/validation-installer-release.log",
+          "originalRawSha256": "e2151aa4f2980831ef8ccceb99077a8ce17034e20bb5e6308c4eca4542297fad"
+        },
+        {
+          "path": "remediation/validation-installer-pester.log",
+          "originalRawSha256": "785184e589d4dbd0be2a3a5657cc89913c262a78185672317974c844b28c1db2"
+        },
+        {
+          "path": "remediation/validation-installer-pester.xml",
+          "originalRawSha256": "b0caa299661ea02486e0f0ae2ec095184d26b8302b72000f7a239ab516742ea9"
+        }
+      ],
+      "scope": "Temporary Git fixtures, intercepted release commands, synthetic native exit37 and mocked process launch. No real installer, package publication, prerequisite installation, persistent policy changes or live server stop/start."
+    },
+    "apiRouteInventory": {
+      "passed": true,
+      "routeFiles": 197
+    },
+    "npmAudit": {
+      "path": "docs/audits/2026-09-16-npm-audit-remediated.json",
+      "sha256": "9a3d2854a795a4ebcbfa7ef32342b7a2d8ab2706c3d5a46cf5a6ed4f94a4e3c4",
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      }
+    },
+    "activeQuarantines": 0
+  },
+  "uiAcceptance": {
+    "path": "docs/audits/2026-09-16-ui-acceptance.json",
+    "sha256": "68a431c2b58cfb2e3064fede9d4e0adfe3b31079e1b9e32cfaa50463b3060887",
+    "scope": "Live fresh-workspace UI used the preceding build 3B_sneoUMRRE3b2a1XCZe. Subsequent production source change only affects the env API; UI and conversation code are unchanged. Local deterministic provider only; no cloud-provider account or spend."
+  },
+  "personaSoak": {
+    "path": "docs/audits/2026-09-16-persona-soak.json",
+    "sha256": "ca2dd0af4d16d8edfde1aad261eabeefe979d69fc7d748d1f7f8993f74ce4232",
+    "result": "failed",
+    "commitSha": "df485400e72f5772f50b1caa9674db22bfb3bf42",
+    "days": 28,
+    "scope": "Offline deterministic Persona acceptance fixture: 28 simulated days, 20 generated activities/day, seed 459, learning enabled. Not 28 real days, a paid-provider test, or validation against existing user workspaces.",
+    "activities": {
+      "accepted": 560,
+      "attempted": 560,
+      "completed": 560,
+      "duplicate": 0,
+      "duplicateSourceIds": [],
+      "failed": 0,
+      "identityMismatchSourceIds": [],
+      "mailboxLinkMismatchSourceIds": [],
+      "missingSourceIds": [],
+      "nonterminalSourceIds": [],
+      "unresolved": 0
+    },
+    "criteria": [
+      {
+        "id": "unattended-runtime-throughput",
+        "status": "passed"
+      },
+      {
+        "id": "persisted-workload-reconciliation",
+        "status": "passed"
+      },
+      {
+        "id": "scheduled-fault-recovery",
+        "status": "passed"
+      },
+      {
+        "id": "recall-precision-stability",
+        "status": "passed"
+      },
+      {
+        "id": "runtime-scale-recall-latency",
+        "status": "passed"
+      },
+      {
+        "id": "bounded-detailed-runtime-state",
+        "status": "passed"
+      },
+      {
+        "id": "flat-event-append-cost",
+        "status": "failed"
+      },
+      {
+        "id": "runtime-event-continuity",
+        "status": "passed"
+      },
+      {
+        "id": "zero-split-brain",
+        "status": "passed"
+      },
+      {
+        "id": "zero-stranded-or-stuck",
+        "status": "passed"
+      },
+      {
+        "id": "resident-memory-bound",
+        "status": "passed"
+      },
+      {
+        "id": "learning-auto-rollback",
+        "status": "passed"
+      },
+      {
+        "id": "os-process-hard-crash-recovery",
+        "status": "passed"
+      }
+    ],
+    "passedCriteria": 12,
+    "totalCriteria": 13
+  },
+  "publicationPrivacy": {
+    "sanitizedForPublicRepository": true,
+    "originalRawSha256": "71a7c07ebbf4dcfe784420140280147adf430f9946b52fd23924243a5ed77f13",
+    "artifactPathPolicy": "remediation/ and persona-soak/ paths identify files relative to a local evidence bundle; toolchain/ identifies local executables. Raw artifacts and exact pre-sanitization audit originals are retained locally and are not included in this repository.",
+    "hashPolicy": "originalRawSha256 identifies unchanged raw artifact bytes retained locally. sha256 on included repository files identifies their public bytes. Source and snapshot hashes retain their original measured scope; this sanitization is not a new validation run.",
+    "redactions": [
+      "Local user-specific absolute paths replaced by repository-relative or artifact-relative paths.",
+      "Private task identifiers omitted."
+    ]
+  }
+}

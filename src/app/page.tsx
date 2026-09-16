@@ -78,6 +78,7 @@ export default function HomePage() {
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<{ message: string; pinned: boolean } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({
@@ -127,6 +128,8 @@ export default function HomePage() {
       .then((data) => {
         if (data?.updateAvailable) {
           setUpdateInfo({ behindBy: data.behindBy, branch: data.branch });
+        } else if (data?.message && (data.updateMode === 'pinned' || data.updateMode === 'blocked')) {
+          setUpdateNotice({ message: data.message, pinned: data.updateMode === 'pinned' });
         }
       })
       .catch((error) => log.warn('Update check failed', error));
@@ -177,6 +180,7 @@ export default function HomePage() {
       });
       const data = await response.json();
       if (!response.ok || data.success === false) {
+        setUpdateInfo(null);
         setUpdateError(data.error || t('home.updateFailed'));
         setUpdating(false);
         return;
@@ -323,6 +327,11 @@ export default function HomePage() {
     <Container maxWidth={false} disableGutters>
       <Box sx={{ width: 'min(100%, 1320px)', mx: 'auto', px: { xs: 2, sm: 3, lg: 5 }, pb: { xs: 7, md: 10 } }}>
         <Stack spacing={1.2} sx={{ pt: { xs: 2, md: 3 } }}>
+          {updateNotice && (
+            <Alert severity="info" action={updateNotice.pinned ? <Button color="inherit" size="small" href="https://github.com/mario-andreschak/FLUJO/releases/latest" target="_blank" rel="noreferrer">{t('settings.update.downloadInstaller')}</Button> : undefined}>
+              {updateNotice.pinned ? t('settings.update.pinned') : updateNotice.message}
+            </Alert>
+          )}
           {updateInfo && (
             <Alert
               severity="info"

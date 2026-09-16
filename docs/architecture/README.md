@@ -1,30 +1,22 @@
 # Flujo Architecture
 
-This section provides technical architecture and design documentation for Flujo.
+FLUJO is a single-user Next.js App Router application. The React frontend calls workspace-aware HTTP handlers; backend services manage models, MCP connections, flow execution, schedules, and persistence. Local MCP servers run in child processes. Persistent state lives under the selected workspace's data directory.
 
 ## System Architecture
 
-- **Overview**: High-level system architecture
-- **Components**: Major system components and their interactions
-- **Data Flow**: How data flows through the system
+The request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. Worker deployments add a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state.
 
 ## Backend Architecture
 
-- **Server Architecture**: Backend server architecture
-- **Database Design**: Database schema and design
-- **API Design**: API architecture and design
+Backend modules live under `src/backend`. Flow execution runs through nodes and emits conversation events; model adapters translate provider requests, and MCP services own connection lifecycle and tool calls. File-backed storage uses atomic writes. AsyncLocalStorage carries the selected workspace so concurrent requests resolve their own paths and caches. See [workspaces](../features/workspaces.md), [MCP lifecycle](../features/mcp-lifecycle-hardening.md), and [API reference](../api-reference/README.md).
 
 ## Frontend Architecture
 
-- **Component Structure**: Frontend component structure
-- **State Management**: State management approach
-- **UI/UX Design**: UI/UX design principles
+Routes live under `src/app`; reusable components, hooks, services, contexts, and localization live under `src/frontend`. Client services manage HTTP/streaming requests; components should surface loading, failed, and successful states distinctly. Shared contracts live under `src/shared`.
 
 ## Integration Architecture
 
-- **Model Integration**: How Flujo integrates with AI models
-- **MCP Integration**: Model Context Protocol integration
-- **External Service Integration**: Integration with external services
+Cloud model adapters send selected context to configured providers. MCP integrations may execute local code or call remote services. Tool approvals mediate requested actions, while process/network permissions remain the host operator's responsibility. See [Connected Apps](../features/mcp/overview.md) and [project status](../project-status.md) for supported and experimental scope.
 
 ## Decision Records
 

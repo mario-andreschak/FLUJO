@@ -102,11 +102,14 @@ export default function BigTutorialOverlay() {
   const router = useRouter();
   const [rect, setRect] = useState<Rect | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [failedRunStep, setFailedRunStep] = useState<string | null>(null);
   const step = isBigTutorialActive ? BIG_TUTORIAL_STEP_BY_ID.get(bigTutorialProgress.stepId) : undefined;
   const target = step ? resolveBigTutorialTarget(step, bigTutorialProgress) : undefined;
 
   const mainSteps = useMemo(() => BIG_TUTORIAL_STEPS.filter(candidate => !candidate.nested), []);
   const mainIndex = step ? Math.max(0, mainSteps.findIndex(candidate => candidate.id === step.id)) : 0;
+
+  useEffect(() => { setFailedRunStep(null); }, [step?.id]);
 
   useEffect(() => {
     if (!step) return;
@@ -192,22 +195,31 @@ export default function BigTutorialOverlay() {
     if (step.id === 'wait-for-app-connection') return;
     if (
       (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer')
-      && (bigTutorialRunStatus === 'completed' || bigTutorialRunStatus === 'error')
+      && bigTutorialRunStatus === 'completed'
     ) {
       void nextBigTutorial();
       return;
     }
     if (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer') {
+      if (bigTutorialRunStatus === 'error') {
+        setFailedRunStep(step.id);
+        return;
+      }
+      // Live events own an in-flight run. Only use durable DOM status when
+      // restoring a tutorial; a previous answer must not finish the new run.
+      if (bigTutorialRunStatus === 'running') return;
       // A completion event can be missed when the tutorial is restored after a
       // reload or when settings persistence and the chat response finish in the
       // same render. The Chat root exposes its durable status, so use that as a
       // fallback instead of leaving the tutorial on "Waiting" forever.
       let timer = 0;
       const checkChat = () => {
-        const finished = document.querySelector(
-          '[data-tutorial-chat-status="completed"], [data-tutorial-chat-status="error"]',
+        const chat = Array.from(document.querySelectorAll('[data-tutorial-chat-status]')).find(element =>
+          element.getAttribute('data-tutorial-conversation-id') === bigTutorialProgress.conversationId,
         );
-        if (finished) void nextBigTutorial();
+        const status = chat?.getAttribute('data-tutorial-chat-status');
+        if (status === 'completed') void nextBigTutorial();
+        else if (status === 'error') setFailedRunStep(step.id);
         else timer = window.setTimeout(checkChat, 200);
       };
       checkChat();
@@ -223,6 +235,7 @@ export default function BigTutorialOverlay() {
   }, [
     bigTutorialConnectedServer,
     bigTutorialProgress.recommendedServerName,
+    bigTutorialProgress.conversationId,
     bigTutorialRunStatus,
     nextBigTutorial,
     pathname,
@@ -236,6 +249,7 @@ export default function BigTutorialOverlay() {
   const position = cardPosition(showSpotlight ? rect : null, step.placement);
   const hasBack = !!step.back;
   const waiting = !!step.waitFor;
+  const runFailed = waiting && (failedRunStep === step.id || bigTutorialRunStatus === 'error');
   const title = resolveBigTutorialText(step.title, bigTutorialProgress);
   const body = resolveBigTutorialText(step.body, bigTutorialProgress);
 
@@ -286,6 +300,19 @@ export default function BigTutorialOverlay() {
         ))}
 
         {bigTutorialError && <Alert severity="warning" sx={{ mt: 1, mb: 1 }}>{bigTutorialError}</Alert>}
+        {runFailed && (
+          <Alert severity="error" sx={{ mt: 1, mb: 1 }}>
+            The agent could not finish this question. Check the error in Chat, fix the AI connection or app, then retry.
+            <Button size="small" onClick={() => void pauseBigTutorial().then(() => router.push('/models'))}>
+              Check AI setup
+            </Button>
+            {bigTutorialProgress.flowId && (
+              <Button size="small" onClick={() => void pauseBigTutorial().then(() => router.push(`/flows?flow=${encodeURIComponent(bigTutorialProgress.flowId!)}&mode=edit`))}>
+                Edit agent and apps
+              </Button>
+            )}
+          </Alert>
+        )}
 
         {!step.nested && (
           <Box sx={{ mt: 1.5 }}>
@@ -302,6 +329,8 @@ export default function BigTutorialOverlay() {
             <Typography variant="caption" color="primary.main" sx={{ alignSelf: 'center', fontWeight: 750 }}>
               Click the highlighted area
             </Typography>
+          ) : runFailed ? (
+            <Button size="small" variant="contained" onClick={() => void backBigTutorial()}>Retry question</Button>
           ) : waiting ? (
             <Button size="small" disabled startIcon={<CircularProgress size={14} />}>Waiting</Button>
           ) : step.action ? (
@@ -321,7 +350,7 @@ export default function BigTutorialOverlay() {
           <Button size="small" color="inherit" onClick={() => setConfirmRestart(true)}>
             Restart from beginning
           </Button>
-          <Button size="small" color="inherit" disabled={!step.next || bigTutorialBusy} onClick={() => void nextBigTutorial()}>
+          <Button size="small" color="inherit" disabled={!step.next || bigTutorialBusy || waiting || step.action === 'start' || step.action === 'send-example'} onClick={() => void nextBigTutorial()}>
             Skip
           </Button>
         </Box>

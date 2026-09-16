@@ -192,14 +192,8 @@ export default function ModelClient() {
         const updatedModels = await service.loadModels();
         setModels(updatedModels);
 
-        // Close modal by removing query param
-        setNewModelDraft(null);
-        if (modalPushedByUsRef.current) {
-          modalPushedByUsRef.current = false;
-          router.back();
-        } else {
-          router.push('/models');
-        }
+        // Save and cancel consume the same modal history entry.
+        await handleCloseModal();
         return { success: true, model: result.model };
       } else {
         setError(result.error || t('models.saveFailed'));
@@ -234,6 +228,12 @@ export default function ModelClient() {
     log.info('Opening manual add-model modal');
     setAddMenuAnchor(null);
     // The draft lives in memory until the user saves.
+    if (isWizardOpen) {
+      // Guided and manual setup are two views of one modal. Keep its original
+      // history ownership so closing cannot return to and reopen the wizard.
+      router.replace('/models?add=manual');
+      return;
+    }
     modalPushedByUsRef.current = true;
     router.push('/models?add=manual');
   };
@@ -252,8 +252,9 @@ export default function ModelClient() {
 
       for (const candidate of candidates) {
         // Re-running a completed (or partially completed) wizard path is
-        // idempotent: a provider/adapter/technical-name match is already the
-        // desired connection, regardless of its user-edited display name.
+        // idempotent: reuse the connection identity and custom settings, but
+        // apply credentials explicitly entered on this attempt (e.g. a typo
+        // correction or a rotated key).
         const match = known.find((model) =>
           model.provider === candidate.provider &&
           (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
@@ -265,7 +266,17 @@ export default function ModelClient() {
           ))
         );
         if (match) {
-          existing.push(match);
+          if (candidate.ApiKey?.trim() && candidate.provider !== 'ollama') {
+            const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey });
+            if (!result.success || !result.model) {
+              setModels(await service.loadModels());
+              return { success: false, created, existing, error: result.error || t('models.saveFailed') };
+            }
+            existing.push(result.model);
+            known[known.indexOf(match)] = result.model;
+          } else {
+            existing.push(match);
+          }
           continue;
         }
 

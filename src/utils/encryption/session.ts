@@ -9,7 +9,7 @@ interface EncryptionSession {
   /** Workspace that issued the token; tokens are never portable across it. */
   workspace?: string;
   token: string;
-  dek: string; // The Data Encryption Key in string format
+  dek: string; // Versioned keyring, or the effective v1 key as hex during upgrade.
   createdAt: number; // Timestamp when the session was created
   lastUsed: number; // Timestamp when the session was last used
 }
@@ -24,7 +24,7 @@ declare global {
   var __flujo_encryption_sessions: Map<string, EncryptionSession> | undefined;
   var __flujo_encryption_sessions_by_workspace:
     Map<string, Map<string, EncryptionSession>> | undefined;
-  // The process-wide server unlock state: the plaintext DEK (hex string) that
+  // The process-wide server unlock state: the serialized plaintext keyring that
   // was recovered when the user authenticated. Non-expiring — cleared only when
   // the process exits. Also global-backed to survive HMR module duplication so
   // routes never see a locked/unlocked split-brain.
@@ -75,7 +75,7 @@ export function createSession(dek: string): string {
   
   // Store the session
   sessionsForWorkspace().set(token, session);
-  log.info(`Created encryption session: ${token}`);
+  log.info('Created encryption session');
   
   // Schedule cleanup of expired sessions
   scheduleCleanup();
@@ -94,14 +94,14 @@ export function getDekFromSession(token: string): string | null {
   const sessions = sessionsForWorkspace(workspace);
   const session = sessions.get(token);
   if (!session || (session.workspace ?? DEFAULT_WORKSPACE) !== workspace) {
-    log.warn(`Session not found: ${token}`);
+    log.warn('Encryption session not found');
     return null;
   }
   
   // Check if the session has expired
   const now = Date.now();
   if (now - session.createdAt > SESSION_EXPIRATION_MS) {
-    log.warn(`Session expired: ${token}`);
+    log.warn('Encryption session expired');
     sessions.delete(token);
     return null;
   }
@@ -120,7 +120,7 @@ export function invalidateSession(token: string): void {
   const sessions = sessionsForWorkspace();
   if (sessions.has(token)) {
     sessions.delete(token);
-    log.info(`Invalidated encryption session: ${token}`);
+    log.info('Invalidated encryption session');
   }
 }
 
@@ -136,7 +136,7 @@ export function invalidateSession(token: string): void {
 
 /**
  * Record the server unlock state.
- * @param dek The plaintext Data Encryption Key (hex string).
+ * @param dek A serialized v2 keyring or effective legacy key (hex string).
  */
 export function unlockServer(dek: string): void {
   const workspace = getCurrentWorkspace();

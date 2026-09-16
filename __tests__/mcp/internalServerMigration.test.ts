@@ -4,6 +4,8 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 import { StorageKey } from '@/shared/types/storage';
@@ -50,7 +52,7 @@ describe('shipped MCP package migration (#347)', () => {
         source: { type: 'marketplace', id: descriptor.packageId },
       });
       expect(typeof servers[descriptor.defaultName].rootPath).toBe('string');
-      expect(path.isAbsolute(servers[descriptor.defaultName].rootPath as string)).toBe(true);
+      expect(servers[descriptor.defaultName].rootPath).toBe(path.join('mcp-servers', descriptor.packageDirectory));
       expect(servers[descriptor.defaultName]).not.toHaveProperty('name');
       expect(servers[descriptor.defaultName]).not.toHaveProperty('builtIn');
       expect(servers[descriptor.defaultName]).not.toHaveProperty('internalPackage');
@@ -149,10 +151,10 @@ describe('shipped MCP package migration (#347)', () => {
       disabled: false,
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
     });
-    expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);
+    expect(servers.browser.rootPath).toBe(path.join('mcp-servers', 'browser'));
   });
 
-  it('backfills blank shipped roots and absolute entrypoints without replacing custom roots', async () => {
+  it('backfills blank shipped roots and workspace entrypoints without replacing custom roots', async () => {
     storage.set(StorageKey.MCP_SERVERS, {
       browser: {
         transport: 'stdio',
@@ -176,9 +178,9 @@ describe('shipped MCP package migration (#347)', () => {
     await migrateShippedMcpServers();
 
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
-    expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);
+    expect(servers.browser.rootPath).toBe(path.join('mcp-servers', 'browser'));
     expect(path.basename(servers.browser.rootPath as string)).toBe('browser');
-    expect(path.isAbsolute((servers.browser.args as string[])[0])).toBe(true);
+    expect(servers.browser.args).toEqual(['./dist/index.js']);
     expect(servers.shell).toMatchObject({
       args: ['custom-entry.js'],
       rootPath: 'C:/custom/shell-root',
@@ -219,8 +221,8 @@ describe('shipped MCP package migration (#347)', () => {
       favorite: true,
       enableMcpApps: true,
     });
-    expect(path.isAbsolute((browser.args as string[])[0])).toBe(true);
-    expect(path.isAbsolute(browser.rootPath as string)).toBe(true);
+    expect(browser.args).toEqual(['./dist/index.js']);
+    expect(browser.rootPath).toBe(path.join('mcp-servers', 'browser'));
     expect(path.isAbsolute(((browser.env as Record<string, { value: string }>).FLUJO_DATA_DIR).value)).toBe(true);
     expect(browser).not.toHaveProperty('error');
     expect(browser).not.toHaveProperty('path');
@@ -280,8 +282,8 @@ describe('shipped MCP package migration (#347)', () => {
       disabled: false,
       favorite: true,
     });
-    expect(path.isAbsolute((control.args as string[])[0])).toBe(true);
-    expect(path.isAbsolute(control.rootPath as string)).toBe(true);
+    expect(control.args).toEqual(['./dist/index.js']);
+    expect(control.rootPath).toBe(path.join('mcp-servers', 'flujo'));
     expect(control).not.toHaveProperty('error');
     expect(control).not.toHaveProperty('path');
     expect(control).not.toHaveProperty('status');
@@ -289,7 +291,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(storage.get(StorageKey.MCP_SHIPPED_FLUJO_REPAIR_MIGRATION_V7)).toBe(true);
   });
 
-  it('repairs a Bash record that still launches the stale workspace copy', async () => {
+  it('normalizes a legacy relative Bash launcher without replacing workspace code', async () => {
     storage.set(StorageKey.MCP_SERVERS, {
       shell: {
         transport: 'stdio',
@@ -327,9 +329,9 @@ describe('shipped MCP package migration (#347)', () => {
       enableMcpApps: true,
       env: expect.objectContaining({ CUSTOM_TERMINAL_SETTING: 'preserved' }),
     });
-    expect(path.isAbsolute((shell.args as string[])[0])).toBe(true);
+    expect(shell.args).toEqual(['./dist/index.js']);
     expect(path.basename((shell.args as string[])[0])).toBe('index.js');
-    expect(path.isAbsolute(shell.rootPath as string)).toBe(true);
+    expect(shell.rootPath).toBe(path.join('mcp-servers', 'bash'));
     expect(path.basename(shell.rootPath as string)).toBe('bash');
     expect(shell).not.toHaveProperty('path');
     expect(shell).not.toHaveProperty('status');
@@ -377,11 +379,57 @@ describe('shipped MCP package migration (#347)', () => {
     const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
     delete servers.filesystem;
     storage.set(StorageKey.MCP_SERVERS, servers);
+    const deletedPackage = path.join(getWorkspaceDataDir(), 'mcp-servers', 'filesystem');
+    await fs.rm(deletedPackage, { recursive: true, force: true });
 
     saveItemMock.mockClear();
     await migrateShippedMcpServers();
 
     expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, unknown>).filesystem).toBeUndefined();
     expect(saveItemMock).not.toHaveBeenCalled();
+    await expect(fs.stat(deletedPackage)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not inspect or recreate a disabled package or a custom name collision', async () => {
+    await migrateShippedMcpServers();
+    const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
+    servers.bash.disabled = true;
+    servers.browser = { transport: 'streamable', url: 'https://custom.test', disabled: false };
+    storage.set(StorageKey.MCP_SERVERS, servers);
+    for (const name of ['bash', 'browser']) {
+      const root = path.join(getWorkspaceDataDir(), 'mcp-servers', name);
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, 'package.json'), '{"name":"custom-user-package"}');
+    }
+    await expect(migrateShippedMcpServers()).resolves.toBeUndefined();
+    for (const name of ['bash', 'browser']) {
+      await expect(fs.readFile(path.join(getWorkspaceDataDir(), 'mcp-servers', name, 'package.json'), 'utf8'))
+        .resolves.toBe('{"name":"custom-user-package"}');
+      await fs.rm(path.join(getWorkspaceDataDir(), 'mcp-servers', name), { recursive: true });
+    }
+  });
+
+  it('rebinds an installation-owned record through an application-root alias without claiming custom roots', async () => {
+    // Complete historical migrations, then simulate their absolute launch record.
+    await migrateShippedMcpServers();
+    const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
+    const appRoot = process.env.FLUJO_APP_ROOT ?? process.cwd();
+    const packageRoot = path.join(appRoot, 'mcp-servers/bash');
+    servers.bash = { ...servers.bash, rootPath: packageRoot, cwd: packageRoot, args: [path.join(packageRoot, 'dist/index.js'), '--kept'] };
+    storage.set(StorageKey.MCP_SERVERS, servers);
+    const alias = path.join(getWorkspaceDataDir(), 'application-alias');
+    await fs.symlink(appRoot, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const previous = process.env.FLUJO_APP_ROOT;
+    process.env.FLUJO_APP_ROOT = alias;
+    try { await migrateShippedMcpServers(); }
+    finally {
+      if (previous === undefined) delete process.env.FLUJO_APP_ROOT;
+      else process.env.FLUJO_APP_ROOT = previous;
+      await fs.rm(alias, { recursive: true });
+    }
+    expect((storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>).bash).toMatchObject({
+      rootPath: path.join('mcp-servers', 'bash'), cwd: path.join('mcp-servers', 'bash'), args: ['./dist/index.js', '--kept'],
+    });
   });
 });

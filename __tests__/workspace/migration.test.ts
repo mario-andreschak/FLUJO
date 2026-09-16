@@ -139,6 +139,32 @@ describe('direct workspace layout migration', () => {
     await expect(exists(path.join(dataRoot, 'mcp-servers', 'custom-metadata.json'))).resolves.toBe(false);
   });
 
+  it('preserves bundled sources when the application root is a filesystem alias of the data root', async () => {
+    const appAlias = path.join(fixtureRoot, 'application-alias');
+    await fs.symlink(dataRoot, appAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    process.env.FLUJO_APP_ROOT = appAlias;
+    await Promise.all([
+      write('mcp-servers/bash/src/index.ts', 'canonical-source'),
+      write('mcp-servers/shared/src/index.ts', 'canonical-shared'),
+      write('mcp-servers/embed-shared.mjs', 'canonical-build-helper'),
+      write('mcp-servers/custom-server/config.json', 'custom-data'),
+      write('workspaces/default-workspace/mcp-servers/bash/src/index.ts', 'workspace-edit'),
+    ]);
+
+    await migrateWorkspaceLayout();
+
+    await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/bash/src/index.ts'), 'utf8'))
+      .resolves.toBe('canonical-source');
+    await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/shared/src/index.ts'), 'utf8'))
+      .resolves.toBe('canonical-shared');
+    await expect(fs.readFile(path.join(dataRoot, 'mcp-servers/embed-shared.mjs'), 'utf8'))
+      .resolves.toBe('canonical-build-helper');
+    await expect(fs.readFile(path.join(workspaceRoot(), 'mcp-servers/bash/src/index.ts'), 'utf8'))
+      .resolves.toBe('workspace-edit');
+    await expect(fs.readFile(path.join(workspaceRoot(), 'mcp-servers/custom-server/config.json'), 'utf8'))
+      .resolves.toBe('custom-data');
+  });
+
   it('moves a same-name empty MCP server folder as one top-level directory', async () => {
     const sourceServer = path.join(dataRoot, 'mcp-servers', 'custom-server');
     const destinationServer = path.join(workspaceRoot(), 'mcp-servers', 'custom-server');

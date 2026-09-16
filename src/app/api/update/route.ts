@@ -1,7 +1,7 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import simpleGit from 'simple-git';
+import simpleGit, { type SimpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs/promises';
 import { execSync, ExecSyncOptionsWithStringEncoding, spawn } from 'child_process';
@@ -30,14 +30,91 @@ const NON_GIT_UPDATE_MESSAGE: Record<'container' | 'npm', string> = {
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
 
-async function getCurrentVersion(): Promise<string> {
+async function getCurrentPackage(): Promise<{ name: string; version: string }> {
   try {
     const pkgRaw = await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf-8');
-    return JSON.parse(pkgRaw).version ?? 'unknown';
+    const pkg = JSON.parse(pkgRaw);
+    return { name: pkg.name ?? '', version: pkg.version ?? 'unknown' };
   } catch (error) {
     log.warn('Failed to read package.json version', error);
-    return 'unknown';
+    return { name: '', version: 'unknown' };
   }
+}
+
+const RELEASES_URL = 'https://github.com/mario-andreschak/FLUJO/releases/latest';
+const OFFICIAL_ORIGIN = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)mario-andreschak\/flujo(?:\.git)?\/?$/i;
+
+interface GitUpdateState {
+  isGitRepo: boolean;
+  updateMode: 'git' | 'pinned' | 'blocked' | 'none';
+  updateAvailable: boolean;
+  canApply: boolean;
+  branch?: string;
+  sourceRef?: string;
+  revision?: string;
+  targetRevision?: string;
+  behindBy?: number;
+  blockedReason?: string;
+  message?: string;
+  releasesUrl?: string;
+}
+
+/** No fetch, checkout, restore or process launch until this preflight passes. */
+async function inspectGitUpdate(git: SimpleGit, packageName: string): Promise<GitUpdateState> {
+  const state: GitUpdateState = { isGitRepo: true, updateMode: 'blocked', updateAvailable: false, canApply: false };
+  const refuse = (blockedReason: string, message: string): GitUpdateState => ({ ...state, blockedReason, message });
+  if (!(await git.checkIsRepo())) {
+    return { ...state, isGitRepo: false, updateMode: 'none', message: 'FLUJO is not running from a Git clone. Use the installer for a newer version.' };
+  }
+  const root = path.resolve((await git.raw(['rev-parse', '--show-toplevel'])).trim());
+  const cwd = path.resolve(process.cwd());
+  const sameRoot = process.platform === 'win32' ? root.toLowerCase() === cwd.toLowerCase() : root === cwd;
+  if (!sameRoot || packageName !== 'flujo-ai') {
+    return refuse('unrelated-checkout', 'This directory is not the root of a FLUJO checkout. Automatic update is unavailable.');
+  }
+  let origin: string;
+  try { origin = (await git.raw(['remote', 'get-url', 'origin'])).trim(); }
+  catch { return refuse('missing-origin', 'This checkout has no readable origin remote. Review its repository configuration and update manually.'); }
+  if (!OFFICIAL_ORIGIN.test(origin)) {
+    return refuse('unrelated-origin', 'This checkout does not use the official FLUJO origin. Review and update this repository manually.');
+  }
+  state.revision = (await git.raw(['rev-parse', 'HEAD'])).trim();
+  let branch: string;
+  try {
+    branch = (await git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+  } catch {
+    branch = '';
+  }
+  if (!branch) {
+    let sourceRef = state.revision;
+    try { sourceRef = (await git.raw(['describe', '--tags', '--exact-match', 'HEAD'])).trim() || sourceRef; } catch { /* A pinned commit may have no tag. */ }
+    return {
+      ...state, updateMode: 'pinned', sourceRef, blockedReason: 'pinned-release', releasesUrl: RELEASES_URL,
+      message: 'This installation is pinned to a release or commit. Download and run a newer versioned FLUJO installer to upgrade. In-app branch updates are disabled for pinned installations.',
+    };
+  }
+  state.branch = branch;
+  state.sourceRef = branch;
+  const status = await git.status();
+  if (status.current !== branch || status.detached) {
+    return refuse('checkout-changed', 'The checkout changed during the update check. Check again before updating.');
+  }
+  if (status.files.length > 0) {
+    return refuse('local-changes', 'This checkout has local changes or untracked files. Commit or back up your work and make the checkout clean before updating. FLUJO will not discard files, including package-lock.json.');
+  }
+  if (status.tracking !== `origin/${branch}`) {
+    return refuse('unexpected-upstream', 'This branch does not track its matching branch on the official origin. Review its upstream configuration and update manually.');
+  }
+  if (status.ahead > 0) {
+    return refuse('local-commits', 'This branch has local commits or has diverged from origin. Update it manually; FLUJO only applies fast-forward updates.');
+  }
+  try {
+    await git.raw(['merge-base', '--is-ancestor', 'HEAD', `refs/remotes/origin/${branch}`]);
+    state.targetRevision = (await git.raw(['rev-parse', `refs/remotes/origin/${branch}`])).trim();
+  } catch {
+    return refuse('not-fast-forward', 'A fast-forward update could not be verified. Review the branch and origin history, then update manually.');
+  }
+  return { ...state, updateMode: 'git', canApply: true, behindBy: status.behind, updateAvailable: status.behind > 0 };
 }
 
 /**
@@ -51,7 +128,8 @@ export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
-  const currentVersion = await getCurrentVersion();
+  const currentPackage = await getCurrentPackage();
+  const currentVersion = currentPackage.version;
 
   // Packaged installs (Docker/npm) can't git-pull themselves. Report the mode so
   // the UI can show the right update instructions instead of a broken button.
@@ -71,32 +149,20 @@ export async function GET(request: NextRequest) {
   try {
     const git = simpleGit(process.cwd());
 
-    if (!(await git.checkIsRepo())) {
-      log.info('Update check skipped: working directory is not a git repository');
-      return NextResponse.json({
-        success: true,
-        isGitRepo: false,
-        updateMode: 'none',
-        updateAvailable: false,
-        currentVersion,
-        message: 'FLUJO is not running from a git clone, so auto-update is unavailable.',
-      });
+    const beforeFetch = await inspectGitUpdate(git, currentPackage.name);
+    if (!beforeFetch.canApply) {
+      return NextResponse.json({ success: true, currentVersion, ...beforeFetch });
     }
 
     log.debug('Fetching from origin to check for updates');
-    await git.fetch();
-    const status = await git.status();
-    const behindBy = status.behind ?? 0;
+    await git.fetch('origin', beforeFetch.branch!);
+    const state = await inspectGitUpdate(git, currentPackage.name);
 
-    log.info(`Update check complete: ${behindBy} commit(s) behind ${status.tracking ?? 'origin'}`);
+    log.info('Update check complete', { mode: state.updateMode, behindBy: state.behindBy });
     return NextResponse.json({
       success: true,
-      isGitRepo: true,
-      updateMode: 'git',
-      updateAvailable: behindBy > 0,
-      behindBy,
-      branch: status.current,
       currentVersion,
+      ...state,
     });
   } catch (error) {
     log.error('Update check failed', error);
@@ -156,11 +222,23 @@ export async function POST(request: NextRequest) {
 
   try {
     const git = simpleGit(cwd);
-    if (!(await git.checkIsRepo())) {
+    const currentPackage = await getCurrentPackage();
+    const beforeFetch = await inspectGitUpdate(git, currentPackage.name);
+    if (!beforeFetch.canApply) {
       return NextResponse.json({
-        success: false,
-        error: 'FLUJO is not running from a git clone, so it cannot update itself.',
-      }, { status: 400 });
+        success: false, currentVersion: currentPackage.version, ...beforeFetch, error: beforeFetch.message,
+      }, { status: beforeFetch.isGitRepo ? 409 : 400 });
+    }
+    await git.fetch('origin', beforeFetch.branch!);
+    const state = await inspectGitUpdate(git, currentPackage.name);
+    if (!state.canApply || state.branch !== beforeFetch.branch || state.revision !== beforeFetch.revision) {
+      return NextResponse.json({
+        success: false, ...state, canApply: false,
+        error: state.message || 'The checkout changed during the update check. Check again before updating.',
+      }, { status: 409 });
+    }
+    if (!state.updateAvailable) {
+      return NextResponse.json({ success: true, ...state, restarting: false, message: 'This branch is already up to date. No update was applied.' });
     }
 
     if (process.platform === 'win32') {
@@ -214,21 +292,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // A previous installer/update may have used `npm install`, which can rewrite
-    // the lockfile merely because a different npm version is in use. That
-    // generated-only drift must not permanently wedge the updater. It is safe to
-    // restore when package.json is unchanged; if both files changed, treat that
-    // as an intentional dependency edit and let git protect it.
-    const status = await git.status();
-    const dirtyPaths = new Set(status.files.map((file) => file.path.replace(/\\/g, '/')));
-    if (dirtyPaths.has('package-lock.json') && !dirtyPaths.has('package.json')) {
-      log.info('Restoring generated package-lock.json drift before update');
-      await git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', 'package-lock.json']);
-    }
-
     // Non-Windows: rebuild in-process and ask the user to restart manually.
-    log.info('Applying update (non-Windows): git pull');
-    await git.pull();
+    // Merge only the exact upstream revision that passed preflight; never
+    // fetch again during a pull or silently merge/reset local work.
+    log.info('Applying fast-forward update (non-Windows)');
+    await git.raw(['merge', '--ff-only', state.targetRevision!]);
     // This is a deployment install backed by a committed lockfile. `npm ci`
     // installs that exact tree and, unlike `npm install`, never updates the
     // dependency manifests as a side effect.

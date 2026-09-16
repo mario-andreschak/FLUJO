@@ -52,6 +52,35 @@ ok()   { printf '%s    %s%s\n'   "$C_OK"   "$1" "$C_END" >&2; }
 warn() { printf '%s    %s%s\n'   "$C_WARN" "$1" "$C_END" >&2; }
 die()  { printf '\n%sERROR: %s%s\n' "$C_WARN" "$1" "$C_END" >&2; exit "${2:-1}"; }
 
+[[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] && [[ "$BRANCH" != *..* ]] || die 'FLUJO_BRANCH must be a branch name or version tag.'
+INSTALL_CHANNEL=development
+if [[ "$BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then INSTALL_CHANNEL=stable; fi
+
+validate_existing_repository() {
+  command -v git >/dev/null 2>&1 || die 'Git is required to safely inspect an existing checkout. Install Git before updating.'
+  local origin current status
+  origin="$(git -C "$INSTALL_DIR" remote get-url origin)" || die 'Could not inspect origin; no repository files were changed.'
+  origin="$(printf '%s' "$origin" | tr '[:upper:]' '[:lower:]')"
+  [[ "$origin" =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)mario-andreschak/flujo(\.git)?/?$ ]] || die 'Target is not the official FLUJO repository. Choose a new installation directory.'
+  grep -Eq '"name"[[:space:]]*:[[:space:]]*"flujo-ai"' "$INSTALL_DIR/package.json" || die 'Target does not contain the FLUJO application package.'
+  status="$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=normal)" || die 'Could not inspect checkout changes.'
+  [ -z "$status" ] || die 'Checkout contains local changes or untracked files. Commit or back them up before updating; the installer never discards them.'
+  current="$(git -C "$INSTALL_DIR" branch --show-current)" || die 'Could not inspect the current branch.'
+  [ "$INSTALL_CHANNEL" = stable ] || [ "$current" = "$BRANCH" ] || die 'Checkout is on a different branch. Select the intended branch yourself before updating.'
+}
+
+update_existing_repository() {
+  validate_existing_repository
+  run_stage repository git -C "$INSTALL_DIR" fetch origin "$BRANCH"
+  git -C "$INSTALL_DIR" merge-base --is-ancestor HEAD FETCH_HEAD || die 'The requested version would discard local commits or downgrade this checkout. Back up your work and choose a separate install directory.'
+  validate_existing_repository
+  if [ "$INSTALL_CHANNEL" = stable ]; then
+    run_stage repository git -C "$INSTALL_DIR" checkout --detach FETCH_HEAD
+  else
+    run_stage repository git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD
+  fi
+}
+
 INSTALL_LOG="${FLUJO_INSTALL_LOG:-$MANIFEST_DIR/install.log}"
 INSTALL_STAGE_FILE="${FLUJO_INSTALL_STAGE_FILE:-$MANIFEST_DIR/install-stage.txt}"
 BROWSER_RESULT_FILE="$MANIFEST_DIR/browser-install-result.json"
@@ -229,7 +258,14 @@ if [ -z "$INSTALL_DIR" ]; then
   INSTALL_DIR="$(ask "Where should FLUJO be installed? (press Enter for: $HOME/FLUJO)" "$HOME/FLUJO")"
 fi
 INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+if [ -e "$INSTALL_DIR/.git" ]; then
+  validate_existing_repository
+elif [ -e "$INSTALL_DIR" ] && { [ ! -d "$INSTALL_DIR" ] || [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
+  die 'Target exists and is not an empty directory or a verified FLUJO checkout.'
+fi
 ok "Installing into: $INSTALL_DIR"
+ok "Install channel: $INSTALL_CHANNEL; source ref: $BRANCH"
+[ "$INSTALL_CHANNEL" = stable ] || warn 'This moving source branch may contain unreleased changes. Use a release tag for a stable version.'
 
 MAKE_SHORTCUT=false
 if [ "$OS" = Linux ]; then
@@ -495,18 +531,14 @@ ok "Network clients: Node.js $(node -v); npm $(npm --version); Node system CA su
 # ---------------------------------------------------------------------------
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
-if [ -d "$INSTALL_DIR/.git" ]; then
-  # Older FLUJO installers used `npm install`, which could rewrite
-  # package-lock.json and leave the tree dirty. This is an install/deploy copy,
-  # not a dev checkout, so discarding tracked-file drift is safe; untracked
-  # node_modules/.next/user data are preserved by reset --hard.
-  run_stage repository git -C "$INSTALL_DIR" fetch origin "$BRANCH"
-  run_stage repository git -C "$INSTALL_DIR" checkout "$BRANCH"
-  run_stage repository git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+if [ -e "$INSTALL_DIR/.git" ]; then
+  update_existing_repository
 else
   mkdir -p "$(dirname "$INSTALL_DIR")"
   run_stage repository git clone -b "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
+INSTALLED_REVISION="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+ok "Installed source: $BRANCH at $INSTALLED_REVISION"
 
 # ---------------------------------------------------------------------------
 # 4. Install dependencies and build.
@@ -612,6 +644,8 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
   "installDir": "$INSTALL_DIR",
   "binDir": "$BIN_DIR",
   "branch": "$BRANCH",
+  "channel": "$INSTALL_CHANNEL",
+  "revision": "$INSTALLED_REVISION",
   "repoUrl": "$REPO_URL",
   "desktopShortcut": $MAKE_SHORTCUT,
   "claudeCli": {

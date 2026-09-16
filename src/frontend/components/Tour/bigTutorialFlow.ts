@@ -12,9 +12,10 @@ export interface TutorialChatFlowResult {
 
 /** Build the small, readable Start → Ask AI → Finish agent used by Stage 1. */
 export function buildTutorialChatFlow(
-  modelId: string | undefined,
+  modelId: string,
   idFactory: () => string,
 ): TutorialChatFlowResult {
+  if (!modelId.trim()) throw new Error('Connect an AI before creating the tutorial agent.');
   const now = Date.now();
   const flowId = idFactory();
   const startId = idFactory();
@@ -43,7 +44,7 @@ export function buildTutorialChatFlow(
           promptTemplate: TUTORIAL_CHAT_PROMPT,
           inputMode: 'full-history',
           outputMode: 'latest-message',
-          ...(modelId ? { boundModel: modelId } : {}),
+          boundModel: modelId,
         },
       },
     },

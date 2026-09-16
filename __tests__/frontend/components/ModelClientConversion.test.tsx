@@ -5,9 +5,13 @@ const mockRouter = {
   push: jest.fn(),
   replace: jest.fn(),
   back: jest.fn(),
+  refresh: jest.fn(),
 };
 const mockLoadModels = jest.fn();
 const mockCreateModelAgent = jest.fn();
+const mockUpdateModel = jest.fn();
+const mockAddModel = jest.fn();
+const mockGuidedResult = jest.fn();
 const mockNavigateWorkspaceRoute = jest.fn();
 const mockT = (key: string) => key;
 
@@ -23,6 +27,8 @@ jest.mock('uuid', () => ({
 jest.mock('@/frontend/services/model', () => ({
   getModelService: () => ({
     loadModels: (...args: unknown[]) => mockLoadModels(...args),
+    updateModel: (...args: unknown[]) => mockUpdateModel(...args),
+    addModel: (...args: unknown[]) => mockAddModel(...args),
   }),
 }));
 
@@ -88,7 +94,12 @@ jest.mock('@/frontend/components/models/modal', () => ({
 
 jest.mock('@/frontend/components/models/ModelConnectionWizard', () => ({
   __esModule: true,
-  default: () => null,
+  default: ({ onCreateModels }: { onCreateModels: (models: unknown[]) => Promise<unknown> }) => (
+    <button onClick={() => void onCreateModels([{
+      id: 'new-draft-id', name: 'source-model', displayName: 'Wizard name',
+      provider: 'openai', ApiKey: 'corrected-key', baseUrl: '', promptTemplate: '',
+    }]).then(mockGuidedResult)}>Save guided credentials</button>
+  ),
 }));
 
 jest.mock('@/frontend/components/shared/StickySearchBar', () => ({
@@ -138,6 +149,9 @@ describe('model-to-agent conversion navigation', () => {
       flowId: 'created-flow',
       name: 'Converted agent',
     });
+    mockUpdateModel.mockReset().mockImplementation(async model => ({ success: true, model: { ...model, ApiKey: 'masked' } }));
+    mockAddModel.mockReset();
+    mockGuidedResult.mockReset();
     mockLoadModels.mockReset().mockResolvedValue([{
       id: 'model-1',
       name: 'source-model',
@@ -178,5 +192,24 @@ describe('model-to-agent conversion navigation', () => {
       '/flows?flow=created-flow&mode=edit&authoringMode=advanced&workspace=game-dev',
     );
     expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  it('reuses a matching model and saves corrected credentials while keeping its identity and settings', async () => {
+    render(<ModelClient />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
+    await waitFor(() => expect(mockGuidedResult).toHaveBeenCalled());
+    expect(mockUpdateModel).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'model-1', name: 'source-model', displayName: 'Source Model', ApiKey: 'corrected-key', temperature: '0',
+    }));
+    expect(mockAddModel).not.toHaveBeenCalled();
+    expect(mockGuidedResult).toHaveBeenCalledWith(expect.objectContaining({ success: true, created: [], existing: [expect.objectContaining({ id: 'model-1' })] }));
+  });
+
+  it('reports a credential update failure instead of claiming the existing connection is ready', async () => {
+    mockUpdateModel.mockResolvedValue({ success: false, error: 'Cannot save key' });
+    render(<ModelClient />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
+    await waitFor(() => expect(mockGuidedResult).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Cannot save key' })));
+    expect(mockAddModel).not.toHaveBeenCalled();
   });
 });

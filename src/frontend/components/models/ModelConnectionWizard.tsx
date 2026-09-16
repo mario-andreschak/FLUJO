@@ -67,6 +67,12 @@ type WizardStep =
   | 'success';
 type InstallTool = 'claude' | 'codex' | 'ollama';
 
+interface SetupHost {
+  platform: string;
+  installMode: 'git' | 'container' | 'npm';
+  oneClickInstall: boolean;
+}
+
 interface OllamaCapability {
   enabled: boolean;
   ollamaReachable: boolean;
@@ -298,6 +304,7 @@ export default function ModelConnectionWizard({
   const [existing, setExisting] = useState<Model[]>([]);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const [installTool, setInstallTool] = useState<InstallTool | null>(null);
+  const [setupHost, setSetupHost] = useState<SetupHost | null>(null);
   const [installOutput, setInstallOutput] = useState<string[]>([]);
   const [installResult, setInstallResult] = useState<'idle' | 'success' | 'error'>('idle');
   const [ollama, setOllama] = useState<OllamaCapability | null>(null);
@@ -328,6 +335,17 @@ export default function ModelConnectionWizard({
     setOllama(null);
     setOllamaChecked(false);
     setOllamaProgress([]);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setSetupHost(null);
+    void fetch('/api/setup/ai-cli', { cache: 'no-store' })
+      .then(async response => response.ok ? response.json() as Promise<SetupHost> : null)
+      .then(host => { if (active) setSetupHost(host); })
+      .catch(() => { /* Official instructions remain usable if host detection fails. */ });
+    return () => { active = false; };
   }, [open]);
 
   const go = (next: WizardStep) => {
@@ -381,6 +399,7 @@ export default function ModelConnectionWizard({
   }, [kind, loadOllama, ollamaChecked, ollamaLoading, open, step]);
 
   const runInstaller = async (tool: InstallTool) => {
+    if (!setupHost?.oneClickInstall) return;
     setInstallTool(tool);
     setInstallResult('idle');
     setInstallOutput([]);
@@ -529,10 +548,22 @@ export default function ModelConnectionWizard({
   const ollamaModel = ollama?.suggestedModel || 'llama3.2:3b';
   const ollamaInstalled = Boolean(ollama?.installedModels?.includes(ollamaModel));
 
-  const installerPanel = (tool: InstallTool, installCommand: string, authCommand?: string) => (
-    <Stack spacing={1.1}>
-      <CommandRow command={installCommand} copied={copiedCommand === installCommand} onCopy={() => void copyCommand(installCommand)} />
-      <Button
+  const installerPanel = (tool: InstallTool, windowsCommand: string, authCommand?: string) => {
+    const installCommand = setupHost?.oneClickInstall ? windowsCommand
+      : setupHost && setupHost.installMode !== 'container' && tool !== 'ollama'
+        ? `npm install -g ${tool === 'claude' ? '@anthropic-ai/claude-code' : '@openai/codex'}`
+        : null;
+    const documentationUrl = tool === 'claude' ? 'https://code.claude.com/docs/en/setup'
+      : tool === 'codex' ? 'https://github.com/openai/codex#installation'
+        : `https://ollama.com/download${setupHost?.platform === 'darwin' ? '/mac' : setupHost?.platform === 'linux' ? '/linux' : ''}`;
+    return <Stack spacing={1.1}>
+      <Alert severity="info">
+        {setupHost?.installMode === 'container' ? t('models.wizard.containerSetup')
+          : setupHost ? t('models.wizard.serverSetup', { platform: setupHost.platform === 'win32' ? 'Windows' : setupHost.platform === 'darwin' ? 'macOS' : setupHost.platform === 'linux' ? 'Linux' : setupHost.platform })
+            : t('models.wizard.unknownHostSetup')}
+      </Alert>
+      {installCommand && <CommandRow command={installCommand} copied={copiedCommand === installCommand} onCopy={() => void copyCommand(installCommand)} />}
+      {setupHost?.oneClickInstall && <Button
         variant="outlined"
         startIcon={installTool === tool ? <CircularProgress size={17} /> : <DownloadRoundedIcon />}
         disabled={Boolean(installTool)}
@@ -540,6 +571,9 @@ export default function ModelConnectionWizard({
         sx={{ alignSelf: 'flex-start' }}
       >
         {installTool === tool ? t('models.wizard.installing') : t('models.wizard.installWinget')}
+      </Button>}
+      <Button href={documentationUrl} target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ alignSelf: 'flex-start' }}>
+        {t('models.wizard.installationInstructions')}
       </Button>
       {authCommand ? (
         <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
@@ -550,8 +584,8 @@ export default function ModelConnectionWizard({
           {installOutput.join('\n')}
         </Box>
       ) : null}
-    </Stack>
-  );
+    </Stack>;
+  };
 
   const renderBody = () => {
     if (step === 'welcome') {
@@ -790,6 +824,7 @@ export default function ModelConnectionWizard({
 
           <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
+          {!isCodex && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
           <Stack direction="row" gap={0.8} flexWrap="wrap" sx={{ mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>
@@ -814,6 +849,7 @@ export default function ModelConnectionWizard({
             <CheckCircleRoundedIcon sx={{ fontSize: 47 }} />
           </Box>
           <Typography variant="h4">{t('models.wizard.successTitle')}</Typography>
+          <Alert severity="info" sx={{ mt: 2, textAlign: 'left' }}>{t('models.wizard.unverifiedSaved')}</Alert>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2 }}>
             {created.length ? tp('models.wizard.created', created.length) : t('models.wizard.alreadyMatched')}
             {existing.length ? ` ${tp('models.wizard.kept', existing.length)}` : ''}

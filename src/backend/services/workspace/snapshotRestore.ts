@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import applicationPackage from '../../../../package.json';
 import { getDataDir } from '@/utils/paths';
 import { unlockServer } from '@/utils/encryption/session';
+import { isValidEncryptionSessionKey } from '@/utils/encryption/format';
 import {
   assertValidWorkspaceName, getWorkspaceDir, getWorkspacesDir, WORKSPACE_SUBTREES,
   getCurrentWorkspace,
@@ -225,9 +226,10 @@ async function readWorkerUnlockKey(result: WorkerSnapshotRestoreResult, root = g
     throw new Error('Worker workspace encryption credentials must be owner-only.');
   }
   const value = parseJson(await fs.readFile(keyPath, 'utf8'), 'Worker workspace encryption bootstrap credentials are invalid.');
-  // secure.ts generates an 8-byte DEK and stores its canonical 16-character hex representation.
+  // Validate v2 keyrings and the effective v1 AES key with the crypto module's
+  // shared parser. Never truncate keys to the old random-byte count.
   if (!record(value) || value.version !== 1 || typeof value.workspaceDek !== 'string'
-      || !/^[a-f0-9]{16}$/.test(value.workspaceDek)) {
+      || !isValidEncryptionSessionKey(value.workspaceDek)) {
     throw new Error('Worker workspace encryption bootstrap credentials are invalid.');
   }
   return value.workspaceDek;

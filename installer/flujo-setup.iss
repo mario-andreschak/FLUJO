@@ -24,6 +24,9 @@
 #ifndef MyBranch
   #define MyBranch "main"
 #endif
+#ifndef MyRevision
+  #define MyRevision ""
+#endif
 #define MyAppName "FLUJO"
 #define MyAppURL "https://github.com/mario-andreschak/FLUJO"
 
@@ -62,7 +65,7 @@ Filename: "{localappdata}\FLUJO-cli\flujo.cmd"; Description: "Start FLUJO now"; 
   Flags: postinstall nowait shellexec skipifsilent; Check: FlujoLauncherExists
 
 [Messages]
-WelcomeLabel2=This will install [name] on your computer - including anything it needs that is missing (Git, Node.js, Python, uv, and ripgrep).%n%nIt is recommended that you close all other applications before continuing.
+WelcomeLabel2=This will install [name] from source ref {#MyBranch}, revision {#MyRevision}, including missing Git, Node.js, Python, uv, and ripgrep.%n%nVersion tags install a pinned stable release. main is a development channel with unreleased changes. Existing local changes are preserved: updating stops if the checkout is dirty or diverged.
 
 [Code]
 function SetEnvironmentVariable(lpName: string; lpValue: string): Boolean;
@@ -120,6 +123,7 @@ begin
   // environment variables (inherited by the Exec'd process below).
   SetRequiredEnvironmentVariable('FLUJO_DIR', ExpandConstant('{app}'));
   SetRequiredEnvironmentVariable('FLUJO_BRANCH', '{#MyBranch}');
+  SetRequiredEnvironmentVariable('FLUJO_REVISION', '{#MyRevision}');
   if WizardIsTaskSelected('desktopicon') then
     SetRequiredEnvironmentVariable('FLUJO_SHORTCUT', '1')
   else

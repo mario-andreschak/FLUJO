@@ -18,6 +18,7 @@ import {
   flattenCustomHeaders,
   httpConfigKey,
   resolveStdioLaunch,
+  attachShippedWorkspaceReadiness,
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
@@ -300,6 +301,7 @@ export function createBetaTransport(
       cwd,
       stderr: "pipe",
     });
+    attachShippedWorkspaceReadiness(transport, config, cwd);
   } catch (error) {
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
     throw error;

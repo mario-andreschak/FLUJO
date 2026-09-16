@@ -15,6 +15,8 @@ childProcess.execSync = (command) => {
   record(command);
   if (command === 'git rev-parse --abbrev-ref HEAD') return 'main\n';
   if (command === 'git status --porcelain') return '';
+  if (command === 'git remote get-url --all origin') return process.env.RELEASE_TEST_FETCH_ORIGIN ?? 'https://github.com/mario-andreschak/FLUJO.git';
+  if (command === 'git remote get-url --push --all origin') return process.env.RELEASE_TEST_PUSH_ORIGIN ?? 'git@github.com:mario-andreschak/FLUJO.git';
   if (command === 'git fetch origin main "+refs/tags/v*:refs/tags/v*"') return '';
   if (command === 'git rev-parse main' || command === 'git rev-parse origin/main') return 'synthetic-release-head\n';
   if (command === 'gh auth status') return '';

@@ -50,9 +50,40 @@ and the next roots request resolves the current workspace list.
 All writable application state lives below the selected workspace: models,
 flows, conversations, automations, global environment variables and settings in
 `db/`; installed MCP servers in `mcp-servers/`; user files and generated runtime
-data in the remaining roots. Shipped MCP package code remains with the read-only
-application installation, but every shipped server receives the selected
-workspace as its `FLUJO_DATA_DIR`.
+data in the remaining roots. The application retains the canonical shipped MCP
+packages for development, packaging and updates. New workspaces receive separate
+copies of those packages and run their copies; every shipped server receives the
+selected workspace as its `FLUJO_DATA_DIR`.
+
+### Built-in MCP packages
+
+The canonical packages stay in `<application>/mcp-servers/`. Creating a workspace
+copies the distributed package files into its own `mcp-servers/` directory.
+A Git development checkout includes source and build inputs; an npm installation
+can copy only the compiled assets and other files included in its distribution.
+The app's bundled MCP build must succeed before creating runnable copies.
+
+Package code and artifacts are independent copies. Installed dependencies remain
+shared through managed links resolved from the installation's actual Node package
+search paths: one `node_modules` directory link for a common dependency root, or
+individual package links for mixed hoisting.
+This resolves ESM imports even when `FLUJO_DATA_DIR` is outside the repository,
+without a background npm install or browser download. It does not create a
+process or dependency security boundary.
+
+Startup preserves existing workspace package files, including edits and older
+versions. Updating the application changes the templates for future copies;
+it does not silently overwrite workspace edits. Shipped launch records use
+workspace-relative paths so renaming a workspace does not leave its servers
+pointing at the old directory. User-owned configurations keep their own paths.
+
+For managed workspace copies, snapshot worker preparation reconstructs ordinary
+built-ins from the target installation and verifies the required package assets
+against provenance and runtime hashes. This does not prove identical dependency
+trees; legacy app-root transfer plans retain their existing behavior. Edited or
+unverifiable workspace package code must be packaged explicitly before transfer;
+the snapshot path must not silently substitute different code. Dependencies are
+prepared on the destination, not transferred as links to the source computer.
 
 Managed MCP children also receive an internal `FLUJO_PARENT_DATA_DIR` marker
 containing the installation data root. MCP packages continue to use their
@@ -99,14 +130,11 @@ compact animation, `FLUJO_MIGRATION_UI=landscape` forces the landscape when the
 terminal supports it, `FLUJO_MIGRATION_ASCII=1` selects compact ASCII, and the
 standard `NO_COLOR` setting disables color and the full-screen scene.
 
-Layout v2 inventories every legacy root and destination before renaming any user
-data. It recursively overlays disjoint paths, which safely recovers installs
-left half-copied by an older build. An overlapping file, directory or symlink is
-accepted only when its type, SHA-256 content (for files) or relative target (for
-links), and permission mode are identical. Any differing overlap aborts before
-mutation. Stable hardlinks are opened without following links, verified against
-their filesystem identity and materialized as independent files, so migration
-never mutates data through an outside alias.
+The current layout mover prefers directory renames and merges populated
+destinations when necessary. For legacy data collisions, source files replace
+destination files; this is not a conflict-preserving transactional overlay.
+Keep a backup of legacy data when operating on an installation that has both
+populated layouts.
 
 The database overlay includes all historical locations: `db/`,
 `.next/storage/` and `storage/`. The migration also covers `mcp-servers/`,
@@ -116,41 +144,18 @@ while runtime-installed MCP directories move. Runtime screenshots/profile data
 written by older browser-server builds beneath
 `mcp-servers/browser/userdata/` is mapped into the corresponding workspace root.
 
-The complete transaction is staged under a random transaction directory,
-content-verified, fsynced and atomically published. A cross-process lock has an
-owner token and heartbeat; a live same-host process is never evicted, while an
-expired/dead owner is recoverable. Workspace roots, metadata and managed source
-roots may not be symlinks or junctions. Internal links are treated as opaque and
-accepted only when unbroken and canonically contained by the managed root.
-Absolute in-tree Windows junctions (including npm workspace links) are rebased
-onto the published workspace; broken or external links fail closed. Descendant
-mount points—including same-device Linux bind mounts discovered through
-`/proc/self/mountinfo`—also fail during preflight, before anything is renamed.
+Application and data roots are compared after filesystem resolution, so an
+application-root junction or symlink alias does not make bundled source packages
+look like legacy user data. The base `bash`, `browser`, `filesystem`, `flujo` and
+`shared` packages, README and build helper remain in the application directory.
+Managed workspace directories themselves must still be real directories.
 
-Linux and macOS use Python 3 for their native, directory-handle-bound
-no-replace rename syscall. The official container includes it. Source/npm
-installations must have `python3` available, or set `FLUJO_PYTHON3` to its
-absolute executable path; if it is missing, migration fails before moving data
-and prints that requirement in the durable transcript.
-
-The durable journal makes every checkpoint retryable from filesystem truth. Old
-sources and an existing destination are retained as transaction-specific backups
-until the new destination is verified and `workspaces/.workspace-layout.json` is
-durably published. Cleanup then verifies the destination again and deletes only
-the exact tokenized backups. If a legacy Docker/bind-mount root cannot be renamed
-(`EXDEV`/`EBUSY`), it stays intact through marker commit and cleanup removes only
-its inventoried children, leaving the empty mountpoint in place. File access and
-modification timestamps are journaled and restored after copying, so legacy flow
-ordering based on `mtime` survives migration and crash recovery.
-
-A crash at any checkpoint resumes the same transaction. A current marker does
-not blindly hide legacy data left by an older binary: startup reconciles any
-non-empty legacy roots in a new transaction. Corrupt, unreadable, unsupported
-future markers and tampered journals fail closed without overwriting either copy.
-
-**Operator recovery from a conflict:** back up every named location, resolve the
-specific differing path or unsafe filesystem object, and retry. Do not delete the
-journal or transaction backups: they are the recovery record.
+The mover records outcomes and errors in `workspaces/.workspace-layout.json`.
+A completed marker skips further folder moves on later starts. The previous
+transaction journals, heartbeat locks and Python rename helpers are no longer
+part of this mover; their obsolete artifacts are cleaned up. Do not infer
+transactional rollback or mid-move crash recovery from the marker. Inspect the
+recorded paths and errors before manually repairing an interrupted migration.
 
 ## Selecting a workspace
 
@@ -201,9 +206,17 @@ longer exists, the UI falls back visibly to `default-workspace`.
 
 ## Creating and removing workspaces
 
-Issue #406 covers the namespace, the migration and the tabs. Creating, renaming
-and deleting workspaces through the UI/API is **not** part of it. A workspace is
-created by making the directory:
+Use the **Workspaces** menu to create, edit or delete a workspace. The API supports
+`POST /api/workspaces` with `{"name":"research"}`, `PATCH` with
+`{"name":"research","newName":"research-next"}`, and `DELETE` with
+`{"name":"research"}`. Creation prepares workspace directories and independent
+copies of the shipped MCP packages. Editing can also update the workspace's
+shared folder roots. The default workspace cannot be renamed or deleted;
+deleting another workspace permanently removes its files. Creating or switching
+workspaces reloads the UI, and deleting the selected workspace returns it to the
+default workspace.
+
+Administrators can also create a directory manually:
 
 ```bash
 mkdir -p "<data root>/workspaces/research"

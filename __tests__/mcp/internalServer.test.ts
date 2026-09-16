@@ -26,7 +26,7 @@ import {
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
-import { ensureWorkspaceDirs } from '@/utils/workspace';
+import { ensureWorkspaceDirs, getWorkspaceDataDir } from '@/utils/workspace';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
@@ -176,13 +176,13 @@ describe('normal stdio delivery', () => {
     for (const descriptor of SHIPPED_MCP_SERVERS) {
       const config = createShippedServerConfig(descriptor);
       expect(config.command).toBe('node');
-      expect(config.args).toEqual([
-        path.join(config.cwd!, 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
-      ]);
-      expect(path.isAbsolute(config.cwd ?? '')).toBe(true);
-      expect(config.rootPath).toBe(path.join(config.cwd!, 'mcp-servers', descriptor.packageDirectory));
-      expect(path.isAbsolute(config.rootPath)).toBe(true);
-      expect(path.isAbsolute(config.args?.[0] ?? '')).toBe(true);
+      expect(config.args).toEqual(['./dist/index.js']);
+      expect(config.cwd).toBe(path.join('mcp-servers', descriptor.packageDirectory));
+      expect(config.rootPath).toBe(config.cwd);
+      const launch = resolveStdioLaunch(config);
+      expect(path.resolve(launch.cwd, launch.args[0])).toBe(
+        path.join(getWorkspaceDataDir(), 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
+      );
       expect(config.source).toEqual({ type: 'marketplace', id: descriptor.packageId });
       expect(config.icons).toEqual(descriptor.icons);
       expect(config.roots).toEqual([]);
@@ -194,7 +194,7 @@ describe('normal stdio delivery', () => {
     const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'flujo')!;
     const config = createShippedServerConfig(descriptor);
     const launch = resolveStdioLaunch(config);
-    expect(launch.cwd).toBe(config.rootPath);
+    expect(launch.cwd).toBe(path.join(getWorkspaceDataDir(), config.rootPath));
     expect(launch.args).toEqual(config.args);
   });
 

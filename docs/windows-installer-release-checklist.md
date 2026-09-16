@@ -10,9 +10,10 @@ verification notes. Do not promote the installer until every required item passe
       has been built and published through the normal release process.
 - [ ] Confirm the release tag is exactly `v<package-version>` and points to the
       reviewed commit.
-- [ ] Decide whether this release needs a non-`main` installer channel. The Inno
-      source supports `MyBranch`, but CI intentionally builds the normal `main`
-      channel unless the workflow is explicitly changed and reviewed.
+- [ ] Confirm the version-tag CI build passes `MyBranch=v<package-version>` and
+      `MyRevision=<full commit SHA>` to Inno Setup. The bootstrapper must install
+      that exact revision and report the stable channel, tag, and SHA. Untagged
+      development builds must identify themselves as development builds.
 - [ ] Record the current code-signing decision. The installer is currently
       unsigned; adding signing requires maintainer approval, repository-managed
       certificate secrets, and a documented certificate-rotation procedure.
@@ -22,8 +23,11 @@ verification notes. Do not promote the installer until every required item passe
 ## Automated validation
 
 - [ ] The `Validate Windows installer` workflow passed its independent Pester job.
-- [ ] Tests did not call winget, Git/npm, execution-policy setters, or destructive
-      filesystem operations; they only loaded `scripts/installer-functions.ps1`.
+- [ ] Decision tests loaded `scripts/installer-functions.ps1`, inspected installer
+      entry points, and exercised synthetic command outcomes. Repository tests
+      used Git only in disposable fixtures. Neither suite ran the real installer,
+      installed prerequisites, changed persistent execution policy, or touched
+      an existing installation's files or processes.
 - [ ] CI installed the pinned Inno Setup version and successfully compiled
       `installer/flujo-setup.iss`.
 - [ ] CI retained one non-empty `flujo-setup.exe` validation artifact.
@@ -47,9 +51,11 @@ Windows VM. Restore a snapshot between scenarios when prerequisite state matters
 | Default wizard choices | Installs under `%LOCALAPPDATA%\FLUJO`, creates the selected shortcut, and can launch at `http://localhost:4200`. | |
 | Custom path and no shortcut | Installs into the selected path, launcher uses that exact path, and no desktop shortcut is created. | |
 | Optional Ollama | Declining causes no Ollama change; accepting installs/records it and uninstall follows the same ownership default as other prerequisites. | |
-| Existing-install rerun | A second run updates the existing Git checkout without duplicating PATH or shortcut entries and preserves user data. | |
+| Existing-install rerun | A clean official development checkout updates by fast-forward without duplicating PATH or shortcuts; stable-tag reruns preserve the selected revision and user data. | |
+| Dirty, diverged, unrelated, or wrong-branch target | Installer refuses before checkout, dependency installation, server stop, or registration; tracked edits, untracked files, and local commits remain intact. | |
+| Stable release provenance | Installed HEAD equals the release's recorded SHA; a moved or mismatched tag is rejected. The manifest records stable channel, ref, and revision. | |
 | Existing non-Git target | Installer rejects the target before package, clone, launcher, or manifest mutations. | |
-| `scripts/update.ps1` | Stops FLUJO, updates/builds the checkout, and restarts successfully. | |
+| `scripts/update.ps1` and in-app updater | Development checkout passes identity/clean/ancestry checks before stop, then updates/builds/restarts. Stable detached installs show guidance to use a newer versioned installer without stopping the app. | |
 | Uninstall, keep optional tools | `DELETE` confirmation is required; FLUJO files, launcher, PATH entry, shortcut, and metadata are removed while declined prerequisites remain. | |
 | Uninstall, remove FLUJO-owned tools | Only explicitly selected tools are passed to winget/npm removal; preexisting tools default to keep. | |
 | Cancel uninstall | Any response other than uppercase `DELETE` makes no changes. | |

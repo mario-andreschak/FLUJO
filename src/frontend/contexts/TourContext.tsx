@@ -31,6 +31,8 @@ const DEFAULT_BIG_PROGRESS: TutorialProgress = {
   stepId: 'intro',
 };
 
+class TutorialModelRequiredError extends Error {}
+
 interface TourContextType {
   /** True while the first-run guided tour is running. */
   isActive: boolean;
@@ -176,10 +178,31 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const ensureTutorialChat = useCallback(async (): Promise<TutorialProgress> => {
     const currentProgress = bigProgressRef.current;
+    const models = (await modelService.loadModels()).filter(model =>
+      model.id && model.name?.trim() && model.provider,
+    );
+    const preferredModel = models.find(model => model.favorite && model.supportsTools !== false)
+      ?? models.find(model => model.supportsTools !== false)
+      ?? models.find(model => model.favorite)
+      ?? models[0];
+    if (!preferredModel) {
+      throw new TutorialModelRequiredError('Connect an AI in AI Setup, then continue the tutorial.');
+    }
     const flows = await flowService.loadFlows();
     const existing = findTutorialChatFlow(flows);
     if (existing) {
       const processNode = existing.flow.nodes.find(node => node.id === existing.processNodeId);
+      if (!models.some(model => model.id === processNode?.data.properties?.boundModel)) {
+        const repaired: Flow = {
+          ...existing.flow,
+          nodes: existing.flow.nodes.map(node => node.id === existing.processNodeId ? {
+            ...node,
+            data: { ...node.data, properties: { ...node.data.properties, boundModel: preferredModel.id } },
+          } : node),
+        };
+        const result = await flowService.updateFlow(repaired);
+        if (!result.success) throw new Error(result.error || 'I could not connect the AI to the Chat agent.');
+      }
       const taskPrompt = typeof processNode?.data.properties?.promptTemplate === 'string'
         ? processNode.data.properties.promptTemplate
         : undefined;
@@ -198,12 +221,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('I found a Chat agent, but it has no AI step. Add one or rename that agent, then restart this tutorial.');
     }
 
-    const models = await modelService.loadModels();
-    const preferredModel = models.find(model => model.favorite && model.supportsTools !== false)
-      ?? models.find(model => model.supportsTools !== false)
-      ?? models.find(model => model.favorite)
-      ?? models[0];
-    const created = buildTutorialChatFlow(preferredModel?.id, uuidv4);
+    const created = buildTutorialChatFlow(preferredModel.id, uuidv4);
     const result = await flowService.addFlow(created.flow);
     if (!result.success) throw new Error(result.error || 'I could not create the Chat agent.');
     const nextProgress = {
@@ -214,6 +232,13 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     await commitBigProgress(nextProgress);
     return nextProgress;
+  }, [commitBigProgress]);
+
+  const handleTutorialError = useCallback(async (error: unknown) => {
+    if (error instanceof TutorialModelRequiredError) {
+      await commitBigProgress({ ...bigProgressRef.current, stepId: 'connect-ai', status: 'active' });
+    }
+    setBigTutorialError(error instanceof Error ? error.message : String(error));
   }, [commitBigProgress]);
 
   const startBigTutorial = useCallback(async () => {
@@ -239,12 +264,10 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setBigTutorialError(null);
     await commitBigProgress(progress);
     setIsBigTutorialActive(true);
-    if (progress.stepId !== 'intro') {
-      void ensureTutorialChat().catch((error) => {
-        setBigTutorialError(error instanceof Error ? error.message : String(error));
-      });
+    if (progress.stepId !== 'intro' && progress.stepId !== 'connect-ai') {
+      void ensureTutorialChat().catch(handleTutorialError);
     }
-  }, [commitBigProgress, ensureTutorialChat]);
+  }, [commitBigProgress, ensureTutorialChat, handleTutorialError]);
 
   const moveBigTutorialTo = useCallback(async (stepId: string) => {
     const current = bigProgressRef.current;
@@ -374,8 +397,11 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await ensureTutorialChat();
         if (step.next) await moveBigTutorialTo(step.next);
       } else if (step.action === 'send-example') {
+        await ensureTutorialChat();
+        const conversationId = bigProgressRef.current.conversationId;
+        if (!conversationId) throw new Error('Start a new conversation and choose the Chat agent before sending the example.');
         setBigTutorialRunStatus(null);
-        emitBigTutorialEvent({ type: 'send-example', message: TUTORIAL_WEB_QUESTION });
+        emitBigTutorialEvent({ type: 'send-example', conversationId, message: TUTORIAL_WEB_QUESTION });
         if (step.next) await moveBigTutorialTo(step.next);
       } else if (step.action === 'check-apps') {
         await checkForWebApp();
@@ -392,11 +418,11 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await moveBigTutorialTo(step.next);
       }
     } catch (error) {
-      setBigTutorialError(error instanceof Error ? error.message : String(error));
+      await handleTutorialError(error);
     } finally {
       setBigTutorialBusy(false);
     }
-  }, [bigTutorialBusy, checkForWebApp, commitBigProgress, ensureTutorialChat, moveBigTutorialTo]);
+  }, [bigTutorialBusy, checkForWebApp, commitBigProgress, ensureTutorialChat, handleTutorialError, moveBigTutorialTo]);
 
   const pauseBigTutorial = useCallback(async () => {
     const paused: TutorialProgress = { ...bigProgressRef.current, status: 'paused' };
@@ -413,7 +439,9 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
           conversationId: event.detail.conversationId,
         });
       } else if (event.detail.type === 'chat-run-status') {
-        setBigTutorialRunStatus(event.detail.status);
+        if (event.detail.conversationId === bigProgressRef.current.conversationId) {
+          setBigTutorialRunStatus(event.detail.status);
+        }
       } else if (event.detail.type === 'app-connected') {
         setBigTutorialConnectedServer(event.detail.serverName);
       }
@@ -433,28 +461,19 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (isLoading || !settingsHydrated || bigAutoStartChecked.current) return;
+    // The long hands-on tutorial is opt-in from Settings > Onboarding. Only
+    // restore a tutorial that the user explicitly started and left active.
+    bigAutoStartChecked.current = true;
     const stored = settings.onboarding?.tutorials?.bigTutorialStage1;
     if (stored?.status === 'active') {
-      bigAutoStartChecked.current = true;
       bigProgressRef.current = stored;
       setBigTutorialProgress(stored);
       setIsBigTutorialActive(true);
-      if (stored.stepId !== 'intro') {
-        void ensureTutorialChat().catch((error) => {
-          setBigTutorialError(error instanceof Error ? error.message : String(error));
-        });
+      if (stored.stepId !== 'intro' && stored.stepId !== 'connect-ai') {
+        void ensureTutorialChat().catch(handleTutorialError);
       }
-      return;
     }
-    if (settings.onboarding?.completed !== true) {
-      if (stored) bigAutoStartChecked.current = true;
-      return;
-    }
-    bigAutoStartChecked.current = true;
-    if (!stored) {
-      void startBigTutorial();
-    }
-  }, [ensureTutorialChat, isLoading, settings.onboarding, settingsHydrated, startBigTutorial]);
+  }, [ensureTutorialChat, handleTutorialError, isLoading, settings.onboarding, settingsHydrated]);
 
   useEffect(() => {
     if (!settingsHydrated || isBigTutorialActive) return;

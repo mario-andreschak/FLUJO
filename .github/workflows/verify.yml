@@ -35,7 +35,8 @@ jobs:
         with:
           node-version: 22
       # Built-in-only tests intercept every release subprocess before execution.
-      - run: node --test scripts/release-arguments.test.mjs
+      - run: node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs
+      - run: node --test tests/installer-repository.test.mjs
 
   typecheck:
     name: typecheck
@@ -53,6 +54,7 @@ jobs:
       # below (and __tests__/meta/parseAllTestFiles.test.ts) is the
       # authoritative "everything parses" gate.
       - run: npm run typecheck
+      - run: node scripts/generate-api-inventory.mjs --check
 
   lint:
     name: lint

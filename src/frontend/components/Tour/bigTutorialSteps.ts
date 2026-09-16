@@ -40,6 +40,13 @@ export const BIG_TUTORIAL_STEPS: BigTutorialStep[] = [
     next: 'go-to-chat', action: 'start', actionLabel: 'Start tutorial',
   },
   {
+    id: 'connect-ai', path: '/models', route: () => '/models?add=1',
+    target: '[data-tour="ai-setup-wizard"]', placement: 'right',
+    title: 'Connect an AI first',
+    body: 'Save an AI connection in this wizard, then continue here. We will use its first answer to check that it works. If a connection already exists, close the wizard to review or test it.',
+    next: 'go-to-chat', action: 'start', actionLabel: 'Continue with connected AI', back: 'intro',
+  },
+  {
     id: 'go-to-chat', path: '/', target: '[data-tour="nav-chat"]', placement: 'bottom',
     title: 'Let’s start in Chat',
     body: 'Go to Chat. I’ll use a fresh conversation for this explanation.',
@@ -91,7 +98,7 @@ export const BIG_TUTORIAL_STEPS: BigTutorialStep[] = [
   },
   {
     id: 'wait-for-first-answer', path: '/chat', route: conversationRoute, placement: 'center',
-    waitFor: '[data-tutorial-chat-status="completed"], [data-tutorial-chat-status="error"]',
+    waitFor: '[data-tutorial-chat-status="completed"]',
     title: 'Waiting for the answer…',
     body: 'The tutorial will continue as soon as the Chat agent finishes.',
     next: 'plain-chat', back: 'send-first-question',
@@ -255,7 +262,7 @@ export const BIG_TUTORIAL_STEPS: BigTutorialStep[] = [
   },
   {
     id: 'wait-for-second-answer', path: '/chat', route: conversationRoute, placement: 'center',
-    waitFor: '[data-tutorial-chat-status="completed"], [data-tutorial-chat-status="error"]',
+    waitFor: '[data-tutorial-chat-status="completed"]',
     title: 'Waiting for the improved answer…', body: 'The agent may take a little longer while it looks things up.',
     next: 'complete', back: 'send-second-question',
   },

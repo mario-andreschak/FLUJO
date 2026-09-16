@@ -773,7 +773,7 @@ footer {
   <p class="hero-tagline">
     An open-source, local-first platform for building <strong>MCP-powered AI workflows</strong> —
     model management, MCP servers, a visual flow builder, chat, and headless automation in one app.
-    Your keys and data never leave your machine.
+    Workspace data is stored locally. Cloud AI and connected apps receive the requests you choose to send. Anonymous usage telemetry is optional in Settings.
   </p>
   <div class="hero-actions">
     <a class="btn btn-primary" href="https://github.com/mario-andreschak/FLUJO" target="_blank" rel="noopener">
@@ -905,7 +905,7 @@ footer {
       <div class="feature-card reveal">
         <div class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
         <h3>Built-in API Docs</h3>
-        <p>A searchable in-app reference for every REST endpoint FLUJO exposes — chat, flows, models, MCP, planned executions, backups, and more.</p>
+        <p>A searchable, curated in-app HTTP reference for chat, flows, models, MCP, automations, and administration, with a source-derived route inventory in the repository.</p>
       </div>
     </div>
   </div>
@@ -1112,9 +1112,9 @@ footer {
     { id: 5, title: "Automation", icon: "clock", tags: ["Cron", "Webhooks", "File watch", "Tool polling"], img: "img/planned-executions.png", related: [4, 3],
       desc: "Planned Executions run flows headlessly: on a schedule, on an authenticated webhook, when files change, when a polled MCP tool or URL changes — with full run history per trigger." },
     { id: 6, title: "Integrations", icon: "link", tags: ["OpenAI-compatible", "Cline", "Cursor", "Roo"], img: "img/docs.png", related: [2, 7],
-      desc: "Expose flows as OpenAI-compatible models on http://localhost:4200/v1 and use them from any OpenAI-SDK tool. A searchable in-app API reference documents every endpoint." },
+      desc: "Expose flows as OpenAI-compatible models on http://localhost:4200/v1 and use them from OpenAI-SDK tools. A searchable in-app reference covers common integrations, alongside a generated HTTP route inventory." },
     { id: 7, title: "Local-first", icon: "zap", tags: ["MIT license", "Your machine", "Your data"], img: "img/home.png", related: [0, 6],
-      desc: "FLUJO runs entirely on your machine — free and open source under MIT. No accounts, no cloud dependency, no telemetry on your keys: your data stays yours." }
+      desc: "FLUJO runs on your machine and is free and open source under MIT. Local models can keep inference local; cloud providers and remote tools require their own connections and receive request data. Anonymous installation telemetry is optional." }
   ];
 
   var wrap = document.getElementById("orbitalWrap");

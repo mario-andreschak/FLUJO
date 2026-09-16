@@ -2901,6 +2901,7 @@ const Chat: React.FC = () => {
     if (!detailedConversation) {
        log.error("Cannot send message, detailed conversation not loaded.");
        setError(t('chat.page.detailsMissing'));
+       if (currentConversationIdRef.current) emitBigTutorialEvent({ type: 'chat-run-status', conversationId: currentConversationIdRef.current, status: 'error' });
        return;
     }
 
@@ -3075,6 +3076,7 @@ const Chat: React.FC = () => {
       // }
     } else {
       setError(t('chat.page.chooseAgent'));
+      emitBigTutorialEvent({ type: 'chat-run-status', conversationId: updatedDetailedConv.id, status: 'error' });
       // Revert optimistic update?
        setDetailedConversation(detailedConversation); // Revert to previous detailed state
     }
@@ -3161,7 +3163,7 @@ const Chat: React.FC = () => {
       setDebugState(null);
       setDebugSessionActive(false);
       setBreakpoints([]);
-      emitBigTutorialEvent({ type: 'chat-run-status', status: data.status });
+      emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: data.status });
     } else {
        // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
        log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
@@ -3554,6 +3556,7 @@ const Chat: React.FC = () => {
       // and a neutral "stopped" banner covers it. Suppress the scary error path.
       if (isCancellationError(err) || stoppedConversationIdsRef.current.has(conversation.id)) {
         log.info('Chat completion cancelled by user', { conversationId: conversation.id });
+        emitBigTutorialEvent({ type: 'chat-run-status', conversationId: conversation.id, status: 'error' });
         success = false;
         markConvRunning(conversation.id, false);
         markConversationStopped(conversation.id, true);
@@ -3571,6 +3574,7 @@ const Chat: React.FC = () => {
         return success;
       }
       log.error('Error calling chat completions API:', err);
+      emitBigTutorialEvent({ type: 'chat-run-status', conversationId: conversation.id, status: 'error' });
       success = false; // API call failed
 
       // ... (keep existing detailed error handling) ...
@@ -3640,9 +3644,15 @@ const Chat: React.FC = () => {
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || event.detail.type !== 'send-example') return;
-      if (!currentConversationIdRef.current) return;
-      emitBigTutorialEvent({ type: 'chat-run-status', status: 'running' });
-      void handleSendMessageRef.current(event.detail.message);
+      const { conversationId, message } = event.detail;
+      if (currentConversationIdRef.current !== conversationId) {
+        emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
+        return;
+      }
+      emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'running' });
+      void handleSendMessageRef.current(message).catch(() => {
+        emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
+      });
     };
     window.addEventListener(BIG_TUTORIAL_EVENT, listener);
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);

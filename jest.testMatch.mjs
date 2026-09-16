@@ -34,21 +34,24 @@ export const nodeTestPathIgnorePatterns = ['/node_modules/', ...withRoot(NODE_IG
 export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
 
 // ---------------------------------------------------------------------------
-// Isolated (process-boundary) stage — issue #457.
+// Isolated (process-boundary and intensive integration) stage — issue #457.
 //
-// These suites spawn real child processes and are CPU-bound, so they starve
-// (and get starved by) the parallel Jest workers of the default run. CI runs
-// them in a dedicated serial job instead of the main one. They are still
+// These suites spawn real child processes or do sustained filesystem/Git work,
+// so they starve (and get starved by) the parallel Jest workers of the default
+// run. CI runs them in a dedicated serial job instead of the main one. They are still
 // collected by the globs above, so the testMatchCoverage guard keeps working;
 // the main run merely *ignores* them when the exclusion switch is on.
 // ---------------------------------------------------------------------------
 export const ISOLATED_TEST_FILES = [
   '__tests__/enduringAgents/personaProcessBoundary.test.ts',
   '__tests__/enduringAgents/activityRuntime.test.ts',
+  '__tests__/enduringAgents/memoryLifecycle.test.ts',
   '__tests__/enduringAgents/soak/personaSoak.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
+  '__tests__/mcp/browserCaptureRecording.test.ts',
   '__tests__/packages/workspaceMcpTransfer.test.ts',
+  '__tests__/snapshot/ShadowRepoService.test.ts',
 ];
 
 // Environment switch consulted by jest.config.mjs. scripts/run-local-jest.cjs

@@ -1105,6 +1105,53 @@ describe('CodexAdapter — SDK thread reuse', () => {
     expect(updates).toEqual(['thread-stale', undefined, 'thread-replacement']);
   });
 
+  it('does not retry a cancelled resumed thread as a fresh SDK run', async () => {
+    const controller = new AbortController();
+    let persisted: CompletionInput['codexSession'];
+    const onCodexSessionChange = jest.fn((session: CompletionInput['codexSession']) => {
+      persisted = session;
+    });
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          threadStarted('thread-cancelled'),
+          agentMessage('first answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 1 }),
+        ])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: (async function* () {
+          yield threadStarted('thread-cancelled');
+          controller.abort();
+          yield agentMessage('This cancelled answer must not escape.');
+        })(),
+      }));
+
+    const identity = { conversationId: 'cancelled-conversation', nodeId: 'process-1', sessionResume: true };
+    await new CodexAdapter().createCompletion(baseInput({ ...identity, onCodexSessionChange }));
+    const onTranscriptMessage = jest.fn();
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      ...identity,
+      codexSession: persisted,
+      onCodexSessionChange,
+      onTranscriptMessage,
+      signal: controller.signal,
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'next' },
+      ] as OpenAI.ChatCompletionMessageParam[],
+    }))).rejects.toThrow('Codex run cancelled by user.');
+
+    expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).toHaveBeenCalledTimes(2);
+    const resumedOptions = runStreamedMock.mock.calls[1][1] as { signal: AbortSignal };
+    expect(resumedOptions.signal.aborted).toBe(true);
+    expect(onTranscriptMessage).not.toHaveBeenCalled();
+    expect(onCodexSessionChange).toHaveBeenLastCalledWith(undefined);
+  });
+
   it('starts fresh when FLUJO history diverges from the stored thread watermark', async () => {
     runStreamedMock
       .mockImplementationOnce(async () => ({

@@ -87,6 +87,15 @@ test('an intentional release reaches the intercepted version boundary without ru
   assert.deepEqual(result.commands.filter(attemptedPublish), ['npm version patch -m "Bump version to %s"']);
 });
 
+for (const side of ['RELEASE_TEST_FETCH_ORIGIN', 'RELEASE_TEST_PUSH_ORIGIN']) {
+  test(`unofficial ${side} stops release before authentication, fetch, build or publication`, (t) => {
+    const result = runRelease(t, ['patch'], { [side]: 'https://github.com/other/FLUJO.git' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /official FLUJO repository/);
+    assert.ok(!result.commands.some((command) => /^(npm |git fetch|git push|gh )/.test(command)));
+  });
+}
+
 test('default and explicit releases retain version selection', () => {
   assert.deepEqual(parseReleaseArguments([], {}), { bump: 'minor', dryRun: false, help: false });
   for (const bump of ['patch', 'minor', 'major', '1.2.3']) assert.equal(parseReleaseArguments([bump], {}).bump, bump);

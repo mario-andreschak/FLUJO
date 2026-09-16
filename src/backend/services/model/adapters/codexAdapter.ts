@@ -971,7 +971,8 @@ export class CodexAdapter implements CompletionAdapter {
       }
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
-      if (resumeThreadId && handoffCalls.length === 0 && !endedByCaller) {
+      // Cancellation is terminal and must not start a replacement run.
+      if (resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,
           nodeId,
