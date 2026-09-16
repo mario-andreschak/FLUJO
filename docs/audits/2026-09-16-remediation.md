@@ -1,6 +1,6 @@
 # September 16 audit remediation
 
-This work follows the [original audit](2026-09-16-project-audit.md), which remains a record of the pre-fix state. Changes are uncommitted development work on top of `26cd39856fd8a5580c77025ee0ec95732572045d`, not a published release. The parallel task's workspace/MCP/Codex-adapter changes were retained and included in validation.
+This work follows the [original audit](2026-09-16-project-audit.md), which remains a record of the pre-fix state. At audit finalization, the changes were uncommitted development work on top of `26cd39856fd8a5580c77025ee0ec95732572045d`, not a published release. This historical record describes that validation snapshot; see the [changelog](../../CHANGELOG.md) for subsequent versioned release notes. The parallel task's workspace/MCP/Codex-adapter changes were retained and included in validation.
 
 ## Changes and acceptance
 
@@ -59,6 +59,6 @@ Static diagnosis found no proven cause. The harness completes the graceful-resta
 
 This is a preserved local snapshot, not a published/upstream commit. The final checkout additionally incorporates Next.js's generated `root-params.d.ts` type import and documentation/evidence updates; runtime/harness source is unchanged. An earlier attempt was deliberately interrupted after two successful activity days because simultaneous build/test work exceeded the latency cap; it is retained separately and is not counted as passing.
 
-The parallel task's 16 recorded source hashes remain unchanged. The user's original server continues on its original build; patched dependencies and runtime were exercised only in isolated temporary installations. This work is uncommitted and unreleased. Remaining release acceptance includes a clean-Windows EXE installation, current-source Linux CI and actual provider/account behavior. Offline simulation and controlled local chat cannot establish indefinite real-world unattended autonomy.
+At audit finalization, the parallel task's 16 recorded source hashes were unchanged, and the user's original server remained on its original build; patched dependencies and runtime had been exercised only in isolated temporary installations. The work was then uncommitted and unreleased. Acceptance still outstanding at that time included a clean-Windows EXE installation, current-source Linux CI and actual provider/account behavior; later release validation is separate evidence. Offline simulation and controlled local chat cannot establish indefinite real-world unattended autonomy.
 
 The pre-fix UI was exercised in a new `audit-first-user-20260916` workspace on the user's running server: skipping the introductory tour opened Stage 1, which created an unbound Chat agent. A generic greeting failed with `flow_invalid` / HTTP 400 and “Ask AI has no model bound.” No provider request was made. This live baseline corroborates F06; it is not a post-fix acceptance result.

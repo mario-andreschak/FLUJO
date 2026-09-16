@@ -631,6 +631,7 @@
     "redactions": [
       "Local user-specific absolute paths replaced by repository-relative or artifact-relative paths.",
       "Private task identifiers omitted."
-    ]
+    ],
+    "auditTimePolicy": "Date, packageVersion, published and userRunningInstanceUpgraded describe the historical audit snapshot; they are not assertions about later release or deployment status."
   }
 }
