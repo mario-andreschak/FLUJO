@@ -13,6 +13,7 @@
 - Preserve tracked edits and local commits during installer reruns; validate the target repository and update only by fast-forward.
 - Pin new stable Windows bootstrappers to their release tag and commit; record channel/revision and refuse unsafe in-app updates before stopping the server.
 - Honor explicit Windows installer shortcut/start choices, and stop updates when dependency installation, compilation, or artifact validation fails.
+- Restore the package wizard's missing build endpoint in clean installations; a broad build-output ignore rule had excluded its route source.
 
 Encryption migration: new writes use authenticated AES-256-GCM and a 32-byte random key. Existing ciphertext remains readable through a versioned keyring; re-entering and saving a secret gives it the new format, while an unchanged masked field may retain its original ciphertext. The public default password provides obfuscation only; configure a private password for storage protection. Historical plaintext failure records also require the explicit repair steps in the migration guide. Make a complete workspace backup before upgrading: older versions cannot read migrated v2 metadata, so downgrade requires restoring that backup. See the [encryption format and migration guide](src/utils/encryption/README.md).
 
