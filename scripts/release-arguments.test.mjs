@@ -43,7 +43,9 @@ for (const setting of ['true', 'TRUE', '1']) {
     const result = runRelease(t, [], { npm_config_dry_run: setting });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Dry run passed/);
-    assert.ok(result.commands.includes('npm run validate:mcp-release'));
+    const buildIndex = result.commands.indexOf('npm run build');
+    assert.ok(buildIndex >= 0);
+    assert.ok(result.commands.indexOf('npm run validate:mcp-release') > buildIndex);
     assert.ok(!result.commands.some(attemptedPublish));
   });
 }
@@ -52,6 +54,14 @@ test('explicit dry-run remains safe when npm environment is false', (t) => {
   const result = runRelease(t, ['patch', '--dry-run'], { npm_config_dry_run: 'false' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Would version 'patch'/);
+  assert.ok(!result.commands.some(attemptedPublish));
+});
+
+test('dry-run stops on an app build failure without validating stale artifacts', (t) => {
+  const result = runRelease(t, ['--dry-run'], { RELEASE_TEST_FAIL_BUILD: '1' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Synthetic app build failed/);
+  assert.ok(!result.commands.includes('npm run validate:mcp-release'));
   assert.ok(!result.commands.some(attemptedPublish));
 });
 
@@ -84,6 +94,9 @@ test('an intentional release reaches the intercepted version boundary without ru
   const result = runRelease(t, ['patch'], { npm_config_dry_run: 'false' });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unexpected release command blocked by test: npm version patch/);
+  assert.ok(result.commands.includes('npm run build:mcp'));
+  assert.ok(!result.commands.includes('npm run build'));
+  assert.ok(!result.commands.includes('npm run validate:mcp-release'));
   assert.deepEqual(result.commands.filter(attemptedPublish), ['npm version patch -m "Bump version to %s"']);
 });
 

@@ -133,16 +133,21 @@ if (run('git rev-parse main') !== run('git rev-parse origin/main')) {
 
 const current = JSON.parse(readFileSync('package.json', 'utf8')).version;
 console.log(`Current FLUJO version: ${current}`);
-show('npm run build:mcp');
-show('npm run validate:mcp-release');
 
 if (dryRun) {
+  // The package validator also checks the app's .next output. A fresh clone
+  // needs a complete build before that check, even when no release is cut.
+  show('npm run build');
+  show('npm run validate:mcp-release');
   console.log(
     `\nDry run passed. Would version '${bump}', publish the four MCP packages and flujo-ai, push main and the new version tag, then wait for the GHCR image.`,
   );
   process.exit(0);
 }
 
+// Catch MCP compilation failures before creating the version commit. The full
+// app build and artifact validation run once below, against that exact commit.
+show('npm run build:mcp');
 show(`npm version ${bump} -m "Bump version to %s"`);
 
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;

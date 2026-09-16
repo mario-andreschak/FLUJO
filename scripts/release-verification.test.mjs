@@ -25,6 +25,8 @@ test('verifies exact version revision and fresh main/isolated evidence before re
   assert.equal(verifyReleaseRevision(f), sha);
   assert.ok(f.commands.indexOf('remove jest-results.json') < f.commands.indexOf('npm run test:ci'));
   assert.ok(f.commands.includes('npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json'));
+  assert.equal(f.commands.filter(command => command === 'npm run build').length, 1);
+  assert.ok(f.commands.indexOf('npm run build') < f.commands.indexOf('npm run validate:mcp-release'));
   assert.equal(f.commands.at(-1), 'npm run smoke:mcp-artifacts');
 });
 

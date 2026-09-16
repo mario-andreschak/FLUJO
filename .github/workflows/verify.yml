@@ -81,6 +81,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev
+      # Workspace creation and migration exercise the shipped package payloads.
+      # A clean checkout has no compiled dist until this explicit prerequisite.
+      - name: Build the standalone MCP packages
+        run: npm run build:mcp
       # Jest's own exit code is deliberately not the gate: the baseline script
       # below is, because it distinguishes "a quarantined flake failed" from
       # "a suite stopped executing". It still records the raw results.

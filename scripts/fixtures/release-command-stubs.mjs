@@ -5,6 +5,7 @@ import { appendFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
 const record = (command) => appendFileSync(process.env.RELEASE_TEST_COMMAND_LOG, `${JSON.stringify(command)}\n`);
+let appBuilt = false;
 for (const method of ['exec', 'execFile', 'execFileSync', 'fork', 'spawn']) {
   childProcess[method] = () => {
     record(`blocked child_process.${method}`);
@@ -22,7 +23,16 @@ childProcess.execSync = (command) => {
   if (command === 'gh auth status') return '';
   if (command === 'npm whoami') return 'synthetic-release-user\n';
   if (command === 'npm view flujo-ai maintainers --json') return '["synthetic-release-user <synthetic@example.invalid>"]';
-  if (command === 'npm run build:mcp' || command === 'npm run validate:mcp-release') return '';
+  if (command === 'npm run build:mcp') return '';
+  if (command === 'npm run build') {
+    if (process.env.RELEASE_TEST_FAIL_BUILD === '1') throw new Error('Synthetic app build failed');
+    appBuilt = true;
+    return '';
+  }
+  if (command === 'npm run validate:mcp-release') {
+    if (!appBuilt) throw new Error('Fresh checkout has no app build to validate');
+    return '';
+  }
   throw new Error(`Unexpected release command blocked by test: ${command}`);
 };
 childProcess.spawnSync = (command, args) => {
