@@ -685,6 +685,7 @@ export async function updateWorkspaceRoots(
   return workspaceInfo(name);
 }
 
+
 /** Permanently delete a non-default workspace and all of its owned data. */
 export async function deleteWorkspace(workspace: string): Promise<void> {
   const name = assertValidWorkspaceName(workspace);
@@ -695,8 +696,32 @@ export async function deleteWorkspace(workspace: string): Promise<void> {
     );
   }
   const dir = await resolveManagedWorkspace(name);
-  await fs.rm(dir, { recursive: true, force: false });
+  
+  // Force delete with retry logic for EBUSY (Windows file locking)
+  const maxRetries = 5;
+  const baseDelayMs = 100;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return; // Success
+    } catch (error) {
+      const errno = (error as NodeJS.ErrnoException).code;
+      const isLastAttempt = attempt === maxRetries - 1;
+      
+      // Retry on EBUSY (resource busy/locked) and EPERM (permission denied, can happen on Windows)
+      if (!isLastAttempt && (errno === 'EBUSY' || errno === 'EPERM')) {
+        const delay = baseDelayMs * Math.pow(2, attempt); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // Re-throw if not retryable or last attempt
+      throw error;
+    }
+  }
 }
+
 
 /** Create the complete workspace-owned directory set if missing. Idempotent. */
 export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
