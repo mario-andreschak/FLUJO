@@ -8,6 +8,25 @@ const TRANSIENT_KEYWORDS = [
   'socket hang up',
   'premature close',
   'etimedout',
+  // Provider-level transient errors that should be retried gracefully
+  'service temporarily overloaded',
+  'temporarily overloaded',
+  'connection error',
+  'connection refused',
+  'connection reset',
+  'connection timed out',
+  'econnrefused',
+  'enotfound',
+  'eai_again',
+  'network error',
+  'upstream error',
+  'provider returned error',
+  'bad gateway',
+  'gateway timeout',
+  'service unavailable',
+  '503',
+  '502',
+  '504',
 ] as const;
 
 /**
