@@ -599,9 +599,12 @@ export class ModelHandler {
       // Some CLI/provider catalogues do not publish a context window. The
       // opt-in summarizer must still be useful for them, so use a conservative
       // provider-neutral trigger instead of silently disabling compaction.
-      const threshold = eff.threshold ?? (model.contextWindow
-        ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
-        : 96_000);
+      // Support percentage-based threshold for more precise control (target 30-60% context usage)
+      const threshold = eff.threshold ?? (eff.thresholdPercent
+        ? Math.floor((model.contextWindow ?? 128000) * (eff.thresholdPercent / 100))
+        : (model.contextWindow
+            ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
+            : 96_000));
       if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
 
       const projection: CompactionProjectionIdentity = {
@@ -754,10 +757,10 @@ export class ModelHandler {
       if (typeof keep === 'number' && Number.isFinite(keep)) {
         return Math.max(2, Math.floor(keep));
       }
-      return 12;
+      return 6;  // Reduced from 12 to 6 to enable wire compaction for short-but-tool-heavy conversations
     } catch (err) {
-      log.warn('Failed to read historyKeepRecentMessages setting; using default 12', { err });
-      return 12;
+      log.warn('Failed to read historyKeepRecentMessages setting; using default 6', { err });
+      return 6;
     }
   }
 

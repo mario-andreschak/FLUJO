@@ -381,7 +381,7 @@ export interface ExperimentalSettings {
    * the oldest provider-facing wire history into an anchored summary head and
    * continues. The canonical persisted conversation is never replaced. Enabled
    * for new installations; a missing value in existing settings remains
-   * disabled. AI summarization is lossy even though the exact source is retained
+   * enabled. AI summarization is lossy even though the exact source is retained
    * in a run-resource anchor.
    */
   compactionEnabled?: boolean;
@@ -389,13 +389,13 @@ export interface ExperimentalSettings {
    * Head-room, in tokens, kept free below the model's context window when
    * deciding whether to compact pre-flight (compact when the estimated request
    * size exceeds contextWindow − max(maxTokens, this)). Only meaningful when
-   * `compactionEnabled`. Missing ⇒ 20000.
+   * `compactionEnabled`. Missing ⇒ 50000 (~40% of 128k context, targets 30-60% usage).
    */
   compactionBufferTokens?: number;
   /**
    * How many tokens of the most-recent conversation tail are kept VERBATIM when
    * compacting (everything older is summarized). Only meaningful when
-   * `compactionEnabled`. Missing ⇒ 8000.
+   * `compactionEnabled`. Missing ⇒ 19000 (~15% of 128k context, targets 30-60% usage).
    */
   compactionKeepTokens?: number;
   /**
@@ -416,14 +416,14 @@ export interface ExperimentalSettings {
   /**
    * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
    * (everything older is eligible for lossless wire-only shrinking of oversized
-   * old tool results / old assistant prose). Missing ⇒ 12 (the historical
-   * default). Issue #286: short-but-tool-heavy conversations (a single message
-   * that fans out into dozens of MCP tool-loop turns) never crossed the 12
-   * threshold, so they got NO compaction and re-sent every fat tool result on
-   * every turn. Lowering this (e.g. 6) lets those runs benefit from wire-only
-   * shrinking. Wire-only and lossless — the persisted transcript is untouched —
-   * but a lower value shifts the recent/old boundary, so the first turn after a
-   * change can cost one prompt-cache miss. Values below 2 are clamped to 2.
+   * old tool results / old assistant prose). Missing ⇒ 6 (the new default).
+   * Issue #286: short-but-tool-heavy conversations (a single message that fans
+   * out into dozens of MCP tool-loop turns) never crossed the 12 threshold, so
+   * they got NO compaction and re-sent every fat tool result on every turn.
+   * Lowering this to 6 lets those runs benefit from wire-only shrinking.
+   * Wire-only and lossless — the persisted transcript is untouched — but a lower
+   * value shifts the recent/old boundary, so the first turn after a change can
+   * cost one prompt-cache miss. Values below 2 are clamped to 2.
    */
   historyKeepRecentMessages?: number;
 }
