@@ -17,6 +17,7 @@ import type {
   RoutePersonaMailboxResult,
 } from '@/backend/services/enduringAgents/activityRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import { getFlowDispatchRetentionPolicy } from '@/backend/services/enduringAgents/compactRuntime';
 import type { PersonaStorageStats } from '@/backend/services/enduringAgents/runtimeStorageStats';
 import {
   getBehaviorMaintenanceRun,
@@ -1128,6 +1129,25 @@ describe('Persona Flow dispatcher', () => {
       expect.anything(),
     );
     expect(records.filter((record) => record.admission.kind === 'maintenance')).toHaveLength(1);
+    await harness.dispatcher.pump('persona_test');
+    (harness.dependencies.getPersona as jest.Mock).mockClear();
+    (harness.dependencies.routePersonaMailboxItem as jest.Mock).mockClear();
+    await harness.dispatcher.pump('persona_test');
+    // Repeated recovery must reuse the frozen maintenance envelope without
+    // rebuilding and reauthorizing every historical source submission.
+    expect(harness.dependencies.getPersona).not.toHaveBeenCalled();
+    expect(harness.dependencies.routePersonaMailboxItem).not.toHaveBeenCalled();
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(2);
+    await runWithWorkspace(completedMaintenance!.workspaceId, async () => {
+      await saveCollectionItem(
+        ENDURING_AGENT_COLLECTIONS.flowDispatches,
+        completedMaintenance!.id,
+        getFlowDispatchRetentionPolicy().compact(completedMaintenance!, Date.now()),
+      );
+    });
+    await harness.dispatcher.pump('persona_test');
+    expect(harness.dependencies.routePersonaMailboxItem).not.toHaveBeenCalled();
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(2);
   });
 
   it('returns maintenance validation failures to the tool call and records them in the conversation', async () => {

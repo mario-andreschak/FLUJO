@@ -38,15 +38,17 @@ const {
 };
 
 interface Baseline {
-  stages: Record<string, { minSuites?: number | null; minTests?: number | null; quarantined?: string[] }>;
+  stages: Record<string, { minSuites?: number | null; minTests?: number | null; quarantined?: string[]; intentionalSkips?: Array<{ suite: string; name: string; reason: string; platforms?: string[] }> }>;
   quarantined?: string[];
 }
 
 interface Summary {
-  suites: { total: number; passed: number; failed: number };
-  tests: { total: number; passed: number; failed: number };
+  suites: { total: number; passed: number; failed: number; executed?: number };
+  tests: { total: number; passed: number; failed: number; executed?: number };
   failedToRun: string[];
   failedTests: string[];
+  skippedTests?: Array<{ suite: string; name: string; status: string }>;
+  invalidResults?: string[];
 }
 
 interface Verdict {
@@ -119,8 +121,9 @@ describe('verify-test-baseline summary', () => {
   it('separates suites that never ran from suites with failing tests', () => {
     const summary = summarizeJestResults(jestResults(ROOT), ROOT);
 
-    expect(summary.suites).toEqual({ total: 3, passed: 1, failed: 2 });
-    expect(summary.tests).toEqual({ total: 40, passed: 39, failed: 1 });
+    expect(summary.suites).toEqual({ total: 3, passed: 1, failed: 2, executed: 2 });
+    // Aggregate counters are untrusted: only individual completed assertions count.
+    expect(summary.tests).toEqual({ total: 2, passed: 1, failed: 1, executed: 2 });
     expect(summary.failedToRun).toEqual(['__tests__/broken/unparseable.test.ts']);
     expect(summary.failedTests).toEqual(['__tests__/flaky/quarantined.test.ts']);
   });
@@ -185,15 +188,46 @@ describe('verify-test-baseline gate', () => {
     expect(verdict.warnings.join('\n')).toMatch(/Quarantined suite has failing tests/);
   });
 
-  it('treats an unrecorded minTests as a warning, not a pass-through failure', () => {
+  it('fails closed when executed-test minima have not been recorded', () => {
     const verdict = compareToBaseline({
       stage: 'ci',
       baseline: { stages: { ci: { minSuites: 3, minTests: null } } },
       summary: summaryOf(),
     });
 
-    expect(verdict.ok).toBe(true);
-    expect(verdict.warnings.join('\n')).toMatch(/no recorded minTests yet/);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures.join('\n')).toMatch(/positive minSuites and minTests/);
+  });
+
+  it('rejects a fully skipped run even if aggregate collected counts meet the baseline', () => {
+    const summary = summarizeJestResults({
+      numTotalTestSuites: 682, numTotalTests: 9000, numPassedTests: 9000,
+      testResults: Array.from({ length: 682 }, (_, index) => ({
+        name: path.join(ROOT, `skipped-${index}.test.ts`), status: 'pending',
+        assertionResults: [{ status: 'pending', fullName: 'hidden regression' }],
+      })),
+    }, ROOT);
+    const verdict = compareToBaseline({ stage: 'ci', baseline: baseline(), summary });
+    expect(verdict.ok).toBe(false);
+    expect(summary.tests.executed).toBe(0);
+    expect(summary.suites.executed).toBe(0);
+    expect(verdict.failures.join('\n')).toMatch(/Unapproved skipped test/);
+  });
+
+  it('permits only the exact documented skip and never counts it as execution', () => {
+    const skipped = { suite: 'opt-in.test.ts', name: 'controlled benchmark', status: 'pending' };
+    const allowed = baseline();
+    allowed.stages.ci.intentionalSkips = [{ ...skipped, reason: 'Dedicated performance job', platforms: [process.platform] }];
+    expect(compareToBaseline({ stage: 'ci', baseline: allowed, summary: summaryOf({ skippedTests: [skipped] }) }).ok).toBe(true);
+    expect(compareToBaseline({ stage: 'ci', baseline: allowed, summary: summaryOf({ skippedTests: [{ ...skipped, name: 'another regression' }] }) }).ok).toBe(false);
+  });
+
+  it('does not quarantine parse failures or allow interrupted runs', () => {
+    const verdict = compareToBaseline({ stage: 'ci', baseline: baseline(), summary: summaryOf({
+      failedToRun: ['__tests__/flaky/quarantined.test.ts'], invalidResults: ['Jest run was interrupted.'],
+    }) });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures).toHaveLength(2);
   });
 
   it('rejects an unknown stage', () => {

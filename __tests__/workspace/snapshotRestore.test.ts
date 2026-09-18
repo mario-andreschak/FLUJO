@@ -9,6 +9,8 @@ import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVer
 import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import { WORKSPACE_SUBTREES, runWithWorkspace } from '@/utils/workspace';
 import { getServerDek } from '@/utils/encryption/session';
+import { newKeyring, seal, serializeKeyring, wrapKeyring } from '@/utils/encryption/format';
+import { decryptWithPassword } from '@/utils/encryption/secure';
 
 const digest = (content: Buffer | string) => createHash('sha256').update(content).digest('hex');
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE',
@@ -161,15 +163,40 @@ describe('worker snapshot restore', () => {
     await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow('decryption failed');
   });
 
-  it('unlocks USER encryption in the selected workspace using only the scoped bootstrap key', async () => {
-    await archive({ files: { 'db/worker-bootstrap-secrets.json': '{"version":1,"workspaceDek":"0123456789abcdef"}' },
+  it.each(['legacy', 'v2'])('unlocks USER encryption using a validated %s scoped bootstrap key', async (format) => {
+    const workspaceDek = format === 'legacy' ? '30313233343536373839616263646566' : serializeKeyring(newKeyring());
+    await archive({ files: { 'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek }) },
       mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
     const result = (await restoreConfiguredWorkerSnapshot())!;
     await runWithWorkspace('research', async () => {
       await unlockWorkerSnapshot(result);
-      expect(getServerDek()).toBe('0123456789abcdef');
+      expect(getServerDek()).toBe(workspaceDek);
     });
-    expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('0123456789abcdef');
+    expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain(workspaceDek);
+  });
+
+  it('restores a v2 keyring that can decrypt both new and legacy snapshot secrets without the password', async () => {
+    const ring = newKeyring(Buffer.from('0123456789abcdef').toString('hex'));
+    const metadata = await wrapKeyring(ring, 'user', 'snapshot-password');
+    const iv = randomBytes(16);
+    const legacyCipher = createCipheriv('aes-128-cbc', Buffer.from(ring.legacyKey!, 'hex'), iv);
+    const legacyData = Buffer.concat([legacyCipher.update('old-secret', 'utf8'), legacyCipher.final()]);
+    const secrets = {
+      legacy: `${iv.toString('hex')}:${legacyData.toString('base64')}`,
+      modern: seal('new-secret', ring.activeKey, 'flujo:secret:v2'),
+    };
+    await archive({ files: {
+      'db/encryption_key.json': JSON.stringify(metadata),
+      'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek: serializeKeyring(ring) }),
+      'db/test-secrets.json': JSON.stringify(secrets),
+    }, mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    await runWithWorkspace('research', async () => {
+      await unlockWorkerSnapshot(result);
+      const restored = JSON.parse(await fs.readFile(path.join(destination, 'db', 'test-secrets.json'), 'utf8'));
+      expect(await decryptWithPassword(restored.legacy)).toBe('old-secret');
+      expect(await decryptWithPassword(restored.modern)).toBe('new-secret');
+    });
   });
 
   it('does not surface malformed credential contents in restore status', async () => {

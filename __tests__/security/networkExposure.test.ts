@@ -56,6 +56,28 @@ describe('single network exposure mode', () => {
     expect(isLocalRequest('flujo.example.com', 'https://attacker.example')).toBe(false);
   });
 
+  it.each(['fc.attacker.example', 'fd.attacker.example', 'fe80.attacker.example', 'feb0.example'])
+  ('rejects public DNS lookalike %s in network mode', (hostname) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`${hostname}:4200`)).toBe(false);
+    expect(isLocalRequest(`${hostname}:4200`, `http://${hostname}:4200`)).toBe(false);
+    expect(isLocalRequest('192.168.1.20:4200', `http://${hostname}:4200`)).toBe(false);
+  });
+
+  it.each(['fc00::1', 'fdff:abcd::1', 'fe80::1', 'febf::1'])
+  ('accepts valid private IPv6 literal %s in network mode', (address) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`[${address}]:4200`)).toBe(true);
+    expect(isLocalRequest(`[${address}]:4200`, `http://[${address}]:4200`)).toBe(true);
+  });
+
+  it.each(['fc::1', 'fd::1', 'fe7f::1', 'fec0::1', 'fc00:::1', 'fd00:invalid::1'])
+  ('rejects non-private or malformed IPv6 literal %s in network mode', (address) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    expect(isRequestHostAllowed(`[${address}]:4200`)).toBe(false);
+    expect(isLocalRequest(`[${address}]:4200`, null)).toBe(false);
+  });
+
   it('keeps strict control-plane requests loopback-only in public mode', () => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
 

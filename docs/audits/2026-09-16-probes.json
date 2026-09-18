@@ -1,0 +1,56 @@
+{
+  "network": [
+    {
+      "host": "fc.attacker.example",
+      "hostAllowed": true,
+      "originAllowed": true
+    },
+    {
+      "host": "fd.attacker.example",
+      "hostAllowed": true,
+      "originAllowed": true
+    },
+    {
+      "host": "fe80.attacker.example",
+      "hostAllowed": true,
+      "originAllowed": true
+    },
+    {
+      "host": "attacker.example",
+      "hostAllowed": false,
+      "originAllowed": false
+    }
+  ],
+  "localhostRejects": true,
+  "crypto": {
+    "randomBytes": 8,
+    "hexTextUtf8Bytes": 16,
+    "pbkdf2DefaultSHA256": true
+  },
+  "allPendingBaseline": {
+    "stage": "ci",
+    "ok": true,
+    "failures": [],
+    "warnings": [
+      "Stage \"ci\" has no recorded minTests yet; run with --update after a known-good run to lock it in."
+    ],
+    "observed": {
+      "suites": {
+        "total": 682,
+        "passed": 0,
+        "failed": 0
+      },
+      "tests": {
+        "total": 682,
+        "passed": 0,
+        "failed": 0
+      },
+      "failedToRun": [],
+      "failedTests": []
+    },
+    "expected": {
+      "minSuites": 682,
+      "minTests": null
+    }
+  }
+}

@@ -16,6 +16,7 @@
 import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseReleaseArguments, releaseUsage } from './release-arguments.mjs';
+import { assertOfficialReleaseOrigin, assertVerifiedRevision, verifyReleaseRevision } from './release-verification.mjs';
 
 const run = (command) =>
   execSync(command, {
@@ -83,6 +84,12 @@ if (run('git status --porcelain') !== '') {
   fail('the working tree is not clean; commit or stash all changes first.');
 }
 
+try {
+  assertOfficialReleaseOrigin(run);
+} catch (error) {
+  fail(error.message);
+}
+
 if (spawnSync('gh', ['--version'], { shell: true, stdio: 'ignore' }).status !== 0) {
   fail('GitHub CLI is required so release cannot report success before the container image exists. Install and authenticate `gh`.');
 }
@@ -126,30 +133,40 @@ if (run('git rev-parse main') !== run('git rev-parse origin/main')) {
 
 const current = JSON.parse(readFileSync('package.json', 'utf8')).version;
 console.log(`Current FLUJO version: ${current}`);
-show('npm run build:mcp');
-show('npm run validate:mcp-release');
 
 if (dryRun) {
+  // The package validator also checks the app's .next output. A fresh clone
+  // needs a complete build before that check, even when no release is cut.
+  show('npm run build');
+  show('npm run validate:mcp-release');
   console.log(
     `\nDry run passed. Would version '${bump}', publish the four MCP packages and flujo-ai, push main and the new version tag, then wait for the GHCR image.`,
   );
   process.exit(0);
 }
 
+// Catch MCP compilation failures before creating the version commit. The full
+// app build and artifact validation run once below, against that exact commit.
+show('npm run build:mcp');
 show(`npm version ${bump} -m "Bump version to %s"`);
 
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 const tag = `v${version}`;
-show('npm run build');
-show('npm run validate:mcp-release');
-show('npm run smoke:mcp-artifacts');
+let releaseSha;
+try {
+  releaseSha = verifyReleaseRevision({ run, show });
+} catch (error) {
+  fail(`The version commit was not verified; no packages or Git refs were published. ${error.message}`);
+}
 
 try {
   for (const packageName of publicMcpPackages) {
-    show(`npm publish --workspace ${packageName} --access public`);
+    assertVerifiedRevision(run, releaseSha);
+    show(`npm publish --workspace ${packageName} --access public --ignore-scripts`);
   }
   // The complete root artifact was built and smoke-tested above. Do not run
   // prepublishOnly again and risk publishing output different from what passed.
+  assertVerifiedRevision(run, releaseSha);
   show('npm publish --ignore-scripts');
 } catch {
   fail(
@@ -165,7 +182,6 @@ try {
   );
 }
 
-const releaseSha = run('git rev-parse HEAD');
 try {
   show('npm run dockerbuild');
 } catch {

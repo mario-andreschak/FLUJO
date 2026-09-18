@@ -228,16 +228,18 @@ export function createShippedServerConfig(
   descriptor: ShippedMcpServerDescriptor,
   env: Environment = process.env,
 ): MCPStdioConfig {
-  const appRoot = shippedMcpAppRoot(env);
+  // Ordinary relative stdio paths resolve against the selected workspace at
+  // launch, so renaming a workspace cannot strand its package entrypoints.
+  const packageRoot = path.join('mcp-servers', descriptor.packageDirectory);
   return {
     name: descriptor.defaultName,
     transport: 'stdio',
     command: 'node',
-    args: [path.join(appRoot, 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js')],
+    args: ['./dist/index.js'],
     env: shippedServerEnv(descriptor, env),
-    cwd: appRoot,
+    cwd: packageRoot,
     disabled: descriptor.disabledByDefault?.(env) ?? false,
-    rootPath: path.join(appRoot, 'mcp-servers', descriptor.packageDirectory),
+    rootPath: packageRoot,
     roots: [],
     _buildCommand: '',
     _installCommand: '',

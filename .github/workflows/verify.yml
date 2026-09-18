@@ -35,7 +35,8 @@ jobs:
         with:
           node-version: 22
       # Built-in-only tests intercept every release subprocess before execution.
-      - run: node --test scripts/release-arguments.test.mjs
+      - run: node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs
+      - run: node --test tests/installer-repository.test.mjs
 
   typecheck:
     name: typecheck
@@ -53,6 +54,7 @@ jobs:
       # below (and __tests__/meta/parseAllTestFiles.test.ts) is the
       # authoritative "everything parses" gate.
       - run: npm run typecheck
+      - run: node scripts/generate-api-inventory.mjs --check
 
   lint:
     name: lint
@@ -79,6 +81,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev
+      # Workspace creation and migration exercise the shipped package payloads.
+      # A clean checkout has no compiled dist until this explicit prerequisite.
+      - name: Build the standalone MCP packages
+        run: npm run build:mcp
       # Jest's own exit code is deliberately not the gate: the baseline script
       # below is, because it distinguishes "a quarantined flake failed" from
       # "a suite stopped executing". It still records the raw results.

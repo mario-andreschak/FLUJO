@@ -84,7 +84,7 @@ describe('encryptApiKey / decryptApiKey round-trip', () => {
     await expect(decryptApiKey(stored)).resolves.toBe(secret);
   });
 
-  it('unwraps the encrypted_failed marker without attempting decryption', async () => {
+  it('keeps historical plaintext readable until an explicit secure re-save', async () => {
     const { decryptApiKey } = await loadEncryption();
 
     await expect(decryptApiKey('encrypted_failed:plain-value')).resolves.toBe('plain-value');

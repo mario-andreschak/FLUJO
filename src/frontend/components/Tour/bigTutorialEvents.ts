@@ -2,9 +2,9 @@ export const BIG_TUTORIAL_EVENT = 'flujo:big-tutorial';
 
 export type BigTutorialEventDetail =
   | { type: 'conversation-created'; conversationId: string }
-  | { type: 'chat-run-status'; status: 'running' | 'completed' | 'error' }
+  | { type: 'chat-run-status'; conversationId: string; status: 'running' | 'completed' | 'error' }
   | { type: 'app-connected'; serverName: string }
-  | { type: 'send-example'; message: string }
+  | { type: 'send-example'; conversationId: string; message: string }
   | { type: 'open-chat-flow-picker'; query: string }
   | { type: 'prepare-app-picker'; processNodeId: string; query: string }
   | { type: 'open-app-marketplace' }

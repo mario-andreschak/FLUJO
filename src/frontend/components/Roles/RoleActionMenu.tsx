@@ -1,6 +1,7 @@
 'use client';
 
 import { MouseEvent, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { MoreVertRounded } from '@mui/icons-material';
 import { Alert, IconButton, Menu, MenuItem, Snackbar } from '@mui/material';
 import type { PublicRole, RoleImpactPreview } from '@/shared/types/enduringAgent';
@@ -19,6 +20,7 @@ export default function RoleActionMenu({
   onDeleted: () => void;
 }) {
   const { t } = useI18n();
+  const router = useRouter();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export default function RoleActionMenu({
 
   const duplicate = () => execute(async () => {
     const copy = await rolesService.duplicate(role.id);
-    window.location.assign(`/roles/${encodeURIComponent(copy.id)}`);
+    router.push(`/roles/${encodeURIComponent(copy.id)}`);
   });
 
   const remove = () => execute(async () => {

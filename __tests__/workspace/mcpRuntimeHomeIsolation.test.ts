@@ -106,7 +106,7 @@ describe('stdio MCP runtime homes', () => {
       expect(launch.env.APPDATA).toBe(hostAppData);
       expect(launch.env.FLUJO_BASH_HOST_ENV_TEST).toBe('visible-from-host');
       expect(launch.env).not.toHaveProperty('GH_CONFIG_DIR');
-      expect(launch.cwd).toBe(shipped.rootPath);
+      expect(launch.cwd).toBe(path.join(getWorkspaceDataDir('runtime-a'), shipped.rootPath));
     } finally {
       for (const key of tracked) {
         const value = previous.get(key);

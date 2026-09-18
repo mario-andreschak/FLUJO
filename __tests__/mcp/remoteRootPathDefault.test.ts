@@ -40,6 +40,7 @@ import { pathToFileURL } from 'node:url';
 import { RegistryServer, getInstallOptions, buildConfigFromOption } from '@/utils/mcp/registry';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { StorageKey } from '@/shared/types/storage';
 import { POST } from '@/app/api/git/route';
 import { getDataDir } from '@/utils/paths';
 import { getWorkspaceDataDir } from '@/utils/workspace';
@@ -55,6 +56,7 @@ const req = (body: unknown) =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  loadItem.mockReset().mockImplementation(async (_key: StorageKey, fallback: unknown) => fallback);
 });
 
 describe('registry buildRemoteConfig rootPath default (issue 52)', () => {
@@ -78,7 +80,8 @@ describe('registry buildRemoteConfig rootPath default (issue 52)', () => {
 
 describe('loadServerConfigs rootPath normalization (issue 52)', () => {
   const load = async (stored: Record<string, unknown>) => {
-    loadItem.mockResolvedValue(stored);
+    loadItem.mockImplementation(async (key: StorageKey, fallback: unknown) =>
+      key === StorageKey.MCP_SERVERS ? stored : fallback);
     const result = await loadServerConfigs();
     expect(Array.isArray(result)).toBe(true);
     return result as MCPServerConfig[];

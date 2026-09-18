@@ -32,7 +32,9 @@ export default function UpdateSettings() {
   // (self-update unavailable — the user pulls a new image / reinstalls the package).
   // Null until the first check; the in-app "Update now" action only applies to 'git'.
   const [updateMode, setUpdateMode] = useState<string | null>(null);
-  const canSelfUpdate = updateMode === null || updateMode === 'git';
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [source, setSource] = useState<{ ref: string; revision: string } | null>(null);
+  const canSelfUpdate = updateMode === 'git' && updateAvailable;
 
   const handleToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     updateSettings({
@@ -46,6 +48,7 @@ export default function UpdateSettings() {
 
   const handleCheck = async () => {
     setChecking(true);
+    setUpdateAvailable(false);
     setStatus(null);
     try {
       const res = await fetch('/api/update');
@@ -53,8 +56,13 @@ export default function UpdateSettings() {
       if (typeof data.updateMode === 'string') {
         setUpdateMode(data.updateMode);
       }
+      setSource(data.sourceRef && data.revision ? { ref: data.sourceRef, revision: data.revision.slice(0, 12) } : null);
       if (!res.ok || data.success === false) {
         setStatus({ severity: 'error', message: data.error || t('settings.update.checkFailed') });
+      } else if (data.updateMode === 'pinned') {
+        setStatus({ severity: 'info', message: t('settings.update.pinned') });
+      } else if (data.updateMode === 'blocked' || data.canApply === false && data.isGitRepo) {
+        setStatus({ severity: 'warning', message: data.message || t('settings.update.checkFailed') });
       } else if (data.isGitRepo === false) {
         const mode = data.updateMode as string | undefined;
         setStatus({
@@ -66,6 +74,7 @@ export default function UpdateSettings() {
               : 'settings.update.notGit'),
         });
       } else if (data.updateAvailable) {
+        setUpdateAvailable(true);
         setStatus({
           severity: 'warning',
           message: tp('settings.update.available', data.behindBy, { branch: data.branch }),
@@ -82,7 +91,9 @@ export default function UpdateSettings() {
   };
 
   const handleApply = async () => {
+    if (!canSelfUpdate || checking || applying) return;
     setApplying(true);
+    setUpdateAvailable(false);
     setStatus({ severity: 'info', message: t('settings.update.progress') });
     try {
       const res = await fetch('/api/update', {
@@ -91,6 +102,7 @@ export default function UpdateSettings() {
         body: JSON.stringify({ action: 'apply' })
       });
       const data = await res.json();
+      if (typeof data.updateMode === 'string') setUpdateMode(data.updateMode);
       if (!res.ok || data.success === false) {
         setStatus({ severity: 'error', message: data.error || t('home.updateFailed') });
         setApplying(false);
@@ -140,7 +152,9 @@ export default function UpdateSettings() {
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.update.checkDescription')}
         </Typography>
-        {!canSelfUpdate && (
+        {updateMode === null && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('settings.update.checkBeforeApply')}</Typography>}
+        {source && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('settings.update.source', source)}</Typography>}
+        {updateMode && ['container', 'npm', 'none'].includes(updateMode) && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             {t(updateMode === 'container'
               ? 'settings.update.container'
@@ -156,10 +170,15 @@ export default function UpdateSettings() {
           {checking ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
           {t('settings.update.checkNow')}
         </Button>
-        <Button variant="contained" onClick={handleApply} disabled={applying || !canSelfUpdate}>
+        <Button variant="contained" onClick={handleApply} disabled={checking || applying || !canSelfUpdate}>
           {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
           {t('home.updateNow')}
         </Button>
+        {updateMode === 'pinned' && (
+          <Button component="a" href="https://github.com/mario-andreschak/FLUJO/releases/latest" target="_blank" rel="noreferrer" variant="outlined">
+            {t('settings.update.downloadInstaller')}
+          </Button>
+        )}
       </Box>
 
       {status && (

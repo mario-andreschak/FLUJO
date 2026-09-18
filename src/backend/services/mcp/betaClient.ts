@@ -18,6 +18,7 @@ import {
   flattenCustomHeaders,
   httpConfigKey,
   resolveStdioLaunch,
+  attachShippedWorkspaceReadiness,
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
@@ -115,7 +116,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.45.2",
+      version: "3.46.0",
     },
     {
       capabilities: {
@@ -300,6 +301,7 @@ export function createBetaTransport(
       cwd,
       stderr: "pipe",
     });
+    attachShippedWorkspaceReadiness(transport, config, cwd);
   } catch (error) {
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
     throw error;

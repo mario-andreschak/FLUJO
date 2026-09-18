@@ -47,6 +47,9 @@ describe('big tutorial — Stage 1', () => {
 });
 
 describe('Stage 1 Chat agent bootstrap', () => {
+  it('refuses to build an agent without a model binding', () => {
+    expect(() => buildTutorialChatFlow('', () => 'id')).toThrow('Connect an AI');
+  });
   it('builds the readable Start → Ask AI → Finish agent', () => {
     let id = 0;
     const built = buildTutorialChatFlow('model-1', () => `id-${++id}`);

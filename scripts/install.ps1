@@ -39,6 +39,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoUrl = 'https://github.com/mario-andreschak/FLUJO/'
+if ($Branch -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Branch.Contains('..')) {
+    throw 'FLUJO_BRANCH must be a branch name or a version tag (for example main or v3.45.2).'
+}
+$isReleaseRef = $Branch -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+if ($env:FLUJO_REVISION -and $env:FLUJO_REVISION -notmatch '^[a-fA-F0-9]{40}$') { throw 'FLUJO_REVISION must be a full Git commit ID.' }
 
 # The graphical installer extracts this helper beside install.ps1. The documented
 # `irm ... | iex` entry point has no script directory, so it loads the same helper
@@ -66,6 +71,43 @@ try {
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundColor Green }
 function Write-Warn2([string]$Message) { Write-Host "    $Message" -ForegroundColor Yellow }
+
+function Read-InstallerGit {
+    param([string[]]$Arguments)
+    $output = & git -C $InstallDir @Arguments 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the existing Git checkout. No repository files were changed.' }
+    return ($output -join "`n").Trim()
+}
+
+function Assert-InstallerRepository {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git is required to safely inspect an existing checkout. Install Git before updating.'
+    }
+    $packageName = ''
+    try { $packageName = (Get-Content -LiteralPath (Join-Path $InstallDir 'package.json') -Raw | ConvertFrom-Json).name } catch { }
+    $decision = Get-RepositoryUpdateDecision `
+        -OriginUrl (Read-InstallerGit @('remote', 'get-url', 'origin')) `
+        -WorkingTreeStatus (Read-InstallerGit @('status', '--porcelain', '--untracked-files=normal')) `
+        -PackageName $packageName `
+        -CurrentBranch (Read-InstallerGit @('branch', '--show-current')) -RequestedRef $Branch
+    if (-not $decision.CanProceed) { throw $decision.Reason }
+}
+
+function Update-InstallerRepository {
+    Assert-InstallerRepository
+    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'fetch', 'origin', $Branch) -Environment $installerEnvironment
+    if ($env:FLUJO_REVISION -and (Read-InstallerGit @('rev-parse', 'FETCH_HEAD^{commit}')) -cne $env:FLUJO_REVISION.ToLowerInvariant()) {
+        throw 'The downloaded source does not match the installer revision. No checkout update was applied.'
+    }
+    & git -C $InstallDir merge-base --is-ancestor HEAD FETCH_HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'The requested version would discard local commits or downgrade this checkout. Back up your work and choose a separate install directory.' }
+    Assert-InstallerRepository
+    if ($isReleaseRef) {
+        Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'checkout', '--detach', 'FETCH_HEAD') -Environment $installerEnvironment
+    } else {
+        Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'merge', '--ff-only', 'FETCH_HEAD') -Environment $installerEnvironment
+    }
+}
 
 function Stop-Installer {
     param(
@@ -400,7 +442,7 @@ function Write-InstallManifest {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
         $manifest = ConvertTo-InstallManifest -AppDir $AppDir -BinDir $binDir `
-            -Branch $Branch -RepoUrl $RepoUrl -Prerequisites $Prereqs `
+            -Branch $Branch -RepoUrl $RepoUrl -Revision $installedRevision -Prerequisites $Prereqs `
             -DesktopShortcut $DesktopShortcut -ExecutionPolicyChanged $ExecutionPolicyChanged `
             -ClaudeCli $ClaudeCli
 
@@ -509,15 +551,18 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 $InstallDir = Resolve-InstallDirectory -RequestedPath $InstallDir -DefaultPath $defaultDir
 $targetPathExists = Test-Path -LiteralPath $InstallDir
 $targetGitExists = Test-Path -LiteralPath (Join-Path $InstallDir '.git')
+if ($targetGitExists) { Assert-InstallerRepository }
 $targetDirectoryEmpty = $targetPathExists -and `
     -not [bool](Get-ChildItem -LiteralPath $InstallDir -Force | Select-Object -First 1)
 $installIntent = Get-InstallIntent -InstallDirectory $InstallDir `
     -PathExists $targetPathExists -GitDirectoryExists $targetGitExists `
-    -DirectoryIsEmpty $targetDirectoryEmpty
+    -DirectoryIsEmpty $targetDirectoryEmpty -RepositoryVerified $targetGitExists
 if (-not $installIntent.CanProceed) {
     throw "Cannot install into '$InstallDir': $($installIntent.Reason). Choose a new folder or an existing FLUJO Git checkout."
 }
 Write-Ok "Installing into: $InstallDir ($($installIntent.Action.ToLowerInvariant()))"
+if ($isReleaseRef) { Write-Ok "Stable release channel: $Branch (pinned release tag)" }
+else { Write-Warn2 "Development channel: $Branch (moving source; may contain unreleased changes). Use a versioned setup.exe for a stable release." }
 
 Write-InstallerStage -Name 'preflight'
 try {
@@ -538,7 +583,9 @@ Write-Ok "Sanitized installer log: $script:InstallerLogPath"
 Write-InstallerStage -Name 'preflight' -State completed -ExitCode 0
 
 # Decide whether to create a Desktop shortcut (defaults to yes).
-if ($env:FLUJO_SHORTCUT -in @('0', 'false', 'no')) {
+if ($env:FLUJO_SHORTCUT -in @('1', 'true', 'yes')) {
+    $makeShortcut = $true
+} elseif ($env:FLUJO_SHORTCUT -in @('0', 'false', 'no')) {
     $makeShortcut = $false
 } else {
     $scAnswer = Read-Host "Create a desktop shortcut for FLUJO? (Y/n)"
@@ -550,6 +597,8 @@ $startAfter = $Start.IsPresent
 if (-not $startAfter) {
     if ($env:FLUJO_START -in @('1', 'true', 'yes')) {
         $startAfter = $true
+    } elseif ($env:FLUJO_START -in @('0', 'false', 'no')) {
+        $startAfter = $false
     } else {
         $startAnswer = Read-Host "Start FLUJO after building? (Y/n)"
         $startAfter = -not ($startAnswer -match '^\s*(n|no)\s*$')
@@ -648,13 +697,7 @@ Write-Ok "Network clients: Node.js $($nodeResult.Version); npm $npmVersion; Node
 # 3. Clone or update the repository.
 # ---------------------------------------------------------------------------
 if (Test-Path (Join-Path $InstallDir '.git')) {
-    # Older FLUJO installers used `npm install`, which could rewrite
-    # package-lock.json and leave the tree dirty. This is an install/deploy copy,
-    # not a dev checkout, so discarding tracked-file drift is safe; untracked
-    # node_modules/.next/user data are preserved by reset --hard.
-    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'fetch', 'origin', $Branch) -Environment $installerEnvironment
-    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'checkout', $Branch) -Environment $installerEnvironment
-    Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('-C', $InstallDir, 'reset', '--hard', "origin/$Branch") -Environment $installerEnvironment
+    Update-InstallerRepository
 } else {
     $parent = Split-Path -Parent $InstallDir
     if ($parent -and -not (Test-Path $parent)) {
@@ -662,6 +705,9 @@ if (Test-Path (Join-Path $InstallDir '.git')) {
     }
     Invoke-InstallerCommand -Stage 'repository' -Command 'git' -Arguments @('clone', '-b', $Branch, $RepoUrl, $InstallDir) -Environment $installerEnvironment
 }
+$installedRevision = Read-InstallerGit @('rev-parse', 'HEAD')
+if ($env:FLUJO_REVISION -and $installedRevision -cne $env:FLUJO_REVISION.ToLowerInvariant()) { throw 'The cloned source does not match the installer revision. Installation stopped before building or registration.' }
+Write-Ok "Installed source: $Branch at $installedRevision"
 
 # ---------------------------------------------------------------------------
 # 4. Install dependencies and build.

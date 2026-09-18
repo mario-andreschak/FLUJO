@@ -69,6 +69,38 @@ export function workspaceHeaderForReference(workspace: string): string | null {
 
 export const API_GROUPS: ApiGroup[] = [
   {
+    id: 'workspaces',
+    name: 'Workspaces',
+    description: 'Installation-wide workspace administration. Logical workspaces are not separate user accounts.',
+    endpoints: [
+      { method: 'GET', path: '/api/workspaces', summary: 'List available workspaces and the default workspace.', response: '{ workspaces, defaultWorkspace }', notes: ['Returns 503 while the workspace layout is unavailable.'] },
+      { method: 'POST', path: '/api/workspaces', summary: 'Create an empty workspace.', paramsLabel: 'Body', params: [{ name: 'name', type: 'string', required: true, description: '1–64 letters, numbers, underscores, or hyphens; start with an alphanumeric character.' }], response: '201 { workspace, workspaces }' },
+      { method: 'PATCH', path: '/api/workspaces', summary: 'Rename a workspace or update its configured filesystem roots.', notes: ['Body contains name, newName, and optional roots. Mutation conflicts are reported without silently switching workspace ownership.'] },
+      { method: 'DELETE', path: '/api/workspaces', summary: 'Delete a non-default workspace and its stored data.', notes: ['Body contains name. Back up needed data first; this is an administrative operation.'] },
+    ],
+  },
+  {
+    id: 'tickets',
+    name: 'Tickets',
+    description: 'Workspace-scoped messages and follow-up tasks left by agents.',
+    endpoints: [
+      { method: 'GET', path: '/api/tickets', summary: 'List tickets with status, label, search, limit, and offset filters.', notes: ['presence=1 returns a count for the selected status. Requires local access and an unlocked workspace.'] },
+      { method: 'POST', path: '/api/tickets', summary: 'Create a ticket using the current ticket input schema.', response: '201 ticket or 400 validation error.' },
+      { method: 'DELETE', path: '/api/tickets', summary: 'Delete tickets by ID.', notes: ['Body: { ids: string[] }, at most 500 IDs.'] },
+    ],
+  },
+  {
+    id: 'persistent-agents',
+    name: 'Personas and Roles (experimental)',
+    description: 'Persistent agents and reusable role definitions. These are guarded administration endpoints, not ordinary OpenAI-compatible model calls.',
+    endpoints: [
+      { method: 'GET', path: '/v1/personas', summary: 'List Personas in the selected workspace.' },
+      { method: 'POST', path: '/v1/personas', summary: 'Create a Persona from a Role using the current Persona factory schema.', notes: ['Requires local access and an unlocked workspace. Invalid configuration returns 400; missing role version returns 404; conflicts return 409.'] },
+      { method: 'GET', path: '/v1/roles', summary: 'List role definitions, versions, and public role projections.', notes: ['includeArchived=true includes archived definitions.'] },
+      { method: 'POST', path: '/v1/roles', summary: 'Create a Role using the current role administration schema.', notes: ['Requires local access and an unlocked workspace. Consult the source-derived inventory for lifecycle and goal child routes.'] },
+    ],
+  },
+  {
     id: 'openai',
     name: 'Chat — OpenAI-compatible',
     description:

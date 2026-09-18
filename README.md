@@ -13,7 +13,7 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.45.2-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.46.0-green.svg)](package.json)
 </div>
 
 
@@ -187,16 +187,18 @@ As an example, a "watch a tool" trigger polling a WhatsApp MCP server can turn F
 
 ### 📖 Built-in API Documentation
 
-A searchable `/docs` page inside the app documents every REST endpoint FLUJO exposes (chat, conversations, models, flows, MCP, planned executions, env/encryption, backups) — useful when integrating FLUJO into your own tooling.
+A searchable `/docs` page inside the app provides a curated HTTP reference for chat, conversations, models, flows, MCP, automations, and administration. See the [API guide](docs/api-reference/README.md) for integration boundaries and the generated route inventory.
 
 ![Built-in API Documentation](docs/images/readme/docs.png)
 
 ## 🚀 Getting Started
 
+Start with the [first successful conversation guide](docs/getting-started/README.md). It covers installation choices, connecting and testing an AI, creating an agent, and recovering from common setup errors.
+
 ### Manual installation:
 ### Prerequisites
 
-- Node.js (v18 or higher)
+- Node.js (v22 or higher)
 - claude code (optional, if you want to use Anthropic Subscription) 
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
@@ -213,16 +215,12 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
 
 2. Install dependencies:
    ```bash
-   npm install
-   # or
-   yarn install
+   npm ci
    ```
 
 3. Start the development server:
    ```bash
    npm run dev
-   # or
-   yarn dev
    ```
 
 4. Open your browser and navigate to:
@@ -351,9 +349,17 @@ package. It requires Windows App Installer (`winget`) and access to GitHub, the
 winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
 uv, and ripgrep are installed through winget; Ollama is optional. The installer also
 installs the Claude Code CLI used by the optional Claude Subscription provider.
-Running the installer again against an existing FLUJO Git checkout updates and
-rebuilds that checkout. For safety, an existing target that is not a Git checkout
-is rejected before registration or cloning.
+Installer builds from the current source pin versioned Windows releases to their
+tag and commit. The one-line scripts default to the `main` development channel;
+their installed revision and channel are recorded in the installation manifest.
+Older released installers may still follow `main`; check their release notes.
+
+Reruns require an official FLUJO checkout with a clean working tree and no local
+commits that the update would discard. Dirty, diverged, unrelated, or wrong-branch
+targets stop with recovery guidance. Commit or back up your work before retrying.
+Development updates are fast-forward only. A stable detached-tag install is
+upgraded with a newer versioned installer; the in-app updater does not switch it
+to `main`.
 
 ### Corporate proxy and custom CA
 
@@ -472,6 +478,7 @@ once writes the manifest for future uninstalls. See
 2. Click **Connect AI**
 3. Choose the gentle guide, the faster guided path, or the expert form
 4. Select a provider, enter its credentials, and save the connection
+5. Use the model card's connection test before creating an agent. Saving alone does not verify credentials, provider access, or quota.
 
 ### Connecting Apps and MCP Servers
 
@@ -509,7 +516,17 @@ FLUJO is licensed under the [MIT License](LICENSE).
 
 ## 🚀 Roadmap
 
-Most of the original roadmap has shipped: MCP resources/prompts/roots/sampling, the MCP Marketplace & Spotlight, subflows, the visual debugger, and Automation triggers (scheduled/triggered headless runs) are all in. The main thing left on the list is **AI-assisted flow generation** — describe what you want and have FLUJO draft the flow for you.
+| Capability | Current scope |
+| --- | --- |
+| Interactive agents and visual flows | Available, including branching, subflows, debugging, and tool approvals |
+| AI-assisted flow generation | Available; review the generated graph and tool access before running it |
+| MCP connections | Tools, resources, prompts, roots, sampling, and interactive Apps are available; servers have their own requirements |
+| Automation triggers | Available while the FLUJO server runs; provider and tool failures still need recovery |
+| Workspaces and portable workers | Available; workers use a separate authentication boundary and credential-transfer rules |
+| Personas and Roles | Experimental persistent agents with memory and goals; indefinite unattended reliability is not established |
+| MCP Skills and experimental generators | Opt-in; see the relevant feature flags and guides |
+
+See [project status](docs/project-status.md), [release history](CHANGELOG.md), and the [Persona endurance acceptance criteria](docs/performance/persona-goal-endurance-acceptance.md) for evidence and limitations.
 
 Beyond that, ideas we're keeping an eye on:
 - Real-time voice input/output
@@ -538,6 +555,8 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 [![FLUJO animated short: A sad song about MCP](https://github.com/user-attachments/assets/e83cf81d-e5db-451c-9599-77dcdbe4ba2c)](https://www.youtube.com/watch?v=boOS9XHQdZc)
 
 ## Privacy & usage
+
+FLUJO stores workspace data locally. Requests to cloud models send prompts, selected context, and authentication to the provider you choose. Connected apps can send data to their configured services. A local Ollama model can keep inference on your computer; review the tools you enable as well. A custom encryption password protects stored credentials against access to the data files; the default password is public and is not a private vault.
 
 FLUJO shares one anonymous daily-active pulse by default. The payload is limited
 to the app version, platform, install method, UTC date, and a random identifier

@@ -7,7 +7,6 @@ interface ScheduledTimer {
   id: number;
   dueAt: number;
   order: number;
-  active: boolean;
   callback: () => void;
 }
 
@@ -16,7 +15,7 @@ export class VirtualPersonaRuntimeClock implements PersonaRuntimeClock {
   private monotonic = 0;
   private nextId = 1;
   private nextOrder = 1;
-  private readonly timers: ScheduledTimer[] = [];
+  private readonly timers = new Map<number, ScheduledTimer>();
 
   constructor(startAt = Date.UTC(2026, 0, 1), private readonly runawayLimit = 10_000) {
     this.wallNow = startAt;
@@ -31,12 +30,11 @@ export class VirtualPersonaRuntimeClock implements PersonaRuntimeClock {
       id: this.nextId++,
       dueAt: this.wallNow + ms,
       order: this.nextOrder++,
-      active: true,
       callback,
     };
-    this.timers.push(timer);
+    this.timers.set(timer.id, timer);
     return {
-      clear: () => { timer.active = false; },
+      clear: () => { this.timers.delete(timer.id); },
       unref: () => undefined,
     };
   }
@@ -56,11 +54,12 @@ export class VirtualPersonaRuntimeClock implements PersonaRuntimeClock {
     }
     let fired = 0;
     for (;;) {
-      this.timers.sort((a, b) => a.dueAt - b.dueAt || a.order - b.order);
-      const timer = this.timers.find((candidate) => candidate.active && candidate.dueAt <= target);
+      const timer = [...this.timers.values()]
+        .filter(candidate => candidate.dueAt <= target)
+        .sort((a, b) => a.dueAt - b.dueAt || a.order - b.order)[0];
       if (!timer) break;
       if (++fired > this.runawayLimit) throw new Error('Virtual clock runaway timer limit exceeded.');
-      timer.active = false;
+      this.timers.delete(timer.id);
       const elapsed = timer.dueAt - this.wallNow;
       this.wallNow = timer.dueAt;
       this.monotonic += elapsed;
@@ -77,6 +76,6 @@ export class VirtualPersonaRuntimeClock implements PersonaRuntimeClock {
   }
 
   pendingTimerCount(): number {
-    return this.timers.filter((timer) => timer.active).length;
+    return this.timers.size;
   }
 }

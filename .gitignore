@@ -144,6 +144,10 @@ dist
 !/mcp-servers/flujo/
 !/mcp-servers/shared/
 build
+# This App Router endpoint is source, not generated build output.
+!/src/app/api/packages/build/
+/src/app/api/packages/build/*
+!/src/app/api/packages/build/route.ts
 .vscode
 *.code-workspace
 

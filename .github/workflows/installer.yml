@@ -12,8 +12,10 @@ on:
       - 'scripts/install.sh'
       - 'scripts/installer-functions.ps1'
       - 'scripts/uninstall.ps1'
+      - 'scripts/update.ps1'
       - 'tests/installer.Tests.ps1'
       - 'tests/installer-unix.test.sh'
+      - 'tests/installer-repository.test.mjs'
       - 'package.json'
       - 'package-lock.json'
       - 'bin/flujo.mjs'
@@ -82,12 +84,17 @@ jobs:
 
   installer-build:
     name: Compile flujo-setup.exe
-    needs: powershell-tests
+    needs: [powershell-tests, artifact-smoke, unix-installer-tests]
     runs-on: windows-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Install pinned Inno Setup
         shell: powershell
@@ -111,11 +118,15 @@ jobs:
               throw "Release tag '$env:GITHUB_REF_NAME' does not match package version '$expectedTag'."
             }
             $version = $packageVersion
+            $sourceRef = $expectedTag
+            $sourceRevision = $env:GITHUB_SHA
           } else {
             $version = '0.0.0'
+            $sourceRef = 'main'
+            $sourceRevision = ''
           }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc "/DMyAppVersion=$version" installer\flujo-setup.iss
+          & $iscc "/DMyAppVersion=$version" "/DMyBranch=$sourceRef" "/DMyRevision=$sourceRevision" installer\flujo-setup.iss
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup compilation failed (exit $LASTEXITCODE)."
           }
@@ -135,6 +146,12 @@ jobs:
           path: installer/Output/flujo-setup.exe
           if-no-files-found: error
           retention-days: 14
+
+      - name: Require exact-commit main verification before release publication
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-release-verification.mjs installer
 
       - name: Attach installer to version release
         if: startsWith(github.ref, 'refs/tags/v')

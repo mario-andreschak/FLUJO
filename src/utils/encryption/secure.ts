@@ -1,819 +1,213 @@
-import CryptoJS from 'crypto-js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked } from './session';
+import {
+  DEFAULT_PASSWORD, decryptLegacy, keyId, newKeyring, open, parseSessionKey, seal,
+  serializeKeyring, unwrapKeyring, unwrapLegacyKey, wrapKeyring,
+  type EncryptionMetadata, type EncryptionType, type Keyring,
+} from './format';
+export { isValidEncryptionSessionKey } from './format';
 
-// Create a logger instance for this file
 const log = createLogger('utils/encryption/secure');
+const DATA_PURPOSE = 'flujo:secret:v2';
 
-/**
- * Thrown when a secret operation is attempted in USER encryption mode while the
- * server is locked (no unlock DEK in memory and no valid session token).
- *
- * This is a distinct, catchable error so callers never fall back to the DEFAULT
- * DEK (which would silently mis-encrypt/mis-decrypt user secrets). Stage 2's
- * route gate translates this into an HTTP 423 response.
- */
 export class EncryptionLockedError extends Error {
-  constructor(message: string = 'Encryption is locked: user password required to access secrets') {
+  constructor(message = 'Encryption is locked: unlock with your password before accessing secrets') {
     super(message);
     this.name = 'EncryptionLockedError';
-    // Restore prototype chain for instanceof to work across transpilation.
     Object.setPrototypeOf(this, EncryptionLockedError.prototype);
   }
 }
 
-// Constants for encryption
-const PBKDF2_ITERATIONS = 100000;
-const KEY_SIZE = 256 / 32; // 256 bits in words
-const SALT_SIZE = 128 / 8; // 128 bits in bytes
-const IV_SIZE = 128 / 8; // 128 bits in bytes
-
-// Key storage constants
-const DEK_KEY = 'data_encryption_key';
-const DEK_IV = 'data_encryption_iv';
-const DEK_SALT = 'data_encryption_salt';
-const DEK_VERSION = 'encryption_version';
-const ENCRYPTION_TYPE = 'encryption_type';
-
-// Default encryption key (used until user sets their own)
-// This provides basic security without requiring user setup
-const DEFAULT_ENCRYPTION_KEY = "FLUJO~";
-
-// Encryption types
-enum EncryptionType {
-  DEFAULT = 'default',
-  USER = 'user'
+declare global {
+  var __flujo_encryption_metadata_locks: Map<string, Promise<unknown>> | undefined;
 }
 
-interface EncryptionMetadata {
-  [DEK_KEY]: string;    // Encrypted DEK
-  [DEK_IV]: string;     // IV used to encrypt DEK
-  [DEK_SALT]: string;   // Salt used for key derivation
-  [DEK_VERSION]: number; // Version of encryption scheme
-  [ENCRYPTION_TYPE]?: EncryptionType; // Type of encryption (default or user)
+/** Serialize initialization/migration/password changes, including across route bundles. */
+async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
+  const locks = global.__flujo_encryption_metadata_locks ??= new Map();
+  const key = workspaceCacheKey('encryption-metadata');
+  const previous = locks.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  locks.set(key, current);
+  try { return await current; } finally { if (locks.get(key) === current) locks.delete(key); }
 }
 
-/**
- * Get a derived encryption key from the default key
- * This is used when no user key is set
- */
-function getDefaultDerivedKey(): CryptoJS.lib.WordArray {
-  // Use a fixed salt for the default key
-  const fixedSalt = CryptoJS.enc.Utf8.parse("flujo_fixed_salt_v1");
-  
-  // Derive a key from the default password using PBKDF2
-  return CryptoJS.PBKDF2(
-    DEFAULT_ENCRYPTION_KEY,
-    fixedSalt,
-    {
-      keySize: KEY_SIZE,
-      iterations: PBKDF2_ITERATIONS
-    }
-  );
-}
-
-/**
- * Generate a random DEK (Data Encryption Key)
- */
-function generateRandomDEK(): CryptoJS.lib.WordArray {
-  return CryptoJS.lib.WordArray.random(KEY_SIZE);
-}
-
-/**
- * Verify that an unwrapped DEK is genuine and not garbage produced by
- * decrypting with the WRONG key/password.
- *
- * crypto-js AES-CBC/Pkcs7 does NOT reliably fail on a wrong key: it strips
- * padding heuristically from the last byte and commonly returns a NON-EMPTY
- * garbage WordArray. So the historical `if (!decrypted.toString())` check let
- * wrong passwords through data-dependently (see issue #158 — a wrong password
- * could authenticate/unlock the server). The only trustworthy validation is to
- * confirm the recovered plaintext has the canonical DEK shape: the exact
- * lowercase-hex string produced by `generateRandomDEK().toString()` (whose
- * width is `KEY_SIZE * 2` hex chars — see the pattern below).
- *
- * Returns the verified hex plaintext, or null when the DEK is invalid /
- * undecryptable. This adds no metadata, changes no stored format and does not
- * alter the effective key for a correct password — it is a pure reject gate.
- */
-function verifiedDekPlaintext(decryptedDEK: CryptoJS.lib.WordArray): string | null {
-  let plaintext: string;
-  try {
-    // A wrong key can yield bytes that are not valid UTF-8, which crypto-js
-    // signals by throwing "Malformed UTF-8 data" — treat that as invalid.
-    plaintext = decryptedDEK.toString(CryptoJS.enc.Utf8);
-  } catch {
-    return null;
-  }
-  // Width is derived from KEY_SIZE, NOT hardcoded: the DEK is
-  // `WordArray.random(KEY_SIZE)` and `WordArray.random` treats its argument as a
-  // BYTE count, so the stored plaintext is `KEY_SIZE` bytes hex-encoded =
-  // `KEY_SIZE * 2` lowercase-hex chars (16 with today's KEY_SIZE). Deriving it
-  // keeps the gate correct if KEY_SIZE changes and, critically, makes it accept
-  // every LEGITIMATE DEK while still rejecting wrong-key garbage.
-  const dekHexPattern = new RegExp(`^[0-9a-f]{${KEY_SIZE * 2}}$`);
-  return dekHexPattern.test(plaintext) ? plaintext : null;
-}
-
-/**
- * Initialize the default encryption system
- * This creates a DEK encrypted with the default key
- */
-export async function initializeDefaultEncryption(): Promise<boolean> {
-  log.debug('initializeDefaultEncryption: Entering method');
-  try {
-    // Check if encryption is already initialized
-    const isInitialized = await isEncryptionInitialized();
-    if (isInitialized) {
-      // Already initialized, no need to do it again
-      return true;
-    }
-    
-    // Get the default derived key
-    const derivedKey = getDefaultDerivedKey();
-    
-    // Generate a random DEK
-    const dataEncryptionKey = generateRandomDEK();
-    
-    // Generate a random IV for DEK encryption
-    const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
-    
-    // Encrypt the DEK with the derived key
-    const encryptedDEK = CryptoJS.AES.encrypt(
-      dataEncryptionKey.toString(),
-      derivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Create fixed salt for storage
-    const fixedSalt = CryptoJS.enc.Utf8.parse("flujo_fixed_salt_v1");
-    
-    // Store the encrypted DEK and metadata
-    const metadata: EncryptionMetadata = {
-      [DEK_KEY]: encryptedDEK.toString(),
-      [DEK_IV]: iv.toString(),
-      [DEK_SALT]: fixedSalt.toString(),
-      [DEK_VERSION]: 1, // Initial version
-      [ENCRYPTION_TYPE]: EncryptionType.DEFAULT
-    };
-    
-    // Save the encryption metadata
-    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
-    
-    return true;
-  } catch (error) {
-    log.error('initializeDefaultEncryption: Failed to initialize default encryption:', error);
-    return false;
-  }
-}
-
-/**
- * Initialize the encryption system with a user password
- * This creates a new DEK, encrypts it with the password-derived key,
- * and stores the encrypted DEK and metadata
- */
-export async function initializeEncryption(password: string): Promise<boolean> {
-  log.debug('initializeEncryption: Entering method');
-  try {
-    // Check if we need to migrate from default encryption
-    const existingMetadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (existingMetadata && existingMetadata[ENCRYPTION_TYPE] === EncryptionType.DEFAULT) {
-      // Migrate from default to user encryption
-      return await migrateToUserEncryption(password);
-    }
-    
-    // Generate a random salt for key derivation
-    const salt = CryptoJS.lib.WordArray.random(SALT_SIZE);
-    
-    // Derive a key from the password using PBKDF2
-    const derivedKey = CryptoJS.PBKDF2(
-      password,
-      salt,
-      {
-        keySize: KEY_SIZE,
-        iterations: PBKDF2_ITERATIONS
-      }
-    );
-    
-    // Generate a random DEK (Data Encryption Key)
-    const dataEncryptionKey = CryptoJS.lib.WordArray.random(KEY_SIZE);
-    
-    // Generate a random IV for DEK encryption
-    const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
-    
-    // Encrypt the DEK with the derived key
-    const encryptedDEK = CryptoJS.AES.encrypt(
-      dataEncryptionKey.toString(),
-      derivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Store the encrypted DEK and metadata
-    const metadata: EncryptionMetadata = {
-      [DEK_KEY]: encryptedDEK.toString(),
-      [DEK_IV]: iv.toString(),
-      [DEK_SALT]: salt.toString(),
-      [DEK_VERSION]: 1, // Initial version
-      [ENCRYPTION_TYPE]: EncryptionType.USER
-    };
-    
-    // Save the encryption metadata
-    await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
-    
-    return true;
-  } catch (error) {
-    log.error('initializeEncryption: Failed to initialize encryption:', error);
-    return false;
-  }
-}
-
-/**
- * Get the default DEK
- * This is used for encryption/decryption when no user key is set
- */
-async function getDefaultDEK(): Promise<CryptoJS.lib.WordArray | null> {
-  log.debug('getDefaultDEK: Entering method');
-  try {
-    // Load the encryption metadata
-    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (!metadata) {
-      // No encryption metadata found, initialize default encryption
-      const initialized = await initializeDefaultEncryption();
-      if (!initialized) {
-        log.error('getDefaultDEK: Failed to initialize default encryption');
-        return null;
-      }
-      
-      // Try again after initialization
-      return await getDefaultDEK();
-    }
-    
-    // Check if we're using default encryption
-    if (metadata[ENCRYPTION_TYPE] !== EncryptionType.DEFAULT) {
-      log.error('getDefaultDEK: Not using default encryption');
-      return null;
-    }
-    
-    // Extract the metadata
-    const encryptedDEK = metadata[DEK_KEY];
-    const iv = CryptoJS.enc.Hex.parse(metadata[DEK_IV]);
-    
-    // Get the default derived key
-    const derivedKey = getDefaultDerivedKey();
-    
-    // Decrypt the DEK
-    const decryptedDEK = CryptoJS.AES.decrypt(
-      encryptedDEK,
-      derivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Reject a wrong/garbage unwrap deterministically (see verifiedDekPlaintext).
-    if (!verifiedDekPlaintext(decryptedDEK)) {
-      log.error('getDefaultDEK: Failed to decrypt DEK with default key');
-      return null;
-    }
-    
-    return CryptoJS.enc.Hex.parse(decryptedDEK.toString());
-  } catch (error) {
-    log.error('getDefaultDEK: Failed to get default DEK:', error);
-    return null;
-  }
-}
-
-/**
- * Get the user DEK
- * This is used for encryption/decryption when a user key is set
- */
-async function getUserDEK(password: string): Promise<CryptoJS.lib.WordArray | null> {
-  log.debug('getUserDEK: Entering method');
-  try {
-    // Load the encryption metadata
-    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (!metadata) {
-      log.error('getUserDEK: No encryption metadata found');
-      return null;
-    }
-    
-    // Check if we're using user encryption
-    if (metadata[ENCRYPTION_TYPE] !== EncryptionType.USER) {
-      log.error('getUserDEK: Not using user encryption');
-      return null;
-    }
-    
-    // Extract the metadata
-    const encryptedDEK = metadata[DEK_KEY];
-    const iv = CryptoJS.enc.Hex.parse(metadata[DEK_IV]);
-    const salt = CryptoJS.enc.Hex.parse(metadata[DEK_SALT]);
-    
-    // Derive the key from the password
-    const derivedKey = CryptoJS.PBKDF2(
-      password,
-      salt,
-      {
-        keySize: KEY_SIZE,
-        iterations: PBKDF2_ITERATIONS
-      }
-    );
-    
-    // Decrypt the DEK
-    const decryptedDEK = CryptoJS.AES.decrypt(
-      encryptedDEK,
-      derivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // A truthy string is NOT sufficient: a wrong password yields non-empty
-    // garbage under AES-CBC, so verify the canonical DEK shape (issue #158).
-    if (!verifiedDekPlaintext(decryptedDEK)) {
-      log.error('getUserDEK: Failed to decrypt DEK with provided password');
-      return null;
-    }
-    
-    return CryptoJS.enc.Hex.parse(decryptedDEK.toString());
-  } catch (error) {
-    log.error('getUserDEK: Failed to get user DEK:', error);
-    return null;
-  }
-}
-
-/**
- * Migrate from default encryption to user encryption
- * This decrypts all data with the default key and re-encrypts it with the user's key
- */
-export async function migrateToUserEncryption(password: string): Promise<boolean> {
-  log.debug('migrateToUserEncryption: Entering method');
-  try {
-    // Check if we're already using user encryption
-    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (metadata && metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
-      // Already using user encryption, no need to migrate
-      return true;
-    }
-    
-    // Get the default DEK
-    const defaultDEK = await getDefaultDEK();
-    if (!defaultDEK) {
-      log.error('migrateToUserEncryption: Failed to get default DEK for migration');
-      return false;
-    }
-    
-    // Generate a random salt for key derivation
-    const salt = CryptoJS.lib.WordArray.random(SALT_SIZE);
-    
-    // Derive a key from the password using PBKDF2
-    const derivedKey = CryptoJS.PBKDF2(
-      password,
-      salt,
-      {
-        keySize: KEY_SIZE,
-        iterations: PBKDF2_ITERATIONS
-      }
-    );
-    
-    // Generate a random IV for DEK encryption
-    const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
-    
-    // Re-encrypt the DEK with the user's key.
-    //
-    // Store the DEK plaintext in the SAME representation that default-mode init
-    // used (`.toString(Utf8)`), NOT the default hex `.toString()`. getDefaultDEK
-    // returns a WordArray whose bytes are the UTF-8 of the originally-stored DEK
-    // string, and getUserDEK reconstructs the key as `Hex.parse(decrypted)` —
-    // i.e. the key that actually encrypts data is `WordArray(utf8(storedPlaintext))`.
-    // Storing the hex of `defaultDEK` here would change that stored plaintext, so
-    // getUserDEK would recover a DIFFERENT key and every secret written before
-    // migration would fail to decrypt. Using `.toString(Utf8)` preserves the DEK
-    // value, so no data re-encryption is needed (see closed issue #79).
-    const encryptedDEK = CryptoJS.AES.encrypt(
-      defaultDEK.toString(CryptoJS.enc.Utf8),
-      derivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Update the metadata
-    const newMetadata: EncryptionMetadata = {
-      [DEK_KEY]: encryptedDEK.toString(),
-      [DEK_IV]: iv.toString(),
-      [DEK_SALT]: salt.toString(),
-      [DEK_VERSION]: metadata ? metadata[DEK_VERSION] : 1, // Keep the same version or use 1
-      [ENCRYPTION_TYPE]: EncryptionType.USER
-    };
-    
-    // Save the updated metadata
-    await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
-
-    // No re-encryption of stored secrets is needed here: the DEK value itself is
-    // unchanged — this migration only re-wraps the SAME DEK under a new
-    // (password-derived) wrapping key (see the .toString(Utf8) note above and
-    // the single-DEK invariant in issue #81). Every secret already written under
-    // the DEFAULT-mode DEK stays valid and decryptable under USER mode. Do NOT
-    // "fix" this into a real re-encrypt pass — that is unnecessary and risky
-    // (see closed issue #79 for why).
-
-    return true;
-  } catch (error) {
-    log.error('migrateToUserEncryption: Failed to migrate to user encryption:', error);
-    return false;
-  }
-}
-
-/**
- * Change the encryption password
- * This decrypts the DEK with the old password and re-encrypts it with the new password
- */
-export async function changeEncryptionPassword(oldPassword: string, newPassword: string): Promise<boolean> {
-  log.debug('changeEncryptionPassword: Entering method');
-  try {
-    // Load the encryption metadata
-    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (!metadata) {
-      log.error('changeEncryptionPassword: No encryption metadata found');
-      return false;
-    }
-    
-    // Check if we're using default encryption
-    if (metadata[ENCRYPTION_TYPE] === EncryptionType.DEFAULT) {
-      // Migrate from default to user encryption instead of changing password
-      return await migrateToUserEncryption(newPassword);
-    }
-    
-    // Extract the metadata
-    const encryptedDEK = metadata[DEK_KEY];
-    const iv = CryptoJS.enc.Hex.parse(metadata[DEK_IV]);
-    const salt = CryptoJS.enc.Hex.parse(metadata[DEK_SALT]);
-    
-    // Derive the old key
-    const oldDerivedKey = CryptoJS.PBKDF2(
-      oldPassword,
-      salt,
-      {
-        keySize: KEY_SIZE,
-        iterations: PBKDF2_ITERATIONS
-      }
-    );
-    
-    // Decrypt the DEK with the old key
-    const decryptedDEK = CryptoJS.AES.decrypt(
-      encryptedDEK,
-      oldDerivedKey,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Reject a wrong old password deterministically before re-wrapping the DEK
-    // (see verifiedDekPlaintext); a truthy garbage string must not pass here.
-    if (!verifiedDekPlaintext(decryptedDEK)) {
-      log.error('changeEncryptionPassword: Failed to decrypt DEK with old password');
-      return false;
-    }
-    
-    // Generate a new salt for the new key
-    const newSalt = CryptoJS.lib.WordArray.random(SALT_SIZE);
-    
-    // Derive a new key from the new password
-    const newDerivedKey = CryptoJS.PBKDF2(
-      newPassword,
-      newSalt,
-      {
-        keySize: KEY_SIZE,
-        iterations: PBKDF2_ITERATIONS
-      }
-    );
-    
-    // Generate a new IV for DEK encryption
-    const newIv = CryptoJS.lib.WordArray.random(IV_SIZE);
-    
-    // Re-encrypt the DEK with the new key. Preserve the DEK value by storing its
-    // UTF-8 representation (see the detailed note in migrateToUserEncryption):
-    // the effective key is `WordArray(utf8(storedPlaintext))`, so re-wrapping via
-    // hex `.toString()` would silently change it and break every stored secret on
-    // a password change. `.toString(Utf8)` keeps the key stable.
-    const newEncryptedDEK = CryptoJS.AES.encrypt(
-      decryptedDEK.toString(CryptoJS.enc.Utf8),
-      newDerivedKey,
-      {
-        iv: newIv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Update the metadata
-    const newMetadata: EncryptionMetadata = {
-      [DEK_KEY]: newEncryptedDEK.toString(),
-      [DEK_IV]: newIv.toString(),
-      [DEK_SALT]: newSalt.toString(),
-      [DEK_VERSION]: metadata[DEK_VERSION], // Keep the same version
-      [ENCRYPTION_TYPE]: EncryptionType.USER
-    };
-    
-    // Save the updated metadata
-    await saveItem(StorageKey.ENCRYPTION_KEY, newMetadata);
-    
-    return true;
-  } catch (error) {
-    log.error('changeEncryptionPassword: Failed to change encryption password:', error);
-    return false;
-  }
-}
-
-/**
- * Get the DEK using the provided password, session token, or default key
- * This is a helper function used by encrypt and decrypt
- */
-async function getDEK(passwordOrToken?: string, isToken: boolean = false): Promise<CryptoJS.lib.WordArray | null> {
-  log.debug('getDEK: Entering method');
-  try {
-    // If a token is provided, try to get the DEK from the session
-    if (isToken && passwordOrToken) {
-      log.debug('getDEK: Using session token');
-      const dekString = getDekFromSession(passwordOrToken);
-      if (dekString) {
-        return CryptoJS.enc.Hex.parse(dekString);
-      }
-      log.warn('getDEK: Invalid or expired session token, falling back to default encryption');
-    }
-    
-    // Load the encryption metadata
-    const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-    if (!metadata) {
-      // No encryption metadata found, initialize default encryption
-      log.info('getDEK: No encryption metadata found, initializing default encryption');
-      const initialized = await initializeDefaultEncryption();
-      if (!initialized) {
-        log.error('getDEK: Failed to initialize default encryption');
-        return null;
-      }
-      
-      // Try again after initialization
-      return await getDEK(passwordOrToken, isToken);
-    }
-    
-    // Check the encryption type
-    if (metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
-      // 1. Use the server unlock state if present (the authoritative backend
-      //    decryption source once the user has authenticated this process).
-      const serverDek = getServerDek();
-      if (serverDek) {
-        log.debug('getDEK: Using server unlock state for user encryption');
-        return CryptoJS.enc.Hex.parse(serverDek);
-      }
-
-      // 2. Honour an explicit password (non-token) if supplied. A valid session
-      //    token was already handled at the top of this method.
-      if (passwordOrToken && !isToken) {
-        const userDEK = await getUserDEK(passwordOrToken);
-        if (userDEK) {
-          return userDEK;
-        }
-        log.warn('getDEK: Provided password did not yield a valid user DEK');
-      }
-
-      // 3. Locked: never silently fall back to the DEFAULT DEK (that would
-      //    mis-encrypt/mis-decrypt user secrets). Throw a distinct error.
-      log.warn('getDEK: User encryption is locked (no unlock state or valid credential)');
-      throw new EncryptionLockedError();
-    } else {
-      // Default encryption
-      return await getDefaultDEK();
-    }
-  } catch (error) {
-    // Never swallow the locked signal into the default-DEK error recovery below.
-    if (error instanceof EncryptionLockedError) {
-      throw error;
-    }
-
-    log.error('getDEK: Failed to get DEK:', error);
-    
-    // Try to initialize default encryption as a last resort (DEFAULT mode only).
+async function readMetadata(): Promise<EncryptionMetadata | null> {
+  const stored = await loadItem<unknown>(StorageKey.ENCRYPTION_KEY, null);
+  if (stored === null || stored === undefined) {
+    // Generic storage treats empty/whitespace files and JSON null as absent.
+    // Key metadata cannot use that recovery policy: minting a replacement key
+    // would make the workspace's existing ciphertext permanently unreadable.
+    const metadataPath = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
     try {
-      log.warn('getDEK: Attempting to initialize default encryption as error recovery');
-      const initialized = await initializeDefaultEncryption();
-      if (initialized) {
-        return await getDefaultDEK();
-      }
-    } catch (fallbackError) {
-      log.error('getDEK: Failed to initialize default encryption as error recovery:', fallbackError);
-    }
-    
-    return null;
-  }
-}
-
-/**
- * Encrypt data using the DEK
- * If no password or token is provided, uses the default key
- */
-export async function encryptWithPassword(text: string, passwordOrToken?: string, isToken: boolean = false): Promise<string | null> {
-  log.debug('encryptWithPassword: Entering method');
-  try {
-    // Get the DEK
-    const dek = await getDEK(passwordOrToken, isToken);
-    if (!dek) {
-      return null;
-    }
-    
-    // Generate a random IV for data encryption
-    const iv = CryptoJS.lib.WordArray.random(IV_SIZE);
-    
-    // Encrypt the data with the DEK
-    const encrypted = CryptoJS.AES.encrypt(
-      text,
-      dek,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    
-    // Combine the IV and ciphertext for storage
-    // Format: iv:ciphertext
-    return iv.toString() + ':' + encrypted.toString();
-  } catch (error) {
-    // Surface the locked signal to callers instead of turning it into a silent
-    // null (which they would treat as a generic encryption failure).
-    if (error instanceof EncryptionLockedError) {
+      await fs.lstat(metadataPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
-    log.error('encryptWithPassword: Failed to encrypt data:', error);
-    return null;
+    throw new Error('Existing encryption metadata is empty or invalid; restore it from a matching workspace backup');
   }
+  if (typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid encryption metadata');
+  const metadata = stored as EncryptionMetadata;
+  if (![1, 2].includes(metadata.encryption_version)) throw new Error('Unsupported encryption metadata version');
+  if (metadata.encryption_type !== undefined && !['default', 'user'].includes(metadata.encryption_type)) {
+    throw new Error('Invalid encryption type');
+  }
+  return metadata;
 }
 
-/**
- * Decrypt data using the DEK
- * If no password or token is provided, uses the default key
- */
-export async function decryptWithPassword(ciphertext: string, passwordOrToken?: string, isToken: boolean = false): Promise<string | null> {
-  log.debug('decryptWithPassword: Entering method');
+async function persist(ring: Keyring, type: EncryptionType, password: string): Promise<EncryptionMetadata> {
+  const metadata = await wrapKeyring(ring, type, password);
+  // Atomic rename: no ciphertext is written under a new key until this succeeds.
+  // Interrupted migration leaves either complete v1 or complete v2 metadata.
+  await saveItem(StorageKey.ENCRYPTION_KEY, metadata);
+  return metadata;
+}
+
+async function metadataOrInitialize(): Promise<EncryptionMetadata> {
+  return await readMetadata() ?? await persist(newKeyring(), 'default', DEFAULT_PASSWORD);
+}
+
+/** Upgrade metadata only; keep v1 ciphertext decryptable without a bulk rewrite. */
+async function unwrapAndUpgrade(metadata: EncryptionMetadata, password: string): Promise<Keyring> {
+  if (metadata.encryption_version === 2) return unwrapKeyring(metadata, password);
+  const legacyKey = await unwrapLegacyKey(metadata, password);
+  const ring = newKeyring(legacyKey);
+  await persist(ring, metadata.encryption_type ?? 'default', password);
+  return ring;
+}
+
+export async function initializeDefaultEncryption(): Promise<boolean> {
   try {
-    // Get the DEK
-    const dek = await getDEK(passwordOrToken, isToken);
-    if (!dek) {
-      return null;
+    return await withMetadataLock(async () => { await metadataOrInitialize(); return true; });
+  } catch { log.error('Could not initialize encryption metadata'); return false; }
+}
+
+/** Existing USER metadata must never be overwritten by a second initialization. */
+export async function initializeEncryption(password: string): Promise<boolean> {
+  if (!password) return false;
+  try {
+    return await withMetadataLock(async () => {
+      const metadata = await readMetadata();
+      if (metadata?.encryption_type === 'user') return false;
+      const ring = !metadata ? newKeyring()
+        : metadata.encryption_version === 2 ? await unwrapKeyring(metadata, DEFAULT_PASSWORD)
+          : newKeyring(await unwrapLegacyKey(metadata, DEFAULT_PASSWORD));
+      await persist(ring, 'user', password);
+      return true;
+    });
+  } catch { log.error('Could not initialize password encryption'); return false; }
+}
+
+export async function migrateToUserEncryption(password: string): Promise<boolean> {
+  if (await isUserEncryptionEnabled()) return true;
+  return initializeEncryption(password);
+}
+
+export async function changeEncryptionPassword(oldPassword: string, newPassword: string): Promise<boolean> {
+  if (!newPassword) return false;
+  try {
+    return await withMetadataLock(async () => {
+      const metadata = await readMetadata();
+      if (!metadata) return false;
+      const password = metadata.encryption_type === 'user' ? oldPassword : DEFAULT_PASSWORD;
+      const ring = metadata.encryption_version === 2 ? await unwrapKeyring(metadata, password)
+        : newKeyring(await unwrapLegacyKey(metadata, password));
+      await persist(ring, 'user', newPassword);
+      if (getServerDek()) unlockServer(serializeKeyring(ring));
+      return true;
+    });
+  } catch { log.error('Could not change encryption password'); return false; }
+}
+
+async function getKeys(passwordOrToken?: string, isToken = false): Promise<Keyring | { legacyKey: string }> {
+  return withMetadataLock(async () => {
+    const metadata = await metadataOrInitialize();
+    if (metadata.encryption_type !== 'user') return unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
+    // An explicit password is verified even if the process is already unlocked.
+    if (passwordOrToken && !isToken) return unwrapAndUpgrade(metadata, passwordOrToken);
+    const serialized = isToken && passwordOrToken ? getDekFromSession(passwordOrToken) : getServerDek();
+    if (!serialized) throw new EncryptionLockedError();
+    const ring = parseSessionKey(serialized);
+    if (metadata.encryption_version === 2 && (!('activeKey' in ring) || keyId(ring) !== metadata.key_id)) {
+      throw new EncryptionLockedError('Encryption metadata changed; unlock this workspace again');
     }
-    
-    // Split the IV and ciphertext
-    const parts = ciphertext.split(':');
-    if (parts.length !== 2) {
-      log.error('decryptWithPassword: Invalid ciphertext format');
-      return null;
+    return ring;
+  });
+}
+
+/** Every successful new write uses authenticated encryption with 32 random key bytes. */
+export async function encryptWithPassword(text: string, passwordOrToken?: string, isToken = false): Promise<string | null> {
+  try {
+    const ring = await getKeys(passwordOrToken, isToken);
+    if (!('activeKey' in ring)) {
+      throw new EncryptionLockedError('Unlock with your password to upgrade legacy encryption before saving secrets');
     }
-    
-    const iv = CryptoJS.enc.Hex.parse(parts[0]);
-    const encryptedText = parts[1];
-    
-    // Decrypt the data with the DEK
-    const decrypted = CryptoJS.AES.decrypt(
-      encryptedText,
-      dek,
-      {
-        iv: iv,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-      }
-    );
-    // log.verbose('decrypted', decrypted);
-    return decrypted.toString(CryptoJS.enc.Utf8);
+    return seal(text, ring.activeKey, DATA_PURPOSE);
   } catch (error) {
-    // Surface the locked signal to callers instead of turning it into a silent
-    // null (which they would treat as garbage/failed decryption).
-    if (error instanceof EncryptionLockedError) {
-      throw error;
-    }
-    log.error('decryptWithPassword: Failed to decrypt data:', error);
+    if (error instanceof EncryptionLockedError) throw error;
+    log.error('Secret encryption failed; no plaintext value will be saved');
     return null;
   }
 }
 
-/**
- * Check if the provided password is correct
- * If correct, creates a session and returns the token
- */
-export async function verifyPassword(password: string): Promise<{ valid: boolean, token?: string }> {
-  log.debug('verifyPassword: Entering method');
-  // Load the encryption metadata
-  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  if (!metadata) {
-    return { valid: false };
-  }
-  
-  // Check the encryption type
-  if (metadata[ENCRYPTION_TYPE] === EncryptionType.USER) {
-    // For user encryption, verify the password
-    const dek = await getUserDEK(password);
-    if (dek !== null) {
-      // Password is valid: record the process-wide server unlock state so that
-      // tokenless backend secret operations use the correct USER DEK, and also
-      // create a 2-hour session token for the UI dialog flow. Reuse the DEK we
-      // just derived — never re-derive or log the password.
-      unlockServer(dek.toString());
-      const token = createSession(dek.toString());
-      return { valid: true, token };
+export async function decryptWithPassword(ciphertext: string, passwordOrToken?: string, isToken = false): Promise<string | null> {
+  try {
+    const ring = await getKeys(passwordOrToken, isToken);
+    if (ciphertext.startsWith('v2:')) {
+      if (!('activeKey' in ring)) return null;
+      return open(ciphertext, ring.activeKey, DATA_PURPOSE);
     }
-    return { valid: false };
-  } else {
-    // For default encryption, any password is invalid
-    return { valid: false };
+    if (!ring.legacyKey) return null;
+    return decryptLegacy(ciphertext, ring.legacyKey);
+  } catch (error) {
+    if (error instanceof EncryptionLockedError) throw error;
+    log.error('Secret decryption failed: invalid credentials, metadata or ciphertext');
+    return null;
   }
 }
 
-/**
- * Authenticate with a password and create a session
- * @param password The user's password
- * @returns A session token if authentication is successful, null otherwise
- */
+export async function verifyPassword(password: string): Promise<{ valid: boolean; token?: string }> {
+  try {
+    return await withMetadataLock(async () => {
+      const metadata = await readMetadata();
+      if (!metadata || metadata.encryption_type !== 'user') return { valid: false };
+      const ring = await unwrapAndUpgrade(metadata, password);
+      const serialized = serializeKeyring(ring);
+      unlockServer(serialized);
+      return { valid: true, token: createSession(serialized) };
+    });
+  } catch { return { valid: false }; }
+}
+
 export async function authenticate(password: string): Promise<string | null> {
-  log.debug('authenticate: Entering method');
   const result = await verifyPassword(password);
-  return result.valid ? result.token || null : null;
+  return result.valid ? result.token ?? null : null;
 }
 
-/**
- * Invalidate an authentication session
- * @param token The session token to invalidate
- */
 export async function logout(token: string): Promise<boolean> {
-  log.debug('logout: Entering method');
-  try {
-    invalidateSession(token);
-    return true;
-  } catch (error) {
-    log.error('logout: Failed to invalidate session:', error);
-    return false;
-  }
+  invalidateSession(token);
+  return true;
 }
 
-/**
- * Check if encryption is initialized
- */
 export async function isEncryptionInitialized(): Promise<boolean> {
-  log.debug('isEncryptionInitialized: Entering method');
-  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  return metadata !== null;
+  return (await readMetadata()) !== null;
 }
 
-/**
- * Check if user encryption is enabled
- */
 export async function isUserEncryptionEnabled(): Promise<boolean> {
-  log.debug('isUserEncryptionEnabled: Entering method');
-  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  // `!= null` guards both null and undefined: the route lock gate (issue #77)
-  // calls this on every request, so it must never throw on a missing metadata
-  // value (e.g. an undefined store entry) before reading ENCRYPTION_TYPE.
-  return metadata != null && metadata[ENCRYPTION_TYPE] === EncryptionType.USER;
+  return (await readMetadata())?.encryption_type === 'user';
 }
 
-/**
- * Whether secret operations are currently locked: USER encryption is enabled
- * AND the server has no in-memory unlock DEK. DEFAULT mode (or
- * encryption-not-initialized) is never locked. This is the single source of
- * truth for the "locked" concept — the route lock gate (#77), backend startup
- * gating and the scheduler's locked-fire guard (#78) all defer to it so they
- * can never drift. Cheap: touches only the mode metadata + the lock flag,
- * never the DEK or any secret.
- */
 export async function isEncryptionLocked(): Promise<boolean> {
   return (await isUserEncryptionEnabled()) && isServerLocked();
 }
 
-/**
- * Get the current encryption type
- */
 export async function getEncryptionType(): Promise<EncryptionType | null> {
-  log.debug('getEncryptionType: Entering method');
-  const metadata = await loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null);
-  if (!metadata) {
-    return null;
-  }
-  
-  return metadata[ENCRYPTION_TYPE] || EncryptionType.DEFAULT;
+  const metadata = await readMetadata();
+  return metadata ? metadata.encryption_type ?? 'default' : null;
 }

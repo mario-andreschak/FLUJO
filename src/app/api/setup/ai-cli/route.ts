@@ -5,11 +5,23 @@ import { NextRequest } from 'next/server';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { createLogger } from '@/utils/logger';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { getInstallMode } from '@/utils/paths';
 import { AI_CLI_PACKAGES, buildWingetArgs, type AiCliTool } from './winget';
 
 const log = createLogger('app/api/setup/ai-cli/route');
 
 export const runtime = 'nodejs';
+
+/** Read-only host facts: browser OS is not the machine installing AI tools. */
+async function GET_handler(_request: NextRequest) {
+  return Response.json({
+    platform: process.platform,
+    installMode: getInstallMode(),
+    oneClickInstall: process.platform === 'win32' && getInstallMode() !== 'container',
+  });
+}
+
+export const GET = withWorkspaceRoute(GET_handler);
 
 /**
  * Installs one of three explicitly allow-listed AI runtimes. The request never

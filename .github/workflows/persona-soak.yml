@@ -1,8 +1,7 @@
 name: persona-soak
 
 on:
-  schedule:
-    - cron: '17 3 * * *'
+  # Run deliberately against a selected commit; do not emit daily failures.
   workflow_dispatch:
     inputs:
       commit_sha:

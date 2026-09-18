@@ -1,222 +1,192 @@
-/**
- * Regression tests for /api/update install-mode awareness (issues #57, #59).
- *
- * FLUJO's in-app updater does `git pull` + rebuild in the install folder. That is
- * impossible (and unsafe) for the Docker image and the npm package, which are
- * effectively read-only and updated by pulling a new image / reinstalling. The
- * route must therefore:
- *   - GET: report `updateMode` ('git' | 'container' | 'npm' | 'none') and, for a
- *     packaged install, return updateAvailable=false + instructions instead of
- *     touching git.
- *   - POST: refuse with 501 for a packaged install BEFORE any git interaction.
- *
- * Install mode is driven by env vars (FLUJO_CONTAINER / FLUJO_NPM); simple-git is
- * mocked so the git-mode branches never hit a real repository.
- */
-
+/** Update preflight must finish before any fetch, code mutation, or server stop. */
 jest.mock('simple-git', () => {
-  const git: any = {
-    checkIsRepo: jest.fn(),
-    fetch: jest.fn(),
-    status: jest.fn(),
-    pull: jest.fn(),
-    raw: jest.fn(),
+  const git = {
+    checkIsRepo: jest.fn(), fetch: jest.fn(), status: jest.fn(), pull: jest.fn(), raw: jest.fn(),
   };
-  return {
-    __esModule: true,
-    default: jest.fn(() => git),
-    __git: git,
-  };
+  return { __esModule: true, default: jest.fn(() => git), __git: git };
 });
 
 jest.mock('child_process', () => ({
   ...jest.requireActual('child_process'),
   execSync: jest.fn(),
-  spawn: jest.fn(() => ({
-    on: jest.fn(),
-    unref: jest.fn(),
-  })),
+  spawn: jest.fn(() => ({ on: jest.fn(), unref: jest.fn() })),
 }));
 
 import { GET, POST } from '@/app/api/update/route';
 import { makeLocalRequest } from '../utils/localRequest';
 
-const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as any;
-const { execSync: mockExecSync } = jest.requireMock('child_process') as {
-  execSync: jest.Mock;
+const { __git: mockGit, default: simpleGitFactory } = jest.requireMock('simple-git') as {
+  __git: Record<string, jest.Mock>; default: jest.Mock;
 };
-
-const postReq = (body: unknown) => makeLocalRequest({ body });
-// GET is guarded by the fail-closed origin guard (#142); it reads only Host/Origin.
-const getReq = () => makeLocalRequest();
-
-const ENV_KEYS = ['FLUJO_CONTAINER', 'FLUJO_NPM'] as const;
-const saved: Record<string, string | undefined> = {};
+const { execSync: mockExecSync, spawn: mockSpawn } = jest.requireMock('child_process') as {
+  execSync: jest.Mock; spawn: jest.Mock;
+};
+const postReq = () => makeLocalRequest({ body: { action: 'apply' } });
 const originalPlatform = process.platform;
+const savedEnv: Record<string, string | undefined> = {};
+const currentRevision = 'a'.repeat(40);
+const upstreamRevision = 'b'.repeat(40);
+const cleanStatus = (overrides: Record<string, unknown> = {}) => ({
+  files: [], current: 'main', tracking: 'origin/main', ahead: 0, behind: 0, detached: false, ...overrides,
+});
+
+function gitReply(args: string[]) {
+  switch (args.join(' ')) {
+    case 'rev-parse --show-toplevel': return process.cwd();
+    case 'remote get-url origin': return 'https://github.com/mario-andreschak/FLUJO.git';
+    case 'rev-parse HEAD': return currentRevision;
+    case 'symbolic-ref --quiet --short HEAD': return 'main';
+    case 'describe --tags --exact-match HEAD': return 'v3.45.2';
+    case 'merge-base --is-ancestor HEAD refs/remotes/origin/main': return '';
+    case 'rev-parse refs/remotes/origin/main': return upstreamRevision;
+    case `merge --ff-only ${upstreamRevision}`: return '';
+    default: throw new Error(`Unexpected Git command: ${args.join(' ')}`);
+  }
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
-  for (const key of ENV_KEYS) {
-    saved[key] = process.env[key];
+  for (const key of ['FLUJO_CONTAINER', 'FLUJO_NPM']) {
+    savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  mockGit.checkIsRepo.mockResolvedValue(true);
+  mockGit.status.mockResolvedValue(cleanStatus());
+  mockGit.fetch.mockResolvedValue(undefined);
+  mockGit.raw.mockImplementation(async (args: string[]) => gitReply(args));
 });
 
 afterEach(() => {
   Object.defineProperty(process, 'platform', { value: originalPlatform });
-  for (const key of ENV_KEYS) {
-    if (saved[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = saved[key];
-    }
+  for (const key of ['FLUJO_CONTAINER', 'FLUJO_NPM']) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
   }
 });
 
-describe('GET /api/update', () => {
-  it("reports updateMode 'container' without touching git when FLUJO_CONTAINER is set", async () => {
-    process.env.FLUJO_CONTAINER = '1';
-    const res = await GET(getReq());
-    const body = await res.json();
+function expectNoUpdateEffects() {
+  expect(mockGit.fetch).not.toHaveBeenCalled();
+  expect(mockGit.pull).not.toHaveBeenCalled();
+  expect(mockGit.raw.mock.calls.some(call => ['merge', 'reset', 'restore', 'checkout'].includes((call[0] as string[])[0]))).toBe(false);
+  expect(mockExecSync).not.toHaveBeenCalled();
+  expect(mockSpawn).not.toHaveBeenCalled();
+}
 
-    expect(res.status).toBe(200);
-    expect(body).toMatchObject({
-      success: true,
-      isGitRepo: false,
-      updateMode: 'container',
-      updateAvailable: false,
-    });
-    expect(typeof body.message).toBe('string');
+describe('packaged updates', () => {
+  it.each([['FLUJO_CONTAINER', 'container'], ['FLUJO_NPM', 'npm']])('keeps %s out of Git update paths', async (env, mode) => {
+    process.env[env] = '1';
+    const check = await GET(makeLocalRequest());
+    expect(await check.json()).toMatchObject({ success: true, isGitRepo: false, updateMode: mode, updateAvailable: false });
+    const apply = await POST(postReq());
+    expect(apply.status).toBe(501);
     expect(simpleGitFactory).not.toHaveBeenCalled();
-  });
-
-  it("reports updateMode 'npm' without touching git when FLUJO_NPM is set", async () => {
-    process.env.FLUJO_NPM = '1';
-    const res = await GET(getReq());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.updateMode).toBe('npm');
-    expect(body.updateAvailable).toBe(false);
-    expect(simpleGitFactory).not.toHaveBeenCalled();
-  });
-
-  it("reports updateMode 'git' and no update when up to date", async () => {
-    mockGit.checkIsRepo.mockResolvedValue(true);
-    mockGit.fetch.mockResolvedValue(undefined);
-    mockGit.status.mockResolvedValue({ behind: 0, current: 'main', tracking: 'origin/main' });
-
-    const res = await GET(getReq());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body).toMatchObject({ isGitRepo: true, updateMode: 'git', updateAvailable: false });
-  });
-
-  it("reports updateMode 'git' with updateAvailable when behind", async () => {
-    mockGit.checkIsRepo.mockResolvedValue(true);
-    mockGit.fetch.mockResolvedValue(undefined);
-    mockGit.status.mockResolvedValue({ behind: 3, current: 'main', tracking: 'origin/main' });
-
-    const res = await GET(getReq());
-    const body = await res.json();
-
-    expect(body).toMatchObject({ updateMode: 'git', updateAvailable: true, behindBy: 3, branch: 'main' });
-  });
-
-  it("reports updateMode 'none' when git mode but not a git repo", async () => {
-    mockGit.checkIsRepo.mockResolvedValue(false);
-
-    const res = await GET(getReq());
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body).toMatchObject({ isGitRepo: false, updateMode: 'none', updateAvailable: false });
+    expectNoUpdateEffects();
   });
 });
 
-describe('POST /api/update', () => {
-  it('refuses with 501 in container mode before touching git', async () => {
-    process.env.FLUJO_CONTAINER = '1';
-    const res = await POST(postReq({ action: 'apply' }));
-    const body = await res.json();
+describe('safe branch checks', () => {
+  it('inspects a clean official checkout before fetching and reports its source', async () => {
+    mockGit.status.mockResolvedValue(cleanStatus({ behind: 3 }));
+    const response = await GET(makeLocalRequest());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ updateMode: 'git', canApply: true, updateAvailable: true, behindBy: 3, branch: 'main', sourceRef: 'main', revision: currentRevision });
+    expect(mockGit.fetch).toHaveBeenCalledWith('origin', 'main');
+    expect(mockGit.status.mock.invocationCallOrder[0]).toBeLessThan(mockGit.fetch.mock.invocationCallOrder[0]);
+    expect(mockGit.status).toHaveBeenCalledTimes(2);
+  });
 
-    expect(res.status).toBe(501);
-    expect(body).toMatchObject({ success: false, updateMode: 'container' });
-    expect(simpleGitFactory).not.toHaveBeenCalled();
+  it('does not rebuild or stop a server when already current', async () => {
+    const response = await POST(postReq());
+    expect(await response.json()).toMatchObject({ success: true, updateAvailable: false, restarting: false });
+    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('uses only a fast-forward to the verified revision on non-Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    mockGit.status.mockResolvedValue(cleanStatus({ behind: 1 }));
+    const response = await POST(postReq());
+    expect(response.status).toBe(200);
+    expect(mockGit.raw).toHaveBeenCalledWith(['merge', '--ff-only', upstreamRevision]);
     expect(mockGit.pull).not.toHaveBeenCalled();
+    expect(mockExecSync).toHaveBeenNthCalledWith(1, 'npm ci --include=dev', expect.objectContaining({ cwd: process.cwd() }));
+    expect(mockExecSync).toHaveBeenNthCalledWith(2, 'npm run build', expect.anything());
   });
 
-  it('refuses with 501 in npm mode before touching git', async () => {
-    process.env.FLUJO_NPM = '1';
-    const res = await POST(postReq({ action: 'apply' }));
-    const body = await res.json();
+  it('only launches the Windows updater after both preflights pass', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    mockGit.status.mockResolvedValue(cleanStatus({ behind: 1 }));
+    const response = await POST(postReq());
+    expect(await response.json()).toMatchObject({ success: true, restarting: true });
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSpawn.mock.invocationCallOrder[0]).toBeGreaterThan(mockGit.status.mock.invocationCallOrder[1]);
+  });
+});
 
-    expect(res.status).toBe(501);
-    expect(body.updateMode).toBe('npm');
-    expect(simpleGitFactory).not.toHaveBeenCalled();
+describe('unsafe checkouts', () => {
+  const blockedStates = [
+    ['lockfile edits', { files: [{ path: 'package-lock.json', index: ' ', working_dir: 'M' }] }, 'local-changes'],
+    ['untracked work', { files: [{ path: 'notes.txt', index: '?', working_dir: '?' }] }, 'local-changes'],
+    ['local commits', { ahead: 1 }, 'local-commits'],
+    ['diverged branch', { ahead: 1, behind: 2 }, 'local-commits'],
+    ['different upstream', { tracking: 'fork/main' }, 'unexpected-upstream'],
+  ] as const;
+
+  it.each(blockedStates)('refuses %s on GET and POST before any fetch or update effect', async (_label, status, blockedReason) => {
+    mockGit.status.mockResolvedValue(cleanStatus(status));
+    const check = await GET(makeLocalRequest());
+    expect(await check.json()).toMatchObject({ updateMode: 'blocked', blockedReason, updateAvailable: false });
+    const apply = await POST(postReq());
+    expect(apply.status).toBe(409);
+    expect(await apply.json()).toMatchObject({ success: false, blockedReason });
+    expectNoUpdateEffects();
   });
 
-  it('still rejects an unknown action before the install-mode check', async () => {
-    const res = await POST(postReq({ action: 'bogus' }));
-    expect(res.status).toBe(400);
+  it('reports detached stable releases as pinned and refuses before stopping Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    mockGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') throw new Error('detached HEAD');
+      return gitReply(args);
+    });
+    const response = await GET(makeLocalRequest());
+    const data = await response.json();
+    expect(data).toMatchObject({ updateMode: 'pinned', sourceRef: 'v3.45.2', revision: currentRevision, canApply: false });
+    expect(data.message).toMatch(/newer versioned FLUJO installer/);
+    expect((await POST(postReq())).status).toBe(409);
+    expectNoUpdateEffects();
   });
 
-  it('returns 400 in git mode when the install is not a git repo', async () => {
+  it.each(['unrelated-origin', 'unrelated-checkout', 'not-fast-forward'])('refuses %s without mutating the checkout', async reason => {
+    mockGit.raw.mockImplementation(async (args: string[]) => {
+      if (reason === 'unrelated-origin' && args[0] === 'remote') return 'https://github.com/someone/another-project.git';
+      if (reason === 'unrelated-checkout' && args[1] === '--show-toplevel') return `${process.cwd()}/different-root`;
+      if (reason === 'not-fast-forward' && args[0] === 'merge-base') throw new Error('not ancestor');
+      return gitReply(args);
+    });
+    const response = await POST(postReq());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ blockedReason: reason });
+    expectNoUpdateEffects();
+  });
+
+  it('rechecks fetched history and refuses divergence before spawning or merging', async () => {
+    mockGit.fetch.mockImplementation(async () => { mockGit.status.mockResolvedValue(cleanStatus({ ahead: 1, behind: 2 })); });
+    const response = await POST(postReq());
+    expect(response.status).toBe(409);
+    expect(mockGit.raw.mock.calls.some(call => (call[0] as string[])[0] === 'merge')).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('reports a non-Git install without trying to update it', async () => {
     mockGit.checkIsRepo.mockResolvedValue(false);
-    const res = await POST(postReq({ action: 'apply' }));
-    const body = await res.json();
-
-    expect(res.status).toBe(400);
-    expect(body.success).toBe(false);
-    expect(mockGit.pull).not.toHaveBeenCalled();
+    expect(await (await GET(makeLocalRequest())).json()).toMatchObject({ updateMode: 'none', isGitRepo: false });
+    expect((await POST(postReq())).status).toBe(400);
+    expectNoUpdateEffects();
   });
 
-  it('restores installer-generated lockfile drift and installs with npm ci', async () => {
-    Object.defineProperty(process, 'platform', { value: 'linux' });
-    mockGit.checkIsRepo.mockResolvedValue(true);
-    mockGit.status.mockResolvedValue({
-      files: [{ path: 'package-lock.json', index: ' ', working_dir: 'M' }],
-    });
-    mockGit.raw.mockResolvedValue('');
-    mockGit.pull.mockResolvedValue({});
-
-    const res = await POST(postReq({ action: 'apply' }));
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.success).toBe(true);
-    expect(mockGit.raw).toHaveBeenCalledWith([
-      'restore', '--source=HEAD', '--staged', '--worktree', '--', 'package-lock.json',
-    ]);
-    expect(mockGit.pull).toHaveBeenCalled();
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      1,
-      'npm ci --include=dev',
-      expect.objectContaining({ cwd: process.cwd(), encoding: 'utf8' }),
-    );
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      2,
-      'npm run build',
-      expect.objectContaining({ cwd: process.cwd(), encoding: 'utf8' }),
-    );
-  });
-
-  it('does not discard a lockfile when package.json also has dependency edits', async () => {
-    Object.defineProperty(process, 'platform', { value: 'linux' });
-    mockGit.checkIsRepo.mockResolvedValue(true);
-    mockGit.status.mockResolvedValue({
-      files: [
-        { path: 'package.json', index: ' ', working_dir: 'M' },
-        { path: 'package-lock.json', index: ' ', working_dir: 'M' },
-      ],
-    });
-    mockGit.pull.mockResolvedValue({});
-
-    const res = await POST(postReq({ action: 'apply' }));
-
-    expect(res.status).toBe(200);
-    expect(mockGit.raw).not.toHaveBeenCalled();
-    expect(mockGit.pull).toHaveBeenCalled();
+  it('rejects unknown actions', async () => {
+    expect((await POST(makeLocalRequest({ body: { action: 'bogus' } }))).status).toBe(400);
+    expect(simpleGitFactory).not.toHaveBeenCalled();
   });
 });

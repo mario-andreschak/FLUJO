@@ -11,6 +11,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { prepareGithubServerRuntime } from '@/backend/services/mcp/githubInstall';
 import { prepareRegistryServerRuntime } from '@/backend/services/mcp/registryInstall';
 import { createShippedServerConfig, shippedDescriptorForConfig } from '@/backend/services/mcp/shippedServers';
+import { ensureShippedWorkspacePackages, shippedWorkspacePackageRuntimeDigest } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { atomicWriteWithoutLinks } from '@/backend/services/workspace/backupRestoreFs';
 
 export interface WorkspaceMcpTransferServer {
@@ -18,6 +19,8 @@ export interface WorkspaceMcpTransferServer {
   kind: 'bundled' | 'github' | 'registry' | 'remote' | 'package-runner' | 'disabled';
   sourceRootPath: string;
   installOrigin?: McpInstallOrigin;
+  /** Runtime identity of an unmodified workspace copy; edits are not included in snapshots. */
+  bundledRuntimeSha256?: string;
   /** Disabled, unsupported configurations are retained but never started on the worker. */
   reason?: string;
 }
@@ -232,6 +235,15 @@ export async function pinWorkspaceMcpTransferPlan(
   const pinned = structuredClone(plan);
   for (const entry of pinned.servers) {
     options.signal?.throwIfAborted();
+    if (entry.kind === 'bundled') {
+      const packageRoot = absolute(entry.sourceRootPath) ? entry.sourceRootPath
+        : pathApi(plan.sourceWorkspaceRoot).resolve(plan.sourceWorkspaceRoot, entry.sourceRootPath);
+      if (relativeInside(plan.sourceWorkspaceRoot, packageRoot) !== undefined) {
+        try { entry.bundledRuntimeSha256 = await shippedWorkspacePackageRuntimeDigest(packageRoot); }
+        catch (error) { fail(entry.name, error instanceof Error ? error.message : 'The copied package could not be inspected.'); }
+      }
+      continue;
+    }
     if (entry.kind !== 'github') continue;
     const sourceRoot = absolute(entry.sourceRootPath) ? entry.sourceRootPath
       : pathApi(plan.sourceWorkspaceRoot).resolve(plan.sourceWorkspaceRoot, entry.sourceRootPath);
@@ -369,6 +381,15 @@ async function prepareConfig(
     if (config.transport !== 'stdio') throw new Error('Bundled server transport changed.');
     const descriptor = shippedDescriptorForConfig(config);
     if (!descriptor) throw new Error('The bundled MCP package is unavailable on this worker.');
+    // Snapshots omit MCP checkouts: materialize the target distribution, not
+    // the source machine's edited package or its dependency junction.
+    await ensureShippedWorkspacePackages(targetWorkspaceRoot, undefined, [descriptor.packageDirectory]);
+    if (entry.bundledRuntimeSha256) {
+      const restoredRoot = path.join(targetWorkspaceRoot, 'mcp-servers', descriptor.packageDirectory);
+      if (await shippedWorkspacePackageRuntimeDigest(restoredRoot) !== entry.bundledRuntimeSha256) {
+        throw new Error('The worker bundled package differs from the captured runtime. Use the matching application build.');
+      }
+    }
     const runtime = createShippedServerConfig(descriptor);
     const env = mapEnvironment(config.env, mappings);
     for (const key of runtimeEnvironmentKeys) {
@@ -435,7 +456,8 @@ export async function reinstallWorkspaceMcpServers(plan: WorkspaceMcpTransferPla
   if (plan?.formatVersion !== 1 || !Array.isArray(plan.servers)
     || typeof plan.sourceWorkspaceRoot !== 'string' || !absolute(plan.sourceWorkspaceRoot)
     || plan.servers.some(entry => !entry || typeof entry.name !== 'string' || !entry.name
-      || typeof entry.sourceRootPath !== 'string' || !kinds.has(entry.kind))
+      || typeof entry.sourceRootPath !== 'string' || !kinds.has(entry.kind)
+      || (entry.bundledRuntimeSha256 !== undefined && (typeof entry.bundledRuntimeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.bundledRuntimeSha256))))
     || new Set(plan.servers.map(entry => entry.name)).size !== plan.servers.length) {
     throw new Error('Unsupported MCP workspace transfer plan.');
   }

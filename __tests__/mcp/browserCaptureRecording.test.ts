@@ -31,10 +31,16 @@ function browserToolContent(value: unknown): BrowserToolContentItem[] {
 }
 
 async function connectBrowser(dataDir: string): Promise<Client> {
+  const entry = path.resolve('mcp-servers/browser/dist/index.js');
+  try {
+    await fs.access(entry);
+  } catch {
+    throw new Error('Browser capture process tests require built MCP artifacts. Run npm run build:mcp, then npm run test:isolated.');
+  }
   const client = new Client({ name: 'browser-capture-recording-test', version: '1.0.0' }, { capabilities: {} });
-  await client.connect(new StdioClientTransport({
+  const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [path.resolve('mcp-servers/browser/dist/index.js')],
+    args: [entry],
     env: processEnv({
       FLUJO_DATA_DIR: dataDir,
       FLUJO_BROWSER_SCREENSHOT_DIR: path.join(dataDir, 'screenshots'),
@@ -43,7 +49,18 @@ async function connectBrowser(dataDir: string): Promise<Client> {
       FLUJO_FFMPEG_PATH: path.join(dataDir, 'definitely-not-ffmpeg'),
     }),
     stderr: 'pipe',
-  }));
+  });
+  let stderr = '';
+  transport.stderr?.on('data', (chunk: Buffer | string) => {
+    stderr = (stderr + chunk.toString()).slice(-8_000);
+  });
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
+    throw new Error(`Browser MCP startup failed: ${error instanceof Error ? error.message : String(error)}\n${stderr || '(no stderr output)'}`);
+  }
   return client;
 }
 
@@ -69,8 +86,9 @@ describe('browser capture and recording process boundary', () => {
     const page = await localPage('<!doctype html><h1 id="ready">local capture</h1>');
     const localFile = path.join(root, 'local-page.html');
     await fs.writeFile(localFile, '<!doctype html><h1>file capture</h1>');
-    const client = await connectBrowser(root);
+    let client: Client | undefined;
     try {
+      client = await connectBrowser(root);
       for (const source of [page.url, localFile]) {
         const result = await client.callTool({
           name: 'browser_capture_page',
@@ -96,7 +114,7 @@ describe('browser capture and recording process boundary', () => {
       expect(active.isError).not.toBe(true);
       expect(active.structuredContent).toMatchObject({ success: true, selector: '#ready' });
     } finally {
-      await client.close();
+      await client?.close().catch(() => undefined);
       await closeServer(page.server);
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -117,8 +135,9 @@ describe('browser capture and recording process boundary', () => {
           setTimeout(() => { oscillator.stop(); context.close(); }, 900);
         };
       </script>`);
-    const client = await connectBrowser(root);
+    let client: Client | undefined;
     try {
+      client = await connectBrowser(root);
       const started = await client.callTool({
         name: 'browser_record_start',
         arguments: { source: page.url, resolution: '4k', durationMs: 1_500, audio: true },
@@ -165,7 +184,7 @@ describe('browser capture and recording process boundary', () => {
       const outputPath = (stopped.structuredContent as { outputPath: string }).outputPath;
       expect((await fs.stat(outputPath)).size).toBeGreaterThan(0);
     } finally {
-      await client.close();
+      await client?.close().catch(() => undefined);
       await closeServer(page.server);
       await fs.rm(root, { recursive: true, force: true });
     }

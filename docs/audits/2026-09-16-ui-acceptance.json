@@ -1,0 +1,26 @@
+{
+  "date": "2026-09-16T19:47:31.889Z",
+  "buildId": "3B_sneoUMRRE3b2a1XCZe",
+  "testProvider": "Local deterministic fixture on127.0.0.1:4290; no paid/provider account",
+  "checks": {
+    "introSkipDoesNotStartStage1": true,
+    "badFixtureKeyShows401": true,
+    "correctedFixtureKeyTests200": true,
+    "manualBuilderRequiresModel": true,
+    "modelBindingEnablesTry": true,
+    "conversationStatus": "completed",
+    "reply": "The local audit fixture confirms that your FLUJO conversation completed successfully.",
+    "credentialUsableAfterRestart": true,
+    "wizardToManualSaveReturnsToModelList": true
+  },
+  "conversationId": "0e13f479-931e-4215-9446-05a81d616011",
+  "encryption": {
+    "metadataVersion": 2,
+    "kdf": "pbkdf2-sha256",
+    "iterations": 600000,
+    "authenticatedKeyring": true,
+    "modelCount": 2,
+    "allModelCredentialsV2": true
+  },
+  "limitation": "Actual cloud-provider authentication/quotas not tested. Initial fixture omitted streaming; that harness error was corrected before successful retry."
+}

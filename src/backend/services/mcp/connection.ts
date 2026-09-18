@@ -40,6 +40,7 @@ import {
   resolvePlaywrightBrowsersPath,
   shippedDescriptorForConfig,
 } from './shippedServers';
+import { ensureShippedWorkspacePackages } from './shippedWorkspacePackages';
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -378,7 +379,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.45.2",
+      version: "3.46.0",
     },
     {
       capabilities: {
@@ -952,9 +953,21 @@ export function resolveStdioLaunch(
   return { command, args, env: transformedEnv, cwd };
 }
 
-/**
- * Create a stdio transport for the MCP client
- */
+/** Prepare only workspace-owned shipped code immediately before either SDK spawns it. */
+export function attachShippedWorkspaceReadiness(
+  transport: { start: () => Promise<void> }, config: MCPStdioConfig, cwd: string,
+): void {
+  const descriptor = shippedDescriptorForConfig(config);
+  const workspaceRoot = getWorkspaceDataDir();
+  if (!descriptor || path.resolve(cwd) !== path.resolve(workspaceRoot, 'mcp-servers', descriptor.packageDirectory)) return;
+  const start = transport.start.bind(transport);
+  transport.start = async () => {
+    await ensureShippedWorkspacePackages(workspaceRoot, undefined, [descriptor.packageDirectory]);
+    await start();
+  };
+}
+
+/** Create a stdio transport for the MCP client. */
 export function createStdioTransport(
   config: MCPServerConfig,
   options?: TransportCreationOptions,
@@ -987,6 +1000,7 @@ export function createStdioTransport(
   let transport: StdioClientTransport;
   try {
     transport = new StdioClientTransport(transportoptions);
+    attachShippedWorkspaceReadiness(transport, config, cwd);
   } catch (error) {
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
     throw error;

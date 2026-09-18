@@ -80,24 +80,21 @@ export async function encryptApiKey(apiKey: string): Promise<string> {
       // Initialize default encryption
       const initialized = await initializeDefaultEncryption();
       if (!initialized) {
-        log.error('encryptApiKey: Failed to initialize default encryption');
-        return `encrypted_failed:${apiKey}`;
+        throw new Error('Could not initialize credential encryption');
       }
     }
     
     // Use the encryption utility from secure.ts
     const encryptedKey = await encryptWithPassword(apiKey);
     if (!encryptedKey) {
-      log.error('encryptApiKey: encryptWithPassword returned null');
-      return `encrypted_failed:${apiKey}`;
+      throw new Error('Could not encrypt credential');
     }
     
     return `encrypted:${encryptedKey}`;
     
   } catch (error) {
-    log.error('encryptApiKey: Failed to encrypt API key:', error);
-    // Instead of returning plain text, return a marker that indicates encryption failed
-    return `encrypted_failed:${apiKey}`;
+    log.error('encryptApiKey: Credential was not saved because encryption failed');
+    throw new Error('Credential encryption failed. Unlock this workspace and retry; the previous credential has been retained.', { cause: error });
   }
 }
 
@@ -117,7 +114,9 @@ export async function decryptApiKey(encryptedApiKey: string): Promise<string | n
     
     // Check if this is a failed encryption marker
     if (encryptedApiKey && encryptedApiKey.startsWith('encrypted_failed:')) {
-      // Return the original value without the marker
+      // Read-only compatibility for historical plaintext records. Explicitly
+      // re-saving the model or signing in again encrypts the replacement; no
+      // new credential write may produce this legacy representation.
       return encryptedApiKey.substring('encrypted_failed:'.length);
     }
 

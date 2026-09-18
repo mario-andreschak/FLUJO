@@ -41,6 +41,8 @@ import {
   pinWorkspaceMcpTransferPlan,
   selectWorkspaceFlowDependencies,
 } from '@/backend/services/packages/workspaceMcpTransfer';
+import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
+import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 
 const source = 'C:\\desktop\\workspaces\\worker';
 function server(overrides: Record<string, unknown> = {}): MCPServerConfig {
@@ -316,6 +318,28 @@ it('reports failed readiness without echoing remote credential-bearing errors', 
   expect(result.ok).toBe(false);
   expect(result.servers[0].status).toBe('failed');
   expect(JSON.stringify(result)).not.toContain('private-token');
+});
+
+it('pins an unchanged workspace package and rejects source edits instead of silently discarding them', async () => {
+  await ensureShippedWorkspacePackages(mockWorkspace, undefined, ['filesystem']);
+  const config = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'filesystem')!);
+  const plan = buildWorkspaceMcpTransferPlan([config], mockWorkspace);
+  const pinned = await pinWorkspaceMcpTransferPlan(plan);
+  expect(pinned.servers[0].bundledRuntimeSha256).toMatch(/^[a-f0-9]{64}$/);
+  await fs.writeFile(path.join(mockWorkspace, 'mcp-servers/filesystem/local-customization.ts'), '// custom source');
+  await expect(pinWorkspaceMcpTransferPlan(plan)).rejects.toThrow('local changes');
+});
+
+it('refuses to replace a pinned workspace runtime with a different worker build', async () => {
+  await ensureShippedWorkspacePackages(mockWorkspace, undefined, ['filesystem']);
+  const config = createShippedServerConfig(SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'filesystem')!);
+  const plan = await pinWorkspaceMcpTransferPlan(buildWorkspaceMcpTransferPlan([config], mockWorkspace));
+  plan.servers[0].bundledRuntimeSha256 = '0'.repeat(64);
+  loadConfigs.mockResolvedValue([config]);
+  const result = await reinstallWorkspaceMcpServers(plan);
+  expect(result.ok).toBe(false);
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(connect).not.toHaveBeenCalled();
 });
 
 it('starts the rebuilt bundled filesystem process and reads/writes only the target workspace', async () => {

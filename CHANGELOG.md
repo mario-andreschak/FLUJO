@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+## [3.46.0] — 2026-09-16
+
+### Security and reliability
+
+- Upgrade Next.js to 16.3.5 and sharp to 0.35.4, and refresh affected transitive dependencies.
+- Reject public DNS names that resemble private IPv6 addresses in Network mode.
+- Fail model, registry, and secret environment-variable saves when encryption fails; retain previous values and never store an encryption-failure prefix followed by plaintext.
+- Add versioned authenticated encryption and stronger new data keys while retaining legacy ciphertext compatibility.
+- Preserve tracked edits and local commits during installer reruns; validate the target repository and update only by fast-forward.
+- Pin new stable Windows bootstrappers to their release tag and commit; record channel/revision and refuse unsafe in-app updates before stopping the server.
+- Honor explicit Windows installer shortcut/start choices, and stop updates when dependency installation, compilation, or artifact validation fails.
+- Restore the package wizard's missing build endpoint in clean installations; a broad build-output ignore rule had excluded its route source.
+
+Encryption migration: new writes use authenticated AES-256-GCM and a 32-byte random key. Existing ciphertext remains readable through a versioned keyring; re-entering and saving a secret gives it the new format, while an unchanged masked field may retain its original ciphertext. The public default password provides obfuscation only; configure a private password for storage protection. Historical plaintext failure records also require the explicit repair steps in the migration guide. Make a complete workspace backup before upgrading: older versions cannot read migrated v2 metadata, so downgrade requires restoring that backup. See the [encryption format and migration guide](src/utils/encryption/README.md).
+
+### First-run experience and documentation
+
+- Require and repair model bindings before tutorial execution, and show recovery when a tutorial run fails.
+- Make the longer Stage 1 tutorial optional from Onboarding settings; skipping the introduction returns to setup instead of opening another tour.
+- Distinguish saved AI configurations from tested connections; preserve corrected credentials on guided setup retries.
+- Return manual model creation to its originating page without reopening the connection wizard.
+- Show runtime installation guidance for the server's operating system and container mode.
+- Add a complete first-conversation guide, missing model/MCP/flow guides, accurate privacy and maturity descriptions, and a generated HTTP route inventory.
+- Count completed tests in verification, retire all nine test quarantines with fresh passing evidence, and require verification of the release commit and official repository before publication.
+
+### Workspace and MCP runtime
+
+- Keep the built-in MCP package source canonical while preserving workspace edits and sharing installed dependencies safely.
+- Preserve workspace isolation through MCP migration, process startup and portable-worker transfer.
+- Preserve cancelled Codex resume sessions without silently starting a fresh conversation.
+
+Known limitation: Personas remain experimental. The full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but one daily event-append p95 was 169.69 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall endurance acceptance did not. This release does not claim indefinite unattended reliability. See the [September 16 remediation record](docs/audits/2026-09-16-remediation.md) for validation scope and the [original audit](docs/audits/2026-09-16-project-audit.md) for the pre-fix findings.
+
+## [3.45.2] — 2026-09-06
+
+- Retry current-process identity lookup during cold Windows PowerShell startup, share concurrent lookup work, and cache successful results.
+- Preserve Persona lock ownership/PID-reuse checks; invalid identity results fail closed.
+- Report concise startup diagnostics without subprocess output or environment details.
+
+Includes the capabilities and limitations of 3.45.1 below. [Release notes](https://github.com/mario-andreschak/FLUJO/releases/tag/v3.45.2) · [Changes](https://github.com/mario-andreschak/FLUJO/compare/v3.45.1...v3.45.2).
+
+## [3.45.1] — 2026-09-06
+
+- Add experimental persistent Personas, reusable Roles, durable memory, goal follow-up/recovery, and owner pause/continue/stop controls.
+- Add portable authenticated cloud-worker execution, supported credential/dependency transfer, and native private discovery.
+- Improve MCP credential storage, conversations, model connections, automation/meetings, corporate-network installation, and release argument handling.
+
+Known limitation: this version's clean Windows startup test failed during process-identity initialization; 3.45.2 contains the fix. Personas and MCP Skills remain experimental. Controlled goal acceptance does not establish indefinite unattended reliability. Browser capture/recording exceptions remain tracked. Worker snapshots can contain transferable credentials and must be treated as secrets.
+
+[Release notes](https://github.com/mario-andreschak/FLUJO/releases/tag/v3.45.1) · [Changes](https://github.com/mario-andreschak/FLUJO/compare/v3.45.0...v3.45.1). See [all earlier releases](https://github.com/mario-andreschak/FLUJO/releases) for version-specific history before these summaries.
+
+## Earlier entries retained from the legacy changelog
+
+The following previously unversioned entries predate the current stabilization work; their exact release attribution was not recorded here.
+
 ### Fixed
 - Bash MCP now explicitly substitutes Windows PowerShell 5.1 only when an explicit `pwsh`
   request cannot find PowerShell 7, reporting the requested shell, effective shell, and reason (#314).

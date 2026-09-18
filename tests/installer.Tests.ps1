@@ -78,8 +78,9 @@ Describe 'Windows installer target selection' {
         $intent.CanProceed | Should -BeTrue
     }
 
-    It 'classifies an existing Git target as a rerun update' {
-        $intent = Get-InstallIntent -InstallDirectory 'C:\Apps\FLUJO' -PathExists $true -GitDirectoryExists $true
+    It 'requires repository verification before accepting an existing Git target' {
+        (Get-InstallIntent -InstallDirectory 'C:\Apps\FLUJO' -PathExists $true -GitDirectoryExists $true).CanProceed | Should -BeFalse
+        $intent = Get-InstallIntent -InstallDirectory 'C:\Apps\FLUJO' -PathExists $true -GitDirectoryExists $true -RepositoryVerified $true
         $intent.Action | Should -Be 'Update'
         $intent.CanProceed | Should -BeTrue
     }
@@ -89,6 +90,35 @@ Describe 'Windows installer target selection' {
             -GitDirectoryExists $false -DirectoryIsEmpty $false
         $intent.Action | Should -Be 'Reject'
         $intent.CanProceed | Should -BeFalse
+    }
+}
+
+Describe 'Installer checkout safety decisions' {
+    It 'allows a clean official repository on the requested development branch' {
+        $decision = Get-RepositoryUpdateDecision -OriginUrl 'https://github.com/mario-andreschak/FLUJO.git' `
+            -PackageName 'flujo-ai' -WorkingTreeStatus '' -CurrentBranch 'main' -RequestedRef 'main'
+        $decision.CanProceed | Should -BeTrue
+    }
+
+    It 'rejects dirty or untracked work even in the official repository' {
+        foreach ($status in @(' M package.json', '?? new-work.ts', 'A  source.ts')) {
+            $decision = Get-RepositoryUpdateDecision -OriginUrl 'git@github.com:mario-andreschak/FLUJO.git' `
+                -PackageName 'flujo-ai' -WorkingTreeStatus $status -CurrentBranch 'main' -RequestedRef 'main'
+            $decision.CanProceed | Should -BeFalse
+            $decision.Reason | Should -Match 'never discards'
+        }
+    }
+
+    It 'rejects unrelated repository origins and different packages' {
+        foreach ($url in @('https://github.com/other/FLUJO', 'https://github.com.evil.test/mario-andreschak/FLUJO', 'C:\some-repository')) {
+            (Get-RepositoryUpdateDecision -OriginUrl $url -PackageName 'flujo-ai' -WorkingTreeStatus '' -CurrentBranch 'main' -RequestedRef 'main').CanProceed | Should -BeFalse
+        }
+        (Get-RepositoryUpdateDecision -OriginUrl 'https://github.com/mario-andreschak/FLUJO/' -PackageName 'unrelated' -WorkingTreeStatus '' -CurrentBranch 'main' -RequestedRef 'main').CanProceed | Should -BeFalse
+    }
+
+    It 'does not switch development branches but permits a clean pinned release target' {
+        (Get-RepositoryUpdateDecision -OriginUrl 'https://github.com/mario-andreschak/FLUJO/' -PackageName 'flujo-ai' -WorkingTreeStatus '' -CurrentBranch 'feature' -RequestedRef 'main').CanProceed | Should -BeFalse
+        (Get-RepositoryUpdateDecision -OriginUrl 'https://github.com/mario-andreschak/FLUJO/' -PackageName 'flujo-ai' -WorkingTreeStatus '' -CurrentBranch '' -RequestedRef 'v3.45.2').CanProceed | Should -BeTrue
     }
 }
 
@@ -106,6 +136,7 @@ Describe 'Windows installer generated payloads' {
         $manifest.installDir | Should -Be 'C:\Apps\FLUJO'
         $manifest.binDir | Should -Be 'C:\Users\tester\FLUJO-cli'
         $manifest.branch | Should -Be 'main'
+        $manifest.channel | Should -Be 'development'
         $manifest.repoUrl | Should -Be 'https://github.com/mario-andreschak/FLUJO/'
         $manifest.desktopShortcut | Should -BeTrue
         $manifest.executionPolicyChanged | Should -BeTrue
@@ -163,9 +194,19 @@ Describe 'Windows installer entry-point contracts' {
 
     It 'gates tag publishing on Pester and package version consistency' {
         $source = Get-Content -LiteralPath $script:WorkflowPath -Raw
-        $source | Should -Match 'installer-build:[\s\S]+needs: powershell-tests'
+        $source | Should -Match 'installer-build:[\s\S]+needs: \[powershell-tests, artifact-smoke, unix-installer-tests\]'
+        $source | Should -Match '/DMyBranch=\$sourceRef'
+        $source | Should -Match '/DMyRevision=\$sourceRevision'
         $source | Should -Match '\$expectedTag = "v\$packageVersion"'
         $source | Should -Match "if: startsWith\(github\.ref, 'refs/tags/v'\)"
+    }
+
+    It 'updates without discarding tracked changes or local commits' {
+        $source = Get-Content -LiteralPath $script:InstallScriptPath -Raw
+        $source | Should -Not -Match "'reset', '--hard'"
+        $source | Should -Match 'merge-base --is-ancestor HEAD FETCH_HEAD'
+        $source | Should -Match "'merge', '--ff-only', 'FETCH_HEAD'"
+        $source | Should -Match 'Assert-InstallerRepository'
     }
 }
 

@@ -525,9 +525,25 @@ async function rewritePersistedMcpServerPaths(
   });
 }
 
-function applicationSharesDataRoot(): boolean {
+async function applicationSharesDataRoot(): Promise<boolean> {
   const appRoot = path.resolve(process.env.FLUJO_APP_ROOT?.trim() || getAppDir());
-  return appRoot.toLowerCase() === path.resolve(getDataDir()).toLowerCase();
+  const dataRoot = path.resolve(getDataDir());
+  const canonicalRoot = async (root: string): Promise<string> => {
+    try {
+      return await fs.realpath(root);
+    } catch (error) {
+      // Fresh installations can name a root that does not exist yet. Other
+      // failures must stop discovery rather than permit moving app sources.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return root;
+      throw error;
+    }
+  };
+  // Junctions/symlinks can give one installation two different path spellings.
+  // Compare filesystem-resolved paths, retaining case on case-sensitive hosts.
+  const [canonicalApp, canonicalData] = await Promise.all([
+    canonicalRoot(appRoot), canonicalRoot(dataRoot),
+  ]);
+  return canonicalApp === canonicalData;
 }
 
 async function candidates(
@@ -555,7 +571,7 @@ async function candidates(
 
   const legacyMcp = path.join(dataRoot, 'mcp-servers');
   const workspaceMcp = path.join(workspaceRoot, 'mcp-servers');
-  if (!applicationSharesDataRoot()) {
+  if (!await applicationSharesDataRoot()) {
     result.push({ subtree: 'mcp-servers', source: legacyMcp, destination: workspaceMcp });
   } else {
     try {
