@@ -44,7 +44,7 @@ const MAX_READ_CHARS = 200_000;
 /** #316: bound batch fan-out and its cumulative serialized response size. */
 const MAX_BATCH_READ_FILES = 25;
 const MAX_BATCH_READ_CHARS = 1_000_000;
-const MAX_SEARCH_RESULTS = 1_000;
+const DEFAULT_SEARCH_PAGE_SIZE = 1_000;
 const DEFAULT_TREE_DEPTH = 3;
 const MAX_TREE_DEPTH = 10;
 const MAX_TREE_ENTRIES = 5_000;
@@ -458,13 +458,15 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'search',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Search a directory tree by namePattern and/or text content. Matching is case-insensitive. Content matches include line numbers. Binary and very large files are skipped.',
+        'Search a directory tree by namePattern and/or text content. Matching is case-insensitive. Content matches include line numbers. Results are cursor-paginated: pass nextCursor back as cursor until complete is true. Binary and very large files are skipped.',
       inputSchema: {
         type: 'object',
         properties: {
           path: pathProp,
           namePattern: { type: 'string', description: 'Optional case-insensitive substring to match against entry names.' },
           content: { type: 'string', description: 'Optional case-insensitive substring to match inside text files.' },
+          pageSize: { type: 'number', description: `Number of matches in this page (default ${DEFAULT_SEARCH_PAGE_SIZE}). This is a page size, not a total-result cap.` },
+          cursor: { type: 'string', description: 'Opaque nextCursor from the preceding page of the same search.' },
         },
         required: ['path'],
       },
@@ -479,9 +481,12 @@ export function filesystemToolDefinitions(): Tool[] {
               required: ['path'],
             },
           },
-          truncated: { type: 'boolean' },
+          truncated: { type: 'boolean', description: 'Always false for cursor-paginated search results; retained for compatibility.' },
+          hasMore: { type: 'boolean' },
+          complete: { type: 'boolean' },
+          nextCursor: { type: 'string' },
         },
-        required: ['matches', 'truncated'],
+        required: ['matches', 'truncated', 'hasMore', 'complete'],
       },
     },
     {
@@ -1607,6 +1612,7 @@ async function searchWithNode(
     });
 
     for (const { dir, entries } of listings) {
+      entries.sort((left, right) => left.name.localeCompare(right.name));
       for (const entry of entries) {
         if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) break;
         const full = path.join(dir, entry.name);
@@ -1651,6 +1657,44 @@ async function searchWithNode(
   };
 }
 
+interface SearchCursor {
+  version: 1;
+  offset: number;
+  signature: string;
+}
+
+function searchSignature(rootPath: string, namePattern: string, contentPattern: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify([rootPath, namePattern, contentPattern]))
+    .digest('base64url');
+}
+
+function decodeSearchCursor(raw: unknown, signature: string): number {
+  if (raw === undefined) return 0;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error('"cursor" must be an opaque nextCursor returned by search.');
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as SearchCursor;
+    if (
+      decoded.version !== 1
+      || decoded.signature !== signature
+      || !Number.isSafeInteger(decoded.offset)
+      || decoded.offset < 0
+    ) {
+      throw new Error('cursor mismatch');
+    }
+    return decoded.offset;
+  } catch {
+    throw new Error('Invalid or mismatched search cursor. Re-run the first page for this query.');
+  }
+}
+
+function encodeSearchCursor(offset: number, signature: string): string {
+  const cursor: SearchCursor = { version: 1, offset, signature };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
 async function searchTool(
   args: Record<string, unknown>,
   roots: string[],
@@ -1665,6 +1709,39 @@ async function searchTool(
     return errorResult('Provide "namePattern" and/or "content" to search for.');
   }
 
+  const rawPageSize = args.pageSize ?? DEFAULT_SEARCH_PAGE_SIZE;
+  if (
+    typeof rawPageSize !== 'number'
+    || !Number.isSafeInteger(rawPageSize)
+    || rawPageSize <= 0
+  ) {
+    return errorResult('"pageSize" must be a positive integer.');
+  }
+  const signature = searchSignature(rootPath, namePattern, contentPattern);
+  let offset: number;
+  try {
+    offset = decodeSearchCursor(args.cursor, signature);
+  } catch (error) {
+    return errorResult(error instanceof Error ? error.message : String(error));
+  }
+  const scanLimit = offset + rawPageSize + 1;
+  if (!Number.isSafeInteger(scanLimit)) {
+    return errorResult('Search cursor and pageSize exceed the supported integer range.');
+  }
+
+  const pageResult = (result: { matches: SearchMatch[]; truncated: boolean }): CallToolResult => {
+    const matches = result.matches.slice(offset, offset + rawPageSize);
+    const hasMore = result.truncated || result.matches.length > offset + matches.length;
+    return dualResult({
+      matches,
+      // Pagination retains every match behind nextCursor; no result is dropped.
+      truncated: false,
+      hasMore,
+      complete: !hasMore,
+      ...(hasMore ? { nextCursor: encodeSearchCursor(offset + matches.length, signature) } : {}),
+    });
+  };
+
   const progress = createSearchProgressReporter(context);
   progress.update({ phase: 'starting filesystem search' }, true);
   try {
@@ -1674,23 +1751,23 @@ async function searchTool(
         rootPath,
         namePattern,
         contentPattern,
-        MAX_SEARCH_RESULTS,
+        scanLimit,
         signal,
         progress.update,
       );
       if (signal?.aborted) throw new Error('Filesystem search cancelled.');
       progress.update({ phase: 'filesystem search complete', matches: result.matches.length }, true);
-      return dualResult(result);
+      return pageResult(result);
     }
 
     // Name matches retain their historical priority in the combined response.
     const names = namePattern
-      ? await searchWithNode(rootPath, namePattern, '', MAX_SEARCH_RESULTS, signal, progress.update)
+      ? await searchWithNode(rootPath, namePattern, '', scanLimit, signal, progress.update)
       : { matches: [] as SearchMatch[], truncated: false };
     if (signal?.aborted) throw new Error('Filesystem search cancelled.');
-    if (names.truncated) return dualResult(names);
+    if (names.truncated) return pageResult(names);
 
-    const remaining = MAX_SEARCH_RESULTS - names.matches.length;
+    const remaining = scanLimit - names.matches.length;
     const content = await searchContentWithRipgrep(
       ripgrep,
       rootPath,
@@ -1700,14 +1777,15 @@ async function searchTool(
       progress.update,
     );
     if (content) {
+      const combined = {
+        matches: [...names.matches, ...content.matches],
+        truncated: content.truncated,
+      };
       progress.update({
         phase: 'filesystem search complete',
-        matches: names.matches.length + content.matches.length,
+        matches: combined.matches.length,
       }, true);
-      return dualResult({
-        matches: [...names.matches, ...content.matches],
-        truncated: content.truncated || names.matches.length + content.matches.length >= MAX_SEARCH_RESULTS,
-      });
+      return pageResult(combined);
     }
 
     const fallback = await searchWithNode(
@@ -1719,9 +1797,9 @@ async function searchTool(
       progress.update,
     );
     if (signal?.aborted) throw new Error('Filesystem search cancelled.');
-    return dualResult({
+    return pageResult({
       matches: [...names.matches, ...fallback.matches],
-      truncated: fallback.truncated || names.matches.length + fallback.matches.length >= MAX_SEARCH_RESULTS,
+      truncated: fallback.truncated,
     });
   } finally {
     await progress.stop();

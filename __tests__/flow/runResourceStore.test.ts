@@ -15,6 +15,7 @@ import {
   listRunResources,
   listAllRunResources,
   readRunResource,
+  readRunResourceRange,
   copyRunResourceToConversation,
   getRunResourceLocalPath,
   findRunResourceByName,
@@ -123,6 +124,31 @@ describe('write/read/list round-trip', () => {
     expect(read!.contents.contents[0]).toMatchObject({ mimeType: 'image/png', blob: payload });
     // No access arg → no lineage append.
     expect(read!.entry.readBy).toEqual([]);
+  });
+
+  it('reads exact byte pages without hydrating the complete resource', async () => {
+    const payload = '0123456789abcdefghijklmnopqrstuvwxyz';
+    const written = await writeRunResource({
+      conversationId: 'convRange',
+      mimeType: 'text/plain',
+      kind: 'text',
+      data: { text: payload },
+      producedBy,
+    }) as RunResourceEntry;
+
+    const page = await readRunResourceRange(
+      written.uri,
+      10,
+      19,
+      { at: 456, source: 'res-ref' },
+    );
+    expect(page).not.toBeNull();
+    expect(page!.data.toString('utf8')).toBe('abcdefghij');
+    expect(page).toMatchObject({ start: 10, end: 19, total: payload.length });
+    expect((await listRunResources('convRange'))[0].readBy).toContainEqual({
+      at: 456,
+      source: 'res-ref',
+    });
   });
 
   it('unknown uri reads as null', async () => {

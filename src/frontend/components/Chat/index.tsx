@@ -341,6 +341,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  deliberate Stop is never surfaced as a provider failure. */
 const SIDEBAR_PAGE_SIZE = 50;
 const MODEL_DELTA_COMMIT_INTERVAL_MS = 125;
+const TOOL_PROGRESS_COMMIT_INTERVAL_MS = 100;
 const CHAT_HYDRATION_MESSAGE_LIMIT = 200;
 
 const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
@@ -870,6 +871,10 @@ const Chat: React.FC = () => {
   const eventSourceRef = useRef<EventSource | null>(null);
   const pendingModelDeltasRef = useRef<ModelDeltaEvent[]>([]);
   const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushModelDeltasRef = useRef<() => void>(() => undefined);
+  const eventStreamGenerationRef = useRef(0);
+  const pendingToolProgressRef = useRef<Extract<ExecutionEvent, { type: 'tool:progress' }> | null>(null);
+  const toolProgressFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
   // composer); this ref lets it call the latest close/detach implementation.
   const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
@@ -1999,12 +2004,44 @@ const Chat: React.FC = () => {
   }, []);
 
   // --- Live execution event stream (SSE) ---
-  const closeEventStream = useCallback(() => {
-    if (modelDeltaFlushTimerRef.current !== null) {
-      clearTimeout(modelDeltaFlushTimerRef.current);
-      modelDeltaFlushTimerRef.current = null;
+  const flushToolProgress = useCallback(() => {
+    if (toolProgressFlushTimerRef.current !== null) {
+      clearTimeout(toolProgressFlushTimerRef.current);
+      toolProgressFlushTimerRef.current = null;
     }
-    pendingModelDeltasRef.current = [];
+    const event = pendingToolProgressRef.current;
+    pendingToolProgressRef.current = null;
+    if (!event) return;
+    if (event.laneIndex != null) {
+      setLiveLanes(prev => applyLaneEvent(prev, event));
+    }
+    setLiveStats(prev => ({
+      totalTokens: prev?.totalTokens ?? 0,
+      activeNode: event.message ? `${event.name} — ${event.message}` : event.name,
+      startedAt: prev?.startedAt ?? Date.now(),
+      lastEventAt: Date.now(),
+    }));
+  }, []);
+
+  const enqueueToolProgress = useCallback((event: Extract<ExecutionEvent, { type: 'tool:progress' }>) => {
+    pendingToolProgressRef.current = event;
+    if (toolProgressFlushTimerRef.current !== null) return;
+    toolProgressFlushTimerRef.current = setTimeout(
+      flushToolProgress,
+      TOOL_PROGRESS_COMMIT_INTERVAL_MS,
+    );
+  }, [flushToolProgress]);
+
+  const closeEventStream = useCallback(() => {
+    eventStreamGenerationRef.current++;
+    // Preserve any final delta-only burst even when navigation/unmount closes
+    // the stream before a terminal non-delta event arrives.
+    flushModelDeltasRef.current();
+    if (toolProgressFlushTimerRef.current !== null) {
+      clearTimeout(toolProgressFlushTimerRef.current);
+      toolProgressFlushTimerRef.current = null;
+    }
+    pendingToolProgressRef.current = null;
     if (eventSourceRef.current) {
       log.debug('Closing execution event stream');
       eventSourceRef.current.close();
@@ -2044,6 +2081,7 @@ const Chat: React.FC = () => {
       lastEventAt: Date.now(),
     }));
   }, []);
+  flushModelDeltasRef.current = flushModelDeltas;
 
   const enqueueModelDelta = useCallback((event: ModelDeltaEvent) => {
     pendingModelDeltasRef.current.push(event);
@@ -2070,6 +2108,17 @@ const Chat: React.FC = () => {
       enqueueModelDelta(event);
       return;
     }
+    if (event.type === 'tool:progress') {
+      // Progress is transient liveness information. Coalesce it independently
+      // instead of flushing transcript deltas and rendering the full chat for
+      // every notification from a noisy third-party server.
+      enqueueToolProgress(event);
+      setRetryWait(prev => (
+        prev && (!event.conversationId || prev.conversationId === event.conversationId) ? null : prev
+      ));
+      return;
+    }
+    flushToolProgress();
     // Preserve event order when a final message/model:end/run:done overtakes a
     // scheduled delta paint in the same browser task.
     flushModelDeltas();
@@ -2152,7 +2201,6 @@ const Chat: React.FC = () => {
           touch({});
           return;
         case 'tool:call':
-        case 'tool:progress':
         case 'subflow:start':
         case 'handoff':
           touch({}); // refresh lastEventAt without overwriting activeNode
@@ -2360,11 +2408,6 @@ const Chat: React.FC = () => {
       case 'tool:call':
         touch({ activeNode: event.name });
         break;
-      case 'tool:progress':
-        // Server-side progress for a long-running tool: refreshes lastEventAt (so
-        // the stall warning stays away) and shows the server's message if any.
-        touch({ activeNode: event.message ? `${event.name} — ${event.message}` : event.name });
-        break;
       case 'subflow:start':
         touch({ activeNode: `↳ ${event.subflowName || event.subflowId}` });
         break;
@@ -2488,7 +2531,7 @@ const Chat: React.FC = () => {
         touch({});
         break;
     }
-  }, [closeEventStream, enqueueModelDelta, fetchDetailedConversation, fetchConversations, flushModelDeltas, markConvRunning, patchConversationStatus, markConversationStopped, t]);
+  }, [closeEventStream, enqueueModelDelta, enqueueToolProgress, fetchDetailedConversation, fetchConversations, flushModelDeltas, flushToolProgress, markConvRunning, patchConversationStatus, markConversationStopped, t]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -2501,6 +2544,7 @@ const Chat: React.FC = () => {
     replayOptions?: { activityOnly?: boolean },
   ): Promise<void> => {
     closeEventStream();
+    const streamGeneration = eventStreamGenerationRef.current;
     // Accept events at/after the replay position (fromSeq) or everything (-1).
     lastSeqRef.current = fromSeq !== undefined ? fromSeq - 1 : -1;
     // Lane rows are rebuilt from the replay; without this, rows from a
@@ -2517,7 +2561,12 @@ const Chat: React.FC = () => {
       try {
         eventSourceRef.current = chatService.subscribeToEvents(
           conversationId,
-          { onEvent: applyExecutionEvent, onOpen: settle },
+          {
+            onEvent: (event) => {
+              if (eventStreamGenerationRef.current === streamGeneration) applyExecutionEvent(event);
+            },
+            onOpen: settle,
+          },
           fromSeq,
           replayOptions,
         );
