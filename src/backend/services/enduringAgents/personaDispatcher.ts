@@ -121,6 +121,9 @@ import {
   PersonaFlowDispatchRecordSchema,
   SerializableFlowRunInputSchema,
 } from './personaFlowDispatchSchema';
+import {
+  listPersonaFlowDispatchRecordsForReconciliation,
+} from './personaFlowDispatchRetention';
 import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
@@ -349,6 +352,8 @@ export interface PersonaFlowDispatchRecord {
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
+  /** All retryable terminal projections completed; safe to omit from operational reconciliation. */
+  terminalProjectionsSettledAt?: number;
   compactedAt?: number;
 }
 
@@ -1900,15 +1905,18 @@ export class PersonaFlowDispatcher {
    * Activity/dispatch terminal transition. Reconciliation revisits terminal
    * dispatches after restart if this best-effort projection is interrupted.
    */
-  private async synchronizeAssignedWorkItem(activity: PersonaActivity): Promise<void> {
+  private async synchronizeAssignedWorkItem(activity: PersonaActivity): Promise<boolean> {
+    let synchronized = true;
     try {
       await this.inWorkspace(() => (
         this.dependencies.synchronizeAssignedWorkItemFromActivity(activity)
       ));
     } catch (error) {
+      synchronized = false;
       log.warn(`Deferred Task lifecycle synchronization for Activity ${activity.id}:`, error);
     }
     await this.recordBehaviorOutcome(activity);
+    return synchronized;
   }
 
   /**
@@ -2140,7 +2148,7 @@ export class PersonaFlowDispatcher {
   ): Promise<PersonaFlowDispatchRecord> {
     let completion: CompletedPersonaActivity | undefined;
     let assignmentSynchronized = false;
-    const terminal = await this.inWorkspace(() => withPersonaRuntimeLock(
+    let terminal = await this.inWorkspace(() => withPersonaRuntimeLock(
       record.personaId,
       async (lock) => {
         const latest = (await this.get(record.id)) ?? record;
@@ -2234,10 +2242,15 @@ export class PersonaFlowDispatcher {
         log.warn(`Failed to observe terminal Persona Activity ${fence.activityId}:`, error);
       }
       if (!assignmentSynchronized) {
-        await this.synchronizeAssignedWorkItem(completion.activity);
+        assignmentSynchronized = await this.synchronizeAssignedWorkItem(completion.activity);
       } else {
         await this.recordBehaviorOutcome(completion.activity);
       }
+      terminal = await this.settleTerminalProjections(
+        terminal,
+        completion.activity,
+        assignmentSynchronized,
+      );
       // Retention is awaited for deterministic cutoff behavior, but every
       // collection has its own post-authoritative lock and failure boundary.
       const retentionObservation = await this.compactRuntimeAfterTerminal(
@@ -2363,6 +2376,7 @@ export class PersonaFlowDispatcher {
   private async ensurePostActivityMaintenance(
     source: PersonaFlowDispatchRecord,
   ): Promise<PersonaFlowDispatchRecord | null> {
+    if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION) return null;
     if (
       source.state !== 'completed'
       || source.admission.kind === 'maintenance'
@@ -2438,6 +2452,59 @@ export class PersonaFlowDispatcher {
       maintenancePlan: plan,
     }, { startPump: false });
     return submission.dispatch;
+  }
+
+  private async settleTerminalProjections(
+    source: PersonaFlowDispatchRecord,
+    knownActivity?: PersonaActivity,
+    assignmentSynchronized = false,
+  ): Promise<PersonaFlowDispatchRecord> {
+    if (!isTerminalDispatch(source.state) || source.terminalProjectionsSettledAt !== undefined) {
+      return source;
+    }
+
+    let activity = knownActivity;
+    if (source.activityId && !activity) {
+      activity = await this.inWorkspace(() => (
+        this.dependencies.getPersonaActivity(source.personaId, source.activityId!)
+      )) ?? undefined;
+    }
+    if (source.activityId && !activity) return source;
+
+    let taskProjectionSettled = assignmentSynchronized;
+    if (activity && !taskProjectionSettled) {
+      taskProjectionSettled = await this.synchronizeAssignedWorkItem(activity);
+    }
+    if (source.activityId && !taskProjectionSettled) return source;
+
+    try {
+      await this.ensurePostActivityMaintenance(source);
+    } catch (error) {
+      log.warn(`Deferred post-Activity maintenance for ${source.id}:`, error);
+      return source;
+    }
+
+    try {
+      return await this.inWorkspace(() => withPersonaRuntimeLock(
+        source.personaId,
+        async (lock) => {
+          await lock.assertOwned();
+          const latest = (await this.get(source.id)) ?? source;
+          if (!isTerminalDispatch(latest.state) || latest.terminalProjectionsSettledAt !== undefined) {
+            return latest;
+          }
+          const settledAt = Math.max(runtimeClock.now(), latest.updatedAt, latest.completedAt ?? 0);
+          return this.save({
+            ...latest,
+            terminalProjectionsSettledAt: settledAt,
+            updatedAt: settledAt,
+          });
+        },
+      ));
+    } catch (error) {
+      log.warn(`Could not persist terminal projection settlement for ${source.id}:`, error);
+      return source;
+    }
   }
 
   private async executeClaim(claim: PersonaActivityClaim, control: PumpControl): Promise<boolean> {
@@ -3171,18 +3238,11 @@ export class PersonaFlowDispatcher {
     }
 
     try {
-      const terminal = await this.commitTerminal(record, fence, {
+      await this.commitTerminal(record, fence, {
         status: 'completed',
         outcome,
         ...(maintenanceResult ? { maintenanceResult } : {}),
       });
-      try {
-        await this.ensurePostActivityMaintenance(terminal);
-      } catch (error) {
-        // The source Activity is already terminal. Startup/drain reconciliation
-        // retries the deterministic maintenance admission without replaying it.
-        log.warn(`Deferred post-Activity maintenance for ${terminal.id}:`, error);
-      }
     } catch {
       await this.saveTerminalError(record, leaseLostDispatchError());
       return false;
@@ -3301,13 +3361,7 @@ export class PersonaFlowDispatcher {
 
   private async reconcileRecord(record: PersonaFlowDispatchRecord): Promise<PersonaFlowDispatchRecord> {
     if (isTerminalDispatch(record.state)) {
-      if (record.activityId) {
-        const activity = await this.inWorkspace(() => (
-          this.dependencies.getPersonaActivity(record.personaId, record.activityId!)
-        ));
-        if (activity) await this.synchronizeAssignedWorkItem(activity);
-      }
-      return record;
+      return this.settleTerminalProjections(record);
     }
     if (record.state === 'waiting' && record.waitingReason === 'delivery') {
       const repaired = await this.reconcileRelatedDelivery(record);
@@ -3426,6 +3480,9 @@ export class PersonaFlowDispatcher {
       return current;
       },
     ));
+    if (isTerminalDispatch(reconciled.state)) {
+      return this.settleTerminalProjections(reconciled);
+    }
     if (reconciled.activityId) {
       const activity = await this.inWorkspace(() => (
         this.dependencies.getPersonaActivity(reconciled.personaId, reconciled.activityId!)
@@ -3439,18 +3496,13 @@ export class PersonaFlowDispatcher {
     personaId: string,
     control: PumpControl,
   ): Promise<boolean> {
-    const records = await this.list(personaId);
+    const records = await this.inWorkspace(() => (
+      listPersonaFlowDispatchRecordsForReconciliation(personaId)
+    ));
     let waiting = false;
     for (const candidate of records) {
       if (control.cancelRequested || this.quiescedPersonas.has(personaId)) return true;
       const reconciled = await this.reconcileRecord(candidate);
-      if (reconciled.state === 'completed') {
-        try {
-          await this.ensurePostActivityMaintenance(reconciled);
-        } catch (error) {
-          log.warn(`Could not reconcile post-Activity maintenance for ${reconciled.id}:`, error);
-        }
-      }
       if (
         reconciled.state === 'waiting'
         && reconciled.waitingReason !== 'delivery'

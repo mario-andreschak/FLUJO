@@ -107,7 +107,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  _resetBashSessionsForTests();
+  await _resetBashSessionsForTests();
   _resetBashShellCacheForTests();
   mockedSpawn.mockClear();
   mockedRoots.mockReset();

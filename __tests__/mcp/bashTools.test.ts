@@ -8,13 +8,13 @@ import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
 jest.mock('node:child_process', () => {
   const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
-  return { ...actual, spawn: jest.fn(actual.spawn) };
+  return { ...actual, spawn: jest.fn(actual.spawn), spawnSync: jest.fn(actual.spawnSync) };
 });
 
 jest.mock('@/backend/services/mcp/config', () => ({
@@ -46,7 +46,9 @@ function parse(r: CallToolResult): Record<string, unknown> {
 }
 
 const isWin = process.platform === 'win32';
+const itOnWindows = isWin ? it : it.skip;
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
+const mockedSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
@@ -108,7 +110,13 @@ async function withResolvedPowerShell(
     restoreEnv('Path', originalWinPath);
     restoreEnv('PATHEXT', originalPathExt);
     _resetBashShellCacheForTests();
-    await fsp.rm(tempDir, { recursive: true, force: true });
+    await fsp.rm(tempDir, {
+      recursive: true,
+      force: true,
+      // Windows antivirus/indexing can briefly retain an executable handle.
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 }
 
@@ -121,10 +129,11 @@ beforeEach(async () => {
   mockedRoots.mockResolvedValue([getDataDir()]);
 });
 
-afterEach(() => {
-  _resetBashSessionsForTests();
+afterEach(async () => {
+  await _resetBashSessionsForTests();
   _resetBashShellCacheForTests();
   mockedSpawn.mockClear();
+  mockedSpawnSync.mockClear();
   mockedRoots.mockReset();
 });
 
@@ -863,11 +872,55 @@ describe('bash background sessions', () => {
     expect(waited.hint).toBeUndefined();
   });
 
+  itOnWindows('waits for delayed child closure before reporting kill success', async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      stdin: new PassThrough(),
+      pid: 54321,
+      killed: false,
+    }) as unknown as ChildProcess;
+    mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
+
+    const start = parse(await bashCallTool('start', { command: 'delayed-close' }));
+    mockedSpawnSync.mockReturnValueOnce({
+      pid: 1,
+      output: [null, Buffer.alloc(0), Buffer.alloc(0)],
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      status: 0,
+      signal: null,
+    } as never);
+
+    let settled = false;
+    const killing = bashCallTool('kill', { sessionId: start.sessionId as string });
+    void killing.then(() => { settled = true; });
+    await Promise.resolve();
+
+    expect(mockedSpawnSync).toHaveBeenCalledWith(
+      'taskkill',
+      ['/pid', '54321', '/T', '/F'],
+      expect.objectContaining({ windowsHide: true }),
+    );
+    expect(settled).toBe(false);
+    expect(parse(await bashCallTool('status', { sessionId: start.sessionId as string })).running).toBe(true);
+
+    child.emit('close', null);
+    const killed = parse(await killing);
+    expect(killed).toEqual(expect.objectContaining({ killed: true, running: false }));
+    expect(parse(await bashCallTool('wait', {
+      sessionId: start.sessionId as string,
+      timeout: 0.01,
+    })).running).toBe(false);
+  });
+
   itWithRealShell('kills a long-running background session', async () => {
     const command = isWin ? 'ping -n 30 127.0.0.1 > NUL' : 'sleep 30';
     const start = parse(await bashCallTool('start', { command }));
     const killed = parse(await bashCallTool('kill', { sessionId: start.sessionId as string }));
-    expect(killed.killed).toBe(true);
+    expect(killed).toEqual(expect.objectContaining({ killed: true, running: false }));
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
     expect(waited.running).toBe(false);
   }, 25000);

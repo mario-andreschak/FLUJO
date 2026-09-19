@@ -216,6 +216,7 @@ export const PersonaFlowDispatchRecordSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
   startedAt: z.number().int().nonnegative().optional(),
   completedAt: z.number().int().nonnegative().optional(),
+  terminalProjectionsSettledAt: z.number().int().nonnegative().optional(),
   compactedAt: z.number().int().nonnegative().optional(),
 }).strict().superRefine((record, ctx) => {
   const terminal = record.state === 'completed'
@@ -283,5 +284,21 @@ export const PersonaFlowDispatchRecordSchema = z.object({
   }
   if (!terminal && record.completedAt !== undefined) {
     ctx.addIssue({ code: 'custom', message: 'A non-terminal dispatch cannot carry completedAt.' });
+  }
+  if (record.terminalProjectionsSettledAt !== undefined && !terminal) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only a terminal dispatch may settle terminal projections.',
+    });
+  }
+  if (
+    record.terminalProjectionsSettledAt !== undefined
+    && record.completedAt !== undefined
+    && record.terminalProjectionsSettledAt < record.completedAt
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Terminal projections cannot settle before dispatch completion.',
+    });
   }
 });
