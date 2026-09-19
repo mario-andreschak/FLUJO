@@ -156,6 +156,7 @@ describe('graceful landing at the turn cap (#253)', () => {
     expect(result.sharedState.capped).toBe(true);
     expect(result.sharedState.cappedReason).toBe('maxTurns');
     expect(result.outputText).toBe(SUMMARY_TEXT);
+    expect(conversationStates.has(result.conversationId)).toBe(false);
 
     // Criterion 2: no tool was executed on the capped turn.
     expect(processToolCallsMock).not.toHaveBeenCalled();

@@ -51,6 +51,25 @@ describe('isTransientTransportError', () => {
       ).toBe(false);
     });
 
+    it('does not mistake generic provider wrappers for transport failures', () => {
+      expect(
+        isTransientTransportError(
+          new Error('400 Provider returned error (upstream: AtlasCloud bad request)')
+        )
+      ).toBe(false);
+      expect(isTransientTransportError(new Error('upstream error'))).toBe(false);
+    });
+
+    it('never retries an HTTP 4xx even when its message sounds transient', () => {
+      const err = Object.assign(new Error('503 service unavailable'), { status: 400 });
+      expect(isTransientTransportError(err)).toBe(false);
+    });
+
+    it('still retries a transient HTTP 5xx', () => {
+      const err = Object.assign(new Error('service unavailable'), { status: 503 });
+      expect(isTransientTransportError(err)).toBe(true);
+    });
+
     it('returns false for plain TypeError with a non-transient message', () => {
       expect(
         isTransientTransportError(

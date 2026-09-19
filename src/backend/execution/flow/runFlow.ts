@@ -3352,7 +3352,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // An ephemeral run is transient: drop it from the in-memory map once it
   // reaches a terminal state so isolated/subflow runs don't accumulate.
   const cleanupEphemeral = () => {
-    if (ephemeral && (sharedState.status === 'completed' || sharedState.status === 'error')) {
+    if (
+      ephemeral &&
+      (sharedState.status === 'completed' ||
+        sharedState.status === 'error' ||
+        sharedState.status === 'capped')
+    ) {
       FlowExecutor.conversationStates.delete(effectiveConvId);
       forgetConversationCacheEntry(effectiveConvId);
     }

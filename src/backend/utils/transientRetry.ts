@@ -19,8 +19,6 @@ const TRANSIENT_KEYWORDS = [
   'enotfound',
   'eai_again',
   'network error',
-  'upstream error',
-  'provider returned error',
   'bad gateway',
   'gateway timeout',
   'service unavailable',
@@ -37,8 +35,12 @@ const TRANSIENT_KEYWORDS = [
  */
 export function isTransientTransportError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  // Never retry a user-initiated abort.
+  // Never retry a user-initiated abort or a client error. Generic provider
+  // wrappers may contain transient-sounding text even when the HTTP status is
+  // a definitive 4xx (issue #520).
   if (error.name === 'AbortError') return false;
+  const status = (error as Error & { status?: unknown }).status;
+  if (typeof status === 'number' && status >= 400 && status < 500) return false;
   const msg = error.message.toLowerCase();
   return TRANSIENT_KEYWORDS.some((kw) => msg.includes(kw));
 }
