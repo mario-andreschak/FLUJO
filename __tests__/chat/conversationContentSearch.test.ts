@@ -210,6 +210,26 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     await expect(getJson('?paged=1&cursor=broken')).resolves.toMatchObject({ status: 400 });
     await expect(getJson('?paged=1&origin=invalid')).resolves.toMatchObject({ status: 400 });
     await expect(getJson('?paged=1&descendantsOf=../escape')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&pinnedId=../escape')).resolves.toMatchObject({ status: 400 });
+  });
+
+  it('includes pinned families outside the regular page without changing its cursor or total', async () => {
+    await writeConv('root', { title: 'Root', messages: [], updatedAt: 1 });
+    await writeConv('child', { title: 'Child', messages: [], parentConversationId: 'root', rootConversationId: 'root', updatedAt: 2 });
+    await writeConv('grandchild', { title: 'Grandchild', messages: [], parentConversationId: 'child', rootConversationId: 'root', updatedAt: 3 });
+    await writeConv('other', { title: 'Other', messages: [], updatedAt: 4 });
+    const unpinned = await getJson('?paged=1&limit=1');
+    const { status, body } = await getJson('?paged=1&limit=1&pinnedId=root&pinnedId=child&pinnedId=missing');
+    expect(status).toBe(200);
+    expect(body.items).toEqual(unpinned.body.items);
+    expect(body).toMatchObject({ total: 4, hasMore: true, nextCursor: unpinned.body.nextCursor });
+    expect(body.pinnedItems.map((item: any) => item.id).sort()).toEqual(['child', 'grandchild', 'root']);
+    expect(body.pinnedItems.every((item: any) => !('messages' in item))).toBe(true);
+
+    const childPin = await getJson('?paged=1&limit=1&pinnedId=child');
+    expect(childPin.body.pinnedItems.map((item: any) => item.id).sort()).toEqual(['child', 'grandchild']);
+    const second = await getJson(`?paged=1&limit=1&cursor=${encodeURIComponent(body.nextCursor)}`);
+    expect(second.body.items.map((item: any) => item.id)).toEqual(['grandchild']);
   });
 
   it('filters exact session keys before pagination in summary and content-search paths', async () => {

@@ -142,6 +142,14 @@ describe('chatService REST methods', () => {
     );
   });
 
+  it('listConversationPage: requests pinned families alongside the regular page', async () => {
+    const page = { items: [{ id: 'recent' }], pinnedItems: [{ id: 'parent' }, { id: 'child' }], total: 3, hasMore: true };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, page));
+    const result = await chatService.listConversationPage({ limit: 1, pinnedIds: ['parent', 'child'] });
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations?paged=1&limit=1&pinnedId=parent&pinnedId=child');
+    expect(result).toEqual(page);
+  });
+
   it('listAllConversationPages: follows cursors until the collection is complete', async () => {
     fetchMock
       .mockResolvedValueOnce(makeResponse(200, {

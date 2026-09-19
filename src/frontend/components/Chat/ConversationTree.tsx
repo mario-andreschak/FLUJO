@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Box, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Collapse, IconButton } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -27,8 +27,6 @@ export interface ConversationTreeProps {
   /** Ids already rendered on the path to here — the cycle guard. */
   visited?: Set<string>;
   maxDepth?: number;
-  /** Direct parent rendered immediately above this recursive level. */
-  parent?: ConversationListItem;
 }
 
 /**
@@ -47,7 +45,6 @@ export default function ConversationTree({
   depth = 0,
   visited,
   maxDepth = MAX_CONVERSATION_TREE_DEPTH,
-  parent,
 }: ConversationTreeProps): React.ReactElement | null {
   const { t } = useI18n();
   const theme = useTheme();
@@ -95,18 +92,6 @@ export default function ConversationTree({
               } : {}),
             }}
           >
-            {depth > 0 && parent && (
-              <Tooltip title={t('chat.chain.childOf', { title: parent.title })}>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  noWrap
-                  sx={{ display: 'block', ml: 4.25, mb: 0.15, maxWidth: 'calc(100% - 40px)', fontWeight: 650 }}
-                >
-                  ↳ {t('chat.chain.childOf', { title: parent.title })}
-                </Typography>
-              </Tooltip>
-            )}
             <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
               {hasChildren ? (
                 <IconButton
@@ -141,7 +126,6 @@ export default function ConversationTree({
                   depth={depth + 1}
                   visited={nextVisited}
                   maxDepth={maxDepth}
-                  parent={node}
                 />
               </Collapse>
             )}

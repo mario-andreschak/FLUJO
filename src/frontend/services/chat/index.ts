@@ -81,12 +81,15 @@ export type RestoreMode = 'chat-and-files' | 'files-only' | 'chat-only';
 
 export interface ConversationPage {
   items: ConversationListItem[];
+  /** Saved pins and their descendants, independent of the regular page cursor. */
+  pinnedItems?: ConversationListItem[];
   total: number;
   hasMore: boolean;
   nextCursor?: string;
 }
 
 export interface ConversationPageQuery {
+  pinnedIds?: string[];
   limit?: number;
   cursor?: string;
   search?: string;
@@ -553,6 +556,7 @@ class ChatService {
     if (query.origin) params.set('origin', query.origin);
     if (query.sessionKey) params.set('sessionKey', query.sessionKey);
     if (query.descendantsOf) params.set('descendantsOf', query.descendantsOf);
+    for (const id of query.pinnedIds ?? []) params.append('pinnedId', id);
     const url = `${BASE}?${params.toString()}`;
     const response = query.signal
       ? await fetch(url, { signal: query.signal })

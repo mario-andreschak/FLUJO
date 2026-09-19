@@ -23,6 +23,8 @@ import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineR
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
+import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
 import type { CapturedToolResource } from './toolCallPairing';
@@ -987,7 +989,9 @@ const Chat: React.FC = () => {
           : SIDEBAR_PAGE_SIZE;
         let page = await chatService.listConversationPage({
           limit: Math.min(200, targetCount),
+          pinnedIds: readWorkspaceUiPreference<string[]>(CONVERSATION_PINS_PREFERENCE, []),
         });
+        const pinnedItems = page.pinnedItems ?? [];
         const serverItems = [...page.items];
         while (serverItems.length < targetCount && page.nextCursor) {
           page = await chatService.listConversationPage({
@@ -996,11 +1000,11 @@ const Chat: React.FC = () => {
           });
           serverItems.push(...page.items);
         }
-        fetchedList = serverItems
+        fetchedList = [...new Map([...pinnedItems, ...serverItems].map(item => [item.id, item])).values()]
           // Never re-add a conversation whose DELETE is still in flight.
           .filter(c => !pendingDeleteIdsRef.current.has(c.id))
           .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-        loadedServerConversationCountRef.current = fetchedList.length;
+        loadedServerConversationCountRef.current = serverItems.length;
         updateConversationPagination({
           total: page.total,
           hasMore: page.hasMore,
@@ -4907,6 +4911,7 @@ const Chat: React.FC = () => {
       isLoadingMore={isLoadingMoreHistory}
       onLoadMore={loadMoreConversations}
       onLoadAll={loadAllConversations}
+      onPinsChanged={() => { void fetchConversations(undefined, { silent: true }); }}
       flowNames={flowNames}
       currentConversationId={currentConversationId}
       revealRequest={sidebarRevealRequest}
