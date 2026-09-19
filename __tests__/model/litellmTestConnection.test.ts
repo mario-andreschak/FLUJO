@@ -24,6 +24,10 @@ jest.mock('axios', () => ({
 import axios from 'axios';
 import { testModelConnection } from '@/backend/services/model/testConnection';
 
+jest.mock('@/backend/services/model/testToolConnection', () => ({
+  testModelToolConnection: jest.fn(async () => ({ ok: true, durationMs: 1 })),
+}));
+
 const axiosPost = (axios as unknown as { post: jest.Mock }).post;
 
 const okCompletion = { choices: [{ message: { content: 'pong' } }], usage: { total_tokens: 5 } };

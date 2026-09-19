@@ -4,13 +4,13 @@ import {
   getProviderProfile,
   getProviderProfileById,
   supportsProviderModelDiscovery,
+  resolveModelAdapter,
 } from '@/shared/types/model/provider';
 
 describe('provider profiles', () => {
   it('exposes the expected set of profiles and hides Mistral', () => {
     const ids = PROVIDER_PROFILES.map(p => p.id);
     expect(ids).toEqual([
-      'openai',
       'openai-responses',
       'azure',
       'openrouter',
@@ -24,6 +24,7 @@ describe('provider profiles', () => {
       'anthropic-native',
       'claude-subscription',
       'codex',
+      'openai',
     ]);
     // Mistral must not be selectable in the modal.
     expect(PROVIDER_PROFILES.some(p => p.provider === 'mistral')).toBe(false);
@@ -44,10 +45,23 @@ describe('provider profiles', () => {
 
   it('does not let the Responses profile shadow plain OpenAI', () => {
     // Both profiles share provider 'openai', so resolution must key on the adapter.
-    // The plain profile is listed first and stays the answer for adapter 'openai'
+    // The legacy profile stays the answer for adapter 'openai'
     // and for legacy models with no adapter at all.
     expect(getProviderProfile('openai', 'openai').id).toBe('openai');
     expect(getProviderProfile('openai', undefined).id).toBe('openai');
+  });
+
+  it('puts legacy OpenAI last and uses Responses for gateway profiles and saved connections', () => {
+    expect(PROVIDER_PROFILES.at(-1)).toMatchObject({ id: 'openai', label: 'OpenAI ChatCompletions (Legacy)' });
+    for (const provider of ['requesty', 'openrouter'] as const) {
+      expect(getProviderProfileById(provider)?.adapter).toBe('openai-responses');
+      for (const adapter of [undefined, 'openai', 'openai-responses'] as const) {
+        expect(resolveModelAdapter(provider, adapter)).toBe('openai-responses');
+        expect(getProviderProfile(provider, adapter).adapter).toBe('openai-responses');
+      }
+    }
+    expect(resolveModelAdapter('openai', 'openai')).toBe('openai');
+    expect(resolveModelAdapter('ollama', undefined)).toBe('openai');
   });
 
   it('defaults legacy models (no adapter) to the OpenAI-compatible profile', () => {

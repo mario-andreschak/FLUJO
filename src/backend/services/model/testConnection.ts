@@ -3,15 +3,16 @@ import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
-import { ModelAdapter } from '@/shared/types/model/provider';
+import { ModelAdapter, resolveModelAdapter } from '@/shared/types/model/provider';
 import { createOpenAIClient, getProviderDefaultHeaders } from './openaiClient';
 import {
   getCompletionAdapter,
   describeCompletionAdapter,
   resolveOpenRouterMediaRoute,
-  normalizeOutputModalities,
 } from './adapters';
 import type { OpenRouterMediaKind } from './adapters';
+import { fromResponse } from './adapters/openaiResponsesAdapter';
+import { testModelToolConnection } from './testToolConnection';
 
 const log = createLogger('backend/services/model/testConnection');
 
@@ -53,7 +54,7 @@ function pickHeaders(headers: Record<string, unknown> | undefined): Record<strin
  * Attempt the test request via the OpenAI SDK (the same hardened client the
  * flow engine uses). This is the authoritative "will my flows work" check.
  */
-async function attemptViaSdk(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string): Promise<ModelTestAttempt> {
+async function attemptViaSdk(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string, responses = false): Promise<ModelTestAttempt> {
   const started = Date.now();
   try {
     // maxRetries: 0 here so the user sees the raw first-attempt outcome rather
@@ -64,15 +65,19 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
       maxRetries: 0,
       defaultHeaders: getProviderDefaultHeaders(provider),
     });
-    const completion = await client.chat.completions.create({
+    const raw = responses ? await client.responses.create({
+      model: modelName,
+      input: TEST_MESSAGES,
+      store: false,
+    }) : await client.chat.completions.create({
       model: modelName,
       messages: TEST_MESSAGES,
     });
     const durationMs = Date.now() - started;
 
     // Some providers (OpenRouter) return 200 with an error object in the body.
-    const maybeError = 'error' in completion && completion.error && typeof completion.error === 'object'
-      ? completion.error as Record<string, unknown>
+    const maybeError = 'error' in raw && raw.error && typeof raw.error === 'object'
+      ? raw.error as unknown as Record<string, unknown>
       : undefined;
     if (maybeError) {
       return {
@@ -89,6 +94,9 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
       };
     }
 
+    const completion = responses
+      ? fromResponse(raw as OpenAI.Responses.Response, modelName).completion
+      : raw as OpenAI.ChatCompletion;
     return {
       ok: true,
       status: 200,
@@ -141,14 +149,16 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
  * error but axios succeeds, the failure is the keep-alive/transport bug, not
  * the provider or the key.
  */
-async function attemptViaAxios(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string): Promise<ModelTestAttempt> {
+async function attemptViaAxios(modelName: string, baseUrl: string | undefined, apiKey: string, provider?: string, responses = false): Promise<ModelTestAttempt> {
   const started = Date.now();
   const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
-  const url = `${base}/chat/completions`;
+  const url = `${base}/${responses ? 'responses' : 'chat/completions'}`;
   try {
     const response = await axios.post(
       url,
-      { model: modelName, messages: TEST_MESSAGES },
+      responses
+        ? { model: modelName, input: TEST_MESSAGES, store: false }
+        : { model: modelName, messages: TEST_MESSAGES },
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -182,11 +192,12 @@ async function attemptViaAxios(modelName: string, baseUrl: string | undefined, a
       };
     }
 
+    const completion = responses ? fromResponse(data, modelName).completion : data;
     return {
       ok: true,
       status: response.status,
       durationMs,
-      content: data?.choices?.[0]?.message?.content?.slice(0, 500) ?? '',
+      content: completion?.choices?.[0]?.message?.content?.slice(0, 500) ?? '',
       usage: data?.usage,
     };
   } catch (error) {
@@ -390,20 +401,48 @@ function buildDiagnosis(sdk: ModelTestAttempt, axiosAttempt: ModelTestAttempt): 
 }
 
 /**
- * Run a direct, flow-engine-free connectivity test for a model. Performs a
- * minimal chat completion via the OpenAI SDK and via axios, then summarizes.
- *
- * The caller is responsible for resolving/decrypting the API key before calling
- * this (so secrets never round-trip through the wire to the browser).
+ * The caller resolves/decrypts the API key before running diagnostics, so it
+ * never round-trips through the browser.
  */
-export async function testModelConnection(params: {
+interface ModelTestParams {
   modelName: string;
   baseUrl?: string;
   apiKey: string;
   provider?: string;
   adapter?: ModelAdapter;
   model?: Model;
-}): Promise<ModelTestResult> {
+}
+
+/** Test the model's transport, then its production tool conversion and result loop. */
+export async function testModelConnection(params: ModelTestParams): Promise<ModelTestResult> {
+  const model: Model = {
+    ...params.model,
+    id: params.model?.id ?? 'model-connection-test',
+    name: params.modelName,
+    ApiKey: '',
+    baseUrl: params.baseUrl ?? params.model?.baseUrl,
+    provider: (params.provider ?? params.model?.provider) as Model['provider'],
+    adapter: params.adapter ?? params.model?.adapter,
+  };
+  model.adapter = resolveModelAdapter(model.provider, model.adapter);
+  const result = await testModelTransports({
+    ...params, model, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl,
+  });
+  if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
+    result.tool = { ok: false, skipped: true, durationMs: 0, content: 'Dedicated image/video models do not support this tool-call test.' };
+  } else if (!result.ok) {
+    result.tool = { ok: false, skipped: true, durationMs: 0, content: 'Tool test skipped because the model connection failed.' };
+  } else {
+    result.tool = await testModelToolConnection(model, params.apiKey);
+    result.ok = result.tool.ok;
+    result.diagnosis += result.tool.ok
+      ? ' The FLUJO tool round-trip also passed.'
+      : ` The connection works, but the FLUJO tool round-trip failed: ${result.tool.error?.message ?? 'unknown error'}`;
+  }
+  return result;
+}
+
+async function testModelTransports(params: ModelTestParams): Promise<ModelTestResult> {
   const { modelName, baseUrl, apiKey, provider, adapter, model } = params;
   log.info('Testing model connection', { modelName, baseUrl, provider, adapter, hasApiKey: Boolean(apiKey) });
 
@@ -414,7 +453,8 @@ export async function testModelConnection(params: {
     const kind = (mediaRoute as { kind?: OpenRouterMediaKind }).kind ?? 'images';
     const sdk = await attemptOpenRouterMediaConnection(model, apiKey, kind);
     const axiosAttempt: ModelTestAttempt = {
-      ok: sdk.ok,
+      ok: false,
+      skipped: true,
       durationMs: 0,
       content: 'n/a — dedicated OpenRouter media APIs are validated without starting a billable generation.',
     };
@@ -435,27 +475,18 @@ export async function testModelConnection(params: {
     };
   }
 
-  // Anything other than the plain Chat Completions path is tested with a single
-  // round-trip through its own adapter rather than the SDK+axios cross-check:
-  // the native adapters (Anthropic / Gemini / Claude subscription) don't speak
-  // the OpenAI protocol at all, and the Responses adapter speaks a different
-  // endpoint on it. Either way the cross-check has nothing to compare against, and
-  // the adapter round-trip is the authoritative "will my flows work" answer.
-  // Requires the stored Model object.
-  if (adapter && adapter !== 'openai' && model) {
+  // Native SDKs and Azure need their own transport/auth conventions. Both
+  // OpenAI HTTP protocols can use the independent SDK + axios cross-check.
+  if (adapter && adapter !== 'openai' && adapter !== 'openai-responses' && model) {
     const sdk = await attemptViaAdapter(model, apiKey);
-    // 'openai-responses' is still an OpenAI-hosted HTTP endpoint, so describing it
-    // as a "native SDK" adapter would be wrong.
-    const isNativeSdk = adapter !== 'openai-responses';
     const naAxios: ModelTestAttempt = {
-      ok: sdk.ok,
+      ok: false,
+      skipped: true,
       durationMs: 0,
-      content: isNativeSdk
-        ? 'n/a — native SDK adapter; the axios cross-check applies only to OpenAI-compatible endpoints.'
-        : 'n/a — the axios cross-check targets the Chat Completions endpoint only.',
+      content: 'Native SDK adapter; the axios cross-check applies only to OpenAI-compatible endpoints.',
     };
     const diagnosis = sdk.ok
-      ? `Connected successfully via the ${adapter} adapter${isNativeSdk ? ' (native SDK)' : ''}. The model and credentials are working.`
+      ? `Connected successfully via the ${adapter} adapter. The model and credentials are working.`
       : `The ${adapter} adapter failed: ${sdk.error?.message ?? 'unknown error'}. ` +
         `Check the model name and the ${
         adapter === 'claude-cli'
@@ -480,17 +511,11 @@ export async function testModelConnection(params: {
   // Run both transports in parallel — they are independent and this halves the
   // wait. Each fully captures its own outcome, so neither can fail the other.
   const [sdk, axiosAttempt] = await Promise.all([
-    attemptViaSdk(modelName, baseUrl, apiKey, provider),
-    attemptViaAxios(modelName, baseUrl, apiKey, provider),
+    attemptViaSdk(modelName, baseUrl, apiKey, provider, adapter === 'openai-responses'),
+    attemptViaAxios(modelName, baseUrl, apiKey, provider, adapter === 'openai-responses'),
   ]);
 
-  let diagnosis = buildDiagnosis(sdk, axiosAttempt);
-  if (adapterRoute?.adapterId === 'openai' && provider === 'openrouter' && model) {
-    const outputs = normalizeOutputModalities(model);
-    if ((outputs.includes('image') || outputs.includes('video')) && outputs.includes('text')) {
-      diagnosis += ' This model also outputs image/video alongside text, so it is served by /chat/completions rather than the dedicated OpenRouter media route.';
-    }
-  }
+  const diagnosis = buildDiagnosis(sdk, axiosAttempt);
 
   const result: ModelTestResult = {
     ok: sdk.ok,

@@ -29,8 +29,8 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
  *                   owning the history — no previous_response_id), but carries
  *                   encrypted REASONING items across turns, so a gpt-5 / o-series
  *                   model in an agentic tool loop stops re-deriving its own
- *                   reasoning each iteration. Only worthwhile for reasoning
- *                   models; 'openai' remains the default everywhere else.
+ *                   reasoning each iteration. Also used by the OpenRouter and
+ *                   Requesty gateway profiles.
  * - 'azure'      -> AzureOpenAiAdapter, Azure OpenAI's deployment-scoped Chat
  *                   Completions API through the AzureOpenAI SDK client.
  * - 'gemini'     -> GeminiAdapter, native Google GenAI SDK.
@@ -48,6 +48,14 @@ export type ModelAdapter =
   | 'anthropic'
   | 'claude-cli'
   | 'codex-cli';
+
+/** Gateways use Responses, including connections saved before that became their default. */
+export function resolveModelAdapter(provider?: ModelProvider, adapter?: ModelAdapter): ModelAdapter {
+  if ((provider === 'requesty' || provider === 'openrouter') && (!adapter || adapter === 'openai')) {
+    return 'openai-responses';
+  }
+  return adapter || 'openai';
+}
 
 /** Provider-neutral reasoning effort stored on a configured model. */
 export type ModelReasoningEffort =
@@ -418,15 +426,6 @@ export function supportsProviderModelDiscovery(
  */
 export const PROVIDER_PROFILES: ProviderProfile[] = [
   {
-    id: 'openai',
-    label: 'OpenAI',
-    provider: 'openai',
-    adapter: 'openai',
-    sdkLabel: 'OpenAI SDK',
-    baseUrl: 'https://api.openai.com/v1',
-    showBaseUrl: true,
-  },
-  {
     id: 'openai-responses',
     label: 'OpenAI (Responses API)',
     provider: 'openai',
@@ -434,9 +433,6 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     sdkLabel: 'OpenAI SDK (Responses)',
     baseUrl: 'https://api.openai.com/v1',
     showBaseUrl: true,
-    // Worth choosing only for reasoning models — the adapter's reason to exist is
-    // carrying encrypted reasoning items across turns of an agentic tool loop.
-    // Non-reasoning models should stay on the plain 'OpenAI' profile.
     defaultModels: ['gpt-5', 'gpt-5-mini', 'o4-mini', 'o3'],
   },
   {
@@ -454,8 +450,8 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     id: 'openrouter',
     label: 'OpenRouter',
     provider: 'openrouter',
-    adapter: 'openai',
-    sdkLabel: 'OpenAI SDK',
+    adapter: 'openai-responses',
+    sdkLabel: 'OpenAI SDK (Responses)',
     baseUrl: 'https://openrouter.ai/api/v1',
     showBaseUrl: true,
   },
@@ -463,8 +459,8 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     id: 'requesty',
     label: 'Requesty',
     provider: 'requesty',
-    adapter: 'openai',
-    sdkLabel: 'OpenAI SDK',
+    adapter: 'openai-responses',
+    sdkLabel: 'OpenAI SDK (Responses)',
     baseUrl: 'https://router.requesty.ai/v1',
     showBaseUrl: true,
     // Requesty routing policies are addressed like models: set the technical
@@ -581,6 +577,15 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
       'gpt-5.4-mini',
     ],
   },
+  {
+    id: 'openai',
+    label: 'OpenAI ChatCompletions (Legacy)',
+    provider: 'openai',
+    adapter: 'openai',
+    sdkLabel: 'OpenAI SDK',
+    baseUrl: 'https://api.openai.com/v1',
+    showBaseUrl: true,
+  },
 ];
 
 /** Resolve the profile that best matches a stored model's provider + adapter. */
@@ -589,11 +594,11 @@ export function getProviderProfile(
   adapter?: ModelAdapter
 ): ProviderProfile {
   const wantProvider = provider || 'openai';
-  const wantAdapter = adapter || 'openai';
+  const wantAdapter = resolveModelAdapter(provider, adapter);
   return (
     PROVIDER_PROFILES.find(p => p.provider === wantProvider && p.adapter === wantAdapter) ||
     PROVIDER_PROFILES.find(p => p.provider === wantProvider) ||
-    PROVIDER_PROFILES[0]
+    PROVIDER_PROFILES.find(p => p.id === 'openai')!
   );
 }
 

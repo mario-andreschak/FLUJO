@@ -11,12 +11,16 @@
 
 // Mock the hardened client factory so we can drive the SDK attempt's outcome.
 const sdkCreate = jest.fn();
+const responsesCreate = jest.fn();
 jest.mock('@/backend/services/model/openaiClient', () => ({
   ...jest.requireActual('@/backend/services/model/openaiClient'),
   createOpenAIClient: jest.fn(() => ({
     chat: { completions: { create: sdkCreate } },
+    responses: { create: responsesCreate },
   })),
 }));
+
+jest.mock('@/backend/services/model/testToolConnection', () => ({ testModelToolConnection: jest.fn() }));
 
 // Mock axios so we can drive the cross-check attempt's outcome.
 jest.mock('axios', () => ({
@@ -26,6 +30,8 @@ jest.mock('axios', () => ({
 
 import axios from 'axios';
 import { testModelConnection } from '@/backend/services/model/testConnection';
+import { testModelToolConnection } from '@/backend/services/model/testToolConnection';
+const toolTest = jest.mocked(testModelToolConnection);
 
 const axiosPost = (axios as unknown as { post: jest.Mock }).post;
 const axiosGet = (axios as unknown as { get: jest.Mock }).get;
@@ -38,6 +44,8 @@ const run = () =>
 
 beforeEach(() => {
   sdkCreate.mockReset();
+  responsesCreate.mockReset();
+  toolTest.mockReset().mockResolvedValue({ ok: true, durationMs: 1, content: 'Tool round-trip passed' });
   axiosPost.mockReset();
   axiosGet.mockReset();
 });
@@ -54,6 +62,35 @@ describe('testModelConnection', () => {
     expect(result.axios.ok).toBe(true);
     expect(result.sdk.content).toBe('pong');
     expect(result.diagnosis).toMatch(/both/i);
+    expect(result.tool?.ok).toBe(true);
+    expect(toolTest).toHaveBeenCalledWith(expect.objectContaining({ name: 'test/model' }), 'sk-x');
+  });
+
+  it('reports a failed tool round-trip even when text connectivity works', async () => {
+    sdkCreate.mockResolvedValue(okCompletion);
+    axiosPost.mockResolvedValue(okAxios);
+    toolTest.mockResolvedValue({ ok: false, durationMs: 1, error: { message: 'Missing tool call' } });
+    const result = await run();
+    expect(result.sdk.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.tool?.error?.message).toBe('Missing tool call');
+    expect(result.diagnosis).toMatch(/tool round-trip failed/);
+  });
+
+  it.each(['requesty', 'openrouter'] as const)('uses Responses for SDK, axios, and tools on saved %s models', async (provider) => {
+    const response = { id: 'response-1', output: [{ type: 'message', content: [{ type: 'output_text', text: 'pong' }] }] };
+    responsesCreate.mockResolvedValue(response);
+    axiosPost.mockResolvedValue({ status: 200, data: response, headers: {} });
+    const baseUrl = provider === 'requesty' ? 'https://router.requesty.ai/v1' : 'https://openrouter.ai/api/v1';
+    const result = await testModelConnection({ modelName: 'test/model', provider, adapter: 'openai', baseUrl, apiKey: 'sk-x' });
+    expect(result.ok).toBe(true);
+    expect(result.sdk.content).toBe('pong');
+    expect(result.axios.content).toBe('pong');
+    expect(result.adapterRoute).toMatchObject({ adapterId: 'openai-responses', endpoint: '/responses' });
+    expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({ model: 'test/model', input: expect.any(Array), store: false }));
+    expect(axiosPost).toHaveBeenCalledWith(`${baseUrl}/responses`, expect.objectContaining({ input: expect.any(Array), store: false }), expect.any(Object));
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(toolTest).toHaveBeenCalledWith(expect.objectContaining({ adapter: 'openai-responses', provider }), 'sk-x');
   });
 
   it('omits temperature from both OpenAI-compatible test requests', async () => {
@@ -77,6 +114,8 @@ describe('testModelConnection', () => {
     expect(result.axios.ok).toBe(true);
     expect(result.diagnosis).toMatch(/premature close/i);
     expect(result.diagnosis).toMatch(/keep-alive|connection-reuse/i);
+    expect(result.tool).toMatchObject({ ok: false, skipped: true });
+    expect(toolTest).not.toHaveBeenCalled();
   });
 
   it('detects the OpenRouter 200-with-error-body case', async () => {
@@ -159,6 +198,8 @@ describe('testModelConnection', () => {
     expect(sdkCreate).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
     expect(result.diagnosis).toMatch(/no billable generation/i);
+    expect(result.tool).toMatchObject({ ok: false, skipped: true });
+    expect(toolTest).not.toHaveBeenCalled();
   });
 
   it('reports an invalid OpenRouter media API key without attempting model generation', async () => {

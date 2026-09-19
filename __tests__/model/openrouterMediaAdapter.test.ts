@@ -2,7 +2,7 @@ import type { Model } from '@/shared/types/model';
 import {
   describeCompletionAdapter,
   getCompletionAdapter,
-  OpenAiAdapter,
+  OpenAiResponsesAdapter,
   OpenRouterMediaAdapter,
 } from '@/backend/services/model/adapters';
 
@@ -68,13 +68,13 @@ describe('OpenRouter dedicated media adapter', () => {
   it.each([
     [['text', 'image']],
     [['text', 'video']],
-  ] as const)('keeps mixed OpenRouter output %j on chat completions', (outputModalities) => {
+  ] as const)('keeps mixed OpenRouter output %j on Responses', (outputModalities) => {
     const candidate = multimodalModel(outputModalities);
 
-    expect(getCompletionAdapter(candidate)).toBeInstanceOf(OpenAiAdapter);
+    expect(getCompletionAdapter(candidate)).toBeInstanceOf(OpenAiResponsesAdapter);
     expect(describeCompletionAdapter(candidate)).toMatchObject({
-      adapterId: 'openai',
-      endpoint: '/chat/completions',
+      adapterId: 'openai-responses',
+      endpoint: '/responses',
     });
   });
 
