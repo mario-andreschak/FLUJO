@@ -589,11 +589,17 @@ export class ModelHandler {
 
       let lastPromptTokens: number | undefined;
       for (let i = source.length - 1; i >= 0; i--) {
-        const usage = source[i].usage;
-        if (usage && typeof usage.promptTokens === 'number' && usage.promptTokens > 0) {
-          lastPromptTokens = usage.promptTokens;
+        const message = source[i];
+        const promptTokens = message.contextUsage !== undefined
+          ? message.contextUsage?.promptTokens
+          : model.adapter === 'codex-cli' || model.adapter === 'claude-cli'
+            ? undefined
+            : message.usage?.promptTokens;
+        if (typeof promptTokens === 'number' && promptTokens > 0) {
+          lastPromptTokens = promptTokens;
           break;
         }
+        if (message.contextUsage !== undefined || message.usage) break;
       }
       const estimate = lastPromptTokens ?? estimateTokens(source);
       // Some CLI/provider catalogues do not publish a context window. The
@@ -1725,6 +1731,7 @@ export class ModelHandler {
             : {}),
           ...(transcriptMedia?.length ? { media: transcriptMedia } : {}),
           ...(isLast && usage ? { usage } : {}),
+          ...(isLast && modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
         } as FlujoChatMessage);
       }
     } else {
@@ -1761,6 +1768,7 @@ export class ModelHandler {
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
         ...(usage ? { usage } : {}),
+        ...(modelResponse.contextUsage !== undefined ? { contextUsage: modelResponse.contextUsage } : {}),
       } as unknown as FlujoChatMessage;
       finalMessages.push(assistantMessage);
     }
@@ -2586,6 +2594,7 @@ export class ModelHandler {
           let transcript: FlujoChatMessage[] | undefined;
           let liveMessageId: string | undefined;
           let media: ModelMediaPart[] | undefined;
+          let contextUsage: ModelCallResult['contextUsage'];
           try {
             // --- Auto-unload Ollama (opt-in feature, issue #242) ---
             // When enabled and this is an Ollama model, wrap the completion
@@ -2721,7 +2730,7 @@ export class ModelHandler {
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
-              ({ completion: chatCompletion, transcript, liveMessageId, media } = await withOllamaLock(
+              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await withOllamaLock(
                 ollamaRootForUnload,
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
@@ -2739,7 +2748,7 @@ export class ModelHandler {
                 }
               ));
             } else {
-              ({ completion: chatCompletion, transcript, liveMessageId, media } = await issueCompletion());
+              ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await issueCompletion());
             }
           } finally {
             stopCancelWatch();
@@ -2877,6 +2886,7 @@ export class ModelHandler {
               messages: [...messages], // Return original messages with timestamps
               fullResponse: chatCompletion, // Return the full original response
               transcript, // Present only for self-orchestrating adapters (Claude subscription)
+              contextUsage,
               liveMessageId,
             }
           };

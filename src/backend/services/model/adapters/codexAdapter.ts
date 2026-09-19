@@ -22,7 +22,8 @@ import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { paceToolCallArguments } from './toolArgumentPacing';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
-import { mapCodexUsage, type CodexUsageLike } from './codexUsage';
+import { mapCodexUsage, subtractCodexUsage, type CodexUsageLike } from './codexUsage';
+import { readCodexTokenSnapshot, type CodexTokenSnapshot } from './codexContextUsage';
 import {
   codexSessionKey,
   computeCodexPrefixHash,
@@ -158,6 +159,7 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
  */
 export class CodexAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    const invocationStartedAt = Date.now();
     const {
       model,
       apiKey,
@@ -673,6 +675,9 @@ export class CodexAdapter implements CompletionAdapter {
     let failure: string | undefined;
     let completedTurn = false;
     let capturedThreadId = resumeThreadId;
+    let runtimeHome: string | undefined;
+    let baselineSnapshot: CodexTokenSnapshot | undefined;
+    let contextUsage: CompletionResult['contextUsage'] = null;
 
     try {
       if (bridgeTools.length > 0) {
@@ -681,6 +686,10 @@ export class CodexAdapter implements CompletionAdapter {
 
       const modelCatalogPath = await resolveCodexModelCatalogPath();
       const runtime = await prepareCodexRuntimeEnvironment(!apiKey);
+      runtimeHome = runtime.home;
+      if (resumeThreadId) {
+        baselineSnapshot = await readCodexTokenSnapshot(runtime.home, resumeThreadId);
+      }
       const config = {
         // A user's Codex app/CLI Fast-mode preference is global. Do not let a
         // personal `service_tier = "priority"` leak into FLUJO when its selected
@@ -986,6 +995,19 @@ export class CodexAdapter implements CompletionAdapter {
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
       await bridge?.close().catch(() => undefined);
+      if (runtimeHome && capturedThreadId) {
+        const snapshot = await readCodexTokenSnapshot(runtimeHome, capturedThreadId);
+        if (snapshot && snapshot.timestamp >= invocationStartedAt) {
+          contextUsage = snapshot.contextUsage;
+          // Also captures work before steering/retries and intentional handoffs.
+          usage = snapshot.totalUsage;
+        }
+        if (usage && baselineSnapshot) {
+          // The terminal SDK event can still supply totals if the final rollout
+          // snapshot is unavailable. Never count the known baseline twice.
+          usage = subtractCodexUsage(usage, baselineSnapshot.totalUsage);
+        }
+      }
       if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
     }
 
@@ -1083,6 +1105,6 @@ export class CodexAdapter implements CompletionAdapter {
       },
     };
 
-    return { completion, transcript };
+    return { completion, transcript, contextUsage };
   }
 }

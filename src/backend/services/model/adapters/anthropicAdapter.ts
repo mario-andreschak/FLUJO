@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import {
@@ -725,8 +726,10 @@ export class AnthropicAdapter implements CompletionAdapter {
           },
           () => send(client, params, options),
         );
+        const translated = toChatCompletion(model.name, result.message);
         return {
-          ...toChatCompletion(model.name, result.message),
+          ...translated,
+          contextUsage: contextUsageFromCompletion(translated.completion.usage, model.contextWindow),
           liveMessageId: result.liveMessageId,
         };
       } catch (err) {

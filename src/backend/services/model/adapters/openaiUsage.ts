@@ -67,7 +67,7 @@ export function mapOpenAiUsage(
   return {
     promptTokens: rawUsage.prompt_tokens ?? 0,
     completionTokens: rawUsage.completion_tokens ?? 0,
-    totalTokens: rawUsage.total_tokens ?? 0,
+    totalTokens: rawUsage.total_tokens ?? (rawUsage.prompt_tokens ?? 0) + (rawUsage.completion_tokens ?? 0),
     ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
     ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
   };

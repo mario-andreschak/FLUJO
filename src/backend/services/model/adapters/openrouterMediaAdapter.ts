@@ -70,6 +70,7 @@ function completion(
   usage?: OpenAI.Completions.CompletionUsage,
 ): CompletionResult {
   return {
+    contextUsage: null,
     media,
     completion: {
       id,

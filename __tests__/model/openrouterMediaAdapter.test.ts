@@ -121,6 +121,8 @@ describe('OpenRouter dedicated media adapter', () => {
       data: 'PNGDATA',
       mimeType: 'image/png',
     }]);
+    expect(result.completion.usage).toMatchObject({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 });
+    expect(result.contextUsage).toBeNull();
   });
 
   it('maps a dedicated image endpoint 404 to an actionable route diagnostic', async () => {

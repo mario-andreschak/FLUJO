@@ -1,5 +1,7 @@
 import { GoogleGenAI, Content, Part, FunctionDeclaration, GenerateContentResponse } from '@google/genai';
 import OpenAI from 'openai';
+import { contextUsageFromCompletion } from './contextUsage';
+import { mapGeminiUsage } from './geminiUsage';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
@@ -321,13 +323,7 @@ function toChatCompletion(
         },
       },
     ],
-    usage: usage
-      ? {
-          prompt_tokens: usage.promptTokenCount ?? 0,
-          completion_tokens: usage.candidatesTokenCount ?? 0,
-          total_tokens: usage.totalTokenCount ?? 0,
-        }
-      : undefined,
+    usage: mapGeminiUsage(usage),
   };
   return { completion, media };
 }
@@ -395,7 +391,12 @@ export class GeminiAdapter implements CompletionAdapter {
       () => ai.models.generateContent(request),
     );
 
-    return toChatCompletion(model.name, resp);
+    const result = toChatCompletion(model.name, resp);
+    return {
+      ...result,
+      // Gemini's catalog limit is inputTokenLimit; output has a separate limit.
+      contextUsage: contextUsageFromCompletion(result.completion.usage, model.contextWindow, true),
+    };
   }
 
   async createStreamCompletion({
@@ -532,6 +533,7 @@ export class GeminiAdapter implements CompletionAdapter {
     return {
       liveMessageId,
       media,
+      contextUsage: contextUsageFromCompletion(mapGeminiUsage(usage), model.contextWindow, true),
       completion: {
         id: responseId,
         object: 'chat.completion',
@@ -550,11 +552,7 @@ export class GeminiAdapter implements CompletionAdapter {
         }],
         ...(usage
           ? {
-              usage: {
-                prompt_tokens: usage.promptTokenCount ?? 0,
-                completion_tokens: usage.candidatesTokenCount ?? 0,
-                total_tokens: usage.totalTokenCount ?? 0,
-              },
+              usage: mapGeminiUsage(usage),
             }
           : {}),
       },

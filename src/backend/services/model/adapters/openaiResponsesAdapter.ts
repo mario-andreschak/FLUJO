@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
@@ -466,7 +467,7 @@ export function fromResponse(
           usage: {
             prompt_tokens: usage.input_tokens ?? 0,
             completion_tokens: usage.output_tokens ?? 0,
-            total_tokens: usage.total_tokens ?? 0,
+            total_tokens: usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
             ...(usage.input_tokens_details
               ? {
                   prompt_tokens_details: {
@@ -682,7 +683,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       });
     }
 
-    return { completion, media };
+    return { completion, media, contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow) };
   }
 
   async createStreamCompletion({
@@ -846,6 +847,6 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     if (key && firstCallId && reasoning.length > 0) {
       stashReasoning(key, firstCallId, reasoning);
     }
-    return { completion, liveMessageId, media };
+    return { completion, liveMessageId, media, contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow) };
   }
 }

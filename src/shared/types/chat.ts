@@ -185,7 +185,10 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
    */
   injected?: boolean;
 
-  /** Token usage reported by the provider for the call that produced this message (assistant messages only). */
+  /** Latest model request's context. null explicitly means unavailable. */
+  contextUsage?: import('./model/contextUsage').ModelContextUsage | null;
+
+  /** Token usage for the call/run that produced this message; may cover multiple model requests. */
   usage?: {
     promptTokens: number;
     completionTokens: number;

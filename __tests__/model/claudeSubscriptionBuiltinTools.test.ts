@@ -112,6 +112,26 @@ const capturedOptions = () => {
   return queryMock.mock.calls[0][0].options as Record<string, unknown>;
 };
 
+it('returns per-query totals independently from the latest root request context', async () => {
+  queryMock.mockImplementation(() => (async function* () {
+    yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start', message: {
+      id: 'api-message', model: 'claude-test', usage: { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 1 },
+    } } };
+    yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_delta', usage: { output_tokens: 50 } } };
+    yield { type: 'result', subtype: 'success', result: 'done', session_id: 'session-telemetry',
+      usage: { input_tokens: 999999, output_tokens: 9999 },
+      modelUsage: { 'claude-test': {
+        inputTokens: 500, cacheReadInputTokens: 5000, cacheCreationInputTokens: 200,
+        outputTokens: 200, contextWindow: 200000,
+      } },
+    };
+  })());
+  const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput());
+  expect(result.completion.usage).toMatchObject({ prompt_tokens: 5700, completion_tokens: 200, total_tokens: 5900 });
+  expect(result.contextUsage).toEqual({ promptTokens: 1000, completionTokens: 50, totalTokens: 1050,
+    contextWindow: 200000, contextWindowSource: 'runtime' });
+});
+
 beforeEach(() => {
   queryMock.mockReset();
   callToolMock.mockReset();

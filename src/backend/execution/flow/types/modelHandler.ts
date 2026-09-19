@@ -98,6 +98,7 @@ export interface ModelCallInput {
 
 // Result of model call
 export interface ModelCallResult {
+  contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
   content?: string;
   /** Direct model media normalized by the selected adapter. */
   media?: ModelMediaPart[];

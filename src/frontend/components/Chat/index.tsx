@@ -220,15 +220,8 @@ export interface Conversation {
       cacheWriteTokens?: number;
     }>;
   };
-  /** Context snapshot of the latest model call (provider-reported prompt size
-   *  + the bound model's configured context window, when available). */
-  contextInfo?: {
-    promptTokens: number;
-    completionTokens?: number;
-    nodeId?: string;
-    modelDisplayName?: string;
-    contextWindow?: number;
-  };
+  /** Latest individual model request and effective runtime window, when known. */
+  contextInfo?: import('@/shared/types/model/contextUsage').ConversationContextInfo;
   /** Latest persisted future-turn context from each MCP App View. */
   mcpAppContexts?: McpAppModelContextMap;
   /** Issue #383: normalized terminal error, present when status === 'error'.
