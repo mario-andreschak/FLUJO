@@ -20,6 +20,10 @@ const codexCtorMock = jest.fn();
 const startThreadMock = jest.fn();
 const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
+const readTokenSnapshotMock = jest.fn();
+jest.mock('@/backend/services/model/adapters/codexContextUsage', () => ({
+  readCodexTokenSnapshot: (...args: unknown[]) => readTokenSnapshotMock(...args),
+}));
 
 // `virtual: true` because the SDK is ESM-only (its exports map has no
 // `require` condition), so Jest's CJS resolver can't see it. The adapter
@@ -124,6 +128,7 @@ beforeEach(() => {
   startThreadMock.mockReset();
   resumeThreadMock.mockReset();
   runStreamedMock.mockReset();
+  readTokenSnapshotMock.mockReset().mockResolvedValue(undefined);
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
   listServerToolsMock.mockReset();
@@ -237,6 +242,32 @@ describe('CodexAdapter — thread setup', () => {
 });
 
 describe('CodexAdapter — transcript & usage', () => {
+  it('returns real context separately from millions of accumulated input tokens', async () => {
+    runStreamedMock.mockResolvedValueOnce({ events: eventStream([
+      threadStarted('01a0ba76-e5e0-7a12-823b-5eed320794ca'),
+      agentMessage('done'),
+      turnCompleted({ input_tokens: 5606187, cached_input_tokens: 5432064, output_tokens: 27510 }),
+    ])() });
+    const contextUsage = { promptTokens: 165897, completionTokens: 390, totalTokens: 166287, contextWindow: 258400 };
+    readTokenSnapshotMock.mockImplementation(async () => ({
+      timestamp: Date.now(), contextUsage,
+      totalUsage: { input_tokens: 5606187, cached_input_tokens: 5432064, output_tokens: 27510 },
+    }));
+    const result = await new CodexAdapter().createCompletion(baseInput());
+    expect(result.contextUsage).toEqual(contextUsage);
+    expect(result.completion.usage?.prompt_tokens).toBe(5606187);
+  });
+
+  it('reports context as unavailable when the runtime snapshot is missing or stale', async () => {
+    runStreamedMock.mockResolvedValueOnce({ events: eventStream([
+      threadStarted('01a0ba76-e5e0-7a12-823b-5eed320794ca'), agentMessage('done'),
+      turnCompleted({ input_tokens: 5606187, output_tokens: 27510 }),
+    ])() });
+    readTokenSnapshotMock.mockResolvedValue({ timestamp: 1, contextUsage: { promptTokens: 5, contextWindow: 100 } });
+    expect((await new CodexAdapter().createCompletion(baseInput())).contextUsage).toBeNull();
+    expect((await new CodexAdapter().createCompletion(baseInput())).contextUsage).toBeNull();
+  });
+
   it('streams the answer once and maps usage with the cached split', async () => {
     const streamed: unknown[] = [];
     const { completion, transcript } = await new CodexAdapter().createCompletion(
@@ -974,6 +1005,34 @@ describe('CodexAdapter — tool bridging', () => {
 });
 
 describe('CodexAdapter — SDK thread reuse', () => {
+  it.each([false, true])('subtracts previous native totals on resume (final snapshot missing: %s)', async (missingFinalSnapshot) => {
+    const threadId = '01a0ba76-e5e0-7a12-823b-5eed320794ca';
+    const firstUsage = { input_tokens: 5000, cached_input_tokens: 4000, output_tokens: 100 };
+    const secondUsage = { input_tokens: 12000, cached_input_tokens: 10000, output_tokens: 300 };
+    runStreamedMock
+      .mockResolvedValueOnce({ events: eventStream([threadStarted(threadId), agentMessage('first answer'), turnCompleted(firstUsage)])() })
+      .mockResolvedValueOnce({ events: eventStream([threadStarted(threadId), agentMessage('second answer'), turnCompleted(secondUsage)])() });
+    const snapshot = (totalUsage: typeof firstUsage, promptTokens: number) => ({
+      timestamp: Date.now(), totalUsage, contextUsage: { promptTokens, contextWindow: 258400 },
+    });
+    readTokenSnapshotMock
+      .mockImplementationOnce(async () => snapshot(firstUsage, 1000))
+      .mockImplementationOnce(async () => snapshot(firstUsage, 1000))
+      .mockImplementationOnce(async () => missingFinalSnapshot ? undefined : snapshot(secondUsage, 1500));
+    const identity = { conversationId: 'conversation-usage', nodeId: 'process-usage', sessionResume: true };
+    await new CodexAdapter().createCompletion(baseInput(identity));
+    const result = await new CodexAdapter().createCompletion(baseInput({
+      ...identity,
+      messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'first answer' }, { role: 'user', content: 'next' }],
+    }));
+    expect(resumeThreadMock).toHaveBeenCalledTimes(1);
+    expect(result.completion.usage).toMatchObject({
+      prompt_tokens: 7000, completion_tokens: 200, total_tokens: 7200,
+      prompt_tokens_details: { cached_tokens: 6000 },
+    });
+    expect(result.contextUsage).toEqual(missingFinalSnapshot ? null : { promptTokens: 1500, contextWindow: 258400 });
+  });
+
   it('resumes the same conversation/node with only the appended message delta', async () => {
     runStreamedMock
       .mockImplementationOnce(async () => ({

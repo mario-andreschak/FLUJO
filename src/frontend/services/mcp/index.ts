@@ -12,6 +12,17 @@ import { TestConnectionEvent } from '@/shared/types/streaming';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import { createLogger } from '@/utils/logger';
 import { FEATURES } from '@/config/features'; // Import the feature flags
+import {
+  callStreamingTool,
+  type StreamingToolCallOptions,
+  type StreamingToolResult,
+} from './streamingToolCall';
+
+export type {
+  StreamingToolCallOptions,
+  StreamingToolProgress,
+  StreamingToolResult,
+} from './streamingToolCall';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/mcp/index');
@@ -366,24 +377,43 @@ class MCPService {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverName: string, toolName: string, args: Record<string, unknown>, timeout?: number) {
+  async callTool(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    timeout?: number,
+    signal?: AbortSignal,
+    onProgress?: StreamingToolCallOptions['onProgress'],
+  ): Promise<StreamingToolResult> {
     try {
-      const response = await fetch(
-        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ args, timeout }),
-        }
-      );
-
-      return await response.json();
+      return await this.callToolStream(serverName, toolName, args, {
+        timeout,
+        signal,
+        source: 'host',
+        onProgress,
+      });
     } catch (error) {
       log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
-      return { error: `Failed to call tool` };
+      const cancelled = error instanceof Error && error.name === 'AbortError';
+      return {
+        success: false,
+        error: cancelled ? 'Tool call cancelled' : 'Failed to call tool',
+        errorType: cancelled ? 'cancelled' : undefined,
+      };
     }
+  }
+
+  /**
+   * Stream progress and the JSON result over a backpressure-aware response.
+   * Result parsing happens in a worker, outside React's main thread.
+   */
+  async callToolStream(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    options: StreamingToolCallOptions = {},
+  ): Promise<StreamingToolResult> {
+    return callStreamingTool(serverName, toolName, args, options);
   }
 
   /**
@@ -418,25 +448,24 @@ class MCPService {
     timeout?: number,
     signal?: AbortSignal,
     ownerScope?: string,
-  ) {
+    onProgress?: StreamingToolCallOptions['onProgress'],
+  ): Promise<StreamingToolResult> {
     try {
-      const response = await fetch(
-        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ args, timeout, source: 'app', ownerScope }),
-          ...(signal ? { signal } : {}),
-        }
-      );
-
-      const data = await response.json();
-      return { ...data, httpStatus: response.status };
+      return await this.callToolStream(serverName, toolName, args, {
+        timeout,
+        signal,
+        source: 'app',
+        ownerScope,
+        onProgress,
+      });
     } catch (error) {
       log.warn(`Failed to call MCP App tool ${toolName} on server ${serverName}:`, error);
-      return { success: false, error: 'Failed to call MCP App tool' };
+      const cancelled = error instanceof Error && error.name === 'AbortError';
+      return {
+        success: false,
+        error: cancelled ? 'MCP App tool call cancelled' : 'Failed to call MCP App tool',
+        errorType: cancelled ? 'cancelled' : undefined,
+      };
     }
   }
 

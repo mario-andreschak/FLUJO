@@ -66,7 +66,7 @@ describe('resolveOpenRouterMediaRoute (#370)', () => {
     expect(route.reason).toMatch(/anthropic/);
   });
 
-  it('falls back to chat completions when modality metadata is missing or stale', () => {
+  it('falls back to Responses when modality metadata is missing or stale', () => {
     for (const outputs of [undefined, [] as OutputModality[]]) {
       const route = resolveOpenRouterMediaRoute(withOutputs(outputs));
       expect(route.useMediaRoute).toBe(false);
@@ -84,13 +84,21 @@ describe('resolveOpenRouterMediaRoute (#370)', () => {
     [['text', 'video']],
     [['image', 'text']],
     [['TEXT', ' Image ']],
-  ] as const)('keeps text-emitting OpenRouter model %j on /chat/completions', (outputs) => {
+  ] as const)('keeps text-emitting OpenRouter model %j on /responses', (outputs) => {
     const route = resolveOpenRouterMediaRoute(withOutputs(outputs as unknown as OutputModality[]));
     expect(route.useMediaRoute).toBe(false);
     expect(route.kind).toBeUndefined();
   });
 
   it('routes media-only models to their dedicated endpoint', () => {
+    expect(resolveOpenRouterMediaRoute(withOutputs(['image'], { adapter: 'openai-responses' }))).toMatchObject({
+      useMediaRoute: true,
+      kind: 'images',
+    });
+    expect(resolveOpenRouterMediaRoute(withOutputs(['video'], { adapter: 'openai-responses' }))).toMatchObject({
+      useMediaRoute: true,
+      kind: 'videos',
+    });
     expect(resolveOpenRouterMediaRoute(withOutputs(['image']))).toMatchObject({
       useMediaRoute: true,
       kind: 'images',
@@ -166,8 +174,8 @@ describe('adapter selection stays in sync with its description (#370)', () => {
 
   it('reports the endpoint the user will actually hit', () => {
     expect(describeCompletionAdapter(withOutputs(['text', 'image']))).toMatchObject({
-      adapterId: 'openai',
-      endpoint: '/chat/completions',
+      adapterId: 'openai-responses',
+      endpoint: '/responses',
     });
     expect(describeCompletionAdapter(withOutputs(['image']))).toMatchObject({
       adapterId: 'openrouter-media',

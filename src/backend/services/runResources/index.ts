@@ -420,6 +420,76 @@ export async function readRunResource(
 }
 
 /**
+ * Read one byte range without materializing the complete payload. This powers
+ * the browser's paged result viewer; range size controls I/O granularity only
+ * and never changes the canonical resource.
+ */
+export async function readRunResourceRange(
+  uri: string,
+  start: number,
+  endInclusive: number,
+  access?: RunResourceAccess,
+): Promise<{
+  entry: RunResourceEntry;
+  data: Buffer;
+  start: number;
+  end: number;
+  total: number;
+} | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find((candidate) => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link') return null;
+
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), 'r');
+    const stat = await handle.stat();
+    const total = stat.size;
+    const safeStart = Math.max(0, Math.floor(start));
+    if (safeStart >= total) {
+      return { entry, data: Buffer.alloc(0), start: safeStart, end: safeStart - 1, total };
+    }
+    const safeEnd = Math.min(total - 1, Math.max(safeStart, Math.floor(endInclusive)));
+    const data = Buffer.allocUnsafe(safeEnd - safeStart + 1);
+    const { bytesRead } = await handle.read(data, 0, data.byteLength, safeStart);
+
+    if (access) {
+      try {
+        await mutateIndex<void>(parsed.conversationId, async (current) => {
+          const target = current.find((candidate) => candidate.id === parsed.id);
+          if (!target) return { next: current, result: undefined };
+          const updated: RunResourceEntry = {
+            ...target,
+            readBy: [...target.readBy, access],
+          };
+          return {
+            next: current.map((candidate) => candidate === target ? updated : candidate),
+            result: undefined,
+          };
+        });
+      } catch (error) {
+        log.warn(`Failed to persist ranged readBy for ${uri}`, error);
+      }
+    }
+
+    return {
+      entry,
+      data: bytesRead === data.byteLength ? data : data.subarray(0, bytesRead),
+      start: safeStart,
+      end: safeStart + bytesRead - 1,
+      total,
+    };
+  } catch (error) {
+    log.error(`Run-resource range read failed for ${uri}`, error);
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
  * Copy a run resource into another conversation's resource scope.
  *
  * Subflows persist generated media under the child conversation. Downstream

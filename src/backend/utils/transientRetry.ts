@@ -8,6 +8,23 @@ const TRANSIENT_KEYWORDS = [
   'socket hang up',
   'premature close',
   'etimedout',
+  // Provider-level transient errors that should be retried gracefully
+  'service temporarily overloaded',
+  'temporarily overloaded',
+  'connection error',
+  'connection refused',
+  'connection reset',
+  'connection timed out',
+  'econnrefused',
+  'enotfound',
+  'eai_again',
+  'network error',
+  'bad gateway',
+  'gateway timeout',
+  'service unavailable',
+  '503',
+  '502',
+  '504',
 ] as const;
 
 /**
@@ -18,8 +35,12 @@ const TRANSIENT_KEYWORDS = [
  */
 export function isTransientTransportError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  // Never retry a user-initiated abort.
+  // Never retry a user-initiated abort or a client error. Generic provider
+  // wrappers may contain transient-sounding text even when the HTTP status is
+  // a definitive 4xx (issue #520).
   if (error.name === 'AbortError') return false;
+  const status = (error as Error & { status?: unknown }).status;
+  if (typeof status === 'number' && status >= 400 && status < 500) return false;
   const msg = error.message.toLowerCase();
   return TRANSIENT_KEYWORDS.some((kw) => msg.includes(kw));
 }

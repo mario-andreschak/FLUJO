@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
@@ -241,6 +242,7 @@ export class OpenAiAdapter implements CompletionAdapter {
         const canonicalCompletion = translateCompletionFromProvider(completion, toolNames);
         return {
           completion: canonicalCompletion,
+          contextUsage: contextUsageFromCompletion(canonicalCompletion.usage, model.contextWindow),
           media: extractAssistantMedia(canonicalCompletion.choices?.[0]?.message),
         };
       } catch (error) {
@@ -464,6 +466,7 @@ export class OpenAiAdapter implements CompletionAdapter {
         liveMessageId,
         media,
         completion,
+        contextUsage: contextUsageFromCompletion(completion.usage, model.contextWindow),
       };
     };
 

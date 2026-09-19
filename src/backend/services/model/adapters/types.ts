@@ -281,6 +281,8 @@ export interface CompletionInput {
  */
 export interface CompletionResult {
   completion: OpenAI.Chat.Completions.ChatCompletion;
+  /** null means the adapter cannot report current context; usage is not a substitute. */
+  contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
   /** Direct model media normalized from the provider-native response. */
   media?: ModelMediaPart[];
   /** Stable id used by `onModelDelta` for the final assistant response. */

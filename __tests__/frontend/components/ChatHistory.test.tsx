@@ -1,12 +1,81 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import ChatHistory from '@/frontend/components/Chat/ChatHistory';
+import type { ConversationListItem } from '@/frontend/components/Chat';
+import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
+import { readWorkspaceUiPreference, writeWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 
 jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => ({ visualStyle: 'modern' }),
 }));
 
 describe('ChatHistory', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  const parent: ConversationListItem = { id: 'parent', title: 'Parent run', flowId: 'flow-a', createdAt: 1, updatedAt: 1 };
+  const child: ConversationListItem = { id: 'child', title: 'Child run', flowId: 'flow-b', createdAt: 2, updatedAt: 2, parentConversationId: 'parent', rootConversationId: 'parent' };
+  const recent: ConversationListItem = { id: 'recent', title: 'Recent run', flowId: null, createdAt: 3, updatedAt: 3 };
+  const pinProps = {
+    conversations: [recent, child, parent],
+    currentConversationId: null,
+    onSelectConversation: jest.fn(),
+    onDeleteConversation: jest.fn(),
+    onBulkDelete: jest.fn(async () => undefined),
+    onNewConversation: jest.fn(),
+  };
+  const rowIds = (element: Element) => Array.from(element.querySelectorAll('[data-conversation-id]'))
+    .map((row) => row.getAttribute('data-conversation-id'));
+
+  it.each(['none', 'chain', 'date', 'flow', 'origin'])('pins a family above other conversations in %s grouping and restores it after remount', (group) => {
+    writeWorkspaceUiPreference('flujo-ui:chat-sidebar:group', group);
+    const onPinsChanged = jest.fn();
+    const onSelectConversation = jest.fn();
+    const view = render(<ChatHistory {...pinProps} onPinsChanged={onPinsChanged} onSelectConversation={onSelectConversation} />);
+    const parentRow = screen.getByText('Parent run').closest('[data-conversation-id]') as HTMLElement;
+    fireEvent.click(within(parentRow).getByRole('button', { name: 'Pin conversation and children' }));
+
+    expect(rowIds(screen.getByRole('group', { name: 'Pinned' }))).toEqual(['parent', 'child']);
+    expect(rowIds(screen.getByRole('list', { name: 'Conversations' }))).toEqual(['parent', 'child', 'recent']);
+    expect(screen.queryByText(/Child of/)).not.toBeInTheDocument();
+    expect(onSelectConversation).not.toHaveBeenCalled();
+    expect(onPinsChanged).toHaveBeenCalledTimes(1);
+    expect(readWorkspaceUiPreference(CONVERSATION_PINS_PREFERENCE, [])).toEqual(['parent']);
+
+    view.unmount();
+    render(<ChatHistory {...pinProps} />);
+    expect(rowIds(screen.getByRole('group', { name: 'Pinned' }))).toEqual(['parent', 'child']);
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin conversation and children' }));
+    expect(screen.queryByRole('group', { name: 'Pinned' })).not.toBeInTheDocument();
+    expect(readWorkspaceUiPreference(CONVERSATION_PINS_PREFERENCE, [])).toEqual([]);
+  });
+
+  it('includes new descendants, supports independently pinned children, and keeps pins scoped to their workspace', () => {
+    writeWorkspaceUiPreference(CONVERSATION_PINS_PREFERENCE, ['parent']);
+    const view = render(<ChatHistory {...pinProps} />);
+    const grandchild: ConversationListItem = { ...child, id: 'grandchild', title: 'Grandchild run', parentConversationId: 'child', updatedAt: 4 };
+    view.rerender(<ChatHistory {...pinProps} conversations={[grandchild, ...pinProps.conversations]} />);
+    expect(rowIds(screen.getByRole('group', { name: 'Pinned' }))).toEqual(['parent', 'child', 'grandchild']);
+
+    const childRow = screen.getByText('Child run').closest('[data-conversation-id]') as HTMLElement;
+    fireEvent.click(within(childRow).getByRole('button', { name: 'Pin conversation and children' }));
+    const parentRow = screen.getByText('Parent run').closest('[data-conversation-id]') as HTMLElement;
+    fireEvent.click(within(parentRow).getByRole('button', { name: 'Unpin conversation and children' }));
+    expect(rowIds(screen.getByRole('group', { name: 'Pinned' }))).toEqual(['child', 'grandchild']);
+    view.unmount();
+
+    window.localStorage.setItem('flujo-ui:workspace', 'other-workspace');
+    render(<ChatHistory {...pinProps} />);
+    expect(screen.queryByRole('group', { name: 'Pinned' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a child pinned when a filter hides its parent', () => {
+    writeWorkspaceUiPreference(CONVERSATION_PINS_PREFERENCE, ['parent']);
+    writeWorkspaceUiPreference('flujo-ui:chat-sidebar:status', 'running');
+    render(<ChatHistory {...pinProps} conversations={[parent, { ...child, status: 'running' }]} />);
+    expect(rowIds(screen.getByRole('group', { name: 'Pinned' }))).toEqual(['child']);
+    expect(screen.queryByText('Parent run')).not.toBeInTheDocument();
+  });
+
   it('keeps search visible while the filter controls can be expanded and hidden', () => {
     render(
       <ThemeProvider theme={createTheme()}>

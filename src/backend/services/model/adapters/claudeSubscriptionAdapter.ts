@@ -31,6 +31,7 @@ import {
 import { normalizeMessageInput, isMalformedToolCallProse } from './messageNormalization';
 import { buildToolInputShape, embedSchemaInDescription } from './jsonSchemaToZod';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
+import { ClaudeUsageTracker } from './claudeUsageTracker';
 import {
   sessionKey,
   computePrefixHash,
@@ -980,17 +981,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     let resultText = '';
     let accumulatedText = '';
-    // Token accounting. The SDK's terminal `result` message carries the run's
-    // usage, but a handoff ABORTS the loop before that message arrives — so we
-    // also track per-turn usage from each assistant message as a fallback
-    // (otherwise every run that ends by routing to another node reports 0
-    // tokens). The fresh/cached split is computed by mapSdkUsage (see
-    // claudeUsage.ts and issue #87): promptTokens is the full input context,
-    // but the cheap cache RE-READ tokens are also surfaced separately so the UI
-    // doesn't count them as fresh on every turn.
-    let usage: SdkUsage | undefined;
-    let lastTurnUsage: SdkUsage | undefined;
-    let totalOutputTokens = 0;
+    // Result totals and per-request stream usage have different scopes. Track
+    // them separately and deduplicate assistant frames by their API message id.
+    const usageTracker = new ClaudeUsageTracker();
     // Whether we streamed at least one assistant text turn live (below). If so,
     // the final answer is already in the transcript and we must not re-emit the
     // concatenated text at the end (it would duplicate in the UI).
@@ -1064,6 +1057,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
+        usageTracker.observe(message);
         // Handoff end conditions (issue #156). A PLAIN handoff (endSpawning)
         // ends the run at the next streamed message, exactly like before —
         // no extra model turn, no post-handoff narration. SPAWN handoffs
@@ -1198,12 +1192,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // truncated one.
             pendingAbortedProse = undefined;
           }
-          if (assistant?.usage) {
-            lastTurnUsage = assistant.usage;
-            totalOutputTokens += assistant.usage.output_tokens ?? 0;
-          }
         } else if (message.type === 'result') {
-          usage = (message as { usage?: SdkUsage }).usage;
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
           } else if (handoffCalls.length === 0) {
@@ -1266,20 +1255,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
 
     const finalText = resultText || accumulatedText;
-    // Prefer the result message's totals; on handoff-aborted runs fall back to
-    // the last turn's context size + the summed output of all turns. cacheRead
-    // is the prefix re-read cheaply from the prompt cache — kept out of the
-    // "fresh" headline so a warmed-cache conversation stops reporting millions.
+    // Prefer query totals; an intentional handoff falls back to observed,
+    // deduplicated requests, including message_delta output counts.
     const {
       promptTokens,
       completionTokens,
       totalTokens,
       cacheReadTokens,
       cacheWriteTokens,
-    } = mapSdkUsage(usage, {
-      lastTurnUsage,
-      totalOutputTokens,
-    });
+    } = mapSdkUsage(usageTracker.getUsage());
 
     // The per-tool assistant(tool_call)+tool(result) pairs, and now each turn's
     // narration text, were already recorded and streamed live as they happened
@@ -1388,6 +1372,6 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       },
     };
 
-    return { completion, transcript };
+    return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow) };
   }
 }

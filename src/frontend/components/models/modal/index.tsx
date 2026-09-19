@@ -34,6 +34,7 @@ import {
   PROVIDER_PROFILES,
   getModelConfigurationCapabilities,
   getProviderProfile,
+  resolveModelAdapter,
   supportsProviderModelDiscovery,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
@@ -322,6 +323,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     if (open) {
       setFormState({
         ...model,
+        adapter: resolveModelAdapter(model.provider, model.adapter),
         displayName: model.displayName || model.name,
       });
       
@@ -487,7 +489,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         baseUrl: formState.baseUrl,
         azureApiVersion: currentProfile.adapter === 'azure' ? formState.azureApiVersion : '',
         provider: formState.provider!,
-        adapter: formState.adapter || 'openai',
+        adapter: resolveModelAdapter(formState.provider, formState.adapter),
         promptTemplate: formState.promptTemplate,
         temperature: configurationCapabilities.creativity ? formState.temperature : undefined,
         reasoningEffort: configurationCapabilities.effortLevels?.includes(formState.reasoningEffort!)

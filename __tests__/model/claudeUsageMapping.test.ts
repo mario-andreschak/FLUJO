@@ -38,27 +38,6 @@ describe('mapSdkUsage (#87)', () => {
     expect(result.promptTokens - result.cacheReadTokens).toBe(202);
   });
 
-  it('falls back to the last turn + summed output when the result message is absent (handoff)', () => {
-    const result = mapSdkUsage(undefined, {
-      lastTurnUsage: { input_tokens: 10, cache_read_input_tokens: 100 },
-      totalOutputTokens: 40,
-    });
-    expect(result.promptTokens).toBe(110); // 10 + 100
-    expect(result.cacheReadTokens).toBe(100);
-    expect(result.completionTokens).toBe(40);
-    expect(result.cacheWriteTokens).toBe(0);
-  });
-
-  it('prefers the result message usage over the fallback when both are present', () => {
-    const result = mapSdkUsage(
-      { input_tokens: 5, output_tokens: 7 },
-      { lastTurnUsage: { input_tokens: 9999 }, totalOutputTokens: 9999 },
-    );
-    expect(result.promptTokens).toBe(5);
-    expect(result.completionTokens).toBe(7);
-    expect(result.cacheReadTokens).toBe(0);
-  });
-
   it('returns all zeros when nothing is known', () => {
     expect(mapSdkUsage(undefined)).toEqual({
       promptTokens: 0,

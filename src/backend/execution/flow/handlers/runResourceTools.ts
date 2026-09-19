@@ -81,7 +81,6 @@ export function buildReadResourceTool(): ToolDefinition {
         },
         expected_sha256: {
           type: 'string',
-          pattern: '^[a-fA-F0-9]{64}$',
           description: 'Optional SHA-256 to verify against the immutable stored payload.',
         },
       },

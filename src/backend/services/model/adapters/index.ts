@@ -1,4 +1,5 @@
 import { Model } from '@/shared/types/model';
+import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
 import { OpenAiResponsesAdapter } from './openaiResponsesAdapter';
@@ -30,14 +31,13 @@ export type {
 
 /**
  * Pick the completion adapter for a model based on its `adapter` field.
- * Models saved before the field existed (undefined) fall through to the
- * OpenAI-compatible path, preserving their original behaviour.
+ * Gateway profiles also resolve older Chat Completions records to Responses.
  */
 export function getCompletionAdapter(model: Model): CompletionAdapter {
   if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
     return new OpenRouterMediaAdapter();
   }
-  switch (model.adapter) {
+  switch (resolveModelAdapter(model.provider, model.adapter)) {
     case 'azure':
       return new AzureOpenAiAdapter();
     case 'openai-responses':
@@ -77,7 +77,7 @@ export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
       reason: mediaRoute.reason,
     };
   }
-  switch (model.adapter) {
+  switch (resolveModelAdapter(model.provider, model.adapter)) {
     case 'azure':
       return {
         adapterId: 'azure',

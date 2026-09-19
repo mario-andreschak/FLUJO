@@ -144,7 +144,31 @@ export function extractRetryErrorFacts(error: unknown): RetryErrorFacts {
 export function isSessionLimitFailure(error: unknown): boolean {
   const facts = extractRetryErrorFacts(error);
   if (facts.status === 429) return true;
-  return LIMIT_SIGNATURE.test(`${facts.code ?? ''} ${facts.message}`);
+  
+  // Also check for provider-specific rate limit patterns
+  // AtlasCloud 400 "bad request" with rate limit context
+  // Nvidia "Service temporarily overloaded"
+  // Connection errors with undefined status
+  const combined = `${facts.code ?? ''} ${facts.message}`.toLowerCase();
+  
+  // Check for the standard limit signature
+  if (LIMIT_SIGNATURE.test(combined)) return true;
+  
+  // Additional provider-specific patterns that indicate rate limiting
+  const providerRateLimitPatterns = [
+    'service temporarily overloaded',
+    'temporarily overloaded',
+    'provider returned error',
+    'upstream error',
+    'bad request',
+    'rate limit',
+    'quota',
+    'too many requests',
+    'throttle',
+    'throttled',
+  ];
+  
+  return providerRateLimitPatterns.some(pattern => combined.includes(pattern));
 }
 
 export interface AutomaticRetryPlan {
@@ -214,7 +238,7 @@ export async function waitForRetryWindow(
 
   return new Promise<'ready' | 'aborted'>((resolve) => {
     let settled = false;
-    let poll: ReturnType<typeof setInterval> | undefined;
+    let poll: NodeJS.Timeout | undefined;
 
     // `timer` below is declared after this closure; settle() is only ever
     // reached from the timer/poll/abort callbacks, all created afterwards.
@@ -231,7 +255,7 @@ export async function waitForRetryWindow(
       settle('aborted');
     }
 
-    const timer = setTimeout(() => settle('ready'), delayMs);
+    const timer = setTimeout(() => settle('ready'), delayMs) as unknown as NodeJS.Timeout;
     timer.unref?.();
 
     if (shouldAbort) {

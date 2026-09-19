@@ -12,7 +12,7 @@ describe('guided model bundles', () => {
     expect(models[0]).toMatchObject({
       name: 'openrouter/free',
       provider: 'openrouter',
-      adapter: 'openai',
+      adapter: 'openai-responses',
       baseUrl: 'https://openrouter.ai/api/v1',
       ApiKey: 'secret',
     });

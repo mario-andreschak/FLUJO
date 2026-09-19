@@ -55,6 +55,8 @@ export interface CompletionResponse extends ModelServiceResponse {
  */
 export interface ModelTestAttempt {
   ok: boolean;
+  /** Check was not run; content explains why. Never presented as a pass. */
+  skipped?: boolean;
   /** HTTP status code, when one was received. */
   status?: number;
   /** Wall-clock duration of the attempt in milliseconds. */
@@ -111,6 +113,8 @@ export interface ModelTestResult {
   adapterRoute?: ModelAdapterRoute;
   /** Optional: result of exercising exactly the resolved adapter. */
   adapter?: ModelTestAttempt;
+  /** Synthetic FLUJO tool using the production schema/adapter conversion path. */
+  tool?: ModelTestAttempt;
 }
 
 /**

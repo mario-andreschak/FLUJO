@@ -33,7 +33,9 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
   const { t, formatNumber } = useI18n();
   return <Box sx={{ mb: 2 }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-      {attempt.ok ? (
+      {attempt.skipped ? (
+        <Chip size="small" label={t('models.test.skipped')} />
+      ) : attempt.ok ? (
         <CheckCircleIcon color="success" fontSize="small" />
       ) : (
         <ErrorIcon color="error" fontSize="small" />
@@ -45,7 +47,9 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
       <Chip size="small" variant="outlined" label={`${formatNumber(attempt.durationMs)} ms`} />
     </Box>
 
-    {attempt.ok ? (
+    {attempt.skipped ? (
+      <Typography variant="body2" color="text.secondary" sx={{ pl: 3 }}>{attempt.content}</Typography>
+    ) : attempt.ok ? (
       <Typography variant="body2" color="text.secondary" sx={{ pl: 3 }}>
         {t('models.test.response', { response: attempt.content ? `"${attempt.content}"` : t('models.test.empty') })}
       </Typography>
@@ -147,6 +151,9 @@ export const ModelTestDialog = ({
             <AttemptBlock title={t('models.test.axios')} attempt={result.axios} />
             {result.adapter && (
               <AttemptBlock title={t('models.test.adapterAttempt')} attempt={result.adapter} />
+            )}
+            {result.tool && (
+              <AttemptBlock title={t('models.test.toolAttempt')} attempt={result.tool} />
             )}
           </>
         ) : null}

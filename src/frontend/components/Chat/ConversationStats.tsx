@@ -21,7 +21,8 @@ import { summarizeTokenMeter } from '@/shared/utils/tokenUsage';
 
 /** 12345 → "12.3k", 950 → "950". */
 export const formatTokens = (n: number): string =>
-  n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`;
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`
+    : n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`;
 
 interface ConversationStatsProps {
   usage: NonNullable<Conversation['usage']> | undefined;
@@ -33,10 +34,8 @@ interface ConversationStatsProps {
 }
 
 /**
- * Compact token/context summary for the chat header: total tokens (click for
- * the per-node breakdown) and, when the active model's context window is
- * configured, a context-usage meter based on the provider-reported prompt
- * size of the latest call.
+ * Conversation-wide input/output totals, with the latest individual
+ * request's context displayed independently. Click for full processed totals.
  */
 const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInfo, availableNodes, compact = false }) => {
   const { t, formatNumber } = useI18n();
@@ -49,37 +48,43 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
   const byNode = usage?.byNode ? Object.entries(usage.byNode) : [];
 
-  // Cache RE-READ tokens are a subset of promptTokens that was re-read cheaply
-  // from the provider prompt cache. Counting them as fresh input made warmed
-  // conversations report absurd totals (#87), so the headline shows the FRESH
-  // figure (total minus cached reads) and the cached amount is called out
-  // separately in the tooltip/breakdown.
+  // Input includes cached reads on every provider; cache columns are subsets.
   const meter = usage ? summarizeTokenMeter(usage) : undefined;
   const cachedReads = meter?.cacheReadTokens ?? 0;
   const cacheWrites = meter?.cacheWriteTokens ?? 0;
-  const freshPrompt = meter?.freshPromptTokens ?? 0;
-  const freshTotal = meter?.meterTotalTokens ?? 0;
+  const promptTokens = usage?.promptTokens ?? 0;
 
-  // Context meter: provider-reported prompt tokens of the latest call vs the
-  // bound model's configured window. Rendered only when both are known.
+  const contextTokens = contextInfo?.totalTokens ?? contextInfo?.promptTokens;
+  const hasContext = typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens >= 0;
   const contextPct =
-    contextInfo?.contextWindow && contextInfo.contextWindow > 0
-      ? Math.min(100, Math.round((contextInfo.promptTokens / contextInfo.contextWindow) * 100))
+    hasContext && contextInfo?.contextWindow && contextInfo.contextWindow > 0
+      ? Math.round((contextTokens / contextInfo.contextWindow) * 100)
       : undefined;
+
+  const contextTooltip = hasContext && contextInfo?.contextWindow
+    ? `${t('chat.stats.context', {
+      model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
+      used: formatNumber(contextTokens!),
+      total: formatNumber(contextInfo.contextWindow),
+    })}${contextInfo.contextWindowSource === 'configured' ? ` ${t('chat.stats.configuredWindow')}` : ''}`
+    : '';
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: compact ? 0.5 : 1.5, flexShrink: 0 }}>
-      {usage && freshTotal > 0 && (
+      {usage && meter!.processedTotalTokens > 0 && (
         <>
           <Tooltip title={t('chat.stats.tooltip', {
-            prompt: formatNumber(freshPrompt),
+            prompt: formatNumber(promptTokens),
             completion: formatNumber(usage.completionTokens),
             cached: cachedReads > 0 ? t('chat.stats.cached', { count: formatNumber(cachedReads) }) : '',
             written: cacheWrites > 0 ? t('chat.stats.written', { count: formatNumber(cacheWrites) }) : '',
           })}>
             <Chip
               icon={<DataUsageIcon />}
-              label={compact ? formatTokens(freshTotal) : t('chat.stats.tokens', { count: formatTokens(freshTotal) })}
+              label={t(compact ? 'chat.stats.inputOutputCompact' : 'chat.stats.inputOutput', {
+                input: formatTokens(promptTokens),
+                output: formatTokens(meter!.completionTokens),
+              })}
               size="small"
               variant="outlined"
               onClick={(e) => setAnchorEl(e.currentTarget)}
@@ -118,27 +123,27 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
                             <span>{nodeLabel(nodeId)}</span>
                           </Tooltip>
                         </TableCell>
-                        <TableCell align="right">{formatNumber(nodeMeter.freshPromptTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(n.promptTokens)}</TableCell>
                         <TableCell align="right">{formatNumber(nodeMeter.completionTokens)}</TableCell>
-                        <TableCell align="right">{formatNumber(nodeMeter.cacheReadTokens)}</TableCell>
-                        <TableCell align="right">{formatNumber(nodeMeter.cacheWriteTokens)}</TableCell>
-                        <TableCell align="right">{formatNumber(nodeMeter.meterTotalTokens)}</TableCell>
+                        <TableCell align="right">{n.cacheReadTokens == null ? '—' : formatNumber(nodeMeter.cacheReadTokens)}</TableCell>
+                        <TableCell align="right">{n.cacheWriteTokens == null ? '—' : formatNumber(nodeMeter.cacheWriteTokens)}</TableCell>
+                        <TableCell align="right">{formatNumber(nodeMeter.processedTotalTokens)}</TableCell>
                       </TableRow>
                     );
                   })}
                   <TableRow>
                     <TableCell sx={{ fontWeight: 'bold' }}>{t('chat.stats.total')}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(freshPrompt)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(promptTokens)}</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.completionTokens)}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(cachedReads)}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(cacheWrites)}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(freshTotal)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{usage.cacheReadTokens == null ? '—' : formatNumber(cachedReads)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{usage.cacheWriteTokens == null ? '—' : formatNumber(cacheWrites)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(meter!.processedTotalTokens)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
               {cachedReads > 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                  {t('chat.stats.cacheHelp', { cached: formatNumber(cachedReads), fresh: formatNumber(freshTotal) })}
+                  {t('chat.stats.cacheHelp', { cached: formatNumber(cachedReads) })}
                 </Typography>
               )}
               {cacheWrites > 0 && (
@@ -153,44 +158,43 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
       {contextInfo && contextPct !== undefined && !compact && (
         <Tooltip
-          title={t('chat.stats.context', {
-            model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
-            used: formatNumber(contextInfo.promptTokens),
-            total: formatNumber(contextInfo.contextWindow!),
-          })}
+          title={contextTooltip}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 140 }}>
             <LinearProgress
               variant="determinate"
-              value={contextPct}
+              value={Math.min(100, contextPct)}
               color={contextPct >= 90 ? 'error' : contextPct >= 70 ? 'warning' : 'primary'}
               sx={{ flex: 1, height: 6, borderRadius: 3 }}
             />
             <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-              {formatTokens(contextInfo.promptTokens)}/{formatTokens(contextInfo.contextWindow!)} ({contextPct}%)
+              {t('chat.stats.contextLabel')} {formatTokens(contextTokens!)}/{formatTokens(contextInfo.contextWindow!)} ({contextPct}%)
             </Typography>
           </Box>
         </Tooltip>
       )}
 
       {contextInfo && contextPct !== undefined && compact && (
-        <Tooltip title={t('chat.stats.context', {
-          model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
-          used: formatNumber(contextInfo.promptTokens),
-          total: formatNumber(contextInfo.contextWindow!),
-        })}>
+        <Tooltip title={contextTooltip}>
           <Typography variant="caption" color={contextPct >= 90 ? 'error.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
             ctx {contextPct}%
           </Typography>
         </Tooltip>
       )}
 
-      {contextInfo && contextPct === undefined && (
+      {contextInfo && hasContext && contextPct === undefined && (
         <Tooltip title={t('chat.stats.noWindow', {
           model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
         })}>
           <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-            ctx {formatTokens(contextInfo.promptTokens)}
+            {t('chat.stats.contextLabel')} {formatTokens(contextTokens!)}
+          </Typography>
+        </Tooltip>
+      )}
+      {contextInfo && !hasContext && (
+        <Tooltip title={t('chat.stats.contextUnavailableHelp')}>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+            {t('chat.stats.contextUnavailable')}
           </Typography>
         </Tooltip>
       )}

@@ -133,6 +133,25 @@ beforeEach(() => {
 });
 
 describe('mid-flight completion cancellation', () => {
+  it.each([false, true])('persists context separately from run usage (transcript: %s)', async (withTranscript) => {
+    const contextUsage = { promptTokens: 165897, completionTokens: 390, totalTokens: 166287, contextWindow: 258400 };
+    createCompletionMock.mockImplementationOnce(async () => ({
+      completion: {
+        id: 'context-result', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'done', refusal: null } }],
+        usage: { prompt_tokens: 5606187, completion_tokens: 27510, total_tokens: 5633697 },
+      },
+      contextUsage,
+      ...(withTranscript ? { transcript: [{ role: 'assistant', content: 'done', id: 'a1', timestamp: 1 }] } : {}),
+    }));
+    const result = await callModel();
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.value.messages.at(-1)).toMatchObject({
+      contextUsage, usage: { promptTokens: 5606187, completionTokens: 27510, totalTokens: 5633697 },
+    });
+  });
+
   it('archives steering in the canonical and wire views of the next internal dispatch', async () => {
     seedState('conv-steering-archive');
     const streamedAssistant = {

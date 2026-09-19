@@ -51,6 +51,8 @@ import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
 import FilterListRoundedIcon from '@mui/icons-material/FilterListRounded';
 import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded';
 import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded';
+import PushPinRoundedIcon from '@mui/icons-material/PushPinRounded';
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import type { ChatRevealRequest } from './index';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
@@ -66,6 +68,7 @@ import type { WavesResponse } from '@/shared/types/waves/waves';
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
+import { CONVERSATION_PINS_PREFERENCE, collectPinnedConversationIds } from '@/utils/shared/conversationPins';
 import { alpha, useTheme as useMuiTheme } from '@mui/material/styles';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 import { getConversationOrigin } from './conversationOrigin';
@@ -90,6 +93,8 @@ interface ChatHistoryProps {
   onLoadMore?: () => Promise<void>;
   /** Explicitly materialize all pages for complete bulk-action semantics. */
   onLoadAll?: () => Promise<ConversationListItem[]>;
+  /** Refresh pinned families that may live outside the loaded history pages. */
+  onPinsChanged?: () => void;
   currentConversationId: string | null;
   /** One-shot, URL-originated request to reveal a conversation (issue #397):
    *  expands the group/chain that contains it and scrolls its row into view
@@ -200,6 +205,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   isLoadingMore = false,
   onLoadMore,
   onLoadAll,
+  onPinsChanged,
   currentConversationId,
   revealRequest = null,
   onSelectConversation,
@@ -244,6 +250,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const [searchErrorKey, setSearchErrorKey] = React.useState<string | null>(null);
   const searchAbortRef = React.useRef<AbortController | null>(null);
   const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(PREF.group, 'none');
+  const [pinnedConversationIds, setPinnedConversationIds] = useWorkspaceUiPreference<string[]>(
+    CONVERSATION_PINS_PREFERENCE,
+    [],
+  );
+  const previousPinsRef = React.useRef(pinnedConversationIds);
+  React.useEffect(() => {
+    if (previousPinsRef.current === pinnedConversationIds) return;
+    previousPinsRef.current = pinnedConversationIds;
+    onPinsChanged?.();
+  }, [pinnedConversationIds, onPinsChanged]);
   const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<StatusFilter>(PREF.status, 'all');
   const [flowFilter, setFlowFilter] = useWorkspaceUiPreference<string>(PREF.flow, 'all');
   const [dateFilter, setDateFilter] = useWorkspaceUiPreference<DateFilter>(PREF.date, 'all');
@@ -492,15 +508,24 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     [filterConversations, sourceConversations],
   );
 
+  // Resolve membership before filtering so a hidden parent still pins its children.
+  const pinnedIds = useMemo(
+    () => collectPinnedConversationIds([...conversations, ...sourceConversations], pinnedConversationIds),
+    [conversations, sourceConversations, pinnedConversationIds],
+  );
+  const pinnedConversations = useMemo(() => filtered.filter((c) => pinnedIds.has(c.id)), [filtered, pinnedIds]);
+  const unpinnedConversations = useMemo(() => filtered.filter((c) => !pinnedIds.has(c.id)), [filtered, pinnedIds]);
+  const pinnedChainIndex = useMemo(() => buildChainIndex(pinnedConversations), [pinnedConversations]);
+
   // Build the (optionally grouped) sections to render.
   const groups: CardGroup<ConversationListItem>[] = useMemo(() => {
     if (groupMode === 'none') {
-      return [{ key: 'all', label: '', items: filtered }];
+      return [{ key: 'all', label: '', items: unpinnedConversations }];
     }
     if (groupMode === 'wave') {
       // Bucket by wave; keep the Ad-hoc / Archived fallback buckets last.
       return orderWaveGroups(
-        groupItems(filtered, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
+        groupItems(unpinnedConversations, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
       ).map((group) => ({
         ...group,
         label: group.key === 'wave:__adhoc__'
@@ -510,7 +535,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             : group.label,
       }));
     }
-    return groupItems(filtered, (c) => {
+    return groupItems(unpinnedConversations, (c) => {
        if (groupMode === 'date') {
          const bucket = recencyBucket(c.updatedAt);
          const labels: Record<string, string> = {
@@ -528,7 +553,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       }
       return flowMeta(c.flowId);
     });
-  }, [filtered, groupMode, flowMeta, waveLookup, originLabel, t]);
+  }, [unpinnedConversations, groupMode, flowMeta, waveLookup, originLabel, t]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -543,9 +568,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const chainIndex = useMemo(
     () =>
       groupMode === 'chain'
-        ? buildChainIndex(filtered)
+        ? buildChainIndex(unpinnedConversations)
         : { roots: [], childrenByParent: new Map(), detachedIds: new Set<string>() },
-    [groupMode, filtered],
+    [groupMode, unpinnedConversations],
   );
   // Per-node expand state is session-only (not persisted): a node is expanded
   // unless explicitly collapsed, so chains are visible by default.
@@ -569,7 +594,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [groupMode, groups]);
 
   const expandableChainIds = useMemo(() => {
-    const ids = new Set<string>();
+    const ids = new Set<string>(pinnedChainIndex.childrenByParent.keys());
     if (groupMode === 'chain') {
       chainIndex.childrenByParent.forEach((_children, parentId) => ids.add(parentId));
     } else if (groupMode === 'wave') {
@@ -578,7 +603,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       });
     }
     return [...ids];
-  }, [chainIndex, groupMode, waveChainByGroup]);
+  }, [chainIndex, groupMode, waveChainByGroup, pinnedChainIndex]);
 
   const setAllHierarchyExpanded = React.useCallback((expanded: boolean) => {
     setExpandedChains((previous) => {
@@ -596,7 +621,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [expandableChainIds, groupMode, groups, setCollapsedGroups]);
 
   const showHierarchyControls =
-    (groupMode === 'chain' && expandableChainIds.length > 0)
+    expandableChainIds.length > 0
     || (groupMode === 'wave' && groups.length > 0);
 
   // --- URL reveal (issue #397) ---------------------------------------------
@@ -645,8 +670,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     // 2. Tree modes (chain, and the per-wave trees): expand every collapsed
     //    ancestor on the rendered path. `ConversationTree` unmounts collapsed
     //    children, so an ancestor left closed keeps the row out of the DOM.
-    const tree = groupMode === 'chain'
-      ? chainIndex
+    const tree = pinnedIds.has(id)
+      ? pinnedChainIndex
+      : groupMode === 'chain' ? chainIndex
       : group
         ? waveChainByGroup.get(group.key)
         : undefined;
@@ -705,6 +731,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     collapsedGroups,
     setCollapsedGroups,
     chainIndex,
+    pinnedIds,
+    pinnedChainIndex,
     waveChainByGroup,
     expandedChains,
     revealAttempt,
@@ -724,6 +752,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     opts?: { detached?: boolean },
   ) => {
     const detached = opts?.detached === true;
+    const directlyPinned = pinnedConversationIds.includes(conversation.id);
+    const pinLabel = t(directlyPinned ? 'chat.history.unpin' : 'chat.history.pin');
     // Any conversation whose run is still alive — executing or holding
     // tool calls (awaiting approval) — gets a stop button, so a run can
     // be stopped without first switching to its conversation.
@@ -767,6 +797,23 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               '& .MuiIconButton-root': { width: 30, height: 30 },
             } : { display: 'flex' }}
           >
+            <Tooltip title={pinLabel}>
+              <IconButton
+                size="small"
+                aria-label={pinLabel}
+                aria-pressed={directlyPinned}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPinnedConversationIds((previous) => previous.includes(conversation.id)
+                    ? previous.filter((id) => id !== conversation.id)
+                    : [...previous, conversation.id]);
+                }}
+              >
+                {directlyPinned
+                  ? <PushPinRoundedIcon color="primary" fontSize="small" />
+                  : <PushPinOutlinedIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
             {stoppable && (
               <Tooltip title={t('chat.history.stop')}>
                 <IconButton
@@ -872,8 +919,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           sx={{
             position: 'relative',
             zIndex: 1,
-            pr: stoppable ? 12 : 7,
             px: modern ? 1.5 : 2,
+            pr: stoppable ? 17 : 13,
             py: modern ? 1.25 : 1,
             alignItems: 'flex-start',
             borderRadius: 'inherit',
@@ -1397,6 +1444,22 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           scrollbarGutter: 'stable',
         }}
       >
+        {pinnedConversations.length > 0 && !searchPending && !isSearching && (
+          <Box role="group" aria-label={t('chat.history.pinned')} sx={{ mb: 1 }}>
+            <Typography variant="overline" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 1, mb: 0.5 }}>
+              <PushPinRoundedIcon sx={{ fontSize: 16 }} />
+              {t('chat.history.pinned')}
+            </Typography>
+            <ConversationTree
+              nodes={pinnedChainIndex.roots}
+              childrenByParent={pinnedChainIndex.childrenByParent}
+              renderItem={(c) => renderConversation(c, { detached: pinnedChainIndex.detachedIds.has(c.id) })}
+              expanded={expandedChains}
+              onToggle={toggleChain}
+            />
+            {unpinnedConversations.length > 0 && <Divider sx={{ my: 1 }} />}
+          </Box>
+        )}
         {searchPending || isSearching ? (
           <ListItem sx={{ justifyContent: 'center', gap: 1, py: 3 }}>
             <CircularProgress size={18} />
@@ -1441,7 +1504,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           />
         ) : groupMode === 'none' ? (
           // NB: wrap the call — Array.map would pass the index as `opts`.
-          filtered.map((c) => renderConversation(c))
+          unpinnedConversations.map((c) => renderConversation(c))
         ) : (
           groups.map((group) => {
             const collapsed = !!collapsedGroups[group.key];

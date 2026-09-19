@@ -55,14 +55,14 @@ function takeHeadBytes(s: string, maxBytes: number): string {
   if (buf.byteLength <= maxBytes) return s;
   // A byte slice may split a multibyte char at the tail; toString then emits a
   // U+FFFD replacement char there — strip it so the preview stays clean.
-  return buf.subarray(0, maxBytes).toString('utf8').replace(/�+$/, '');
+  return buf.subarray(0, maxBytes).toString('utf8').replace(/\ufffd+$/, '');
 }
 
 /** Take at most `maxBytes` UTF-8 bytes from the END of `s`. */
 function takeTailBytes(s: string, maxBytes: number): string {
   const buf = Buffer.from(s, 'utf8');
   if (buf.byteLength <= maxBytes) return s;
-  return buf.subarray(buf.byteLength - maxBytes).toString('utf8').replace(/^�+/, '');
+  return buf.subarray(buf.byteLength - maxBytes).toString('utf8').replace(/^\ufffd+/, '');
 }
 
 /**
@@ -101,6 +101,12 @@ function buildPreview(
 
 export async function boundToolResult(input: BoundToolResultInput): Promise<BoundToolResultOutcome> {
   const { conversationId, toolCallId, server, toolName, nodeId, content, settings } = input;
+
+  // Master switch: if truncation is disabled, return content as-is
+  if (!settings.toolResultTruncationEnabled) {
+    return { content, spilled: false };
+  }
+
   const maxLines = settings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
   const maxBytes = settings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
 

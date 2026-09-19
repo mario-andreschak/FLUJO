@@ -166,7 +166,7 @@ export const API_GROUPS: ApiGroup[] = [
         paramsLabel: 'Body',
         params: [{ name: 'flowId', type: 'string', description: 'New flow id (PATCH only).' }],
         response:
-          'Conversation with messages, plus usage (token totals, per-node breakdown), status, and contextInfo (latest prompt-token count + the bound model\'s context window — what the chat token counter and context meter display).',
+          'Conversation with messages, plus usage (accumulated input/output totals, including cached input, and per-node breakdown), status, and contextInfo (latest individual model request and context limit, when available). contextWindowSource distinguishes runtime-reported limits from model settings. Context counts are omitted when unknown; accumulated agent usage is never a context measurement.',
         notes: [
           'Messages are a projection of the append-only conversation log when one exists (legacy conversations without a log are served as stored). Node system prompts are never included.',
           'Subflow steps appear inline as depth-tagged, display-only messages (nested in the chat UI); they are never part of the parent\'s model context.',

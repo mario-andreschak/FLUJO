@@ -25,13 +25,12 @@ export function normalizeOutputModalities(model: Pick<Model, 'outputModalities'>
 /**
  * Single source of truth for whether an OpenRouter model must be routed to
  * the dedicated `/images` or `/videos` media endpoints rather than
- * `/chat/completions`.
+ * `/responses`.
  *
  * A model is routed to the media endpoints only when it is *media-only*:
  * its output modalities include `image`/`video` but do NOT include `text`.
  * Models that also emit text (ordinary multimodal chat models) are served by
- * Chat Completions, which already supports requesting image output via
- * `modalities: ["image","text"]` (see openaiAdapter.ts).
+ * the Responses adapter.
  *
  * Used by both the execution path (getCompletionAdapter, the media adapter
  * itself) and the model-card test path (testConnection.ts) so the two can
@@ -42,7 +41,7 @@ export function resolveOpenRouterMediaRoute(model: Model): OpenRouterMediaRoute 
     return { useMediaRoute: false, reason: 'not an OpenRouter model' };
   }
 
-  if (model.adapter && model.adapter !== 'openai') {
+  if (model.adapter && model.adapter !== 'openai' && model.adapter !== 'openai-responses') {
     return {
       useMediaRoute: false,
       reason: `explicit ${model.adapter} adapter pinned on the model`,
@@ -54,14 +53,14 @@ export function resolveOpenRouterMediaRoute(model: Model): OpenRouterMediaRoute 
   if (outputs.length === 0) {
     return {
       useMediaRoute: false,
-      reason: 'no output modality metadata; defaulting to Chat Completions',
+      reason: 'no output modality metadata; defaulting to Responses',
     };
   }
 
   if (outputs.includes('text')) {
     return {
       useMediaRoute: false,
-      reason: 'model also emits text, so it is served by /chat/completions',
+      reason: 'model also emits text, so it is served by /responses',
     };
   }
 

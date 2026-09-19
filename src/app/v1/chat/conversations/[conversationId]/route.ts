@@ -14,8 +14,7 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { loadItem as loadItemBackend, saveItem } from '@/utils/storage/backend'; // Import saveItem
 import { StorageKey } from '@/shared/types/storage';
 import { ConversationListItem } from '@/frontend/components/Chat'; // Import for response type
-import { flowService } from '@/backend/services/flow';
-import { modelService } from '@/backend/services/model';
+import { buildContextInfo } from '@/backend/execution/flow/conversationContextInfo';
 import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
 import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
@@ -75,64 +74,6 @@ async function personaConversationDeleteConflict(
     return 'This Persona conversation is still queued, running, or waiting. Stop it before deleting it.';
   }
   return null;
-}
-
-/**
- * Context-usage snapshot for the conversation's most recent model call.
- *
- * `promptTokens` is the PROVIDER-REPORTED prompt size of the last assistant
- * turn that carried usage — the exact size of what that node's model last
- * received, no tokenizer approximation needed. `contextWindow` comes from the
- * node's bound model config (optional metadata); the frontend renders a meter
- * when both are present. Advisory: any resolution failure just omits fields.
- */
-async function buildContextInfo(sharedState: SharedState): Promise<
-  | {
-      promptTokens: number;
-      completionTokens?: number;
-      nodeId?: string;
-      modelDisplayName?: string;
-      contextWindow?: number;
-    }
-  | undefined
-> {
-  try {
-    const messages = sharedState.messages || [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== 'assistant' || !msg.usage) continue;
-
-      const info: {
-        promptTokens: number;
-        completionTokens?: number;
-        nodeId?: string;
-        modelDisplayName?: string;
-        contextWindow?: number;
-      } = {
-        promptTokens: msg.usage.promptTokens,
-        completionTokens: msg.usage.completionTokens,
-        nodeId: msg.processNodeId,
-      };
-
-      if (msg.processNodeId && sharedState.flowId) {
-        const flow = await flowService.getFlow(sharedState.flowId);
-        const node = flow?.nodes.find((candidate) => candidate.id === msg.processNodeId);
-        const rawBoundModelId = node?.data?.properties?.boundModel;
-        const boundModelId = typeof rawBoundModelId === 'string' ? rawBoundModelId : undefined;
-        if (boundModelId) {
-          const model = await modelService.getModel(boundModelId);
-          if (model) {
-            info.modelDisplayName = model.displayName || model.name;
-            info.contextWindow = model.contextWindow;
-          }
-        }
-      }
-      return info;
-    }
-  } catch (error) {
-    log.warn('buildContextInfo failed; omitting context info', { error });
-  }
-  return undefined;
 }
 
 async function GET_handler(

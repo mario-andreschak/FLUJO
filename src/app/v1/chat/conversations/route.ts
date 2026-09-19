@@ -22,6 +22,7 @@ import { isPersonaOwnedConversationState } from '@/backend/execution/flow/person
 import { deleteRunResources } from '@/backend/services/runResources';
 import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
+import { collectPinnedConversationIds } from '@/utils/shared/conversationPins';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
@@ -213,6 +214,12 @@ async function GET_handler(request: NextRequest) {
   const cursor = url.searchParams.get('cursor') ?? undefined;
   const requestedOrigin = (url.searchParams.get('origin') ?? '').trim();
   const descendantsOf = (url.searchParams.get('descendantsOf') ?? '').trim();
+  const pinnedIds = [...new Set(url.searchParams.getAll('pinnedId'))];
+  try {
+    pinnedIds.forEach((id) => assertSafeCollectionId(id));
+  } catch {
+    return NextResponse.json({ error: 'invalid pinned conversation id' }, { status: 400 });
+  }
   const rawSessionKey = url.searchParams.get('sessionKey');
   if (rawSessionKey !== null && rawSessionKey.length > SESSION_KEY_MAX_LENGTH) {
     return NextResponse.json(
@@ -323,7 +330,11 @@ async function GET_handler(request: NextRequest) {
         visible = visible.filter((summary) => ids.has(summary.id));
       }
       try {
-        return NextResponse.json(paginateConversationSummaries(visible, pageLimit, cursor));
+        const pinned = pinnedIds.length > 0 ? collectPinnedConversationIds(visible, pinnedIds) : undefined;
+        return NextResponse.json({
+          ...paginateConversationSummaries(visible, pageLimit, cursor),
+          ...(pinned ? { pinnedItems: visible.filter((item) => pinned.has(item.id)) } : {}),
+        });
       } catch (error) {
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
@@ -539,7 +550,11 @@ async function GET_handler(request: NextRequest) {
         visibleConversations = visibleConversations.filter((conversation) => ids.has(conversation.id));
       }
       try {
-        return NextResponse.json(paginateConversationSummaries(visibleConversations, pageLimit, cursor));
+        const pinned = pinnedIds.length > 0 ? collectPinnedConversationIds(visibleConversations, pinnedIds) : undefined;
+        return NextResponse.json({
+          ...paginateConversationSummaries(visibleConversations, pageLimit, cursor),
+          ...(pinned ? { pinnedItems: visibleConversations.filter((item) => pinned.has(item.id)) } : {}),
+        });
       } catch (error) {
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });
