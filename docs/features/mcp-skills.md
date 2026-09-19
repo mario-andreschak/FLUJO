@@ -12,7 +12,9 @@ Skills are disabled by default for every MCP server. Enable **MCP Skills** on an
 individual server card. FLUJO then reconnects that server, inspects its
 server-side extension capability, and calls `skills/list` or `skills/get`
 only when both the local opt-in and the advertised extension are present.
-FLUJO does not advertise a client-side Skills extension.
+When Skills are enabled for a server, FLUJO also advertises the client-side
+`io.modelcontextprotocol/skills` extension during initialization. Servers that
+require mutual extension negotiation can then accept its Skills requests.
 
 The server details dialog has a Skills tab. Discovery does not load or activate
 anything. **Load for this conversation** is a separate user action: the host

@@ -22,6 +22,7 @@ import {
   MCPServerConfig,
   MCPStdioConfig,
   MCPStreamableConfig,
+  MCP_SKILLS_EXTENSION_ID,
   SERVER_DIR_PREFIX,
 } from "@/shared/types/mcp";
 import { ChildProcess } from "child_process";
@@ -395,6 +396,9 @@ export function createNewClient(config: MCPServerConfig): Client {
             }
           : {}),
         extensions: {
+          ...(config.enableMcpSkills === true
+            ? { [MCP_SKILLS_EXTENSION_ID]: {} }
+            : {}),
           ...(serverHasStdioOAuth
             ? { [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY }
             : {}),
