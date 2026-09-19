@@ -13,7 +13,7 @@ const baseInput = (content: string) => ({
   server: 'web',
   toolName: 'fetch',
   content,
-  settings: { ...DEFAULT_RUN_RESOURCE_SETTINGS },
+  settings: { ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: true },
 });
 
 beforeEach(() => {
@@ -48,7 +48,19 @@ describe('boundToolResult FLUJO boundary', () => {
 
     const outcome = await boundToolResult({
       ...baseInput(content),
-      settings: { ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultMaxBytes: 900_000 },
+      settings: { ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: true, toolResultMaxBytes: 900_000 },
+    });
+
+    expect(outcome).toEqual({ content, spilled: false });
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it('does not truncate when toolResultTruncationEnabled is false', async () => {
+    const content = 'x'.repeat(300_000);
+
+    const outcome = await boundToolResult({
+      ...baseInput(content),
+      settings: { ...DEFAULT_RUN_RESOURCE_SETTINGS, toolResultTruncationEnabled: false },
     });
 
     expect(outcome).toEqual({ content, spilled: false });

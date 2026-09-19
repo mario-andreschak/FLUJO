@@ -139,6 +139,14 @@ export interface RunResourceSettings {
    */
   replaceLargeTextWithStub: boolean;
   /**
+   * Master switch for tool-result truncation/conversion to resource-URI.
+   * When disabled (default), tool results are never truncated or converted
+   * to resource URIs at the tool boundary, regardless of size limits.
+   * When enabled, tool results exceeding toolResultMaxLines or toolResultMaxBytes
+   * are truncated to a head+tail preview with a resource URI.
+   */
+  toolResultTruncationEnabled: boolean;
+  /**
    * Tool-boundary bound (issue #251). Every tool result whose text form exceeds
    * EITHER of these limits is truncated to a head+tail preview and the full
    * content is spilled unconditionally to a run resource on the very turn it is
@@ -164,6 +172,7 @@ export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   maxResourceBytes: 50 * 1024 * 1024,
   maxConversationBytes: 256 * 1024 * 1024,
   replaceLargeTextWithStub: false,
+  toolResultTruncationEnabled: false,
   toolResultMaxLines: DEFAULT_TOOL_RESULT_MAX_LINES,
   toolResultMaxBytes: DEFAULT_TOOL_RESULT_MAX_BYTES,
   retentionAgeDays: 7,

@@ -82,6 +82,7 @@ beforeEach(() => {
     maxResourceBytes: 1024 * 1024,
     maxConversationBytes: 2 * 1024 * 1024,
     replaceLargeTextWithStub: false,
+    toolResultTruncationEnabled: false,
     toolResultMaxLines: 2000,
     toolResultMaxBytes: 50 * 1024,
     retentionAgeDays: 7,
