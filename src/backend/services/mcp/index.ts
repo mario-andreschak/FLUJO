@@ -2208,6 +2208,7 @@ export class MCPService {
     timeout?: number,
     signal?: AbortSignal,
     ownerScope?: string,
+    onProgress?: (progress: ToolCallProgress) => void,
   ): Promise<MCPServiceResponse> {
     const appAccess = await this.checkMcpAppAccess(serverName);
     if (appAccess) return appAccess;
@@ -2217,7 +2218,7 @@ export class MCPService {
       toolName,
       args,
       timeout,
-      undefined,
+      onProgress,
       undefined,
       signal,
       "app",
@@ -2245,7 +2246,7 @@ export class MCPService {
       toolName,
       args,
       timeout,
-      undefined,
+      onProgress,
       undefined,
       signal,
       "app",

@@ -4,6 +4,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import {
   buildRunResourceUri,
   readRunResource,
+  readRunResourceRange,
 } from '@/backend/services/runResources';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
@@ -40,6 +41,42 @@ async function GET_handler(
 
   try {
     const uri = buildRunResourceUri(conversationId, resourceId);
+    const access = {
+      at: Date.now(),
+      source: 'res-ref' as const,
+    };
+    const rangeHeader = request.headers.get('range');
+    if (rangeHeader) {
+      const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader.trim());
+      if (!match) {
+        return new NextResponse(null, { status: 416 });
+      }
+      const start = Number(match[1]);
+      const end = match[2] ? Number(match[2]) : Number.MAX_SAFE_INTEGER;
+      const ranged = await readRunResourceRange(uri, start, end, access);
+      if (!ranged) {
+        return NextResponse.json({ error: 'Resource not found' }, { status: 404 });
+      }
+      if (ranged.start >= ranged.total) {
+        return new NextResponse(null, {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${ranged.total}` },
+        });
+      }
+      const safeFilename = (ranged.entry.name ?? ranged.entry.id).replace(/["\r\n]/g, '_');
+      return new NextResponse(Uint8Array.from(ranged.data), {
+        status: 206,
+        headers: {
+          'Content-Type': ranged.entry.mimeType ?? 'application/octet-stream',
+          'Content-Length': String(ranged.data.byteLength),
+          'Content-Range': `bytes ${ranged.start}-${ranged.end}/${ranged.total}`,
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          'Content-Disposition': `inline; filename="${safeFilename}"`,
+        },
+      });
+    }
+
     const read = await readRunResource(uri, {
       at: Date.now(),
       source: 'res-ref',
@@ -60,6 +97,7 @@ async function GET_handler(
       headers: {
         'Content-Type': content.mimeType ?? read.entry.mimeType ?? 'application/octet-stream',
         'Content-Length': String(body.byteLength),
+        'Accept-Ranges': 'bytes',
         'Cache-Control': 'private, max-age=31536000, immutable',
         'Content-Disposition': `inline; filename="${safeFilename}"`,
       },

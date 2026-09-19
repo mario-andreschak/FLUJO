@@ -133,10 +133,10 @@ describe('filesystem tool definitions', () => {
     expect(names).toContain('get_allowed_directories');
   });
 
-  it('keeps the search interface limited to path, name, and content', () => {
+  it('keeps search focused while exposing cursor pagination', () => {
     const search = filesystemToolDefinitions().find((tool) => tool.name === 'search');
     expect(Object.keys(search?.inputSchema.properties ?? {}).sort()).toEqual([
-      'content', 'namePattern', 'path',
+      'content', 'cursor', 'namePattern', 'pageSize', 'path',
     ]);
   });
 
@@ -412,6 +412,8 @@ describe('filesystem operations', () => {
     expect(out).toEqual({
       matches: [{ path: path.resolve(dir, 'nested/doc.txt'), line: 7, text: 'Fast TOKEN result' }],
       truncated: false,
+      hasMore: false,
+      complete: true,
     });
     expect(mockedSpawn).toHaveBeenCalledWith(
       executable,
@@ -420,15 +422,24 @@ describe('filesystem operations', () => {
     );
   });
 
-  it('search enforces one global result budget in the Node fallback', async () => {
+  it('paginates every Node-fallback match without dropping the tail', async () => {
     _setRipgrepExecutableForTests(null);
     await Promise.all([
       fsp.writeFile(path.join(dir, 'many-a.txt'), Array.from({ length: 700 }, () => 'shared token').join('\n')),
       fsp.writeFile(path.join(dir, 'many-b.txt'), Array.from({ length: 700 }, () => 'shared token').join('\n')),
     ]);
-    const out = parse(await filesystemCallTool('search', { path: dir, content: 'shared token' }));
-    expect(out.matches).toHaveLength(1_000);
-    expect(out.truncated).toBe(true);
+    const first = parse(await filesystemCallTool('search', { path: dir, content: 'shared token' }));
+    expect(first.matches).toHaveLength(1_000);
+    expect(first).toMatchObject({ truncated: false, hasMore: true, complete: false });
+    expect(typeof first.nextCursor).toBe('string');
+
+    const second = parse(await filesystemCallTool('search', {
+      path: dir,
+      content: 'shared token',
+      cursor: first.nextCursor,
+    }));
+    expect(second.matches).toHaveLength(400);
+    expect(second).toMatchObject({ truncated: false, hasMore: false, complete: true });
   });
 
   it('search kills ripgrep when the MCP request is cancelled', async () => {

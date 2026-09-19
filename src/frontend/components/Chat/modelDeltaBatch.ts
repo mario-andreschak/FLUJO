@@ -17,7 +17,11 @@ export function applyModelDeltaBatch<
   let changed = false;
   const indexes = new Map(messages.map((message, index) => [message.id, index]));
 
-  for (const event of events) {
+  const orderedEvents = events.length > 1
+    ? [...events].sort((left, right) => left.seq - right.seq)
+    : events;
+
+  for (const event of orderedEvents) {
     if (event.conversationId !== conversation.id) continue;
 
     const existingIndex = indexes.get(event.messageId) ?? -1;

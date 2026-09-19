@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -412,37 +412,152 @@ const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => {
   </Box>;
 };
 
-/**
- * Renders a tool result body — either the raw string or the "rendered" view
- * that understands the MCP `{ content: [...] }` shape (text → markdown,
- * image/audio → inline media, everything else → pretty-printed JSON). Extracted
- * so the merged tool-call timeline (#95) and the legacy orphan tool bubble share
- * a single implementation.
- */
-const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ content, showRaw }) => {
-  if (showRaw) {
+const LARGE_TOOL_RESULT_CHARS = 64 * 1024;
+const TOOL_RESULT_ITEM_PAGE_SIZE = 50;
+const TOOL_RESULT_TEXT_PAGE_CHARS = 64 * 1024;
+const TOOL_RESULT_REMOTE_PAGE_BYTES = 64 * 1024;
+
+const resultPreSx = {
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
+  fontSize: '0.8rem',
+  p: 1,
+  borderRadius: 1,
+  border: 1,
+  borderColor: 'divider',
+  bgcolor: 'action.hover',
+  color: 'text.primary',
+  overflow: 'auto',
+  maxHeight: '560px',
+} as const;
+
+const ResultPager: React.FC<{
+  page: number;
+  pageCount: number;
+  onChange: (page: number) => void;
+}> = ({ page, pageCount, onChange }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.75 }}>
+    <Button size="small" disabled={page <= 0} onClick={() => onChange(page - 1)}>
+      Previous
+    </Button>
+    <Typography variant="caption" color="text.secondary">
+      Page {page + 1} / {Math.max(1, pageCount)}
+    </Typography>
+    <Button size="small" disabled={page + 1 >= pageCount} onClick={() => onChange(page + 1)}>
+      Next
+    </Button>
+  </Box>
+);
+
+const PagedInlineText: React.FC<{ content: string }> = ({ content }) => {
+  const pageCount = Math.max(1, Math.ceil(content.length / TOOL_RESULT_TEXT_PAGE_CHARS));
+  const [page, setPage] = useState(0);
+  useEffect(() => setPage(0), [content]);
+  const safePage = Math.min(page, pageCount - 1);
+  const visible = content.slice(
+    safePage * TOOL_RESULT_TEXT_PAGE_CHARS,
+    (safePage + 1) * TOOL_RESULT_TEXT_PAGE_CHARS,
+  );
+  return (
+    <Box>
+      <ResultPager page={safePage} pageCount={pageCount} onChange={setPage} />
+      <Box component="pre" sx={resultPreSx}>{visible}</Box>
+    </Box>
+  );
+};
+
+interface WorkerResultMeta {
+  kind: 'array' | 'mcp-content' | 'object' | 'scalar';
+  length: number;
+}
+
+const ProgressiveStructuredResult: React.FC<{ content: string }> = ({ content }) => {
+  const workerRef = useRef<Worker | null>(null);
+  const requestIdRef = useRef('');
+  const [meta, setMeta] = useState<WorkerResultMeta | null>(null);
+  const [items, setItems] = useState<string[]>([]);
+  const [page, setPage] = useState(0);
+  const [notJson, setNotJson] = useState(false);
+
+  useEffect(() => {
+    setMeta(null);
+    setItems([]);
+    setPage(0);
+    setNotJson(false);
+    if (typeof Worker === 'undefined') {
+      setNotJson(true);
+      return;
+    }
+    const worker = new Worker('/workers/tool-result-worker.js', {
+      name: 'flujo-tool-result-viewer',
+    });
+    const requestId = crypto.randomUUID();
+    workerRef.current = worker;
+    requestIdRef.current = requestId;
+    worker.onmessage = (event: MessageEvent<{
+      type?: string;
+      requestId?: string;
+      meta?: WorkerResultMeta;
+      items?: string[];
+    }>) => {
+      if (event.data.requestId !== requestId) return;
+      if (event.data.type === 'opened' && event.data.meta) {
+        setMeta(event.data.meta);
+      } else if (event.data.type === 'page' && Array.isArray(event.data.items)) {
+        setItems(event.data.items);
+      } else if (event.data.type === 'error') {
+        setNotJson(true);
+      }
+    };
+    worker.onerror = () => setNotJson(true);
+    worker.postMessage({ type: 'open', requestId, content });
+    return () => {
+      worker.postMessage({ type: 'close', requestId });
+      worker.terminate();
+      workerRef.current = null;
+    };
+  }, [content]);
+
+  const pageCount = Math.max(1, Math.ceil((meta?.length ?? 0) / TOOL_RESULT_ITEM_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  useEffect(() => {
+    if (!meta || !workerRef.current) return;
+    workerRef.current.postMessage({
+      type: 'page',
+      requestId: requestIdRef.current,
+      offset: safePage * TOOL_RESULT_ITEM_PAGE_SIZE,
+      limit: TOOL_RESULT_ITEM_PAGE_SIZE,
+    });
+  }, [meta, safePage]);
+
+  if (notJson) return <PagedInlineText content={content} />;
+  if (!meta) {
     return (
-      <Box
-        component="pre"
-        sx={{
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          fontSize: '0.8rem',
-          p: 1,
-          borderRadius: 1,
-          border: 1,
-          borderColor: (theme) => theme.palette.divider,
-          bgcolor: 'action.hover',
-          color: (theme) => theme.palette.text.primary,
-          overflow: 'auto',
-          maxHeight: '300px',
-        }}
-      >
-        {typeof content === 'string' ? content : '[Invalid tool content]'}
-      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={14} thickness={6} /> Preparing paged result…
+      </Typography>
     );
   }
 
+  return (
+    <Box>
+      <ResultPager page={safePage} pageCount={pageCount} onChange={setPage} />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, maxHeight: '560px', overflow: 'auto' }}>
+        {items.map((item, index) => (
+          <Box key={safePage * TOOL_RESULT_ITEM_PAGE_SIZE + index} component="pre" sx={resultPreSx}>
+            {item}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+};
+
+/**
+ * Small results keep the rich MCP renderer. Large results are parsed and
+ * paginated in a worker so React never constructs the complete object tree.
+ */
+const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ content, showRaw }) => {
   if (typeof content !== 'string') {
     return (
       <Typography variant="body2" fontStyle="italic" color="text.secondary">
@@ -450,14 +565,19 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
       </Typography>
     );
   }
+  if (content.length > LARGE_TOOL_RESULT_CHARS) {
+    return showRaw
+      ? <PagedInlineText content={content} />
+      : <ProgressiveStructuredResult content={content} />;
+  }
+  if (showRaw) return <Box component="pre" sx={{ ...resultPreSx, maxHeight: '300px' }}>{content}</Box>;
 
   return (
-    <Box sx={{ width: '100%', minWidth: 0 }}>
+    <Box sx={{ width: '100%', minWidth: 0, maxHeight: '560px', overflow: 'auto' }}>
       {(() => {
         try {
           const parsedContent: unknown = JSON.parse(content);
           const parsedRecord = asRecord(parsedContent);
-          // MCP structured content: an array of text/image/audio parts.
           if (Array.isArray(parsedRecord?.content)) {
             return (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -468,65 +588,106 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                   const itemMimeType = typeof itemRecord?.mimeType === 'string' ? itemRecord.mimeType : undefined;
                   if (itemType === 'text' && typeof itemRecord?.text === 'string') {
                     return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{itemRecord.text}</ReactMarkdown>;
-                  } else if (itemType === 'image' && itemData && itemMimeType) {
+                  }
+                  if (itemType === 'image' && itemData && itemMimeType) {
                     return (
-                      // MCP tool images are data URLs, which the Next image optimizer does not support.
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        key={index}
-                        src={`data:${itemMimeType};base64,${itemData}`}
-                        alt={`Tool Result Image ${index + 1}`}
-                        style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }}
-                      />
-                    );
-                  } else if (itemType === 'audio' && itemData && itemMimeType) {
-                    return (
-                      <audio
-                        key={index}
-                        controls
-                        src={`data:${itemMimeType};base64,${itemData}`}
-                        style={{ width: '100%', marginTop: '8px' }}
-                      >
-                        Your browser does not support the audio element.
-                      </audio>
-                    );
-                  } else if (itemType === 'video' && itemData && itemMimeType) {
-                    return (
-                      <video
-                        key={index}
-                        controls
-                        src={`data:${itemMimeType};base64,${itemData}`}
-                        style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }}
-                      >
-                        Your browser does not support the video element.
-                      </video>
-                    );
-                  } else {
-                    return (
-                      <Box
-                        key={index}
-                        component="pre"
-                        sx={{
-                          whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', p: 1,
-                          borderRadius: 1, border: 1, borderColor: (theme) => theme.palette.divider,
-                          bgcolor: 'action.hover', color: (theme) => theme.palette.text.primary, overflow: 'auto', mt: 1,
-                        }}
-                      >
-                        {`Unsupported content type: ${itemType}\n${JSON.stringify(item, null, 2)}`}
-                      </Box>
+                      <img key={index} src={`data:${itemMimeType};base64,${itemData}`} alt={`Tool Result Image ${index + 1}`} style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }} />
                     );
                   }
+                  if (itemType === 'audio' && itemData && itemMimeType) {
+                    return <audio key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ width: '100%', marginTop: '8px' }} />;
+                  }
+                  if (itemType === 'video' && itemData && itemMimeType) {
+                    return <video key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }} />;
+                  }
+                  return (
+                    <Box key={index} component="pre" sx={resultPreSx}>
+                      {`Unsupported content type: ${itemType}\n${JSON.stringify(item, null, 2)}`}
+                    </Box>
+                  );
                 })}
               </Box>
             );
           }
-          // Valid JSON but not the MCP shape: pretty-print it.
-          return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
-        } catch (e) {
-          // Not JSON: render the raw string as markdown.
+          return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{'```json\n' + JSON.stringify(parsedContent, null, 2) + '\n```'}</ReactMarkdown>;
+        } catch {
           return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{content}</ReactMarkdown>;
         }
       })()}
+    </Box>
+  );
+};
+
+function decodeUtf8Page(
+  bytes: Uint8Array,
+  actualStart: number,
+  wantedStart: number,
+  wantedEnd: number,
+): string {
+  let start = Math.max(0, wantedStart - actualStart);
+  const wantedEndOffset = Math.min(bytes.length - 1, wantedEnd - actualStart);
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+  let endExclusive = Math.max(start, wantedEndOffset + 1);
+  while (endExclusive < bytes.length && (bytes[endExclusive] & 0xc0) === 0x80) {
+    endExclusive++;
+  }
+  return new TextDecoder().decode(bytes.subarray(start, endExclusive));
+}
+
+const PagedRemoteToolResult: React.FC<{ payload: LazyToolPayloadRef }> = ({ payload }) => {
+  const pageCount = Math.max(1, Math.ceil(payload.size / TOOL_RESULT_REMOTE_PAGE_BYTES));
+  const [page, setPage] = useState(0);
+  const [state, setState] = useState<{ loading: boolean; text: string; error?: string }>({
+    loading: true,
+    text: '',
+  });
+  const safePage = Math.min(page, pageCount - 1);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const wantedStart = safePage * TOOL_RESULT_REMOTE_PAGE_BYTES;
+    const wantedEnd = Math.min(payload.size - 1, wantedStart + TOOL_RESULT_REMOTE_PAGE_BYTES - 1);
+    const requestStart = Math.max(0, wantedStart - 3);
+    const requestEnd = Math.min(payload.size - 1, wantedEnd + 3);
+    setState({ loading: true, text: '' });
+    void fetch(payload.href, {
+      headers: { Range: `bytes=${requestStart}-${requestEnd}` },
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`Tool payload request failed (${response.status})`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const contentRange = response.headers.get('content-range');
+      const actualStart = contentRange
+        ? Number(/^bytes (\d+)-/.exec(contentRange)?.[1] ?? 0)
+        : 0;
+      setState({
+        loading: false,
+        text: decodeUtf8Page(bytes, actualStart, wantedStart, wantedEnd),
+      });
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      setState({
+        loading: false,
+        text: '',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return () => controller.abort();
+  }, [payload.href, payload.size, safePage]);
+
+  return (
+    <Box>
+      <ResultPager page={safePage} pageCount={pageCount} onChange={setPage} />
+      {state.loading ? (
+        <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} thickness={6} /> Loading page…
+        </Typography>
+      ) : state.error ? (
+        <Typography variant="caption" color="error">{state.error}</Typography>
+      ) : (
+        <Box component="pre" sx={resultPreSx}>{state.text}</Box>
+      )}
     </Box>
   );
 };
@@ -536,7 +697,8 @@ type ToolCallStatus = 'pending' | 'done' | 'error';
 /** Classify a tool result: pending (none yet), error (MCP `isError` / an `error` field), else done. */
 function toolCallStatus(result?: ChatMessage): ToolCallStatus {
   if (!result) return 'pending';
-  if (typeof result.content === 'string') {
+  if (result.ui?.isError) return 'error';
+  if (typeof result.content === 'string' && result.content.length <= LARGE_TOOL_RESULT_CHARS) {
     try {
       const parsed = JSON.parse(result.content);
       if (parsed && (parsed.isError === true || parsed.error != null)) return 'error';
@@ -605,7 +767,9 @@ const DeferredToolResultView: React.FC<{
 }> = ({ content, payload, showRaw }) => {
   const { t } = useI18n();
   const fallback = typeof content === 'string' ? content : '[Invalid tool content]';
-  const loaded = useLazyToolPayload(payload, fallback);
+  const pageRemote = Boolean(payload && payload.size > LARGE_TOOL_RESULT_CHARS);
+  const loaded = useLazyToolPayload(pageRemote ? undefined : payload, fallback);
+  if (pageRemote && payload) return <PagedRemoteToolResult payload={payload} />;
   if (loaded.loading) {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
