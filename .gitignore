@@ -209,3 +209,4 @@ goal-acceptance-artifacts/
 /soak-smoke-artifacts
 /benchmark-artifacts
 fresh-memory-experiment-results.json
+next-env.d.ts
