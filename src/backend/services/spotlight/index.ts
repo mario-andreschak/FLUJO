@@ -40,9 +40,36 @@ declare global {
     Map<string, Promise<SpotlightCache>> | undefined;
 }
 
-/** The cached spotlight data, or null when no refresh has succeeded yet. */
+/** Apply shipped endpoint corrections without mutating cached registry data. */
+function applySourceOverrides(cache: SpotlightCache): SpotlightCache {
+  const sources = SPOTLIGHT_SERVERS.map(normalizeSpotlightSource);
+  return {
+    ...cache,
+    entries: cache.entries.map(entry => {
+      const overrides = sources.find(source => source.url === entry.url)?.remoteUrlOverrides;
+      const result = entry.result;
+      if (!overrides || !result?.server.remotes) return entry;
+      return {
+        ...entry,
+        result: {
+          ...result,
+          server: {
+            ...result.server,
+            remotes: result.server.remotes.map(remote => ({
+              ...remote,
+              url: overrides[remote.url] ?? remote.url
+            }))
+          }
+        }
+      };
+    })
+  };
+}
+
+/** The cache with current shipped corrections, even before startup refresh. */
 export async function loadSpotlightCache(): Promise<SpotlightCache | null> {
-  return loadItem<SpotlightCache | null>(StorageKey.SPOTLIGHT_SERVERS, null);
+  const cache = await loadItem<SpotlightCache | null>(StorageKey.SPOTLIGHT_SERVERS, null);
+  return cache ? applySourceOverrides(cache) : null;
 }
 
 /**
@@ -113,7 +140,9 @@ async function doRefresh(): Promise<SpotlightCache> {
 
   // Keep the previous good record for entries that failed this time, so a
   // transient registry outage doesn't empty the tab until the next refresh.
-  const previous = await loadSpotlightCache();
+  // Keep fallback records raw too, so removing a shipped correction can take
+  // effect immediately without waiting for a successful registry refresh.
+  const previous = await loadItem<SpotlightCache | null>(StorageKey.SPOTLIGHT_SERVERS, null);
   if (previous) {
     for (const entry of cache.entries) {
       if (!entry.result) {
@@ -128,5 +157,5 @@ async function doRefresh(): Promise<SpotlightCache> {
   await saveItem(StorageKey.SPOTLIGHT_SERVERS, cache);
   const resolved = cache.entries.filter(e => e.result).length;
   log.info(`Spotlight refresh complete: ${resolved}/${cache.entries.length} entries resolved`);
-  return cache;
+  return applySourceOverrides(cache);
 }
