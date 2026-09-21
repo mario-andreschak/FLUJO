@@ -30,7 +30,7 @@ import {
   Typography,
 } from '@mui/material';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import FlowCard, {
   FlowCardSkeleton,
@@ -49,6 +49,8 @@ import {
   personaReturnPath,
 } from '@/frontend/utils/personaFlowNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { localizeRoleBehavior } from '@/frontend/utils/roleBehaviorLabels';
+import { localizePersonaFlow } from '@/frontend/utils/personaFlowLabels';
 import type {
   BehaviorBinding,
   BehaviorRevision,
@@ -63,7 +65,7 @@ import type {
 type PickerTarget =
   | { kind: 'core' }
   | { kind: 'behavior'; ref: string }
-  | { kind: 'add'; ref: string; slotKey: string; name: string; description?: string };
+  | { kind: 'add' };
 
 function updateBehavior(
   behavior: PersonaBehaviorComposition,
@@ -114,7 +116,7 @@ export default function PersonaFlowsArea({
     try {
       const [nextComposition, nextFlows] = await Promise.all([
         personasService.getComposition(detail.persona.id),
-        flowService.loadFlows(),
+        flowService.loadFlows({ refresh: true }),
       ]);
       setComposition(nextComposition);
       setFlows(nextFlows);
@@ -129,7 +131,11 @@ export default function PersonaFlowsArea({
 
   const pickerModel = useCardPicker<Flow>(
     'flows',
-    flows.filter((flow) => !flow.personaOwnership),
+    flows.filter((flow) => !flow.personaOwnership || (
+      picker?.kind === 'add'
+      && flow.personaOwnership.personaId === detail.persona.id
+      && flow.id !== composition?.coreFlowRef
+    )).map((flow) => localizePersonaFlow(flow, detail.persona, t)),
   );
 
   const persistBehaviors = async (
@@ -165,6 +171,13 @@ export default function PersonaFlowsArea({
 
   const applyFlow = (flow: Flow) => complete(async () => {
     if (!composition || !picker) throw new Error(t('personas.flows.loadFailed'));
+    if (picker.kind === 'add') {
+      return personasService.addBehavior(detail.persona.id, {
+        expectedUpdatedAt: composition.expectedUpdatedAt,
+        sourceFlowRef: flow.id,
+        mode: 'shared',
+      });
+    }
     if (picker.kind === 'core') {
       return personasService.updateComposition(detail.persona.id, {
         expectedUpdatedAt: composition.expectedUpdatedAt,
@@ -173,16 +186,7 @@ export default function PersonaFlowsArea({
     }
     const binding: PersonaFlowBinding = { mode: 'shared', sharedFlowRef: flow.id };
     const existing = composition.behaviors.map((behavior) => ({ ...behavior }));
-    if (picker.kind === 'add') {
-      existing.push({
-        ref: picker.ref,
-        slotKey: picker.slotKey,
-        name: picker.name,
-        ...(picker.description ? { description: picker.description } : {}),
-        order: existing.length,
-        binding,
-      });
-    } else {
+    {
       const index = existing.findIndex((behavior) => behavior.ref === picker.ref);
       if (index < 0) throw new Error(t('personas.behaviors.missing'));
       existing[index] = {
@@ -197,21 +201,15 @@ export default function PersonaFlowsArea({
 
   const copyFlow = (flow: Flow) => complete(async () => {
     if (!composition || !picker) throw new Error(t('personas.flows.loadFailed'));
-    let expectedUpdatedAt = composition.expectedUpdatedAt;
     if (picker.kind === 'add') {
-      const next = [...composition.behaviors, {
-        ref: picker.ref,
-        slotKey: picker.slotKey,
-        name: picker.name,
-        ...(picker.description ? { description: picker.description } : {}),
-        order: composition.behaviors.length,
-        binding: { mode: 'shared' as const, sharedFlowRef: flow.id },
-      }];
-      const added = await persistBehaviors(next, expectedUpdatedAt);
-      expectedUpdatedAt = added.expectedUpdatedAt;
+      return personasService.addBehavior(detail.persona.id, {
+        expectedUpdatedAt: composition.expectedUpdatedAt,
+        sourceFlowRef: flow.id,
+        mode: 'persona_copy',
+      });
     }
     const result = await personasService.copyCompositionFlow(detail.persona.id, {
-      expectedUpdatedAt,
+      expectedUpdatedAt: composition.expectedUpdatedAt,
       target: picker.kind === 'core' ? 'core' : 'behavior',
       ...(picker.kind !== 'core' ? { behaviorRef: picker.ref } : {}),
       sourceFlowRef: flow.id,
@@ -223,8 +221,9 @@ export default function PersonaFlowsArea({
   const move = (ref: string, delta: number) => {
     if (!composition) return;
     const next = [...composition.behaviors];
+    const visibleIndex = visibleCards.findIndex((card) => card.ref === ref);
     const index = next.findIndex((behavior) => behavior.ref === ref);
-    const target = index + delta;
+    const target = next.findIndex((behavior) => behavior.ref === visibleCards[visibleIndex + delta]?.ref);
     if (index < 0 || target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
     void complete(() => persistBehaviors(next));
@@ -292,8 +291,9 @@ export default function PersonaFlowsArea({
     }
   };
 
-  const configured = new Set(composition?.behaviors.map((behavior) => behavior.ref) ?? []);
-  const availableBindings = detail.behaviorBindings.filter((binding) => !configured.has(binding.id));
+  const visibleCards = composition?.behaviorCards.filter((card) => (
+    card.slotKey !== 'primary' || !composition.core
+  )) ?? [];
   const pickerItems = pickerModel.items.map((flow) => ({
     key: flow.id,
     label: flow.name,
@@ -301,11 +301,12 @@ export default function PersonaFlowsArea({
     content: (
       <Stack spacing={1.25} sx={{ height: '100%' }}>
         <FlowCard flow={flow} selected={false} pickerMode selectionManaged onSelect={() => {}} />
+        {flow.personaOwnership && <Typography variant="body2">{t('personas.behaviors.ownedCopyHelp')}</Typography>}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-          <Button fullWidth variant="contained" onClick={() => void applyFlow(flow)}>
+          <Button fullWidth disabled={busy || !!flow.personaOwnership} variant="contained" onClick={() => void applyFlow(flow)}>
             {t('personas.behaviors.useShared')}
           </Button>
-          <Button fullWidth variant="outlined" startIcon={<ContentCopyRounded />} onClick={() => void copyFlow(flow)}>
+          <Button fullWidth disabled={busy} variant="outlined" startIcon={<ContentCopyRounded />} onClick={() => void copyFlow(flow)}>
             {t('personas.behaviors.makeCopy')}
           </Button>
         </Stack>
@@ -314,7 +315,14 @@ export default function PersonaFlowsArea({
   }));
 
   if (loading) {
-    return <Paper variant="outlined" sx={{ p: 4, borderRadius: 4 }}><Stack alignItems="center"><CircularProgress /></Stack></Paper>;
+    return (
+      <Paper variant="outlined" sx={{ p: 4, borderRadius: 4 }}>
+        <Stack alignItems="center" spacing={2} role="status">
+          <CircularProgress aria-hidden="true" />
+          <Typography color="text.secondary">{t('personas.flows.loading')}</Typography>
+        </Stack>
+      </Paper>
+    );
   }
   if (!composition) {
     return <Alert severity="error" action={<Button onClick={() => void load()}>{t('personas.retry')}</Button>}>{error ?? t('personas.flows.loadFailed')}</Alert>;
@@ -335,37 +343,39 @@ export default function PersonaFlowsArea({
           ? resetCore
           : undefined}
         personaId={detail.persona.id}
+        personaName={detail.persona.name}
       />
+      {composition.core && detail.behaviorBindings.filter((binding) => binding.slotKey === 'primary').map((binding) => (
+        <BehaviorVersionHistory
+          key={binding.id}
+          persona={detail.persona}
+          binding={binding}
+          revisions={detail.behaviorRevisions.filter((revision) => revision.behaviorId === binding.id)
+            .sort((left, right) => right.revision - left.revision)}
+          busy={busy}
+          onActivate={(revision) => void activateVersion(binding, revision)}
+        />
+      ))}
       <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1} sx={{ mb: 2 }}>
           <Box>
-            <Typography variant="h5" fontWeight={760}>{t('personas.behaviors.title')}</Typography>
+            <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.behaviors.title')}</Typography>
             <Typography color="text.secondary">{t('personas.behaviors.description')}</Typography>
           </Box>
-          {availableBindings.length > 0 && (
             <Button
+              disabled={busy || composition.behaviors.length >= 64}
               startIcon={<AddRounded />}
-              onClick={() => {
-                const binding = availableBindings[0];
-                const slot = detail.roleVersion.behaviorSlots.find((item) => item.key === binding.slotKey);
-                setPicker({
-                  kind: 'add',
-                  ref: binding.id,
-                  slotKey: binding.slotKey,
-                  name: slot?.name ?? binding.slotKey,
-                  ...(slot?.description ? { description: slot.description } : {}),
-                });
-              }}
+              onClick={() => setPicker({ kind: 'add' })}
             >
               {t('personas.behaviors.add')}
             </Button>
-          )}
         </Stack>
-        {composition.behaviorCards.length === 0 ? (
+        {visibleCards.length === 0 ? (
           <Typography color="text.secondary">{t('personas.behaviors.empty')}</Typography>
         ) : (
           <Stack spacing={2}>
-            {composition.behaviorCards.map((card, index) => {
+            {visibleCards.map((card, index) => {
+              const label = localizeRoleBehavior({ key: card.slotKey, name: card.name, description: card.description }, t);
               const binding = detail.behaviorBindings.find((candidate) => candidate.id === card.ref);
               const revisions = detail.behaviorRevisions
                 .filter((revision) => revision.behaviorId === card.ref)
@@ -375,18 +385,28 @@ export default function PersonaFlowsArea({
                   <CardContent>
                     <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
                       <Box>
-                        <Typography variant="h6" fontWeight={750}>{card.name}</Typography>
-                        {card.description && <Typography color="text.secondary">{card.description}</Typography>}
+                        <Typography variant="h6" component="h3" fontWeight={750}>{label.name}</Typography>
+                        {card.slotKey === 'maintain_memory'
+                          ? <Typography color="text.secondary">{t('personas.behaviors.maintenanceHelp')}</Typography>
+                          : label.description && <Typography color="text.secondary">{label.description}</Typography>}
                       </Box>
-                      <ReadinessChip card={card} />
+                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                        <BindingChip card={card} />
+                        <Chip label={t(card.slotKey === 'maintain_memory'
+                          ? 'personas.behaviors.maintenance'
+                          : card.slotKey === 'primary' ? 'personas.behaviors.kind.core' : 'personas.behaviors.callable')} />
+                        <ReadinessChip card={card} />
+                      </Stack>
                     </Stack>
                     <Box sx={{ mt: 2 }}>
                       {card.flow
-                        ? <FlowCard flow={card.flow as Flow} selected pickerMode selectionManaged onSelect={() => {}} />
+                        ? <FlowCard flow={localizePersonaFlow(card.flow as Flow, detail.persona, t)} selected pickerMode selectionManaged onSelect={() => {}} />
                         : <Alert severity="warning">{t('personas.behaviors.missing')}</Alert>}
                     </Box>
+                    <ReadinessHelp card={card} />
                     {binding && revisions.length > 0 && (
                       <BehaviorVersionHistory
+                        persona={detail.persona}
                         binding={binding}
                         revisions={revisions}
                         busy={busy}
@@ -399,7 +419,7 @@ export default function PersonaFlowsArea({
                     <FlowLinks card={card} personaId={detail.persona.id} />
                     <Button disabled={busy} startIcon={<EditRounded />} onClick={() => { setRename(card); setRenameValue(card.name); }}>{t('personas.behaviors.rename')}</Button>
                     <Button disabled={busy || index === 0} aria-label={t('personas.behaviors.moveUp')} onClick={() => move(card.ref, -1)}><ArrowUpwardRounded /></Button>
-                    <Button disabled={busy || index === composition.behaviorCards.length - 1} aria-label={t('personas.behaviors.moveDown')} onClick={() => move(card.ref, 1)}><ArrowDownwardRounded /></Button>
+                    <Button disabled={busy || index === visibleCards.length - 1} aria-label={t('personas.behaviors.moveDown')} onClick={() => move(card.ref, 1)}><ArrowDownwardRounded /></Button>
                     {card.binding.mode === 'persona_copy' && card.binding.sharedFlowRef && (
                       <Button disabled={busy} startIcon={<RestartAltRounded />} onClick={() => reset(card)}>{t('personas.behaviors.resetShared')}</Button>
                     )}
@@ -441,11 +461,13 @@ export default function PersonaFlowsArea({
 }
 
 function BehaviorVersionHistory({
+  persona,
   binding,
   revisions,
   busy,
   onActivate,
 }: {
+  persona: { id: string; name: string };
   binding: BehaviorBinding;
   revisions: BehaviorRevision[];
   busy: boolean;
@@ -481,7 +503,7 @@ function BehaviorVersionHistory({
                     </Typography>
                     {current && <Chip size="small" color="success" label={t('personas.behaviors.currentVersion')} />}
                   </Stack>
-                  <Typography variant="body2">{revision.flowSnapshot.name}</Typography>
+                  <Typography variant="body2">{localizePersonaFlow(revision.flowSnapshot as Flow, persona, t).name}</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {t('personas.behaviors.versionCreated', {
                       date: formatDate(revision.createdAt, { dateStyle: 'medium', timeStyle: 'short' }),
@@ -529,6 +551,7 @@ function FlowSection({
   onChange,
   onReset,
   personaId,
+  personaName,
 }: {
   title: string;
   description: string;
@@ -537,24 +560,27 @@ function FlowSection({
   onChange: () => void;
   onReset?: () => void;
   personaId: string;
+  personaName: string;
 }) {
   const { t } = useI18n();
   return (
     <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
-        <Box><Typography variant="h5" fontWeight={760}>{title}</Typography><Typography color="text.secondary">{description}</Typography></Box>
+        <Box><Typography variant="h5" component="h2" fontWeight={760}>{title}</Typography><Typography color="text.secondary">{description}</Typography></Box>
         {card && (
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <OwnershipChip card={card} />
+            <BindingChip card={card} />
             <ReadinessChip card={card} />
           </Stack>
         )}
       </Stack>
       <Box sx={{ mt: 2 }}>
         {card?.flow
-          ? <FlowCard flow={card.flow as Flow} selected pickerMode selectionManaged onSelect={() => {}} />
+          ? <FlowCard flow={localizePersonaFlow(card.flow as Flow, { id: personaId, name: personaName }, t)} selected pickerMode selectionManaged onSelect={() => {}} />
           : <Alert severity="warning">{t('personas.behaviors.missing')}</Alert>}
       </Box>
+      {card && <ReadinessHelp card={card} />}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
         <Button disabled={busy} onClick={onChange}>{card?.flow ? t('personas.behaviors.change') : t('personas.behaviors.replace')}</Button>
         {card && <FlowLinks card={card} personaId={personaId} />}
@@ -579,6 +605,30 @@ function OwnershipChip({ card }: { card: PersonaFlowCard }) {
     custom: t('personas.behaviors.kind.custom'),
   }[kind];
   return <Chip variant="outlined" label={label} />;
+}
+
+function BindingChip({ card }: { card: PersonaFlowCard }) {
+  const { t } = useI18n();
+  return <Chip variant="outlined" label={t(card.binding.mode === 'shared'
+    ? 'personas.behaviors.sharedFlow' : 'personas.behaviors.personaCopy')} />;
+}
+
+function ReadinessHelp({ card }: { card: PersonaFlowCard }) {
+  const { t } = useI18n();
+  if (card.readiness.state !== 'invalid') return null;
+  return (
+    <Alert severity="warning" sx={{ mt: 1.5 }}>
+      {t('personas.behaviors.repairHelp')}
+      {card.readiness.issues.length > 0 && (
+        <Box component="details" sx={{ mt: 1 }}>
+          <Box component="summary" sx={{ cursor: 'pointer' }}>{t('personas.behaviors.repairDetails')}</Box>
+          {card.readiness.issues.map((issue, index) => (
+            <Typography key={index} variant="body2" sx={{ overflowWrap: 'anywhere' }}>{issue}</Typography>
+          ))}
+        </Box>
+      )}
+    </Alert>
+  );
 }
 
 function ReadinessChip({ card }: { card: PersonaFlowCard }) {

@@ -2,6 +2,7 @@ import {
   MEMORY_RANKING_WEIGHTS,
   MEMORY_DEDUP_SETTINGS,
   normaliseMemoryContent,
+  lowercaseMemoryContent,
   contentShingles,
   jaccardSimilarity,
   recencyMultiplier,
@@ -16,6 +17,17 @@ import {
 import type { MemoryItem } from '@/shared/types/enduringAgent/enduringAgent';
 
 describe('Memory Ranking (Issue #450)', () => {
+  it('keeps locale-aware case matching current after an in-place correction', () => {
+    const memory = { content: 'RELEASE İSTANBUL Straße' };
+    const original = memory.content.toLocaleLowerCase();
+    expect(lowercaseMemoryContent(memory)).toBe(original);
+    expect(lowercaseMemoryContent(memory)).toBe(original);
+    memory.content = 'STABLE Αθήνα';
+    expect(lowercaseMemoryContent(memory)).toBe(memory.content.toLocaleLowerCase());
+    expect(lowercaseMemoryContent(memory)).not.toContain('release');
+    expect(lowercaseMemoryContent({ content: 'RELEASE İSTANBUL Straße' })).toBe(original);
+  });
+
   describe('normaliseMemoryContent', () => {
     it('lowercases content', () => {
       expect(normaliseMemoryContent('HELLO WORLD')).toBe('hello world');

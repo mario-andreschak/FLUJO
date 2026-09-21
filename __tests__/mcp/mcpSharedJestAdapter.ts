@@ -9,6 +9,12 @@ export {
   loadEffectiveRoots,
 } from '@/backend/services/mcp/internal/confinement';
 export { killProcessTree } from '@/utils/process/killProcessTree';
+// Bash waits for the standalone package's close-event contract, which differs
+// from the backend helper's exit-event contract and options signature.
+export {
+  killProcessTreeAndWait,
+  type ProcessTreeTerminationResult,
+} from '../../mcp-servers/shared/src/index';
 
 export type RootsProvider = () => Promise<Array<{ uri: string }>>;
 

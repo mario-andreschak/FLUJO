@@ -112,7 +112,32 @@ function logFilePath(conversationId: string): string {
 // Per-conversation append chains so concurrent appends for the same log never
 // interleave (mirrors saveItem's writeChains). Different conversations still
 // append concurrently.
-const appendChains = new Map<string, Promise<unknown>>();
+declare global {
+  var __flujo_conversation_log_state_v1: {
+    appendChains: Map<string, Promise<unknown>>;
+    nextSeq: Map<string, number>;
+    pendingCommits: Map<string, Set<Promise<unknown>>>;
+  } | undefined;
+}
+// Next's request and execution bundles can evaluate this module independently.
+// Separate counters let one bundle append seq 1 after another had reached 52;
+// separate chains also fail to serialize their writes. Share both for the whole
+// process, retaining the existing workspace-qualified keys and disk cold start.
+const processLogState = globalThis.__flujo_conversation_log_state_v1
+  ??= { appendChains: new Map(), nextSeq: new Map(), pendingCommits: new Map() };
+const appendChains = processLogState.appendChains;
+const pendingCommits = processLogState.pendingCommits;
+
+function trackCommit(conversationId: string, pending: Promise<void>): Promise<void> {
+  const key = ck(conversationId);
+  const commits = pendingCommits.get(key) ?? new Set<Promise<unknown>>();
+  commits.add(pending);
+  pendingCommits.set(key, commits);
+  return pending.finally(() => {
+    commits.delete(pending);
+    if (!commits.size && pendingCommits.get(key) === commits) pendingCommits.delete(key);
+  });
+}
 
 // --- Authoritative per-conversation sequence (issue #261) --------------------
 // The JSONL file is the source of truth for ordering, so the LOG allocates the
@@ -127,7 +152,7 @@ const appendChains = new Map<string, Promise<unknown>>();
 // by tail-reading the existing .jsonl and resuming at max(seq)+1, ignoring
 // legacy sentinel/non-numeric values — so pre-#261 logs are tolerated, never
 // rewritten. The counter then stays in memory for the process lifetime.
-const nextSeq = new Map<string, number>();
+const nextSeq = processLogState.nextSeq;
 
 /** Cold-start init of the durable counter from the persisted log tail. Runs at
  *  most once per conversation per process; a one-time synchronous read keeps
@@ -179,21 +204,24 @@ export async function latestSequence(conversationId: string): Promise<number> {
 }
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
-  return withWorkspaceMutation(async () => {
-    const key = ck(conversationId);
-    const previous = appendChains.get(key) ?? Promise.resolve();
-    const run = previous
-      .catch(() => { /* prior append's error was logged by its own caller */ })
-      .then(async () => {
+  return chainLogMutation(conversationId, async () => {
         await fs.mkdir(logDir(), { recursive: true });
         await fs.appendFile(logFilePath(conversationId), lines);
-      });
-    appendChains.set(key, run);
-    return run.finally(() => {
-      if (appendChains.get(key) === run) {
-        appendChains.delete(key);
-      }
-    }) as Promise<void>;
+  });
+}
+
+function chainLogMutation(conversationId: string, task: () => Promise<void>): Promise<void> {
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
+  // Reserve order synchronously. Cross-process workspace admission performs I/O
+  // and must not let later events overtake an earlier submitted append.
+  const run = withWorkspaceMutation(async () => {
+    await previous.catch(() => undefined);
+    await task();
+  });
+  appendChains.set(key, run);
+  return run.finally(() => {
+    if (appendChains.get(key) === run) appendChains.delete(key);
   });
 }
 
@@ -201,21 +229,9 @@ function chainAppend(conversationId: string, lines: string): Promise<void> {
 // chain as appends so it never interleaves with an in-flight append. Used by the
 // transactional transcript-replacement path so it can roll back atomically.
 function chainWrite(conversationId: string, content: string): Promise<void> {
-  return withWorkspaceMutation(async () => {
-    const key = ck(conversationId);
-    const previous = appendChains.get(key) ?? Promise.resolve();
-    const run = previous
-      .catch(() => { /* prior op's error was logged by its own caller */ })
-      .then(async () => {
+  return chainLogMutation(conversationId, async () => {
         await fs.mkdir(logDir(), { recursive: true });
         await fs.writeFile(logFilePath(conversationId), content);
-      });
-    appendChains.set(key, run);
-    return run.finally(() => {
-      if (appendChains.get(key) === run) {
-        appendChains.delete(key);
-      }
-    }) as Promise<void>;
   });
 }
 
@@ -281,10 +297,10 @@ export function appendFromBus(event: ExecutionEvent): void {
   }
   const state = persistableState(event.conversationId);
   if (!state) return;
-  void commitConversationWrite(
+  void trackCommit(event.conversationId, commitConversationWrite(
     state,
     () => chainAppend(event.conversationId, serialize(event)),
-  ).catch((err) =>
+  )).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );
 }
@@ -308,7 +324,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
     .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
     .join('');
   try {
-    await commitConversationWrite(state, () => chainAppend(conversationId, lines));
+    await trackCommit(conversationId, commitConversationWrite(state, () => chainAppend(conversationId, lines)));
   } catch (err) {
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
     // Persona-related input is acknowledged only after this append succeeds;
@@ -323,8 +339,13 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
  * observe them (projection reads, tests) can flush first. Never rejects.
  */
 export function flushConversationLog(conversationId: string): Promise<void> {
-  const pending = appendChains.get(ck(conversationId));
-  return pending ? pending.then(() => undefined, () => undefined) : Promise.resolve();
+  const key = ck(conversationId);
+  // Admission and Activity-authority checks may await before reaching the disk
+  // chain. A flush must include those already-submitted commits too.
+  const pending = [...pendingCommits.get(key) ?? []];
+  const append = appendChains.get(key);
+  if (append) pending.push(append);
+  return Promise.allSettled(pending).then(() => undefined);
 }
 
 /**
@@ -435,21 +456,13 @@ export async function readConversationLog(conversationId: string): Promise<Execu
 /** Remove a conversation's log file (conversation deletion). Idempotent. */
 export async function deleteConversationLog(conversationId: string): Promise<void> {
   if (!SAFE_ID.test(conversationId)) return;
-  await withWorkspaceMutation(async () => {
-    const key = ck(conversationId);
-    const previous = appendChains.get(key) ?? Promise.resolve();
-    const run = previous
-      .catch(() => { /* prior operation's error was logged by its own caller */ })
-      .then(() => fs.unlink(logFilePath(conversationId)));
-    appendChains.set(key, run);
+  await chainLogMutation(conversationId, async () => {
     try {
-      await run;
+      await fs.unlink(logFilePath(conversationId));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         log.warn(`Error deleting conversation log ${conversationId}:`, error);
       }
-    } finally {
-      if (appendChains.get(key) === run) appendChains.delete(key);
     }
   });
 }

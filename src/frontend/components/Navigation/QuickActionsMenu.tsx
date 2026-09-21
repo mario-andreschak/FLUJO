@@ -48,7 +48,7 @@ export interface QuickActionsMenuProps {
   /**
    * `floating` is the bottom-left control of the desktop layout; `drawer` is
    * the same action pinned to the bottom of the compact navigation Drawer, so
-   * the spatial intent of issue #396 survives below 1280px.
+   * the spatial intent of issue #396 survives in compact navigation.
    */
   variant?: 'floating' | 'drawer';
   /** Called after an action so the compact Drawer can close itself. */

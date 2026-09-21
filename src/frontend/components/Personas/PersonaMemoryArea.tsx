@@ -27,7 +27,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import { FEATURES } from '@/config/features';
@@ -150,6 +150,25 @@ export default function PersonaMemoryArea({
   refresh: () => Promise<void>;
 }) {
   const { t, formatDate } = useI18n();
+  const addButton = useRef<HTMLButtonElement>(null);
+  const dialogTrigger = useRef<HTMLButtonElement | null>(null);
+  const dialogPersonaId = useRef<string | null>(null);
+  const correctedMemoryId = useRef<string | null>(null);
+  const correctionButtons = useRef(new Map<string, HTMLButtonElement>());
+  const rememberDialogTrigger = (trigger: HTMLButtonElement) => {
+    dialogTrigger.current = trigger;
+    dialogPersonaId.current = detail.persona.id;
+    correctedMemoryId.current = null;
+  };
+  const restoreDialogFocus = () => {
+    if (dialogPersonaId.current !== detail.persona.id) return;
+    const replacement = correctedMemoryId.current
+      ? correctionButtons.current.get(correctedMemoryId.current)
+      : undefined;
+    const target = [replacement, dialogTrigger.current, addButton.current]
+      .find(button => button?.isConnected && !button.disabled);
+    target?.focus();
+  };
   const [query, setQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [addContent, setAddContent] = useState('');
@@ -177,11 +196,15 @@ export default function PersonaMemoryArea({
     details?: Record<string, unknown>;
   } | null>(null);
 
-  useEffect(() => {
-    if (!correction) return;
-    const latest = detail.memoryItems.find((memory) => memory.id === correction.id);
-    if (latest && latest.updatedAt !== correction.updatedAt) setCorrection(latest);
-  }, [correction, detail.memoryItems]);
+  // Keep the revision the owner opened. Background refresh must not silently
+  // authorize a correction against a version they have not reviewed.
+  const correctionChanged = memoryError?.code === 'memory_changed';
+  const currentCorrectionVersions = correction && correctionChanged
+    ? detail.memoryItems.filter(memory => memory.status === 'active' && (
+      memory.id === correction.id
+      || earlierMemoryVersions(memory, detail.memoryItems).some(previous => previous.id === correction.id)
+    ))
+    : [];
 
   useEffect(() => {
     let active = true;
@@ -450,7 +473,7 @@ export default function PersonaMemoryArea({
         >
           <Stack direction="row" spacing={1} alignItems="center" flex={1}>
             <MemoryRounded color="primary" />
-            <Typography variant="h5" fontWeight={780}>
+            <Typography variant="h5" component="h2" fontWeight={780}>
               {t('personas.memory.title')}
             </Typography>
           </Stack>
@@ -460,12 +483,15 @@ export default function PersonaMemoryArea({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Button variant="contained" onClick={openAdd} disabled={isPending}>
+          <Button ref={addButton} variant="contained" onClick={(event) => {
+            rememberDialogTrigger(event.currentTarget);
+            openAdd();
+          }} disabled={isPending}>
             {t('personas.memory.add')}
           </Button>
         </Stack>
 
-        {memoryError && (
+        {memoryError && !addOpen && !correction && !forgetting && !conflictPair && (
           <Alert
             severity="error"
             onClose={() => setMemoryError(null)}
@@ -667,7 +693,9 @@ export default function PersonaMemoryArea({
                                       <Button
                                         size="small"
                                         disabled={isPending}
-                                        onClick={() => {
+                                        onClick={(event) => {
+                                          rememberDialogTrigger(event.currentTarget);
+                                          setMemoryError(null);
                                           setConflictPair({ memory, counterpart });
                                           setConflictReason('');
                                         }}
@@ -791,9 +819,14 @@ export default function PersonaMemoryArea({
                               )}
                               {memory.status !== 'forgotten' && (
                                 <Button
+                                  ref={(button: HTMLButtonElement | null) => {
+                                    if (button) correctionButtons.current.set(memory.id, button);
+                                    else correctionButtons.current.delete(memory.id);
+                                  }}
                                   startIcon={<EditRounded />}
                                   disabled={isPending}
-                                  onClick={() => {
+                                  onClick={(event) => {
+                                     rememberDialogTrigger(event.currentTarget);
                                      setCorrection(memory);
                                      setCorrectionContent(memory.content);
                                      setCorrectionValidFromDate(dateInputValue(memory.validFrom));
@@ -808,7 +841,11 @@ export default function PersonaMemoryArea({
                                 <Button
                                   color="error"
                                   disabled={isPending}
-                                  onClick={() => setForgetting(memory)}
+                                  onClick={(event) => {
+                                    rememberDialogTrigger(event.currentTarget);
+                                    setMemoryError(null);
+                                    setForgetting(memory);
+                                  }}
                                 >
                                   {t('personas.memory.forget')}
                                 </Button>
@@ -846,6 +883,8 @@ export default function PersonaMemoryArea({
 
       <Dialog
         open={Boolean(conflictPair)}
+        disableRestoreFocus
+        slotProps={{ transition: { onExited: restoreDialogFocus } }}
         onClose={() => !isPending && setConflictPair(null)}
         fullWidth
         maxWidth="sm"
@@ -853,6 +892,7 @@ export default function PersonaMemoryArea({
         <DialogTitle>{t('personas.memory.resolveConflictTitle')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.5}>
+            {memoryError && <Alert severity="error">{memoryError.message}</Alert>}
             <Typography>{t('personas.memory.resolveConflictHelp')}</Typography>
             {conflictPair && (
               <>
@@ -907,10 +947,12 @@ export default function PersonaMemoryArea({
         </DialogActions>
       </Dialog>
 
-      <Dialog open={addOpen} onClose={() => !isPending && setAddOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={addOpen} onClose={() => !isPending && setAddOpen(false)} fullWidth maxWidth="sm"
+        disableRestoreFocus slotProps={{ transition: { onExited: restoreDialogFocus } }}>
         <DialogTitle>{t('personas.memory.addTitle')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.5}>
+            {memoryError && <Alert severity="error">{memoryError.message}</Alert>}
             <Typography color="text.secondary">{t('personas.memory.addHelp')}</Typography>
              <TextField
               autoFocus
@@ -963,6 +1005,8 @@ export default function PersonaMemoryArea({
 
       <Dialog
         open={Boolean(correction)}
+        disableRestoreFocus
+        slotProps={{ transition: { onExited: restoreDialogFocus } }}
         onClose={() => !isPending && setCorrection(null)}
         fullWidth
         maxWidth="sm"
@@ -970,7 +1014,18 @@ export default function PersonaMemoryArea({
         <DialogTitle>{t('personas.memory.correct')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.5}>
+            {memoryError && <Alert severity="error">{memoryError.message}</Alert>}
             <Alert severity="info">{t('personas.memory.correctHelp')}</Alert>
+            {currentCorrectionVersions.map(memory => (
+              <Box key={memory.id} sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+                <Typography variant="subtitle2" component="p">{t('personas.memory.currentVersion')}</Typography>
+                <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{memory.content}</Typography>
+                <Button onClick={() => {
+                  setCorrection(memory);
+                  setMemoryError(null);
+                }}>{t('personas.memory.continueVersion')}</Button>
+              </Box>
+            ))}
              <TextField
               autoFocus
               fullWidth
@@ -1012,12 +1067,13 @@ export default function PersonaMemoryArea({
           </Button>
           <Button
             variant="contained"
-            disabled={isPending || !correctionContent.trim() || correctionRangeInvalid}
+            disabled={isPending || correctionChanged || !correctionContent.trim() || correctionRangeInvalid}
             onClick={() => {
               if (!correction) return;
               void runMutation(
                 `correct:${correction.id}`,
-                () => personasService.correctMemory(
+                async () => {
+                  const replacement = await personasService.correctMemory(
                   detail.persona.id,
                    correction,
                    correctionContent.trim(),
@@ -1025,7 +1081,9 @@ export default function PersonaMemoryArea({
                      validFrom: correctionValidFrom,
                      validUntil: correctionValidUntil,
                    },
-                 ),
+                  );
+                  correctedMemoryId.current = replacement.id;
+                },
               ).then((succeeded) => {
                 if (succeeded) setCorrection(null);
               });
@@ -1036,9 +1094,11 @@ export default function PersonaMemoryArea({
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(forgetting)} onClose={() => !isPending && setForgetting(null)}>
+      <Dialog open={Boolean(forgetting)} onClose={() => !isPending && setForgetting(null)}
+        disableRestoreFocus slotProps={{ transition: { onExited: restoreDialogFocus } }}>
         <DialogTitle>{t('personas.memory.forgetTitle')}</DialogTitle>
         <DialogContent dividers>
+          {memoryError && <Alert severity="error" sx={{ mb: 1.5 }}>{memoryError.message}</Alert>}
           <Typography>{t('personas.memory.forgetBody')}</Typography>
           {forgetting && (
             <>
@@ -1048,7 +1108,7 @@ export default function PersonaMemoryArea({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setForgetting(null)} disabled={isPending}>
+          <Button autoFocus onClick={() => setForgetting(null)} disabled={isPending}>
             {t('personas.action.cancel')}
           </Button>
           <Button

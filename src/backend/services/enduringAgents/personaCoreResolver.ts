@@ -17,6 +17,7 @@ import {
   createBehaviorRevision,
   getBehaviorRevision,
   getPersona,
+  getPersonaDeletionTombstone,
   listBehaviorBindings,
   listBehaviorRevisions,
 } from './store';
@@ -88,6 +89,9 @@ export async function resolvePersonaCoreRevision(
   personaId: string,
 ): Promise<BehaviorRevision> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await getPersonaDeletionTombstone(personaId)) {
+      throw new PersonaCoreResolutionError('Persona deletion is pending; its Core cannot accept new work.');
+    }
     const persona = await getPersona(personaId);
     if (!persona) {
       throw new PersonaCoreResolutionError(

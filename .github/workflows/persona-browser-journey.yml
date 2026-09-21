@@ -1,0 +1,108 @@
+name: Persona browser journey
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full 40-character lowercase release commit SHA
+        required: true
+        type: string
+
+concurrency:
+  group: persona-browser-${{ inputs.commit_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      PERSONA_JOURNEY_COMMIT: ${{ inputs.commit_sha }}
+      PERSONA_JOURNEY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Require the default-branch workflow and an exact commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          [[ "$PERSONA_JOURNEY_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+      - name: Verify the selected trusted checkout
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"
+          git merge-base --is-ancestor "$PERSONA_JOURNEY_COMMIT" "$WORKFLOW_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npx playwright install --with-deps chromium
+      - name: Verify report rejection and source guards
+        run: node --test scripts/persona-browser-acceptance/evidence.test.mjs
+      - run: npm run test:persona-browser-fixture
+      - name: Verify clean source before building
+        run: node --input-type=module -e "import { assertExactPersonaAcceptanceSource } from './scripts/persona-acceptance-source.mjs'; assertExactPersonaAcceptanceSource(process.env.PERSONA_JOURNEY_COMMIT);"
+      - run: npm run build
+      - name: Retain and normalize generated Next type references
+        run: |
+          mkdir -p persona-browser-artifacts
+          git diff -- next-env.d.ts > persona-browser-artifacts/next-env-build.patch
+          git restore -- next-env.d.ts
+      - run: npm run test:persona-browser-environment
+      - name: Record clean source and build identity before the journey
+        run: node scripts/persona-browser-acceptance/check-source.mjs --phase before --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID"
+      - run: npm run test:persona-browser
+      - name: Verify source after the journey
+        if: always()
+        run: node scripts/persona-browser-acceptance/check-source.mjs --phase after --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID"
+      - name: Validate complete matching journey evidence
+        if: always()
+        run: |
+          node scripts/persona-browser-acceptance/validate.mjs \
+            --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID" \
+            --build-id "$(cat .next/BUILD_ID)"
+      - name: Hash retained reports and attachments
+        if: always()
+        run: |
+          if test -d persona-browser-artifacts; then
+            for artifact_directory in persona-browser-artifacts test-results/personas playwright-report/personas; do
+              if test -d "$artifact_directory"; then
+                find "$artifact_directory" -type f ! -name SHA256SUMS -print0
+              fi
+            done | sort -z | xargs -0 -r sha256sum > persona-browser-artifacts/SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-browser-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            persona-browser-artifacts
+            test-results/personas
+            playwright-report/personas
+          if-no-files-found: error
+          # SHA256SUMS includes Playwright's .last-run.json alongside the reports.
+          include-hidden-files: true
+          retention-days: 90
+      - name: Download the published evidence
+        if: success()
+        uses: actions/download-artifact@v4
+        with:
+          name: persona-browser-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: published-persona-browser
+      - name: Verify the published files and journey
+        if: success()
+        run: |
+          (cd published-persona-browser && sha256sum -c persona-browser-artifacts/SHA256SUMS)
+          node scripts/persona-browser-acceptance/validate.mjs \
+            --directory published-persona-browser/persona-browser-artifacts \
+            --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID" \
+            --build-id "$(cat .next/BUILD_ID)"

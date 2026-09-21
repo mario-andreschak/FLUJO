@@ -16,19 +16,42 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('@/frontend/contexts/I18nContext', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({ t: (key: string) => key, locale: 'en', formatList: (items: Iterable<string>) => Array.from(items).join(', ') }),
 }));
 
-const detail = {
+const detail: PersonaDetail = {
   persona: {
+    schemaVersion: 2,
     id: 'persona_jim',
     name: 'Jim & Co',
     lifecycleState: 'idle',
     provisioningState: 'ready',
     mission: 'Make careful decisions.',
+    roleVersionId: 'developer-v1',
+    autonomyLevel: 'propose_overrides',
+    interruptionPolicy: 'queue',
+    createdAt: 1,
+    updatedAt: 1,
   },
-  roleVersion: { name: 'Developer', version: 1 },
-} as PersonaDetail;
+  roleVersion: { schemaVersion: 3, id: 'developer-v1', roleDefinitionId: 'developer',
+    name: 'Developer', version: 1, mission: 'Make careful decisions.', behaviorSlots: [], createdAt: 1 },
+  behaviorBindings: [],
+  behaviorRevisions: [],
+  appGrants: [],
+  memoryItems: [],
+  workItems: [],
+  activities: [],
+  mailboxItems: [],
+  lease: null,
+  runtime: {
+    projection: { personaId: 'persona_jim', lifecycleState: 'idle',
+      mailbox: { queued: 0, ready: 0, delayed: 0, claimed: 0, coalesced: 0, completed: 0, rejected: 0 },
+      activities: { running: 0, waiting: 0, terminal: 0 }, active: null, waitingActivityIds: [],
+      leaseStatus: 'none', stuck: false, stuckIndicators: [] },
+    detectedStuckIndicators: [], reconciliation: { attempted: false, changed: false, remainingStuck: false }, recentEvents: [],
+  },
+  presentation: { conversations: [], tasks: [], history: [], current: null, queuedInputCount: 0 },
+};
 
 describe('Persona meeting entry', () => {
   beforeEach(() => {

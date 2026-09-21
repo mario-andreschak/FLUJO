@@ -1252,6 +1252,20 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
+  const agentMessage = message.agentMessage;
+  const isHumanMessage = message.role === 'user' && !agentMessage;
+  const hasNeutralBubble = Boolean(agentMessage) || message.role === 'assistant' || message.role === 'tool';
+  const senderLabel = agentMessage
+    ? t(agentMessage.kind === 'completion' ? 'chat.messages.agentCompletion' : 'chat.messages.agentMessage', {
+        sender: agentMessage.senderName?.trim() || agentMessage.senderConversationId,
+      })
+    : message.role === 'user'
+      ? t('chat.messages.you')
+      : message.role === 'assistant'
+        ? t('chat.messages.agent')
+        : message.role === 'tool'
+          ? t('chat.messages.tool')
+          : t('chat.messages.system');
   return (
     <Box
       data-ask-flujo-message-id={message.id}
@@ -1264,7 +1278,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         containIntrinsicSize: '0 140px',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: message.role === 'user' ? 'flex-end' : 'flex-start',
+        alignItems: isHumanMessage ? 'flex-end' : 'flex-start',
         opacity: message.disabled ? 0.5 : 1,
         ...(depth > 0 && {
           pl: 3 * depth,
@@ -1281,15 +1295,14 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         }),
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-          {message.role === 'user'
-            ? t('chat.messages.you')
-            : message.role === 'assistant'
-              ? t('chat.messages.agent')
-              : message.role === 'tool'
-                ? t('chat.messages.tool')
-                : t('chat.messages.system')} • {typeof message.timestamp === 'number' && !Number.isNaN(message.timestamp)
+      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', mb: 0.5 }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ mr: 1, overflowWrap: 'anywhere' }}
+          title={agentMessage?.senderConversationId}
+        >
+          {senderLabel} • {typeof message.timestamp === 'number' && !Number.isNaN(message.timestamp)
                   ? formatLocalizedDate(message.timestamp, { hour: '2-digit', minute: '2-digit' })
                   : t('chat.messages.invalidDate')}
         </Typography>
@@ -1389,15 +1402,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           // theme - so there links inherit the bubble's contrast text color and
           // stay recognizable via the underline. Neutral paper bubbles keep a
           // brand-tinted link that actually contrasts with the surface.
-          ...markdownLinkVars(theme, message.role !== 'assistant' && message.role !== 'tool'),
-          bgcolor: message.role === 'user'
+          ...markdownLinkVars(theme, !hasNeutralBubble),
+          bgcolor: isHumanMessage
             ? 'primary.light'
-            : message.role === 'assistant' || message.role === 'tool'
+            : hasNeutralBubble
               ? 'background.paper'
               : 'info.light',
-          color: message.role === 'user'
+          color: isHumanMessage
             ? 'primary.contrastText'
-            : message.role === 'assistant' || message.role === 'tool'
+            : hasNeutralBubble
               ? 'text.primary'
               : 'info.contrastText',
           position: 'relative',
@@ -1412,7 +1425,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           // The default white-on-violet selection is effectively invisible on
           // the modern light user bubble. Reverse those colors locally so the
           // selected range has a clear light block and dark-violet text.
-          ...(message.role === 'user' && {
+          ...(isHumanMessage && {
             ':root.modern-theme:not(.dark-theme) & ::selection': {
               color: theme.palette.primary.dark,
               backgroundColor: theme.palette.common.white,

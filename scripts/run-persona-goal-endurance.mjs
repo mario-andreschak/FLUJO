@@ -12,6 +12,7 @@ import { loadPublicFixtureManifest } from './persona-goal-acceptance/public-fixt
 import { startPublicFixtureServer } from './persona-goal-acceptance/public-fixture-server.mjs';
 import { writeRuntimeProvenanceEvidence } from './persona-goal-acceptance/runtime-provenance.mjs';
 import { validatePersonaGoalEndurance } from './validate-persona-goal-endurance.mjs';
+import { hashPersonaAcceptanceSourceDiff } from './persona-acceptance-source.mjs';
 
 const execute = promisify(execFile);
 const options = new Map();
@@ -105,21 +106,7 @@ if (manifest.serviceClass !== 'controlled-staging') {
 }
 
 const commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const sourceHash = createHash('sha256').update(execFileSync(
-  'git',
-  ['-c', 'core.safecrlf=false', 'diff', '--binary', 'HEAD'],
-  { stdio: ['ignore', 'pipe', 'pipe'] },
-));
-const untracked = execFileSync(
-  'git',
-  ['ls-files', '--others', '--exclude-standard'],
-  { encoding: 'utf8' },
-).trim().split('\n').filter(name =>
-  /^(?:src|scripts|__tests__|docs|\.github)\//.test(name));
-for (const name of untracked.sort()) {
-  sourceHash.update(name).update(await fs.readFile(name));
-}
-const sourceDiffSha256 = sourceHash.digest('hex');
+const sourceDiffSha256 = await hashPersonaAcceptanceSourceDiff();
 const requestedRunId = options.get('run-id');
 if (requestedRunId && !/^[A-Za-z0-9][A-Za-z0-9._-]{5,127}$/.test(requestedRunId)) {
   throw new Error('--run-id must be 6-128 safe identifier characters.');

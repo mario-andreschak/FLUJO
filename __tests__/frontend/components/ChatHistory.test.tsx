@@ -26,6 +26,46 @@ describe('ChatHistory', () => {
   const rowIds = (element: Element) => Array.from(element.querySelectorAll('[data-conversation-id]'))
     .map((row) => row.getAttribute('data-conversation-id'));
 
+  it('identifies Persona drafts and completed runs by Persona instead of their changing Core Flow', () => {
+    const conversations: ConversationListItem[] = [
+      { ...recent, id: 'draft', title: 'Persona draft', personaId: 'ada' },
+      { ...recent, id: 'old-core', title: 'Earlier Core', personaId: 'ada', flowId: 'core-old' },
+      { ...recent, id: 'new-core', title: 'Current Core', personaId: 'ada', flowId: 'core-new' },
+      parent,
+    ];
+    render(<ChatHistory {...pinProps} conversations={conversations} personaNames={{ ada: 'Ada' }} flowNames={{ 'flow-a': 'Writer', 'core-old': 'Old Core', 'core-new': 'New Core' }} />);
+    expect(screen.getAllByText('Ada')).toHaveLength(3);
+    expect(screen.queryByText('No agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Old Core')).not.toBeInTheDocument();
+    expect(screen.getByText('Writer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Filters and grouping/ }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by agent' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Ada' }));
+    expect(rowIds(screen.getByRole('list', { name: 'Conversations' }))).toEqual(['draft', 'old-core', 'new-core']);
+    expect(screen.queryByText('Parent run')).not.toBeInTheDocument();
+  });
+
+  it('keeps Persona grouping stable before names load and after the Persona is renamed', () => {
+    writeWorkspaceUiPreference('flujo-ui:chat-sidebar:group', 'flow');
+    const conversations: ConversationListItem[] = [
+      { ...recent, id: 'draft', title: 'Persona draft', personaId: 'ada' },
+      { ...parent, personaId: 'ada' },
+    ];
+    const view = render(<ChatHistory {...pinProps} conversations={conversations} />);
+    expect(screen.getAllByText('Persona', { exact: true })).toHaveLength(1);
+    expect(screen.queryByText('ada', { exact: true })).not.toBeInTheDocument();
+    view.rerender(<ChatHistory {...pinProps} conversations={conversations} personaNames={{ ada: 'Renamed Ada' }} />);
+    expect(screen.getAllByText('Renamed Ada')).toHaveLength(1);
+    expect(rowIds(screen.getByRole('list', { name: 'Conversations' }))).toEqual(['draft', 'parent']);
+  });
+
+  it('keeps archived Persona identity anonymous even if a stale id and name remain loaded', () => {
+    render(<ChatHistory {...pinProps} conversations={[{ ...parent, personaId: 'ada', personaArchived: true }]} personaNames={{ ada: 'Private Ada' }} flowNames={{ 'flow-a': 'Private Core' }} />);
+    expect(screen.getByText('Archived Persona')).toBeInTheDocument();
+    expect(screen.queryByText(/Private/)).not.toBeInTheDocument();
+  });
+
   it.each(['none', 'chain', 'date', 'flow', 'origin'])('pins a family above other conversations in %s grouping and restores it after remount', (group) => {
     writeWorkspaceUiPreference('flujo-ui:chat-sidebar:group', group);
     const onPinsChanged = jest.fn();

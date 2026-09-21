@@ -498,13 +498,22 @@ async function assertRealDirectory(candidate: string, label: string): Promise<vo
   }
 }
 
+/** Revalidate on every use, creating only directories that are actually missing. */
+async function ensureRealDirectory(candidate: string, label: string): Promise<void> {
+  try {
+    await assertRealDirectory(candidate, label);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await fs.mkdir(candidate, { recursive: true });
+    await assertRealDirectory(candidate, label);
+  }
+}
+
 async function ensureWorkspacesRoot(): Promise<string> {
   const dataRoot = getDataDir();
   const workspacesRoot = getWorkspacesDir();
-  await fs.mkdir(dataRoot, { recursive: true });
-  await assertRealDirectory(dataRoot, 'FLUJO data root');
-  await fs.mkdir(workspacesRoot, { recursive: true });
-  await assertRealDirectory(workspacesRoot, 'Workspaces root');
+  await ensureRealDirectory(dataRoot, 'FLUJO data root');
+  await ensureRealDirectory(workspacesRoot, 'Workspaces root');
   return workspacesRoot;
 }
 
@@ -570,6 +579,19 @@ async function resolveManagedWorkspace(workspace: string): Promise<string> {
 
 /** Create a workspace namespace with independent copies of shipped MCP packages. */
 export async function createWorkspace(workspace: string): Promise<WorkspaceInfo> {
+  return withWorkspaceNamespaceMutation(() => createWorkspaceWithinNamespaceLock(workspace));
+}
+
+/** One installation-wide namespace lock also used by atomic recovery publication. */
+export async function withWorkspaceNamespaceMutation<T>(task: () => Promise<T>): Promise<T> {
+  const selectedWorkspace = getCurrentWorkspace();
+  const { withWorkspaceRuntimeLock } = await import('@/backend/services/enduringAgents/runtimeLock');
+  return runWithWorkspace(DEFAULT_WORKSPACE, () => withWorkspaceRuntimeLock(
+    'workspace-namespace', () => runWithWorkspace(selectedWorkspace, task),
+  ));
+}
+
+async function createWorkspaceWithinNamespaceLock(workspace: string): Promise<WorkspaceInfo> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
     throw new WorkspaceMutationError(
@@ -620,6 +642,10 @@ export async function renameWorkspace(
   workspace: string,
   newName: string,
 ): Promise<WorkspaceInfo> {
+  return withWorkspaceNamespaceMutation(() => renameWorkspaceWithinNamespaceLock(workspace, newName));
+}
+
+async function renameWorkspaceWithinNamespaceLock(workspace: string, newName: string): Promise<WorkspaceInfo> {
   const current = assertValidWorkspaceName(workspace);
   const next = assertValidWorkspaceName(newName);
   if (current === DEFAULT_WORKSPACE || next === DEFAULT_WORKSPACE) {
@@ -688,6 +714,10 @@ export async function updateWorkspaceRoots(
 
 /** Permanently delete a non-default workspace and all of its owned data. */
 export async function deleteWorkspace(workspace: string): Promise<void> {
+  return withWorkspaceNamespaceMutation(() => deleteWorkspaceWithinNamespaceLock(workspace));
+}
+
+async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<void> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
     throw new WorkspaceMutationError(
@@ -740,8 +770,7 @@ export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
     );
   }
 
-  await fs.mkdir(dir, { recursive: true });
-  await assertRealDirectory(dir, `Workspace ${expectedName}`);
+  await ensureRealDirectory(dir, `Workspace ${expectedName}`);
   const canonicalRoot = await fs.realpath(workspacesRoot);
   const canonicalWorkspace = await fs.realpath(dir);
   const rel = path.relative(canonicalRoot, canonicalWorkspace);
@@ -750,8 +779,7 @@ export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
   }
   for (const sub of WORKSPACE_SUBTREES) {
     const subtree = path.join(dir, sub);
-    await fs.mkdir(subtree, { recursive: true });
-    await assertRealDirectory(subtree, `Workspace subtree ${sub}`);
+    await ensureRealDirectory(subtree, `Workspace subtree ${sub}`);
   }
   return dir;
 }

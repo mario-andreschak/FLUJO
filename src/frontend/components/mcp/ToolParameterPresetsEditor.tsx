@@ -14,6 +14,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { MCPToolParameterPresets, MCPToolResponse } from '@/shared/types/mcp';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import GlobalReferenceEditor from '@/frontend/components/shared/GlobalReferenceEditor';
 import { coercePresetEditorValue, presetEditorValue } from '@/utils/shared/toolParameterPresets';
 
@@ -37,11 +38,12 @@ export default function ToolParameterPresetsEditor({
   tools,
   value = {},
   onChange,
-  title = 'Pre-set tool parameters',
-  description = 'Fixed values are removed from the model-visible schema and injected into every call. Node values override server defaults.',
+  title,
+  description,
   workspaceRoots,
 }: ToolParameterPresetsEditorProps) {
   const { globalEnvVars } = useStorage();
+  const { t, tp } = useI18n();
   const globalNames = useMemo(() => Object.keys(globalEnvVars).sort((a, b) => a.localeCompare(b)), [globalEnvVars]);
   const configurableTools = useMemo(
     () => tools.filter((tool) => Object.keys(propertiesOf(tool)).length > 0),
@@ -60,30 +62,30 @@ export default function ToolParameterPresetsEditor({
 
   return (
     <Box>
-      <Typography variant="subtitle1" fontWeight={700}>{title}</Typography>
+      <Typography variant="subtitle1" component="h3" fontWeight={700}>{title ?? t('mcp.presets.title')}</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
-        {description}
+        {description ?? t('mcp.presets.description')}
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Type <code>${'{global:NAME}'}</code> for globals, <code>@</code> for context/entities, or <code>@@</code> to find files in configured workspace roots. Append <code>.name</code>, <code>.created</code>, or <code>.updated</code>; <code>.id</code> is the default.
+        {t('mcp.presets.references', { globalReference: '${global:NAME}' })}
       </Typography>
 
       {configurableTools.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">No tool parameters are available.</Typography>
+        <Typography variant="body2" color="text.secondary">{t('mcp.presets.empty')}</Typography>
       ) : configurableTools.map((tool) => {
         const properties = propertiesOf(tool);
         const presetCount = Object.keys(value[tool.name] ?? {}).length;
         return (
-          <Accordion key={tool.name} disableGutters variant="outlined">
+          <Accordion key={tool.name} disableGutters variant="outlined" slots={{ heading: 'h4' }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="subtitle2" sx={{ overflowWrap: 'anywhere' }}>
-                  Fixed parameters for {tool.title || tool.name}
+                <Typography variant="subtitle2" component="span" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                  {t('mcp.presets.toolTitle', { tool: tool.title || tool.name })}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {presetCount > 0
-                    ? `${presetCount} fixed parameter${presetCount === 1 ? '' : 's'}`
-                    : 'Configure values hidden from the model'}
+                    ? tp('mcp.presets.count', presetCount)
+                    : t('mcp.presets.configure')}
                 </Typography>
               </Box>
             </AccordionSummary>
@@ -114,8 +116,8 @@ export default function ToolParameterPresetsEditor({
                           workspaceRoots={workspaceRoots}
                           multiline={false}
                           disabled={!enabled}
-                          placeholder="Literal, ${global:NAME}, or @reference"
-                          ariaLabel={`Fixed value for ${tool.name}.${parameter}`}
+                          placeholder={t('mcp.presets.placeholder', { globalReference: '${global:NAME}' })}
+                          ariaLabel={t('mcp.presets.valueLabel', { tool: tool.name, parameter })}
                         />
                         {schemaDescription && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>

@@ -23,6 +23,7 @@ import {
 } from './soakHarness';
 import { VirtualPersonaRuntimeClock } from './virtualClock';
 import { generatePersonaSoakWorkload } from './workloadGenerator';
+import { withSoakAllocationProfile } from './allocationProfile';
 
 // Keep Jest below the 60-minute workflow cap so harness teardown and artifact upload can finish.
 jest.setTimeout(50 * 60 * 1_000);
@@ -112,7 +113,7 @@ describe('deterministic Persona soak harness', () => {
     const quick = process.env.PERSONA_SOAK_FULL !== '1';
     const days = Number(process.env.PERSONA_SOAK_DAYS ?? (quick ? 3 : 28));
     const activitiesPerDay = Number(process.env.PERSONA_SOAK_ACTIVITIES_PER_DAY ?? (quick ? 5 : 20));
-    const summary = await runPersonaSoak({
+    const summary = await withSoakAllocationProfile(() => runPersonaSoak({
       days,
       activitiesPerDay,
       seed: Number(process.env.PERSONA_SOAK_SEED ?? 459),
@@ -126,7 +127,7 @@ describe('deterministic Persona soak harness', () => {
         ? { runId: process.env.PERSONA_SOAK_RUN_ID }
         : {}),
       runMode: quick ? 'smoke' : process.env.PERSONA_SOAK_MODE === 'infrastructure' ? 'infrastructure' : 'acceptance',
-    });
+    }));
     expect(summary.activities).toBe(days * activitiesPerDay);
     expect(summary.splitBrainCount).toBe(0);
     expect(summary.strandedLeaseCount).toBe(0);
@@ -165,6 +166,8 @@ describe('deterministic Persona soak harness', () => {
       && /^[0-9a-f]{64}$/.test(metric.leaseHistoryPruning.prePruneSnapshotSha256)
     ))).toBe(true);
     expect(summary.runtimeEvidence.modelCalls).toBeGreaterThan(0);
+    expect(summary.criteria.find(criterion => criterion.id === 'runtime-scale-recall-latency')?.observed.memoryItems)
+      .toBe(days + 1);
     expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
     expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);
     expect(summary.criteria.filter((criterion) => criterion.status === 'failed')).toEqual([]);

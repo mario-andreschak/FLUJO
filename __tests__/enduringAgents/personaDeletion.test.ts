@@ -50,6 +50,7 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { listConversationSummaries } from '@/backend/execution/flow/conversationSummaryStore';
+import { archiveModelDispatch, readModelTurnSnapshot } from '@/backend/execution/flow/modelTurnArchive';
 import {
   appendStatisticsEvent,
   createStatisticsEvent,
@@ -832,6 +833,14 @@ describe('Persona deletion policy', () => {
       await saveCollectionItem('conversations', conversationId, state);
       FlowExecutor.conversationStates.set(conversationId, structuredClone(state));
 
+      const modelTurn = await archiveModelDispatch({
+        conversationId, nodeId: 'process', modelId: 'model_test', modelName: 'Test',
+        adapter: 'test', operation: 'test', attempt: 1,
+        canonicalMessages: state.messages, genericWire: [{ role: 'system', content: instruction }],
+        sdkRequest: { messages: [{ role: 'system', content: instruction }] },
+      });
+      expect(JSON.stringify(await readModelTurnSnapshot(conversationId, modelTurn.id))).toContain('Jim Private');
+
       const preview = await previewPersonaDeletion(persona.id);
       const tombstone = await deletePersona(
         persona.id,
@@ -860,6 +869,7 @@ describe('Persona deletion policy', () => {
       expect(archived).not.toHaveProperty('personaTargetId');
       expect(archived).not.toHaveProperty('personaInstructionContext');
       expect(archived).not.toHaveProperty('codexSessions');
+      expect(await readModelTurnSnapshot(conversationId, modelTurn.id)).toBeUndefined();
       expect(JSON.stringify(archived?.executionTrace)).not.toContain(instruction);
       expect(JSON.stringify(archived?.executionTrace)).not.toContain(persona.id);
 

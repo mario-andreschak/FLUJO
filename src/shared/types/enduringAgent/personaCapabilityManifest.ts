@@ -73,6 +73,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'personas.list',
       'personas.read',
       'personas.create',
+      'personas.creation-readiness',
       'personas.update',
       'personas.summarize',
       'personas.setup-options',
@@ -85,6 +86,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
     backendEndpoints: [
       'GET /v1/personas',
       'POST /v1/personas',
+      'POST /v1/personas/readiness',
       'GET /v1/personas/summary',
       'GET /v1/personas/settings-options',
       'GET /v1/personas/[personaId]',
@@ -209,6 +211,7 @@ export const PERSONA_CAPABILITY_MANIFEST = [
       'GET /v1/personas/[personaId]/composition',
       'PATCH /v1/personas/[personaId]/composition',
       'POST /v1/personas/[personaId]/composition/copy',
+      'POST /v1/personas/[personaId]/composition/behaviors',
       'POST /v1/personas/[personaId]/behaviors/[behaviorId]/activate',
     ],
     ui: {

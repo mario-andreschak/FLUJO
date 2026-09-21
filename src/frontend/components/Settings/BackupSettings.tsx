@@ -22,6 +22,7 @@ import { createLogger } from '@/utils/logger';
 import { StorageKey } from '@/shared/types/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
+import PersonaRecoverySettings from './PersonaRecoverySettings';
 
 const log = createLogger('frontend/components/Settings/BackupSettings');
 
@@ -254,13 +255,11 @@ export default function BackupSettings() {
 
   return (
     <Box sx={{ width: '100%' }}>
-      <Typography variant="h6" gutterBottom>
-        {t('settings.backup.title')}
-      </Typography>
-      
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        {t('settings.backup.description')}
-      </Typography>
+      <PersonaRecoverySettings />
+
+      <Alert severity="info" sx={{ mb: 2 }}>
+        {t('settings.backup.personaScope')}
+      </Alert>
 
       {message && (
         <Alert severity={message.type} sx={{ mb: 2 }}>
@@ -270,7 +269,7 @@ export default function BackupSettings() {
 
       {/* Backup Section */}
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
           {t('settings.backup.create')}
         </Typography>
         
@@ -329,7 +328,7 @@ export default function BackupSettings() {
 
       {/* Restore Section */}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="subtitle1" gutterBottom fontWeight="bold">
+        <Typography variant="subtitle1" component="h3" gutterBottom fontWeight="bold">
           {t('settings.backup.restore')}
         </Typography>
         
@@ -362,7 +361,7 @@ export default function BackupSettings() {
         
         <Divider sx={{ mb: 2 }} />
         
-        <Typography variant="subtitle2" gutterBottom>
+        <Typography variant="subtitle2" component="h4" gutterBottom>
           {t('settings.backup.restoreOptions')}
         </Typography>
         

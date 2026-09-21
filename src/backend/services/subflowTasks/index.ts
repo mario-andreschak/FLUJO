@@ -107,12 +107,13 @@ export async function getTask(taskId: string): Promise<SubflowTaskRecord | null>
   }
 }
 
-export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskRecord, 'taskId' | 'uri' | 'version' | 'createdAt'>>): Promise<SubflowTaskRecord | null> {
+export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskRecord, 'taskId' | 'uri' | 'version' | 'createdAt'>>, options: { ifStatus?: SubflowTaskStatus } = {}): Promise<SubflowTaskRecord | null> {
   try {
     assertSafeCollectionId(taskId);
     return await runInWriteChain(`subflow-task:${taskId}`, async () => {
       const current = await loadCollectionItem<SubflowTaskRecord | null>(COLLECTION, taskId, null);
       if (!current) return null;
+      if (options.ifStatus && current.status !== options.ifStatus) return current;
       const now = Date.now();
       const next: SubflowTaskRecord = {
         ...current,
@@ -150,7 +151,7 @@ export async function listTasks(options: { conversationId?: string; status?: Sub
 export async function requestCancel(taskId: string): Promise<SubflowTaskRecord | null> {
   const current = await getTask(taskId);
   if (!current || TERMINAL.has(current.status)) return current;
-  return patchTask(taskId, { status: 'cancelled', cancelRequestedAt: Date.now(), failureReason: 'cancelled' });
+  return patchTask(taskId, { status: 'cancelled', cancelRequestedAt: Date.now(), failureReason: 'cancelled' }, { ifStatus: current.status });
 }
 
 export async function sweepOldSubflowTasks(now = Date.now()): Promise<{ removed: number }> {

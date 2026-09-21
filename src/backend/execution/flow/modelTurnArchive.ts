@@ -16,6 +16,8 @@ import type {
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { commitFlowDurableMutation, type FlowDurableMutationContext } from './executionAuthority';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -279,6 +281,7 @@ async function writeAtomic(file: string, data: Buffer): Promise<void> {
 }
 
 export interface ArchiveModelDispatchInput {
+  durableContext?: FlowDurableMutationContext;
   conversationId: string;
   runId?: string;
   nodeId: string;
@@ -295,7 +298,13 @@ export interface ArchiveModelDispatchInput {
   visualCompaction?: VisualCompactionDiagnostic;
 }
 
-export async function archiveModelDispatch(
+export function archiveModelDispatch(input: ArchiveModelDispatchInput): Promise<ModelTurnIndexEntry> {
+  return withWorkspaceMutation(() => commitFlowDurableMutation(
+    input.durableContext ?? {}, () => archiveModelDispatchWithinMutation(input),
+  ));
+}
+
+async function archiveModelDispatchWithinMutation(
   input: ArchiveModelDispatchInput,
 ): Promise<ModelTurnIndexEntry> {
   const id = randomUUID();
@@ -354,7 +363,18 @@ export async function archiveModelDispatch(
   return entry;
 }
 
-export async function updateModelDispatchOutcome(
+export function updateModelDispatchOutcome(
+  conversationId: string,
+  dispatchId: string,
+  outcome: Exclude<ModelDispatchOutcome, 'running'>,
+  durableContext: FlowDurableMutationContext = {},
+): Promise<void> {
+  return withWorkspaceMutation(() => commitFlowDurableMutation(
+    durableContext, () => updateModelDispatchOutcomeWithinMutation(conversationId, dispatchId, outcome),
+  ));
+}
+
+async function updateModelDispatchOutcomeWithinMutation(
   conversationId: string,
   dispatchId: string,
   outcome: Exclude<ModelDispatchOutcome, 'running'>,
@@ -395,7 +415,11 @@ export async function readModelTurnMedia(
   }
 }
 
-export async function deleteModelTurnArchive(conversationId: string): Promise<void> {
+export function deleteModelTurnArchive(conversationId: string): Promise<void> {
+  return withWorkspaceMutation(() => deleteModelTurnArchiveWithinMutation(conversationId));
+}
+
+async function deleteModelTurnArchiveWithinMutation(conversationId: string): Promise<void> {
   const target = conversationDir(conversationId);
   const resolvedRoot = path.resolve(archiveRoot());
   const resolvedTarget = path.resolve(target);

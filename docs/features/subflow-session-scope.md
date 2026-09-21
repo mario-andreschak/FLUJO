@@ -14,25 +14,19 @@ Session scope lets a Subflow node **resume the same child conversation** across 
 visits inside one parent run, so the second (and later) visit can say "here is what to
 fix" instead of re-stating the entire task from scratch.
 
-**This feature is experimental and off by default.** Enable it in
-**Settings → Experimental features → "Resume subflow child conversations across
-visits"**.
+Session memory works immediately from the node's saved scope. No Experimental
+settings switch is required. New nodes already default to one conversation per
+session key; nodes without a saved scope retain their fresh-child behavior.
 
-## Enabling the feature
-
-The toggle is a **global switch** (`experimental.subflowSessions`, off by default). It
-does not by itself change any flow's behaviour — a Subflow node must *also* be
-configured with a resumable `sessionScope` (`per-run` or `per-key`; see below) before resumption happens.
-Turning the toggle off at any time instantly restores today's default behaviour (a fresh
-child conversation on every visit), even for nodes that have a resumable scope configured.
+For messages while a child is running, see [Subflow communication](../SUBFLOW_COMMUNICATION.md).
 
 ## Session scope options
 
 | `sessionScope` | Behaviour | Status |
 |---|---|---|
 | `per-visit` (legacy/absent fallback) | Every handoff/queue visit starts a brand-new child run with no memory of any prior visit. | Available |
-| `per-run` | All visits to this Subflow node within one parent run share **one** child conversation; the second and later visits resume it. | Available (behind the `experimental.subflowSessions` flag) |
-| `per-key` | One conversation per `sessionKey`. An incoming Process handoff may choose the key; reusing it sends the new task as a follow-up turn to that finished child conversation. Different keys remain independent. | Available (behind the `experimental.subflowSessions` flag) |
+| `per-run` | All visits to this Subflow node within one parent run share **one** child conversation; the second and later visits resume it. | Available |
+| `per-key` | One conversation per `sessionKey`. An incoming Process handoff may choose the key; reusing it sends the new task as a follow-up turn to that finished child conversation. Different keys remain independent. | Available |
 
 ## Session input mode
 
@@ -154,9 +148,7 @@ genuinely redundant.
 
 ## Trade-offs and troubleshooting
 
-- **Context growth:** a resumed child's transcript grows with every visit. There is no
-  compaction for subflow sessions yet, so a loop with many retries can approach the
-  child model's context limit. Very long-running retry loops are not yet a great fit.
+- **Context growth:** a resumed child's transcript grows with every visit. Use summary input mode or a turn cap to bound retained context in long retry loops.
 - **Concurrent lanes are NOT isolated under `per-run`:** if a Subflow node is invoked as
   multiple parallel lanes (e.g. a fan-out queue), all lanes under the same `per-run`
   node share **one** conversation and are serialized by the per-conversation execution
@@ -164,18 +156,12 @@ genuinely redundant.
   handles for parallel independent work; repeated uses of the same key are serialized.
 - **How to spot reuse:** each subflow invocation lane now records `sessionIdentity` (the
   registry key it resolved to) and `resumedVisit` (`true` once a visit reused a prior
-  conversation rather than creating a new one). A debug log line —
-  `Subflow sessionScope is configured but experimental.subflowSessions is disabled;
-  falling back to per-visit` — is emitted once per lane pool when a node is configured
-  with a non-`per-visit` scope while the flag is off, so a silent fallback is
-  discoverable in the logs.
-- **Disabling the flag** at any time instantly restores per-visit behaviour for every
-  node, with no migration or data loss (any resumed conversations simply stop being
-  reused going forward).
+  conversation rather than creating a new one).
+- **Starting fresh:** choose `per-visit` on the node to start a new child each time.
+  Previously saved conversations remain available.
 
 ## Limitations
 
-- **N1 — `summary` session input mode is not implemented.** Tracked as #363 Phase 3.
 - **N2 — Session keys live only for the current logical parent run.** A later top-level
   user turn starts a new registry; this prevents accidental cross-run memory leakage.
 - **N3 — `list_conversations` (MCP) has no session filter yet**, so resumed subflow

@@ -11,6 +11,8 @@ import type {
   PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
 import { canonicalJson } from './behaviorRevisions';
+import { compactBehaviorCallPin, saveCompactedBehaviorCallPin, type BehaviorCallPin } from './behaviorCallPins';
+import type { PersonaRuntimeLock } from './runtimeLock';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import {
   listPersonaFlowDispatchRecordsForRetention,
@@ -53,12 +55,37 @@ export const PERSONA_RUNTIME_RETENTION_POLICY = {
     retentionMs: 90 * DAY_MS,
     detailedLimit: 1_000,
   },
+  behaviorCallPin: {
+    retentionMs: 30 * DAY_MS,
+    detailedLimit: 200,
+  },
 } as const;
 
 export const PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP = 100;
 
 function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+/** A child may finish before its parent; retain all detail until that Activity is terminal. */
+export function getBehaviorCallPinRetentionPolicy(
+  activities: readonly PersonaActivity[],
+  lock: PersonaRuntimeLock,
+): RetentionPolicy<BehaviorCallPin> {
+  const terminalActivities = new Set(activities
+    .filter((activity) => ['completed', 'cancelled', 'error'].includes(activity.status))
+    .map((activity) => activity.id));
+  return {
+    recordKind: 'BehaviorCallPin',
+    isEligible: (pin) => pin.compactedAt === undefined && terminalActivities.has(pin.activityId),
+    timestampOf: (pin) => pin.completedAt ?? pin.updatedAt,
+    isCompacted: (pin) => pin.compactedAt !== undefined,
+    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.behaviorCallPin.retentionMs,
+    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.behaviorCallPin.detailedLimit,
+    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
+    compact: compactBehaviorCallPin,
+    save: (pin) => saveCompactedBehaviorCallPin(pin, lock),
+  };
 }
 
 /**

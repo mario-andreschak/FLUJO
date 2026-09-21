@@ -122,6 +122,8 @@ interface ChatHistoryProps {
    *  conversation used (issue #147). Quick-chat pseudo-flows are detected from
    *  their id and labelled "Quick Chat" regardless of this map. */
   flowNames?: Record<string, string>;
+  /** Current workspace Persona names, shared with the target selector. */
+  personaNames?: Record<string, string>;
 }
 
 type GroupMode = 'none' | 'date' | 'flow' | 'origin' | 'wave' | 'chain';
@@ -217,6 +219,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onCollapse,
   collapsed = false,
   flowNames = {},
+  personaNames = {},
 }) => {
   const { t, tp, formatDate: formatLocalizedDate } = useI18n();
   const muiTheme = useMuiTheme();
@@ -455,17 +458,17 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     }
   };
 
-  // Resolve a conversation's flow into a stable grouping key + display label.
-  // Quick-chat snapshots share one bucket ("Quick Chat"); a flowId not present
-  // in the loaded flows map (e.g. a since-deleted flow) is shown as "Unknown
-  // flow" rather than dropped, so the conversation stays discoverable.
-  const flowMeta = React.useCallback(
-    (flowId: string | null): { key: string; label: string } => {
+  // Persona identity survives Core changes and exists before the first run.
+  // Archived evidence must never resolve a retained id back to a live name.
+  const targetMeta = React.useCallback(
+    ({ flowId, personaId, personaArchived }: ConversationListItem): { key: string; label: string } => {
+      if (personaArchived) return { key: 'persona:__archived__', label: t('chat.history.archivedPersona') };
+      if (personaId) return { key: `persona:${personaId}`, label: personaNames[personaId] ?? t('chat.target.persona') };
       if (!flowId) return { key: 'flow:__none__', label: t('chat.history.noAgent') };
       if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: t('chat.quick.title') };
       return { key: `flow:${flowId}`, label: flowNames[flowId] ?? t('chat.history.unknownAgent') };
     },
-    [flowNames, t],
+    [flowNames, personaNames, t],
   );
 
   // Distinct flow options for the flow filter, derived from the conversations
@@ -473,13 +476,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const flowOptions = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of sourceConversations) {
-      const meta = flowMeta(c.flowId);
+      const meta = targetMeta(c);
       if (!map.has(meta.key)) map.set(meta.key, meta.label);
     }
     return Array.from(map.entries())
       .map(([key, label]) => ({ key, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [sourceConversations, flowMeta]);
+  }, [sourceConversations, targetMeta]);
 
   // Search is already resolved by the server. Apply the remaining presentation
   // filters to the loaded result page, then sort most-recent-first.
@@ -495,13 +498,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     return source
       .filter((c) => {
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
-        if (flowFilter !== 'all' && flowMeta(c.flowId).key !== flowFilter) return false;
+        if (flowFilter !== 'all' && targetMeta(c).key !== flowFilter) return false;
         if (originFilter !== 'all' && getConversationOrigin(c).key !== originFilter) return false;
         if (dateCutoff && c.updatedAt < dateCutoff) return false;
         return true;
       })
       .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-  }, [statusFilter, flowFilter, originFilter, dateFilter, flowMeta]);
+  }, [statusFilter, flowFilter, originFilter, dateFilter, targetMeta]);
 
   const filtered = useMemo(
     () => filterConversations(sourceConversations),
@@ -551,9 +554,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         const origin = getConversationOrigin(c);
          return { key: `origin:${origin.key}`, label: originLabel(origin.key) };
       }
-      return flowMeta(c.flowId);
+      return targetMeta(c);
     });
-  }, [unpinnedConversations, groupMode, flowMeta, waveLookup, originLabel, t]);
+  }, [unpinnedConversations, groupMode, targetMeta, waveLookup, originLabel, t]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -760,7 +763,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     const stoppable =
       !!onStopConversation &&
       (conversation.status === 'running' || conversation.status === 'awaiting_tool_approval');
-    const meta = flowMeta(conversation.flowId);
+    const meta = targetMeta(conversation);
+    const isPersona = meta.key.startsWith('persona:');
     const isQuickChat = meta.key === 'flow:__quickchat__';
     const selected = conversation.id === currentConversationId;
     const origin = getConversationOrigin(conversation);
@@ -1033,7 +1037,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 {/* Which flow this conversation used (issue #147) — hidden when
                     grouping by flow to avoid redundancy with the section header. */}
                 {groupMode !== 'flow' && (
-                  <Tooltip title={isQuickChat ? t('chat.history.quickNoAgent') : t('chat.history.agentNamed', { agent: meta.label })}>
+                  <Tooltip title={isQuickChat ? t('chat.history.quickNoAgent') : isPersona ? t('chat.history.personaNamed', { persona: meta.label }) : t('chat.history.agentNamed', { agent: meta.label })}>
                     <Chip
                       icon={isQuickChat ? <BoltIcon /> : undefined}
                       label={meta.label}

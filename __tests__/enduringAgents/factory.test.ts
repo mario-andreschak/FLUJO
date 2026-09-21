@@ -1,5 +1,6 @@
 import {
   createPersonaFromRole as createPersonaFromRoleProduction,
+  getPersonaCreationReadiness,
   hashBehaviorFlow,
   PersonaFactoryConflictError,
   reconcilePersonaRoleBehaviors,
@@ -166,6 +167,49 @@ function exactToolsRoleVersion(): RoleVersion {
 }
 
 describe('workspace-authored Roles', () => {
+  it('preflights generated Role flows without creating a Persona and recovers after model setup', async () => {
+    await inFreshWorkspace(async () => {
+      await saveItem(StorageKey.MODELS, []);
+      const input = { roleVersionId: TEST_ROLE_VERSION_ID };
+      const missing = await getPersonaCreationReadiness(input);
+      expect(missing.state).toBe('invalid');
+      expect(missing.issues.join(' ')).toMatch(/model/i);
+      expect(await listPersonas()).toEqual([]);
+
+      await saveItem(StorageKey.MODELS, [{
+        id: 'configured', name: 'configured-model', displayName: 'Configured model', provider: 'openai',
+      }]);
+      expect(await getPersonaCreationReadiness(input)).toEqual({
+        state: 'ready', issues: [], models: ['Configured model'],
+      });
+      expect(await listPersonas()).toEqual([]);
+      const bundle = await createPersonaFromRole({ name: 'Frederik' });
+      expect(bundle.persona.provisioningState).toBe('ready');
+    });
+  });
+
+  it('preflights every required Behavior even when the Core is valid', async () => {
+    await inFreshWorkspace(async () => {
+      const badRole = clone(buildTestRoleVersion());
+      badRole.id = 'rolever_invalid_behavior';
+      badRole.version = 2;
+      badRole.defaultModelId = 'model-test';
+      const processNode = badRole.behaviorSlots[1].flowTemplate.nodes.find((entry) => entry.data.type === 'process')!;
+      processNode.data.properties = { ...processNode.data.properties, boundModel: 'deleted-model' };
+      await createRoleVersion(badRole);
+      const result = await getPersonaCreationReadiness({ roleVersionId: badRole.id });
+      expect(result.state).toBe('invalid');
+      expect(result.issues.join(' ')).toMatch(/Required Behavior/);
+      expect(await listPersonas()).toEqual([]);
+    });
+  });
+
+  it('rejects a shared Core also selected as a Behavior during preflight', async () => {
+    await expect(getPersonaCreationReadiness({
+      roleVersionId: TEST_ROLE_VERSION_ID, coreFlowRef: 'same', behaviorFlowRefs: ['same'],
+    })).rejects.toThrow('The Core Flow cannot also be selected as a Behavior.');
+  });
+
   it('does not seed any Role or Persona into an empty workspace', async () => {
     const emptyWorkspace = `enduring-factory-empty-${process.pid}-${++workspaceSequence}`;
     await runWithWorkspace(emptyWorkspace, async () => {

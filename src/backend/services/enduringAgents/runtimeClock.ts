@@ -44,6 +44,11 @@ export function getPersonaRuntimeClock(): PersonaRuntimeClock {
   return facade;
 }
 
+/** Physical lock contention must keep progressing when actor time is paused or accelerated. */
+export function getPersonaFilesystemClock(): PersonaRuntimeClock {
+  return systemClock;
+}
+
 /** Test-only process-local clock seam. Returns the previous delegate. */
 export function _setPersonaRuntimeClockForTests(
   clock: PersonaRuntimeClock | undefined,

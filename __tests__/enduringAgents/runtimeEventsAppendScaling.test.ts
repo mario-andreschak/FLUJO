@@ -22,7 +22,10 @@ const APPEND_COUNT = 20_000;
 const WINDOW_SIZE = 1_000;
 const P95_MAX_RATIO = 3;
 
-jest.setTimeout(900_000);
+// Each append now includes real cross-process writer admission. Allow the full
+// workload to finish on a contended Windows main-suite worker; the append count,
+// linear-work counters, bounded window and late/early p95 gate stay unchanged.
+jest.setTimeout(1_800_000);
 
 function p95(samples: number[]): number {
   const sorted = [...samples].sort((a, b) => a - b);

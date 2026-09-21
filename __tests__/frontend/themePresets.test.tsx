@@ -3,6 +3,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { getContrastRatio, type CSSObject } from '@mui/material/styles';
 import { createAppTheme, createLegacyAppTheme, getThemeOptions } from '@/frontend/utils/muiTheme';
 import { legacyThemeColors, themeColors } from '@/frontend/utils/paletteTokens';
 import { ThemeProvider, useTheme } from '@/frontend/contexts/ThemeContext';
@@ -41,6 +42,53 @@ function ThemeProbe() {
 }
 
 describe('four visual theme presets', () => {
+  it.each([
+    ['modern', 'light'], ['modern', 'dark'], ['legacy', 'light'], ['legacy', 'dark'],
+  ] as const)('keeps supporting text and small status labels readable in %s %s', (style, mode) => {
+    const theme = getThemeOptions(mode, style);
+    for (const surface of [theme.palette.background.default, theme.palette.background.paper]) {
+      expect(getContrastRatio(theme.palette.text.primary, surface)).toBeGreaterThanOrEqual(4.5);
+      expect(getContrastRatio(theme.palette.text.secondary, surface)).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const name of ['secondary', 'info', 'success', 'warning', 'error'] as const) {
+      const color = theme.palette[name];
+      expect(getContrastRatio(color.contrastText, color.main)).toBeGreaterThanOrEqual(4.5);
+      // These foregrounds also label contained buttons. Their darker hover
+      // surfaces must retain the same contrast as the filled status chips.
+      if ((style === 'legacy' && (name === 'info' || name === 'success'))
+        || (style === 'modern' && (name === 'secondary' || name === 'warning'))) {
+        expect(getContrastRatio(color.contrastText, color.dark)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it.each([
+    ['modern', 'light'], ['modern', 'dark'], ['legacy', 'light'], ['legacy', 'dark'],
+  ] as const)('keeps small primary labels readable in %s %s, including hover gradients', (style, mode) => {
+    const theme = getThemeOptions(mode, style);
+    const { primary } = theme.palette;
+    expect(getContrastRatio(primary.contrastText, primary.main)).toBeGreaterThanOrEqual(4.5);
+    if (style === 'legacy') {
+      expect(getContrastRatio(primary.contrastText, primary.dark)).toBeGreaterThanOrEqual(4.5);
+      return;
+    }
+    const button = theme.components!.MuiButton!.styleOverrides!.containedPrimary as CSSObject;
+    const hover = button['&:hover'] as CSSObject;
+    for (const state of [button, hover]) {
+      expect(getContrastRatio(String(button.color), String(state.backgroundColor))).toBeGreaterThanOrEqual(4.5);
+      const stops = String(state.backgroundImage).match(/#[\da-f]{6}/gi)!;
+      expect(stops).toHaveLength(3);
+      for (const stop of stops) {
+        expect(getContrastRatio(String(button.color), stop)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('keeps small filled success labels readable in the modern light theme', () => {
+    const { success } = createAppTheme('light').palette;
+    expect(getContrastRatio(success.contrastText, success.main)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('keeps modern as the default and reconstructs both legacy palettes', () => {
     expect(getThemeOptions('light').palette.background.default).toBe(themeColors.light.background);
     expect(getThemeOptions('dark', 'modern').palette.background.default).toBe(themeColors.dark.background);
@@ -50,7 +98,7 @@ describe('four visual theme presets', () => {
 
   it('keeps the public modern builder and the dedicated legacy builder distinct', () => {
     expect(createAppTheme('light').palette.primary.main).toBe('#6355E8');
-    expect(createLegacyAppTheme('light').palette.primary.main).toBe('#007bff');
+    expect(createLegacyAppTheme('light').palette.primary.main).toBe('#0069d9');
     expect(createAppTheme('dark').shape.borderRadius).toBe(14);
     expect(createLegacyAppTheme('dark').shape.borderRadius).toBe(4);
   });

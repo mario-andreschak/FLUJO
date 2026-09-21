@@ -12,6 +12,18 @@ import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
 
+// Match the collection-backed fixture below at the authoring boundary as well.
+// Real filesystem locking/ownership is covered by personaOwnedFlows and its
+// process tests; this suite exercises the actual backup/restore route logic.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
+
 const loadItemMock = jest.fn();
 const saveItemMock = jest.fn();
 const saveCollectionItemMock = jest.fn();

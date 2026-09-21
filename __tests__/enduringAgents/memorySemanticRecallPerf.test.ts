@@ -18,10 +18,12 @@ import {
   resetMemoryQueryVectorCache,
 } from '@/backend/services/enduringAgents/memoryQueryVectorCache';
 import { CURRENT_MEMORY_VARIANT } from '@/backend/services/enduringAgents/memoryRanking';
+import { getSemanticRecallMetricsSnapshot, resetSemanticRecallMetrics } from '@/backend/services/enduringAgents/memoryRecallMetrics';
 import { setMemorySettings } from '@/backend/services/enduringAgents/memorySettings';
 import { getMemoryIndex } from '@/backend/services/enduringAgents/indexing';
 import { modelService } from '@/backend/services/model';
 import { getEmbeddingProvider } from '@/backend/services/model/embeddings';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import {
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
@@ -71,7 +73,11 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
       const setupStartedAt = performance.now();
 
       for (let start = 0; start < ITEM_COUNT; start += 250) {
-        await Promise.all(Array.from(
+        // Fixture seeding is one bulk mutation per batch, so capture cannot see
+        // a partly seeded batch and nested writes share its admission. The
+        // separately tested 250-independent-writer burst covers admission load;
+        // production recall below still considers all 50k persisted candidates.
+        await withWorkspaceMutation(() => Promise.all(Array.from(
           { length: Math.min(250, ITEM_COUNT - start) },
           async (_, offset) => {
             const index = start + offset;
@@ -112,7 +118,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
               updatedAt: index + 1,
             };
           },
-        ));
+        )));
       }
 
       await saveCollectionItem(
@@ -178,6 +184,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
       expect(queryCache.stats()).toMatchObject({ misses: 1, hits: 0, size: 1 });
 
       const samples: number[] = [];
+      resetSemanticRecallMetrics();
       for (let sample = 0; sample < SAMPLE_COUNT; sample += 1) {
         const startedAt = performance.now();
         const ranked = await searchPersonaMemory(persona.id, {
@@ -190,6 +197,10 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
         expect(ranked[0]?.item.id).toBe(memoryId(ITEM_COUNT - 1));
       }
 
+      const recallStages = getSemanticRecallMetricsSnapshot();
+      // A large fixture alone does not prove that all its records participated.
+      // In particular, a cache-cap truncation used to silently reduce recall.
+      expect(recallStages.counters['candidates:before']).toBe(ITEM_COUNT * SAMPLE_COUNT);
       const cacheStats = queryCache.stats();
       const lexical = await searchPersonaMemory(persona.id, {
         query,
@@ -283,6 +294,7 @@ describePerf('semantic memory recall 50k performance (opt-in)', () => {
           },
         },
         latencyMilliseconds,
+        recallStages,
         gate: {
           criterionId: 'controlled-50k-recall-p95',
           operator: 'strictly_less_than',

@@ -600,6 +600,12 @@ export const UpdatePersonaBehaviorCompositionSchema = z.object({
   }
 });
 
+export const AddPersonaBehaviorInputSchema = z.object({
+  expectedUpdatedAt: TimestampSchema,
+  sourceFlowRef: WorkspaceFlowRefSchema,
+  mode: z.enum(['shared', 'persona_copy']),
+}).strict();
+
 export const CopyPersonaFlowInputSchema = z.object({
   expectedUpdatedAt: TimestampSchema,
   target: z.enum(['core', 'behavior']),
@@ -1837,8 +1843,11 @@ export const CreatePersonaLeaseInputSchema = z.object({
 }).strict();
 
 export const PersonaDeletionCountsSchema = z.object({
+  ownedFlows: z.number().int().nonnegative().default(0),
+  ownedFlowFiles: z.number().int().nonnegative().default(0),
   behaviorBindings: z.number().int().nonnegative(),
   behaviorRevisions: z.number().int().nonnegative(),
+  behaviorCallPins: z.number().int().nonnegative().default(0),
   // Additive defaults preserve already-written deletion tombstones from earlier phases.
   behaviorProposals: z.number().int().nonnegative().default(0),
   behaviorMaintenanceRuns: z.number().int().nonnegative().default(0),

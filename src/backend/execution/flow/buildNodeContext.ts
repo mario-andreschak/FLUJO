@@ -489,7 +489,7 @@ export function toApiMessages(messages: FlujoChatMessage[]): OpenAI.ChatCompleti
   };
 
   for (const message of stripHandoffPlumbing(messages)) {
-    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, media, ...rest } = message;
+    const { id, timestamp, disabled, processNodeId, depth, usage, contextUsage, injected, agentMessage, media, ...rest } = message;
 
     if (rest.role === 'tool') {
       // Tool-produced media (captureToolResult) rides on the tool message but

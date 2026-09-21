@@ -15,6 +15,7 @@ const updateDraftMock = jest.fn();
 const deleteDraftMock = jest.fn();
 const rolesMock = jest.fn();
 const readinessMock = jest.fn();
+const creationReadinessMock = jest.fn();
 const loadFlowsMock = jest.fn();
 const discoveryOptionsMock = jest.fn();
 const refreshAppsMock = jest.fn();
@@ -39,6 +40,7 @@ jest.mock('@/frontend/services/personas', () => {
       deleteDraft: (...args: unknown[]) => deleteDraftMock(...args),
       roles: (...args: unknown[]) => rolesMock(...args),
       flowReadiness: (...args: unknown[]) => readinessMock(...args),
+      creationReadiness: (...args: unknown[]) => creationReadinessMock(...args),
     },
   };
 });
@@ -210,6 +212,7 @@ describe('PersonaCreationWizard', () => {
     rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [role] });
     loadFlowsMock.mockResolvedValue([flow, behaviorFlow]);
     readinessMock.mockResolvedValue({ state: 'ready', issues: [] });
+    creationReadinessMock.mockReset().mockResolvedValue({ state: 'ready', issues: [], models: ['Test model'] });
     createMock.mockResolvedValue({ persona: { id: 'persona_1' } });
     createDraftMock.mockImplementation(async (input) => ({
       schemaVersion: 1,
@@ -236,6 +239,51 @@ describe('PersonaCreationWizard', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('blocks a model-less Role before creation and recovers after configuring a model', async () => {
+    creationReadinessMock.mockResolvedValueOnce({ state: 'invalid', issues: ['Core Flow needs a model.'], models: [] });
+    render(wizard());
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Frederik' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('personas.create.setupNeedsAttention')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'personas.create.configureModels' })).toHaveAttribute('href', expect.stringContaining('/models'));
+    expect(createMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'personas.retry' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.back' }));
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Frederik');
+    await advanceToReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Create Persona' }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('fails closed on a preflight network error and preserves a resumable draft', async () => {
+    creationReadinessMock.mockRejectedValueOnce(new Error('offline'));
+    render(wizard({ draft: draftRecord({ ...fullPayload, step: 4 }) }));
+    expect(await screen.findByText('personas.create.setupCheckFailed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create Persona' })).toBeDisabled();
+    expect(screen.queryByText('personas.create.ready')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalledWith('draft_existing', {
+      expectedRevision: 4, payload: { ...fullPayload, step: 4 },
+    }));
+  });
+
+  it('ignores an older setup check after returning from configuration', async () => {
+    const pending = deferred<{ state: string; issues: string[]; models: string[] }>();
+    creationReadinessMock.mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ state: 'invalid', issues: ['Model was removed.'], models: [] });
+    render(wizard({ draft: draftRecord({ ...fullPayload, step: 4 }) }));
+    await waitFor(() => expect(creationReadinessMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Create Persona' })).toBeDisabled();
+    fireEvent(window, new Event('focus'));
+    expect(await screen.findByText('Model was removed.')).toBeInTheDocument();
+    await act(async () => { pending.resolve({ state: 'ready', issues: [], models: ['Old model'] }); });
+    expect(screen.getByRole('button', { name: 'Create Persona' })).toBeDisabled();
+    expect(screen.queryByText('personas.create.ready')).not.toBeInTheDocument();
   });
 
   it('preserves its draft across Back and submits one stable five-step creation bundle', async () => {

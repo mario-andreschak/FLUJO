@@ -4,6 +4,11 @@ import type { Flow } from '@/shared/types/flow';
 import { generatedFlowName } from '@/utils/shared/flowNamePolicy';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import {
+  AddPersonaBehaviorInputSchema,
+  BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_REVISION_SCHEMA_VERSION,
+  BehaviorBindingSchema,
+  BehaviorRevisionSchema,
   CopyPersonaFlowInputSchema,
   PersonaCompositionSchema,
   PersonaSchema,
@@ -21,7 +26,12 @@ import {
   type UpdatePersonaCompositionInput,
 } from '@/shared/types/enduringAgent';
 
-import { behaviorCompositionFlowRefs } from './behaviorRevisions';
+import {
+  behaviorCompositionFlowRefs,
+  behaviorRevisionId,
+  hashBehaviorFlow,
+  snapshotBehaviorFlow,
+} from './behaviorRevisions';
 import { reconcilePersonaRoleBehaviors } from './factory';
 import { stableEnduringAgentId } from './ids';
 import {
@@ -30,6 +40,8 @@ import {
   withPersonaDomainMutation,
 } from './domainMutation';
 import {
+  createBehaviorBindingIfAbsent,
+  createBehaviorRevision,
   getMemoryItem,
   getRoleDefinition,
   listPersonaBundle,
@@ -472,6 +484,108 @@ function nextPreferences(
   };
 }
 
+
+/**
+ * Attach a specialist after creation. Install its immutable initial revision and
+ * durable binding before publishing the composition reference. Interrupted
+ * writes leave only a detached binding; a retry reuses it without rolling back
+ * an existing revision. The Persona lock fences dispatch and concurrent edits.
+ */
+export async function addPersonaCompositionBehavior(
+  personaId: string,
+  value: unknown,
+): Promise<PersonaComposition> {
+  const input = AddPersonaBehaviorInputSchema.parse(value);
+  let copiedFlow: Flow | undefined;
+  try {
+    await withPersonaDomainMutation(personaId, {}, async ({ persona, updatePersona }) => {
+      if (input.expectedUpdatedAt !== persona.updatedAt) {
+        throw new PersonaDomainConflictError('Persona composition changed since it was inspected.');
+      }
+      if (persona.provisioningState === 'pending') {
+        throw new PersonaDomainConflictError('Persona composition cannot change while provisioning is pending.');
+      }
+      const bundle = await listPersonaBundle(personaId);
+      if (!bundle) missing('Persona', personaId);
+      const behaviors = persona.composition?.behaviors ?? await legacyBehaviorProjection(bundle);
+      if (behaviors.length >= 64) {
+        throw new PersonaDomainConflictError('A Persona can have at most 64 Behavior bindings.');
+      }
+      const source = await flowService.getFlow(input.sourceFlowRef);
+      if (!source) missing('Flow', input.sourceFlowRef);
+      if (source.personaOwnership && source.personaOwnership.personaId !== personaId) {
+        throw new PersonaDomainConflictError('A Flow owned by another Persona cannot be used.');
+      }
+      if (input.mode === 'shared') {
+        await assertBindingOwnership(personaId, { mode: 'shared', sharedFlowRef: source.id });
+      }
+      if (source.id === authoredCoreFlowRef(persona)) {
+        throw new PersonaDomainConflictError('Choose a specialist Flow distinct from the Persona Core.');
+      }
+      const behaviorId = stableEnduringAgentId('behavior', {
+        personaId, source: 'selected-flow', flowRef: source.id,
+      });
+      if (behaviors.some((behavior) => behavior.ref === behaviorId)) {
+        throw new PersonaDomainConflictError('This Flow already has a Behavior. Edit its existing binding.');
+      }
+      let durableBinding = bundle.behaviorBindings.find((binding) => binding.id === behaviorId);
+      if (!durableBinding) {
+        const slotKey = `picked_${behaviorId.slice(-40)}`;
+        const snapshot = snapshotBehaviorFlow({
+          ...source,
+          id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
+        });
+        const contentHash = hashBehaviorFlow(snapshot);
+        const now = Date.now();
+        const existingRevision = bundle.behaviorRevisions
+          .filter((candidate) => candidate.behaviorId === behaviorId && candidate.slotKey === slotKey)
+          .sort((left, right) => right.revision - left.revision)[0];
+        const revision = existingRevision ?? BehaviorRevisionSchema.parse({
+          schemaVersion: BEHAVIOR_REVISION_SCHEMA_VERSION,
+          id: behaviorRevisionId({ personaId, behaviorId, revision: 1, contentHash }),
+          personaId, behaviorId, slotKey, revision: 1, contentHash,
+          flowSnapshot: snapshot,
+          source: { kind: 'persona_override', sourceFlowRef: source.id, selectedFlowRef: source.id },
+          createdAt: now,
+        });
+        if (!existingRevision) await createBehaviorRevision(revision);
+        durableBinding = await createBehaviorBindingIfAbsent(BehaviorBindingSchema.parse({
+          schemaVersion: BEHAVIOR_BINDING_SCHEMA_VERSION,
+          id: behaviorId, personaId, slotKey, activeRevisionId: revision.id,
+          createdAt: revision.createdAt, updatedAt: now,
+        }));
+      }
+      let binding: PersonaFlowBinding = { mode: 'shared', sharedFlowRef: source.id };
+      if (input.mode === 'persona_copy') {
+        const cloned = await flowService.cloneFlowForPersona(source.id, personaId, `${source.name} · ${persona.name}`);
+        if (!cloned.success || !cloned.flow) {
+          throw new PersonaDomainConflictError(cloned.error || 'The Persona Flow copy could not be created.');
+        }
+        copiedFlow = cloned.flow;
+        binding = { mode: 'persona_copy', sharedFlowRef: source.id, personaFlowRef: copiedFlow.id };
+      }
+      await updatePersona(PersonaSchema.parse({
+        ...persona,
+        composition: {
+          ...persona.composition,
+          behaviors: [...behaviors.map((behavior, order) => ({ ...behavior, order })), {
+            ref: durableBinding.id, slotKey: durableBinding.slotKey,
+            name: source.name.slice(0, 160),
+            ...(source.description ? { description: source.description.slice(0, 10_000) } : {}),
+            order: behaviors.length, binding,
+          }],
+        },
+        updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+      }));
+    });
+  } catch (error) {
+    if (copiedFlow) await flowService.deleteFlow(copiedFlow.id);
+    throw error;
+  }
+  const composition = await readPersonaComposition(personaId);
+  if (!composition) missing('Persona', personaId);
+  return composition;
+}
 
 /**
  * Create a canonical Persona-owned Flow copy and atomically switch the selected

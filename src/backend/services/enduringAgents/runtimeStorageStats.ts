@@ -18,6 +18,7 @@ import {
 import { getCurrentWorkspace } from '@/utils/workspace';
 
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import { BEHAVIOR_CALL_PINS_COLLECTION, BehaviorCallPinSchema, type BehaviorCallPin } from './behaviorCallPins';
 import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import { getPersonaRuntimeClock } from './runtimeClock';
@@ -49,6 +50,7 @@ export interface PersonaStorageStats {
     activities: PersonaStorageKindStats;
     flowDispatches: PersonaStorageKindStats;
     leaseHistory: PersonaStorageKindStats;
+    behaviorCallPins: PersonaStorageKindStats;
   };
   totals: {
     records: number;
@@ -103,14 +105,20 @@ type RuntimeStorageDescriptor<T extends RuntimeStorageRecord> = {
   workspaceIdOf?: (record: T) => string;
 };
 
+// Each read validates both sharded and legacy files. Bound concurrent I/O as
+// history grows instead of retaining a promise and read buffers for every item.
+const STORAGE_STATS_READ_BATCH_SIZE = 32;
+
 async function collectKind<T extends RuntimeStorageRecord>(
   personaId: string,
   workspaceId: string,
   descriptor: RuntimeStorageDescriptor<T>,
   indexedRecords?: readonly T[],
 ): Promise<PersonaStorageKindStats> {
-  const entries = indexedRecords
-    ? await Promise.all(indexedRecords.map(async (item) => {
+  const entries = indexedRecords ? [] : await listCollectionItemsWithStats<unknown>(descriptor.collection);
+  if (indexedRecords) {
+    for (let offset = 0; offset < indexedRecords.length; offset += STORAGE_STATS_READ_BATCH_SIZE) {
+      const batch = await Promise.all(indexedRecords.slice(offset, offset + STORAGE_STATS_READ_BATCH_SIZE).map(async (item) => {
         if (!descriptor.indexedCollection) {
           throw new PersonaStorageStatsUnavailableError();
         }
@@ -125,8 +133,10 @@ async function collectKind<T extends RuntimeStorageRecord>(
           item,
           ...stats,
         };
-      }))
-    : await listCollectionItemsWithStats<unknown>(descriptor.collection);
+      }));
+      entries.push(...batch);
+    }
+  }
   const result: PersonaStorageKindStats = {
     total: 0,
     byStatus: {},
@@ -213,6 +223,13 @@ const LEASE_HISTORY_DESCRIPTOR: RuntimeStorageDescriptor<PersonaLease> = {
 };
 
 const STORAGE_INDEX_PAGE_SIZE = 1_000;
+const BEHAVIOR_CALL_PIN_DESCRIPTOR: RuntimeStorageDescriptor<BehaviorCallPin> = {
+  collection: BEHAVIOR_CALL_PINS_COLLECTION,
+  schema: BehaviorCallPinSchema,
+  statusOf: (record) => record.status,
+  timestampOf: (record) => record.createdAt,
+  workspaceIdOf: (record) => record.workspaceId,
+};
 
 async function listAllIndexedPersonaRecords<T extends RuntimeStorageRecord>(
   personaId: string,
@@ -240,7 +257,7 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
     throw new PersonaStorageStatsNotFoundError();
   }
   const workspaceId = getCurrentWorkspace();
-  const [mailboxRecords, activityRecords, leaseRecords, flowDispatches] = await Promise.all([
+  const [mailboxRecords, activityRecords, leaseRecords, flowDispatches, behaviorCallPins] = await Promise.all([
     listAllIndexedPersonaRecords(
       validatedPersonaId,
       (id, query) => listPersonaMailboxItems(id, query),
@@ -254,13 +271,14 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
       (id, query) => listPersonaLeaseRecords(id, query),
     ),
     collectKind(validatedPersonaId, workspaceId, FLOW_DISPATCH_DESCRIPTOR),
+    collectKind(validatedPersonaId, workspaceId, BEHAVIOR_CALL_PIN_DESCRIPTOR),
   ]);
   const [mailboxItems, activities, leaseHistory] = await Promise.all([
     collectKind(validatedPersonaId, workspaceId, MAILBOX_DESCRIPTOR, mailboxRecords),
     collectKind(validatedPersonaId, workspaceId, ACTIVITY_DESCRIPTOR, activityRecords),
     collectKind(validatedPersonaId, workspaceId, LEASE_HISTORY_DESCRIPTOR, leaseRecords),
   ]);
-  const kinds = { mailboxItems, activities, flowDispatches, leaseHistory };
+  const kinds = { mailboxItems, activities, flowDispatches, leaseHistory, behaviorCallPins };
   const values = Object.values(kinds);
 
   return {

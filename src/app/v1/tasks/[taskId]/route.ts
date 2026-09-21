@@ -1,7 +1,8 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
-import { getTask, requestCancel, toTaskHandle } from '@/backend/services/subflowTasks';
+import { getTask, toTaskHandle } from '@/backend/services/subflowTasks';
+import { cancelDetachedTask } from '@/backend/execution/flow/handlers/subflowDetachedInvocation';
 
 function responseForTask(task: Awaited<ReturnType<typeof getTask>>) {
   if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
@@ -33,7 +34,7 @@ async function DELETE_handler(
 ) {
   const locked = await assertUnlocked({ openai: true });
   if (locked) return locked;
-  return responseForTask(await requestCancel((await params).taskId));
+  return responseForTask(await cancelDetachedTask((await params).taskId));
 }
 
 export const GET = withWorkspaceRoute(GET_handler);

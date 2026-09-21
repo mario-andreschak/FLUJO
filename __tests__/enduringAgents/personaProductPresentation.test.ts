@@ -36,6 +36,29 @@ function mailbox(
 }
 
 describe('Persona product Task ordering', () => {
+  it('marks only generated labels for translation, including when an owner title matches a default', () => {
+    const bundle = {
+      persona: { id: 'persona_queue' },
+      workItems: [{ ...workItem('owned', 'normal', 20), title: 'Assigned task' }],
+      mailboxItems: [],
+      activities: [
+        { id: 'chat', kind: 'interactive_chat', source: { kind: 'chat' } },
+        { id: 'missing', kind: 'assignment', source: { kind: 'assignment', sourceId: 'removed' } },
+        { id: 'owned', kind: 'assignment', source: { kind: 'assignment', sourceId: 'owned' } },
+      ].map((activity) => ({
+        ...activity, schemaVersion: 1, personaId: 'persona_queue', status: 'completed', createdAt: 20, updatedAt: 30,
+      })),
+    } as unknown as Parameters<typeof projectPersonaPresentation>[0];
+    const { history } = projectPersonaPresentation(bundle);
+    expect(history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ summary: 'Conversation', summaryKind: 'interactive_chat' }),
+      expect.objectContaining({ summary: 'Assigned task', summaryKind: 'assignment' }),
+    ]));
+    expect(history.filter((entry) => entry.summaryKind === undefined)).toEqual([
+      expect.objectContaining({ summary: 'Assigned task' }),
+    ]);
+  });
+
   it.each([true, false])('keeps the current open goal out of the waiting queue without hiding its queued child (direct source: %s)', (directSource) => {
     const bundle = {
       persona: { id: 'persona_queue' },

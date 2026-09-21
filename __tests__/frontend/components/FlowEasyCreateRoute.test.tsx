@@ -271,11 +271,23 @@ describe('easy agent creation deep link', () => {
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Converted agent');
     expect(screen.getByTestId('flow-builder'))
       .toHaveAttribute('data-authoring-mode', 'advanced');
-    await waitFor(() => expect(mockNavigateWorkspaceRoute).toHaveBeenCalledWith(
-      expect.anything(),
-      '/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev',
-    ));
+    expect(mockNavigateWorkspaceRoute).not.toHaveBeenCalled();
     expect(window.location.pathname + window.location.search)
       .toBe('/flows?flow=saved-flow&mode=edit&authoringMode=advanced&workspace=game-dev');
+  });
+
+  it('refreshes a stale gallery before opening a new Persona Core and preserves the return link', async () => {
+    const returnTo = '/personas/frederik?area=setup&section=behaviors&workspace=default-workspace';
+    const url = '/flows?flow=new-persona-core&mode=edit&returnTo=' + encodeURIComponent(returnTo);
+    window.history.replaceState({}, '', url);
+    mockLoadFlows.mockImplementation((options?: { refresh?: boolean }) => Promise.resolve(
+      options?.refresh ? [{ id: 'new-persona-core', name: 'Frederik Core', nodes: [], edges: [] }] : [],
+    ));
+    render(<FlowsPage />);
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Frederik Core');
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(window.location.search).toContain('returnTo=');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Persona Setup' }));
+    expect(mockPush).toHaveBeenCalledWith(returnTo);
   });
 });

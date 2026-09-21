@@ -60,11 +60,11 @@ class FlowService {
   /**
    * Load all flows
    */
-  async loadFlows(): Promise<Flow[]> {
+  async loadFlows(options: { refresh?: boolean } = {}): Promise<Flow[]> {
     log.debug('loadFlows: Entering method');
     try {
       // Try to use cache first
-      if (this.flowsCache) {
+      if (this.flowsCache && !options.refresh) {
         log.debug('loadFlows: Using cached flows', { count: this.flowsCache.length });
         return this.flowsCache;
       }

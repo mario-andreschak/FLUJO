@@ -210,3 +210,9 @@ goal-acceptance-artifacts/
 /benchmark-artifacts
 fresh-memory-experiment-results.json
 next-env.d.ts
+/docs/outreach
+/docs/research
+/.tmp
+/test-results/
+/playwright-report/
+/persona-browser-artifacts/

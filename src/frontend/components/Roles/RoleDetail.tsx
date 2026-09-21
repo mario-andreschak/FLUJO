@@ -8,6 +8,7 @@ import { Alert, Box, Button, Chip, CircularProgress, Divider, Stack, Typography 
 import type { PublicRole, RoleImpactPreview } from '@/shared/types/enduringAgent';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { rolesService } from '@/frontend/services/roles';
+import { localizeRoleBehavior } from '@/frontend/utils/roleBehaviorLabels';
 import RoleActionMenu from './RoleActionMenu';
 import RoleVersionHistory from './RoleVersionHistory';
 
@@ -34,7 +35,7 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
   if (!role || !impact) return <Stack alignItems="center" sx={{ p: 6 }}><CircularProgress /></Stack>;
 
   return (
-    <Box component="main" sx={{ p: { xs: 2, md: 4 }, maxWidth: 900, mx: 'auto' }}>
+    <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 900, mx: 'auto' }}>
       <Button component={Link} href="/roles">{t('roles.back')}</Button>
       <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={2} sx={{ mt: 2 }}>
         <Box>
@@ -59,12 +60,12 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
         </Stack>
       </Stack>
       <Divider sx={{ my: 3 }} />
-      <Typography variant="h6">{t('roles.behaviors')}</Typography>
+      <Typography variant="h6" component="h2">{t('roles.behaviors')}</Typography>
       <Typography color="text.secondary" sx={{ mt: 0.5 }}>
         {t('roles.behaviorsHelp')}
       </Typography>
       <Stack gap={1.5} sx={{ my: 1.5 }}>
-        {role.behaviors.map((behavior) => (
+        {role.behaviors.map((behavior) => localizeRoleBehavior(behavior, t)).map((behavior) => (
           <Box
             key={behavior.key}
             sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 2 }}
@@ -78,7 +79,7 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
           </Box>
         ))}
       </Stack>
-      <Typography variant="h6">{t('roles.suggestedApps')}</Typography>
+      <Typography variant="h6" component="h2">{t('roles.suggestedApps')}</Typography>
       <Stack direction="row" gap={1} flexWrap="wrap" sx={{ my: 1.5 }}>
         {role.suggestedApps.length === 0
           ? <Typography color="text.secondary">{t('roles.noApps')}</Typography>
@@ -86,7 +87,7 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
             <Chip key={app.mcpServerName} label={app.mcpServerName} color={app.status === 'available' ? 'default' : 'warning'} />
           ))}
       </Stack>
-      <Typography variant="h6" sx={{ mt: 3 }}>{t('roles.personasUsage')}</Typography>
+      <Typography variant="h6" component="h2" sx={{ mt: 3 }}>{t('roles.personasUsage')}</Typography>
       <Alert severity="info" sx={{ my: 1.5 }}>
         {impact.personaCount === 0
           ? t('roles.personasNone')

@@ -1515,19 +1515,6 @@ export async function runSubflowLanes(
       ? parentState.subflowInvocations?.[prepResult.invocationId]
       : undefined;
 
-    // Issue #391: read the experiment gate ONCE for the whole lane pool (not
-    // inside runLane(), which can be invoked many times) — resolveSessionIdentity()
-    // etc. stay flag-agnostic; the gate simply decides whether we ever pass
-    // them a real sessionScope.
-    const { ModelHandler } = await import('../handlers/ModelHandler');
-    const subflowSessionsEnabled = await ModelHandler.isSubflowSessionsEnabled();
-    if (!subflowSessionsEnabled && prepResult.sessionScope && prepResult.sessionScope !== 'per-visit') {
-      log.debug(
-        'Subflow sessionScope is configured but experimental.subflowSessions is disabled; falling back to per-visit',
-        { nodeId: prepResult.nodeId, sessionScope: prepResult.sessionScope },
-      );
-    }
-
     log.info('runSubflowLanes() running queued subflow jobs', {
       laneCount,
       concurrencyLimit,
@@ -1542,7 +1529,8 @@ export async function runSubflowLanes(
     // Cancellation is checked before a queue claim and again after a lane has
     // waited for keyed ownership, so cancelled work never starts late.
     const parentChainCancelled = (): boolean =>
-      isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
+      Boolean(prepResult.abortSignal?.aborted)
+      || isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
 
     const runLane = async (i: number): Promise<void> => {
       const lane = lanes[i];
@@ -1553,12 +1541,8 @@ export async function runSubflowLanes(
         ? invocation.lanes.find((candidate) => candidate.id === lane.laneId)
         : undefined;
 
-      // Issue #363/#391: session-aware conversation ID resolution, gated by
-      // the experimental.subflowSessions flag. When the flag is off, the
-      // identity resolves to undefined regardless of the node's configured
-      // sessionScope, which reproduces pre-#363 per-visit behaviour exactly:
-      // every branch below already keys off `sessionIdentity` being truthy.
-      const sessionIdentity = subflowSessionsEnabled && prepResult.persistConversation
+      // Authored session scope is effective immediately; no global switch.
+      const sessionIdentity = prepResult.persistConversation
         ? resolveSessionIdentity(
             parentState?.logicalRunId ?? prepResult.parentRunId,
             prepResult.nodeId,
@@ -1576,7 +1560,9 @@ export async function runSubflowLanes(
           return;
         }
 
-      let laneConversationId: string | undefined;
+      // Ephemeral children need the same stable live address as persisted ones
+      // for scoped steering/replies; the run mode still controls persistence.
+      let laneConversationId: string | undefined = lane.conversationId ?? crypto.randomUUID();
       let resumedVisit = false;
       let sessionVisit: number | undefined;
       let recoveryConversationId: string | undefined;
@@ -1728,6 +1714,7 @@ export async function runSubflowLanes(
           depth: prepResult.depth,
           chainDepth: prepResult.chainDepth,
           parentRunId: prepResult.parentRunId,
+          ...(prepResult.abortSignal ? { abortSignal: prepResult.abortSignal } : {}),
           lane: {
             laneIndex: lane.itemIndex ?? i,
             laneCount: lane.itemCount ?? laneCount,
@@ -1859,7 +1846,7 @@ export async function runSubflowLanes(
     // runnable. Per-visit lanes get unique queues and keep legacy concurrency.
     const queueMap = new Map<string, number[]>();
     lanes.forEach((lane, index) => {
-      const identity = subflowSessionsEnabled && prepResult.persistConversation
+      const identity = prepResult.persistConversation
         ? resolveSessionIdentity(
             parentState?.logicalRunId ?? prepResult.parentRunId,
             prepResult.nodeId,

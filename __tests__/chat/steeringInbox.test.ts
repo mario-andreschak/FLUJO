@@ -1,3 +1,4 @@
+import { runWithWorkspace } from '@/utils/workspace';
 /**
  * The mid-run steering inbox: a per-conversation FIFO of user messages handed to
  * a run that is already in flight. It is deliberately dumb (routes append, the
@@ -12,6 +13,7 @@ import {
   takeSteeringMessages,
   requeueSteeringMessages,
   clearSteeringInbox,
+  subscribeSteeringMessages,
 } from '@/backend/execution/flow/steeringInbox';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
@@ -80,4 +82,29 @@ describe('steeringInbox', () => {
     clearSteeringInbox(CONV);
     expect(steeringCount(CONV)).toBe(0);
   });
+});
+
+
+it('notifies subscribers only in their workspace and deduplicates requeued IDs', async () => {
+  const notified = jest.fn();
+  let unsubscribe!: () => void;
+  runWithWorkspace('steering-test-a', () => {
+    clearSteeringInbox(CONV);
+    unsubscribe = subscribeSteeringMessages(CONV, notified);
+  });
+  runWithWorkspace('steering-test-b', () => { clearSteeringInbox(CONV); enqueueSteeringMessage(CONV, msg('other')); });
+  await Promise.resolve();
+  expect(notified).not.toHaveBeenCalled();
+  runWithWorkspace('steering-test-a', () => {
+    enqueueSteeringMessage(CONV, msg('stable'));
+    enqueueSteeringMessage(CONV, msg('stable'));
+    requeueSteeringMessages(CONV, [msg('stable')]);
+    expect(peekSteeringMessages(CONV)).toHaveLength(1);
+  });
+  await Promise.resolve();
+  expect(notified).toHaveBeenCalled();
+  unsubscribe(); notified.mockClear();
+  runWithWorkspace('steering-test-a', () => enqueueSteeringMessage(CONV, msg('late')));
+  await Promise.resolve();
+  expect(notified).not.toHaveBeenCalled();
 });

@@ -57,6 +57,7 @@ export default function PersonaSummaryCard({
         overflow: 'visible',
         display: 'flex',
         flexDirection: 'column',
+        minWidth: 0,
         minHeight: 290,
       }}
     >
@@ -76,19 +77,20 @@ export default function PersonaSummaryCard({
             {summary.name.slice(0, 2).toUpperCase()}
           </Avatar>
           <Box minWidth={0} flex={1}>
-            <Typography variant="h5" fontWeight={760} noWrap>{summary.name}</Typography>
-            <Typography variant="body2" color="text.secondary" noWrap>
+            <Typography variant="h5" component="h2" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>{summary.name}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
               {t('personas.role', {
                 role: summary.role.name,
                 version: summary.role.version,
               })}
             </Typography>
+            <Chip
+              size="small"
+              color={statusColor(summary.status)}
+              label={t(`personas.status.${summary.status}`)}
+              sx={{ mt: 1, maxWidth: '100%' }}
+            />
           </Box>
-          <Chip
-            size="small"
-            color={statusColor(summary.status)}
-            label={t(`personas.status.${summary.status}`)}
-          />
         </Stack>
         <Typography
           color="text.secondary"
@@ -108,7 +110,9 @@ export default function PersonaSummaryCard({
             <BoltRounded fontSize="small" color={summary.currentWork ? 'primary' : 'disabled'} />
             <Typography variant="body2" fontWeight={650} noWrap>
               {summary.currentWork
-                ? summary.currentWork.summary ?? t('personas.status.working')
+                ? summary.currentWork.kind === 'interactive_chat'
+                  ? t('personas.history.type.interactive_chat')
+                  : summary.currentWork.summary ?? t('personas.status.working')
                 : t('personas.noActivity')}
             </Typography>
           </Box>
@@ -129,7 +133,7 @@ export default function PersonaSummaryCard({
         </Stack>
       </CardContent>
       <Divider />
-      <CardActions sx={{ px: 2, py: 1.5 }}>
+      <CardActions disableSpacing sx={{ px: 2, py: 1.5, flexWrap: 'wrap', gap: 1 }}>
         {capabilities.open && (
           <Button
             component={Link}

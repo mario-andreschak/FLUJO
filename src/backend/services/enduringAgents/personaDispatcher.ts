@@ -964,6 +964,7 @@ export class PersonaFlowDispatcher {
   private readonly wakeTimers = new Map<string, PersonaRuntimeTimer>();
   private readonly quiescedPersonas = new Set<string>();
   private readonly waiters = new Map<string, Set<() => void>>();
+  private readonly terminalCommits = new Map<string, number>();
   private readonly deliveryChains = new Map<string, Promise<void>>();
   private readonly resumePreparations = new Map<string, PendingResumePreparation>();
 
@@ -2146,6 +2147,22 @@ export class PersonaFlowDispatcher {
     fence: PersonaLeaseFence,
     requested: TerminalDispatchRequest,
   ): Promise<PersonaFlowDispatchRecord> {
+    this.terminalCommits.set(record.id, (this.terminalCommits.get(record.id) ?? 0) + 1);
+    try {
+      return await this.performTerminalCommit(record, fence, requested);
+    } finally {
+      const remaining = (this.terminalCommits.get(record.id) ?? 1) - 1;
+      if (remaining > 0) this.terminalCommits.set(record.id, remaining);
+      else this.terminalCommits.delete(record.id);
+      this.notify(record.id);
+    }
+  }
+
+  private async performTerminalCommit(
+    record: PersonaFlowDispatchRecord,
+    fence: PersonaLeaseFence,
+    requested: TerminalDispatchRequest,
+  ): Promise<PersonaFlowDispatchRecord> {
     let completion: CompletedPersonaActivity | undefined;
     let assignmentSynchronized = false;
     let terminal = await this.inWorkspace(() => withPersonaRuntimeLock(
@@ -2241,11 +2258,11 @@ export class PersonaFlowDispatcher {
         // states above are already authoritative and must never be rewritten.
         log.warn(`Failed to observe terminal Persona Activity ${fence.activityId}:`, error);
       }
-      if (!assignmentSynchronized) {
-        assignmentSynchronized = await this.synchronizeAssignedWorkItem(completion.activity);
-      } else {
+      if (assignmentSynchronized) {
         await this.recordBehaviorOutcome(completion.activity);
       }
+      // Settlement owns the one fallback attempt. On failure the durable row
+      // remains unsettled so reconciliation can retry it without replaying work.
       terminal = await this.settleTerminalProjections(
         terminal,
         completion.activity,
@@ -3594,7 +3611,10 @@ export class PersonaFlowDispatcher {
       if (options.signal?.aborted) throw options.signal.reason ?? new Error('Dispatch wait aborted.');
       const record = await this.get(dispatchId);
       if (!record) throw new Error(`Persona Flow dispatch ${JSON.stringify(dispatchId)} not found.`);
-      if (isTerminalDispatch(record.state)) return record;
+      // The terminal Activity is authoritative before its projections finish.
+      // Let an in-flight local commit finish its bounded attempt before waking
+      // the caller; failed projections remain retryable after that attempt.
+      if (isTerminalDispatch(record.state) && !this.terminalCommits.has(dispatchId)) return record;
       const remaining = deadline === undefined ? 1_000 : deadline - runtimeClock.now();
       if (remaining <= 0) throw new PersonaFlowDispatchTimeoutError(dispatchId);
       await new Promise<void>((resolve, reject) => {

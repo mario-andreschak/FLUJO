@@ -1,3 +1,9 @@
+// These deterministic tests exercise the in-process admission race. Separate
+// workspaceProcessGate tests run the real filesystem protocol in two processes.
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withWorkspaceProcessMutation: (task: () => Promise<unknown>) => task(),
+}));
+
 import {
   beginWorkspaceSnapshotBoundary,
   withWorkspaceMutation,

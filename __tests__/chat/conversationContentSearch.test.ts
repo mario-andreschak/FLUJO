@@ -188,6 +188,34 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(originFilter.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
   });
 
+  it('finds Persona drafts by their current workspace name without putting names in summaries', async () => {
+    const personaDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'personas');
+    await fs.mkdir(personaDir, { recursive: true });
+    const persona = { schemaVersion: 1, id: 'persona-ada', name: 'Ada Researcher', roleVersionId: 'role-version',
+      lifecycleState: 'idle', autonomyLevel: 'locked', interruptionPolicy: 'queue', createdAt: 1, updatedAt: 1 };
+    const savePersona = (name: string) => fs.writeFile(path.join(personaDir, 'persona-ada.json'), JSON.stringify({ ...persona, name }));
+    await savePersona(persona.name);
+    await writeConv('draft', { title: 'Untitled draft', flowId: '', personaTargetId: persona.id, messages: [] });
+    await writeConv('run', { title: 'Earlier work', flowId: 'older-core', personaAttribution: {
+      personaId: persona.id, activityId: 'activity', behaviorRevisionId: 'revision',
+    }, messages: [] });
+    await writeConv('archive', { title: 'Retained evidence', personaArchived: true, messages: [] });
+
+    const result = await getJson('?paged=1&search=ada%20researcher');
+    expect(result.status).toBe(200);
+    expect(result.body.items.map((item: any) => item.id).sort()).toEqual(['draft', 'run']);
+    expect(JSON.stringify(result.body)).not.toContain(persona.name);
+    await savePersona('Renamed teammate');
+    expect((await getJson('?paged=1&search=ada%20researcher')).body.total).toBe(0);
+    expect((await getJson('?paged=1&search=renamed%20teammate')).body.total).toBe(2);
+    expect((await getJson('?paged=1&search=archived%20persona')).body.items.map((item: any) => item.id)).toEqual(['archive']);
+
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    const remote = await GET(new NextRequest('https://flujo.example.com/v1/chat/conversations?paged=1&search=renamed%20teammate', { headers: { host: 'flujo.example.com' } }));
+    expect(remote.status).toBe(200);
+    expect((await remote.json()).items).toEqual([]);
+  });
+
   it('returns only transitive descendants for delete-family checks', async () => {
     await writeConv('root', { title: 'Root', messages: [], updatedAt: 40 });
     await writeConv('child', {

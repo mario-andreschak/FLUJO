@@ -232,7 +232,7 @@ export async function updatePersonaWorkItem(
   const updated = await withPersonaDomainMutation(personaId, options, async () => {
     const existing = requireOwnedWorkItem(await getPersonaWorkItem(personaId, workItemId), personaId);
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== existing.updatedAt) {
-      throw new PersonaDomainConflictError('WorkItem changed since it was inspected.');
+      throw new PersonaDomainConflictError('WorkItem changed since it was inspected.', 'PERSONA_WORK_ITEM_CHANGED');
     }
     if (existing.parentGoalId && existing.goalControlState && parsed.status !== undefined && parsed.status !== existing.status) {
       throw new PersonaDomainConflictError(

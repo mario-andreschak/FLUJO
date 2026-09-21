@@ -2,7 +2,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
-import { saveIndexedCollectionItem } from '@/backend/services/enduringAgents/indexing';
+import { getMemoryIndex, saveIndexedCollectionItem } from '@/backend/services/enduringAgents/indexing';
+import { invalidatePersonaRecordCache } from '@/backend/services/enduringAgents/personaRecordCache';
 import {
   listMemoryItems,
   listPersonaLeaseRecords,
@@ -200,6 +201,40 @@ describe('indexed collection scan isolation', () => {
       } finally {
         readSpy.mockRestore();
       }
+    });
+  });
+
+  it('counts gallery Memories from current index metadata without opening private payloads', async () => {
+    await inFreshWorkspace(async () => {
+      const own = memory('memory_summary', 'persona_a');
+      const forgotten = { ...memory('memory_forgotten', 'persona_a'), status: 'forgotten' as const };
+      const foreign = memory('memory_foreign', 'persona_b');
+      for (const record of [own, forgotten, foreign]) {
+        await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record);
+      }
+      await getMemoryIndex();
+      invalidatePersonaRecordCache(ENDURING_AGENT_COLLECTIONS.memoryItems, own.personaId);
+      const payloadPaths = [own, forgotten, foreign].map(record => path.resolve(
+        getShardedCollectionItemPath(ENDURING_AGENT_COLLECTIONS.memoryItems, record.personaId, record.id),
+      ));
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        const result = await listPersonaSummaryRecords(['persona_a']);
+        expect(result.memoryItems).toEqual(expect.arrayContaining([
+          { id: own.id, personaId: own.personaId, status: 'active' },
+          { id: forgotten.id, personaId: forgotten.personaId, status: 'forgotten' },
+        ]));
+        expect(result.memoryItems).toHaveLength(2);
+        const opened = new Set(readSpy.mock.calls.map(([value]) => path.resolve(String(value))));
+        payloadPaths.forEach(payloadPath => expect(opened).not.toContain(payloadPath));
+      } finally {
+        readSpy.mockRestore();
+      }
+      await saveIndexedCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, {
+        ...own, status: 'forgotten', updatedAt: 2,
+      });
+      const updated = await listPersonaSummaryRecords(['persona_a']);
+      expect(updated.memoryItems.find(record => record.id === own.id)?.status).toBe('forgotten');
     });
   });
 

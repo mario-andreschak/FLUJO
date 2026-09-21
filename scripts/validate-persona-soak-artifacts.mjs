@@ -5,6 +5,55 @@ import { fileURLToPath } from 'url';
 
 const PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION = 2;
 
+// Independently enforce the producer's committed #489 numeric contracts.
+// A report-authored "passed" label cannot override its measured daily values.
+export function validatePersonaSoakNumericEvidence(report, mode) {
+  const errors = [];
+  const metrics = report?.metrics;
+  if (!Array.isArray(metrics) || metrics.length === 0) return ['daily numeric measurements are missing'];
+  const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  for (const metric of metrics) {
+    if (!metric || !['residentMemoryBytes', 'eventAppendP95Ms', 'recallP95Ms', 'recallPrecision'].every(key => finite(metric[key]))
+      || metric.recallPrecision > 1) {
+      return ['daily numeric measurements are missing or invalid'];
+    }
+  }
+  const first = metrics[0];
+  const last = metrics.at(-1);
+  if (last.recallPrecision < first.recallPrecision - 0.05) errors.push('recall precision dropped by more than five percentage points');
+  if (last.recallP95Ms >= 150) errors.push('runtime recall p95 must be strictly below 150 ms');
+  if (mode === 'smoke') return errors;
+
+  const growth = last.residentMemoryBytes - first.residentMemoryBytes;
+  const peak = Math.max(...metrics.map(metric => metric.residentMemoryBytes));
+  if (growth > 256 * 1024 * 1024 || peak > 768 * 1024 * 1024) {
+    errors.push(`resident-memory-bound contradicts daily measurements: growth=${growth}, peak=${peak}`);
+  }
+  const median = values => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.5) - 1];
+  const baseline = median(metrics.slice(0, 7).map(metric => metric.eventAppendP95Ms));
+  const final = median(metrics.slice(-7).map(metric => metric.eventAppendP95Ms));
+  if (final > Math.max(20, baseline * 2) || metrics.some(metric => metric.eventAppendP95Ms >= 150)) {
+    errors.push('flat-event-append-cost contradicts daily measurements');
+  }
+  const caps = { mailboxItems: 500, activities: 200, flowDispatches: 200, leaseHistory: 50, behaviorCallPins: 200 };
+  const activities = report?.runIdentity?.days * report?.runIdentity?.activitiesPerDay;
+  if (!Number.isSafeInteger(activities) || activities <= 0) return [...errors, 'numeric workload size is invalid'];
+  const totalCap = 2 * activities + 128;
+  for (const metric of metrics) {
+    for (const [field, limits] of [
+      ['collectionCounts', Object.fromEntries(Object.keys(caps).map(key => [key, totalCap]))],
+      ['collectionUncompactedCounts', caps],
+    ]) {
+      const counts = metric[field];
+      if (!counts || Object.keys(counts).length !== Object.keys(limits).length
+        || Object.entries(limits).some(([key, limit]) => !Number.isSafeInteger(counts[key]) || counts[key] < 0 || counts[key] > limit)) {
+        errors.push(`bounded-detailed-runtime-state contradicts day ${metric.day} ${field}`);
+      }
+    }
+  }
+  return errors;
+}
+
 const CRITERION_IDS = [
   'unattended-runtime-throughput',
   'persisted-workload-reconciliation',
@@ -152,6 +201,16 @@ export async function validatePersonaSoakArtifacts({
   expectedCommit,
   expectedMode,
 }) {
+  try {
+    await fs.access(path.join(directory, 'persona-soak-source-error.json'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return validateUnchangedPersonaSoakArtifacts({ directory, expectedCommit, expectedMode });
+  }
+  throw new Error('Persona soak source verification failed; these artifacts cannot establish exact-commit acceptance.');
+}
+
+async function validateUnchangedPersonaSoakArtifacts({ directory, expectedCommit, expectedMode }) {
   const errors = [];
   const jsonPath = path.join(directory, 'persona-soak.json');
   const jsonlPath = path.join(directory, 'persona-soak.jsonl');
@@ -259,6 +318,7 @@ export async function validatePersonaSoakArtifacts({
     if (ids.length !== CRITERION_IDS.length) errors.push('criterion count does not match registry');
     for (const criterion of report.criteria) validateCriterion(criterion, expectedMode, errors);
   }
+  errors.push(...validatePersonaSoakNumericEvidence(report, expectedMode));
 
   const reconciliation = report.workloadReconciliation;
   const reconciliationCounts = [

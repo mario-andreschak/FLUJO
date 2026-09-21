@@ -545,6 +545,7 @@ function makeHarness(
       activities: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
       flowDispatches: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
       leaseHistory: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
+      behaviorCallPins: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
     },
     totals: { records: 0, compacted: 0, uncompacted: 0, approxBytes: 0 },
   }));
@@ -1061,6 +1062,36 @@ describe('Persona Flow dispatcher', () => {
     expect(await harness.dispatcher.list('persona_test')).toHaveLength(1);
   });
 
+  it('keeps completion waits cancellable while terminal projections are in flight', async () => {
+    const harness = makeHarness(workspace('terminal-wait-order'));
+    const observing = deferred<void>();
+    const release = deferred<void>();
+    (harness.dependencies.observeCompletedPersonaActivity as jest.Mock).mockImplementation(async () => {
+      observing.resolve();
+      await release.promise;
+    });
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'terminal-wait-order'), { startPump: false },
+    );
+    const pump = harness.dispatcher.pump('persona_test');
+    await observing.promise;
+    expect((await harness.dispatcher.get(submission.dispatch.id))?.state).toBe('completed');
+    try {
+      await expect(harness.dispatcher.wait(submission.dispatch.id, { timeoutMs: 10 }))
+        .rejects.toThrow('Timed out');
+      const abort = new AbortController();
+      const waiting = harness.dispatcher.wait(submission.dispatch.id, { signal: abort.signal });
+      abort.abort(new Error('Owner left'));
+      await expect(waiting).rejects.toThrow('Owner left');
+    } finally {
+      release.resolve();
+      await pump;
+    }
+    expect(await harness.dispatcher.wait(submission.dispatch.id, { timeoutMs: 100 })).toMatchObject({
+      state: 'completed', terminalProjectionsSettledAt: expect.any(Number),
+    });
+  });
+
   it('runs one restricted memory-maintenance Activity after an authored Activity completes', async () => {
     FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance'), {
@@ -1479,10 +1510,10 @@ describe('Persona Flow dispatcher', () => {
       { startPump: false },
     );
     await harness.dispatcher.pump('persona_test');
-    expect(await harness.dispatcher.get(submission.dispatch.id)).toMatchObject({
-      state: 'completed',
-      terminalProjectionsSettledAt: undefined,
-    });
+    const interrupted = await harness.dispatcher.get(submission.dispatch.id);
+    expect(interrupted?.state).toBe('completed');
+    // JSON persistence omits undefined properties; absence is the retry marker.
+    expect(interrupted?.terminalProjectionsSettledAt).toBeUndefined();
 
     taskProjection.mockClear();
     atomicTaskProjection.mockClear();

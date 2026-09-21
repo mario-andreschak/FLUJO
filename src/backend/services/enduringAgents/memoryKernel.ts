@@ -49,6 +49,7 @@ import {
   MEMORY_DEDUP_SETTINGS,
   MEMORY_RANKING_WEIGHTS,
   MEMORY_SEMANTIC_FLOOR,
+  lowercaseMemoryContent,
   scoreMemoryCandidate,
   semanticCandidateEligible,
   selectNearDuplicateCandidate,
@@ -720,7 +721,7 @@ export async function searchPersonaMemory(
         && item.reviewedAt === undefined
         && (item.expiresAt === undefined || item.expiresAt > asOf)
         && (terms.length === 0 || terms.some(
-          term => item.content.toLocaleLowerCase().includes(term)
+          term => lowercaseMemoryContent(item).includes(term)
         ))
       ))
       .sort((left, right) => compareMemoryReviewCandidates(left, right, asOf))
@@ -734,39 +735,28 @@ export async function searchPersonaMemory(
     const semantic = parsed.mode === 'lexical'
       ? lexicalRecallContext()
       : await prepareSemanticRecall(personaId, parsed.query, items);
-    const candidates = items.map((item) => {
-      const lexicalHit = terms.some(
-        term => item.content.toLocaleLowerCase().includes(term),
-      );
-      return {
-        item,
-        core: coreIds.has(item.id),
-        lexicalHit,
-        semantic: semantic.scores.get(item.id),
-      };
-    });
-    const eligible = candidates.filter(({ lexicalHit, semantic: semanticScore }) => (
-      terms.length === 0
-      || semanticCandidateEligible(lexicalHit, semanticScore, semantic.floor)
-    ));
-    recordSemanticRecallCandidates(candidates.length, eligible.length);
     const rankingWeights = {
       ...MEMORY_RANKING_WEIGHTS,
       lexicalWeight: semantic.lexicalWeight,
       semanticWeight: semantic.semanticWeight,
     };
-    const results = eligible.map(({ item, core, semantic: semanticScore }) => ({
-      item,
-      core,
-      score: scoreMemoryCandidate({
+    const results: MemorySearchResult[] = [];
+    for (const item of items) {
+      const content = lowercaseMemoryContent(item);
+      const lexicalHit = terms.some(term => content.includes(term));
+      const semanticScore = semantic.scores.get(item.id);
+      if (terms.length > 0 && !semanticCandidateEligible(lexicalHit, semanticScore, semantic.floor)) continue;
+      const core = coreIds.has(item.id);
+      results.push({ item, core, score: scoreMemoryCandidate({
         item,
         terms,
         core,
         asOf,
         semantic: semanticScore,
         weights: rankingWeights,
-      }),
-    }));
+      }) });
+    }
+    recordSemanticRecallCandidates(items.length, results.length);
     ordered = terms.length === 0 ? results : results.sort((left, right) => (
       right.score - left.score
       || right.item.updatedAt - left.item.updatedAt
@@ -822,6 +812,13 @@ export async function correctMemory(
     const original = requireOwnedMemory(await getMemoryItem(personaId, memoryId), personaId, memoryId);
     if (original.status === 'forgotten') {
       throw new PersonaDomainConflictError('Forgotten memory cannot be corrected in place.');
+    }
+    if (original.status === 'superseded') {
+      throw new PersonaDomainConflictError(
+        'Memory has already been replaced. Review its current version before correcting it.',
+        'memory_changed',
+        { currentUpdatedAt: original.updatedAt },
+      );
     }
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== original.updatedAt) {
       throw new PersonaDomainConflictError(

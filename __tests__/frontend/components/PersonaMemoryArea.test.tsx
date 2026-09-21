@@ -1,9 +1,9 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import PersonaMemoryArea from '@/frontend/components/Personas/PersonaMemoryArea';
-import { personasService, type PersonaDetail } from '@/frontend/services/personas';
+import { PersonasApiError, personasService, type PersonaDetail } from '@/frontend/services/personas';
 import type { MemoryItem } from '@/shared/types/enduringAgent';
 
 const original: MemoryItem = {
@@ -42,6 +42,144 @@ const detail = {
   },
   memoryItems: [corrected, original],
 } as unknown as PersonaDetail;
+
+describe('PersonaMemoryArea dialog feedback and focus', () => {
+  beforeEach(() => {
+    jest.spyOn(personasService, 'memories').mockResolvedValue([]);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('keeps failed additions and their error inside the dialog', async () => {
+    jest.spyOn(personasService, 'createMemory').mockRejectedValue(new Error('Memory storage is unavailable.'));
+    render(<PersonaMemoryArea detail={detail} busy={false} refresh={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add memory' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add a memory' });
+    const input = within(dialog).getByRole('textbox', { name: 'What should this Persona remember?' });
+    fireEvent.change(input, { target: { value: 'Keep this draft.' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add memory' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Memory storage is unavailable.');
+    expect(input).toHaveValue('Keep this draft.');
+    expect(within(dialog).getByRole('button', { name: 'Add memory' })).toBeEnabled();
+  });
+
+  it('keeps correction errors accessible without closing the draft', async () => {
+    jest.spyOn(personasService, 'correctMemory').mockRejectedValue(new Error('Correction could not be saved.'));
+    render(<PersonaMemoryArea detail={detail} busy={false} refresh={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct' }));
+    const dialog = screen.getByRole('dialog', { name: 'Correct' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect((await within(dialog).findByText('Correction could not be saved.')).closest('[role=alert]')).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: 'What should this Persona remember?' })).toHaveValue(corrected.content);
+  });
+
+  it('keeps the inspected revision until the owner reviews a concurrent replacement', async () => {
+    const replacement = { ...corrected, id: 'memory_concurrent', content: 'The release is on Thursday.', supersedes: [corrected.id], updatedAt: 31 };
+    const next = { ...detail, memoryItems: [replacement, { ...corrected, status: 'superseded' as const, updatedAt: 32 }, original] };
+    const correctMemory = jest.spyOn(personasService, 'correctMemory')
+      .mockRejectedValueOnce(new PersonasApiError(409, 'Changed.', 'memory_changed'))
+      .mockResolvedValue({ ...replacement, id: 'memory_reviewed', content: 'My proposed Wednesday.' });
+    const refresh = jest.fn().mockResolvedValue(undefined);
+    const view = render(<PersonaMemoryArea detail={detail} busy={false} refresh={refresh} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct' }));
+    const dialog = screen.getByRole('dialog', { name: 'Correct' });
+    const input = within(dialog).getByRole('textbox', { name: 'What should this Persona remember?' });
+    fireEvent.change(input, { target: { value: 'My proposed Wednesday.' } });
+    view.rerender(<PersonaMemoryArea detail={next} busy={false} refresh={refresh} />);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(correctMemory).toHaveBeenNthCalledWith(1, detail.persona.id,
+      expect.objectContaining({ id: corrected.id, updatedAt: corrected.updatedAt, status: 'active' }),
+      'My proposed Wednesday.', expect.any(Object)));
+    expect(await within(dialog).findByText(replacement.content)).toBeInTheDocument();
+    expect(input).toHaveValue('My proposed Wednesday.');
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue with this version' }));
+    expect(input).toHaveValue('My proposed Wednesday.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(correctMemory).toHaveBeenNthCalledWith(2, detail.persona.id,
+      expect.objectContaining({ id: replacement.id, updatedAt: replacement.updatedAt }),
+      'My proposed Wednesday.', expect.any(Object)));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('returns focus to the corrected Memory after its original card is replaced', async () => {
+    const replacement = { ...corrected, id: 'memory_replacement', content: 'The release is on Friday.', supersedes: [corrected.id] };
+    jest.spyOn(personasService, 'correctMemory').mockResolvedValue(replacement);
+    const next = { ...detail, memoryItems: [replacement, { ...corrected, status: 'superseded' as const }, original] };
+    const refresh = jest.fn(async () => view.rerender(<PersonaMemoryArea detail={next} busy={false} refresh={refresh} />));
+    const view = render(<PersonaMemoryArea detail={detail} busy={false} refresh={refresh} />);
+    const trigger = screen.getByRole('button', { name: 'Correct' });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Correct' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'What should this Persona remember?' }), { target: { value: replacement.content } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Correct' })).toHaveFocus());
+    expect(trigger).not.toBeInTheDocument();
+    expect(screen.getByText(replacement.content)).toBeInTheDocument();
+  });
+
+  it('returns to Add memory when the corrected text no longer matches the search', async () => {
+    const replacement = { ...corrected, id: 'memory_replacement', content: 'The review is on Friday.', supersedes: [corrected.id] };
+    jest.spyOn(personasService, 'correctMemory').mockResolvedValue(replacement);
+    const next = { ...detail, memoryItems: [replacement, { ...corrected, status: 'superseded' as const }, original] };
+    const refresh = jest.fn(async () => view.rerender(<PersonaMemoryArea detail={next} busy={false} refresh={refresh} />));
+    const view = render(<PersonaMemoryArea detail={detail} busy={false} refresh={refresh} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search memories' }), { target: { value: 'Tuesday' } });
+    const trigger = screen.getByRole('button', { name: 'Correct' });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Correct' })).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add memory' })).toHaveFocus());
+  });
+
+  it('returns correction cancellation to its existing trigger', async () => {
+    render(<PersonaMemoryArea detail={detail} busy={false} refresh={jest.fn()} />);
+    const trigger = screen.getByRole('button', { name: 'Correct' });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Correct' })).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('starts Forget on Cancel and retains a failed request inside the dialog', async () => {
+    jest.spyOn(personasService, 'forgetMemory').mockRejectedValue(new Error('Forget could not be saved.'));
+    render(<PersonaMemoryArea detail={detail} busy={false} refresh={jest.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Forget' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Forget could not be saved.');
+  });
+
+  it('returns to Add memory after Forget removes its trigger', async () => {
+    jest.spyOn(personasService, 'forgetMemory').mockResolvedValue({ ...corrected, status: 'forgotten' });
+    const next = { ...detail, memoryItems: [{ ...corrected, status: 'forgotten' as const }, original] };
+    const refresh = jest.fn(async () => view.rerender(<PersonaMemoryArea detail={next} busy={false} refresh={refresh} />));
+    const view = render(<PersonaMemoryArea detail={detail} busy={false} refresh={refresh} />);
+    const trigger = screen.getByRole('button', { name: 'Forget' });
+    act(() => trigger.focus());
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Forget' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add memory' })).toHaveFocus());
+  });
+
+  it('does not move focus into another Persona when a dialog finishes closing', async () => {
+    const refresh = jest.fn();
+    const view = render(<PersonaMemoryArea detail={detail} busy={false} refresh={refresh} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    const other = { ...detail, persona: { ...detail.persona, id: 'persona_other' }, memoryItems: [] };
+    view.rerender(<PersonaMemoryArea detail={other} busy={false} refresh={refresh} />);
+    const search = screen.getByLabelText('Search memories');
+    act(() => search.focus());
+    await waitFor(() => expect(screen.queryByRole('dialog', { hidden: true })).not.toBeInTheDocument());
+    expect(search).toHaveFocus();
+  });
+});
 
 describe('PersonaMemoryArea correction history', () => {
   afterEach(() => {

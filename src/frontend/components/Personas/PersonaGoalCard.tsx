@@ -45,7 +45,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
     }));
     if (saved) setDirty(false);
   };
-  return <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3 }}>
+  return <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 3, minWidth: 0, overflowWrap: 'anywhere' }}>
     <Stack spacing={1.5}>
       <Stack direction="row" justifyContent="space-between" gap={1} flexWrap="wrap">
         <Typography variant="h6" fontWeight={760}>{item.title}</Typography>
