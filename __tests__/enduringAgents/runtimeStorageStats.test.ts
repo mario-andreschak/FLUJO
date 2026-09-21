@@ -227,6 +227,39 @@ describe('Persona runtime storage statistics', () => {
     }
   });
 
+  it('bounds filesystem reads as retained history grows and still counts every record', async () => {
+    const template = (await listPersonaActivitiesMock())[0];
+    const records = Array.from({ length: 1_200 }, (_, index) => ({
+      ...template, id: `activity_${index}`,
+    }));
+    listPersonaActivitiesMock.mockImplementation(async (_id, query) => (
+      records.slice(query.offset, query.offset + query.limit)
+    ));
+    listPersonaMailboxItemsMock.mockResolvedValue([]);
+    listPersonaLeaseRecordsMock.mockResolvedValue([]);
+    let inFlight = 0;
+    let peak = 0;
+    getShardedCollectionItemStatsMock.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setImmediate(resolve));
+      inFlight -= 1;
+      return { mtimeMs: 100, sizeBytes: 200 };
+    });
+
+    const stats = await getPersonaStorageStats('persona_1');
+    expect(stats.kinds.activities).toMatchObject({ total: 1_200, approxBytes: 240_000 });
+    expect(getShardedCollectionItemStatsMock).toHaveBeenCalledTimes(1_200);
+    expect(peak).toBeLessThanOrEqual(32);
+    expect(inFlight).toBe(0);
+
+    getShardedCollectionItemStatsMock.mockImplementation(async (_collection, _persona, id) => (
+      id === 'activity_1199' ? null : { mtimeMs: 100, sizeBytes: 200 }
+    ));
+    await expect(getPersonaStorageStats('persona_1'))
+      .rejects.toBeInstanceOf(PersonaStorageStatsUnavailableError);
+  });
+
   it('keeps foreign records outside the bounded indexed statistics inputs', async () => {
     listCollectionItemsWithStatsMock.mockResolvedValue([]);
     listPersonaMailboxItemsMock.mockResolvedValue([]);

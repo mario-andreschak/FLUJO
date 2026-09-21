@@ -498,13 +498,22 @@ async function assertRealDirectory(candidate: string, label: string): Promise<vo
   }
 }
 
+/** Revalidate on every use, creating only directories that are actually missing. */
+async function ensureRealDirectory(candidate: string, label: string): Promise<void> {
+  try {
+    await assertRealDirectory(candidate, label);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await fs.mkdir(candidate, { recursive: true });
+    await assertRealDirectory(candidate, label);
+  }
+}
+
 async function ensureWorkspacesRoot(): Promise<string> {
   const dataRoot = getDataDir();
   const workspacesRoot = getWorkspacesDir();
-  await fs.mkdir(dataRoot, { recursive: true });
-  await assertRealDirectory(dataRoot, 'FLUJO data root');
-  await fs.mkdir(workspacesRoot, { recursive: true });
-  await assertRealDirectory(workspacesRoot, 'Workspaces root');
+  await ensureRealDirectory(dataRoot, 'FLUJO data root');
+  await ensureRealDirectory(workspacesRoot, 'Workspaces root');
   return workspacesRoot;
 }
 
@@ -761,8 +770,7 @@ export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
     );
   }
 
-  await fs.mkdir(dir, { recursive: true });
-  await assertRealDirectory(dir, `Workspace ${expectedName}`);
+  await ensureRealDirectory(dir, `Workspace ${expectedName}`);
   const canonicalRoot = await fs.realpath(workspacesRoot);
   const canonicalWorkspace = await fs.realpath(dir);
   const rel = path.relative(canonicalRoot, canonicalWorkspace);
@@ -771,8 +779,7 @@ export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
   }
   for (const sub of WORKSPACE_SUBTREES) {
     const subtree = path.join(dir, sub);
-    await fs.mkdir(subtree, { recursive: true });
-    await assertRealDirectory(subtree, `Workspace subtree ${sub}`);
+    await ensureRealDirectory(subtree, `Workspace subtree ${sub}`);
   }
   return dir;
 }

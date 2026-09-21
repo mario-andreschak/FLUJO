@@ -14,6 +14,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      persona_memory_profile:
+        description: Also capture a diagnostic allocation profile of the full Persona soak
+        type: boolean
+        default: false
 
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -23,6 +28,46 @@ permissions:
   contents: read
 
 jobs:
+  persona-memory-profile:
+    if: github.event_name == 'workflow_dispatch' && inputs.persona_memory_profile
+    name: diagnostic Persona memory profile (not release acceptance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Profile the unchanged full runtime workload
+        env:
+          PERSONA_SOAK_FULL: '1'
+          PERSONA_SOAK_DAYS: '28'
+          PERSONA_SOAK_ACTIVITIES_PER_DAY: '20'
+          PERSONA_SOAK_SEED: '459'
+          PERSONA_SOAK_WITH_LEARNING: '1'
+          PERSONA_SOAK_MODE: infrastructure
+          PERSONA_SOAK_COMMIT: ${{ github.sha }}
+          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-profile
+          PERSONA_SOAK_DEBUG: '1'
+          PERSONA_SOAK_PROFILE_ALLOCATIONS: '1'
+          PERSONA_SOAK_OUTPUT: profile-artifacts/soak
+        run: |
+          mkdir -p profile-artifacts
+          node node_modules/jest/bin/jest.js \
+            --selectProjects node --runInBand \
+            __tests__/enduringAgents/runtimeClock.test.ts \
+            __tests__/enduringAgents/soak/evidence.test.ts \
+            __tests__/enduringAgents/soak/personaSoak.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-memory-profile-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: profile-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
   release-safety:
     name: Release safety (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
