@@ -11,5 +11,6 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: 'playwright-report/personas', open: 'never' }],
     ['json', { outputFile: 'persona-browser-artifacts/report.json' }]],
   use: { browserName: 'chromium', locale: 'en-US', viewport: { width: 1280, height: 720 },
+    actionTimeout: 30_000, navigationTimeout: 30_000,
     trace: 'retain-on-failure', screenshot: 'only-on-failure' },
 });
