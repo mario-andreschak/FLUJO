@@ -89,4 +89,6 @@ jobs:
             test-results/personas
             playwright-report/personas
           if-no-files-found: error
+          # SHA256SUMS includes Playwright's .last-run.json alongside the reports.
+          include-hidden-files: true
           retention-days: 90
