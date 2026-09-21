@@ -179,10 +179,6 @@ describe('Persona execution preview', () => {
         name: 'Deep research',
         description: 'Find and compare trustworthy evidence.',
       },
-      {
-        slotKey: 'quality-review',
-        name: 'Quality Review',
-      },
     ]);
     expect(preview?.behaviors.map((behavior) => behavior.name)).not.toContain('quality-review');
     expect(snapshotPersonaCoreAppRefsMock).toHaveBeenCalledWith(
@@ -190,6 +186,19 @@ describe('Persona execution preview', () => {
       expect.objectContaining({ id: 'persona_preview' }),
     );
     expect(getFlowMock).toHaveBeenCalledWith('flow_ada_core');
+  });
+
+  it('never advertises automatic maintenance or a detached binding as a callable specialist', async () => {
+    const persona = await getPersonaMock();
+    persona.composition.behaviors.push({ ref: 'maintenance', slotKey: 'maintain_memory', name: 'Maintain memory' });
+    listBehaviorBindingsMock.mockResolvedValue([
+      ...(await listBehaviorBindingsMock()),
+      { id: 'maintenance', slotKey: 'maintain_memory', activeRevisionId: 'maintenance-revision' },
+    ]);
+    const preview = await previewPersonaExecution('persona_preview');
+    expect(preview?.behaviors.map((behavior) => behavior.name)).toEqual(['Deep research']);
+    persona.composition.behaviors = [];
+    expect((await previewPersonaExecution('persona_preview'))?.behaviors).toEqual([]);
   });
 
   it('reports only memory recall when automatic learning is off', async () => {

@@ -2,6 +2,7 @@
 
 import React, { Suspense } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
 import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
@@ -196,7 +197,14 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main-content">{t('shell.skipToContent')}</a>
+      <Link
+        className="skip-link"
+        href="#main-content"
+        replace
+        onNavigate={() => document.getElementById('main-content')?.focus()}
+      >
+        {t('shell.skipToContent')}
+      </Link>
       <LivingWorldGate />
       <Suspense fallback={<AppLoading message="shell.loading.navigation" compact />}>
         <Navigation />

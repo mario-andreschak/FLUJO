@@ -161,7 +161,7 @@ describe('Persona runtime storage statistics', () => {
     );
   });
 
-  it('reports all four kinds, native statuses, timestamps, compaction, and exact bytes', async () => {
+  it('reports runtime kinds, native statuses, timestamps, compaction, and exact bytes', async () => {
     const stats = await getPersonaStorageStats('persona_1');
     expect(stats.kinds.mailboxItems).toEqual({
       total: 1,
@@ -196,7 +196,7 @@ describe('Persona runtime storage statistics', () => {
     expect(stats.retentionEnabled).toBe(false);
   });
 
-  it('returns four zero-filled kinds for an existing Persona without runtime records', async () => {
+  it('returns five zero-filled kinds for an existing Persona without runtime records', async () => {
     listCollectionItemsWithStatsMock.mockResolvedValue([]);
     listPersonaMailboxItemsMock.mockResolvedValue([]);
     listPersonaActivitiesMock.mockResolvedValue([]);
@@ -208,6 +208,7 @@ describe('Persona runtime storage statistics', () => {
       'activities',
       'flowDispatches',
       'leaseHistory',
+      'behaviorCallPins',
     ]);
     expect(stats.totals).toEqual({
       records: 0,

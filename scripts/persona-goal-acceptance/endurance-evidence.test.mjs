@@ -10,10 +10,50 @@ import {
   writeEnduranceEvidenceAttestation,
 } from './endurance-attestation.mjs';
 import { CONTROLLED_PUBLIC_FIXTURE_MANIFEST } from './public-fixture-manifest.mjs';
-import { validatePersonaGoalEndurance } from '../validate-persona-goal-endurance.mjs';
+import { hasVerifiedCrashModelExecution, validatePersonaGoalEndurance } from '../validate-persona-goal-endurance.mjs';
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const iso = seconds => new Date(Date.parse('2026-09-06T00:00:00.000Z') + seconds * 1000).toISOString();
+
+test('forced live epoch requires joined native model, transcript and independent effect evidence', () => {
+  const input = {
+    mode: 'live', runId: 'crash-proof',
+    epoch: { exitKind: 'forced_after_effect', epochId: 'epoch-2', pid: 42,
+      startedAt: iso(10), endedAt: iso(20), crashActivityId: 'activity-crash' },
+    activities: [{ id: 'activity-crash', conversationId: 'conversation-crash', createdAt: Date.parse(iso(11)) }],
+    runtimeTurns: [{ outcome: 'running', operation: 'thread.runStreamed', adapter: 'codex-cli',
+      processEpochId: 'epoch-2', processPid: 42, conversationId: 'conversation-crash', timestamp: Date.parse(iso(12)) }],
+    toolCalls: [{ conversationId: 'conversation-crash', messageId: 'stream_codex_native', toolCallId: 'call-native',
+      toolName: 'goal-endurance__publish_campaign', source: 'conversation-logs/native.jsonl',
+      sourceFileSha256: 'a'.repeat(64), seq: 5, timestamp: Date.parse(iso(13)) }],
+    effects: [{ id: 'publication-1', idempotencyKey: 'goal-endurance-publication:crash-proof',
+      contentSha256: 'b'.repeat(64), publishedAt: Date.parse(iso(14)) }],
+    audit: [{ type: 'publication_committed_ack_withheld', idempotencyKey: 'goal-endurance-publication:crash-proof',
+      publicationId: 'publication-1', contentSha256: 'b'.repeat(64), at: Date.parse(iso(14)) + 1 }],
+  };
+  assert.equal(hasVerifiedCrashModelExecution(input), true);
+  for (const [name, mutate] of [
+    ['offline', value => { value.mode = 'offline'; }],
+    ['graceful epoch', value => { value.epoch.exitKind = 'graceful'; }],
+    ['inflight alone', value => { value.toolCalls = []; }],
+    ['different conversation', value => { value.toolCalls[0].conversationId = 'other'; }],
+    ['other adapter', value => { value.runtimeTurns[0].adapter = 'fixture'; }],
+    ['wrong process', value => { value.runtimeTurns[0].processPid = 43; }],
+    ['cancelled model', value => { value.runtimeTurns[0].outcome = 'cancelled'; }],
+    ['no persisted transcript', value => { value.toolCalls[0].sourceFileSha256 = ''; }],
+    ['producer trace', value => { value.toolCalls[0].source = 'producer.json'; }],
+    ['wrong tool', value => { value.toolCalls[0].toolName = 'other'; }],
+    ['wrong effect', value => { value.audit[0].publicationId = 'other'; }],
+    ['wrong run', value => { value.audit[0].idempotencyKey = 'other'; }],
+    ['effect before tool', value => { value.effects[0].publishedAt = Date.parse(iso(12)); }],
+    ['effect after crash', value => { value.audit[0].at = Date.parse(iso(21)); }],
+    ['model before activity', value => { value.runtimeTurns[0].timestamp = Date.parse(iso(10)); }],
+  ]) {
+    const invalid = structuredClone(input);
+    mutate(invalid);
+    assert.equal(hasVerifiedCrashModelExecution(invalid), false, name);
+  }
+});
 const checks = Object.fromEntries([
   'oneOngoingGoal',
   'ordinaryMarketingSetup',
@@ -63,6 +103,16 @@ async function writeSyntheticRuntimeProvenance(root, report) {
       runId: report.runIdentity.runId,
       collectedAt: iso(61),
       sourceRoot: 'runtime-data',
+      setup: Object.fromEntries(Object.entries({
+        persona: ['personas', { id: 'persona-unit', name: 'Frederik', roleVersionId: 'role-unit', composition: { coreFlowRef: 'core-unit' } }],
+        roleVersion: ['role-versions', { id: 'role-unit', name: 'Marketing Agent', roleDefinitionId: 'role-definition-unit' }],
+        roleDefinition: ['role-definitions', { id: 'role-definition-unit', name: 'Marketing Agent', currentVersionId: 'role-unit' }],
+      }).map(([key, [collection, record]]) => [key, {
+        record, source: 'workspaces/workspace-unit/db/' + collection + '/' + record.id + '.json', sourceFileSha256: 'e'.repeat(64),
+      }])),
+      activities: report.activities.map(record => ({
+        record, source: 'workspaces/workspace-unit/db/persona-activities/' + record.id + '.json', sourceFileSha256: 'f'.repeat(64),
+      })),
       runtimeEvents: report.runtimeEvents.map(event => ({
         record: event,
         source: 'db/persona-runtime-events/events.jsonl',
@@ -261,7 +311,9 @@ async function createSyntheticEvidence(root) {
     { id: 'activity-crash', createdAt: Date.parse(iso(20)), completedAt: Date.parse(iso(34)) },
     { id: 'activity-recovered', createdAt: Date.parse(iso(34)), completedAt: Date.parse(iso(39)) },
     { id: 'activity-followup', createdAt: Date.parse(iso(46)), completedAt: Date.parse(iso(55)) },
-  ];
+  ].map(activity => ({ ...activity, personaId: 'persona-unit', coreFlowId: 'core-unit',
+    instructionContext: { personaName: 'Frederik', roleName: 'Marketing Agent', roleVersionId: 'role-unit' },
+  }));
   const mailbox = activities.map((activity, index) => ({
     id: 'mailbox-' + index,
     claimedActivityId: activity.id,
@@ -350,7 +402,7 @@ async function createSyntheticEvidence(root) {
       authoritativeLiveModel: false,
       startedAt: iso(0),
       endedAt: iso(60),
-      verifierVersion: 'persona-goal-endurance-v1',
+      verifierVersion: 'persona-goal-endurance-v2',
       policyVersion: 'issue-505-endurance-metrics-v1',
     },
     configuration: {
@@ -609,6 +661,26 @@ async function withSyntheticEvidence(assertion) {
 }
 
 test('independently rejects incomplete or mismatched endurance evidence', async t => {
+  for (const [name, mutate] of [
+    ['generic test Role version', value => { value.setup.roleVersion.record.name = 'Test general Role v1'; }],
+    ['custom test Core', value => { value.setup.roleVersion.record.coreFlowTemplate = { id: 'test_core' }; }],
+    ['different Persona Role pin', value => { value.setup.persona.record.roleVersionId = 'other'; }],
+    ['mismatched frozen Activity context', value => { value.activities[0].record.instructionContext.roleName = 'Test general Role v1'; }],
+    ['different executed Core', value => { value.activities[0].record.coreFlowId = 'test_core'; }],
+    ['unattributed setup receipt', value => { value.setup.roleVersion.sourceFileSha256 = ''; }],
+    ['foreign workspace setup receipt', value => { value.setup.persona.source = 'workspaces/foreign/db/personas/persona-unit.json'; }],
+    ['missing persisted Activity', value => { value.activities.pop(); }],
+  ]) {
+    await t.test(name, async () => withSyntheticEvidence(async ({ root, report, keys, options }) => {
+      const filename = path.join(root, 'runtime-provenance.json');
+      const provenance = JSON.parse(await readFile(filename, 'utf8'));
+      mutate(provenance);
+      await writeFile(filename, JSON.stringify(provenance, null, 2) + '\n');
+      await writeReport(root, report, keys);
+      await assert.rejects(validatePersonaGoalEndurance(options), /ordinary Marketing Agent setup|Producer Activities differ/);
+    }));
+  }
+
   await t.test('missing evidence', async () => withSyntheticEvidence(async ({ root, options }) => {
     await rm(path.join(root, 'persona-goal-endurance.json'));
     await assert.rejects(validatePersonaGoalEndurance(options), { code: 'ENOENT' });

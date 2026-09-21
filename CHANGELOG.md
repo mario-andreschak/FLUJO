@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Personas
+
+- Keep first-start migration reports accurate after workspace-lock setup, distinguish directory moves from merges, and release the startup lock if snapshot admission fails.
+- Check Role-derived Core and Behavior readiness before creation; preserve blocked drafts and provide setup/retry actions. Repair Core editor navigation, add specialist Behaviors after creation, and clarify History outcomes.
+- Add an opt-in beginner browser journey with a local model/App fixture, queued-Task restart checks and configuration/privacy assertions. Let users dismiss the first-use telemetry notice without changing privacy preferences, so it no longer traps controls underneath it.
+- Bind browser acceptance to a selected release commit, run and build; reject partial or mismatched journey reports and retain checksummed CI evidence for 90 days.
+- Localize the default memory-maintenance Behavior heading and keep long History reset-filter labels readable alongside the filters.
+- Translate untouched generated Persona Flow names and descriptions in setup and Behavior pickers while preserving custom content. Identify, group, filter and search Persona chats by the Persona, including drafts before their first run and conversations made with an earlier Core Flow.
+- Keep keyboard focus on Persona Setup and Apps tabs instead of an App search field below the viewport. Align Portuguese and Chinese Role terminology with the Role library.
+- Preserve keyboard focus after Memory corrections and show failed saves inside Memory and Task dialogs. Label Task dependencies and keep pending saves open. Reject corrections of replaced Memories; retain the owner's draft and require review of the current version before continuing.
+- Translate concurrent Task-edit conflicts while retaining unsaved input and the original revision. Improve primary, gradient, supporting-text and status-label contrast across the four shared theme presets.
+- Show default History filters and inherited Persona language explicitly. Wrap long settings choices and menus, correct section heading levels and singular blocker wording, and translate Role-change help consistently across seven languages.
+- Keep failed App-tool and Role-sharing saves visible inside their dialogs, retain drafts and focus the error for keyboard users. Add descriptive, translated loading status messages for Persona surfaces and previews.
+- Keep long Persona gallery names and actions within narrow screens, correct gallery/App-tool heading levels, and translate fixed-parameter controls and concurrent App-edit guidance in seven languages.
+- Link Persona tabs to named, keyboard-focusable content panels. Reveal focused tabs within the narrow tab strip and keep navigation focus below the sticky header.
+- Keep Skip to content focus and browser history aligned, so returning from Persona chat restores the Persona page instead of leaving Chat beneath its URL.
+- Show translated chat loading statuses while a Persona conversation opens, without flashing new-conversation guidance or remounting the draft composer.
+- Announce observed Task and goal state changes with their names and translated status across Persona areas, without moving focus or repeating unchanged refreshes. Bound simultaneous updates and avoid duplicate generic lifecycle announcements.
+- Complete Persona translations in seven languages and improve narrow layouts, contrast, loading messages and dialog focus. Replace browser confirmations, retain failed-save drafts, localize generated History and default Role Behavior labels, correct Role page landmarks, and prevent translated navigation from overlapping workspace controls.
+- Add a separate Persona recovery ZIP with integrity validation, private-data disclosure and restoration into a new disabled workspace. Model/App connections require reconnection; saved work does not resume automatically.
+- Erase Persona-owned Flow copies/history, specialist-call payloads and private model archives during deletion; prevent stale writers from restoring erased data and protect Role versions referenced by historical work.
+- Bound detailed specialist-call retention, improve complete 50k Memory recall, share conversation log counters across server bundles and strengthen runtime/recovery evidence. Run endurance with the production Role factory and verify its saved setup independently; preserve earlier generic-Core results with their limits. Personas remain experimental; see the [audit and verification record](docs/audits/2026-09-19-persona-audit.md) for measured results and outstanding release gates.
+
+### Subflow collaboration
+
+- Connected subflows automatically offer inline calls, background launches, messages and waits. Remove the global subflow activation switches and the per-node callable-tool toggle; saved session scopes work without an additional gate.
+- Let children send progress, questions and results to their parent while working. Keep a finishing parent available for its background children, and identify agent senders in chat and conversation previews.
+- Fix detached child IDs, cancellation propagation, concurrent launch admission and late completion races. Keep communication scoped to the current parent/child run and workspace.
+- Deliver steering during quiet Claude and Codex SDK turns, preserve pending input on delivery failures, and keep tool-call/result pairs intact. See [Subflow communication](docs/SUBFLOW_COMMUNICATION.md).
+
 ## [3.46.0] — 2026-09-16
 
 ### Security and reliability

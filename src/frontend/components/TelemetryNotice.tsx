@@ -65,10 +65,19 @@ export default function TelemetryNotice() {
   return (
     <Snackbar
       open={Boolean(result)}
+      onClose={(_event, reason) => {
+        if (reason === 'escapeKeyDown') setResult(null);
+      }}
       anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       sx={{ maxWidth: 720 }}
     >
-      <Alert severity="info" variant="filled" sx={{ width: '100%' }}>
+      <Alert
+        severity="info"
+        variant="filled"
+        closeText={t('common.close')}
+        onClose={() => setResult(null)}
+        sx={{ width: '100%' }}
+      >
         <Typography variant="body2">
           {t(result?.sent ? 'telemetry.notice.sent' : 'telemetry.notice.notSent')}
         </Typography>

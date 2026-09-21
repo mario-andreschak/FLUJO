@@ -6,9 +6,9 @@ import {
 } from '@/backend/execution/flow/handlers/resolveEffectiveCompaction';
 
 describe('resolveEffectiveCompaction (issue #248)', () => {
-  it('is disabled by default (no global flag)', () => {
+  it('is enabled by default (no global flag)', () => {
     const r = resolveEffectiveCompaction();
-    expect(r.enabled).toBe(false);
+    expect(r.enabled).toBe(true);
     expect(r.keepTokens).toBe(DEFAULT_COMPACTION_KEEP_TOKENS);
     expect(r.bufferTokens).toBe(DEFAULT_COMPACTION_BUFFER_TOKENS);
     expect(r.threshold).toBeUndefined();

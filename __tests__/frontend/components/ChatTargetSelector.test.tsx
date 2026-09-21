@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 jest.mock('@/frontend/components/Chat/FlowSelector', () => ({
   __esModule: true,
@@ -79,6 +79,23 @@ describe('ChatTargetSelector', () => {
       status: 200,
       json: async () => String(input).includes('/composition') ? composition : personas,
     }));
+  });
+
+  it('shares names from its existing lookup, including unavailable Personas with retained conversations', async () => {
+    const onPersonaNamesLoaded = jest.fn();
+    render(<ChatTargetSelector selectedFlowId={null} onSelectFlow={jest.fn()} onSelectPersona={jest.fn()} onPersonaNamesLoaded={onPersonaNamesLoaded} />);
+    await waitFor(() => expect(onPersonaNamesLoaded).toHaveBeenCalledWith({ persona_active: 'Ada', persona_disabled: 'Disabled Persona' }));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish a late Persona lookup after unmount', async () => {
+    let resolveLookup!: (response: unknown) => void;
+    mockFetch.mockReturnValue(new Promise((resolve) => { resolveLookup = resolve; }));
+    const onPersonaNamesLoaded = jest.fn();
+    const view = render(<ChatTargetSelector selectedFlowId={null} onSelectFlow={jest.fn()} onSelectPersona={jest.fn()} onPersonaNamesLoaded={onPersonaNamesLoaded} />);
+    view.unmount();
+    await act(async () => resolveLookup({ ok: true, json: async () => personas }));
+    expect(onPersonaNamesLoaded).not.toHaveBeenCalled();
   });
 
   it('uses one trigger with Agents as the default tab and offers Personas in the second tab', async () => {

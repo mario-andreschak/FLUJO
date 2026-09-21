@@ -82,7 +82,6 @@ import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import ChatErrorDetails from './ChatErrorDetails';
 import { getStartNode } from '@/utils/shared/getStartNode';
-import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
 import { flowService } from '@/frontend/services/flow';
@@ -1495,6 +1494,7 @@ const Chat: React.FC = () => {
     }
     return map;
   }, [flows]);
+  const [personaNames, setPersonaNames] = useState<Record<string, string>>({});
 
   // Nodes of the conversation's flow, for message attribution + the edit
   // dropdown. Memoized: a fresh array per render would defeat the memoized
@@ -4940,8 +4940,9 @@ const Chat: React.FC = () => {
   ) : null;
 
   const sidebarPanelContent = isLoadingHistory ? (
-    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
-      <Spinner size="medium" color="primary" />
+    <Box role="status" aria-live="polite" aria-atomic="true" sx={{ display: 'flex', flexDirection: 'column', gap: 1, justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
+      <CircularProgress size={32} aria-hidden="true" />
+      <Typography variant="body2" color="text.secondary">{t('chat.page.loadingConversations')}</Typography>
     </Box>
   ) : historyError ? (
     <Alert severity="error" sx={{ m: 2 }}>{historyError}</Alert>
@@ -4955,6 +4956,7 @@ const Chat: React.FC = () => {
       onLoadAll={loadAllConversations}
       onPinsChanged={() => { void fetchConversations(undefined, { silent: true }); }}
       flowNames={flowNames}
+      personaNames={personaNames}
       currentConversationId={currentConversationId}
       revealRequest={sidebarRevealRequest}
       onSelectConversation={selectSidebarConversation}
@@ -5227,6 +5229,7 @@ const Chat: React.FC = () => {
                 ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <ChatTargetSelector
+                      onPersonaNamesLoaded={setPersonaNames}
                       selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
                       selectedPersonaId={currentConversationSummary?.personaId || detailedConversation?.personaId || null}
                       selectedPersonaBehaviorSlotKey={
@@ -5360,9 +5363,10 @@ const Chat: React.FC = () => {
             },
           }}
         >
-          {isLoadingDetails ? (
-             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-               <Spinner size="medium" color="primary" />
+          {isLoadingHistory || isLoadingDetails ? (
+             <Box role="status" aria-live="polite" aria-atomic="true" sx={{ display: 'flex', flexDirection: 'column', gap: 1, justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+               <CircularProgress size={32} aria-hidden="true" />
+               <Typography variant="body2" color="text.secondary">{t('chat.page.loadingChat')}</Typography>
              </Box>
           ) : detailsError ? (
              <Alert severity="error" sx={{ m: 2 }}>{detailsError}</Alert>
@@ -5819,6 +5823,7 @@ const Chat: React.FC = () => {
                 </Button>
               )}
               <ChatTargetSelector
+                onPersonaNamesLoaded={setPersonaNames}
                 selectedFlowId={null}
                 onSelectFlow={(flowId) => void createNewConversation(flowId)}
                 onSelectPersona={(personaId, behaviorSlotKey) => (
@@ -5846,6 +5851,7 @@ const Chat: React.FC = () => {
                   : t('chat.page.createToStart')}
               </Typography>
               <ChatTargetSelector
+                onPersonaNamesLoaded={setPersonaNames}
                 selectedFlowId={null}
                 onSelectFlow={(flowId) => void createNewConversation(flowId)}
                 onSelectPersona={(personaId, behaviorSlotKey) => (

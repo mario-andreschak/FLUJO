@@ -337,16 +337,16 @@ async function moveMerge(
   destination: string,
   errors: string[],
   replaceEmptyDestination = true,
-): Promise<boolean> {
+): Promise<'moved' | 'merged' | undefined> {
   const sourceStat = await lstatOptional(source);
-  if (!sourceStat) return false;
+  if (!sourceStat) return undefined;
   const destinationStat = await lstatOptional(destination);
 
   try {
     if (!destinationStat) {
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.rename(source, destination);
-      return true;
+      return 'moved';
     }
 
     if (
@@ -364,7 +364,7 @@ async function moveMerge(
         await fs.rmdir(destination);
         try {
           await fs.rename(source, destination);
-          return true;
+          return 'moved';
         } catch (error) {
           // Restore the empty destination before falling back to the recursive
           // merge. A failed optimization must not change merge semantics.
@@ -382,16 +382,16 @@ async function moveMerge(
       await fs.rmdir(source).catch(error => {
         if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY') throw error;
       });
-      return true;
+      return 'merged';
     }
 
     await removeForOverwrite(destination);
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
-    return true;
+    return 'moved';
   } catch (error) {
     errors.push(`Could not move ${source} to ${destination}: ${String(error)}`);
-    return false;
+    return undefined;
   }
 }
 
@@ -609,12 +609,21 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
   await fs.mkdir(getWorkspacesDir(), { recursive: true });
   const release = await acquireLock();
   migrationConsole('exclusive lock acquired', { pid: process.pid, lock: lockPath() });
+  try {
+  // Mutation admission prepares workspace directories for its process locks.
+  // Observe the starting layout before admission so those internal creations
+  // cannot label a fresh or skipped subtree as previously migrated.
+  const targetExisting = new Set<string>();
+  for (const subtree of WORKSPACE_SUBTREES) {
+    if (await lstatOptional(path.join(getWorkspaceDir(DEFAULT_WORKSPACE), subtree))) {
+      targetExisting.add(subtree);
+    }
+  }
   // Acquire snapshot store lease to coordinate with capture/cleanup operations
   // that may be in progress. This prevents concurrent mutations of the snapshot
   // store during migration (issue #414).
   const snapshotRoots = [snapshotStore.rootPath()];
-  return snapshotStore.withMigrationAccess(snapshotRoots, async () => {
-    try {
+  return await snapshotStore.withMigrationAccess(snapshotRoots, async () => {
     const errors: string[] = [];
     const narration: MigrationNarration[] = [];
     lastNarration = narration;
@@ -661,13 +670,6 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
     const moved = new Set<string>();
     const merged = new Set<string>();
     const present = new Set<string>();
-    const targetExisting = new Set<string>();
-
-    for (const subtree of WORKSPACE_SUBTREES) {
-      if (await lstatOptional(path.join(getWorkspaceDir(DEFAULT_WORKSPACE), subtree))) {
-        targetExisting.add(subtree);
-      }
-    }
 
     for (const candidate of planned) {
       migrationConsole('preflight candidate', {
@@ -721,33 +723,33 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
           errors,
         );
       }
-      const destinationExisted = Boolean(await lstatOptional(candidate.destination));
       // Keep the workspace mcp-servers container in place, but prefer moving
       // each server folder below it wholesale. This matters for pre-created
       // workspace/volume roots and still lets populated name collisions use the
       // lossless recursive merge below.
       const preserveMcpContainer = candidate.subtree === 'mcp-servers'
         && path.basename(candidate.source).toLowerCase() === 'mcp-servers';
-      if (await moveMerge(
+      const outcome = await moveMerge(
         candidate.source,
         candidate.destination,
         errors,
         !preserveMcpContainer,
-      )) {
+      );
+      if (outcome) {
         moved.add(candidate.subtree);
-        if (destinationExisted) merged.add(candidate.subtree);
+        if (outcome === 'merged') merged.add(candidate.subtree);
         narration.push({
-          status: destinationExisted ? 'MERGED' : 'MOVED',
+          status: outcome === 'merged' ? 'MERGED' : 'MOVED',
           subject: candidate.subtree,
           source: candidate.source,
           destination: candidate.destination,
-          reason: destinationExisted
+          reason: outcome === 'merged'
             ? 'target already existed; moved whole source directories where possible and recursively merged populated name collisions'
             : 'renamed the legacy directory directly into the workspace',
         });
         migrationConsole('commit entry published', {
           subtree: candidate.subtree,
-          strategy: destinationExisted ? 'top-level directory rename/merge' : 'atomic directory rename',
+          strategy: outcome === 'merged' ? 'top-level directory rename/merge' : 'atomic directory rename',
         });
       }
     }
@@ -788,11 +790,11 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
     if (errors.length > 0) log.warn('Workspace move completed with skipped errors', errors);
     else log.info('Workspace folders moved directly', { workspace: getWorkspaceDir(DEFAULT_WORKSPACE) });
     return marker;
-    } finally {
-      await release();
-      migrationConsole('exclusive lock released', { lock: lockPath() });
-    }
   });
+  } finally {
+    await release();
+    migrationConsole('exclusive lock released', { lock: lockPath() });
+  }
 }
 
 export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {

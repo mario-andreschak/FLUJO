@@ -120,7 +120,6 @@ describe('SubflowNode fan-out (issue #102)', () => {
   });
 
   it('serialises equal session keys while allowing another key to use the bounded pool', async () => {
-    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(true);
     const releaseFirstA = deferred();
     const bStarted = deferred();
     const started: string[] = [];

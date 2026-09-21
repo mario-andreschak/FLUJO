@@ -7,6 +7,10 @@ import type {
 const mockCapture = jest.fn<Promise<CapturedWorkspaceSnapshot>, [string, number, { signal?: AbortSignal }?]>();
 const mockWriteArchive = jest.fn<Promise<WorkspaceArchiveResult>, [CapturedWorkspaceSnapshot, { signal?: AbortSignal }?]>();
 
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withWorkspaceProcessMutation: (task: () => Promise<unknown>) => task(),
+}));
+
 jest.mock('@/backend/services/workspace/snapshotArchive', () => ({
   captureWorkspaceSnapshot: (...args: Parameters<typeof mockCapture>) => mockCapture(...args),
   writeWorkspaceSnapshotArchive: (...args: Parameters<typeof mockWriteArchive>) => mockWriteArchive(...args),

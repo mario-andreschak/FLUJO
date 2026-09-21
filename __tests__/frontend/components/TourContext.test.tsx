@@ -23,9 +23,11 @@ jest.mock('@/frontend/contexts/StorageContext', () => ({
 }));
 
 function Harness() {
-  const { bigTutorialProgress, bigTutorialError, bigTutorialRunStatus, isBigTutorialActive, next, endTour, startBigTutorial, nextBigTutorial, restartBigTutorial, runBigTutorialAction } = useTour();
+  const { isActive, startTour, bigTutorialProgress, bigTutorialError, bigTutorialRunStatus, isBigTutorialActive, next, endTour, startBigTutorial, nextBigTutorial, restartBigTutorial, runBigTutorialAction } = useTour();
   return (
     <>
+      <output aria-label="intro active">{String(isActive)}</output>
+      <button onClick={startTour}>Start intro</button>
       <output aria-label="tutorial step">{bigTutorialProgress.stepId}</output>
       <output aria-label="tutorial conversation">{bigTutorialProgress.conversationId ?? 'none'}</output>
       <output aria-label="tutorial error">{bigTutorialError}</output>
@@ -44,6 +46,7 @@ function Harness() {
 describe('TourProvider tutorial progress', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.history.replaceState({}, '', '/');
     mockLoadModels.mockResolvedValue([{ id: 'model-1', name: 'model', provider: 'openai' }]);
     mockLoadFlows.mockResolvedValue([]);
     mockAddFlow.mockResolvedValue({ success: true });
@@ -54,6 +57,27 @@ describe('TourProvider tutorial progress', () => {
       isLoading: false,
       settingsHydrated: true,
     });
+  });
+
+  it('keeps a first-time Persona deep link in place while allowing an explicit tour', async () => {
+    window.history.replaceState({}, '', '/personas?create=1');
+    mockUseStorage.mockReturnValue({
+      settings: { onboarding: { completed: false } }, updateSettings: jest.fn(async () => {}),
+      isLoading: false, settingsHydrated: true,
+    });
+    render(<TourProvider><Harness /></TourProvider>);
+    expect(screen.getByLabelText('intro active')).toHaveTextContent('false');
+    fireEvent.click(screen.getByRole('button', { name: 'Start intro' }));
+    expect(screen.getByLabelText('intro active')).toHaveTextContent('true');
+  });
+
+  it('still starts the introductory tour for a first-time home visit', () => {
+    mockUseStorage.mockReturnValue({
+      settings: { onboarding: { completed: false } }, updateSettings: jest.fn(async () => {}),
+      isLoading: false, settingsHydrated: true,
+    });
+    render(<TourProvider><Harness /></TourProvider>);
+    expect(screen.getByLabelText('intro active')).toHaveTextContent('true');
   });
 
   it.each(['skip', 'complete'])('does not start the long tutorial when users %s the introductory tour', async action => {

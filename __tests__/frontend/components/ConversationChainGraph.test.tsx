@@ -6,7 +6,7 @@
  * inline-conversation request.
  */
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -173,6 +173,44 @@ describe('Chain Chat page container (#405)', () => {
 
     expect(await screen.findByText('No conversation chains yet')).toBeInTheDocument();
     expect(screen.queryByTestId('chain-flow-tree')).toBeNull();
+  });
+
+  it('preserves peer message and result senders in the expanded transcript', async () => {
+    mockGetConversationChains.mockResolvedValue(chainResponse());
+    mockGetConversation.mockResolvedValue({
+      id: 'root 1',
+      title: 'Root chain',
+      flowId: null,
+      createdAt: 1,
+      updatedAt: 20,
+      messages: [
+        { id: 'human', role: 'user', content: 'Human instruction', timestamp: 1 },
+        {
+          id: 'peer-message', role: 'user', content: 'Agent progress', timestamp: 2,
+          agentMessage: {
+            senderConversationId: 'child-1', senderName: 'Research agent',
+            recipientConversationId: 'root 1', kind: 'message',
+          },
+        },
+        {
+          id: 'peer-result', role: 'user', content: 'Agent result', timestamp: 3,
+          agentMessage: {
+            senderConversationId: 'child-2',
+            recipientConversationId: 'root 1', kind: 'completion',
+          },
+        },
+      ],
+    });
+
+    render(<ConversationChainGraph />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Read conversation: Root chain' }));
+
+    const transcript = await screen.findByRole('dialog', { name: 'Conversation preview: Root chain' });
+    expect(await within(transcript).findByText(/^Message from Research agent/)).toHaveAttribute('title', 'child-1');
+    expect(within(transcript).getByText(/^Result from child-2/)).toBeInTheDocument();
+    expect(within(transcript).getAllByText(/^You/)).toHaveLength(1);
+    expect(within(transcript).getByText('Agent progress')).toBeInTheDocument();
+    expect(within(transcript).getByText('Agent result')).toBeInTheDocument();
   });
 
   it('surfaces a recoverable error and retries the projection request', async () => {

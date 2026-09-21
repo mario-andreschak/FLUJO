@@ -398,6 +398,14 @@ export interface PersonaFlowReadiness {
   issues: string[];
 }
 
+export type PersonaCreationReadinessInput = Pick<CreatePersonaInput,
+  'roleVersionId' | 'coreFlowRef' | 'behaviorFlowRefs'>;
+
+export interface PersonaCreationReadiness extends PersonaFlowReadiness {
+  /** Display names only; no model credentials or provider configuration. */
+  models: string[];
+}
+
 export interface PersonaFlowCard {
   binding: PersonaFlowBinding;
   effectiveFlowRef: string;
@@ -411,6 +419,12 @@ export interface PersonaBehaviorFlowCard extends PersonaFlowCard {
   name: string;
   description?: string;
   order: number;
+}
+
+export interface AddPersonaBehaviorInput {
+  expectedUpdatedAt: number;
+  sourceFlowRef: string;
+  mode: 'shared' | 'persona_copy';
 }
 
 export interface CopyPersonaFlowInput {
@@ -1015,6 +1029,8 @@ export interface PersonaHistoryEntry {
   outcome: PersonaPresentationOutcome;
   occurredAt: number;
   summary: string;
+  /** Set only for a system-generated summary, so clients can localize it without rewriting owner titles. */
+  summaryKind?: PersonaActivityKind;
   /** Bounded, user-facing result; raw execution envelopes remain private. */
   resultSummary?: string;
   recordLinks: PersonaPresentationRecordLink[];
@@ -1286,8 +1302,13 @@ export const PERSONA_DELETION_STATUSES = ['deleting', 'completed'] as const;
 export type PersonaDeletionStatus = (typeof PERSONA_DELETION_STATUSES)[number];
 
 export interface PersonaDeletionCounts {
+  /** Absent on older deletion receipts. Includes authoring copies and their history. */
+  ownedFlows?: number;
+  ownedFlowFiles?: number;
   behaviorBindings: number;
   behaviorRevisions: number;
+  /** Absent only on deletion receipts written before specialist-call erasure was added. */
+  behaviorCallPins?: number;
   behaviorProposals: number;
   behaviorMaintenanceRuns: number;
   behaviorOutcomeMetrics: number;

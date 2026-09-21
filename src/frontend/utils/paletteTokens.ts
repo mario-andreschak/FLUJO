@@ -111,7 +111,7 @@ export const legacyThemeColors = {
     surface: '#F5F6FA',
     surfaceRaised: '#FFFFFF',
     paperBackground: '#F5F6FA',
-    textSecondary: '#7F8C8D',
+    textSecondary: '#59686C',
     textDisabled: '#9CA3AF',
     border: '#e5e7eb',
     heading: '#111',

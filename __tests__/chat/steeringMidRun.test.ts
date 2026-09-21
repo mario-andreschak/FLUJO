@@ -231,3 +231,21 @@ describe('mid-run steering', () => {
     expect(result.outputText).toBe('second answer');
   });
 });
+
+
+it('retries delivery of an SDK-persisted correction without duplicating its transcript', async () => {
+  const convId = 'conv-rejected-sdk';
+  const message = steering('undelivered correction', 'stable-sdk-id');
+  script.push(state => {
+    state.messages.push(message);
+    enqueueSteeringMessage(convId, message);
+    return finalStep('superseded')(state);
+  });
+  script.push(state => {
+    expect(state.messages.filter(item => item.id === message.id)).toHaveLength(1);
+    return finalStep('corrected')(state);
+  });
+  const result = await runFlow({ flowId: FLOW_ID, prompt: 'go', conversationId: convId, mode: 'conversation' });
+  expect(result.outputText).toBe('corrected');
+  expect(peekSteeringMessages(convId)).toEqual([]);
+});

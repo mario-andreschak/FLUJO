@@ -28,7 +28,7 @@ import {
   Typography,
 } from '@mui/material';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { personasService, type PersonaDetail } from '@/frontend/services/personas';
@@ -86,6 +86,11 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
   const [notice, setNotice] = useState<string | null>(null);
   const [promotion, setPromotion] = useState<BehaviorProposal | null>(null);
   const [migrationNotes, setMigrationNotes] = useState('');
+  const promotionErrorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (promotion && error && acting === null) promotionErrorRef.current?.focus();
+  }, [promotion, error, acting]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,7 +171,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
           <Box>
             <Stack direction="row" spacing={1} alignItems="center">
               <AutoAwesomeRounded color="primary" />
-              <Typography variant="h5" fontWeight={760}>{t('personas.improvements.title')}</Typography>
+              <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.improvements.title')}</Typography>
             </Stack>
             <Typography color="text.secondary" sx={{ mt: 0.5 }}>
               {t('personas.improvements.description')}
@@ -183,11 +188,14 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
         {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
         {notice && <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>}
         {loading ? (
-          <Stack alignItems="center" py={5}><CircularProgress /></Stack>
+          <Stack alignItems="center" py={5} spacing={2} role="status">
+            <CircularProgress aria-hidden="true" />
+            <Typography color="text.secondary">{t('personas.improvements.loading')}</Typography>
+          </Stack>
         ) : visible.length === 0 ? (
           <Box sx={{ py: 5, textAlign: 'center' }}>
             <AutoAwesomeRounded sx={{ fontSize: 42, color: 'text.disabled', mb: 1 }} />
-            <Typography variant="h6" fontWeight={720}>{t('personas.improvements.empty')}</Typography>
+            <Typography variant="h6" component="h3" fontWeight={720}>{t('personas.improvements.empty')}</Typography>
             <Typography color="text.secondary">{t('personas.improvements.emptyHelp')}</Typography>
           </Box>
         ) : (
@@ -205,7 +213,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                     <Stack spacing={1.5}>
                       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
                         <Box>
-                          <Typography variant="h6" fontWeight={740}>
+                          <Typography variant="h6" component="h3" fontWeight={740}>
                             {behavior?.name ?? t('personas.improvements.behaviorFallback')}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
@@ -383,6 +391,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
                          startIcon={<ShareRounded />}
                          disabled={acting !== null}
                          onClick={() => {
+                           setError(null);
                            setMigrationNotes('');
                            setPromotion(proposal);
                          }}
@@ -408,6 +417,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
          <DialogTitle>{t('personas.improvements.shareTitle')}</DialogTitle>
          <DialogContent dividers>
            <Stack spacing={2}>
+             {error && <Alert severity="error" ref={promotionErrorRef} tabIndex={-1}>{error}</Alert>}
              <Alert severity="info">
                {t('personas.improvements.shareExplanation', {
                  role: detail.roleVersion.name,
@@ -416,6 +426,7 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
              <TextField
                autoFocus
                required
+               disabled={acting !== null}
                fullWidth
                multiline
                minRows={3}

@@ -17,6 +17,7 @@ import type {
 export const MEMORY_LEXICAL_WEIGHT = 0.6;
 export const MEMORY_SEMANTIC_WEIGHT = 0.4;
 export const MEMORY_SEMANTIC_FLOOR = 0.75;
+const finite = Number.isFinite;
 
 export interface SemanticRankingInput {
   readonly available: boolean;
@@ -65,6 +66,18 @@ export const CURRENT_MEMORY_VARIANT: MemoryExperimentVariant = Object.freeze({
   ranking: MEMORY_RANKING_WEIGHTS,
   dedup: MEMORY_DEDUP_SETTINGS,
 });
+
+const lowercaseContents = new WeakMap<object, { source: string; lowercase: string }>();
+
+/** Reuse case conversion across warm searches without retaining evicted records. */
+export function lowercaseMemoryContent(item: Pick<MemoryRankingCandidate, 'content'>): string {
+  const cached = lowercaseContents.get(item);
+  if (cached?.source === item.content) return cached.lowercase;
+  const lowercase = item.content.toLocaleLowerCase();
+  // Checking source text also invalidates corrections made to the same object.
+  lowercaseContents.set(item, { source: item.content, lowercase });
+  return lowercase;
+}
 
 export function normaliseMemoryContent(content: string): string {
   return content
@@ -135,8 +148,8 @@ export function trustWeight(
 }
 
 export function normaliseSemanticScore(score: number | undefined): number | null {
-  if (score === undefined || !Number.isFinite(score)) return null;
-  return Math.min(1, Math.max(0, score));
+  if (score === undefined || !finite(score)) return null;
+  return score < 0 ? 0 : score > 1 ? 1 : score;
 }
 
 export function hybridScore(
@@ -160,9 +173,7 @@ export function semanticCandidateEligible(
   if (lexicalHit) return true;
   if (!semantic?.available) return false;
   const score = normaliseSemanticScore(semantic.score);
-  const effectiveFloor = Number.isFinite(floor)
-    ? Math.min(1, Math.max(0, floor))
-    : MEMORY_SEMANTIC_FLOOR;
+  const effectiveFloor = normaliseSemanticScore(floor) ?? MEMORY_SEMANTIC_FLOOR;
   return score !== null && score >= effectiveFloor;
 }
 
@@ -188,7 +199,7 @@ export function scoreMemoryCandidate(opts: {
       ? undefined
       : { available: true, score: opts.semanticScore }
   );
-  const content = item.content.toLocaleLowerCase();
+  const content = lowercaseMemoryContent(item);
   let lexical = (
     item.importance * weights.importanceWeight
     + item.confidence * weights.confidenceWeight
@@ -274,7 +285,7 @@ export function lexicalScore(
   terms: readonly string[],
   weights: MemoryRankingWeights = MEMORY_RANKING_WEIGHTS,
 ): number {
-  const content = item.content.toLocaleLowerCase();
+  const content = lowercaseMemoryContent(item);
   let score = (
     item.importance * weights.importanceWeight
     + item.confidence * weights.confidenceWeight

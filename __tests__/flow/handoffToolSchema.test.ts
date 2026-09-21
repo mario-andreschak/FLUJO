@@ -24,7 +24,6 @@ jest.mock('@/backend/execution/flow/buildHandoffDescription', () => ({
 }));
 
 import { ProcessNode, SignalNode, SubflowNode } from '@/backend/execution/flow/nodes';
-import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type { SharedState } from '@/backend/execution/flow/types';
 
 const getFlowMock = flowService.getFlow as jest.Mock;
@@ -91,7 +90,6 @@ describe('ProcessNode.generateHandoffTools — Signal body (#307)', () => {
 
 describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
   it('exposes a caller-chosen sessionKey for an enabled per-key Subflow and lists reusable keys', async () => {
-    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(true);
     const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
     getFlowMock.mockResolvedValue({
       nodes: [{
@@ -115,7 +113,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
       },
     } as unknown as SharedState;
 
-    const tools = await (proc as any).generateHandoffTools(sharedState);
+    const tools = (await (proc as any).generateHandoffTools(sharedState)).filter((tool: any) => tool.name.startsWith('handoff_to_'));
 
     expect(tools[0].inputSchema.properties.sessionKey).toMatchObject({
       type: 'string',
@@ -126,8 +124,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
     expect(tools[0].description).toContain('writer-main');
   });
 
-  it('does not expose sessionKey while the experiment is disabled', async () => {
-    jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValueOnce(false);
+  it('exposes sessionKey without reading an experiment switch', async () => {
     const proc = makeProcessNode([{ edgeId: 'e-keyed', nodeId: 'sub-keyed' }]);
     getFlowMock.mockResolvedValue({
       nodes: [{ id: 'sub-keyed', type: 'subflow', data: { properties: { sessionScope: 'per-key' } } }],
@@ -135,7 +132,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
 
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
 
-    expect(tools[0].inputSchema.properties.sessionKey).toBeUndefined();
+    expect(tools.find((tool: any) => tool.name.startsWith('handoff_to_')).inputSchema.properties.sessionKey).toBeDefined();
   });
 
   it('exposes a `task` on every Subflow handoff without an opt-in flag', async () => {
@@ -154,7 +151,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
     const sharedState = { flowId: 'flow-1' } as SharedState;
     const tools = await (proc as any).generateHandoffTools(sharedState);
 
-    const withTask = tools.filter((t: any) => !!t?.inputSchema?.properties?.task);
+    const withTask = tools.filter((t: any) => t.name.startsWith('handoff_to_') && !!t?.inputSchema?.properties?.task);
     expect(withTask).toHaveLength(2);
 
     for (const tool of withTask) {
@@ -206,7 +203,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
       nodes: [{ id: 'sub', type: 'subflow', data: { properties: { inputMode: 'isolated', allowCallerPrompt: false } } }],
     });
 
-    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    const tools = (await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState)).filter((tool: any) => tool.name.startsWith('handoff_to_'));
     expect(tools).toHaveLength(1);
     expect(tools[0].inputSchema.properties.task.type).toBe('string');
     expect(tools[0].inputSchema.properties.prompt).toBeUndefined();
@@ -269,5 +266,33 @@ describe('ProcessNode.generateHandoffTools — caller-prompt for an ISOLATED PRO
     const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
     expect(hasPromptParam(tools[0])).toBe(false);
     expect(tools[0].inputSchema).toEqual({ type: 'object', properties: {}, required: [] });
+  });
+});
+
+
+describe('subflow collaboration defaults', () => {
+  it.each([undefined, 'handoff', 'tool', 'detached'])('offers all execution choices for saved mode %s without settings', async invocationMode => {
+    const proc = makeProcessNode([{ edgeId: 'edge', nodeId: 'worker' }]);
+    getFlowMock.mockResolvedValue({ nodes: [{ id: 'worker', type: 'subflow', data: { properties: { invocationMode } } }] });
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    expect(tools.map((tool: any) => tool.name)).toEqual(expect.arrayContaining([
+      'handoff_to_worker', 'call_subflow_worker', 'start_subflow_worker',
+      'subflow_list', 'subflow_send_message', 'subflow_wait', 'subflow_task_get', 'subflow_task_cancel',
+    ]));
+  });
+
+  it('gives a child with no successors its reply and wait tools automatically', async () => {
+    const proc = makeProcessNode([]);
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1', parentRunId: 'parent' } as SharedState);
+    expect(tools.map((tool: any) => tool.name)).toEqual(['subflow_list', 'subflow_send_message', 'subflow_wait']);
+  });
+
+  it('keeps launch names distinct for two equally named workers', async () => {
+    const first = subflowTarget('one'); first.node_params!.label = 'Worker';
+    const second = subflowTarget('two'); second.node_params!.label = 'Worker';
+    const proc = makeProcessNodeWith([{ edgeId: 'e1', node: first }, { edgeId: 'e2', node: second }]);
+    const tools = await (proc as any).generateHandoffTools({ flowId: 'flow-1' } as SharedState);
+    const names = tools.filter((tool: any) => tool.name.startsWith('start_subflow_')).map((tool: any) => tool.name);
+    expect(names).toHaveLength(2); expect(new Set(names).size).toBe(2);
   });
 });

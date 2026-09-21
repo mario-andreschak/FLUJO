@@ -46,7 +46,6 @@ function parse(r: CallToolResult): Record<string, unknown> {
 }
 
 const isWin = process.platform === 'win32';
-const itOnWindows = isWin ? it : it.skip;
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
 const mockedSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
@@ -872,7 +871,7 @@ describe('bash background sessions', () => {
     expect(waited.hint).toBeUndefined();
   });
 
-  itOnWindows('waits for delayed child closure before reporting kill success', async () => {
+  it('waits for delayed child closure before reporting kill success', async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const child = Object.assign(new EventEmitter(), {
@@ -885,7 +884,7 @@ describe('bash background sessions', () => {
     mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
 
     const start = parse(await bashCallTool('start', { command: 'delayed-close' }));
-    mockedSpawnSync.mockReturnValueOnce({
+    if (isWin) mockedSpawnSync.mockReturnValueOnce({
       pid: 1,
       output: [null, Buffer.alloc(0), Buffer.alloc(0)],
       stdout: Buffer.alloc(0),
@@ -893,27 +892,38 @@ describe('bash background sessions', () => {
       status: 0,
       signal: null,
     } as never);
+    // The close-event contract applies on both platforms. Keep the synthetic
+    // PID away from real POSIX process groups instead of skipping that branch.
+    const killSignal = jest.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      let settled = false;
+      const killing = bashCallTool('kill', { sessionId: start.sessionId as string });
+      void killing.then(() => { settled = true; });
+      await Promise.resolve();
 
-    let settled = false;
-    const killing = bashCallTool('kill', { sessionId: start.sessionId as string });
-    void killing.then(() => { settled = true; });
-    await Promise.resolve();
+      if (isWin) {
+        expect(mockedSpawnSync).toHaveBeenCalledWith(
+          'taskkill',
+          ['/pid', '54321', '/T', '/F'],
+          expect.objectContaining({ windowsHide: true }),
+        );
+      } else {
+        expect(killSignal).toHaveBeenCalledWith(-54321, 'SIGTERM');
+      }
+      expect(settled).toBe(false);
+      expect(parse(await bashCallTool('status', { sessionId: start.sessionId as string })).running).toBe(true);
 
-    expect(mockedSpawnSync).toHaveBeenCalledWith(
-      'taskkill',
-      ['/pid', '54321', '/T', '/F'],
-      expect.objectContaining({ windowsHide: true }),
-    );
-    expect(settled).toBe(false);
-    expect(parse(await bashCallTool('status', { sessionId: start.sessionId as string })).running).toBe(true);
-
-    child.emit('close', null);
-    const killed = parse(await killing);
-    expect(killed).toEqual(expect.objectContaining({ killed: true, running: false }));
-    expect(parse(await bashCallTool('wait', {
-      sessionId: start.sessionId as string,
-      timeout: 0.01,
-    })).running).toBe(false);
+      child.emit('close', null);
+      const killed = parse(await killing);
+      expect(killed).toEqual(expect.objectContaining({ killed: true, running: false }));
+      expect(parse(await bashCallTool('wait', {
+        sessionId: start.sessionId as string,
+        timeout: 0.01,
+      })).running).toBe(false);
+    } finally {
+      child.emit('close', null);
+      killSignal.mockRestore();
+    }
   });
 
   itWithRealShell('kills a long-running background session', async () => {

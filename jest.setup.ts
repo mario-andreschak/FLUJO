@@ -16,7 +16,14 @@ jest.setTimeout(15_000);
 // Workspace route wrappers now await the real layout barrier. Give every Jest
 // environment an isolated installation root before test modules are evaluated,
 // so an unmocked route can never migrate or write the checkout's real data.
-const jestDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), `flujo-jest-data-${process.pid}-`));
+// The dedicated endurance environment validates a runner-owned root. Its three
+// OS processes must share persistence, including after an unclean termination.
+// An inherited environment variable alone never opts ordinary tests into it.
+const enduranceDataRoot = (globalThis as typeof globalThis & {
+  __personaGoalEnduranceDataRoot?: string;
+}).__personaGoalEnduranceDataRoot;
+const jestDataRoot = enduranceDataRoot
+  ?? fs.mkdtempSync(path.join(os.tmpdir(), `flujo-jest-data-${process.pid}-`));
 // An MCP-launched command may carry the installation parent separately from its
 // workspace-scoped FLUJO_DATA_DIR. Jest owns a wholly independent root, so drop
 // that inherited boundary marker before test modules resolve application paths.
@@ -51,7 +58,7 @@ afterAll(async () => {
   await flushStatisticsEvents();
 
   setWorkspaceLayoutPreparation(undefined);
-  fs.rmSync(jestDataRoot, { recursive: true, force: true });
+  if (!enduranceDataRoot) fs.rmSync(jestDataRoot, { recursive: true, force: true });
   // Deliberately do not restore an inherited FLUJO_DATA_DIR. Jest's next test
   // environment replaces it with another isolated root, and the worker exits
   // after its final environment. Keeping this temp path selected also confines
@@ -67,5 +74,7 @@ beforeAll(() => {
   const { _setConversationLogDirForTests } = jest.requireActual<
     typeof import('@/backend/execution/flow/conversationLog')
   >('@/backend/execution/flow/conversationLog');
-  _setConversationLogDirForTests(path.join(os.tmpdir(), `flujo-test-convlogs-${process.pid}`));
+  _setConversationLogDirForTests(enduranceDataRoot
+    ? path.join(enduranceDataRoot, 'conversation-logs')
+    : path.join(os.tmpdir(), `flujo-test-convlogs-${process.pid}`));
 });

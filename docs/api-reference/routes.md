@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 197.
+Route files: 201.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -69,6 +69,7 @@ Route files: 197.
 | `/api/mcp/servers/{name}/stdio-oauth/start` | DELETE, POST | [source](../../src/app/api/mcp/servers/[name]/stdio-oauth/start/route.ts) |
 | `/api/mcp/servers/{name}/tools` | GET | [source](../../src/app/api/mcp/servers/[name]/tools/route.ts) |
 | `/api/mcp/servers/{name}/tools/{toolName}` | POST | [source](../../src/app/api/mcp/servers/[name]/tools/[toolName]/route.ts) |
+| `/api/mcp/servers/{name}/tools/{toolName}/stream` | POST | [source](../../src/app/api/mcp/servers/[name]/tools/[toolName]/stream/route.ts) |
 | `/api/mcp/test-connection` | POST | [source](../../src/app/api/mcp/test-connection/route.ts) |
 | `/api/mcp/test-connection/stream` | POST | [source](../../src/app/api/mcp/test-connection/stream/route.ts) |
 | `/api/model` | GET, POST | [source](../../src/app/api/model/route.ts) |
@@ -88,6 +89,7 @@ Route files: 197.
 | `/api/packages/scan-targets` | POST | [source](../../src/app/api/packages/scan-targets/route.ts) |
 | `/api/packages/search` | GET | [source](../../src/app/api/packages/search/route.ts) |
 | `/api/packages/uninstall` | POST | [source](../../src/app/api/packages/uninstall/route.ts) |
+| `/api/persona-recovery` | POST | [source](../../src/app/api/persona-recovery/route.ts) |
 | `/api/planned-executions` | GET, PATCH, POST | [source](../../src/app/api/planned-executions/route.ts) |
 | `/api/planned-executions/preview-schedule` | POST | [source](../../src/app/api/planned-executions/preview-schedule/route.ts) |
 | `/api/planned-executions/reconcile` | POST | [source](../../src/app/api/planned-executions/reconcile/route.ts) |
@@ -166,6 +168,7 @@ Route files: 197.
 | `/v1/persona-drafts` | GET, POST | [source](../../src/app/v1/persona-drafts/route.ts) |
 | `/v1/persona-drafts/{draftId}` | DELETE, GET, PATCH | [source](../../src/app/v1/persona-drafts/[draftId]/route.ts) |
 | `/v1/personas` | GET, POST | [source](../../src/app/v1/personas/route.ts) |
+| `/v1/personas/readiness` | POST | [source](../../src/app/v1/personas/readiness/route.ts) |
 | `/v1/personas/settings-options` | GET | [source](../../src/app/v1/personas/settings-options/route.ts) |
 | `/v1/personas/summary` | GET | [source](../../src/app/v1/personas/summary/route.ts) |
 | `/v1/personas/{personaId}` | DELETE, GET, PATCH | [source](../../src/app/v1/personas/[personaId]/route.ts) |
@@ -174,6 +177,7 @@ Route files: 197.
 | `/v1/personas/{personaId}/app-grants/{grantId}/launch` | POST | [source](../../src/app/v1/personas/[personaId]/app-grants/[grantId]/launch/route.ts) |
 | `/v1/personas/{personaId}/behaviors/{behaviorId}/activate` | POST | [source](../../src/app/v1/personas/[personaId]/behaviors/[behaviorId]/activate/route.ts) |
 | `/v1/personas/{personaId}/composition` | GET, PATCH | [source](../../src/app/v1/personas/[personaId]/composition/route.ts) |
+| `/v1/personas/{personaId}/composition/behaviors` | POST | [source](../../src/app/v1/personas/[personaId]/composition/behaviors/route.ts) |
 | `/v1/personas/{personaId}/composition/copy` | POST | [source](../../src/app/v1/personas/[personaId]/composition/copy/route.ts) |
 | `/v1/personas/{personaId}/deletion-preview` | GET | [source](../../src/app/v1/personas/[personaId]/deletion-preview/route.ts) |
 | `/v1/personas/{personaId}/execution-preview` | GET | [source](../../src/app/v1/personas/[personaId]/execution-preview/route.ts) |

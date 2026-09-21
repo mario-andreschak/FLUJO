@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type {
   BehaviorOutcomeMetric,
   BehaviorOutcomeVerdict,
@@ -256,6 +256,37 @@ describe('PersonaImprovementsArea', () => {
 
     expect(await screen.findByText('In use')).toBeInTheDocument();
     expect(screen.queryByText('Results since this change')).not.toBeInTheDocument();
+  });
+
+  it('keeps sharing notes and exposes failed promotion inside the dialog for retry', async () => {
+    const active = proposal('activated');
+    improvementsMock.mockResolvedValue([active]);
+    let rejectPromotion!: (reason: Error) => void;
+    promoteImprovementMock.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectPromotion = reject; }));
+    promoteImprovementMock.mockResolvedValue({
+      proposal: proposal('activated', { promotedRoleVersionId: 'rolever_shared' }),
+      roleVersion: { id: 'rolever_shared', name: 'Shared Role v2' },
+    });
+    render(<PersonaImprovementsArea detail={detail} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as a reusable Role version' }));
+    const dialog = within(screen.getByRole('dialog'));
+    const notes = dialog.getByRole('textbox', { name: 'Why should this become the Role default?' });
+    fireEvent.change(notes, { target: { value: 'Keep checked source handling available to future Personas.' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save Role version' }));
+    expect(notes).toBeDisabled();
+    expect(dialog.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    await act(async () => { rejectPromotion(new Error('The Role could not be saved. Please retry.')); });
+    expect(dialog.getAllByRole('alert').some((alert) => alert.textContent?.includes('The Role could not be saved. Please retry.'))).toBe(true);
+    expect(dialog.getByText('The Role could not be saved. Please retry.').closest('[role="alert"]')).toHaveFocus();
+    expect(notes).toHaveValue('Keep checked source handling available to future Personas.');
+    expect(notes).toBeEnabled();
+    fireEvent.click(dialog.getByRole('button', { name: 'Save Role version' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(promoteImprovementMock).toHaveBeenCalledTimes(2);
+    expect(promoteImprovementMock).toHaveBeenLastCalledWith('jim', active.id, {
+      confirmation: 'PROMOTE',
+      migrationNotes: 'Keep checked source handling available to future Personas.',
+    });
   });
 
   it('saves an activated improvement as a reusable Role version after confirmation', async () => {

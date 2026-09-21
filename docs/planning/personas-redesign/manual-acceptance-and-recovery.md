@@ -2,6 +2,8 @@
 
 This checklist is the release gate for issue #435. It records a manual run of the same ten-step journey required by browser acceptance. It does not authorize migration of production data or selection of a recovery branch.
 
+The repeatable browser suite and local fixture commands are documented in [Persona beginner browser journey](../../performance/persona-browser-journey.md). Its CI/manual evidence must be recorded here; merely adding the runner does not fill any acceptance checkbox.
+
 ## Run record
 
 - Date/time:
@@ -80,13 +82,14 @@ Do not use real secrets or production data. Treat every workspace backup as sens
 Complete this section before any migration or acceptance mutation.
 
 1. Open the active workspace and navigate to **Settings → Backup & Restore**.
-2. Under **Create Backup**, select every category required for this acceptance fixture and choose **Create Backup**.
-3. Save the generated `flujo-backup-<timestamp>.zip` outside the workspace. Record its path, size, creation time, and SHA-256.
-4. In a fresh disposable workspace, return to **Settings → Backup & Restore**.
-5. Under **Restore from Backup**, choose the ZIP, select the same categories, choose **Restore from Backup**, review the warning, and confirm.
-6. Reload the workspace and verify the restored records, relationships, configuration, and workspace placement.
-7. Verify that nothing from workspace B appeared in the restored workspace.
-8. Keep the original backup unchanged until rollout acceptance expires.
+2. Under **Persona recovery**, choose **Prepare Persona backup**. Review the source workspace, record counts, any historical-log notice and the private-data warning. Active execution, unfinished provisioning/deletion or unsupported records must stop capture instead of producing a partial backup.
+3. Choose **Download recovery backup** and save `flujo-persona-recovery-<capture-id>.zip` outside the workspace. Record its path, size, creation time and SHA-256. The ZIP is unencrypted; model/App connections, login state and external files are excluded. Ordinary configuration backup is separate and cannot replace this Persona recovery point.
+4. Choose **Choose Persona recovery file**, select that exact ZIP and enter a distinct **New workspace name**. Existing workspaces must never be overwritten.
+5. Choose **Preview recovery**. Review source/destination, counts, required model/App reconnections and frozen-work semantics. Confirm with **Restore into new workspace**, then choose **Open restored workspace**.
+6. Verify original IDs, immutable revision hashes, Memory correction history, Tasks/goals, conversations and owned/shared Flow relationships. Verify that restored Personas are disabled, nonterminal goals are paused, old conversations are read-only, and no model calls, App effects or queued work start automatically, including after a restart.
+7. Verify that nothing from workspace B appeared and that both source workspaces are unchanged.
+8. Deliberately reconnect the fixture model/App, repair the restored Flow bindings as needed, and enable the Persona. Run one fresh controlled Activity, verify restored Memory/configuration and its App receipt, and confirm that historical Activity evidence remains unchanged.
+9. Keep the original backup unchanged until rollout acceptance expires. Later Persona deletion does not rewrite stored backups; apply the separately recorded retention policy.
 
 Backup evidence:
 
@@ -96,9 +99,11 @@ Backup evidence:
 - Restore workspace:
 - Restored record/relationship comparison:
 - Isolation result:
+- Frozen-work/no-automatic-effects result:
+- Deliberate reconnection and fresh Activity result:
 - Reviewer:
 
-The supported product workflow uses the Settings UI backed by `POST /api/backup` and `POST /api/restore`. Do not substitute direct filesystem copying. If the selectable categories do not cover the Persona fixture required by the release, mark this gate blocked; do not claim the backup exercise passed.
+The supported Persona recovery workflow uses the Settings UI backed by `POST /api/persona-recovery` with capture, inspect and restore actions. The separate configuration backup uses `POST /api/backup` and `POST /api/restore`; it does not cover the Persona recovery graph. Do not substitute direct filesystem copying. If the Persona recovery preview does not cover the fixture required by the release, mark this gate blocked; do not claim the backup exercise passed.
 
 ## Ten-step journey
 

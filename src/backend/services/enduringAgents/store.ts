@@ -1,9 +1,11 @@
 import type { ZodType } from 'zod';
+import { getRecoveredPersonaDeletionTombstone } from './personaRecoveryOrigins';
 
 import {
   BehaviorBindingSchema,
   BehaviorMaintenanceRunSchema,
   BehaviorOutcomeMetricSchema,
+  BehaviorProposalSchema,
   BehaviorRevisionSchema,
   MemoryItemSchema,
   PersonaAppGrantSchema,
@@ -502,21 +504,41 @@ export function createRoleVersion(value: RoleVersion): Promise<RoleVersion> {
   });
 }
 
-/** Delete one immutable RoleVersion only when no Persona remains pinned to it. */
+/** Current settings and immutable history both retain Role versions. Fail closed on corrupt records. */
+export async function listRoleVersionReferences(versionIds: ReadonlySet<string>): Promise<{ personaIds: string[]; pinnedRoleVersionIds: string[] }> {
+  const [personas, revisions, activities, proposals] = await Promise.all([
+    listPersonasStrict(), listBehaviorRevisions(), listActivitiesStrictForLeasePruning(),
+    listRecords({ collection: ENDURING_AGENT_COLLECTIONS.behaviorProposals,
+      recordKind: 'BehaviorProposal', schema: BehaviorProposalSchema, strict: true }),
+  ]);
+  const personaIds = new Set<string>();
+  const pinned = new Set<string>();
+  const add = (personaId: string, versionId: string | undefined) => {
+    if (!versionId || !versionIds.has(versionId)) return;
+    personaIds.add(personaId); pinned.add(versionId);
+  };
+  for (const persona of personas) add(persona.id, persona.roleVersionId);
+  for (const revision of revisions) if (revision.source.kind === 'role_template') add(revision.personaId, revision.source.roleVersionId);
+  for (const activity of activities) add(activity.personaId, activity.instructionContext?.roleVersionId);
+  for (const proposal of proposals) {
+    add(proposal.personaId, proposal.promotedRoleVersionId);
+    for (const audit of proposal.auditTrail) add(proposal.personaId, audit.roleVersionId);
+  }
+  return { personaIds: [...personaIds].sort(), pinnedRoleVersionIds: [...pinned].sort() };
+}
+
+/** Delete one immutable RoleVersion only when neither current settings nor history pins it. */
 export async function deleteRoleVersionRecord(id: string): Promise<void> {
   assertSafeCollectionId(id);
   const version = await getRoleVersion(id);
   if (!version) return;
-  const referencingPersona = (await listPersonasStrict()).find(
-    (persona) => persona.roleVersionId === version.id,
-  );
-  if (referencingPersona) {
-    throw new Error(
-      `RoleVersion ${JSON.stringify(id)} is pinned by Persona `
-      + `${JSON.stringify(referencingPersona.id)}.`,
-    );
-  }
-  await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.roleVersions, id);
+  await withRoleDefinitionRuntimeLock(version.roleDefinitionId, async () => {
+    const references = await listRoleVersionReferences(new Set([id]));
+    if (references.personaIds.length) {
+      throw new Error(`RoleVersion ${JSON.stringify(id)} is pinned by Persona settings or history; archive its Role instead.`);
+    }
+    await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.roleVersions, id);
+  });
 }
 
 /** Delete an empty Role family after all of its immutable versions are removed. */
@@ -558,13 +580,18 @@ export interface PersonaSummaryRecords {
   roleVersions: RoleVersion[];
   behaviorBindings: BehaviorBinding[];
   appGrants: PersonaAppGrant[];
-  memoryItems: MemoryItem[];
+  memoryItems: Pick<MemoryItem, 'id' | 'personaId' | 'status'>[];
   workItems: PersonaWorkItem[];
   activities: PersonaActivity[];
   mailboxItems: PersonaMailboxItem[];
 }
 
 const SUMMARY_INDEX_PAGE_SIZE = 1_000;
+
+function isMemoryStatus(value: unknown): value is MemoryItem['status'] {
+  return value === 'candidate' || value === 'active'
+    || value === 'superseded' || value === 'forgotten';
+}
 
 async function listRequestedPersonaRecords<T extends IdentifiedRecord>(
   personaIds: readonly string[],
@@ -629,10 +656,11 @@ export async function listPersonaSummaryRecords(
       schema: PersonaAppGrantSchema,
       strict: true,
     }),
-    listRequestedPersonaRecords(
-      [...requested],
-      (personaId, query) => listMemoryItems(personaId, query),
-    ),
+    // Gallery cards only count Memories. Read their current index once instead
+    // of materializing every private Memory payload for every visible Persona.
+    getMemoryIndex().then(({ entries }) => entries.flatMap(({ id, personaId, status }) => (
+      requested.has(personaId) && isMemoryStatus(status) ? [{ id, personaId, status }] : []
+    ))),
     listRequestedPersonaRecords(
       [...requested],
       (personaId, query) => listPersonaWorkItems(personaId, query),
@@ -692,17 +720,17 @@ export async function createPersona(value: Persona): Promise<Persona> {
   ));
 }
 
-export function getPersonaDeletionTombstone(
+export async function getPersonaDeletionTombstone(
   personaId: string,
 ): Promise<PersonaDeletionTombstone | null> {
   assertSafeCollectionId(personaId);
   const id = personaDeletionTombstoneId(getCurrentWorkspace(), personaId);
-  return getRecord({
+  return await getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.deletionTombstones,
     id,
     recordKind: 'PersonaDeletionTombstone',
     schema: PersonaDeletionTombstoneSchema,
-  });
+  }) ?? getRecoveredPersonaDeletionTombstone(personaId);
 }
 
 export function savePersonaDeletionTombstone(
@@ -921,7 +949,7 @@ async function assertValidCoreMemoryItems(persona: Persona): Promise<void> {
   }
 }
 
-function assertBehaviorRevisionIntegrity(
+export function assertBehaviorRevisionIntegrity(
   record: BehaviorRevision,
   rawRecord: unknown = record,
 ): void {

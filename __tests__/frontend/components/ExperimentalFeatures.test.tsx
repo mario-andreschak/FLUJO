@@ -20,7 +20,7 @@ function setCompactNavigation(compact: boolean) {
     configurable: true,
     writable: true,
     value: jest.fn().mockImplementation((query: string) => ({
-      matches: query === '(max-width:1279px)' ? compact : false,
+      matches: query === '(max-width:1535px)' ? compact : false,
       media: query,
       onchange: null,
       addListener: jest.fn(),
@@ -408,30 +408,11 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
-  it('exposes and persists the detached subflow task feature', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, subflowToolInvocation: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
+  it('has no activation switches for built-in subflow collaboration', () => {
     render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('checkbox', {
-      name: /Run detached subflows in the background/i,
-    });
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        subflowToolInvocation: true,
-        subflowDetachedInvocation: true,
-      },
-    });
+    expect(screen.queryByRole('checkbox', { name: /Subflow nodes be called as tools/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /detached subflows/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Resume subflow child/i })).not.toBeInTheDocument();
   });
 
   it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {

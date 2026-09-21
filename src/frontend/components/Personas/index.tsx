@@ -107,6 +107,16 @@ const PERSONA_LEASE_STATUS_KEYS = {
   TranslationKey
 >;
 
+function actionErrorMessage(cause: unknown, t: (key: TranslationKey) => string): string {
+  if (cause instanceof Error && 'code' in cause && cause.code === 'PERSONA_WORK_ITEM_CHANGED') {
+    return t('personas.tasks.changed');
+  }
+  if (cause instanceof Error && 'code' in cause && cause.code === 'PERSONA_APP_STALE_WRITE') {
+    return t('personas.apps.changed');
+  }
+  return cause instanceof Error ? cause.message : t('personas.action.failed');
+}
+
 function humanize(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -233,7 +243,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       if (success) setNotice(success);
       return true;
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : t('personas.action.failed'));
+      setActionError(actionErrorMessage(cause, t));
       await refreshSelected().catch(() => undefined);
       return false;
     } finally {
@@ -248,7 +258,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       const now = Date.now();
       const conversation = await personasService.startConversation({
         id: uuidv4(),
-        title: `Conversation with ${persona.name}`,
+        title: t('personas.talk.conversationTitle', { name: persona.name }),
         flowId: null,
         personaTargetId: persona.id,
         createdAt: now,
@@ -264,12 +274,12 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
 
   return (
     <Container maxWidth="xl" sx={{ py: { xs: 2, md: 3.5 } }}>
-      {busy && <LinearProgress sx={{ position: 'fixed', inset: '0 0 auto', zIndex: 1500 }} />}
+      {busy && <LinearProgress aria-label={t('personas.loading')} sx={{ position: 'fixed', inset: '0 0 auto', zIndex: 1500 }} />}
       {actionError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>{actionError}</Alert>}
       {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice(null)}>{notice}</Alert>}
       {initialPersonaId && loading ? (
         <Stack alignItems="center" justifyContent="center" minHeight="55vh" spacing={2}>
-          <CircularProgress />
+          <CircularProgress aria-label={t('personas.loading')} />
           <Typography color="text.secondary">{t('personas.loading')}</Typography>
         </Stack>
       ) : initialPersonaId && error ? (
@@ -293,7 +303,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
                     <PersonaFlowsArea detail={selected} onChanged={refreshSelected} />
                   )}
                   {(subsection === null || subsection === 'apps') && (
-                    <AppsArea detail={selected} busy={busy} mutate={mutate} />
+                    <AppsArea detail={selected} busy={busy} mutate={mutate} mutationError={actionError} />
                   )}
                 </PersonaSetup>
               )}
@@ -337,7 +347,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
               <Stack spacing={2}>
                 <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
                   <Box>
-                    <Typography variant="h6" fontWeight={760}>{t('personas.create.savedDrafts')}</Typography>
+                    <Typography variant="h6" component="h2" fontWeight={760}>{t('personas.create.savedDrafts')}</Typography>
                     <Typography color="text.secondary">{t('personas.create.savedDraftsHelp')}</Typography>
                   </Box>
                   <Button disabled={draftsLoading} startIcon={<RefreshRounded />} onClick={() => void loadDrafts()}>
@@ -436,9 +446,9 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
 
 function AreaShell({ title, icon, action, children }: { title: string; icon: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2} sx={{ mb: 2.5 }}>
-        <Stack direction="row" alignItems="center" spacing={1}><Box color="primary.main">{icon}</Box><Typography variant="h5" fontWeight={760}>{title}</Typography></Stack>
+    <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, minWidth: 0 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} spacing={2} sx={{ mb: 2.5 }}>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}><Box color="primary.main" sx={{ flexShrink: 0 }}>{icon}</Box><Typography variant="h5" component="h2" fontWeight={760}>{title}</Typography></Stack>
         {action}
       </Stack>
       {children}
@@ -461,7 +471,7 @@ function TaskRecordLinks({ task }: { task: PersonaTaskSummary }) {
 
 
 function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean> }) {
-  const { t, formatDate } = useI18n();
+  const { t, tp, formatDate } = useI18n();
   const current = detail.presentation.current;
   const queuedTasks = detail.presentation.tasks.filter((task) => task.state === 'waiting');
   const activeTask = detail.presentation.tasks.find((task) => task.state === 'in_progress');
@@ -561,8 +571,8 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
       >
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2} alignItems={{ md: 'center' }}>
           <Box>
-            <Typography variant="h4" fontWeight={790}>{t('personas.goal.title')}</Typography>
-            <Typography sx={{ opacity: 0.86, mt: 0.5 }}>{t('personas.goal.help')}</Typography>
+            <Typography variant="h4" component="h2" fontWeight={790}>{t('personas.goal.title')}</Typography>
+            <Typography sx={{ mt: 0.5 }}>{t('personas.goal.help')}</Typography>
           </Box>
           <Button
             variant="contained"
@@ -570,7 +580,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
             startIcon={<AssignmentRounded />}
             disabled={busy || detail.persona.lifecycleState === 'disabled'}
             onClick={() => setGoalOpen(true)}
-            sx={{ color: 'primary.main', flexShrink: 0 }}
+            sx={{ color: 'primary.main', bgcolor: 'background.paper', '&:hover': { bgcolor: 'background.paper' }, flexShrink: 0 }}
           >
             {t('personas.goal.action')}
           </Button>
@@ -581,7 +591,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           {detail.presentation.tasks.find((task) => task.id === item.id) && <TaskRecordLinks task={detail.presentation.tasks.find((task) => task.id === item.id)!} />}
         </PersonaGoalCard>
       ))}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.25fr) minmax(320px, .75fr)' }, gap: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1.25fr) minmax(320px, .75fr)' }, gap: 2 }}>
         <AreaShell title={t('personas.now.title')} icon={<BoltRounded />}>
           {current || activeTask ? (
             <Stack spacing={1.25}>
@@ -589,8 +599,8 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                 {current && <Chip color={statusColor(current.outcome)} label={t(PERSONA_OUTCOME_KEYS[current.outcome])} />}
                 {activeTask && <Chip variant="outlined" label={t(`personas.priority.${activeTask.priority}`)} />}
               </Stack>
-              <Typography variant="h6" fontWeight={740}>
-                {activeTask?.title ?? current?.summary}
+              <Typography variant="h6" component="h3" fontWeight={740}>
+                {activeTask?.title ?? (current?.summaryKind ? t(`personas.history.type.${current.summaryKind}`) : current?.summary)}
               </Typography>
               {activeTask?.description && <Typography color="text.secondary">{activeTask.description}</Typography>}
               {activeTask?.nextAction && (
@@ -648,7 +658,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           )}
         </AreaShell>
       </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
         <AreaShell title={t('personas.home.needsYou')} icon={<AssignmentRounded />}>
           {needsYou.length === 0 ? (
             <Typography color="text.secondary">{t('personas.home.noNeeds')}</Typography>
@@ -660,7 +670,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
                   <Typography variant="body2" color="text.secondary">
                     {task.state === 'blocked'
                       ? task.blockerTitles.length > 0
-                        ? t('personas.home.blocked', { count: task.blockerTitles.length })
+                        ? tp('personas.home.blocked', task.blockerTitles.length)
                         : t('personas.home.intervention')
                       : t('personas.home.overdue')}
                   </Typography>
@@ -772,11 +782,11 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
         {previewError ? (
           <Alert severity="warning">{t('personas.capabilities.unavailable')}</Alert>
         ) : !preview ? (
-          <Stack direction="row" alignItems="center" spacing={1}><CircularProgress size={18} /><Typography color="text.secondary">{t('personas.capabilities.loading')}</Typography></Stack>
+          <Stack direction="row" alignItems="center" spacing={1}><CircularProgress size={18} aria-label={t('personas.capabilities.loading')} /><Typography color="text.secondary">{t('personas.capabilities.loading')}</Typography></Stack>
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
             <Box>
-              <Typography variant="subtitle2">{t('personas.capabilities.everyday')}</Typography>
+              <Typography variant="subtitle2" component="h3">{t('personas.capabilities.everyday')}</Typography>
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
                 <Chip
                   color={memoryRecall || memoryChanges ? 'success' : 'default'}
@@ -796,7 +806,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
               ) : null}
             </Box>
             <Box>
-              <Typography variant="subtitle2">{t('personas.capabilities.apps')}</Typography>
+              <Typography variant="subtitle2" component="h3">{t('personas.capabilities.apps')}</Typography>
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
                 {preview.apps.length > 0
                   ? preview.apps.map((app) => <Chip key={app} label={app} />)
@@ -804,7 +814,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
               </Stack>
             </Box>
             <Box>
-              <Typography variant="subtitle2">{t('personas.capabilities.behaviors')}</Typography>
+              <Typography variant="subtitle2" component="h3">{t('personas.capabilities.behaviors')}</Typography>
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
                 {preview.behaviors.length > 0
                   ? preview.behaviors.map((behavior) => <Chip key={behavior.slotKey} label={behavior.name} />)
@@ -872,13 +882,20 @@ function draftForWorkItem(item?: PersonaWorkItem): WorkDraft {
 function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean> }) {
   const { t, formatDate } = useI18n();
   const [draft, setDraft] = useState<WorkDraft | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [assignmentNotice, setAssignmentNotice] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<PersonaWorkItem | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deletionPending = useRef(false);
+  const deleteTrigger = useRef<HTMLButtonElement | null>(null);
+  const newTaskButton = useRef<HTMLButtonElement | null>(null);
   const tasks = detail.presentation.tasks;
   const save = async () => {
     if (!draft?.title.trim()) return;
+    setSaveError(null);
     const deadline = draft.deadline ? new Date(`${draft.deadline}T23:59:59`).getTime() : null;
-    if (draft.id) {
-      await mutate(() => personasService.updateWorkItem(detail.persona.id, draft.id!, {
+    const saveAction = () => draft.id
+      ? personasService.updateWorkItem(detail.persona.id, draft.id, {
         title: draft.title,
         description: draft.description || null,
         priority: draft.priority,
@@ -886,19 +903,45 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
         deadline,
         dependencyIds: draft.dependencyIds,
         expectedUpdatedAt: draft.expectedUpdatedAt,
-      }));
-    } else {
-      await mutate(() => personasService.createWorkItem(detail.persona.id, {
+      })
+      : personasService.createWorkItem(detail.persona.id, {
         title: draft.title,
         ...(draft.description ? { description: draft.description } : {}),
         priority: draft.priority,
         ...(draft.nextAction ? { nextAction: draft.nextAction } : {}),
         ...(deadline ? { deadline } : {}),
         dependencyIds: draft.dependencyIds,
-      }));
-    }
-    setDraft(null);
+      });
+    const saved = await mutate(async () => {
+      try {
+        return await saveAction();
+      } catch (cause) {
+        setSaveError(actionErrorMessage(cause, t));
+        throw cause;
+      }
+    });
+    if (saved) setDraft(null);
+    else setSaveError(current => current ?? t('personas.action.failed'));
   };
+  const deleteTask = async () => {
+    if (!deleting || busy || deletionPending.current) return;
+    deletionPending.current = true;
+    setDeleteError(null);
+    try {
+      const deleted = await mutate(async () => {
+        try {
+          await personasService.deleteWorkItem(detail.persona.id, deleting.id);
+        } catch (cause) {
+          setDeleteError(cause instanceof Error ? cause.message : t('personas.action.failed'));
+          throw cause;
+        }
+      });
+      if (deleted) setDeleting(null);
+    } finally {
+      deletionPending.current = false;
+    }
+  };
+  const deletingState = tasks.find((task) => task.id === deleting?.id)?.state;
   const assign = (task: PersonaTaskSummary) => mutate(async () => {
     const result = await personasService.assignWorkItem(detail.persona.id, task.id, {
       expectedUpdatedAt: task.expectedUpdatedAt,
@@ -919,12 +962,12 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
     t(success),
   );
   return (
-    <AreaShell title={t('personas.tasks.title')} icon={<WorkOutlineRounded />} action={<Button variant="contained" startIcon={<AddRounded />} onClick={() => setDraft(draftForWorkItem())}>{t('personas.tasks.new')}</Button>}>
+    <AreaShell title={t('personas.tasks.title')} icon={<WorkOutlineRounded />} action={<Button ref={newTaskButton} variant="contained" startIcon={<AddRounded />} onClick={() => { setSaveError(null); setDraft(draftForWorkItem()); }}>{t('personas.tasks.new')}</Button>}>
       <Stack spacing={2}>
         <Alert severity="info">{t('personas.tasks.temporaryHelp')}</Alert>
         {assignmentNotice && <Alert severity="success" onClose={() => setAssignmentNotice(null)}>{assignmentNotice}</Alert>}
         {tasks.length === 0 ? <Typography color="text.secondary">{t('personas.tasks.empty')}</Typography> : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
             {tasks.map((task) => {
               const item = detail.workItems.find((candidate) => candidate.id === task.id);
               if (item?.goal) return <PersonaGoalCard key={item.id} item={item} busy={busy} mutate={mutate}><TaskRecordLinks task={task} /></PersonaGoalCard>;
@@ -944,7 +987,7 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
                 <Card key={task.id} variant="outlined" sx={{ borderRadius: 3, minWidth: 0 }}>
                   <CardContent>
                     <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'flex-start' }} gap={1}>
-                      <Typography variant="h6" fontWeight={720}>{task.title}</Typography>
+                      <Typography variant="h6" component="h3" fontWeight={720}>{task.title}</Typography>
                       <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                         <Chip size="small" color={statusColor(task.state)} label={t(`personas.taskState.${task.state}`)} />
                         <Chip size="small" variant="outlined" label={t(`personas.priority.${task.priority}`)} />
@@ -1015,9 +1058,13 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
                         {t('personas.tasks.resumeRetry')}
                       </Button>
                     )}
-                    {item && <Button startIcon={<EditRounded />} onClick={() => setDraft(draftForWorkItem(item))}>{t('personas.tasks.edit')}</Button>}
+                    {item && <Button startIcon={<EditRounded />} onClick={() => { setSaveError(null); setDraft(draftForWorkItem(item)); }}>{t('personas.tasks.edit')}</Button>}
                     {item && !active && item.status !== 'completed' && item.status !== 'cancelled' && <Button disabled={busy} startIcon={<CheckCircleOutlineRounded />} onClick={() => void mutate(() => personasService.updateWorkItem(detail.persona.id, item.id, { status: 'completed', expectedUpdatedAt: item.updatedAt }))}>{t('personas.tasks.complete')}</Button>}
-                    {item && <Button color="error" disabled={busy || active} onClick={() => { if (window.confirm(t('personas.tasks.deleteConfirm', { title: item.title }))) void mutate(() => personasService.deleteWorkItem(detail.persona.id, item.id)); }}>{t('personas.tasks.delete')}</Button>}
+                    {item && <Button color="error" disabled={busy || active} onClick={(event) => {
+                      deleteTrigger.current = event.currentTarget;
+                      setDeleteError(null);
+                      setDeleting(item);
+                    }}>{t('personas.tasks.delete')}</Button>}
                   </CardActions>
                 </Card>
               );
@@ -1025,36 +1072,55 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
           </Box>
         )}
       </Stack>
-      <WorkItemDialog draft={draft} items={detail.workItems} busy={busy} onChange={setDraft} onClose={() => setDraft(null)} onSave={() => void save()} />
+      <WorkItemDialog draft={draft} items={detail.workItems} busy={busy} error={saveError} onChange={setDraft} onClose={() => setDraft(null)} onSave={() => void save()} />
+      <Dialog
+        open={Boolean(deleting)} fullWidth maxWidth="sm"
+        aria-labelledby="persona-task-delete-title"
+        disableRestoreFocus
+        onClose={() => { if (!deletionPending.current) setDeleting(null); }}
+        slotProps={{ transition: { onExited: () => {
+          const trigger = deleteTrigger.current;
+          (trigger?.isConnected && !trigger.disabled ? trigger : newTaskButton.current)?.focus();
+        } } }}
+      >
+        <DialogTitle id="persona-task-delete-title" sx={{ overflowWrap: 'anywhere' }}>{t('personas.tasks.deleteConfirm', { title: deleting?.title ?? '' })}</DialogTitle>
+        {deleteError && <DialogContent><Alert severity="error">{deleteError}</Alert></DialogContent>}
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
+          <Button autoFocus disabled={busy} onClick={() => setDeleting(null)}>{t('personas.action.cancel')}</Button>
+          <Button color="error" variant="contained" disabled={busy || !deletingState || deletingState === 'waiting' || deletingState === 'in_progress'} onClick={() => void deleteTask()}>{t('personas.tasks.delete')}</Button>
+        </DialogActions>
+      </Dialog>
     </AreaShell>
   );
 }
 
-function WorkItemDialog({ draft, items, busy, onChange, onClose, onSave }: { draft: WorkDraft | null; items: PersonaWorkItem[]; busy: boolean; onChange: (draft: WorkDraft | null) => void; onClose: () => void; onSave: () => void }) {
+function WorkItemDialog({ draft, items, busy, error, onChange, onClose, onSave }: { draft: WorkDraft | null; items: PersonaWorkItem[]; busy: boolean; error: string | null; onChange: (draft: WorkDraft | null) => void; onClose: () => void; onSave: () => void }) {
   const { t } = useI18n();
   if (!draft) return null;
   const set = <K extends keyof WorkDraft>(key: K, value: WorkDraft[K]) => onChange({ ...draft, [key]: value });
   return (
-    <Dialog open fullWidth maxWidth="sm" onClose={onClose}>
+    <Dialog open fullWidth maxWidth="sm" onClose={() => { if (!busy) onClose(); }}>
       <DialogTitle>{draft.id ? t('personas.tasks.edit') : t('personas.tasks.new')}</DialogTitle>
       <DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>
+        {error && <Alert severity="error">{error}</Alert>}
         <TextField label={t('personas.tasks.field.title')} value={draft.title} onChange={(event) => set('title', event.target.value)} required autoFocus />
         <TextField label={t('personas.tasks.field.description')} value={draft.description} onChange={(event) => set('description', event.target.value)} multiline minRows={3} />
         <TextField select fullWidth label={t('personas.tasks.field.priority')} value={draft.priority} onChange={(event) => set('priority', event.target.value as PersonaPriority)}>{PERSONA_PRIORITIES.map((priority) => <MenuItem key={priority} value={priority}>{t(`personas.priority.${priority}`)}</MenuItem>)}</TextField>
         <TextField label={t('personas.tasks.nextAction')} value={draft.nextAction} onChange={(event) => set('nextAction', event.target.value)} />
         <TextField label={t('personas.tasks.field.deadline')} type="date" value={draft.deadline} onChange={(event) => set('deadline', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-        <FormControl><InputLabel>{t('personas.tasks.dependencies')}</InputLabel><Select multiple label={t('personas.tasks.dependencies')} value={draft.dependencyIds} onChange={(event) => set('dependencyIds', typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)}>{items.filter((item) => item.id !== draft.id).map((item) => <MenuItem key={item.id} value={item.id}>{item.title}</MenuItem>)}</Select></FormControl>
+        <FormControl><InputLabel id="persona-task-dependencies-label">{t('personas.tasks.dependencies')}</InputLabel><Select multiple labelId="persona-task-dependencies-label" label={t('personas.tasks.dependencies')} value={draft.dependencyIds} onChange={(event) => set('dependencyIds', typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)}>{items.filter((item) => item.id !== draft.id).map((item) => <MenuItem key={item.id} value={item.id}>{item.title}</MenuItem>)}</Select></FormControl>
       </Stack></DialogContent>
-      <DialogActions><Button onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={busy || !draft.title.trim()} onClick={onSave}>{t('personas.action.save')}</Button></DialogActions>
+      <DialogActions><Button disabled={busy} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={busy || !draft.title.trim()} onClick={onSave}>{t('personas.action.save')}</Button></DialogActions>
     </Dialog>
   );
 }
 
 
-function AppsArea({ detail, busy, mutate }: {
+function AppsArea({ detail, busy, mutate, mutationError }: {
   detail: PersonaDetail;
   busy: boolean;
   mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean>;
+  mutationError: string | null;
 }) {
   const { t } = useI18n();
   const [selectedConfig, setSelectedConfig] = useState('');
@@ -1111,6 +1177,9 @@ function AppsArea({ detail, busy, mutate }: {
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
           <CardPickerGrid
             searchable
+            // The picker follows setup facts and help; keep focus on navigation
+            // instead of moving it to a search field that may be off screen.
+            autoFocusSearch={false}
             stickySearch
             selectionMode="single"
             ariaLabel={t('personas.apps.config')}
@@ -1166,6 +1235,7 @@ function AppsArea({ detail, busy, mutate }: {
           <Stack spacing={2}>
             {detail.appGrants.map((grant) => {
               const server = servers.find((candidate) => candidate.name === grant.mcpServerName);
+              const checking = !server && (loading || refreshing);
               return (
                 <Card key={grant.id} variant="outlined" sx={{ borderRadius: 3 }}>
                   <CardContent>
@@ -1174,14 +1244,14 @@ function AppsArea({ detail, busy, mutate }: {
                         <Typography variant="overline" color="text.secondary">
                           {t('personas.apps.account')}
                         </Typography>
-                        <Typography variant="h6" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>
+                        <Typography variant="h6" component="h3" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>
                           {grant.mcpServerName}
                         </Typography>
                       </Box>
-                      <Chip color={server && !server.error ? 'success' : 'warning'} label={server && !server.error ? t('personas.apps.available') : t('personas.apps.unavailable')} />
+                      <Chip color={checking ? 'default' : server && !server.error ? 'success' : 'warning'} label={checking ? t('personas.apps.checking') : server && !server.error ? t('personas.apps.available') : t('personas.apps.unavailable')} />
                     </Stack>
                     <Box sx={{ mt: 2 }}>
-                      <ServerCard
+                      {checking ? <CircularProgress size={24} aria-label={t('personas.apps.checking')} /> : <ServerCard
                         name={grant.mcpServerName}
                         showName={false}
                         status={!server || server.error ? 'error' : 'connected'}
@@ -1194,9 +1264,9 @@ function AppsArea({ detail, busy, mutate }: {
                         selected
                         serverConfig={server?.config}
                         onClick={() => {}}
-                      />
+                      />}
                     </Box>
-                    {!server ? (
+                    {checking ? null : !server ? (
                       <Alert severity="warning" sx={{ mt: 2 }}>{t('personas.apps.stale')}</Alert>
                     ) : server.error ? (
                       <Alert severity="warning" sx={{ mt: 2 }}>{server.error}</Alert>
@@ -1229,7 +1299,7 @@ function AppsArea({ detail, busy, mutate }: {
                     )}
                   </CardContent>
                   <CardActions sx={{ flexWrap: 'wrap', gap: 1 }}>
-                    {!server ? (
+                    {checking ? null : !server ? (
                       <Button component={Link} href={withWorkspaceUrl('/mcp')}>
                         {t('personas.apps.connect')}
                       </Button>
@@ -1282,6 +1352,7 @@ function AppsArea({ detail, busy, mutate }: {
             ? servers.find((server) => server.name === configuredGrant.mcpServerName)?.config?.roots
             : undefined}
           busy={busy}
+          saveError={mutationError}
           onClose={() => setConfiguredGrant(null)}
           onSave={async ({ enabledTools, toolParameterPresets }) => {
             if (!configuredGrant) return false;
@@ -1324,16 +1395,16 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
     <AreaShell title={t('personas.history.title')} icon={<HistoryRounded />}>
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
-          <TextField select fullWidth label={t('personas.history.filter.type')} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+          <TextField select fullWidth label={t('personas.history.filter.type')} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true }, select: { displayEmpty: true } }}>
             <MenuItem value="">{t('personas.history.filter.allTypes')}</MenuItem>
             {activityTypes.map((kind) => <MenuItem key={kind} value={kind}>{t(`personas.history.type.${kind}`)}</MenuItem>)}
           </TextField>
-          <TextField select fullWidth label={t('personas.history.filter.status')} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <TextField select fullWidth label={t('personas.history.filter.status')} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true }, select: { displayEmpty: true } }}>
             <MenuItem value="">{t('personas.history.filter.allStatuses')}</MenuItem>
             {(Object.keys(PERSONA_OUTCOME_KEYS) as PersonaPresentationOutcome[]).map((outcome) => <MenuItem key={outcome} value={outcome}>{t(PERSONA_OUTCOME_KEYS[outcome])}</MenuItem>)}
           </TextField>
           <TextField fullWidth type="date" label={t('personas.history.filter.date')} value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-          {(typeFilter || statusFilter || dateFilter) && <Button onClick={clearFilters}>{t('personas.history.filter.clear')}</Button>}
+          {(typeFilter || statusFilter || dateFilter) && <Button sx={{ flexShrink: 0, alignSelf: { xs: 'flex-start', md: 'center' } }} onClick={clearFilters}>{t('personas.history.filter.clear')}</Button>}
         </Stack>
         {activities.length === 0 ? <Typography color="text.secondary">{detail.presentation.history.length === 0 ? t('personas.history.empty') : t('personas.history.noMatches')}</Typography> : (
           <Stack divider={<Divider flexItem />}>
@@ -1345,7 +1416,12 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
                     <Chip size="small" variant="outlined" label={t(`personas.history.type.${activity.kind}`)} />
                     <Chip size="small" variant="outlined" label={t(`personas.origin.${activity.origin}`)} />
                   </Stack>
-                  <Typography fontWeight={700} sx={{ mt: 0.75 }}>{activity.summary}</Typography>
+                  <Typography fontWeight={700} sx={{ mt: 0.75 }}>{activity.summaryKind ? t(`personas.history.type.${activity.summaryKind}`) : activity.summary}</Typography>
+                  {activity.outcome === 'needs_attention' && activity.advanced.status === 'completed' && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                      {t('personas.history.completionUnconfirmed')}
+                    </Typography>
+                  )}
                   {activity.resultSummary && (
                     <Typography color="text.secondary" sx={{ mt: 0.25 }}>{activity.resultSummary}</Typography>
                   )}

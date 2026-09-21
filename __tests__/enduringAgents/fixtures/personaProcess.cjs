@@ -119,6 +119,9 @@ const {
 const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
 const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
 const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
+const { withWorkspaceMutation, withWorkspaceRecoveryCapture } = require(path.join(
+  repositoryRoot, 'src/backend/services/workspace/workspaceMutationGate.ts',
+));
 const {
   ensureTestRole,
   TEST_ROLE_VERSION_ID,
@@ -135,9 +138,75 @@ function leaseFence(claim) {
   };
 }
 
+const captureGates = new Map();
+let recoveryCheckpoint;
+
 async function execute(command) {
   return runWithWorkspace(workspaceId, async () => {
     switch (command.type) {
+      case 'readFlow': return flowService.getFlow(command.flowId);
+      case 'saveFlow': return flowService.saveFlow(command.flow);
+      case 'previewDeletion': return enduringAgents.previewPersonaDeletion(command.personaId);
+      case 'deletePersona': return enduringAgents.deletePersona(command.personaId, {
+        previewToken: command.previewToken, archivePolicy: 'anonymize', confirmation: 'DELETE',
+      });
+      case 'captureRecovery': {
+        const { capturePersonaRecovery } = require(path.join(repositoryRoot, 'src/backend/services/enduringAgents/personaRecoveryCapture.ts'));
+        const result = await capturePersonaRecovery();
+        return { archive: result.bytes.toString('base64'), manifest: result.manifest };
+      }
+      case 'previewRecovery': {
+        const { planPersonaRecoveryRestore } = require(path.join(repositoryRoot, 'src/backend/services/enduringAgents/personaRecoveryPlan.ts'));
+        return planPersonaRecoveryRestore(Buffer.from(command.archive, 'base64'), command.destination).preview;
+      }
+      case 'restoreRecovery': {
+        const { restorePersonaRecovery } = require(path.join(repositoryRoot, 'src/backend/services/enduringAgents/personaRecoveryRestore.ts'));
+        recoveryCheckpoint = undefined;
+        return restorePersonaRecovery(Buffer.from(command.archive, 'base64'), command.destination, command.previewToken, {
+          onCheckpoint: async (point) => {
+            recoveryCheckpoint = point;
+            if (point === command.holdAt) await new Promise(() => {});
+          },
+        });
+      }
+      case 'recoveryCheckpoint':
+        return { checkpoint: recoveryCheckpoint };
+      case 'captureGateEnter': {
+        if (captureGates.has(command.token)) throw new Error('Duplicate gate token');
+        let release;
+        let entered;
+        let rejected;
+        const finish = new Promise((resolve) => { release = resolve; });
+        const started = new Promise((resolve, reject) => { entered = resolve; rejected = reject; });
+        const state = { held: false, release, done: undefined };
+        captureGates.set(command.token, state);
+        const task = async () => {
+          if (command.mode === 'writer') await saveItem(StorageKey.THEME, 'light');
+          state.held = true;
+          entered({ pid: process.pid, held: true });
+          await finish;
+          return { released: true };
+        };
+        state.done = (command.mode === 'flow'
+          ? require(path.join(repositoryRoot, 'src/backend/services/flow/personaOwnedFlows.ts')).withFlowMutationLock(task)
+          : command.mode === 'writer'
+          ? withWorkspaceMutation(task)
+          : withWorkspaceRecoveryCapture(task, { timeoutMs: command.timeoutMs }))
+          .catch((error) => { rejected(error); throw error; });
+        // A failed entry is returned through started; retain its completion for
+        // Leave without creating an unhandled rejected background promise.
+        state.done.catch(() => {});
+        return started;
+      }
+      case 'captureGateLeave': {
+        const state = captureGates.get(command.token);
+        if (!state) throw new Error('Unknown gate token');
+        state.release();
+        try { return await state.done; }
+        finally { captureGates.delete(command.token); }
+      }
+      case 'captureGateStatus':
+        return { requested: captureGates.has(command.token), held: captureGates.get(command.token)?.held ?? false };
       case 'createPersona':
         await saveItem(StorageKey.MODELS, [{
           id: 'model-test',

@@ -404,7 +404,9 @@ export default function Navigation() {
   const router = useRouter();
   const { settings, settingsHydrated } = useStorage();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const isCompact = useMediaQuery('(max-width:1279px)');
+  // Translated labels plus workspace/account controls need more room than the
+  // former 1280px desktop threshold. Use the existing drawer on smaller screens.
+  const isCompact = useMediaQuery('(max-width:1535px)');
 
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
 
@@ -552,6 +554,7 @@ export default function Navigation() {
               alignItems: 'center',
               gap: 0.3,
               minWidth: 0,
+              overflowX: 'auto',
             }}
           >
             <NavigationEntries
@@ -761,7 +764,7 @@ export default function Navigation() {
 
     {/* #396: bottom-left quick actions. Rendered as a sibling of the sticky
         AppBar so it is anchored to the viewport corner rather than to the top
-        bar, and only in the desktop layout — below 1280px the equivalent
+        bar, and only in the desktop layout — in compact layouts the equivalent
         control lives at the bottom of the navigation Drawer. */}
     {!isCompact && (
       <Box

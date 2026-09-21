@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import Link from 'next/link';
 
 const optionsMock = jest.fn();
 const updateMock = jest.fn();
@@ -72,6 +73,46 @@ describe('PersonaSettings editing', () => {
       presentation: undefined,
       updatedAt: 21,
     });
+  });
+
+  it.each(['link', 'tab'])('protects unsaved settings when leaving through a %s, preserving drafts on cancel', async (kind) => {
+    const navigate = jest.fn((event: React.MouseEvent) => event.preventDefault());
+    render(<>
+      {kind === 'link'
+        ? <Link href="/personas" onClick={navigate}>Leave settings</Link>
+        : <div data-persona-navigation><button role="tab" aria-selected="false" onClick={navigate}>Leave settings</button></div>}
+      <PersonaSettings detail={detail} onRefresh={jest.fn()} onDeleted={jest.fn()} />
+    </>);
+    expect(await screen.findByRole('combobox', { name: 'Role' })).toBeInTheDocument();
+    const name = screen.getByRole('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Unsaved name' } });
+    const trigger = screen.getByRole(kind, { name: 'Leave settings' });
+    fireEvent.click(trigger, { ctrlKey: kind === 'tab' });
+    let dialog = screen.getByRole('dialog', { name: 'Leave without saving your Persona settings?' });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(name).toHaveValue('Unsaved name');
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard and leave' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(name).toHaveValue('Mina');
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('shows loading rather than unavailable warnings before settings arrive', async () => {
+    let resolveOptions!: (value: unknown) => void;
+    optionsMock.mockReturnValueOnce(new Promise((resolve) => { resolveOptions = resolve; }));
+    render(<PersonaSettings detail={detail} onRefresh={jest.fn()} onDeleted={jest.fn()} />);
+    expect(screen.getAllByRole('progressbar', { name: 'Loading settings…' })).toHaveLength(2);
+    expect(screen.queryByText('No supported language catalog is available.')).not.toBeInTheDocument();
+    resolveOptions({ roles: [{ roleVersionId: 'rolever_1', name: 'Launch coordinator' }], languages: [] });
+    expect(await screen.findByRole('combobox', { name: 'Role' })).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar', { name: 'Loading settings…' })).not.toBeInTheDocument();
   });
 
   it('lets a user remove an existing picture and saves the change', async () => {
@@ -216,8 +257,8 @@ describe('PersonaSettings editing', () => {
     );
 
     expect(await screen.findByText(
-      /saved Role “Launch coordinator” is no longer available/i,
+      /keeps its saved version of “Launch coordinator”/i,
     )).toBeInTheDocument();
-    expect(screen.getByText('Launch coordinator (no longer available)')).toBeInTheDocument();
+    expect(screen.getByText('Launch coordinator (saved version)')).toBeInTheDocument();
   });
 });

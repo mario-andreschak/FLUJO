@@ -299,28 +299,6 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
-  const handleSubflowToolInvocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Subflow tool invocation toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        subflowToolInvocation: event.target.checked,
-      },
-    });
-  };
-
-  const handleSubflowSessionsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Subflow sessions toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        subflowSessions: event.target.checked,
-      },
-    });
-  };
-
   const handleMcpAppLaunchRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`MCP App click-to-launch restriction toggled: ${event.target.checked}`);
     updateSettings({
@@ -383,17 +361,6 @@ export default function ExperimentalFeaturesSettings() {
       experimental: {
         ...experimental,
         compactionEnabled: event.target.checked,
-      },
-    });
-  };
-
-  const handleSubflowDetachedInvocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Detached subflow invocation toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        subflowDetachedInvocation: event.target.checked,
       },
     });
   };
@@ -526,27 +493,6 @@ export default function ExperimentalFeaturesSettings() {
             label={t('settings.experimental.flowGenerator')}
             name="flowBasedGenerator"
             onChange={handleFlowBasedGeneratorChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.subflowToolInvocation ?? false}
-            description={t('settings.experimental.subflowToolInvocationDescription')}
-            label={t('settings.experimental.subflowToolInvocation')}
-            name="subflowToolInvocation"
-            onChange={handleSubflowToolInvocationChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.subflowDetachedInvocation ?? false}
-            description={t('settings.experimental.subflowDetachedInvocationDescription')}
-            label={t('settings.experimental.subflowDetachedInvocation')}
-            name="subflowDetachedInvocation"
-            onChange={handleSubflowDetachedInvocationChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.subflowSessions ?? false}
-            description={t('settings.experimental.subflowSessionsDescriptionV2')}
-            label={t('settings.experimental.subflowSessions')}
-            name="subflowSessions"
-            onChange={handleSubflowSessionsChange}
           />
         </ExperimentalSettingsGroup>
 

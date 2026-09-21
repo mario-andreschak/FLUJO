@@ -12,6 +12,12 @@
  * init orchestration in isolation; the encryption helpers are flippable.
  */
 
+// Startup arms hourly cleanup jobs. A real timer can fire long after this
+// unit suite has ended (while another suite is still running), entering torn-
+// down modules and writing to a disposed test workspace. Scheduling behavior
+// belongs to its own tests; this suite only exercises startup orchestration.
+jest.mock('croner', () => ({ Cron: jest.fn() }));
+
 // Plain jest.fn()s (untyped, so the `(...a)` delegators below type-check).
 // Async return values are configured in beforeEach; a bare undefined return is
 // harmless for the void-returning collaborators (they are awaited).

@@ -570,6 +570,19 @@ async function resolveManagedWorkspace(workspace: string): Promise<string> {
 
 /** Create a workspace namespace with independent copies of shipped MCP packages. */
 export async function createWorkspace(workspace: string): Promise<WorkspaceInfo> {
+  return withWorkspaceNamespaceMutation(() => createWorkspaceWithinNamespaceLock(workspace));
+}
+
+/** One installation-wide namespace lock also used by atomic recovery publication. */
+export async function withWorkspaceNamespaceMutation<T>(task: () => Promise<T>): Promise<T> {
+  const selectedWorkspace = getCurrentWorkspace();
+  const { withWorkspaceRuntimeLock } = await import('@/backend/services/enduringAgents/runtimeLock');
+  return runWithWorkspace(DEFAULT_WORKSPACE, () => withWorkspaceRuntimeLock(
+    'workspace-namespace', () => runWithWorkspace(selectedWorkspace, task),
+  ));
+}
+
+async function createWorkspaceWithinNamespaceLock(workspace: string): Promise<WorkspaceInfo> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
     throw new WorkspaceMutationError(
@@ -620,6 +633,10 @@ export async function renameWorkspace(
   workspace: string,
   newName: string,
 ): Promise<WorkspaceInfo> {
+  return withWorkspaceNamespaceMutation(() => renameWorkspaceWithinNamespaceLock(workspace, newName));
+}
+
+async function renameWorkspaceWithinNamespaceLock(workspace: string, newName: string): Promise<WorkspaceInfo> {
   const current = assertValidWorkspaceName(workspace);
   const next = assertValidWorkspaceName(newName);
   if (current === DEFAULT_WORKSPACE || next === DEFAULT_WORKSPACE) {
@@ -688,6 +705,10 @@ export async function updateWorkspaceRoots(
 
 /** Permanently delete a non-default workspace and all of its owned data. */
 export async function deleteWorkspace(workspace: string): Promise<void> {
+  return withWorkspaceNamespaceMutation(() => deleteWorkspaceWithinNamespaceLock(workspace));
+}
+
+async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<void> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
     throw new WorkspaceMutationError(

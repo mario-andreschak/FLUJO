@@ -20,9 +20,10 @@ export function createLegacyAppTheme(mode: PaletteMode): Theme {
     palette: {
       mode,
       primary: {
-        main: isDark ? '#4f93f5' : '#007bff',
+        main: isDark ? '#4f93f5' : '#0069d9',
         light: isDark ? '#6aa6f7' : '#3395ff',
         dark: isDark ? '#3a7ad4' : '#0056b3',
+        contrastText: isDark ? '#000000' : '#FFFFFF',
       },
       secondary: {
         main: isDark ? '#a3adba' : '#6c757d',
@@ -37,9 +38,13 @@ export function createLegacyAppTheme(mode: PaletteMode): Theme {
       },
       info: {
         main: isDark ? '#56b6d6' : '#3b82f6',
+        dark: isDark ? '#3c7f95' : '#3375e3',
+        contrastText: '#000000',
       },
       success: {
         main: isDark ? '#3fae72' : '#16a34a',
+        dark: isDark ? '#34965f' : '#168c42',
+        contrastText: '#000000',
       },
       divider: colors.border,
       background: {
@@ -151,6 +156,10 @@ export function createAppTheme(mode: PaletteMode): Theme {
   const primary = isDark ? '#8B7CFF' : '#6355E8';
   const primaryLight = isDark ? '#ACA2FF' : '#6C5CE2';
   const primaryDark = isDark ? '#6656E8' : '#493BCB';
+  // Dark-mode accents are bright surfaces. Use dark labels and keep every
+  // gradient stop bright enough, including the hover/fallback backgrounds.
+  const primaryContrastText = isDark ? '#070912' : '#FFFFFF';
+  const primaryButtonEnd = isDark ? primary : primaryDark;
   const secondary = isDark ? '#31D2ED' : '#129DB8';
   const glass = isDark ? 'rgba(13, 17, 31, 0.82)' : 'rgba(255, 255, 255, 0.84)';
   const softShadow = isDark
@@ -167,12 +176,13 @@ export function createAppTheme(mode: PaletteMode): Theme {
         main: primary,
         light: primaryLight,
         dark: primaryDark,
-        contrastText: '#FFFFFF',
+        contrastText: primaryContrastText,
       },
       secondary: {
         main: secondary,
         light: isDark ? '#79E3F4' : '#3CBBD0',
-        dark: isDark ? '#10A8C3' : '#0B758A',
+        dark: isDark ? '#10A8C3' : '#0F91AA',
+        contrastText: '#171A2B',
       },
       error: {
         main: isDark ? '#FF8298' : '#C62847',
@@ -181,6 +191,8 @@ export function createAppTheme(mode: PaletteMode): Theme {
       },
       warning: {
         main: isDark ? '#F6BC66' : '#C67A13',
+        dark: isDark ? '#AC8347' : '#BC7412',
+        contrastText: '#171A2B',
       },
       info: {
         main: secondary,
@@ -190,7 +202,9 @@ export function createAppTheme(mode: PaletteMode): Theme {
         contrastText: '#171A2B',
       },
       success: {
-        main: isDark ? '#57D59B' : '#15885A',
+        // Filled success chips use small white labels in light mode. Keep
+        // their contrast above 4.5:1 (the previous green measured 4.46:1).
+        main: isDark ? '#57D59B' : '#148456',
       },
       divider: colors.border,
       background: {
@@ -343,12 +357,13 @@ export function createAppTheme(mode: PaletteMode): Theme {
             fontSize: '0.95rem',
           },
           containedPrimary: {
-            color: '#fff',
+            color: primaryContrastText,
             backgroundColor: primary,
-            backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 46%, ${primaryDark} 100%)`,
+            backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 46%, ${primaryButtonEnd} 100%)`,
             boxShadow: `0 10px 26px ${alpha(primary, isDark ? 0.28 : 0.22)}`,
             '&:hover': {
-              backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 38%, ${primaryDark} 100%)`,
+              backgroundColor: primaryButtonEnd,
+              backgroundImage: `linear-gradient(135deg, ${primaryLight} 0%, ${primary} 38%, ${primaryButtonEnd} 100%)`,
               boxShadow: `0 15px 34px ${alpha(primary, isDark ? 0.38 : 0.3)}`,
               transform: 'translateY(-1px)',
             },
@@ -459,9 +474,9 @@ export function createAppTheme(mode: PaletteMode): Theme {
           paper: {
             border: `1px solid ${colors.border}`,
             borderRadius: 24,
-            backgroundColor: glass,
+            // Dialog text must keep its contrast regardless of the page behind it.
+            backgroundColor: colors.surface,
             boxShadow: liftedShadow,
-            backdropFilter: 'blur(30px) saturate(145%)',
           },
         },
       },

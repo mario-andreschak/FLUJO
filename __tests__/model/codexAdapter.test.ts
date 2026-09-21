@@ -15,6 +15,7 @@ import type OpenAI from 'openai';
 import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 const codexCtorMock = jest.fn();
 const startThreadMock = jest.fn();
@@ -156,6 +157,24 @@ beforeEach(() => {
 });
 
 describe('CodexAdapter — thread setup', () => {
+  it('does not call or retry the SDK after archive authority is lost', async () => {
+    const lost = new FlowExecutionAuthorityError('Persona was deleted');
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(runStreamedMock).not.toHaveBeenCalled();
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates authority loss from SDK outcome persistence', async () => {
+    const lost = new FlowExecutionAuthorityError('Lease expired');
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => 'dispatch_lost',
+      onSdkRequestResult: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+  });
+
   it('configures the thread without forcing a sandbox mode', async () => {
     await new CodexAdapter().createCompletion(baseInput());
 
@@ -1251,4 +1270,37 @@ describe('CodexAdapter — SDK thread reuse', () => {
       expect.stringContaining('rewritten answer'),
     );
   });
+});
+
+
+it('steers a quiet Codex turn and requeues if its replacement turn rejects the input', async () => {
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  runStreamedMock.mockImplementationOnce(async (_text: unknown, { signal }: { signal: AbortSignal }) => ({
+    events: (async function* () {
+      yield { type: 'thread.started', thread_id: 'quiet-thread' };
+      entered();
+      await new Promise<void>(resolve => {
+        if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new Error('interrupted');
+    })(),
+  })).mockRejectedValueOnce(new Error('replacement input rejected'));
+  let pending = false;
+  let notify!: () => void;
+  const batch = {
+    messages: [{ id: 'quiet-correction', role: 'user' as const, content: 'Change direction', timestamp: 1, injected: true }],
+    beforeSend: jest.fn(async () => undefined), acknowledge: jest.fn(async () => undefined), requeue: jest.fn(),
+  };
+  const running = new CodexAdapter().createCompletion(baseInput({ steering: {
+    take: async () => { if (!pending) return undefined; pending = false; return batch; },
+    subscribe: listener => { notify = listener; return () => {}; },
+  } }));
+  const rejected = expect(running).rejects.toThrow('replacement input rejected');
+  await started; pending = true; notify();
+  await rejected;
+  expect(runStreamedMock).toHaveBeenCalledTimes(2);
+  expect(startThreadMock).toHaveBeenCalledTimes(1);
+  expect(batch.requeue).toHaveBeenCalledTimes(1);
+  expect(batch.acknowledge).not.toHaveBeenCalled();
 });

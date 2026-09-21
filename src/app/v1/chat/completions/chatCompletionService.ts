@@ -394,7 +394,7 @@ async function processPersonaChatCompletion(
       continueDebug,
       userTurn,
     }),
-    kind: 'assignment',
+    kind: 'interactive_chat',
     source: { kind: 'chat', sourceId: effectiveConvId },
     ...(target.behaviorSlotKey ? { behaviorSlotKey: target.behaviorSlotKey } : {}),
     relationKey: effectiveConvId,

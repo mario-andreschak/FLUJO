@@ -97,10 +97,13 @@ const FlowsPage = () => {
       withWorkspaceUrl(magicLinkPath({
         kind: 'flow-editor',
         id: flowId,
-        extra: authoringMode ? { authoringMode } : undefined,
+        extra: {
+          ...(authoringMode ? { authoringMode } : {}),
+          ...(returnTo ? { returnTo } : {}),
+        },
       })),
     );
-  }, [router]);
+  }, [router, returnTo]);
   
   // Generated draft (issue #14): an UNSAVED flow the builder edits via initialFlow.
   // It is deliberately NOT in `flows` — handleSaveFlow's create-vs-update check relies
@@ -150,11 +153,15 @@ const FlowsPage = () => {
 
   // Load flows on component mount and when selected flow changes
   useEffect(() => {
+    let cancelled = false;
     log.info('Loading flows');
     const loadFlows = async () => {
       setIsLoading(true);
       try {
-        const loadedFlows = await flowService.loadFlows();
+        // Persona creation/copy APIs also create ordinary Flows. A cached
+        // pre-creation gallery must not reject their valid editor deep links.
+        const loadedFlows = await flowService.loadFlows({ refresh: true });
+        if (cancelled) return;
         log.debug('Flows loaded successfully', { count: loadedFlows.length });
         setFlows(loadedFlows);
         
@@ -172,14 +179,16 @@ const FlowsPage = () => {
           }
         }
       } catch (error) {
+        if (cancelled) return;
         log.error('Error loading flows', error);
         showSnackbar(t('flows.page.loadFailed'), 'error');
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     loadFlows();
+    return () => { cancelled = true; };
   }, [selectedFlow, draftFlow, t]);
   
   // Handle flow selection
@@ -191,8 +200,15 @@ const FlowsPage = () => {
 
   const handleResolveFlowDeepLink = useCallback((flowId: string) => {
     setBuilderEntryMode(requestedAuthoringMode);
-    enterEditor(flowId, requestedAuthoringMode);
-  }, [enterEditor, requestedAuthoringMode]);
+    setSelectedFlow(flowId);
+    // The link is already a history entry. Preserve its Persona return path
+    // and avoid adding an identical entry that traps Back in the editor.
+    if (searchParams.get('mode') !== 'edit') {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('mode', 'edit');
+      router.replace(withWorkspaceUrl(`/flows?${params.toString()}`));
+    }
+  }, [requestedAuthoringMode, searchParams, router]);
 
   // Start a new chat conversation bound to a flow (#148). The Chat page reads
   // the `?flow=<id>` param, creates a conversation for it, then clears the param.

@@ -1,6 +1,8 @@
 /** @jest-environment jsdom */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { I18nProvider } from '@/frontend/contexts/I18nContext';
+import { LOCALE_STORAGE_KEY } from '@/frontend/i18n/locales';
 
 const listMock = jest.fn();
 const getMock = jest.fn();
@@ -19,6 +21,12 @@ const createWorkItemMock = jest.fn();
 const getWorkItemMock = jest.fn();
 const assignWorkItemMock = jest.fn();
 const controlWorkItemMock = jest.fn();
+const deleteWorkItemMock = jest.fn();
+const updateWorkItemMock = jest.fn();
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
+beforeAll(() => { HTMLElement.prototype.scrollIntoView = jest.fn(); });
+afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; });
 
 const mockDiscoveryState = {
   servers: [
@@ -62,8 +70,8 @@ jest.mock('@/frontend/services/personas', () => ({
     unpinMemoryFromCore: jest.fn(),
     createWorkItem: (...args: unknown[]) => createWorkItemMock(...args),
     getWorkItem: (...args: unknown[]) => getWorkItemMock(...args),
-    updateWorkItem: jest.fn(),
-    deleteWorkItem: jest.fn(),
+    updateWorkItem: (...args: unknown[]) => updateWorkItemMock(...args),
+    deleteWorkItem: (...args: unknown[]) => deleteWorkItemMock(...args),
     assignWorkItem: (...args: unknown[]) => assignWorkItemMock(...args),
     controlWorkItem: (...args: unknown[]) => controlWorkItemMock(...args),
     activateBehavior: jest.fn(),
@@ -273,6 +281,9 @@ const stuckDetail = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  localStorage.removeItem(LOCALE_STORAGE_KEY);
+  deleteWorkItemMock.mockReset().mockResolvedValue(undefined);
+  updateWorkItemMock.mockReset().mockResolvedValue(undefined);
   listMock.mockResolvedValue([persona]);
   getMock.mockResolvedValue(detail);
   rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [detail.roleVersion] });
@@ -375,6 +386,72 @@ it('prevents duplicate recovery clicks while pending and surfaces backend failur
   expect(screen.getByRole('button', { name: 'Repair and continue' })).toBeInTheDocument();
 });
 
+it('does not report a saved App connection as missing while discovery is pending', async () => {
+  const savedServers = mockDiscoveryState.servers;
+  mockDiscoveryState.servers = [];
+  mockDiscoveryState.loading = true;
+  try {
+    render(<PersonasDesk initialPersonaId="jim" />);
+    await screen.findByRole('heading', { name: 'Jim' });
+    fireEvent.click(screen.getByRole('tab', { name: /Apps/i }));
+    expect(await screen.findByRole('progressbar', { name: 'Checking connection…' })).toBeInTheDocument();
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText(/This config is missing or disabled/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Connect' })).not.toBeInTheDocument();
+  } finally {
+    mockDiscoveryState.servers = savedServers;
+    mockDiscoveryState.loading = false;
+  }
+});
+
+it('links navigation to the named content panel without activating tabs on arrow focus', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  const overview = await screen.findByRole('tab', { name: 'Overview' });
+  const panel = screen.getByRole('tabpanel', { name: 'Overview' });
+  expect(panel).toHaveAttribute('tabindex', '0');
+  expect(panel).toHaveAttribute('aria-labelledby', overview.id);
+  expect(overview).toHaveAttribute('aria-controls', panel.id);
+
+  await act(async () => { overview.focus(); });
+  fireEvent.keyDown(overview, { key: 'ArrowRight' });
+  const setup = screen.getByRole('tab', { name: 'Setup' });
+  expect(setup).toHaveFocus();
+  expect(overview).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('tabpanel', { name: 'Overview' })).toBe(panel);
+
+  fireEvent.click(setup);
+  expect(screen.getByRole('tabpanel', { name: 'Setup' })).toBe(panel);
+  expect(panel).toHaveAttribute('aria-labelledby', setup.id);
+  expect(setup).toHaveFocus();
+
+  const apps = screen.getByRole('tab', { name: 'Apps' });
+  fireEvent.click(apps);
+  expect(screen.getByRole('tabpanel', { name: 'Apps' })).toBe(panel);
+  expect(panel).toHaveAttribute('aria-labelledby', apps.id);
+  for (const tab of within(apps.closest('[role="tablist"]') as HTMLElement).getAllByRole('tab')) {
+    expect(tab.id).not.toBe('');
+    expect(tab).toHaveAttribute('aria-controls', panel.id);
+  }
+  expect(within(panel).getByRole('radiogroup', { name: 'MCP server' })).toBeInTheDocument();
+});
+
+it('keeps focus on Setup and Apps navigation instead of the embedded App search', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  await screen.findByRole('heading', { name: 'Jim' });
+  const setup = screen.getByRole('tab', { name: 'Setup' });
+  await act(async () => { setup.focus(); });
+  fireEvent.click(setup);
+  await screen.findByRole('radiogroup', { name: 'MCP server' });
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(setup).toHaveFocus();
+
+  const apps = screen.getByRole('tab', { name: 'Apps' });
+  await act(async () => { apps.focus(); });
+  fireEvent.click(apps);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(apps).toHaveFocus();
+});
+
 it('shows exact account identity and launches only through a grant-scoped descriptor', async () => {
   render(<PersonasDesk initialPersonaId="jim" />);
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
@@ -395,6 +472,76 @@ it('shows exact account identity and launches only through a grant-scoped descri
     uri: 'ui://github/dashboard',
   });
   expect(screen.getByText(/never add tools or permissions/i)).toBeInTheDocument();
+});
+
+it('keeps App tool drafts and reports a failed save inside the dialog before retrying', async () => {
+  configureAppMock.mockRejectedValueOnce(new Error('The App changed. Review its current access before saving.'));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: /Apps/i }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Configure tools' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Tools for github-jim' });
+  const tools = within(dialog);
+  fireEvent.click(tools.getByRole('checkbox', { name: 'Toggle Delete issue' }));
+  fireEvent.click(tools.getByRole('button', {
+    name: /Fixed parameters for List issues Configure values hidden from the model/,
+  }));
+  fireEvent.click(tools.getByRole('checkbox', { name: /owner/ }));
+  fireEvent.change(tools.getByRole('textbox', { name: 'Fixed value for list_issues.owner' }), {
+    target: { value: '@app.name' },
+  });
+  fireEvent.click(tools.getByRole('button', { name: 'Save' }));
+  expect(await tools.findByRole('alert')).toHaveTextContent(
+    'The App changed. Review its current access before saving.',
+  );
+  expect(tools.getByRole('alert')).toHaveFocus();
+  expect(tools.getByRole('checkbox', { name: 'Toggle Delete issue' })).not.toBeChecked();
+  expect(tools.getByRole('textbox', { name: 'Fixed value for list_issues.owner' })).toHaveValue('@app.name');
+  fireEvent.click(tools.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(configureAppMock).toHaveBeenCalledTimes(2);
+  for (const call of configureAppMock.mock.calls) {
+    expect(call).toEqual(['jim', 'appgrant_jim', {
+      mcpServerName: 'github-jim',
+      enabledTools: ['list_issues'],
+      toolParameterPresets: { list_issues: { owner: '@app.name' } },
+      expectedUpdatedAt: 4,
+    }]);
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Configure tools' }));
+  expect(within(await screen.findByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('localizes App conflicts and fixed-parameter controls without replacing an open draft revision', async () => {
+  localStorage.setItem(LOCALE_STORAGE_KEY, 'de');
+  configureAppMock.mockRejectedValue(Object.assign(new Error('The Persona App selection changed in another request.'), {
+    code: 'PERSONA_APP_STALE_WRITE',
+  }));
+  render(<I18nProvider><PersonasDesk initialPersonaId="jim" /></I18nProvider>);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Apps' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Werkzeuge einrichten' }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Werkzeuge für github-jim' }));
+  fireEvent.click(dialog.getByRole('checkbox', { name: /Delete issue/ }));
+  fireEvent.click(dialog.getByRole('button', { name: /Feste Parameter für List issues/ }));
+  fireEvent.click(dialog.getByRole('checkbox', { name: /owner/ }));
+  fireEvent.change(dialog.getByRole('textbox', { name: 'Fester Wert für list_issues.owner' }), {
+    target: { value: '@app.name' },
+  });
+  expect(dialog.getByText('1 fester Parameter')).toBeInTheDocument();
+  expect(dialog.getByText(/Verwende \$\{global:NAME\}/)).toBeInTheDocument();
+  getMock.mockResolvedValue({ ...detail, appGrants: detail.appGrants.map(grant => ({ ...grant, updatedAt: 5 })) });
+  fireEvent.click(dialog.getByRole('button', { name: 'Speichern' }));
+  const alert = await dialog.findByRole('alert');
+  expect(alert).toHaveTextContent('Diese App wurde an anderer Stelle geändert. Deine Auswahl bleibt erhalten.');
+  expect(alert).toHaveFocus();
+  expect(screen.queryByText('The Persona App selection changed in another request.')).not.toBeInTheDocument();
+  expect(dialog.getByRole('textbox', { name: 'Fester Wert für list_issues.owner' })).toHaveValue('@app.name');
+  fireEvent.click(dialog.getByRole('button', { name: 'Speichern' }));
+  await waitFor(() => expect(configureAppMock).toHaveBeenCalledTimes(2));
+  expect(configureAppMock).toHaveBeenLastCalledWith('jim', 'appgrant_jim', expect.objectContaining({
+    expectedUpdatedAt: 4, enabledTools: ['list_issues'], toolParameterPresets: { list_issues: { owner: '@app.name' } },
+  }));
+  await waitFor(() => expect(dialog.getByRole('button', { name: 'Abbrechen' })).toBeEnabled());
 });
 
 it('configures Persona Core tools and @-aware fixed parameters on a grant', async () => {
@@ -592,6 +739,18 @@ it('makes full activity history reachable from the persona tabs', async () => {
   expect(replaceMock).toHaveBeenLastCalledWith(expect.stringContaining('area=history'));
 });
 
+it('explains why a finished conversation can still need review without claiming task success', async () => {
+  getMock.mockResolvedValue({ ...detail, presentation: { ...detail.presentation, history: [{
+    key: 'history-unverified', kind: 'interactive_chat', origin: 'user_chat', outcome: 'needs_attention',
+    occurredAt: 1, summary: 'Conversation', recordLinks: [{ kind: 'conversation', id: 'conversation-review' }],
+    advanced: { activityKind: 'interactive_chat', sourceKind: 'chat', status: 'completed' },
+  }] } });
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Activity history' }));
+  expect(await screen.findByText(/The run finished, but successful completion of the requested work was not confirmed/)).toBeInTheDocument();
+  expect(screen.getByText('Needs attention')).toBeInTheDocument();
+});
+
 it('discovers externally started work while the persona detail was idle', async () => {
   render(<PersonasDesk initialPersonaId="jim" />);
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
@@ -654,6 +813,135 @@ it('shows what finished work produced and a plain route back to its record', asy
   expect(await screen.findByText('The launch report is ready for review.')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Open chat' }))
     .toHaveAttribute('href', expect.stringContaining('conversation_result'));
+});
+
+function removableTaskDetail() {
+  const item = {
+    schemaVersion: 1, id: 'work_remove', personaId: 'jim', title: 'A saved draft',
+    status: 'open', priority: 'normal', dependencyIds: [], createdAt: 30, updatedAt: 31,
+  };
+  return { ...detail, workItems: [item], presentation: { ...detail.presentation, tasks: [{
+    id: item.id, title: item.title, state: 'ready', priority: item.priority,
+    blockerTitles: [], expectedUpdatedAt: item.updatedAt,
+  }] } };
+}
+
+it('cancels Task deletion without a browser confirm or request and restores focus', async () => {
+  getMock.mockResolvedValue(removableTaskDetail());
+  const nativeConfirm = jest.spyOn(window, 'confirm');
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: /Tasks/i }));
+  const trigger = screen.getByRole('button', { name: 'Delete' });
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole('dialog', { name: 'Delete “A saved draft”?' });
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(trigger).toHaveFocus();
+  expect(deleteWorkItemMock).not.toHaveBeenCalled();
+  expect(nativeConfirm).not.toHaveBeenCalled();
+  nativeConfirm.mockRestore();
+});
+
+it('keeps failed deletion reviewable, then prevents duplicate requests and focuses New Task after success', async () => {
+  getMock.mockResolvedValue(removableTaskDetail());
+  deleteWorkItemMock.mockRejectedValueOnce(new Error('Task changed. Please retry.'));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: /Tasks/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  let dialog = screen.getByRole('dialog', { name: 'Delete “A saved draft”?' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Task changed. Please retry.');
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Delete' })).toBeEnabled());
+  let finish!: () => void;
+  deleteWorkItemMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  dialog = screen.getByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(deleteWorkItemMock).toHaveBeenCalledTimes(2);
+  expect(deleteWorkItemMock).toHaveBeenLastCalledWith('jim', 'work_remove');
+  getMock.mockResolvedValue(detail);
+  await act(async () => { finish(); });
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'New Task' })).toHaveFocus();
+});
+
+it('keeps an unsaved Task draft available after the server rejects saving it', async () => {
+  createWorkItemMock.mockRejectedValueOnce(new Error('Please retry saving.'));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: /Tasks/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'New Task' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: /Title/ }), { target: { value: 'Keep my draft' } });
+  expect(within(dialog).getByRole('combobox', { name: 'Blockers' })).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Please retry saving.');
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled());
+  expect(within(dialog).getByRole('textbox', { name: /Title/ })).toHaveValue('Keep my draft');
+});
+
+it('localizes a stale Task save and retains both the draft and its inspected version', async () => {
+  localStorage.setItem(LOCALE_STORAGE_KEY, 'de');
+  const original = removableTaskDetail();
+  getMock.mockResolvedValue(original);
+  updateWorkItemMock.mockRejectedValue(Object.assign(new Error('WorkItem changed since it was inspected.'), {
+    code: 'PERSONA_WORK_ITEM_CHANGED',
+  }));
+  render(<I18nProvider><PersonasDesk initialPersonaId="jim" /></I18nProvider>);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Aufgaben' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Aufgabe bearbeiten' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: /Titel/ }), { target: { value: 'Mein Entwurf' } });
+  getMock.mockResolvedValue({ ...original, workItems: original.workItems.map(item => ({ ...item, updatedAt: 32 })) });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Speichern' }));
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Diese Aufgabe wurde an anderer Stelle geändert.');
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Speichern' })).toBeEnabled());
+  expect(within(dialog).getByRole('textbox', { name: /Titel/ })).toHaveValue('Mein Entwurf');
+  expect(screen.queryByText('WorkItem changed since it was inspected.')).not.toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Speichern' }));
+  await waitFor(() => expect(updateWorkItemMock).toHaveBeenCalledTimes(2));
+  expect(updateWorkItemMock).toHaveBeenLastCalledWith('jim', 'work_remove', expect.objectContaining({
+    title: 'Mein Entwurf', expectedUpdatedAt: 31,
+  }));
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Abbrechen' })).toBeEnabled());
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Abbrechen' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(screen.getByText(/Diese Aufgabe wurde an anderer Stelle geändert\./)).toBeInTheDocument();
+});
+
+it('keeps a Task save in view until its pending request finishes', async () => {
+  let finish!: (value: unknown) => void;
+  createWorkItemMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<PersonasDesk initialPersonaId="jim" />);
+  fireEvent.click(await screen.findByRole('tab', { name: /Tasks/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'New Task' }));
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: /Title/ }), { target: { value: 'Save once' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+  fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' });
+  expect(dialog).toBeInTheDocument();
+  expect(createWorkItemMock).toHaveBeenCalledTimes(1);
+  await act(async () => finish(undefined));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('localizes generated History labels while preserving an identical owner-written title', async () => {
+  localStorage.setItem(LOCALE_STORAGE_KEY, 'de');
+  const base = { kind: 'assignment', origin: 'assignment', outcome: 'completed', occurredAt: 1,
+    summary: 'Assigned task', recordLinks: [], advanced: { activityKind: 'assignment', sourceKind: 'assignment', status: 'completed' } };
+  getMock.mockResolvedValue({ ...detail, presentation: { ...detail.presentation, history: [
+    { ...base, key: 'generated', summaryKind: 'assignment' },
+    { ...base, key: 'owner' },
+  ] } });
+  render(<I18nProvider><PersonasDesk initialPersonaId="jim" /></I18nProvider>);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Aktivitätsverlauf' }));
+  expect(await screen.findByText('Aufgabe', { selector: 'p' })).toBeInTheDocument();
+  expect(screen.getByText('Assigned task', { selector: 'p' })).toBeInTheDocument();
 });
 
 it('offers Pause and Stop for active work from the Persona desk', async () => {

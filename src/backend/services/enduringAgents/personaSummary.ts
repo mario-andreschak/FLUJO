@@ -144,7 +144,9 @@ export async function listPersonaSummaries(
   const personas = await listPersonas();
   const start = after === null
     ? 0
-    : personas.findIndex((persona) => persona.id > after);
+    // Store records use localeCompare; code-unit comparison can rewind a
+    // cursor when generated IDs contain both uppercase and lowercase letters.
+    : personas.findIndex((persona) => persona.id.localeCompare(after) > 0);
   const pageStart = start < 0 ? personas.length : start;
   const page = personas.slice(pageStart, pageStart + pageSize);
   const hasMore = pageStart + page.length < personas.length;

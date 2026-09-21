@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -6,7 +7,7 @@ import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
 import { stableEnduringAgentId } from './ids';
-import { getPersonaRuntimeClock } from './runtimeClock';
+import { getPersonaRuntimeClock, getPersonaFilesystemClock, type PersonaRuntimeClock } from './runtimeClock';
 import {
   ensureWorkspaceDirs,
   getCurrentWorkspace,
@@ -14,6 +15,13 @@ import {
 } from '@/utils/workspace';
 
 const runtimeClock = getPersonaRuntimeClock();
+const systemClock = getPersonaFilesystemClock();
+// A paused/accelerated actor clock cannot drive physical filesystem contention.
+// The context is shared across route bundles and covers acquisition, cleanup and
+// nested Persona locks for the complete admitted mutation/capture.
+const systemLockTime = globalThis.__flujo_filesystem_lock_system_time
+  ??= new AsyncLocalStorage<boolean>();
+const clockForLock = (): PersonaRuntimeClock => systemLockTime.getStore() ? systemClock : runtimeClock;
 
 const LOCK_ROOT_SEGMENTS = ['.runtime-locks', 'enduring-agents'] as const;
 const LOCK_ACQUIRE_TIMEOUT_MS = 15_000;
@@ -57,6 +65,7 @@ const defaultProcessBirthProbeRunner: ProcessBirthProbeRunner = async (
 let processBirthProbeRunner = defaultProcessBirthProbeRunner;
 
 declare global {
+  var __flujo_filesystem_lock_system_time: AsyncLocalStorage<boolean> | undefined;
   // Next can evaluate this module in multiple route bundles in one process.
   // Sharing the incarnation prevents one bundle mistaking another bundle with
   // the same PID for a stale process after a hot reload.
@@ -70,6 +79,7 @@ declare global {
     IssuedRuntimeLockScope
   > | undefined;
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
+  var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
 }
 
 const PROCESS_INSTANCE_ID = global.__flujo_enduring_agent_process_instance_id ??= randomUUID();
@@ -178,7 +188,7 @@ export class PersonaRuntimeLockLostError extends Error {
 }
 
 function delay(ms: number): Promise<void> {
-  return runtimeClock.sleep(ms);
+  return clockForLock().sleep(ms);
 }
 
 async function ensureRuntimeLockRoot(): Promise<string> {
@@ -510,7 +520,7 @@ export async function initializePersonaRuntimeLockProcessIdentity(): Promise<voi
 async function getProcessBirthMarker(pid: number): Promise<string | null> {
   if (pid === process.pid) return getOwnProcessBirthMarkerV2();
   const cached = processBirthCache.get(pid);
-  if (cached && runtimeClock.monotonicNow() - cached.checkedAt < PROCESS_BIRTH_CACHE_TTL_MS) {
+  if (cached && clockForLock().monotonicNow() - cached.checkedAt < PROCESS_BIRTH_CACHE_TTL_MS) {
     return cached.marker;
   }
   const existing = processBirthInFlight.get(pid);
@@ -518,7 +528,7 @@ async function getProcessBirthMarker(pid: number): Promise<string | null> {
 
   const lookup = queryProcessBirthMarker(pid)
     .then((marker) => {
-      processBirthCache.set(pid, { checkedAt: runtimeClock.monotonicNow(), marker });
+      processBirthCache.set(pid, { checkedAt: clockForLock().monotonicNow(), marker });
       return marker;
     })
     .finally(() => {
@@ -611,7 +621,7 @@ async function isOwnerProcessAlive(
     if (current?.startsWith('dead:')) {
       current = await queryProcessBirthMarker(owner.pid);
       processBirthCache.set(owner.pid, {
-        checkedAt: runtimeClock.monotonicNow(),
+        checkedAt: clockForLock().monotonicNow(),
         marker: current,
       });
     }
@@ -627,7 +637,7 @@ async function isOwnerProcessAlive(
     // cached match is safe but a cached mismatch is not.
     currentBirthMarker = await queryProcessBirthMarker(owner.pid);
     processBirthCache.set(owner.pid, {
-      checkedAt: runtimeClock.monotonicNow(),
+      checkedAt: clockForLock().monotonicNow(),
       marker: currentBirthMarker,
     });
   }
@@ -694,7 +704,7 @@ async function installCandidateLockWithRetry(
   lockPath: string,
   owner: LockOwnerRecord,
 ): Promise<boolean> {
-  const startedAt = runtimeClock.monotonicNow();
+  const startedAt = clockForLock().monotonicNow();
   while (true) {
     try {
       return await installCandidateLock(lockRoot, lockPath, owner);
@@ -702,7 +712,7 @@ async function installCandidateLockWithRetry(
       const code = (error as NodeJS.ErrnoException).code;
       if (
         !['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '')
-        || runtimeClock.monotonicNow() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS
+        || clockForLock().monotonicNow() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS
       ) throw error;
       await delay(LOCK_RETRY_MS);
     }
@@ -711,7 +721,7 @@ async function installCandidateLockWithRetry(
 
 function backgroundDelay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = runtimeClock.setTimer(resolve, ms);
+    const timer = clockForLock().setTimer(resolve, ms);
     timer.unref();
   });
 }
@@ -761,7 +771,7 @@ async function withRecoveryIntent<T>(
     pid: process.pid,
     ...(processBirthMarkerV2 ? { processBirthMarkerV2 } : {}),
     workspace: getCurrentWorkspace(),
-    acquiredAt: runtimeClock.now(),
+    acquiredAt: clockForLock().now(),
     targetOwnerId: target.ownerId,
     targetProcessInstanceId: target.processInstanceId,
     targetPid: target.pid,
@@ -874,10 +884,10 @@ async function acquireFilesystemLock(personaId: string): Promise<{
     pid: process.pid,
     ...(processBirthMarkerV2 ? { processBirthMarkerV2 } : {}),
     workspace: getCurrentWorkspace(),
-    acquiredAt: runtimeClock.now(),
+    acquiredAt: clockForLock().now(),
   };
   ACTIVE_OWNER_IDS.add(owner.ownerId);
-  const acquireStartedAt = runtimeClock.monotonicNow();
+  const acquireStartedAt = clockForLock().monotonicNow();
   let canonicalInstalled = false;
 
   try {
@@ -900,7 +910,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
           await cleanupAbandonmentMarker(abandonmentMarkerPath(lockPath, recovery.ownerId));
         }));
       if (liveRecoveries.length > 0) {
-        if (runtimeClock.monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+        if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
           throw new PersonaRuntimeLockTimeoutError(personaId);
         }
         await delay(LOCK_RETRY_MS);
@@ -968,7 +978,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         });
         continue;
       }
-      if (runtimeClock.monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+      if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
         throw new PersonaRuntimeLockTimeoutError(personaId);
       }
       await delay(LOCK_RETRY_MS);
@@ -1092,4 +1102,114 @@ export function withRoleDefinitionRuntimeLock<T>(
     }),
     task,
   );
+}
+
+const WORKSPACE_CAPTURE_ADMISSION_LOCK = '.workspace-capture-admission';
+const WORKSPACE_WRITER_PREFIX = '.workspace-capture-writer-';
+const WORKSPACE_WRITER_LOCK = /^\.workspace-capture-writer-[0-9a-f-]{36}\.lock$/;
+const workspaceWriterAdmissionChains = globalThis.__flujo_workspace_writer_admission_chains
+  ??= new Map<string, Promise<void>>();
+
+/** Only one local registration needs to contend for the filesystem gate. */
+function registerWorkspaceWriter(task: () => Promise<void>): Promise<void> {
+  const key = getWorkspaceDbDir();
+  const previous = workspaceWriterAdmissionChains.get(key) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(task);
+  workspaceWriterAdmissionChains.set(key, pending);
+  return pending.finally(() => {
+    if (workspaceWriterAdmissionChains.get(key) === pending) workspaceWriterAdmissionChains.delete(key);
+  });
+}
+
+/**
+ * Cross-process half of workspace mutation admission. This intentionally uses
+ * the filesystem primitive, not runInWriteChain: the workspace mutation gate
+ * calls it before entering a domain queue, and recursively entering that gate
+ * here would deadlock. Nested writes are handled by the gate's async context.
+ * Local registrations queue before competing with other processes. A burst of
+ * writes must not make every local writer poll the same lock until its timeout.
+ * Only registration is serialized; admitted tasks retain independent writer
+ * locks and run concurrently, so capture still drains every complete mutation.
+ */
+export async function withWorkspaceProcessMutation<T>(task: () => Promise<T>): Promise<T> {
+  return systemLockTime.run(true, async () => {
+    let writer: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+    try {
+      await registerWorkspaceWriter(async () => {
+        const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+        try {
+          await admission.lock.assertOwned();
+          writer = await acquireFilesystemLock(`${WORKSPACE_WRITER_PREFIX}${randomUUID()}`);
+        } finally {
+          await admission.release();
+        }
+      });
+      await writer!.lock.assertOwned();
+      return await task();
+    } finally {
+      await writer?.release();
+    }
+  });
+}
+
+/**
+ * Close cross-process admission and drain already admitted writers. All source
+ * writers must use withWorkspaceProcessMutation for this boundary to be a
+ * coherent capture. Unregistered/older processes and arbitrary external file
+ * writes are outside this protocol. Call outside any admitted mutation.
+ *
+ * A crashed writer is retired only by the existing birth-identity and ownership
+ * protocol. An old timestamp, probe failure or malformed owner is never enough
+ * to declare a live writer dead. The capture retains admission until its task
+ * has settled, including on abort, so a cancelled read cannot overlap new writes.
+ */
+export async function withWorkspaceProcessSnapshot<T>(
+  task: (lock: PersonaRuntimeLock) => Promise<T>,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  return systemLockTime.run(true, async () => {
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid workspace capture timeout.');
+    options.signal?.throwIfAborted();
+    const started = clockForLock().monotonicNow();
+    const admission = await acquireFilesystemLock(WORKSPACE_CAPTURE_ADMISSION_LOCK);
+    const check = async () => {
+      options.signal?.throwIfAborted();
+      if (clockForLock().monotonicNow() - started >= timeoutMs) {
+        const error = new Error('Timed out waiting for workspace processes to finish writing.');
+        error.name = 'WorkspaceSnapshotTimeoutError';
+        throw error;
+      }
+      await admission.lock.assertOwned();
+    };
+    try {
+      const root = await ensureRuntimeLockRoot();
+      while (true) {
+        await check();
+        const writers = (await fs.readdir(root)).filter((name) => WORKSPACE_WRITER_LOCK.test(name));
+        let live = false;
+        for (const name of writers) {
+          await check();
+          const owner = await readOwner(path.join(root, name));
+          if (!owner) continue;
+          if (owner.workspace !== getCurrentWorkspace()) throw new Error('Workspace writer has foreign ownership.');
+          const abandoned = await listAbandonedOwnerIds(root, path.join(root, name));
+          if (await isOwnerProcessAlive(owner, abandoned)) {
+            live = true;
+            continue;
+          }
+          // Use the same conditional recovery protocol as runtime locks, rather
+          // than unlinking a filename after a liveness observation.
+          const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+          await retired.release();
+        }
+        if (!live) break;
+        await clockForLock().sleep(LOCK_RETRY_MS);
+      }
+      await check();
+      return await task(admission.lock);
+    } finally {
+      await admission.release();
+    }
+  });
 }

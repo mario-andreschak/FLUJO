@@ -123,13 +123,12 @@ export async function executeBehaviorToolCall(
     }
     const attribution = sharedState.personaAttribution;
     const executionAuthority = sharedState.executionAuthority;
-    const commitWhileCurrent = executionAuthority?.commitWhileCurrent;
     if (
       !attribution?.activityId
       || !attribution.behaviorRevisionId
       || attribution.personaId !== target.personaId
       || !executionAuthority
-      || !commitWhileCurrent
+      || !executionAuthority.commitPersonaMutation
     ) {
       return { success: false, error: 'Behavior tool is not authorized for this Persona Activity.' };
     }
@@ -163,6 +162,9 @@ export async function executeBehaviorToolCall(
 
     await executionAuthority.assertCurrent();
     durablePin = await getBehaviorCallPin(pinId) ?? undefined;
+    if (durablePin?.compactedAt !== undefined) {
+      return { success: false, error: 'This Behavior call is archived; its detailed result has expired.' };
+    }
     if (durablePin?.status === 'completed') {
       return {
         success: true,
@@ -189,15 +191,16 @@ export async function executeBehaviorToolCall(
         target.behaviorId,
       );
       await executionAuthority.assertCurrent();
-      durablePin = await commitWhileCurrent(() => createBehaviorCallPin({
+      durablePin = await createBehaviorCallPin({
         personaId: target.personaId,
         activityId: attribution.activityId!,
         parentBehaviorRevisionId: attribution.behaviorRevisionId!,
         revision,
         callKey,
-      }));
+      }, executionAuthority);
     }
     await executionAuthority.assertCurrent();
+    if (!durablePin.flowSnapshot) throw new Error('Behavior call snapshot is unavailable.');
 
     const { runFlow } = await import('../runFlow');
     const result = await runFlow({
@@ -219,14 +222,10 @@ export async function executeBehaviorToolCall(
     await executionAuthority.assertCurrent();
     if (result.error || result.status === 'error') {
       const message = result.error?.message ?? 'Behavior Flow execution failed.';
-      await commitWhileCurrent(() => (
-        completeBehaviorCallPin(durablePin!, 'error', message)
-      ));
+      await completeBehaviorCallPin(durablePin, 'error', executionAuthority, message);
       return { success: false, error: message };
     }
-    await commitWhileCurrent(() => (
-      completeBehaviorCallPin(durablePin!, 'completed', undefined, result.outputText)
-    ));
+    await completeBehaviorCallPin(durablePin, 'completed', executionAuthority, undefined, result.outputText);
     return {
       success: true,
       data: {
@@ -239,14 +238,12 @@ export async function executeBehaviorToolCall(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (durablePin && authority?.commitWhileCurrent) {
+    if (durablePin && authority?.commitPersonaMutation) {
       try {
-        await authority.commitWhileCurrent(async () => {
-          const { completeBehaviorCallPin } = await import(
-            '@/backend/services/enduringAgents/behaviorCallPins'
-          );
-          await completeBehaviorCallPin(durablePin!, 'error', message);
-        });
+        const { completeBehaviorCallPin } = await import(
+          '@/backend/services/enduringAgents/behaviorCallPins'
+        );
+        await completeBehaviorCallPin(durablePin, 'error', authority, message);
       } catch {
         // A lost fence intentionally prevents a stale holder from mutating the pin.
       }

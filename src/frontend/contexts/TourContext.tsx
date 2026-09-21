@@ -453,7 +453,9 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (isLoading || !settingsHydrated || autoStartChecked.current) return;
     autoStartChecked.current = true;
-    if (settings.onboarding?.completed !== true) {
+    // A first visit may be a Persona/Role setup link. Do not redirect that
+    // explicit destination to the tour's home step or discard an open form.
+    if (settings.onboarding?.completed !== true && window.location.pathname === '/') {
       log.info('First run detected — auto-starting guided tour');
       startTour();
     }

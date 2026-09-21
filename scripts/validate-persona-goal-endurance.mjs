@@ -35,6 +35,40 @@ function stableValue(value) {
 
 const stableJson = value => JSON.stringify(stableValue(value));
 
+// The SDK cannot emit a completion after its process is killed while awaiting
+// a tool acknowledgement. Only this independently joined execution boundary
+// may substitute for completion in the deliberately killed live-model epoch.
+export function hasVerifiedCrashModelExecution({
+  mode, runId, epoch, activities, runtimeTurns, toolCalls, effects, audit,
+}) {
+  if (mode !== 'live' || epoch?.exitKind !== 'forced_after_effect') return false;
+  const activity = activities.find(value => value.id === epoch.crashActivityId);
+  if (!activity?.conversationId) return false;
+  const start = Date.parse(epoch.startedAt);
+  const end = Date.parse(epoch.endedAt);
+  return runtimeTurns.some(turn => turn.outcome === 'running'
+    && turn.operation === 'thread.runStreamed' && turn.adapter === 'codex-cli'
+    && turn.processEpochId === epoch.epochId && turn.processPid === epoch.pid
+    && turn.conversationId === activity.conversationId
+    && turn.timestamp >= Math.max(start, activity.createdAt) && turn.timestamp <= end
+    && toolCalls.some(call => call.conversationId === activity.conversationId
+      && typeof call.messageId === 'string' && call.messageId.startsWith('stream_codex_')
+      && typeof call.toolCallId === 'string' && call.toolCallId.length > 0
+      && call.toolName === 'goal-endurance__publish_campaign'
+      && typeof call.source === 'string' && /(^|\/)conversation-logs\//.test(call.source)
+      && !call.source.split('/').includes('..')
+      && /^[a-f0-9]{64}$/.test(call.sourceFileSha256 ?? '')
+      && Number.isSafeInteger(call.seq) && call.seq > 0
+      && call.timestamp >= turn.timestamp && call.timestamp <= end
+      && audit.some(event => event.type === 'publication_committed_ack_withheld'
+        && event.idempotencyKey === 'goal-endurance-publication:' + runId
+        && event.at >= call.timestamp && event.at <= end
+        && effects.some(effect => effect.id === event.publicationId
+          && effect.idempotencyKey === event.idempotencyKey
+          && effect.contentSha256 === event.contentSha256
+          && effect.publishedAt >= call.timestamp && effect.publishedAt <= event.at))));
+}
+
 async function readJsonLines(filename) {
   return (await fs.readFile(filename, 'utf8')).trim().split('\n')
     .filter(Boolean).map(line => JSON.parse(line));
@@ -102,7 +136,7 @@ export async function validatePersonaGoalEndurance({
   assert(identity.profile === expectedProfile
     && identity.profile === 'structured-tools', 'Capability profile mismatch or unsupported terminal execution.');
   assert(identity.authoritativeLiveModel === (identity.mode === 'live'), 'Live-model authority flag is inconsistent.');
-  assert(identity.verifierVersion === 'persona-goal-endurance-v1'
+  assert(identity.verifierVersion === 'persona-goal-endurance-v2'
     && identity.policyVersion === 'issue-505-endurance-metrics-v1', 'Evidence policy/verifier identity mismatch.');
   assert(validTime(identity.startedAt) && validTime(identity.endedAt)
     && Date.parse(identity.endedAt) >= Date.parse(identity.startedAt), 'Run timestamps are invalid.');
@@ -263,6 +297,38 @@ export async function validatePersonaGoalEndurance({
   assert(path.relative(agentRoot, path.join(root, 'trusted-verifier')).startsWith('..'), 'Trusted verifier evidence is inside the model-writable campaign root.');
 
   const activities = report.activities ?? [];
+  const setup = runtimeProvenance.setup ?? {};
+  const setupPersona = setup.persona?.record;
+  const setupVersion = setup.roleVersion?.record;
+  const setupDefinition = setup.roleDefinition?.record;
+  const persistedActivities = runtimeProvenance.activities ?? [];
+  const hasReceipt = (value, collection) => Boolean(value?.record
+    && typeof value.source === 'string'
+    && value.source.startsWith('workspaces/' + configuration.workspaceId + '/db/' + collection + '/')
+    && /^[a-f0-9]{64}$/.test(value.sourceFileSha256 ?? ''));
+  const ordinaryMarketingSetup = hasReceipt(setup.persona, 'personas')
+    && hasReceipt(setup.roleVersion, 'role-versions')
+    && hasReceipt(setup.roleDefinition, 'role-definitions')
+    && setupPersona.id === configuration.personaId
+    && setupPersona.name === configuration.personaName
+    && setupPersona.roleVersionId === configuration.roleVersionId
+    && setupVersion.id === configuration.roleVersionId
+    && setupVersion.name === configuration.roleName
+    && setupDefinition.id === setupVersion.roleDefinitionId
+    && setupDefinition.name === configuration.roleName
+    && setupDefinition.currentVersionId === setupVersion.id
+    && setupVersion.coreFlowTemplate === undefined
+    && persistedActivities.length > 0
+    && persistedActivities.every(value => hasReceipt(value, 'persona-activities')
+      && value.record.personaId === setupPersona.id
+      && value.record.coreFlowId === setupPersona.composition?.coreFlowRef
+      && value.record.instructionContext?.roleVersionId === setupVersion.id
+      && value.record.instructionContext?.roleName === setupVersion.name
+      && value.record.instructionContext?.personaName === setupPersona.name);
+  assert(ordinaryMarketingSetup, 'Persisted ordinary Marketing Agent setup does not match the claimed default configuration.');
+  assert(stableJson(persistedActivities.map(value => value.record).sort((a, b) => a.id.localeCompare(b.id)))
+    === stableJson([...activities].sort((a, b) => a.id.localeCompare(b.id))),
+  'Producer Activities differ from the parent-collected persisted source.');
   assert(Array.isArray(activities)
     && activities.some(activity => activity.id === epochs[1].crashActivityId)
     && activities.some(activity => activity.id === epochs[2].postRestartActivityId), 'Persisted Activity evidence does not match process checkpoints.');
@@ -288,7 +354,17 @@ export async function validatePersonaGoalEndurance({
         && epoch.pid === turn.processPid
         && turn.timestamp >= Date.parse(epoch.startedAt)
         && turn.timestamp <= Date.parse(epoch.endedAt)))
-    && new Set(completedRuntimeTurns.map(turn => turn.processEpochId)).size === 3
+    && epochs.every(epoch => completedRuntimeTurns.some(turn => turn.processEpochId === epoch.epochId)
+      || hasVerifiedCrashModelExecution({
+        mode: identity.mode,
+        runId: identity.runId,
+        epoch,
+        activities,
+        runtimeTurns,
+        toolCalls: runtimeProvenance.toolCalls ?? [],
+        effects: trustedState.effects,
+        audit: trustedAudit,
+      }))
     && (identity.mode !== 'live' || completedRuntimeTurns.every(turn =>
       turn.operation === 'thread.runStreamed'
       && turn.adapter === 'codex-cli'));
@@ -467,7 +543,7 @@ export async function validatePersonaGoalEndurance({
     oneOngoingGoal: goals.length === 1
       && goals[0].id === configuration.goalId
       && goals[0].goal?.completionPolicy === 'until_stopped',
-    ordinaryMarketingSetup: configuration.roleName === 'Marketing Agent'
+    ordinaryMarketingSetup: ordinaryMarketingSetup && configuration.roleName === 'Marketing Agent'
       && configuration.personaName === 'Frederik'
       && configuration.initialGoal === 'Make FLUJO known on the internet'
       && Array.isArray(checkpoints[0].observations?.initialAgentEntries)

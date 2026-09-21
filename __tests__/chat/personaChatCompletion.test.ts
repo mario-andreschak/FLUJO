@@ -183,7 +183,7 @@ describe('Persona chat completion dispatch', () => {
     expect(submitDispatchMock).toHaveBeenCalledWith({
       personaId: 'persona_support',
       idempotencyKey: 'client-retry-1',
-      kind: 'assignment',
+      kind: 'interactive_chat',
       source: { kind: 'chat', sourceId: 'conversation_1' },
       behaviorSlotKey: 'support_chat',
       relationKey: 'conversation_1',

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const mockLoadFlows = jest.fn();
 const mockListConversations = jest.fn();
@@ -7,6 +7,7 @@ const mockCreateConversation = jest.fn();
 const mockUpdateConversationPersonaTarget = jest.fn();
 const mockGetModelTurns = jest.fn();
 const mockGetModelTurn = jest.fn();
+let mockInitialConversationId: string | null = 'conversation-current';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
@@ -31,7 +32,7 @@ jest.mock('@/utils/storage', () => {
       }
       return React.useState(
         key === StorageKey.CURRENT_CONVERSATION_ID
-          ? 'conversation-current'
+          ? mockInitialConversationId
           : initialValue,
       );
     },
@@ -53,6 +54,10 @@ jest.mock('@/frontend/services/chat', () => {
     ChatApiError,
     chatService: {
       listConversations: (...args: unknown[]) => mockListConversations(...args),
+      listConversationPage: async (...args: unknown[]) => {
+        const items = await mockListConversations(...args);
+        return { items, total: items.length, hasMore: false };
+      },
       getConversation: (...args: unknown[]) => mockGetConversation(...args),
       getModelTurns: (...args: unknown[]) => mockGetModelTurns(...args),
       getModelTurn: (...args: unknown[]) => mockGetModelTurn(...args),
@@ -195,6 +200,7 @@ const detailedConversation = {
 
 describe('Talk conversation Agent switch terminology', () => {
   beforeEach(() => {
+    mockInitialConversationId = 'conversation-current';
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: jest.fn(),
@@ -213,6 +219,57 @@ describe('Talk conversation Agent switch terminology', () => {
     mockUpdateConversationPersonaTarget.mockReset();
     mockGetModelTurns.mockReset().mockResolvedValue({ turns: [] });
     mockGetModelTurn.mockReset();
+  });
+
+  it('keeps loading visible and preserves the composer while the Persona conversation opens', async () => {
+    mockInitialConversationId = null;
+    const personaConversation = {
+      ...conversationSummary,
+      flowId: null,
+      personaId: 'persona-ada',
+      messages: [],
+    };
+    let resolveList!: (items: typeof personaConversation[]) => void;
+    let resolveDetails!: (conversation: typeof personaConversation) => void;
+    mockListConversations.mockReturnValue(new Promise(resolve => { resolveList = resolve; }));
+    mockGetConversation.mockReturnValue(new Promise(resolve => { resolveDetails = resolve; }));
+
+    render(<Chat />);
+
+    expect(screen.getByText('Loading conversations…').closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByText('Loading chat…').closest('[role="status"]')).toHaveAttribute('aria-atomic', 'true');
+    expect(screen.queryByText(/Create a new conversation to start chatting|Select a conversation or create a new one/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('data-disabled', 'true');
+    fireEvent.change(screen.getByLabelText('Composer draft'), { target: { value: 'My first Persona question' } });
+
+    await act(async () => { resolveList([personaConversation]); });
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    expect(screen.queryByText('Loading conversations…')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading chat…')).toBeInTheDocument();
+    expect(screen.queryByText(/Create a new conversation to start chatting|Select a conversation or create a new one/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Composer draft')).toHaveValue('My first Persona question');
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('data-disabled', 'true');
+
+    await act(async () => { resolveDetails(personaConversation); });
+    await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('0'));
+    expect(screen.queryByText('Loading chat…')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Composer draft')).toHaveValue('My first Persona question');
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('data-disabled', 'false');
+  });
+
+  it('shows the first-conversation guidance only after an empty list has loaded', async () => {
+    mockInitialConversationId = null;
+    let resolveList!: (items: unknown[]) => void;
+    mockListConversations.mockReturnValue(new Promise(resolve => { resolveList = resolve; }));
+
+    render(<Chat />);
+
+    expect(screen.getByText('Loading chat…')).toBeInTheDocument();
+    expect(screen.queryByText('Create a new conversation to start chatting.')).not.toBeInTheDocument();
+    await act(async () => { resolveList([]); });
+    expect(await screen.findByText('Create a new conversation to start chatting.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading chat…')).not.toBeInTheDocument();
+    expect(mockGetConversation).not.toHaveBeenCalled();
   });
 
   it('renders the current transcript in Live and the archived snapshot in History', async () => {

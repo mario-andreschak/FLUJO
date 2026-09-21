@@ -42,6 +42,7 @@ import {
   getPersonaActivity,
   getPersonaLeaseRecord,
   listPersonaActivities,
+  listMemoryItems,
   listPersonaLeaseRecords,
   listPersonaMailboxItems,
   saveMemoryItem,
@@ -54,7 +55,10 @@ import {
   compactPersonaActivities,
   compactPersonaFlowDispatches,
   compactPersonaMailboxItems,
+  getBehaviorCallPinRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
+import { createBehaviorCallPin, completeBehaviorCallPin, listBehaviorCallPins } from '@/backend/services/enduringAgents/behaviorCallPins';
+import { applyRetention } from '@/backend/services/enduringAgents/retention';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { FEATURES } from '@/config/features';
 import {
@@ -705,10 +709,15 @@ async function completeWorkloadBatch(
 }
 
 async function compactRuntime(personaId: string, now: number) {
-  await withPersonaRuntimeLock(personaId, async () => {
+  await withPersonaRuntimeLock(personaId, async (lock) => {
     await compactPersonaMailboxItems(personaId, now);
     await compactPersonaActivities(personaId, now);
     await compactPersonaFlowDispatches(personaId, now);
+    await applyRetention(
+      await listBehaviorCallPins(personaId),
+      getBehaviorCallPinRetentionPolicy(await listPersonaActivities(personaId), lock),
+      now,
+    );
   });
 
   const before = await listPersonaLeaseRecords(personaId);
@@ -1423,10 +1432,21 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       let modelCalls = 0;
       const runFlowStub = async (input: FlowRunInput): Promise<FlowRunResult> => {
         debugActivity(`runFlow entered for ${input.personaAttribution?.activityId ?? 'unknown Activity'}`);
+        if (!input.executionAuthority || !input.personaAttribution?.activityId) {
+          throw new Error('Soak specialist persistence requires a real Activity fence.');
+        }
+        const call = await createBehaviorCallPin({
+          personaId,
+          activityId: input.personaAttribution.activityId,
+          parentBehaviorRevisionId: coreRevision.id,
+          revision: coreRevision,
+          callKey: 'soak-specialist',
+        }, input.executionAuthority);
         modelCalls += 1;
         const completion = await stubModel.createCompletion({} as never);
         const output = completion.completion.choices[0]?.message.content;
         const result = await flowResult(input, typeof output === 'string' ? output : '', clock.now());
+        await completeBehaviorCallPin(call, 'completed', input.executionAuthority, undefined, result.outputText);
         debugActivity(`runFlow completed for ${input.personaAttribution?.activityId ?? 'unknown Activity'}`);
         return result;
       };
@@ -1688,12 +1708,13 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       _setPersonaRuntimeClockForTests(clock);
 
       progressPhase = 'final-runtime-evidence';
-      const [activities, mailboxItems, leases, dispatches, runtime] = await Promise.all([
+      const [activities, mailboxItems, leases, dispatches, runtime, memories] = await Promise.all([
         listPersonaActivities(personaId),
         listPersonaMailboxItems(personaId),
         listPersonaLeaseRecords(personaId),
         dispatcher.list(personaId),
         inspectAndReconcilePersonaRuntime(personaId),
+        listMemoryItems(personaId),
       ]);
       const workloadReconciliation = reconcileWorkload({
         workload,
@@ -1948,7 +1969,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
           observed: {
             p95Ms: lastMetric.recallP95Ms,
             samples: RECALL_SAMPLES_PER_DAY,
-            memoryItems: lastMetric.collectionCounts.memoryItems ?? 0,
+            memoryItems: memories.length,
           },
           threshold: 'p95 is strictly less than 150 ms; the release-scale 50k fixture is validated by the controlled benchmark.',
           thresholdSource: 'Issue #459 acceptance criterion 3 and issue #489 required fix 6',
@@ -1976,7 +1997,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
             })),
             finalEventLogSegments: lastMetric.eventLogSegments,
           },
-          threshold: `Every reported collection has at most ${totalCollectionCap} total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50; missing or new uncontracted collections fail closed.`,
+          threshold: `Every reported collection has at most ${totalCollectionCap} total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50, behaviorCallPins<=200; missing or new uncontracted collections fail closed.`,
           thresholdSource: 'Issue #489 acceptance repair numeric contract (2026-09-06)',
           provenance: ['getPersonaStorageStats daily observations', 'strict sharded Activity scan', 'production lease-history pruning', 'daily pre-pruning SHA-256 proofs'],
         }),

@@ -203,7 +203,7 @@ const RecoverPersonaRuntimeResultSchema = z.object({
 }).strict();
 
 const PERSONA_RUNTIME_RECOVERY_RECEIPT_SCHEMA_VERSION = 1 as const;
-const PersonaRuntimeRecoveryReceiptSchema = z.object({
+export const PersonaRuntimeRecoveryReceiptSchema = z.object({
   schemaVersion: z.literal(PERSONA_RUNTIME_RECOVERY_RECEIPT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
   workspaceId: z.string().trim().min(1).max(256),

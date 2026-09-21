@@ -141,7 +141,11 @@ export async function previewPersonaExecution(
   });
 
   const behaviors = bindings
-    .filter((candidate) => candidate.slotKey !== 'primary')
+    .filter((candidate) => candidate.slotKey !== 'primary'
+      && candidate.slotKey !== 'maintain_memory'
+      && (!persona.composition?.behaviors || persona.composition.behaviors.some((behavior) => (
+        behavior.ref === candidate.id
+      ))))
     .map((candidate) => {
       const composed = persona.composition?.behaviors?.find((behavior) => (
         behavior.ref === candidate.id || behavior.slotKey === candidate.slotKey

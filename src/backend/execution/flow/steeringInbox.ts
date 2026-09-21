@@ -27,19 +27,47 @@ import { workspaceCacheKey } from '@/utils/workspace';
 
 const globalForInbox = globalThis as unknown as {
   __flujoSteeringInbox?: Map<string, FlujoChatMessage[]>;
+  __flujoSteeringListeners?: Map<string, Set<() => void>>;
 };
 const inbox: Map<string, FlujoChatMessage[]> =
   globalForInbox.__flujoSteeringInbox ?? (globalForInbox.__flujoSteeringInbox = new Map());
+const listeners = globalForInbox.__flujoSteeringListeners
+  ?? (globalForInbox.__flujoSteeringListeners = new Map<string, Set<() => void>>());
+
+function notify(key: string): void {
+  for (const listener of listeners.get(key) ?? []) {
+    // Enqueue is synchronous and must not inherit a provider callback's errors.
+    queueMicrotask(() => {
+      if (!listeners.get(key)?.has(listener)) return;
+      try { listener(); } catch { /* The subscriber owns its delivery errors. */ }
+    });
+  }
+}
+
+/** Capture the workspace at registration, including later notifications and cleanup. */
+export function subscribeSteeringMessages(conversationId: string, listener: () => void): () => void {
+  const key = workspaceCacheKey(conversationId);
+  const subscribers = listeners.get(key) ?? new Set<() => void>();
+  subscribers.add(listener);
+  listeners.set(key, subscribers);
+  if (inbox.get(key)?.length) notify(key);
+  return () => {
+    subscribers.delete(listener);
+    if (subscribers.size === 0) listeners.delete(key);
+  };
+}
 
 /** Append a steering message to the tail of a conversation's inbox (FIFO). */
 export function enqueueSteeringMessage(conversationId: string, message: FlujoChatMessage): void {
   const key = workspaceCacheKey(conversationId);
   const existing = inbox.get(key);
+  if (message.id && existing?.some(candidate => candidate.id === message.id)) return;
   if (existing) {
     existing.push(message);
   } else {
     inbox.set(key, [message]);
   }
+  notify(key);
 }
 
 /** How many messages are waiting. Cheap enough to call every loop iteration. */
@@ -75,7 +103,14 @@ export function requeueSteeringMessages(conversationId: string, messages: FlujoC
   if (messages.length === 0) return;
   const key = workspaceCacheKey(conversationId);
   const later = inbox.get(key) ?? [];
-  inbox.set(key, [...messages, ...later]);
+  const seen = new Set<string>();
+  inbox.set(key, [...messages, ...later].filter(message => {
+    if (!message.id) return true;
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  }));
+  notify(key);
 }
 
 /** Drop a conversation's whole inbox (cancel / delete). */

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { getCurrentWorkspace, normalizeWorkspaceName } from '@/utils/workspace';
+import { getCurrentWorkspace, normalizeWorkspaceName, runWithWorkspace } from '@/utils/workspace';
 
 interface WorkspaceGateState {
   activeMutations: number;
@@ -92,10 +92,35 @@ export async function withWorkspaceMutation<T>(
   nextContext.workspaces.add(normalizedWorkspace);
 
   try {
-    return await mutationContext.run(nextContext, task);
+    // Import lazily: the filesystem lock primitive itself uses storage helpers
+    // that import this gate. Its admission path deliberately avoids write queues.
+    const { withWorkspaceProcessMutation } = await import('../enduringAgents/runtimeLock');
+    return await runWithWorkspace(normalizedWorkspace, () => withWorkspaceProcessMutation(
+      () => mutationContext.run(nextContext, task),
+    ));
   } finally {
     state.activeMutations -= 1;
     notifyDrain(state);
+  }
+}
+
+/** A coherent capture for registered writers in all processes on this workspace. */
+export async function withWorkspaceRecoveryCapture<T>(
+  task: (generation: number) => Promise<T>,
+  options: { workspace?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const workspace = normalizeWorkspaceName(options.workspace ?? getCurrentWorkspace());
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const started = performance.now();
+  const boundary = await beginWorkspaceSnapshotBoundary(workspace, timeoutMs, options.signal);
+  try {
+    const { withWorkspaceProcessSnapshot } = await import('../enduringAgents/runtimeLock');
+    return await runWithWorkspace(workspace, () => withWorkspaceProcessSnapshot(
+      () => task(boundary.generation),
+      { signal: options.signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)) },
+    ));
+  } finally {
+    boundary.release();
   }
 }
 

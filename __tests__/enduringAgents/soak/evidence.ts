@@ -65,6 +65,7 @@ export const SOAK_ACCEPTANCE_NUMERIC_CONTRACTS = {
       activities: 200,
       flowDispatches: 200,
       leaseHistory: 50,
+      behaviorCallPins: 200,
     },
   },
   eventAppendCost: {

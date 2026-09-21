@@ -35,6 +35,7 @@ export interface InlineTranscriptStep {
   timestamp: number;
   toolName?: string;
   toolKind?: 'call' | 'result';
+  agentMessage?: ChatMessage['agentMessage'];
 }
 
 type ToolCallLike = {
@@ -88,7 +89,13 @@ export function buildInlineTranscript(messages: ChatMessage[]): InlineTranscript
 
     if (message.role === 'user' || message.role === 'assistant') {
       if (text) {
-        steps.push({ id: baseId, role: message.role, text, timestamp });
+        steps.push({
+          id: baseId,
+          role: message.role,
+          text,
+          timestamp,
+          ...(message.agentMessage ? { agentMessage: message.agentMessage } : {}),
+        });
       }
       if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
         (message.tool_calls as ToolCallLike[]).forEach((call, callIndex) => {
@@ -133,13 +140,17 @@ interface TranscriptMessageProps {
 function TranscriptMessage({ step }: TranscriptMessageProps) {
   const { t, formatDate } = useI18n();
   const theme = useTheme();
-  const roleLabel = t(
-    step.role === 'user'
-      ? 'chainChat.roleUser'
-      : step.role === 'assistant'
-        ? 'chainChat.roleAssistant'
-        : 'chainChat.roleTool',
-  );
+  const roleLabel = step.agentMessage
+    ? t(step.agentMessage.kind === 'completion' ? 'chat.messages.agentCompletion' : 'chat.messages.agentMessage', {
+        sender: step.agentMessage.senderName?.trim() || step.agentMessage.senderConversationId,
+      })
+    : t(
+        step.role === 'user'
+          ? 'chainChat.roleUser'
+          : step.role === 'assistant'
+            ? 'chainChat.roleAssistant'
+            : 'chainChat.roleTool',
+      );
   const time = step.timestamp > 0
     ? formatDate(step.timestamp, { hour: '2-digit', minute: '2-digit' })
     : null;
@@ -223,14 +234,17 @@ function TranscriptMessage({ step }: TranscriptMessageProps) {
     );
   }
 
-  const isUser = step.role === 'user';
+  const isUser = step.role === 'user' && !step.agentMessage;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
       <Stack direction="row" spacing={0.7} alignItems="center" sx={{ mb: 0.45, px: 0.45 }}>
         {isUser
           ? <PersonRoundedIcon sx={{ fontSize: '0.8rem', color: 'primary.main' }} />
           : <AutoAwesomeRoundedIcon sx={{ fontSize: '0.8rem', color: 'secondary.main' }} />}
-        <Typography sx={{ color: 'text.secondary', fontSize: '0.66rem', fontWeight: 720 }}>
+        <Typography
+          title={step.agentMessage?.senderConversationId}
+          sx={{ color: 'text.secondary', fontSize: '0.66rem', fontWeight: 720, overflowWrap: 'anywhere' }}
+        >
           {roleLabel}{time ? ` · ${time}` : ''}
         </Typography>
       </Stack>

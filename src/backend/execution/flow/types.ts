@@ -604,23 +604,8 @@ export interface SubflowNodeProperties {
     /** Maximum retained logical child turns for one resolved session. Positive
      *  integers only; absence means unbounded. The incoming task counts as one. */
     sessionTurnCap?: number;
-    /** Callable-subflow invocation mode (issue #385, deferred Part B of #359):
-     *    - 'handoff' (default/absent): today's behaviour — the routing model
-     *      calls the node's `handoff_to_<slug>` tool, the engine TRANSITIONS to
-     *      this Subflow node, and it runs through the normal prep/execCore/post
-     *      lifecycle (durable, resumable when `saveConversation` is set).
-     *    - 'tool': the node is instead advertised as a distinct
-     *      `call_subflow_<slug>` tool. Calling it runs this Subflow's target
-     *      flow INLINE inside the tool call (via `runSubflowLanes()`, the same
-     *      bounded lane engine) and returns a structured JSON lane result
-     *      straight to the calling model — no graph transition, so the model
-     *      stays on its current node and can keep working with the answer.
-     *  Gated behind the experimental `subflowToolInvocation` setting (default
-     *  OFF): when the setting is off, a node authored with `'tool'` silently
-     *  falls back to `'handoff'` behaviour, so flipping the setting can never
-     *  change an existing flow's behaviour by itself. Tool-mode invocations are
-     *  NOT resumable in v1 (no graph transition means no persist point); a
-     *  mid-call crash re-runs the lanes from scratch. */
+    /** @deprecated Saved for compatibility only. Connected Subflows always expose
+     * handoff, inline-call and background-start tools without a mode switch. */
     invocationMode?: 'handoff' | 'tool' | 'detached';
     /** Optional per-node detached-task polling hint and runtime cap (issue #386). */
     detachedPollIntervalMs?: number;
@@ -1352,6 +1337,8 @@ export interface SharedState {
     subflowDetachedToolNameMap?: Record<string, string>;
     /** Durable task handles launched while this conversation was active. */
     launchedTaskIds?: string[];
+    /** Process that can handle worker replies after the graph reaches Finish. */
+    subflowOrchestratorNodeId?: string;
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */
@@ -1372,6 +1359,8 @@ export interface SharedState {
      * ancestor's isCancelled flag is set (issue #109). Unset for top-level runs.
      */
     parentRunId?: string;
+    /** Parent run generation, preventing late replies from entering a newer run. */
+    parentLogicalRunId?: string;
 
     /**
      * Conversation-level parent link (issue #182): the conversationId of the
@@ -1648,6 +1637,8 @@ export interface MCPNodePrepResult extends BasePrepResult {
 // SubflowNode prep result
 export interface SubflowNodePrepResult extends BasePrepResult {
     nodeType: 'subflow';
+    /** Runtime-only cancellation for an independently running child task. */
+    abortSignal?: AbortSignal;
     subflowId?: string;
     /** Explicit prompt passed into the subflow (set only when the node has a
      *  promptTemplate override). Mutually exclusive with `messages`. */

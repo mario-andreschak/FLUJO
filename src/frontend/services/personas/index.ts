@@ -2,6 +2,7 @@
 
 import type {
   ActivateBehaviorRevisionInput,
+  AddPersonaBehaviorInput,
   AssignPersonaWorkItemInput,
   AssignPersonaWorkItemResult,
   BehaviorBinding,
@@ -23,6 +24,8 @@ import type {
   PersonaAppLaunchDescriptor,
   PersonaComposition,
   PersonaFlowReadiness,
+  PersonaCreationReadiness,
+  PersonaCreationReadinessInput,
   PersonaMailboxItem,
   PersonaNativeAbilityId,
   PersonaPresentationSummary,
@@ -293,6 +296,10 @@ class PersonasService {
     return jsonRequest(personaPath(personaId, '/composition'), 'PATCH', input);
   }
 
+  addBehavior(personaId: string, input: AddPersonaBehaviorInput): Promise<PersonaComposition> {
+    return jsonRequest(personaPath(personaId, '/composition/behaviors'), 'POST', input);
+  }
+
   copyCompositionFlow(
     personaId: string,
     input: CopyPersonaFlowInput,
@@ -421,6 +428,14 @@ class PersonasService {
 
   createWorkItem(personaId: string, input: Omit<CreatePersonaWorkItemInput, 'personaId'>): Promise<PersonaWorkItem> {
     return jsonRequest(personaPath(personaId, '/work-items'), 'POST', input);
+  }
+
+  creationReadiness(input: PersonaCreationReadinessInput, signal?: AbortSignal): Promise<PersonaCreationReadiness> {
+    return parse(fetch(withWorkspaceUrl(`${BASE}/readiness`), {
+      method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }));
   }
 
   getWorkItem(personaId: string, workItemId: string): Promise<PersonaWorkItem> {

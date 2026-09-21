@@ -111,7 +111,7 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
         <Box>
-          <Typography variant="h6">{allowedToolsTitle ?? t('flows.mcpNode.allowedTools')}</Typography>
+          <Typography variant="h6" component="h3">{allowedToolsTitle ?? t('flows.mcpNode.allowedTools')}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {toolsHelp ?? t('flows.mcpNode.toolsHelp')}
           </Typography>
@@ -165,7 +165,7 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
             return (
               <Box component="section" key={section.key} aria-labelledby={`mcp-tools-${section.key}`}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                  <Typography id={`mcp-tools-${section.key}`} variant="subtitle1" fontWeight={700}>
+                  <Typography id={`mcp-tools-${section.key}`} variant="subtitle1" component="h4" fontWeight={700}>
                     {t(copy.title)}
                   </Typography>
                   <Chip size="small" color={sectionColor[section.key]} variant="outlined" label={section.tools.length} />
@@ -198,7 +198,7 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
                             sx={{ mt: -0.25 }}
                           />
                           <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography variant="subtitle2" sx={{ overflowWrap: 'anywhere' }}>
+                            <Typography variant="subtitle2" component="h5" sx={{ overflowWrap: 'anywhere' }}>
                               {displayName}
                             </Typography>
                             {tool.description && (
@@ -306,8 +306,8 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
             value={parameterPresets}
             onChange={onParameterPresetsChange}
             workspaceRoots={workspaceRoots}
-            title={parameterPresetsTitle ?? 'Step-specific tool parameters'}
-            description={parameterPresetsDescription ?? 'These values apply only to this MCP node and override matching server-wide values. Fixed parameters are hidden from the model.'}
+            title={parameterPresetsTitle ?? t('mcp.presets.nodeTitle')}
+            description={parameterPresetsDescription ?? t('mcp.presets.nodeDescription')}
           />
         </>
       )}

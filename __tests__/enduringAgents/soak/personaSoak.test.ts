@@ -165,6 +165,8 @@ describe('deterministic Persona soak harness', () => {
       && /^[0-9a-f]{64}$/.test(metric.leaseHistoryPruning.prePruneSnapshotSha256)
     ))).toBe(true);
     expect(summary.runtimeEvidence.modelCalls).toBeGreaterThan(0);
+    expect(summary.criteria.find(criterion => criterion.id === 'runtime-scale-recall-latency')?.observed.memoryItems)
+      .toBe(days + 1);
     expect(summary.metrics.every((metric) => metric.recallP95Ms > 0)).toBe(true);
     expect(summary.metrics.every((metric) => metric.eventAppendP95Ms > 0)).toBe(true);
     expect(summary.criteria.filter((criterion) => criterion.status === 'failed')).toEqual([]);

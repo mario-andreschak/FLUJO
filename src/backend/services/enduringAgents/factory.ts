@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { z } from 'zod';
 
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
@@ -21,6 +22,8 @@ import {
   type CreatePersonaInput,
   type MemoryItem,
   type Persona,
+  type PersonaCreationReadiness,
+  type PersonaCreationReadinessInput,
   type PersonaPresentation,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
@@ -428,14 +431,10 @@ async function materializeInitialMemories(
   return memoryIds;
 }
 
-/**
- * Deterministically materialize a durable Persona and its Role-owned default
- * Behaviors. The Persona is committed last by moving provisioningState to
- * `ready`; a crash leaves a disabled/pending record that the same request can
- * safely repair because every child id and timestamp is deterministic.
- */
-export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
-  const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
+async function preparePersonaCreationFlows(
+  input: PersonaCreationReadinessInput,
+  roleVersion: RoleVersion,
+) {
   const selectedCoreFlow = input.coreFlowRef
     ? await requireReadySharedFlow(input.coreFlowRef, 'Core Flow', { allowMissingModel: true })
     : undefined;
@@ -448,6 +447,79 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       ),
     ),
   );
+  // Simple Roles use their immutable Primary behavior as the Core template.
+  const coreTemplate = selectedCoreFlow
+    ?? roleVersion.coreFlowTemplate
+    ?? roleVersion.behaviorSlots.find((slot) => slot.key === 'primary')?.flowTemplate;
+  if (!coreTemplate) {
+    throw new PersonaFactoryConflictError(
+      'The selected Role has no Core or Primary template. Update the Role and try again.',
+    );
+  }
+  if (roleVersion.behaviorSlots.length === 0) {
+    throw new PersonaFactoryConflictError(
+      'The selected Role version has no usable required Behaviors.',
+    );
+  }
+
+  const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
+  const preparedCore = await requireRunnableGeneratedFlow(
+    bindDefaultModelToFlow(withDefaultPersonaAbilities(coreTemplate as Flow), defaultModelId),
+    'Core Flow',
+  );
+  const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
+    (slot) => requireRunnableGeneratedFlow(
+      bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
+      `Required Behavior ${JSON.stringify(slot.key)}`,
+    ),
+  ));
+  const preparedBehaviorFlows = await Promise.all(behaviorFlows.map(
+    (flow) => requireRunnableGeneratedFlow(
+      bindDefaultModelToFlow(flow, defaultModelId),
+      `Behavior Flow ${JSON.stringify(flow.name)}`,
+    ),
+  ));
+  return { selectedCoreFlow, behaviorFlows, coreTemplate, preparedCore, preparedRoleFlows, preparedBehaviorFlows };
+}
+
+/** Read-only preview of the exact Flow preparation used by creation. */
+export async function getPersonaCreationReadiness(value: unknown): Promise<PersonaCreationReadiness> {
+  const input = z.object({
+    roleVersionId: CreatePersonaInputSchema.shape.roleVersionId,
+    coreFlowRef: CreatePersonaInputSchema.shape.coreFlowRef,
+    behaviorFlowRefs: CreatePersonaInputSchema.shape.behaviorFlowRefs,
+  }).strict().refine((request) => !request.coreFlowRef
+    || !request.behaviorFlowRefs?.includes(request.coreFlowRef),
+  'The Core Flow cannot also be selected as a Behavior.').parse(value);
+  const roleVersion = await resolveRoleVersion(input.roleVersionId);
+  try {
+    const prepared = await preparePersonaCreationFlows(input, roleVersion);
+    const modelIds = new Set([
+      prepared.preparedCore, ...prepared.preparedRoleFlows, ...prepared.preparedBehaviorFlows,
+    ].flatMap((flow) => flow.nodes.flatMap((node) => {
+      const id = node.data?.properties?.boundModel;
+      return typeof id === 'string' && id ? [id] : [];
+    })));
+    const models = await modelService.loadModels();
+    return {
+      state: 'ready', issues: [],
+      models: models.filter((model) => modelIds.has(model.id))
+        .map((model) => model.displayName || model.name),
+    };
+  } catch (error) {
+    if (error instanceof PersonaFactoryConflictError) {
+      return { state: 'invalid', issues: [error.message], models: [] };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Commit the Persona last as ready. Deterministic children let the same request
+ * repair provisioning after a crash; preflight never replaces this validation.
+ */
+export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
+  const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
   const personaId = resolvePersonaId(input);
   assertSafeCollectionId(personaId);
 
@@ -458,45 +530,9 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       );
     }
     const roleVersion = await resolveRoleVersion(input.roleVersionId);
-    // Simple Roles intentionally do not persist a separate Core template. In
-    // that case the immutable Primary behavior is the deterministic Core
-    // source promised by the creation contract.
-    const coreTemplate = selectedCoreFlow
-      ?? roleVersion.coreFlowTemplate
-      ?? roleVersion.behaviorSlots.find((slot) => slot.key === 'primary')?.flowTemplate;
-    if (!coreTemplate) {
-      log.warn('Persona provisioning rejected: no Core template', {
-        roleVersionId: roleVersion.id,
-        expectedSlotCount: roleVersion.behaviorSlots.length,
-        failureCategory: 'missing_core_template',
-      });
-      throw new PersonaFactoryConflictError(
-        'The selected Role has no Core or Primary template. Update the Role and try again.',
-      );
-    }
-    if (roleVersion.behaviorSlots.length === 0) {
-      throw new PersonaFactoryConflictError(
-        'The selected Role version has no usable required Behaviors.',
-      );
-    }
-
-    const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
-    const preparedCore = await requireRunnableGeneratedFlow(
-      bindDefaultModelToFlow(withDefaultPersonaAbilities(coreTemplate as Flow), defaultModelId),
-      'Core Flow',
-    );
-    const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
-      (slot) => requireRunnableGeneratedFlow(
-        bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
-        `Required Behavior ${JSON.stringify(slot.key)}`,
-      ),
-    ));
-    const preparedBehaviorFlows = await Promise.all(behaviorFlows.map(
-      (flow) => requireRunnableGeneratedFlow(
-        bindDefaultModelToFlow(flow, defaultModelId),
-        `Behavior Flow ${JSON.stringify(flow.name)}`,
-      ),
-    ));
+    const {
+      selectedCoreFlow, behaviorFlows, coreTemplate, preparedCore, preparedRoleFlows, preparedBehaviorFlows,
+    } = await preparePersonaCreationFlows(input, roleVersion);
     log.info('Persona Role version validated for provisioning', {
       roleVersionId: roleVersion.id,
       expectedSlotCount: roleVersion.behaviorSlots.length,

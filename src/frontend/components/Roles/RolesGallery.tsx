@@ -39,7 +39,7 @@ export default function RolesGallery() {
   })), [roles]);
 
   return (
-    <Box component="main" sx={{ p: { xs: 2, md: 4 }, maxWidth: 1200, mx: 'auto' }}>
+    <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1200, mx: 'auto' }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2} sx={{ mb: 3 }}>
         <Box>
           <Typography variant="h4" component="h1">{t('roles.title')}</Typography>
