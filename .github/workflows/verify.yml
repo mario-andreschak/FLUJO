@@ -28,6 +28,27 @@ permissions:
   contents: read
 
 jobs:
+  production-build:
+    name: Production build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Match the Windows installation that exposed the default-heap OOM.
+          node-version: 22.13.1
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Verify tracing against a populated runtime directory
+        run: node --test scripts/exclude-workspaces-from-next-glob.test.mjs
+      - name: Build with the ordinary command and default Node heap
+        run: npm run build
+
   persona-memory-profile:
     if: github.event_name == 'workflow_dispatch' && inputs.persona_memory_profile
     name: diagnostic Persona memory profile (not release acceptance)
