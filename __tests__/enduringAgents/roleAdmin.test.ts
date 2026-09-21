@@ -49,6 +49,10 @@ jest.mock('@/backend/services/enduringAgents/store', () => ({
     definitions.delete(id);
   },
   listPersonasStrict: async () => personas,
+  listRoleVersionReferences: async (ids: Set<string>) => ({
+    personaIds: personas.filter((persona) => ids.has(persona.roleVersionId)).map((persona) => persona.id).sort(),
+    pinnedRoleVersionIds: [...new Set(personas.filter((persona) => ids.has(persona.roleVersionId)).map((persona) => persona.roleVersionId))].sort(),
+  }),
 }));
 
 import {

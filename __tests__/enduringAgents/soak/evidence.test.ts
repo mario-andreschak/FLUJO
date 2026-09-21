@@ -127,6 +127,7 @@ describe('Persona soak evidence schema', () => {
           activities: 200,
           flowDispatches: 200,
           leaseHistory: 50,
+          behaviorCallPins: 200,
         },
       },
       eventAppendCost: {

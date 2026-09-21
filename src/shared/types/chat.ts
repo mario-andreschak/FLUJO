@@ -188,6 +188,19 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
   /** Latest model request's context. null explicitly means unavailable. */
   contextUsage?: import('./model/contextUsage').ModelContextUsage | null;
 
+  /**
+   * Trusted provenance for an inter-agent delivery. Its user role is a provider
+   * transport detail, not a human sender. Persist this metadata for transcript
+   * display; strip it from provider wire messages while retaining the textual
+   * sender header in content.
+   */
+  agentMessage?: {
+    senderConversationId: string;
+    senderName?: string;
+    recipientConversationId: string;
+    kind: 'message' | 'completion';
+  };
+
   /** Token usage for the call/run that produced this message; may cover multiple model requests. */
   usage?: {
     promptTokens: number;

@@ -39,6 +39,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { waitForActiveSubflows, resumeSubflowOrchestrator } from './subflowCommunication';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
@@ -648,6 +649,7 @@ function installPersonaActivitySnapshot(
   sharedState.subflowSessions = undefined;
   sharedState.subflowLane = undefined;
   sharedState.launchedTaskIds = undefined;
+  sharedState.subflowOrchestratorNodeId = undefined;
   sharedState.staticInjected = undefined;
 
   // No paused tool/debug decision from the old Activity may execute under the
@@ -1187,6 +1189,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // top conversation stops every descendant subflow at its next iteration.
   if (input.parentRunId) {
     sharedState.parentRunId = input.parentRunId;
+    sharedState.parentLogicalRunId = FlowExecutor.conversationStates.get(input.parentRunId)?.logicalRunId;
     // Conversation-level parent link (issue #182): formalize the subflow
     // parentage at the conversation record so the chat sidebar can render
     // Flow->Subflow->... chains without reverse-engineering run internals.
@@ -1884,9 +1887,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   /**
    * Fold any waiting steering messages into the live transcript. Returns true
    * when at least one was folded in (the caller keeps executing so the model
-   * sees it on its very next call). Ephemeral subflow child runs are keyed by
-   * their own id and never receive injections — a message steers the root
-   * conversation, and arrives when the subflow returns to it.
+   * sees it on its very next call). Every child has its own addressable inbox,
+   * including ephemeral children. Agent messages use this same safe boundary.
   */
   const drainSteering = async (): Promise<boolean> => {
     if (hasUnansweredToolCalls()) {
@@ -1898,6 +1900,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     // Generic fence assertions intentionally have no delivery side effects.
     await sharedState.executionAuthority?.pollRelatedInputs?.();
     if (steeringCount(effectiveConvId) === 0) return false;
+    await resumeSubflowOrchestrator(sharedState);
     const injected = takeSteeringMessages(effectiveConvId);
     if (injected.length === 0) return false;
     const existingIds = new Set(sharedState.messages
@@ -1934,7 +1937,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         await sharedState.executionAuthority?.acknowledgeRelatedInputs?.(stableIds);
       }
       log.info(`Folded ${newlyFolded.length} steering message(s) into the live run for ${effectiveConvId}.`);
-      return newlyFolded.length > 0;
+      // An SDK may have persisted the transcript before rejecting delivery.
+      // Its requeued message must still trigger another model turn even though
+      // the stable transcript ID is already present.
+      return true;
     } catch (error) {
       // If transcript persistence failed, undo the in-memory fold before
       // retrying. If only the durable mailbox ACK failed, keep the already
@@ -2600,6 +2606,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             continue;
           }
 
+          if (await waitForActiveSubflows(sharedState, runtimeAbortSignal)) {
+            if (await drainSteering()) continue;
+          }
+          if (runCancelled()) break;
           sharedState.status = 'completed';
           log.info(`Setting conversation status to 'completed' for conv ${effectiveConvId}`);
           break;

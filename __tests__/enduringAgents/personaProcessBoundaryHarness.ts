@@ -52,6 +52,17 @@ export type PersonaProcessCommand =
   | { type: 'inspect'; personaId: string }
   | { type: 'appendEvent'; personaId: string; event: Record<string, unknown> }
   | { type: 'readEvents'; personaId: string }
+  | { type: 'captureGateEnter'; token: string; mode: 'writer' | 'snapshot' | 'flow'; timeoutMs?: number }
+  | { type: 'readFlow'; flowId: string }
+  | { type: 'saveFlow'; flow: import('@/shared/types/flow').Flow }
+  | { type: 'previewDeletion'; personaId: string }
+  | { type: 'deletePersona'; personaId: string; previewToken: string }
+  | { type: 'captureGateLeave'; token: string }
+  | { type: 'captureGateStatus'; token: string }
+  | { type: 'captureRecovery' }
+  | { type: 'previewRecovery'; archive: string; destination: string }
+  | { type: 'restoreRecovery'; archive: string; destination: string; previewToken: string; holdAt?: 'file_written' | 'before_publish' | 'published' }
+  | { type: 'recoveryCheckpoint' }
   | { type: 'shutdown' };
 
 interface WireSuccess {

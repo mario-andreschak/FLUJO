@@ -276,42 +276,11 @@ export interface ExperimentalSettings {
    * bundled Codex version. Off by default; a missing value is disabled.
    */
   codexModelCatalogCache?: boolean;
-  /**
-   * When true, a Subflow node whose `invocationMode` property is `'tool'` is
-   * advertised to the routing model as a distinct `call_subflow_<slug>` tool
-   * (issue #385, deferred Part B of #359) instead of the usual `handoff_to_*`
-   * transition tool. Calling it runs the target Subflow's lanes INLINE inside
-   * the tool call (same bounded lane pool as a normal parallel Subflow) and
-   * returns a structured JSON result straight to the model, so the model can
-   * keep working in the SAME node instead of leaving it via a graph handoff.
-   * Off by default: tool-mode invocations are NOT resumable in v1 (no graph
-   * transition means no persist point, so a mid-call crash re-runs the lanes
-   * from scratch), so this stays opt-in until checkpointed resumability lands
-   * in a future phase. When off, a Subflow authored with `invocationMode:
-   * 'tool'` silently falls back to ordinary `'handoff'` behaviour — flipping
-   * this flag never breaks an existing flow. A missing value is treated as
-   * disabled.
-   */
+  /** @deprecated Ignored. Subflow capabilities are available automatically. */
   subflowToolInvocation?: boolean;
-  /**
-   * Enable durable, detached subflow task handles (issue #386). Enabled for new
-   * installations; a missing value in existing settings remains disabled.
-   */
+  /** @deprecated Ignored. Subflow capabilities are available automatically. */
   subflowDetachedInvocation?: boolean;
-  /**
-   * When true, a Subflow node honours its `sessionScope` configuration and may
-   * RESUME the same child conversation across repeat visits inside one parent
-   * run, instead of starting a fresh child run every visit (issue #363 Phase
-   * 1, gated by #391). Enabled for new installations; a missing value in
-   * existing settings remains disabled. Resumed children inherit their own
-   * prior transcript, which changes what the child model sees each visit. Both
-   * `sessionScope: 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
-   * conversation for equal resolved keys and serialise same-key execution while
-   * allowing different keys to proceed concurrently (#388). `sessionInputMode: 'summary'` compacts completed child turns before the next task; an optional positive `sessionTurnCap` enforces deterministic retention.
-   * When off, reusable scopes silently fall back to `'per-visit'`, so flipping
-   * this flag never breaks an existing flow. A missing value is treated as
-   * disabled.
-   */
+  /** @deprecated Ignored. Subflow capabilities are available automatically. */
   subflowSessions?: boolean;
   /**
    * When true, MCP client connections are built on the v2 beta SDK

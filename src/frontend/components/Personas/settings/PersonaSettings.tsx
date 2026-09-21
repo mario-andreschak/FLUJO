@@ -45,6 +45,17 @@ interface PersonaSettingsProps {
   onDeleted: () => void;
 }
 
+const settingsChoiceMenuProps = {
+  slotProps: {
+    paper: {
+      sx: {
+        maxWidth: 'calc(100vw - 32px)',
+        '& .MuiMenuItem-root': { whiteSpace: 'normal', overflowWrap: 'anywhere' },
+      },
+    },
+  },
+};
+
 interface SettingsDraft {
   name: string;
   roleVersionId: string;
@@ -124,6 +135,7 @@ export default function PersonaSettings({
   const [form, setForm] = useState(initial);
   const [options, setOptions] = useState<PersonaSettingsOptions | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
@@ -141,8 +153,12 @@ export default function PersonaSettings({
     useState<PersonaDeletionArchivePolicy>('anonymize');
   const personaIdRef = useRef(detail.persona.id);
   const latestServerUpdatedAtRef = useRef(detail.persona.updatedAt);
+  const [pendingNavigation, setPendingNavigation] = useState<HTMLElement | null>(null);
+  const navigationTrigger = useRef<HTMLElement | null>(null);
 
   const dirty = normalized(form) !== normalized(baseline);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   const valid = form.name.trim().length > 0 && form.name.trim().length <= 160;
 
   useEffect(() => {
@@ -172,17 +188,22 @@ export default function PersonaSettings({
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+      if (!dirtyRef.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
     const warnForLink = (event: MouseEvent) => {
-      if (!dirty || event.defaultPrevented) return;
+      if (!dirtyRef.current || event.defaultPrevented || event.button !== 0) return;
       const target = event.target;
-      const link = target instanceof Element ? target.closest('a[href]') : null;
-      if (!link || window.confirm(t('personas.settings.discardPrompt'))) return;
+      const navigation = target instanceof Element
+        ? target.closest<HTMLElement>('a[href], [data-persona-navigation] [role="tab"]')
+        : null;
+      if (!navigation || navigation.getAttribute('aria-selected') === 'true') return;
+      if (navigation instanceof HTMLAnchorElement && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || navigation.hasAttribute('download') || (navigation.target && navigation.target !== '_self'))) return;
       event.preventDefault();
       event.stopPropagation();
+      navigationTrigger.current = navigation;
+      setPendingNavigation(navigation);
     };
     window.addEventListener('beforeunload', warn);
     document.addEventListener('click', warnForLink, true);
@@ -190,9 +211,10 @@ export default function PersonaSettings({
       window.removeEventListener('beforeunload', warn);
       document.removeEventListener('click', warnForLink, true);
     };
-  }, [dirty, t]);
+  }, []);
 
   const loadOptions = async () => {
+    setOptionsLoading(true);
     setOptionsError(null);
     try {
       setOptions(await personaSettingsService.options());
@@ -200,6 +222,8 @@ export default function PersonaSettings({
       setOptionsError(cause instanceof Error
         ? cause.message
         : t('personas.settings.optionsFailed'));
+    } finally {
+      setOptionsLoading(false);
     }
   };
 
@@ -373,7 +397,9 @@ export default function PersonaSettings({
   const selectedRoleUnavailable = Boolean(options && !selectedRole);
 
   return (
-    <Stack spacing={2} maxWidth={900}>
+    <Stack spacing={2} maxWidth={900} sx={{
+      '&& .MuiSelect-select': { whiteSpace: 'normal', overflowWrap: 'anywhere', height: 'auto' },
+    }}>
       <Box>
         <Typography variant="h5" component="h2">
           {t('personas.settings.title')}
@@ -450,6 +476,7 @@ export default function PersonaSettings({
             </InputLabel>
             <Select
               labelId="persona-role-label"
+              MenuProps={settingsChoiceMenuProps}
               label={t('personas.settings.role')}
               value={form.roleVersionId}
               onChange={(event) => set('roleVersionId', event.target.value)}
@@ -469,6 +496,8 @@ export default function PersonaSettings({
             </Select>
             <FormHelperText>{t('personas.settings.roleFutureHelp')}</FormHelperText>
           </FormControl>
+        ) : optionsLoading ? (
+          <CircularProgress size={24} aria-label={t('personas.settings.loadingOptions')} />
         ) : (
           <Alert severity="info">{t('personas.settings.roleOptionsUnavailable')}</Alert>
         )}
@@ -478,7 +507,7 @@ export default function PersonaSettings({
           </Typography>
         )}
         {selectedRoleUnavailable && (
-          <Alert severity="warning">
+          <Alert severity="info">
             {t('personas.settings.roleUnavailable', { role: detail.roleVersion.name })}
           </Alert>
         )}
@@ -490,12 +519,15 @@ export default function PersonaSettings({
       >
         {options ? (
           <FormControl fullWidth>
-            <InputLabel id="persona-language-label">
+            <InputLabel id="persona-language-label" shrink>
               {t('personas.settings.language')}
             </InputLabel>
             <Select
               labelId="persona-language-label"
+              MenuProps={settingsChoiceMenuProps}
               label={t('personas.settings.language')}
+              displayEmpty
+              notched
               value={form.language}
               onChange={(event) => set('language', event.target.value)}
             >
@@ -513,6 +545,8 @@ export default function PersonaSettings({
             </Select>
             <FormHelperText>{t('personas.settings.languageHelp')}</FormHelperText>
           </FormControl>
+        ) : optionsLoading ? (
+          <CircularProgress size={24} aria-label={t('personas.settings.loadingOptions')} />
         ) : (
           <Alert severity="info">{t('personas.settings.languageUnavailable')}</Alert>
         )}
@@ -543,6 +577,7 @@ export default function PersonaSettings({
           </InputLabel>
           <Select
             labelId="persona-lifecycle-label"
+            MenuProps={settingsChoiceMenuProps}
             label={t('personas.settings.lifecycle')}
             value={form.lifecycleState}
             onChange={(event) => set(
@@ -563,6 +598,7 @@ export default function PersonaSettings({
           </InputLabel>
           <Select
             labelId="persona-autonomy-label"
+            MenuProps={settingsChoiceMenuProps}
             label={t('personas.settings.autonomy')}
             value={form.autonomyLevel}
             onChange={(event) => set(
@@ -584,6 +620,7 @@ export default function PersonaSettings({
           </InputLabel>
           <Select
             labelId="persona-interruption-label"
+            MenuProps={settingsChoiceMenuProps}
             label={t('personas.settings.interruption')}
             value={form.interruptionPolicy}
             onChange={(event) => set(
@@ -639,7 +676,12 @@ export default function PersonaSettings({
         <DialogTitle>{t('personas.settings.exportTitle')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            {exportBusy && !exportPreview && <CircularProgress size={24} />}
+            {exportBusy && !exportPreview && (
+              <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+                <CircularProgress size={24} aria-hidden="true" />
+                <Typography>{t('personas.settings.loadingExport')}</Typography>
+              </Stack>
+            )}
             {exportError && <Alert severity="error">{exportError}</Alert>}
             {exportPreview && (
               <>
@@ -692,6 +734,24 @@ export default function PersonaSettings({
         </DialogActions>
       </Dialog>
 
+      <Dialog open={Boolean(pendingNavigation)} fullWidth maxWidth="sm" aria-labelledby="persona-discard-title"
+        disableRestoreFocus onClose={() => setPendingNavigation(null)}
+        slotProps={{ transition: { onExited: () => {
+          if (dirtyRef.current && navigationTrigger.current?.isConnected) navigationTrigger.current.focus();
+        } } }}>
+        <DialogTitle id="persona-discard-title">{t('personas.settings.discardPrompt')}</DialogTitle>
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
+          <Button autoFocus onClick={() => setPendingNavigation(null)}>{t('personas.action.cancel')}</Button>
+          <Button color="warning" variant="contained" onClick={() => {
+            const navigation = pendingNavigation;
+            dirtyRef.current = false;
+            setForm(baseline);
+            setPendingNavigation(null);
+            navigation?.click();
+          }}>{t('personas.settings.discardAndLeave')}</Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog
         open={deleteOpen}
         onClose={() => !deleteBusy && setDeleteOpen(false)}
@@ -701,7 +761,12 @@ export default function PersonaSettings({
         <DialogTitle>{t('personas.settings.deleteTitle')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            {deleteBusy && !deletePreview && <CircularProgress size={24} />}
+            {deleteBusy && !deletePreview && (
+              <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+                <CircularProgress size={24} aria-hidden="true" />
+                <Typography>{t('personas.settings.loadingDeletion')}</Typography>
+              </Stack>
+            )}
             {deleteError && (
               <Alert
                 severity="error"
@@ -731,7 +796,14 @@ export default function PersonaSettings({
                     work: deletePreview.counts.workItems,
                     activities: deletePreview.counts.liveActivities
                       + deletePreview.counts.archivedActivities,
+                    calls: deletePreview.counts.behaviorCallPins ?? 0,
                     files: deletePreview.counts.homeFiles,
+                  })}
+                </Typography>
+                <Typography variant="body2">
+                  {t('personas.settings.deleteOwnedFlows', {
+                    flows: deletePreview.counts.ownedFlows ?? 0,
+                    files: deletePreview.counts.ownedFlowFiles ?? 0,
                   })}
                 </Typography>
                 <Alert severity="info">

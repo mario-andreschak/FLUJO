@@ -7,10 +7,13 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { PersonaDetail } from '@/frontend/services/personas';
+import { flowService } from '@/frontend/services/flow';
+import type { Flow } from '@/frontend/types/flow/flow';
+import { localizePersonaFlow } from '@/frontend/utils/personaFlowLabels';
 
 export default function PersonaSetup({
   detail,
@@ -25,6 +28,17 @@ export default function PersonaSetup({
       ? detail.persona.composition.coreBinding.sharedFlowRef
       : detail.persona.composition.coreBinding.personaFlowRef)
     : detail.persona.composition?.coreFlowRef;
+  const [coreFlow, setCoreFlow] = useState<Flow | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setCoreFlow(null);
+    if (coreFlowRef) {
+      void flowService.getFlow(coreFlowRef).then((flow) => {
+        if (!cancelled) setCoreFlow(flow ?? null);
+      }).catch(() => { /* Keep the safe generic label when metadata is unavailable. */ });
+    }
+    return () => { cancelled = true; };
+  }, [coreFlowRef, detail.persona.id]);
   const facts = [
     {
       label: t('personas.setup.role'),
@@ -35,11 +49,15 @@ export default function PersonaSetup({
     },
     {
       label: t('personas.setup.coreFlow'),
-      value: coreFlowRef ?? t('personas.setup.notConfigured'),
+      value: coreFlowRef
+        ? (coreFlow?.id === coreFlowRef ? localizePersonaFlow(coreFlow, detail.persona, t).name : t('personas.setup.coreFlow'))
+        : t('personas.setup.notConfigured'),
     },
     {
       label: t('personas.setup.behaviors'),
-      value: String(detail.behaviorBindings.length),
+      value: String(detail.persona.composition?.behaviors?.filter((behavior) => (
+        behavior.slotKey !== 'primary'
+      )).length ?? detail.behaviorBindings.filter((binding) => binding.slotKey !== 'primary').length),
     },
     {
       label: t('personas.setup.apps'),
@@ -47,7 +65,7 @@ export default function PersonaSetup({
     },
     {
       label: t('personas.setup.memories'),
-      value: String(detail.memoryItems.filter((item) => item.status !== 'forgotten').length),
+      value: String(detail.memoryItems.filter((item) => item.status === 'active' || item.status === 'candidate').length),
     },
   ];
 
@@ -61,7 +79,7 @@ export default function PersonaSetup({
           sx={{ mb: 2.5 }}
         >
           <Box color="primary.main"><HubRounded /></Box>
-          <Typography variant="h5" fontWeight={760}>{t('personas.setup.title')}</Typography>
+          <Typography variant="h5" component="h2" fontWeight={760}>{t('personas.setup.title')}</Typography>
         </Stack>
         <Box
           sx={{

@@ -16,6 +16,16 @@
  * path id wins on PUT, and the 404/409 edge cases.
  */
 import type { Flow } from '@/shared/types/flow';
+// Keep this collection-backed route fixture in memory. The real filesystem
+// authoring boundary is exercised by personaOwnedFlows and its process suite.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
 
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};

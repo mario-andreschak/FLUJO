@@ -24,12 +24,18 @@ import {
 import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import type { SubflowLanePlan, SubflowNodePrepResult, SubflowNodeProperties, ToolDefinition } from '../types';
 import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { runInWriteChain } from '@/utils/storage/backend';
+import { assertFlowExecutionCurrent, commitFlowDurableMutation, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { isCancelledByAncestry } from '../cancellation';
+import { publishSubflowCompletion } from '../subflowCommunication';
 
 const log = createLogger('backend/flow/execution/handlers/subflowDetachedInvocation');
 export const SUBFLOW_DETACHED_TOOL_PREFIX = 'start_subflow_';
 
 export interface DetachedJobEntry { controller: AbortController; promise: Promise<void>; }
-export const detachedJobRegistry = new Map<string, DetachedJobEntry>();
+const runtime = globalThis as typeof globalThis & { __flujoDetachedJobs?: Map<string, DetachedJobEntry> };
+export const detachedJobRegistry = runtime.__flujoDetachedJobs ??= new Map<string, DetachedJobEntry>();
+const TASK_TIMEOUT = 'subflow-task-runtime-timeout';
 
 function detachedJobKey(taskId: string): string {
   return getCurrentWorkspace() === DEFAULT_WORKSPACE ? taskId : workspaceCacheKey(taskId);
@@ -43,7 +49,7 @@ export function buildDetachedSubflowTool(
 ): ToolDefinition {
   return {
     name,
-    description: `${description}\n\nDETACHED SUBFLOW: starts "${target.label}" in the background and returns a durable task handle immediately. Use subflow_task_get to poll it or subflow_task_cancel to stop it.`,
+    description: `${description}\n\nDETACHED SUBFLOW: starts "${target.label}" in the background and returns a durable task handle immediately. Keep working while it runs. Use subflow_send_message for steering/replies and subflow_wait to wait for updates. subflow_task_get reads its result; subflow_task_cancel stops it.`,
     inputSchema: {
       type: 'object',
       properties: { task: { type: 'string', description: taskMandatory ? 'Required task for the detached subflow.' : 'Optional task; defaults to the subflow configuration.' } },
@@ -73,6 +79,7 @@ async function runDetachedJob(
   nodeRef: NodeRef,
   input: { prompt: string },
   controller: AbortController,
+  maxRuntimeMs: number,
   telemetry?: DetachedSubflowTelemetry,
 ): Promise<void> {
   const timer = startStatisticsTimer();
@@ -102,29 +109,55 @@ async function runDetachedJob(
       // Metadata instrumentation never changes detached subflow behaviour.
     }
   };
+  const timeout = Number.isFinite(maxRuntimeMs) && maxRuntimeMs > 0
+    ? setTimeout(() => controller.abort(TASK_TIMEOUT), maxRuntimeMs)
+    : undefined;
+  timeout?.unref?.();
+  const terminal = async (patch: Parameters<typeof patchTask>[1]): Promise<void> => {
+    const updated = await patchTask(task.taskId, patch, { ifStatus: 'working' });
+    if (updated && ['completed', 'failed', 'cancelled'].includes(updated.status)) {
+      try { await publishSubflowCompletion(updated); }
+      catch (error) { log.warn('Could not notify the parent of a completed subflow task', { taskId: task.taskId, error }); }
+    }
+  };
+  const cancelled = async (): Promise<boolean> => {
+    const { FlowExecutor } = await import('../FlowExecutor');
+    return controller.signal.aborted || Boolean(prep.executionAuthority?.signal.aborted)
+      || isCancelledByAncestry(task.originConversationId, FlowExecutor.conversationStates);
+  };
+  const finishCancellation = async (): Promise<void> => {
+    const timedOut = controller.signal.reason === TASK_TIMEOUT;
+    record(timedOut ? 'error' : 'cancelled', timedOut ? new Error('Detached subflow timed out.') : undefined);
+    await terminal(timedOut
+      ? { status: 'failed', failureReason: 'timeout', error: 'Detached subflow exceeded its maximum runtime.' }
+      : { status: 'cancelled', failureReason: 'cancelled', cancelRequestedAt: Date.now() });
+  };
   try {
     const { runFlow } = await import('../runFlow');
     const { runSubflowLanes } = await import('../nodes/SubflowNode');
     const result = await runSubflowLanes(prep, runFlow, nodeRef, input);
     const current = await getTask(task.taskId);
-    if (controller.signal.aborted || current?.status === 'cancelled') {
-      record('cancelled');
+    if (await cancelled() || current?.status === 'cancelled') {
+      await finishCancellation();
       return;
     }
     record(result.success ? 'completed' : 'error', result.error);
-    await patchTask(task.taskId, result.success
+    await terminal(result.success
       ? { status: 'completed', outputText: result.outputText }
       : { status: 'failed', error: result.error ?? 'Detached subflow failed.', failureReason: 'child-error' });
   } catch (error) {
-    record(controller.signal.aborted ? 'cancelled' : 'error', error);
-    if (!controller.signal.aborted) {
-      await patchTask(task.taskId, {
+    if (await cancelled()) {
+      await finishCancellation();
+    } else {
+      record('error', error);
+      await terminal({
         status: 'failed',
         error: error instanceof Error ? error.message : String(error),
         failureReason: 'child-error',
       });
     }
   } finally {
+    if (timeout) clearTimeout(timeout);
     // A job that ends without any terminal record (process death, unexpected
     // early return) is reported as incomplete instead of a success or failure.
     record('incomplete');
@@ -133,6 +166,14 @@ async function runDetachedJob(
 }
 
 export async function executeDetachedSubflowStart(
+  name: string, args: Record<string, unknown>, ctx: { conversationId?: string; emit?: EmitFn },
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  // Parallel tool calls must share admission, or each can observe the same
+  // spare slot and exceed the workspace's worker limit.
+  return runInWriteChain(workspaceCacheKey('subflow-task-admission'), () => startDetachedSubflow(name, args, ctx));
+}
+
+async function startDetachedSubflow(
   name: string,
   args: Record<string, unknown>,
   ctx: { conversationId?: string; emit?: EmitFn },
@@ -144,6 +185,10 @@ export async function executeDetachedSubflowStart(
     const shared = FlowExecutor.conversationStates.get(originConversationId);
     const targetNodeId = shared?.subflowDetachedToolNameMap?.[name];
     if (!shared || !targetNodeId) return { success: false, error: `Unknown detached subflow tool "${name}".` };
+    await assertFlowExecutionCurrent(shared);
+    if (shared.isCancelled || shared.executionAuthority?.signal.aborted) {
+      return { success: false, error: 'The launching conversation was cancelled.' };
+    }
 
     const [settings, active] = await Promise.all([getSubflowTaskSettings(), listTasks({ status: 'working', limit: 500 })]);
     if (active.length >= settings.maxConcurrentDetachedJobs) {
@@ -157,7 +202,7 @@ export async function executeDetachedSubflowStart(
     if (!props?.subflowId) return { success: false, error: 'Target subflow node has no configured subflowId.' };
     const rawTask = typeof args.task === 'string' ? args.task.trim() : '';
     const prompt = rawTask || props.promptTemplate || '';
-    const task = await createTask({
+    const task = await commitFlowDurableMutation(shared, () => createTask({
       status: 'working',
       pollInterval: props.detachedPollIntervalMs,
       // SharedState.conversationId is optional; the launching conversation id is
@@ -165,22 +210,28 @@ export async function executeDetachedSubflowStart(
       // the record type to `string | undefined`.
       originConversationId: shared.conversationId ?? originConversationId,
       originNodeId: targetNodeId,
-      flowId: props.subflowId,
+      originLogicalRunId: shared.logicalRunId,
+      flowId: props.subflowId!,
       childConversationId: crypto.randomUUID(),
       input: { prompt },
-    });
+    }));
     if (!task) return { success: false, error: 'Unable to persist detached subflow task.' };
 
     shared.launchedTaskIds = [...new Set([...(shared.launchedTaskIds ?? []), task.taskId])];
-    const lane: SubflowLanePlan = { subflowId: props.subflowId, input: { prompt }, laneTitle: buildConversationTitle(prompt || 'Detached subflow') };
+    shared.subflowOrchestratorNodeId = shared.currentNodeId;
+    const controller = new AbortController();
+    const lane: SubflowLanePlan = { subflowId: props.subflowId, conversationId: task.childConversationId, input: { prompt }, laneTitle: buildConversationTitle(prompt || 'Detached subflow') };
     const prep: SubflowNodePrepResult = {
       nodeId: targetNodeId, nodeType: 'subflow', subflowId: props.subflowId,
       nodeName: node?.data?.label, depth: (shared.runDepth ?? 0) + 1,
       chainDepth: shared.chainDepth, plannedExecutionId: shared.plannedExecutionId,
+      parentRunId: task.originConversationId,
+      personaAttribution: shared.personaAttribution,
+      executionAuthority: shared.executionAuthority,
+      abortSignal: controller.signal,
       persistConversation: true, showSteps: true, emit: ctx.emit, lanes: [lane],
       concurrencyLimit: 1, joinSeparator: '\n\n', errorStrategy: 'collect-all',
     };
-    const controller = new AbortController();
     let subflowName: string | undefined;
     try {
       subflowName = (await flowService.getFlow(props.subflowId))?.name;
@@ -196,6 +247,7 @@ export async function executeDetachedSubflowStart(
       { nodeId: targetNodeId, nodeName: node?.data?.label, nodeType: 'subflow' },
       { prompt },
       controller,
+      settings.maxJobRuntimeMs,
       {
         parentRunId: shared.logicalRunId,
         invocationId: newStatisticsInvocationId(),
@@ -209,20 +261,41 @@ export async function executeDetachedSubflowStart(
     );
     detachedJobRegistry.set(detachedJobKey(task.taskId), { controller, promise: job });
     void job;
-    return { success: true, data: toTaskHandle(task) };
+    return { success: true, data: { ...toTaskHandle(task), childConversationId: task.childConversationId, parentConversationId: task.originConversationId } };
   } catch (error) {
+    rethrowFlowExecutionAuthorityError(error);
     log.warn('Failed to start detached subflow', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export async function executeTaskGet(taskId: string) {
-  const task = await getTask(taskId);
-  return task ? { success: true, data: { task: toTaskHandle(task), ...(task.status === 'completed' ? { result: task.outputText } : {}), ...(task.error ? { error: task.error } : {}) } } : { success: false, error: 'Task not found.' };
+async function canAccessTask(task: SubflowTaskRecord, ctx: { conversationId?: string }, allowChild: boolean): Promise<boolean> {
+  if (!ctx.conversationId) return false;
+  const { FlowExecutor } = await import('../FlowExecutor');
+  const caller = FlowExecutor.conversationStates.get(ctx.conversationId);
+  if (!caller) return false;
+  await assertFlowExecutionCurrent(caller);
+  if (caller.isCancelled || caller.executionAuthority?.signal.aborted) return false;
+  if (allowChild && task.childConversationId === ctx.conversationId) return true;
+  return task.originConversationId === ctx.conversationId
+    && (!task.originLogicalRunId || task.originLogicalRunId === caller.logicalRunId);
 }
 
-export async function executeTaskCancel(taskId: string) {
+export async function executeTaskGet(taskId: string, ctx: { conversationId?: string } = {}) {
+  const task = await getTask(taskId);
+  return task && await canAccessTask(task, ctx, true) ? { success: true, data: { task: toTaskHandle(task), childConversationId: task.childConversationId, parentConversationId: task.originConversationId, ...(task.status === 'completed' ? { result: task.outputText } : {}), ...(task.error ? { error: task.error } : {}) } } : { success: false, error: 'Task not found.' };
+}
+
+/** Trusted local-user API; model callers must use the relationship-checked wrapper. */
+export async function cancelDetachedTask(taskId: string): Promise<SubflowTaskRecord | null> {
   const task = await requestCancel(taskId);
-  detachedJobRegistry.get(detachedJobKey(taskId))?.controller.abort();
+  if (task?.status === 'cancelled') detachedJobRegistry.get(detachedJobKey(taskId))?.controller.abort();
+  return task;
+}
+
+export async function executeTaskCancel(taskId: string, ctx: { conversationId?: string } = {}) {
+  const current = await getTask(taskId);
+  if (!current || !await canAccessTask(current, ctx, false)) return { success: false, error: 'Task not found.' };
+  const task = await cancelDetachedTask(taskId);
   return task ? { success: true, data: toTaskHandle(task) } : { success: false, error: 'Task not found.' };
 }

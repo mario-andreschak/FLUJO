@@ -1,5 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { takeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
+import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
   ModelCallResult,
@@ -69,7 +69,7 @@ import {
 } from '../retryAfter';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
-import { getCurrentWorkspace } from '@/utils/workspace';
+import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { resolveInvokedToolUiLink } from '@/backend/mcpApps/toolUi';
 import {
@@ -94,6 +94,7 @@ import {
 } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
+import { isSubflowCommunicationTool, executeSubflowCommunicationTool } from '../subflowCommunication';
 import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
 import {
@@ -101,7 +102,7 @@ import {
   DEFAULT_TOOL_RESULT_MAX_LINES,
   type RunResourceSettings,
 } from '@/shared/types/runResources';
-import type { ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { ModelSteering, ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
@@ -462,35 +463,6 @@ export class ModelHandler {
   }
 
   /**
-   * Read the experimental `subflowToolInvocation` flag (issue #385, deferred
-   * Part B of #359) from the persisted Settings blob. Gates whether a Subflow
-   * node authored with `invocationMode: 'tool'` is advertised as a distinct
-   * `call_subflow_<slug>` tool (ProcessNode.generateHandoffTools) instead of
-   * the default `handoff_to_*` transition tool. Same best-effort pattern as
-   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
-   * disabled, so an unconfigured install keeps today's handoff-only behaviour.
-   */
-  static async isSubflowToolInvocationEnabled(): Promise<boolean> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.subflowToolInvocation);
-    } catch (err) {
-      log.warn('Failed to read subflowToolInvocation setting; defaulting to disabled', { err });
-      return false;
-    }
-  }
-
-  static async isSubflowDetachedInvocationEnabled(): Promise<boolean> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.subflowDetachedInvocation);
-    } catch (err) {
-      log.warn('Failed to read subflowDetachedInvocation setting; defaulting to disabled', { err });
-      return false;
-    }
-  }
-
-  /**
    * Summarize a validated persisted child-session transcript using the same
    * provider adapter as ordinary Process execution. Kept narrow so session
    * policy does not inherit the global automatic-compaction threshold.
@@ -513,24 +485,6 @@ export class ModelHandler {
     });
     await executionAuthority?.assertCurrent();
     return response.success ? (response.value.content ?? '') : '';
-  }
-
-  /**
-   * Read the experimental `subflowSessions` flag (issue #391, gate for #363
-   * Phase 1) from the persisted Settings blob. Gates whether `runSubflowLanes()`
-   * honours a Subflow node's `sessionScope` and resumes a child conversation
-   * across repeat visits within one parent run. Same best-effort pattern as
-   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
-   * disabled, so an unconfigured install keeps today's per-visit behaviour.
-   */
-  static async isSubflowSessionsEnabled(): Promise<boolean> {
-    try {
-      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-      return Boolean(settings?.experimental?.subflowSessions);
-    } catch (err) {
-      log.warn('Failed to read subflowSessions setting; defaulting to disabled', { err });
-      return false;
-    }
   }
 
   /**
@@ -1355,18 +1309,44 @@ export class ModelHandler {
 
     // Self-orchestrating SDK adapters own several model/tool turns inside one
     // createCompletion call, so runFlow cannot reach its between-step steering
-    // drain while they are active. Let those adapters consume the same inbox at
-    // their internal safe boundaries. They immediately record every consumed
-    // message through onTranscriptMessage, which updates live state and the
-    // append-only conversation log before the provider sees it.
-    const consumeSteeringMessages = conversationId &&
+    // drain while they are active. Claim a batch, persist it before sending,
+    // then acknowledge acceptance or return it to the inbox on rejection.
+    const steeringWorkspace = getCurrentWorkspace();
+    const steering: ModelSteering | undefined = conversationId &&
       (modelAdapter === 'claude-cli' || modelAdapter === 'codex-cli')
-      ? () => {
+      ? {
+        take: () => runWithWorkspace(steeringWorkspace, async () => {
+          await assertFlowExecutionCurrent(durableContext);
+          await input.executionAuthority?.pollRelatedInputs?.();
           const pending = takeSteeringMessages(conversationId);
+          if (!pending.length) return undefined;
           for (const message of pending) {
             if (!message.processNodeId && nodeId) message.processNodeId = nodeId;
           }
-          return pending;
+          let accepted = false;
+          let returned = false;
+          return {
+            messages: pending,
+            beforeSend: () => runWithWorkspace(steeringWorkspace, async () => {
+              await flushLiveProjection();
+              await assertFlowExecutionCurrent(durableContext);
+            }),
+            acknowledge: () => runWithWorkspace(steeringWorkspace, async () => {
+              accepted = true;
+              await flushLiveProjection();
+              await assertFlowExecutionCurrent(durableContext);
+              const ids = pending.map(message => message.id).filter(Boolean);
+              if (ids.length) await input.executionAuthority?.acknowledgeRelatedInputs?.(ids);
+            }),
+            requeue: () => runWithWorkspace(steeringWorkspace, () => {
+              if (accepted || returned) return;
+              returned = true;
+              requeueSteeringMessages(conversationId, pending);
+            }),
+          };
+        }),
+        subscribe: listener => runWithWorkspace(steeringWorkspace, () =>
+          subscribeSteeringMessages(conversationId, listener)),
         }
       : undefined;
 
@@ -1417,6 +1397,17 @@ export class ModelHandler {
           .map((t) => t.function.name)
       : [];
     const hasSubflowTool = subflowToolCallNames.length > 0;
+    const communicationToolNames = conversationId
+      ? (tools ?? []).filter(t => t.type === 'function' && isSubflowCommunicationTool(t.function.name)).map(t => t.function.name)
+      : [];
+    const detachedToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && (
+            t.function.name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX)
+            || t.function.name === 'subflow_task_get' || t.function.name === 'subflow_task_cancel'))
+          .map((t) => t.function.name)
+      : [];
+    const hasDetachedSubflowTool = detachedToolCallNames.length > 0;
     const behaviorToolCallNames = conversationId
       ? (tools ?? [])
           .filter((t) => t.type === 'function' && isBehaviorToolName(t.function.name))
@@ -1424,7 +1415,7 @@ export class ModelHandler {
       : [];
     const hasBehaviorTool = behaviorToolCallNames.length > 0;
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool || hasDetachedSubflowTool || communicationToolNames.length > 0)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1501,6 +1492,29 @@ export class ModelHandler {
           return outcome.data;
         };
       }
+    }
+
+    if (localToolExecutors && hasDetachedSubflowTool) {
+      for (const toolName of detachedToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const context = { conversationId, emit };
+          const outcome = toolName === 'subflow_task_get'
+            ? await executeTaskGet(String(args.taskId ?? ''), context)
+            : toolName === 'subflow_task_cancel'
+              ? await executeTaskCancel(String(args.taskId ?? ''), context)
+              : await executeDetachedSubflowStart(toolName, args, context);
+          if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
+          return outcome.data;
+        };
+      }
+    }
+
+    for (const toolName of communicationToolNames) {
+      localToolExecutors![toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+        const outcome = await executeSubflowCommunicationTool(toolName, args, { conversationId, signal: input.signal });
+        if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
+        return outcome.data;
+      };
     }
 
     if (localToolExecutors && hasBehaviorTool) {
@@ -1593,7 +1607,7 @@ export class ModelHandler {
       temperatureOverride: input.temperatureOverride,
       requestToolApproval,
       onTranscriptMessage,
-      consumeSteeringMessages,
+      steering,
       onModelDelta,
       onToolProgress,
       shouldAbort,
@@ -1859,6 +1873,7 @@ export class ModelHandler {
       }) => Promise<boolean>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       consumeSteeringMessages?: () => FlujoChatMessage[];
+      steering?: ModelSteering;
       onModelDelta?: (delta: ModelStreamDelta) => void;
       onToolProgress?: (progress: ModelToolProgress) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
@@ -2633,6 +2648,7 @@ export class ModelHandler {
                 ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
                     try {
                       const entry = await archiveModelDispatch({
+                        durableContext: opts.durableContext,
                         conversationId: opts.conversationId!,
                         runId: opts.runId,
                         nodeId: opts.nodeId!,
@@ -2658,6 +2674,7 @@ export class ModelHandler {
                       });
                       return entry.id;
                     } catch (error) {
+                      rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
                       return undefined;
                     }
@@ -2669,13 +2686,14 @@ export class ModelHandler {
                     outcome: 'completed' | 'error' | 'cancelled';
                   }): Promise<void> => {
                     try {
-                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome);
+                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome, opts.durableContext);
                       executionEventBus.emit(opts.conversationId!, {
                         type: 'model:dispatch-result',
                         dispatchId,
                         outcome,
                       });
                     } catch (error) {
+                      rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }
                   }
@@ -2694,6 +2712,7 @@ export class ModelHandler {
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
               consumeSteeringMessages: opts?.consumeSteeringMessages,
+              steering: opts?.steering,
               onModelDelta,
               onToolProgress,
               signal: abortController.signal,
@@ -3632,14 +3651,7 @@ export class ModelHandler {
             return;
           }
 
-          // call_subflow_* tool-invocation (issue #385, deferred Part B of #359):
-          // synthetic FLUJO tool that runs a tool-mode Subflow target's lanes
-          // INLINE (via runSubflowLanes(), the same bounded pool a parallel/spawn
-          // Subflow uses) and returns a structured JSON result — no graph
-          // transition. Only offered when a connected Subflow target authored
-          // `invocationMode: 'tool'` AND the experimental `subflowToolInvocation`
-          // setting is on (ProcessNode.generateHandoffTools), so this branch is
-          // inert for every existing flow.
+          // Inline subflow tools are available on every connected Subflow.
           if (isSubflowToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = await executeSubflowToolCall(name, args, { conversationId, emit });
@@ -3664,12 +3676,22 @@ export class ModelHandler {
             return;
           }
 
+          if (isSubflowCommunicationTool(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeSubflowCommunicationTool(name, args, { conversationId, toolCallId: id, signal });
+            const resultContent = outcome.success ? JSON.stringify(outcome.data) : `Error: ${outcome.error}`;
+            emit?.({ type: 'tool:result', toolCallId: id, name, result: resultContent.slice(0, 500), isError: !outcome.success });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: resultContent, timestamp: Date.now() });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
           if (name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel') {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = name === 'subflow_task_get'
-              ? await executeTaskGet(String(args.taskId ?? ''))
+              ? await executeTaskGet(String(args.taskId ?? ''), { conversationId })
               : name === 'subflow_task_cancel'
-                ? await executeTaskCancel(String(args.taskId ?? ''))
+                ? await executeTaskCancel(String(args.taskId ?? ''), { conversationId })
                 : await executeDetachedSubflowStart(name, args, { conversationId, emit });
             const resultContent = outcome.success ? JSON.stringify(outcome.data) : `Error: ${outcome.error}`;
             emit?.({ type: 'tool:result', toolCallId: id, name, result: resultContent.slice(0, 500), isError: !outcome.success });
@@ -4182,7 +4204,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name) || isSubflowCommunicationTool(name) || name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel'
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

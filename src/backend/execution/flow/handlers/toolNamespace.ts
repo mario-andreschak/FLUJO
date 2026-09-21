@@ -162,6 +162,11 @@ const SYNTHETIC_INTERNAL_TOOLS = new Set([
   'write_resource',
   'read_resource',
   'list_mcp_resources',
+  'subflow_list',
+  'subflow_send_message',
+  'subflow_wait',
+  'subflow_task_get',
+  'subflow_task_cancel',
 ]);
 
 /**
@@ -172,7 +177,7 @@ export function isInternalToolName(name: string, map?: ToolNameMap): boolean {
   if (map && map[name]) {
     return true;
   }
-  if (SYNTHETIC_INTERNAL_TOOLS.has(name)) {
+  if (SYNTHETIC_INTERNAL_TOOLS.has(name) || name.startsWith('call_subflow_') || name.startsWith('start_subflow_')) {
     return true;
   }
   return name.includes(LEGACY_SEP);

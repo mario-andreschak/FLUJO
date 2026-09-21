@@ -83,6 +83,20 @@ async function claimAssignment(personaId: string, key: string): Promise<PersonaA
 }
 
 describe('issue #415 phase 4 WorkItems', () => {
+  it('reports an identifiable stale Task conflict without changing stored work', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'stale-task-jim' });
+      const task = await createPersonaWorkItem({ personaId: persona.id, title: 'Current task' });
+      await expect(updatePersonaWorkItem(persona.id, task.id, {
+        title: 'Stale edit', expectedUpdatedAt: task.updatedAt - 1,
+      })).rejects.toMatchObject({ code: 'PERSONA_WORK_ITEM_CHANGED' });
+      expect(await getPersonaWorkItem(persona.id, task.id)).toMatchObject({ title: task.title, updatedAt: task.updatedAt });
+      expect(await updatePersonaWorkItem(persona.id, task.id, {
+        title: 'Reviewed edit', expectedUpdatedAt: task.updatedAt,
+      })).toMatchObject({ title: 'Reviewed edit' });
+    });
+  });
+
   it('enforces durable dependencies, readiness, priorities, deadlines, and deletion safety', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'work-jim' });
@@ -306,6 +320,36 @@ describe('issue #415 phase 4 MemoryKernel', () => {
       const forgotten = await forgetMemory(persona.id, correction.id);
       expect(forgotten.status).toBe('forgotten');
       expect(await getCoreMemory(persona.id)).toEqual([]);
+    });
+  });
+
+  it('rejects corrections of a replaced Memory even with its refreshed revision', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'correction-race-jim' });
+      const original = await rememberMemory({
+        personaId: persona.id, kind: 'semantic', scope: 'persona', status: 'active',
+        content: 'The review is on Monday.', confidence: 1, importance: 0.8,
+        trust: 'explicit_user', sourceRefs: [{ kind: 'user_statement', id: 'review-original' }],
+      });
+      const replacement = await correctMemory(persona.id, original.id, {
+        content: 'The review is on Tuesday.', expectedUpdatedAt: original.updatedAt,
+        sourceRefs: [{ kind: 'user_statement', id: 'review-replacement' }],
+      });
+      const superseded = await getMemoryItem(persona.id, original.id);
+      for (const expectedUpdatedAt of [original.updatedAt, superseded!.updatedAt, undefined]) {
+        await expect(correctMemory(persona.id, original.id, {
+          content: 'The stale editor says Wednesday.', expectedUpdatedAt,
+          sourceRefs: [{ kind: 'user_statement', id: 'stale-editor' }],
+        })).rejects.toMatchObject({ code: 'memory_changed' });
+      }
+      expect((await listMemoryItems(persona.id)).filter(item => item.status === 'active').map(item => item.id)).toEqual([replacement.id]);
+      expect(await listMemoryItems(persona.id)).toHaveLength(2);
+      const reviewed = await correctMemory(persona.id, replacement.id, {
+        content: 'The reviewed correction is Wednesday.', expectedUpdatedAt: replacement.updatedAt,
+        sourceRefs: [{ kind: 'user_statement', id: 'reviewed-editor' }],
+      });
+      expect(reviewed.supersedes).toEqual([replacement.id]);
+      expect((await listMemoryItems(persona.id)).filter(item => item.status === 'active').map(item => item.id)).toEqual([reviewed.id]);
     });
   });
 

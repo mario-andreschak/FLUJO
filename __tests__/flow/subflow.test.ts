@@ -338,7 +338,6 @@ describe('SubflowNode', () => {
   });
 
   it('reuses a caller-addressed keyed child as a real follow-up turn', async () => {
-    const sessionGate = jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValue(true);
     const sessionIdentity = 'run-1::sub-node::writer-a';
     const node = makeNode({
       subflowId: 'inner-flow',
@@ -377,7 +376,6 @@ describe('SubflowNode', () => {
     } finally {
       FlowExecutor.conversationStates.delete('parent-conv');
       FlowExecutor.conversationStates.delete('saved-child-conversation');
-      sessionGate.mockRestore();
     }
 
     expect(runFlowMock.mock.calls[0][0]).toMatchObject({

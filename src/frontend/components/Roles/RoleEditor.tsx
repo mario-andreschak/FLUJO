@@ -100,7 +100,10 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
   if (loading) return <Stack alignItems="center" sx={{ p: 6 }}><CircularProgress /></Stack>;
 
   return (
-    <Box component="main" sx={{ p: { xs: 2, md: 4 }, maxWidth: 760, mx: 'auto' }}>
+    <Box sx={{
+      p: { xs: 2, md: 4 }, maxWidth: 760, mx: 'auto', my: 2,
+      bgcolor: 'background.paper', border: 1, borderColor: 'divider', borderRadius: 2,
+    }}>
       <Typography variant="h4" component="h1">{mode === 'create' ? t('roles.createTitle') : t('roles.editTitle')}</Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>{t('roles.editorDescription')}</Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -124,7 +127,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
             onChange={(event) => { setPrompt(event.target.value); setDirty(true); }}
           />
           <Box>
-            <Typography variant="subtitle1">{t('roles.suggestedApps')}</Typography>
+            <Typography variant="subtitle1" component="h2">{t('roles.suggestedApps')}</Typography>
             <Typography variant="body2" color="text.secondary">{t('roles.appsHelper')}</Typography>
             <Stack direction="row" gap={1} flexWrap="wrap" sx={{ my: 1.5 }}>
               {selectedApps.map((app) => <Chip key={app} label={app} onDelete={() => { setSelectedApps((current) => current.filter((name) => name !== app)); setDirty(true); }} />)}

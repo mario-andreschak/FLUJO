@@ -134,6 +134,7 @@ describe('Persona runtime compaction', () => {
       activity: { retentionMs: 30 * dayMs, detailedLimit: 200 },
       flowDispatch: { retentionMs: 30 * dayMs, detailedLimit: 200 },
       leaseHistory: { retentionMs: 90 * dayMs, detailedLimit: 1_000 },
+      behaviorCallPin: { retentionMs: 30 * dayMs, detailedLimit: 200 },
     });
     expect(getMailboxItemRetentionPolicy()).toMatchObject(
       PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem,

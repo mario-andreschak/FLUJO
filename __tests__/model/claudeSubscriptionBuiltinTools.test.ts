@@ -16,6 +16,7 @@
 import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 // Capture the options the adapter passes to the Agent SDK's query().
 const queryMock = jest.fn();
@@ -146,66 +147,83 @@ beforeEach(() => {
 });
 
 describe('ClaudeSubscriptionAdapter — mid-run steering', () => {
-  it('streams an accepted intervention into the active SDK query and records it durably', async () => {
-    const streamedInputs: unknown[] = [];
-    const response = (async function* () {
-      // Any SDK event is a safe opportunity for the adapter to inspect FLUJO's
-      // steering inbox. The real SDK also emits partial stream events here.
-      yield { type: 'system', session_id: 'sess-1' };
-      yield {
-        type: 'assistant',
-        session_id: 'sess-1',
-        uuid: 'corrected-turn',
-        message: {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'corrected answer' }],
-          usage: { input_tokens: 2, output_tokens: 2 },
-        },
-      };
-      yield {
-        type: 'result',
-        subtype: 'success',
-        result: 'corrected answer',
-        session_id: 'sess-1',
-        usage: { input_tokens: 2, output_tokens: 2 },
-      };
-    })() as AsyncGenerator<unknown> & { streamInput: (input: AsyncIterable<unknown>) => Promise<void> };
-    response.streamInput = async (input) => {
-      for await (const message of input) streamedInputs.push(message);
-    };
-    queryMock.mockReturnValue(response);
+  it('does not call the SDK after archive authority is lost', async () => {
+    const lost = new FlowExecutionAuthorityError('Persona was deleted');
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
 
-    const injected = {
-      id: 'steer-claude-1',
-      role: 'user',
-      content: 'change direction now',
-      timestamp: 123,
-      injected: true,
-    } as FlujoChatMessage;
-    const consumeSteeringMessages = jest
-      .fn<FlujoChatMessage[], []>()
-      .mockReturnValueOnce([injected])
-      .mockReturnValue([]);
+  it('propagates authority loss from SDK outcome persistence', async () => {
+    const lost = new FlowExecutionAuthorityError('Lease expired');
+    await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      onSdkRequest: async () => 'dispatch_lost',
+      onSdkRequestResult: async () => { throw lost; },
+    }))).rejects.toBe(lost);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses one open input stream and delivers during a quiet SDK turn', async () => {
+    const streamedInputs: Array<{ message: { content: unknown } }> = [];
+    let resolveInitial!: () => void;
+    let resolveCorrection!: () => void;
+    const initial = new Promise<void>(resolve => { resolveInitial = resolve; });
+    const correction = new Promise<void>(resolve => { resolveCorrection = resolve; });
+    let pump: Promise<void>;
+    queryMock.mockImplementation(({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+      pump = (async () => {
+        for await (const message of prompt) {
+          streamedInputs.push(message);
+          if (streamedInputs.length === 1) resolveInitial();
+          else resolveCorrection();
+        }
+      })();
+      return (async function* () {
+        yield { type: 'system', session_id: 'sess-1' };
+        // No output event arrives to trigger delivery: only the inbox listener
+        // can unblock this quiet provider operation.
+        await correction;
+        yield { type: 'result', subtype: 'success', result: 'old turn', session_id: 'sess-1' };
+        yield { type: 'assistant', session_id: 'sess-1', uuid: 'corrected-turn',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'corrected answer' }] } };
+        yield { type: 'result', subtype: 'success', result: 'corrected answer', session_id: 'sess-1' };
+      })();
+    });
+    const injected = { id: 'steer-claude-1', role: 'user', content: 'change direction now', timestamp: 123, injected: true } as FlujoChatMessage;
+    const beforeSend = jest.fn(async () => undefined);
+    const acknowledge = jest.fn(async () => undefined);
+    const requeue = jest.fn();
+    let pending = false;
+    let notify!: () => void;
+    const unsubscribe = jest.fn();
     const onTranscriptMessage = jest.fn();
-
-    const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
-      consumeSteeringMessages,
+    const running = new ClaudeSubscriptionAdapter().createCompletion(baseInput({
       onTranscriptMessage,
+      steering: {
+        take: async () => {
+          if (!pending) return undefined;
+          pending = false;
+          return { messages: [injected], beforeSend, acknowledge, requeue };
+        },
+        subscribe: listener => { notify = listener; return unsubscribe; },
+      },
     }));
-
-    expect(streamedInputs).toEqual([
-      expect.objectContaining({
-        type: 'user',
-        message: { role: 'user', content: 'change direction now' },
-      }),
-    ]);
+    await initial;
+    pending = true; notify();
+    const result = await running;
+    await pump!;
+    expect(streamedInputs).toHaveLength(2);
+    expect(streamedInputs[1].message.content).toBe('change direction now');
+    expect(result.completion.choices[0].message.content).toBe('corrected answer');
     expect(result.transcript).toEqual([
-      expect.objectContaining({ id: 'steer-claude-1', role: 'user', content: 'change direction now' }),
+      expect.objectContaining({ id: injected.id, content: injected.content }),
       expect.objectContaining({ role: 'assistant', content: 'corrected answer' }),
     ]);
-    expect(onTranscriptMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'steer-claude-1' }),
-    );
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(requeue).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -890,4 +908,28 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       isError: true,
     });
   });
+});
+
+
+it('requeues Claude steering when its authority check rejects before the SDK write', async () => {
+  queryMock.mockImplementation(({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+    const pump = (async () => { for await (const _message of prompt) { /* SDK input pump */ } })();
+    void pump.catch(() => {});
+    return (async function* () {
+      yield { type: 'system', session_id: 'session' };
+      await pump;
+    })();
+  });
+  const batch = {
+    messages: [{ id: 'rejected', role: 'user' as const, content: 'Correction', timestamp: 1 }],
+    beforeSend: jest.fn(async () => { throw new Error('delivery fence rejected'); }),
+    acknowledge: jest.fn(async () => undefined), requeue: jest.fn(),
+  };
+  let pending = true;
+  await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({ steering: {
+    take: async () => { if (!pending) return undefined; pending = false; return batch; },
+    subscribe: () => () => {},
+  } }))).rejects.toThrow('delivery fence rejected');
+  expect(batch.requeue).toHaveBeenCalledTimes(1);
+  expect(batch.acknowledge).not.toHaveBeenCalled();
 });

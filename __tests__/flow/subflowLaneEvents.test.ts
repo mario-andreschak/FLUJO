@@ -6,7 +6,7 @@
  * laneTitle + laneConversationId (and ONLY those two events do — forwarded
  * events stay {laneIndex, laneCount}); the lane's runFlow call receives the
  * SAME pre-generated conversationId and the title falls back to the subflow
- * name for static fan-out lanes; saveConversation: false suppresses the id;
+ * name for static fan-out lanes; ephemeral children retain a live address;
  * and a lane whose runFlow THROWS still yields a synthetic error subflow:done.
  */
 
@@ -147,7 +147,7 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
     }
   });
 
-  it('saveConversation: false → ephemeral lanes, no laneConversationId, no caller-supplied id', async () => {
+  it('saveConversation: false preserves stable live lane ids without making children persistent', async () => {
     respondingChild();
 
     const events: Array<Record<string, unknown>> = [];
@@ -161,12 +161,14 @@ describe('lane identity on subflow boundary events (issue #157)', () => {
 
     const boundaries = events.filter((e) => e.type === 'subflow:start' || e.type === 'subflow:done');
     expect(boundaries.length).toBe(4);
-    expect(boundaries.every((e) => e.laneConversationId === undefined)).toBe(true);
+    expect(boundaries.every((e) => typeof e.laneConversationId === 'string')).toBe(true);
     // Labels still flow (the live view needs them regardless of persistence).
     expect(boundaries.every((e) => typeof e.laneTitle === 'string')).toBe(true);
 
     const inputs = runFlowMock.mock.calls.map((c) => c[0] as Record<string, unknown>);
-    expect(inputs.every((i) => i.mode === 'ephemeral' && i.conversationId === undefined)).toBe(true);
+    expect(inputs.every((i) => i.mode === 'ephemeral' && typeof i.conversationId === 'string')).toBe(true);
+    expect(new Set(inputs.map((i) => i.conversationId)).size).toBe(2);
+    expect(new Set(boundaries.map((e) => e.laneConversationId))).toEqual(new Set(inputs.map((i) => i.conversationId)));
   });
 
   it('a lane whose runFlow THROWS still emits a synthetic subflow:done with status error', async () => {

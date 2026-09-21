@@ -155,6 +155,14 @@ describe('subflow task handles', () => {
     expect(final!.completedAt).toBeGreaterThan(0);
   });
 
+  it('does not resurrect a cancelled task with a late conditional completion', async () => {
+    const task = (await seed())!;
+    await requestCancel(task.taskId);
+    const late = await patchTask(task.taskId, { status: 'completed', outputText: 'too late' }, { ifStatus: 'working' });
+    expect(late?.status).toBe('cancelled');
+    expect(late?.outputText).toBeUndefined();
+  });
+
   it('lists newest-first and filters by conversation and status', async () => {
     const a = await seed({ originConversationId: 'conv-a' });
     const b = await seed({ originConversationId: 'conv-b' });

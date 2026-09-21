@@ -13,9 +13,11 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 
 import {
   getActivityRetentionPolicy,
+  getBehaviorCallPinRetentionPolicy,
   getFlowDispatchRetentionPolicy,
   getMailboxItemRetentionPolicy,
 } from './compactRuntime';
+import { listBehaviorCallPins } from './behaviorCallPins';
 import {
   getPersonaRetentionEligibility,
   type PersonaRetentionEligibilityReason,
@@ -42,7 +44,8 @@ const MAX_PERSONA_CONCURRENCY = 8;
 export type PersonaRuntimeRetentionCollection =
   | 'mailboxItems'
   | 'activities'
-  | 'flowDispatches';
+  | 'flowDispatches'
+  | 'behaviorCallPins';
 
 export interface PersonaRuntimeRetentionCollectionObservation
   extends RetentionExecutionResult {
@@ -122,6 +125,7 @@ function emptySweepResult(
       mailboxItems: emptyExecutionResult(),
       activities: emptyExecutionResult(),
       flowDispatches: emptyExecutionResult(),
+      behaviorCallPins: emptyExecutionResult(),
     },
     observations: [],
     durationMs: 0,
@@ -253,11 +257,12 @@ async function runSweep(
               if (!lockedEligibility.eligible) return null;
               await lock.assertOwned();
 
-              const [mailboxItems, activities, flowDispatches, before] =
+              const [mailboxItems, activities, flowDispatches, behaviorCallPins, before] =
                 await Promise.all([
                   listPersonaMailboxItems(current.persona.id),
                   listPersonaActivities(current.persona.id),
                   listPersonaFlowDispatchRecordsForRetention(current.persona.id),
+                  listBehaviorCallPins(current.persona.id),
                   getPersonaStorageStats(current.persona.id),
                 ]);
 
@@ -306,6 +311,15 @@ async function runSweep(
                   now,
                   mode: initialConfig.mode,
                   actualBytesBefore: storageBytes(before, 'flowDispatches'),
+                  authorizeWrite,
+                }),
+                await processCollection({
+                  collection: 'behaviorCallPins',
+                  records: behaviorCallPins,
+                  policy: getBehaviorCallPinRetentionPolicy(activities, lock),
+                  now,
+                  mode: initialConfig.mode,
+                  actualBytesBefore: storageBytes(before, 'behaviorCallPins'),
                   authorizeWrite,
                 }),
               ];

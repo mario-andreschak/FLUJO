@@ -29,7 +29,7 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type FocusEvent, type ReactNode, useEffect, useId, useState } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { PersonaDetail } from '@/frontend/services/personas';
@@ -42,8 +42,16 @@ import {
   type PersonaArea,
   type PersonaAreaSubsection,
 } from './personaTypes';
+import PersonaStatusUpdates from './PersonaStatusUpdates';
 
 type PersonaNavigationArea = PersonaArea | 'behaviors' | 'apps';
+
+const navigationScrollMargin = 'calc(var(--app-bar-height) + var(--active-subnav-height) + 16px)';
+
+function revealNavigationFocus(event: FocusEvent<HTMLElement>) {
+  if (event.target !== event.currentTarget) return;
+  event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+}
 
 const PERSONA_NAVIGATION_AREAS = [
   'overview',
@@ -97,6 +105,8 @@ export default function PersonaDetailShell({
   const { t } = useI18n();
   const { replace } = useRouter();
   const theme = useTheme();
+  const navigationId = useId();
+  const panelId = `${navigationId}-panel`;
   const [area, setArea] = useState<PersonaArea>('overview');
   const [subsection, setSubsection] = useState<PersonaAreaSubsection>(null);
   const selectedNavigationArea: PersonaNavigationArea = area === 'setup'
@@ -161,7 +171,12 @@ export default function PersonaDetailShell({
   };
 
   return (
-    <Stack spacing={2.5}>
+    <Stack spacing={2.5} sx={{
+      minWidth: 0,
+      overflowWrap: 'anywhere',
+      '& .MuiChip-root': { maxWidth: '100%', height: 'auto' },
+      '& .MuiChip-label': { whiteSpace: 'normal', overflowWrap: 'anywhere', py: 0.5 },
+    }}>
       <Button
         component={Link}
         href={withWorkspaceUrl('/personas')}
@@ -197,20 +212,26 @@ export default function PersonaDetailShell({
           >
             {detail.persona.name.slice(0, 2).toUpperCase()}
           </Avatar>
-          <Box flex={1} minWidth={0}>
+          <Box flex={1} minWidth={0} sx={{ maxWidth: '100%' }}>
+            <PersonaStatusUpdates
+              persona={detail.persona}
+              tasks={detail.presentation.tasks}
+              workItems={detail.workItems}
+              lifecycleLabel={lifecycleLabel}
+            />
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography
                 variant="h3"
                 component="h1"
                 fontWeight={790}
                 letterSpacing="-0.045em"
+                sx={{ maxWidth: '100%' }}
               >
                 {detail.persona.name}
               </Typography>
               <Chip
                 color={lifecycleColor(detail.persona.lifecycleState)}
                 label={lifecycleLabel}
-                aria-live="polite"
               />
             </Stack>
             <Typography color="text.secondary" fontWeight={650}>
@@ -253,6 +274,7 @@ export default function PersonaDetailShell({
       </Paper>
       <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <Tabs
+          data-persona-navigation
           value={selectedNavigationArea}
           onChange={(_event, value: PersonaNavigationArea) => selectArea(value)}
           variant="scrollable"
@@ -264,6 +286,10 @@ export default function PersonaDetailShell({
             return (
               <Tab
                 key={key}
+                id={`${navigationId}-${key}`}
+                aria-controls={panelId}
+                onFocus={revealNavigationFocus}
+                sx={{ scrollMarginTop: navigationScrollMargin }}
                 value={key}
                 icon={<Icon fontSize="small" />}
                 iconPosition="start"
@@ -273,7 +299,16 @@ export default function PersonaDetailShell({
           })}
         </Tabs>
       </Paper>
-      {renderArea(area, subsection)}
+      <Box
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={`${navigationId}-${selectedNavigationArea}`}
+        tabIndex={0}
+        onFocus={revealNavigationFocus}
+        sx={{ minWidth: 0, scrollMarginTop: navigationScrollMargin }}
+      >
+        {renderArea(area, subsection)}
+      </Box>
       <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
         <Button
           startIcon={<RefreshRounded />}

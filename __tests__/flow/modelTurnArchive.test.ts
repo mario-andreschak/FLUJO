@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { z } from 'zod';
+import { withWorkspaceRecoveryCapture, workspaceMutationStatus } from '@/backend/services/workspace/workspaceMutationGate';
 import {
   _setModelTurnArchiveDirForTests,
   archiveModelDispatch,
@@ -23,6 +24,26 @@ describe('modelTurnArchive', () => {
   afterEach(async () => {
     _setModelTurnArchiveDirForTests(previousDir);
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('holds model-turn outcome writes behind a coherent recovery capture', async () => {
+    const entry = await archiveModelDispatch({
+      conversationId: 'capture_conversation', nodeId: 'process_capture', modelId: 'model_capture',
+      modelName: 'Capture model', adapter: 'openai', operation: 'create', attempt: 1,
+      canonicalMessages: [], genericWire: [], sdkRequest: { messages: [] },
+    });
+    let update!: Promise<void>;
+    let settled = false;
+    await withWorkspaceRecoveryCapture(async () => {
+      update = updateModelDispatchOutcome('capture_conversation', entry.id, 'completed')
+        .then(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(workspaceMutationStatus().blocked).toBe(true);
+      expect(settled).toBe(false);
+      expect((await readModelTurnSnapshot('capture_conversation', entry.id))?.entry.outcome).toBe('running');
+    });
+    await update;
+    expect((await readModelTurnSnapshot('capture_conversation', entry.id))?.entry.outcome).toBe('completed');
   });
 
   it('archives native SDK media, redacts credentials, and updates outcomes', async () => {

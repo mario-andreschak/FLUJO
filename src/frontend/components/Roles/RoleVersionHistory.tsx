@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { localizeRoleBehavior } from '@/frontend/utils/roleBehaviorLabels';
+
+import { useRef, useState } from 'react';
 import {
-  Accordion, AccordionDetails, AccordionSummary, Alert, Button, CircularProgress, List, ListItem, ListItemText, Stack, Typography,
+  Accordion, AccordionDetails, AccordionSummary, Alert, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, List, ListItem, ListItemText, Stack, Typography,
 } from '@mui/material';
 import { ExpandMoreRounded } from '@mui/icons-material';
 import type { PublicRole, PublicRoleVersion } from '@/shared/types/enduringAgent';
@@ -15,6 +17,10 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<PublicRoleVersion | null>(null);
+  const rollbackTrigger = useRef<HTMLButtonElement | null>(null);
+  const historyTrigger = useRef<HTMLDivElement | null>(null);
+  const rollbackPending = useRef(false);
 
   const load = async () => {
     if (loaded) return;
@@ -30,7 +36,8 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
   };
 
   const rollback = async (sourceVersionId: string) => {
-    if (!window.confirm(t('roles.rollbackConfirm'))) return;
+    if (rollbackPending.current) return;
+    rollbackPending.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -39,19 +46,21 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
         sourceVersionId,
       });
       onChanged(next);
+      setSelectedVersion(null);
       setVersions((await rolesService.versions(role.id)).versions);
       setLoaded(true);
     } catch (caught) {
       setError(caught instanceof RolesApiError ? caught.message : t('roles.saveFailed'));
     } finally {
+      rollbackPending.current = false;
       setLoading(false);
     }
   };
 
 
   return (
-    <Accordion onChange={(_, expanded) => { if (expanded) void load(); }}>
-      <AccordionSummary expandIcon={<ExpandMoreRounded />}>
+    <Accordion slots={{ heading: 'h2' }} onChange={(_, expanded) => { if (expanded) void load(); }}>
+      <AccordionSummary ref={historyTrigger} expandIcon={<ExpandMoreRounded />}>
         <Typography>{t('roles.history')}</Typography>
       </AccordionSummary>
       <AccordionDetails>
@@ -63,7 +72,7 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
               key={version.id}
               divider
               secondaryAction={!version.current && !role.archived
-                ? <Button disabled={loading} onClick={() => void rollback(version.id)}>{t('roles.rollback')}</Button>
+                ? <Button disabled={loading} onClick={(event) => { rollbackTrigger.current = event.currentTarget; setError(null); setSelectedVersion(version); }}>{t('roles.rollback')}</Button>
                 : undefined}
             >
               <ListItemText
@@ -75,7 +84,7 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
                     </Typography>
                     <Typography component="span" variant="caption" color="text.secondary">
                       {t('roles.versionBehaviors', {
-                        behaviors: version.behaviors.map((behavior) => behavior.name).join(', '),
+                        behaviors: version.behaviors.map((behavior) => localizeRoleBehavior(behavior, t).name).join(', '),
                       })}
                     </Typography>
                   </Stack>
@@ -85,6 +94,19 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
             </ListItem>
           ))}
         </List>
+        <Dialog open={Boolean(selectedVersion)} fullWidth maxWidth="sm" aria-labelledby="role-rollback-title" disableRestoreFocus
+          onClose={() => { if (!rollbackPending.current) setSelectedVersion(null); }}
+          slotProps={{ transition: { onExited: () => {
+            const trigger = rollbackTrigger.current;
+            (trigger?.isConnected && !trigger.disabled ? trigger : historyTrigger.current)?.focus();
+          } } }}>
+          <DialogTitle id="role-rollback-title">{t('roles.rollback')} — {t('roles.version', { version: selectedVersion?.version ?? '' })}</DialogTitle>
+          <DialogContent><Typography>{t('roles.rollbackConfirm')}</Typography>{error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}</DialogContent>
+          <DialogActions sx={{ flexWrap: 'wrap', gap: 1 }}>
+            <Button autoFocus disabled={loading} onClick={() => setSelectedVersion(null)}>{t('roles.cancel')}</Button>
+            <Button variant="contained" disabled={loading || role.archived} onClick={() => { if (selectedVersion) void rollback(selectedVersion.id); }}>{t('roles.rollback')}</Button>
+          </DialogActions>
+        </Dialog>
       </AccordionDetails>
     </Accordion>
   );

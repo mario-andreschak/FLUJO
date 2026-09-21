@@ -23,10 +23,9 @@ import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
  *
- * When a Subflow node's `invocationMode` property is `'tool'` (and the
- * experimental `subflowToolInvocation` setting is on), ProcessNode advertises
- * it as a distinct `call_subflow_<slug>` tool instead of the usual
- * `handoff_to_<slug>` transition tool (see ProcessNode.generateHandoffTools).
+ * Every connected Subflow is advertised as a `call_subflow_<slug>` tool,
+ * alongside its graph handoff and background launch tools. No setting or
+ * per-node mode is required (see ProcessNode.generateHandoffTools).
  * Calling it does NOT transition the engine graph: it runs the target
  * Subflow's underlying flow INLINE, right here inside the tool call, through
  * the SAME bounded lane engine a parallel/spawn Subflow uses
@@ -35,7 +34,7 @@ import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
  * so the model stays on its current node and keeps working with the answer.
  *
  * Dispatch mirrors the existing `question` / `todo` / `write_resource`
- * synthetic tools: a deterministic ToolDefinition offered per opted-in
+ * synthetic tools: a deterministic ToolDefinition offered per connected
  * target, executed by name in BOTH tool loops — ModelHandler.processToolCalls
  * (request/response path) and via `localToolExecutors` (self-orchestrating
  * Claude-subscription / Codex adapters).
@@ -77,7 +76,7 @@ export function buildSubflowTool(
       'CALLABLE SUBFLOW TOOL (not a handoff): calling this runs the ' +
       `"${target.label}" subflow right now and returns its result as structured JSON ` +
       '(success/output/error per lane) — you stay on the current step and can keep working ' +
-      'with the answer. Experimental: this call is NOT resumable; if it is interrupted it must ' +
+      'with the answer. This call is NOT resumable; if it is interrupted it must ' +
       'be retried from scratch.',
     inputSchema: {
       type: 'object',

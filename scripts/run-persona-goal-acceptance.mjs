@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { validatePersonaGoalAcceptance } from './validate-persona-goal-acceptance.mjs';
+import { hashPersonaAcceptanceSourceDiff } from './persona-acceptance-source.mjs';
 
 const options = new Map();
 const allowed = new Set(['mode', 'model', 'output', 'timeout-seconds', 'preflight', 'tools']);
@@ -25,10 +25,7 @@ const runId = `${mode}-${new Date().toISOString().replace(/[:.]/g, '-')}-${proce
 const output = path.resolve(options.get('output') ?? path.join('goal-acceptance-artifacts', runId));
 await fs.mkdir(output, { recursive: true });
 if ((await fs.readdir(output)).length) throw new Error(`Output directory must be empty to preserve prior evidence: ${output}`);
-const sourceHash = createHash('sha256').update(execFileSync('git', ['-c', 'core.safecrlf=false', 'diff', '--binary', 'HEAD'], { stdio: ['ignore', 'pipe', 'pipe'] }));
-const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' }).trim().split('\n').filter(name => /^(?:src|scripts|__tests__|docs|\.github)\//.test(name));
-for (const name of untracked.sort()) sourceHash.update(name).update(await fs.readFile(name));
-const sourceDiffSha256 = sourceHash.digest('hex');
+const sourceDiffSha256 = await hashPersonaAcceptanceSourceDiff();
 process.stdout.write(`Goal acceptance ${runId}\nMode: ${mode}; tools: ${toolsMode}; model: ${options.get('model') ?? 'gpt-6-astra'}; commit: ${commit}\nEvidence: ${output}\n`);
 const child = spawn(process.execPath, [
   path.resolve('scripts/run-local-jest.cjs'), '--selectProjects', 'node', '--runInBand', '--runTestsByPath',

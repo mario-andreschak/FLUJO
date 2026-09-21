@@ -26,13 +26,13 @@ import {
 import { readPersonaRuntimeEvents } from '@/backend/services/enduringAgents/runtimeEvents';
 import type { PersonaRuntimeEvent } from '@/backend/services/enduringAgents/runtimeEvents';
 import { inspectAndReconcilePersonaRuntime } from '@/backend/services/enduringAgents/runtimeObservability';
+import { createPublicRole } from '@/backend/services/enduringAgents/roleAdmin';
 import {
-  createRoleVersion,
+  getRoleVersion,
   getPersonaWorkItem,
   listPersonaActivities,
   listPersonaMailboxItems,
   listPersonaWorkItems,
-  saveRoleDefinition,
 } from '@/backend/services/enduringAgents/store';
 import {
   controlPersonaWorkItem,
@@ -44,10 +44,6 @@ import type { Model } from '@/shared/types/model';
 import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
 import { saveItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
-import {
-  buildTestRoleDefinition,
-  buildTestRoleVersion,
-} from './fixtures/personaFactory';
 
 declare global {
   var __personaGoalEnduranceNativeCodex:
@@ -183,7 +179,9 @@ async function waitFor<T>(
     } catch (error) {
       lastError = error;
     }
-    await sleep(250);
+    // Observation shares the fixture's request budget with actual tools. Four
+    // polls per second exhaust that budget before a slow model can finish.
+    await sleep(1_000);
   }
   const suffix = lastError instanceof Error ? ' Last error: ' + lastError.message : '';
   throw new Error('Timed out waiting for ' + description + '.' + suffix);
@@ -352,12 +350,12 @@ function offlineCompletion() {
               ? 'Publish through the approved service and recover from retryable failures.'
               : 'Read back the service before retrying the stable idempotent publication.',
       });
-      // A partial outcome ends this scripted round. Drop only the in-memory
-      // conversation cursor so autonomous continuation derives its next phase
-      // from durable artifacts and independently observed fixture state.
-      conversations.delete(key);
       return outcome;
     }
+    // Reporting an outcome is a tool call, not the assistant's final response.
+    // Keep the cursor until the Flow asks for that response; otherwise this
+    // same Activity immediately starts another phase (including publication).
+    conversations.delete(key);
     return completion('The partial outcome and next action were recorded for automatic continuation.');
   };
 }
@@ -383,18 +381,18 @@ async function createConfiguration(model: Model) {
       source: { type: 'local' },
     },
   });
-  const roleDefinition = buildTestRoleDefinition();
-  const roleVersion = buildTestRoleVersion();
-  roleDefinition.name = 'Marketing Agent';
-  roleVersion.mission = [
-    'Make FLUJO known through accurate, useful and independently verifiable work.',
-    'Own the ongoing goal, maintain an actionable backlog and continue without routine supervision.',
-    'Use only assigned capabilities and approved effects. Recover from transient failures with bounded backoff.',
-    'Reconcile uncertain external effects before retrying. Retain exact dependencies and next actions.',
-    'Never treat an output count or model claim as proof of progress.',
-  ].join(' ');
-  await saveRoleDefinition(roleDefinition);
-  await createRoleVersion(roleVersion);
+  const role = await createPublicRole({
+    name: 'Marketing Agent',
+    prompt: [
+      'Make FLUJO known through accurate, useful and independently verifiable work.',
+      'Own the ongoing goal, maintain an actionable backlog and continue without routine supervision.',
+      'Use only assigned capabilities and approved effects. Recover from transient failures with bounded backoff.',
+      'Reconcile uncertain external effects before retrying. Retain exact dependencies and next actions.',
+      'Never treat an output count or model claim as proof of progress.',
+    ].join(' '),
+  });
+  const roleVersion = await getRoleVersion(role.currentVersionId);
+  if (!roleVersion) throw new Error('The public Role creation did not persist its current version.');
   const bundle = await createPersonaFromRole({
     name: 'Frederik',
     roleVersionId: roleVersion.id,
@@ -511,6 +509,13 @@ async function browserObservation(external: { state: any; audit: any[] }) {
         throw new Error('Configured model-call budget exhausted before another provider request.');
       }
       const startedAt = Date.now();
+      // Reserve the call budget before awaiting the provider, and retain the
+      // request if the runner kills this OS process before a response exists.
+      const callRecord: Record<string, unknown> = {
+        model: input.model.name, adapter: input.model.adapter,
+        conversationId: input.conversationId, startedAt, pid: process.pid, outcome: 'running',
+      };
+      modelCalls.push(callRecord);
       let runtimeDispatchId: string | undefined;
       try {
         if (mode === 'offline') {
@@ -533,13 +538,8 @@ async function browserObservation(external: { state: any; audit: any[] }) {
             outcome: 'completed',
           });
         }
-        modelCalls.push({
-          model: input.model.name,
-          adapter: input.model.adapter,
-          conversationId: input.conversationId,
-          startedAt,
+        Object.assign(callRecord, {
           completedAt: Date.now(),
-          pid: process.pid,
           outcome: 'completed',
           completionId: result.completion.id,
           completionModel: result.completion.model,
@@ -553,13 +553,8 @@ async function browserObservation(external: { state: any; audit: any[] }) {
             outcome: 'error',
           });
         }
-        modelCalls.push({
-          model: input.model.name,
-          adapter: input.model.adapter,
-          conversationId: input.conversationId,
-          startedAt,
+        Object.assign(callRecord, {
           completedAt: Date.now(),
-          pid: process.pid,
           outcome: 'error',
           errorName: error instanceof Error ? error.name : 'UnknownError',
         });
@@ -696,9 +691,12 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           && value.external.state.effects.length === 1
           && value.external.audit.some((event: any) =>
             event.type === 'publication_uncertain_effect_reconciled')
-          && Boolean(value.external.state.artifacts['backlog.md'])
+          && value.external.state.artifacts['backlog.md']?.observedAt >= phaseStartedAt
+          && (value.current?.goal?.rounds ?? 0) >= 4
+          && !value.current?.goal?.pendingTaskId
           && value.activities.some((activity: any) =>
             activity.id !== second.processEpoch.crashActivityId
+            && activity.status === 'completed'
             && activity.createdAt >= Date.parse(second.processEpoch.endedAt)),
         'fresh verified progress after forced process recovery',
       );
@@ -737,7 +735,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
             : undefined;
           return { events, dispatches, activities, round, dispatch, activity };
         },
-        value => value.activities.length > prePauseCount && Boolean(value.activity),
+        value => value.activities.length > prePauseCount && value.activity?.status === 'completed',
         'a durable manual-retry round linked to a fresh Activity',
       );
       const manualRetryActivity = retryAdmission.activity;
@@ -866,6 +864,15 @@ async function browserObservation(external: { state: any; audit: any[] }) {
       const browser = await browserObservation(external);
       const allModelCalls = [...first.modelCalls, ...second.modelCalls, ...modelCalls];
       const completedModelCalls = allModelCalls.filter(call => call.outcome === 'completed');
+      const crashActivity = activities.find(activity => activity.id === second.processEpoch.crashActivityId);
+      const crashCallObserved = mode === 'live' && second.modelCalls.some(call =>
+        call.outcome === 'running' && call.conversationId === crashActivity?.conversationId
+        && call.pid === second.processEpoch.pid
+        && external.audit.some((event: any) => event.type === 'publication_committed_ack_withheld'
+          && event.at >= Number(call.startedAt)
+          && event.at <= Date.parse(second.processEpoch.endedAt)));
+      const observedModelPids = new Set(completedModelCalls.map(call => call.pid));
+      if (crashCallObserved) observedModelPids.add(second.processEpoch.pid);
       const thirdEpoch = {
         epochId: 'epoch-3-recovered',
         pid: process.pid,
@@ -931,7 +938,11 @@ async function browserObservation(external: { state: any; audit: any[] }) {
         oneOngoingGoal: items.filter(item => item.goal).length === 1
           && root?.goal?.completionPolicy === 'until_stopped',
         ordinaryMarketingSetup: first.observations.initialAgentEntries instanceof Array
-          && (first.observations.initialAgentEntries as unknown[]).length === 0,
+          && (first.observations.initialAgentEntries as unknown[]).length === 0
+          && activities.length > 0
+          && activities.every(activity => activity.instructionContext?.roleName === 'Marketing Agent'
+            && activity.instructionContext?.personaName === 'Frederik'
+            && activity.instructionContext?.roleVersionId === first.roleVersionId),
         multipleAutonomousWakeups: autonomousEligibleRounds >= 4,
         gracefulProcessRestart: first.processEpoch.pid !== second.processEpoch.pid
           && Boolean(second.processEpoch.postRestartActivityId),
@@ -960,7 +971,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
         cleanupCompleted: external.state.cleanup.status === 'completed',
         browserExecution: browser.verified,
         actualModelObserved: completedModelCalls.length > 0
-          && new Set(completedModelCalls.map(call => call.pid)).size === 3
+          && observedModelPids.size === 3
           && allModelCalls.every(call => call.model === model.name && call.adapter === model.adapter)
           && (mode !== 'live' || completedModelCalls.every(call =>
             typeof call.completionId === 'string'
@@ -981,7 +992,7 @@ async function browserObservation(external: { state: any; audit: any[] }) {
           authoritativeLiveModel: mode === 'live',
           startedAt: first.processEpoch.startedAt,
           endedAt: third.processEpoch.endedAt,
-          verifierVersion: 'persona-goal-endurance-v1',
+          verifierVersion: 'persona-goal-endurance-v2',
           policyVersion: 'issue-505-endurance-metrics-v1',
         },
         configuration: {

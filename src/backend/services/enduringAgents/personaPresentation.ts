@@ -109,6 +109,9 @@ function historyEntry(
     outcome: presentationOutcome(activity),
     occurredAt: activityTime(activity),
     summary: activitySummary(activity, byWorkItemId),
+    ...(activity.kind === 'assignment' && activity.source.sourceId && byWorkItemId?.has(activity.source.sourceId)
+      ? {}
+      : { summaryKind: activity.kind }),
     ...(resultSummary ? { resultSummary } : {}),
     recordLinks: recordLinks(activity),
     advanced: {

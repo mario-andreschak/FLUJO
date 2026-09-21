@@ -5,6 +5,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
 import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 /**
  * Captured run resources for oversized PRIOR tool results/args, keyed by the
@@ -72,6 +73,21 @@ export interface SdkRequestSnapshot {
  * (ModelHandler) is responsible for resolving/decrypting the API key and
  * stripping FLUJO-internal fields (timestamps) from the messages first.
  */
+export interface SteeringDelivery {
+  messages: FlujoChatMessage[];
+  /** After recording the messages, flush their transcript and check the run fence. */
+  beforeSend(): Promise<void>;
+  /** The SDK accepted the input; complete its durable mailbox acknowledgement. */
+  acknowledge(): Promise<void>;
+  /** Return an unaccepted batch to the head of the inbox. Safe to call repeatedly. */
+  requeue(): void;
+}
+
+export interface ModelSteering {
+  take(): Promise<SteeringDelivery | undefined>;
+  subscribe(listener: () => void): () => void;
+}
+
 export interface CompletionInput {
   /** The model record (used for name, baseUrl, provider, adapter, ...). */
   model: Model;
@@ -233,6 +249,8 @@ export interface CompletionInput {
    * accepted intervention durable and reconciles the optimistic UI bubble by id.
    */
   consumeSteeringMessages?: () => FlujoChatMessage[];
+  /** Live delivery with explicit ownership; an unaccepted batch must be requeued. */
+  steering?: ModelSteering;
   /**
    * Live token/tool-argument sink. Request/response adapters use it while
    * consuming their native SDK stream; self-orchestrating adapters use it for
@@ -313,7 +331,8 @@ export interface CompletionAdapter {
 
 /**
  * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
- * failures are swallowed: observability must never make a model call fail.
+ * failures remain best-effort, except a lost execution fence: an obsolete
+ * Persona/meeting worker must not start or continue a provider request.
  */
 export async function observeSdkRequest<T>(
   input: Pick<CompletionInput, 'onSdkRequest' | 'onSdkRequestResult' | 'signal'>,
@@ -324,13 +343,14 @@ export async function observeSdkRequest<T>(
   let finalized = false;
   try {
     dispatchId = await input.onSdkRequest?.(snapshot);
-  } catch {
+  } catch (error) {
+    rethrowFlowExecutionAuthorityError(error);
     dispatchId = undefined;
   }
   const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
     if (!dispatchId || finalized) return;
     finalized = true;
-    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(() => undefined);
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(rethrowFlowExecutionAuthorityError);
   };
   try {
     const result = await task();

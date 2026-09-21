@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import {
   _resetWorkspaceMigrationState,
   _workspaceMigrationPathsForTests,
@@ -56,6 +57,22 @@ describe('direct workspace migration startup behavior', () => {
 
     expect(marker).not.toHaveProperty('transactionId');
     expect(marker).not.toHaveProperty('manifestDigest');
+  });
+
+  it('releases the layout lock when snapshot admission fails before migration starts', async () => {
+    const admission = jest.spyOn(snapshotStore, 'withMigrationAccess')
+      .mockRejectedValueOnce(new Error('Snapshot admission failed'));
+    try {
+      await expect(migrateWorkspaceLayout()).rejects.toThrow('Snapshot admission failed');
+      await expect(fs.lstat(_workspaceMigrationPathsForTests().lock))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      admission.mockRestore();
+    }
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({
+      subtrees: { userdata: 'created' },
+    });
   });
 
   it('prints a plain-English completion summary with moved and skipped reasons', async () => {

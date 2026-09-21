@@ -43,10 +43,12 @@ import {
 } from '@/frontend/services/personas';
 import type { Flow } from '@/frontend/types/flow/flow';
 import { personaFlowBuilderUrl } from '@/frontend/utils/personaFlowNavigation';
+import { localizeRoleBehavior } from '@/frontend/utils/roleBehaviorLabels';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type {
   PersonaCreationDraft,
   PersonaCreationDraftPayload,
+  PersonaCreationReadiness,
   PersonaFlowReadiness,
 } from '@/shared/types/enduringAgent';
 
@@ -144,6 +146,8 @@ export default function PersonaCreationWizard({
   const [status, setStatus] = useState<string | null>(null);
   const [draftRecord, setDraftRecord] = useState<PersonaCreationDraft | null>(null);
   const [roleRefreshError, setRoleRefreshError] = useState<string | null>(null);
+  const [setupCheck, setSetupCheck] = useState<{ key: string; result: PersonaCreationReadiness } | null>(null);
+  const [setupRefresh, setSetupRefresh] = useState(0);
   const roleRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({
     sequence: 0,
     controller: null,
@@ -212,6 +216,7 @@ export default function PersonaCreationWizard({
     setError(null);
     setStatus(null);
     setRoleRefreshError(null);
+    setSetupCheck(null);
     setDraftRecord(null);
     hydratingDraftIdRef.current = null;
     setIdempotencyKey(uuidv4());
@@ -354,12 +359,10 @@ export default function PersonaCreationWizard({
 
   useEffect(() => {
     if (!open) return;
-    const missing = refsToCheck.filter(
-      (ref) => !readiness[ref] && !loadingReadiness.has(ref),
-    );
-    if (missing.length === 0) return;
-    setLoadingReadiness((current) => new Set([...current, ...missing]));
-    void Promise.all(missing.map(async (ref) => {
+    let cancelled = false;
+    setReadiness({});
+    setLoadingReadiness(new Set(refsToCheck));
+    void Promise.all(refsToCheck.map(async (ref) => {
       try {
         return [ref, await personasService.flowReadiness(ref, {
           allowModelFallback: true,
@@ -371,22 +374,47 @@ export default function PersonaCreationWizard({
         }] as const;
       }
     })).then((results) => {
-      setReadiness((current) => Object.fromEntries([
-        ...Object.entries(current),
-        ...results,
-      ]));
-      setLoadingReadiness((current) => {
-        const next = new Set(current);
-        missing.forEach((ref) => next.delete(ref));
-        return next;
-      });
+      if (cancelled) return;
+      setReadiness(Object.fromEntries(results));
+      setLoadingReadiness(new Set());
     });
-  }, [loadingReadiness, open, readiness, refsToCheck, t]);
+    return () => { cancelled = true; };
+  }, [open, refsToCheck, setupRefresh, t]);
 
   const setRole = (id: string) => {
     setRoleVersionId(id);
     setAppsEdited(false);
   };
+
+  const setupInput = useMemo(() => ({
+    roleVersionId,
+    ...(coreFlowRef ? { coreFlowRef } : {}),
+    behaviorFlowRefs,
+  }), [roleVersionId, coreFlowRef, behaviorFlowRefs]);
+  const setupKey = JSON.stringify([setupInput, setupRefresh]);
+  const setupResult = setupCheck?.key === setupKey ? setupCheck.result : null;
+  useEffect(() => {
+    if (!open || !roleVersionId) return;
+    const controller = new AbortController();
+    void personasService.creationReadiness(setupInput, controller.signal).then((result) => {
+      if (!controller.signal.aborted) setSetupCheck({ key: setupKey, result });
+    }).catch(() => {
+      if (!controller.signal.aborted) setSetupCheck({
+        key: setupKey,
+        result: { state: 'invalid', issues: [tRef.current('personas.create.setupCheckFailed')], models: [] },
+      });
+    });
+    return () => controller.abort();
+  }, [open, roleVersionId, setupInput, setupKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => {
+      if (document.visibilityState !== 'hidden') setSetupRefresh((value) => value + 1);
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [open]);
 
   const toggleBehavior = (id: string) => {
     setBehaviorFlowRefs((current) => current.includes(id)
@@ -404,11 +432,12 @@ export default function PersonaCreationWizard({
   const flowReady = (ref: string) => readiness[ref]?.state === 'ready';
   const stepValid = [
     Boolean(name.trim()) && avatarValid,
-    Boolean(selectedRole),
+    Boolean(selectedRole) && setupResult?.state === 'ready',
     true,
     behaviorFlowRefs.every(flowReady),
     Boolean(name.trim() && selectedRole && effectiveCore)
       && (!coreFlowRef || flowReady(coreFlowRef))
+      && setupResult?.state === 'ready'
       && behaviorFlowRefs.every(flowReady),
   ][step];
 
@@ -572,6 +601,28 @@ export default function PersonaCreationWizard({
                 {t('personas.create.roleUnavailable')}
               </Alert>
             )}
+            {(step === 1 || step === 4) && selectedRole && (
+              <Alert severity={!setupResult ? 'info' : setupResult.state === 'ready' ? 'success' : 'warning'} role="status">
+                <Typography fontWeight={700}>{t(!setupResult
+                  ? 'personas.create.checkingSetup'
+                  : setupResult.state === 'ready' ? 'personas.create.setupReady' : 'personas.create.setupNeedsAttention')}</Typography>
+                {setupResult?.state === 'ready' && setupResult.models.length > 0 && (
+                  <Typography variant="body2">{t('personas.create.setupModels', { models: setupResult.models.join(', ') })}</Typography>
+                )}
+                {setupResult?.state === 'invalid' && <>
+                  <Typography variant="body2">{t('personas.create.setupHelp')}</Typography>
+                  <Box component="details" sx={{ mt: 1 }}>
+                    <Box component="summary">{t('personas.create.setupDetails')}</Box>
+                    {setupResult.issues.map((issue) => <Typography variant="body2" key={issue}>{issue}</Typography>)}
+                  </Box>
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                    <Button component={Link} href={withWorkspaceUrl('/models')} target="_blank">{t('personas.create.configureModels')}</Button>
+                    <Button component={Link} href={withWorkspaceUrl(`/roles/${encodeURIComponent(selectedRole.roleDefinitionId)}`)} target="_blank">{t('personas.create.openRole')}</Button>
+                    <Button onClick={() => setSetupRefresh((value) => value + 1)}>{t('personas.retry')}</Button>
+                  </Stack>
+                </>}
+              </Alert>
+            )}
 
             {step === 0 && (
               <Stack spacing={2}>
@@ -600,6 +651,7 @@ export default function PersonaCreationWizard({
                   searchable
                   selectionMode="single"
                   ariaLabel={t('personas.create.roleTitle')}
+                  emptyMessage={t('personas.create.noRolesHelp')}
                   isLoading={!roles && loading}
                   items={selectableRoles.map((role) => ({
                     key: role.id,
@@ -717,7 +769,7 @@ export default function PersonaCreationWizard({
                     ? t('personas.create.reviewCoreOwned', { flow: selectedCore.name })
                     : t('personas.create.reviewCoreFromRole', {
                         flow: selectedRole?.coreFlowTemplate?.name
-                          ?? primaryRoleBehavior?.name
+                          ?? (primaryRoleBehavior ? localizeRoleBehavior(primaryRoleBehavior, t).name : undefined)
                           ?? roleDefaultCore?.name
                           ?? '',
                       })}
@@ -733,7 +785,7 @@ export default function PersonaCreationWizard({
                 <Typography>
                   {t('personas.create.reviewRequiredBehaviors', {
                     count: requiredBehaviorCount,
-                    flows: selectedRole?.behaviorSlots.map((slot) => slot.name).join(', ') ?? '',
+                    flows: selectedRole?.behaviorSlots.map((slot) => localizeRoleBehavior(slot, t).name).join(', ') ?? '',
                   })}
                 </Typography>
                 <Typography>{selectedBehaviors.length ? t('personas.create.reviewSupplementalBehaviors', { count: selectedBehaviors.length, flows: selectedBehaviors.map((flow) => flow.name).join(', ') }) : t('personas.create.reviewNoSupplementalBehaviors')}</Typography>
@@ -742,7 +794,7 @@ export default function PersonaCreationWizard({
                 <Typography color="text.secondary">{t('personas.create.memoryPostCreate')}</Typography>
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {avatarUrl && <Chip avatar={<Avatar src={avatarUrl} />} label={t('personas.create.pictureChosen')} />}
-                  <Chip color="success" label={t('personas.create.ready')} />
+                  {setupResult?.state === 'ready' && <Chip color="success" label={t('personas.create.ready')} />}
                 </Stack>
               </Stack>
             )}

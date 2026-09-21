@@ -30,7 +30,7 @@ on:
         required: true
         default: '1600'
       budget_usd:
-        description: Pre-approved provider budget ceiling
+        description: Declared provider budget (recorded, not enforced)
         required: true
         default: '25'
       model:

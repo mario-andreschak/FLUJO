@@ -6,7 +6,6 @@
 
 import { createHash } from 'crypto';
 
-import { EmbeddingProvider } from '@/backend/services/model/embeddings';
 import type {
   CreateMemoryEmbeddingInput,
   EmbeddingValidityResult,
@@ -69,6 +68,19 @@ function legacyEmbeddingStorageKey(personaId: string): StorageKey {
  */
 export function computeContentDigest(text: string): string {
   return createHash('sha256').update(text).digest('hex');
+}
+
+// Cached parsed records retain object identity between index revisions. Avoid
+// hashing the same 50k contents on every warm query. Weak keys do not keep
+// evicted records alive; checking the text also fences in-place edits.
+const contentDigests = new WeakMap<MemoryItem, { content: string; digest: string }>();
+
+function memoryContentDigest(item: MemoryItem): string {
+  const cached = contentDigests.get(item);
+  if (cached?.content === item.content) return cached.digest;
+  const digest = computeContentDigest(item.content);
+  contentDigests.set(item, { content: item.content, digest });
+  return digest;
 }
 
 /**
@@ -262,11 +274,18 @@ export function buildSemanticMemoryScores(
   queryVector: readonly number[],
   expectedModelId: string,
 ): Map<string, SemanticMemoryScore> {
-  if (queryVector.length === 0 || !queryVector.every(Number.isFinite)) return new Map();
+  const finite = Number.isFinite;
+  const sqrt = Math.sqrt;
+  if (queryVector.length === 0 || !queryVector.every(finite)) return new Map();
+  // The query is constant across the batch. Compute its norm once, and join
+  // vector validation, dot product and candidate norm in a single pass.
+  let querySquaredNorm = 0;
+  for (const value of queryVector) querySquaredNorm += value * value;
+  const queryNorm = sqrt(querySquaredNorm);
 
-  const embeddingByMemoryId = new Map(
-    embeddings.map((embedding) => [embedding.memoryId, embedding]),
-  );
+  // Avoid allocating a temporary pair array for every candidate on each query.
+  const embeddingByMemoryId = new Map<string, MemoryEmbedding>();
+  for (const embedding of embeddings) embeddingByMemoryId.set(embedding.memoryId, embedding);
   const scores = new Map<string, SemanticMemoryScore>();
 
   for (const item of items) {
@@ -274,16 +293,25 @@ export function buildSemanticMemoryScores(
     if (!embedding) continue;
     if (embedding.personaId !== personaId) continue;
     if (embedding.modelId !== expectedModelId) continue;
-    if (embedding.contentDigest !== computeContentDigest(item.content)) continue;
+    if (embedding.contentDigest !== memoryContentDigest(item)) continue;
     if (embedding.dimensions !== queryVector.length) continue;
     if (embedding.vector.length !== queryVector.length) continue;
-    if (!embedding.vector.every(Number.isFinite)) continue;
-
-    const cosine = EmbeddingProvider.cosineSimilarity(queryVector, embedding.vector);
-    if (!Number.isFinite(cosine)) continue;
+    let dot = 0;
+    let squaredNorm = 0;
+    let valid = true;
+    for (let index = 0; index < queryVector.length; index += 1) {
+      const value = embedding.vector[index];
+      if (!finite(value)) { valid = false; break; }
+      dot += queryVector[index] * value;
+      squaredNorm += value * value;
+    }
+    if (!valid) continue;
+    const denominator = queryNorm * sqrt(squaredNorm);
+    const cosine = denominator === 0 ? 0 : dot / denominator;
+    if (!finite(cosine)) continue;
     scores.set(item.id, {
       available: true,
-      score: Math.min(1, Math.max(0, cosine)),
+      score: cosine < 0 ? 0 : cosine > 1 ? 1 : cosine,
     });
   }
 

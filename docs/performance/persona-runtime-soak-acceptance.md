@@ -28,6 +28,13 @@ The CLI accepts both `--name=value` and `--name value`, rejects unknown or
 duplicate options, requires a full 40-character lowercase commit SHA, and
 verifies it against checked-out `HEAD`.
 
+Authoritative runs also require a clean checkout (including untracked files)
+before and after execution. Keep evidence outside the checkout or in an ignored
+directory. Use `--infrastructure` for local development diagnostics. If source
+changes during an acceptance run, the runner retains a
+`persona-soak-source-error.json` diagnostic and the standalone validator rejects
+that artifact directory, even if the runtime criteria passed.
+
 For retained exact-commit proof, dispatch `persona-soak.yml` from the default
 branch and provide the implementation commit separately:
 
@@ -178,7 +185,7 @@ The #489 acceptance repair commits the following numeric contracts for the fixed
 - Every detailed runtime collection stays at or below `2 × generated activities +
   128` total records (1,248 records for the authoritative workload). Daily maximum
   uncompacted counts are `mailboxItems <= 500`, `activities <= 200`,
-  `flowDispatches <= 200`, and `leaseHistory <= 50`. Missing collections and new
+  `flowDispatches <= 200`, `behaviorCallPins <= 200`, and `leaseHistory <= 50`. Missing collections and new
   uncontracted collections fail closed. These values include deterministic fault
   overhead while matching the production compaction and soak lease-pruning policies.
 - Event append flatness compares the median daily p95 over the first seven days with

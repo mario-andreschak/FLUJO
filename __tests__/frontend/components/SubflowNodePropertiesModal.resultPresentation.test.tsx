@@ -112,3 +112,11 @@ describe('SubflowNodePropertiesModal child conversation memory', () => {
     });
   });
 });
+
+
+it('requires no per-node activation switch for callable subflows', async () => {
+  renderModal({ invocationMode: 'tool' });
+  await screen.findByText('Execution');
+  expect(screen.queryByRole('checkbox', { name: /callable tool/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Settings.*Experimental/)).not.toBeInTheDocument();
+});

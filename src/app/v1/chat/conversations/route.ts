@@ -94,25 +94,27 @@ const ORIGIN_SEARCH_TERMS: Record<string, string> = {
 };
 
 /** Searchable sidebar metadata is resolved on the server so the browser only
- *  receives the requested result page. Flow names are included because the UI
- *  presents those names (rather than opaque flow ids) as the conversation's
- *  agent. */
+ *  receives the requested result page. Match the current Persona or Flow name
+ *  presented by the sidebar without persisting another copy of that name. */
 function sidebarMetadataMatches(
   item: ConversationListItem,
   query: string,
   flowNames: ReadonlyMap<string, string>,
+  personaNames: ReadonlyMap<string, string>,
 ): boolean {
   if (!query) return true;
   const origin = item.source
     ?? (item.parentConversationId ? 'subflow' : item.plannedExecutionId ? 'schedule' : 'unknown');
-  const flowName = item.flowId?.startsWith('quickchat-')
+  const targetName = item.personaArchived ? 'Archived Persona'
+    : item.personaId ? (personaNames.get(item.personaId) ?? 'Persona')
+    : item.flowId?.startsWith('quickchat-')
     ? 'Quick Chat'
     : item.flowId ? (flowNames.get(item.flowId) ?? '') : 'No agent';
   return [
     item.id,
     item.title,
     item.flowId ?? '',
-    flowName,
+    targetName,
     origin,
     ORIGIN_SEARCH_TERMS[origin] ?? '',
   ].join(' ').toLocaleLowerCase().includes(query);
@@ -317,8 +319,20 @@ async function GET_handler(request: NextRequest) {
               ? { personaArchived: true as const }
               : {}),
           };
-        })
-        .filter((summary) => sidebarMetadataMatches(summary, query, flowNames));
+        });
+      const personaNames = new Map<string, string>();
+      if (query && personaControlAllowed) {
+        // Point-read only Personas referenced by locally visible conversations.
+        // Keep names out of durable summaries and do not re-identify archives.
+        const personaIds = [...new Set(visible.flatMap((item) => (
+          item.personaId && !item.personaArchived ? [item.personaId] : []
+        )))];
+        for (let offset = 0; offset < personaIds.length; offset += 16) {
+          const personas = await Promise.all(personaIds.slice(offset, offset + 16).map(getPersona));
+          for (const persona of personas) if (persona) personaNames.set(persona.id, persona.name);
+        }
+      }
+      visible = visible.filter((summary) => sidebarMetadataMatches(summary, query, flowNames, personaNames));
       if (requestedSessionKey) {
         visible = visible.filter((summary) => summary.sessionKey === requestedSessionKey);
       }

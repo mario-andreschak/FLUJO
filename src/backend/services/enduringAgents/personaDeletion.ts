@@ -15,6 +15,7 @@ import type { SharedState } from '@/backend/execution/flow/types';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationSummaryStrict } from '@/backend/execution/flow/conversationSummaryStore';
+import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
 import {
   deleteCollectionItem,
   loadCollectionItem,
@@ -29,6 +30,7 @@ import {
   retireMeetingPersonaParticipants,
 } from '@/backend/services/meetings';
 import { getSchedulerService } from '@/backend/services/scheduler';
+import { flowService } from '@/backend/services/flow';
 
 import {
   deletePersonaRuntimeRecoveryReceipt,
@@ -37,6 +39,7 @@ import {
 } from './activityRuntime';
 import { listBehaviorProposals } from './behaviorLearning';
 import { canonicalJson } from './behaviorRevisions';
+import { BEHAVIOR_CALL_PINS_COLLECTION, listBehaviorCallPins } from './behaviorCallPins';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   deleteIndexedCollectionItem,
@@ -172,6 +175,11 @@ async function anonymizePersonaConversations(personaId: string): Promise<void> {
       anonymizePersonaConversationState(archived);
       await saveCollectionItem('conversations', id, archived);
       await persistConversationSummaryStrict(id, archived);
+      // Provider-wire snapshots can contain rendered identity/Core Memory even
+      // after the visible conversation has been anonymized. Keep the transcript
+      // and authored Flow evidence, but remove these private prompt/media copies.
+      // SDK archive writers share the Activity fence, which deletion retired.
+      await deleteModelTurnArchive(id);
 
       const live = liveStates.get(id);
       if (live) anonymizePersonaConversationState(live);
@@ -212,6 +220,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const [
     behaviorBindings,
     behaviorRevisions,
+    behaviorCallPins,
     behaviorProposals,
     behaviorMaintenanceRuns,
     behaviorOutcomeMetrics,
@@ -226,9 +235,11 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     lease,
     leaseRecords,
     home,
+    ownedFlows,
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listBehaviorCallPins(personaId),
     listBehaviorProposals(personaId),
     listBehaviorMaintenanceRuns(personaId),
     listBehaviorOutcomeMetrics(personaId),
@@ -243,6 +254,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     getPersonaLease(personaId),
     listPersonaLeaseRecords(personaId),
     inspectPersonaHome(personaId),
+    flowService.inspectPersonaOwnedFlows(personaId),
   ]);
 
   const terminalActivity = (status: string) => (
@@ -256,6 +268,9 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const counts: PersonaDeletionCounts = {
     behaviorBindings: behaviorBindings.length,
     behaviorRevisions: behaviorRevisions.length,
+    behaviorCallPins: behaviorCallPins.length,
+    ownedFlows: ownedFlows.flowIds.length,
+    ownedFlowFiles: ownedFlows.files.length,
     behaviorProposals: behaviorProposals.length,
     behaviorMaintenanceRuns: behaviorMaintenanceRuns.length,
     behaviorOutcomeMetrics: behaviorOutcomeMetrics.length,
@@ -278,6 +293,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     persona: { id: persona.id, updatedAt: persona.updatedAt, state: persona.lifecycleState },
     behaviorBindings: behaviorBindings.map((item) => [item.id, item.updatedAt]),
     behaviorRevisions: behaviorRevisions.map((item) => [item.id, item.createdAt]),
+    behaviorCallPins: behaviorCallPins.map((item) => [item.id, item.updatedAt, item.status, item.compactedAt]),
     behaviorProposals: behaviorProposals.map((item) => [item.id, item.updatedAt, item.status]),
     behaviorMaintenanceRuns: behaviorMaintenanceRuns.map((item) => [item.id, item.updatedAt, item.state]),
     behaviorOutcomeMetrics: behaviorOutcomeMetrics.map((item) => [
@@ -300,6 +316,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     lease: lease ? [lease.id, lease.fencingToken, lease.renewedAt, lease.status] : null,
     leaseRecords: leaseRecords.map((item) => [item.id, item.fencingToken, item.status]),
     home,
+    ownedFlows,
   };
 
   return {
@@ -338,6 +355,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   const [
     behaviorBindings,
     behaviorRevisions,
+    behaviorCallPins,
     behaviorProposals,
     behaviorMaintenanceRuns,
     behaviorOutcomeMetrics,
@@ -352,6 +370,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listBehaviorCallPins(personaId),
     listBehaviorProposals(personaId),
     listBehaviorMaintenanceRuns(personaId),
     listBehaviorOutcomeMetrics(personaId),
@@ -368,6 +387,9 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   // Remove the living actor first. The already-durable tombstone prevents the
   // deterministic factory from resurrecting the id while erasure continues.
   await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, personaId);
+  // The authoring lock drains earlier Flow saves before scanning. Later saves
+  // observe the tombstone and cannot recreate owned definitions or versions.
+  await flowService.deletePersonaOwnedFlows(personaId);
   // Runtime writers are quiescent under the Persona lock. Delete indexed
   // records through the dirty-generation protocol so a crash between source
   // removal and sidecar mutation is recovered by rebuilding the index.
@@ -380,6 +402,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
       ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
       item.id,
     )),
+    ...behaviorCallPins.map((item) => deleteCollectionItem(BEHAVIOR_CALL_PINS_COLLECTION, item.id)),
     ...behaviorProposals.map((item) => deleteCollectionItem(
       ENDURING_AGENT_COLLECTIONS.behaviorProposals,
       item.id,
@@ -523,7 +546,12 @@ export async function deletePersona(
       getSchedulerService().anonymizePersonaAttributionByPersonaId(personaId),
     ]);
   }
-  if (prepared.completed) return prepared.tombstone;
+  if (prepared.completed) {
+    // Older completed receipts predate authoring-Flow erasure. An explicit retry
+    // also cleans their remaining owned copies without changing shared history.
+    await flowService.deletePersonaOwnedFlows(personaId);
+    return prepared.tombstone;
+  }
 
   // Phase two reacquires Persona ownership only after meeting cleanup released
   // its control locks, then irreversibly erases owned state and seals the

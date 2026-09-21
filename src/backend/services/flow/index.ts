@@ -22,6 +22,7 @@ import {
   validateFlowDisplayName,
 } from '@/utils/shared/flowNamePolicy';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import {
   archiveFlowVersion,
   listFlowVersions,
@@ -34,6 +35,12 @@ import {
   createFlowExecutionSnapshot,
   type FlowExecutionSnapshot,
 } from './executionSnapshot';
+import {
+  erasePersonaOwnedFlowFilesWithinLock,
+  inspectPersonaOwnedFlowsWithinLock,
+  readStoredFlow,
+  withFlowMutationLock,
+} from './personaOwnedFlows';
 
 export type { FlowExecutionSnapshot } from './executionSnapshot';
 
@@ -152,6 +159,17 @@ async function ensureFlowsMigrated(): Promise<void> {
  * This is the core backend service that handles all flow operations
  */
 export class FlowService { // Add export keyword here
+  private async ownerExists(flow: Flow): Promise<boolean> {
+    if (!flow.personaOwnership) return true;
+    const { getPersona, getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+    const owner = flow.personaOwnership.personaId;
+    return !await getPersonaDeletionTombstone(owner) && !!await getPersona(owner);
+  }
+
+  private async refreshOwnedFlows(flows: Flow[]): Promise<Flow[]> {
+    const refreshed = await Promise.all(flows.map((flow) => flow.personaOwnership ? this.getFlow(flow.id) : flow));
+    return refreshed.filter((flow): flow is Flow => flow !== null);
+  }
   private get flowsCache(): Flow[] | null {
     const workspace = getCurrentWorkspace();
     return workspace === DEFAULT_WORKSPACE
@@ -172,7 +190,7 @@ export class FlowService { // Add export keyword here
       // Try to use cache first
       if (this.flowsCache) {
         log.debug('Using cached flows');
-        return this.flowsCache;
+        return this.refreshOwnedFlows(this.flowsCache);
       }
 
       log.debug('Loading flows from storage');
@@ -194,7 +212,7 @@ export class FlowService { // Add export keyword here
       });
       this.flowsCache = flows;
       log.info('Loaded flows from storage', { count: flows.length });
-      return flows;
+      return this.refreshOwnedFlows(flows);
     } catch (error) {
       log.error('Failed to load flows', error);
       return [];
@@ -213,6 +231,10 @@ export class FlowService { // Add export keyword here
    * legacy Flow records. Conflicting aliases are reported and never rewritten.
    */
   async migrateBehaviorRulesField(): Promise<FlowBehaviorRulesMigrationResult> {
+    return withFlowMutationLock(() => this.migrateBehaviorRulesFieldWithinLock());
+  }
+
+  private async migrateBehaviorRulesFieldWithinLock(): Promise<FlowBehaviorRulesMigrationResult> {
     await ensureFlowsMigrated();
     const result: FlowBehaviorRulesMigrationResult = {
       migrated: 0,
@@ -267,7 +289,7 @@ export class FlowService { // Add export keyword here
 
       // Cache hit first.
       const cached = this.flowsCache?.find(f => f.id === flowId) || null;
-      if (cached) {
+      if (cached && !cached.personaOwnership) {
         log.debug(`Flow ${flowId} found in cache`);
         return cached;
       }
@@ -287,6 +309,8 @@ export class FlowService { // Add export keyword here
         log.debug(`getFlow: could not load flow ${flowId}`, error);
         flow = null;
       }
+
+      if (flow && !await this.ownerExists(flow)) return null;
 
       // Refresh the shared cache entry, but only when a cache already exists —
       // never build a partial one-item cache that loadFlows would then trust.
@@ -316,7 +340,7 @@ export class FlowService { // Add export keyword here
       await ensureFlowsMigrated();
       const stored = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
       const flow = stored ? canonicalizeFlow(stored) : null;
-      if (!flow || flow.id !== flowId) return null;
+      if (!flow || flow.id !== flowId || !await this.ownerExists(flow)) return null;
       return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
     } catch (error) {
       log.debug(`readFlowExecutionSnapshot: could not capture flow ${flowId}`, error);
@@ -344,6 +368,14 @@ export class FlowService { // Add export keyword here
    */
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
     try {
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.saveFlowWithinMutation(flow)));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to save flow' };
+    }
+  }
+
+  private async saveFlowWithinMutation(flow: Flow): Promise<FlowServiceResponse> {
+    try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
       const nameError = validateFlowDisplayName(flow.name);
       if (nameError) {
@@ -365,12 +397,16 @@ export class FlowService { // Add export keyword here
       // Version history: when this save OVERWRITES an existing flow, archive
       // the definition being replaced (skipping no-op saves). Best-effort —
       // a save must never fail because history could not be written.
-      let previous: Flow | null = null;
-      try {
-        const storedPrevious = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flow.id, null);
-        previous = storedPrevious ? canonicalizeFlow(storedPrevious) : null;
-      } catch (error) {
-        log.debug(`saveFlow: could not read previous definition of ${flow.id} for versioning`, error);
+      const previous = await readStoredFlow(flow.id);
+      if (previous && previous.personaOwnership?.personaId !== flow.personaOwnership?.personaId) {
+        throw new Error('An existing Flow cannot change or remove its Persona owner. Create a distinct copy instead.');
+      }
+      if (flow.personaOwnership) {
+        const { getPersona, getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+        const owner = flow.personaOwnership.personaId;
+        if (await getPersonaDeletionTombstone(owner) || !await getPersona(owner)) {
+          throw new Error('The Flow owner is missing or being deleted.');
+        }
       }
       // Compare content ONLY (excluding the server-managed timestamps), so a
       // save that merely refreshes updatedAt is not treated as a real edit and
@@ -622,6 +658,32 @@ export class FlowService { // Add export keyword here
    */
   async deleteFlow(flowId: string): Promise<FlowServiceResponse> {
     try {
+      return await withWorkspaceMutation(() => withFlowMutationLock(() => this.deleteFlowWithinMutation(flowId)));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete flow' };
+    }
+  }
+
+  async inspectPersonaOwnedFlows(personaId: string) {
+    return withFlowMutationLock(() => inspectPersonaOwnedFlowsWithinLock(personaId));
+  }
+
+  async deletePersonaOwnedFlows(personaId: string): Promise<void> {
+    await withFlowMutationLock(async () => {
+      const { getPersonaDeletionTombstone } = await import('@/backend/services/enduringAgents/store');
+      if (!await getPersonaDeletionTombstone(personaId)) throw new Error('Owned Flow erasure requires a durable Persona deletion intent.');
+      const inspection = await inspectPersonaOwnedFlowsWithinLock(personaId);
+      try { await erasePersonaOwnedFlowFilesWithinLock(inspection); }
+      finally {
+        // Drop even partially erased records; a failed deletion remains retryable.
+        this.flowsCache = null;
+        await this.invalidateExecutionCache();
+      }
+    });
+  }
+
+  private async deleteFlowWithinMutation(flowId: string): Promise<FlowServiceResponse> {
+    try {
       log.debug(`Deleting flow: ${flowId}`);
       await ensureFlowsMigrated();
 
@@ -653,12 +715,17 @@ export class FlowService { // Add export keyword here
 
   /** Archived (superseded) versions of a flow, newest first. */
   async listFlowVersions(flowId: string): Promise<FlowVersionSummary[]> {
-    return listFlowVersions(flowId);
+    const summaries = await listFlowVersions(flowId);
+    const readable = await Promise.all(summaries.map(async (summary) => (
+      await this.getFlowVersion(flowId, summary.versionId) ? summary : null
+    )));
+    return readable.filter((summary): summary is FlowVersionSummary => summary !== null);
   }
 
   /** One archived version with its full definition, or null. */
   async getFlowVersion(flowId: string, versionId: string): Promise<FlowVersionRecord | null> {
-    return getFlowVersion(flowId, versionId);
+    const record = await getFlowVersion(flowId, versionId);
+    return record && await this.ownerExists(record.flow) ? record : null;
   }
 
   /**

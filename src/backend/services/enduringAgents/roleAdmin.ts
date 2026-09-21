@@ -36,7 +36,7 @@ import {
   deleteRoleDefinitionRecord,
   deleteRoleVersionRecord,
   getRoleDefinition,
-  listPersonasStrict,
+  listRoleVersionReferences,
   listRoleDefinitionsStrict,
   listRoleVersionsStrict,
   saveRoleDefinition,
@@ -413,16 +413,13 @@ export async function listPublicRoleVersions(roleId: string): Promise<PublicRole
 export async function previewRoleImpact(roleId: string): Promise<RoleImpactPreview> {
   const state = await requireRoleState(roleId);
   const versionIds = new Set(state.versions.map((version) => version.id));
-  const personas = (await listPersonasStrict())
-    .filter((persona) => versionIds.has(persona.roleVersionId))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  const pinnedRoleVersionIds = [...new Set(personas.map((persona) => persona.roleVersionId))].sort();
+  const { personaIds, pinnedRoleVersionIds } = await listRoleVersionReferences(versionIds);
   return RoleImpactPreviewSchema.parse({
     roleId,
-    personaIds: personas.map((persona) => persona.id),
-    personaCount: personas.length,
+    personaIds,
+    personaCount: personaIds.length,
     pinnedRoleVersionIds,
-    hardDeleteAllowed: personas.length === 0,
+    hardDeleteAllowed: personaIds.length === 0,
     safeAction: 'archive',
   });
 }
@@ -467,16 +464,14 @@ export async function hardDeletePublicRole(
     if (!state) return;
     if (state.current.id !== input.expectedCurrentVersionId) throw staleVersionConflict();
     const versionIds = new Set(state.versions.map((version) => version.id));
-    const referencingPersonas = (await listPersonasStrict()).filter(
-      (persona) => versionIds.has(persona.roleVersionId),
-    );
-    if (referencingPersonas.length > 0) {
+    const { personaIds } = await listRoleVersionReferences(versionIds);
+    if (personaIds.length > 0) {
       throw new RoleAdminConflictError(
-        `Role is pinned by ${referencingPersonas.length} Persona(s); archive it instead.`,
+        `Role is pinned by ${personaIds.length} Persona(s) or their saved history; archive it instead.`,
         {
           reason: 'PERSONA_REFERENCES',
-          personaCount: referencingPersonas.length,
-          personaIds: referencingPersonas.map((persona) => persona.id).sort(),
+          personaCount: personaIds.length,
+          personaIds,
         },
       );
     }

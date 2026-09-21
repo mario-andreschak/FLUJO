@@ -24,6 +24,7 @@ import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildPersonaTools } from '../handlers/personaTools';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
+import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { FlowNode } from '@/shared/types/flow';
@@ -160,56 +161,17 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       log.warn('Could not load flow for handoff descriptions; using basic descriptions', { err });
     }
 
-    // Callable-subflow TOOL invocation (issue #385, deferred Part B of #359):
-    // a Subflow target authored with `invocationMode: 'tool'` is advertised as
-    // a distinct `call_subflow_<slug>` tool instead of a `handoff_to_<slug>`
-    // transition tool — gated behind the experimental `subflowToolInvocation`
-    // setting (default OFF) so an unconfigured install always keeps today's
-    // handoff-only behaviour regardless of what a saved flow authored.
-    const hasSubflowTargets = targets.some((t) => t.type === 'subflow');
-    const subflowToolInvocationEnabled = hasSubflowTargets
-      ? await ModelHandler.isSubflowToolInvocationEnabled()
-      : false;
-    const subflowDetachedInvocationEnabled = hasSubflowTargets
-      ? await ModelHandler.isSubflowDetachedInvocationEnabled()
-      : false;
-    const hasKeyedSessionTarget = targets.some((target) => {
-      if (target.type !== 'subflow') return false;
-      const props = flowNodesById?.get(target.id)?.data?.properties as SubflowNodeProperties | undefined;
-      return props?.sessionScope === 'per-key' && props.saveConversation !== false;
-    });
-    const subflowSessionsEnabled = hasKeyedSessionTarget
-      ? await ModelHandler.isSubflowSessionsEnabled()
-      : false;
-    const subflowToolTargetIds = new Set(
-      subflowToolInvocationEnabled
-        ? targets
-            .filter((t) => {
-              if (t.type !== 'subflow') return false;
-              const targetProps = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
-              return targetProps?.invocationMode === 'tool';
-            })
-            .map((t) => t.id)
-        : [],
-    );
-
-    const subflowDetachedTargetIds = new Set(
-      subflowDetachedInvocationEnabled
-        ? targets.filter((t) => {
-            const props = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
-            return t.type === 'subflow' && props?.invocationMode === 'detached';
-          }).map((t) => t.id)
-        : [],
-    );
-
-    // Human-readable, collision-free tool names (issue #38, Item A): the raw
-    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
-    // name -> node-id mapping so routing still works. Tool-mode subflow targets
-    // get their OWN name map (`call_subflow_*` namespace) and never consume a
-    // `handoff_to_*` slug.
-    const nameMap = buildHandoffToolNameMap(targets.filter((t) => !subflowToolTargetIds.has(t.id) && !subflowDetachedTargetIds.has(t.id)));
-    const subflowNameMap = buildSubflowToolNameMap(targets.filter((t) => subflowToolTargetIds.has(t.id)));
-    const detachedNameMap = new Map(targets.filter((t) => subflowDetachedTargetIds.has(t.id)).map((t) => [t.id, `${SUBFLOW_DETACHED_TOOL_PREFIX}${t.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || t.id}`]));
+    // Connecting a Subflow is sufficient: the model can call it inline, start
+    // it in the background, or follow the graph handoff. Legacy invocationMode
+    // and experimental flags no longer hide these capabilities.
+    const hasSubflowTargets = targets.some(t => t.type === 'subflow');
+    const nameMap = buildHandoffToolNameMap(targets);
+    const subflowNameMap = buildSubflowToolNameMap(targets.filter(t => t.type === 'subflow'));
+    // Every connected Subflow also has a non-blocking launch tool, so an
+    // orchestrator can remain available for questions and steering. Reuse the
+    // collision-safe naming used by callable subflows (including equal labels).
+    const detachedNameMap = new Map([...buildSubflowToolNameMap(targets.filter(t => t.type === 'subflow'))]
+      .map(([id, name]) => [id, name.replace(SUBFLOW_TOOL_PREFIX, SUBFLOW_DETACHED_TOOL_PREFIX)]));
     sharedState.handoffNameMap = sharedState.handoffNameMap || {};
     sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
     sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
@@ -219,22 +181,16 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     for (const target of targets) {
       const flowNodeForTarget = flowNodesById?.get(target.id);
 
-      if (subflowDetachedTargetIds.has(target.id)) {
+      if (target.type === 'subflow') {
         const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
         sharedState.subflowDetachedToolNameMap[toolName] = target.id;
         const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget) : `Start ${target.label} as a detached subflow`;
         const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
-        continue;
       }
 
-      if (subflowToolTargetIds.has(target.id)) {
-        // Tool-mode Subflow (issue #385): emit `call_subflow_<slug>` instead of
-        // a handoff tool. Dispatch happens in ModelHandler (both the
-        // request/response `processToolCalls` branch and the
-        // self-orchestrating `localToolExecutors` map) via
-        // subflowToolInvocation.executeSubflowToolCall — never through
-        // processHandoffToolCalls (that dispatch is `handoff_to_*`-only).
+      if (target.type === 'subflow') {
+        // Inline calls return structured results without changing graph nodes.
         const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
         sharedState.subflowToolNameMap[toolName] = target.id;
         const description = flowNodeForTarget
@@ -246,7 +202,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
         );
         log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
-        continue;
       }
 
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
@@ -298,7 +253,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         targetProps?.inputMode === 'isolated' &&
         !(authoredIsolatedMessage?.trim());
       const acceptsCallerSessionKey =
-        subflowSessionsEnabled &&
         target.type === 'subflow' &&
         targetProps?.sessionScope === 'per-key' &&
         targetProps?.saveConversation !== false;
@@ -375,7 +329,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
     }
 
-    if (subflowDetachedTargetIds.size > 0) {
+    if (hasSubflowTargets || sharedState.launchedTaskIds?.length) {
       handoffTools.push(
         { name: 'subflow_task_get', description: 'Get the status and terminal result of a detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
         { name: 'subflow_task_cancel', description: 'Cancel a working detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
@@ -388,6 +342,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
     return [
       ...handoffTools,
+      ...((hasSubflowTargets || sharedState.parentRunId || sharedState.parentConversationId || sharedState.launchedTaskIds?.length || Object.keys(sharedState.subflowInvocations ?? {}).length)
+        ? buildSubflowCommunicationTools() : []),
       ...buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry),
     ];
   }

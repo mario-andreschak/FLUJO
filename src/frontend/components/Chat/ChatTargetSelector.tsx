@@ -36,6 +36,8 @@ interface ChatTargetSelectorProps {
   selectedPersonaBehaviorSlotKey?: string | null;
   onSelectFlow: (flowId: string) => void;
   onSelectPersona: (personaId: string, behaviorSlotKey: string) => void;
+  /** Share the existing workspace lookup with the conversation sidebar. */
+  onPersonaNamesLoaded?: (names: Record<string, string>) => void;
   disabled?: boolean;
   compact?: boolean;
   fullScreenPicker?: boolean;
@@ -52,6 +54,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
   selectedPersonaBehaviorSlotKey = null,
   onSelectFlow,
   onSelectPersona,
+  onPersonaNamesLoaded,
   disabled = false,
   compact = false,
   fullScreenPicker = false,
@@ -85,9 +88,16 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
         if (!response.ok) throw new Error(`Persona list failed (${response.status})`);
         return response.json() as Promise<Persona[]>;
       })
-      .then((items) => setPersonas(Array.isArray(items) ? items : []))
+      .then((items) => {
+        if (controller.signal.aborted) return;
+        const loaded = Array.isArray(items) ? items : [];
+        setPersonas(loaded);
+        onPersonaNamesLoaded?.(Object.fromEntries(loaded.map(({ id, name }) => [id, name])));
+      })
       .catch((cause) => {
-        if ((cause as { name?: string })?.name !== 'AbortError') {
+        if (!controller.signal.aborted && (cause as { name?: string })?.name !== 'AbortError') {
+          setPersonas([]);
+          onPersonaNamesLoaded?.({});
           setError(t('chat.target.loadFailed'));
         }
       })
@@ -95,7 +105,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [t]);
+  }, [t, onPersonaNamesLoaded]);
 
   useEffect(() => {
     if (!candidatePersona) {

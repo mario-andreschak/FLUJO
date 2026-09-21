@@ -7,6 +7,16 @@
  * process restarted. flowService.saveFlow/deleteFlow must invalidate it.
  */
 import type { Flow } from '@/shared/types/flow';
+// This suite models collections in memory; disk ownership/concurrency is covered
+// by personaOwnedFlows.test.ts against the real authoring boundary.
+jest.mock('@/backend/services/flow/personaOwnedFlows', () => ({
+  ...jest.requireActual('@/backend/services/flow/personaOwnedFlows'),
+  withFlowMutationLock: async (task: () => Promise<unknown>) => task(),
+  readStoredFlow: async (id: string) => {
+    const stored = await jest.requireMock('@/utils/storage/backend').loadCollectionItem('flows', id, null);
+    return stored ? jest.requireActual('@/shared/types/enduringAgent').FlowSnapshotSchema.parse(stored) : null;
+  },
+}));
 
 // Capture engine cache-clear calls without loading the real execution layer.
 const clearFlowCache = jest.fn();

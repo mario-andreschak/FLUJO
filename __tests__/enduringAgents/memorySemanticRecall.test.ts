@@ -26,6 +26,7 @@ import {
 } from '@/backend/services/enduringAgents/memoryEmbeddingStore';
 import { prepareSemanticRecall } from '@/backend/services/enduringAgents/memoryKernel';
 import { getMemorySettings } from '@/backend/services/enduringAgents/memorySettings';
+import { EmbeddingProvider } from '@/backend/services/model/embeddings';
 import type { MemoryEmbedding, MemoryItem } from '@/shared/types/enduringAgent';
 import type { Model } from '@/shared/types/model';
 import { mergeMemorySettings } from '@/shared/types/memorySettings';
@@ -141,5 +142,34 @@ describe('semantic memory recall integration (issue #471)', () => {
     );
 
     expect(scores.size).toBe(0);
+  });
+
+  it('invalidates a warm content digest when the same memory object is corrected', () => {
+    const current = { ...item };
+    const original = embedding();
+    const scores = (sidecar: MemoryEmbedding) => buildSemanticMemoryScores(
+      personaId, [current], [sidecar], [1, 0], model.name,
+    );
+    expect(scores(original).get(memoryId)?.score).toBeCloseTo(0.8);
+    expect(scores(original).get(memoryId)?.score).toBeCloseTo(0.8);
+    current.content = 'Deploys now run from the stable branch.';
+    expect(scores(original).size).toBe(0);
+    expect(scores(embedding({ contentDigest: computeContentDigest(current.content) })).get(memoryId)?.score)
+      .toBeCloseTo(0.8);
+    expect(scores(embedding({ personaId: 'foreign_persona' })).size).toBe(0);
+  });
+
+  it.each([
+    [[1, 0], [0.8, 0.6]], [[3, 4], [4, 3]], [[0, 0], [1, 0]],
+    [[1, 0], [0, 0]], [[1, 0], [-1, 0]], [[1, 1], [1, 1]],
+  ])('preserves cosine scoring for query %j and candidate %j', (query, vector) => {
+    const score = buildSemanticMemoryScores(personaId, [item], [embedding({ vector })], query, model.name)
+      .get(memoryId)?.score;
+    expect(score).toBeCloseTo(Math.max(0, Math.min(1, EmbeddingProvider.cosineSimilarity(query, vector))));
+  });
+
+  it.each([[[NaN, 1]], [[Infinity, 1]], [[1]], [[]]])('rejects non-finite or incompatible vectors %j', vector => {
+    expect(buildSemanticMemoryScores(personaId, [item], [embedding({ vector })], [1, 0], model.name).size)
+      .toBe(0);
   });
 });

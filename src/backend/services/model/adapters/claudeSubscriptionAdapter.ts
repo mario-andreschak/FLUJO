@@ -6,6 +6,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
+import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -22,7 +23,8 @@ import {
   DEFAULT_TOOL_RESULT_MAX_BYTES,
   type RunResourceSettings,
 } from '@/shared/types/runResources';
-import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker, type SteeringDelivery } from './types';
+import { steeringSource, watchSteering } from './liveSteering';
 import {
   extractMediaParts,
   extractNativeMediaParts,
@@ -315,6 +317,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     requestToolApproval,
     onTranscriptMessage,
     consumeSteeringMessages,
+    steering,
     onModelDelta,
     onToolProgress,
     signal,
@@ -473,10 +476,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       transcript.push(message);
       onTranscriptMessage?.(message);
     };
+    const unansweredTools = new Set<string>();
     const recordToolCall = (
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
       messageId?: string,
     ): void => {
+      unansweredTools.add(ti.id);
       recordMessage({
         role: 'assistant',
         content: '',
@@ -484,6 +489,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }, messageId);
     };
     const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
+      unansweredTools.delete(ti.id);
       recordMessage({
         role: 'tool',
         tool_call_id: ti.id,
@@ -785,16 +791,57 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
     });
 
-    // Drive the SDK via its streaming-input channel with a single user message.
-    // The generator yields once then completes, signaling end-of-input so the
-    // SDK processes the turn (and runs the agentic tool loop) to completion.
+    // Keep one input iterable open for the query lifetime. Agent SDK streamInput
+    // closes stdin when an iterable ends; starting a second finite stream can
+    // close the process early or deadlock while waiting for its first result.
     const sdkPromptMessage: SDKUserMessage = {
-      type: 'user',
-      parent_tool_use_id: null,
+      type: 'user', parent_tool_use_id: null,
       message: { role: 'user', content: userContent },
     };
+    let inputClosed = false;
+    let wakeInput: (() => void) | undefined;
+    let queuedDelivery: SteeringDelivery | undefined;
+    let activeDelivery: SteeringDelivery | undefined;
+    let deliverySettled: Promise<void> | undefined;
+    let settleDelivery: (() => void) | undefined;
+    let pendingResults = 0;
+    let steeringFailure: unknown;
+    const closeInput = (): void => { inputClosed = true; wakeInput?.(); };
     async function* promptStream(): AsyncGenerator<SDKUserMessage> {
+      pendingResults++;
       yield sdkPromptMessage;
+      while (!inputClosed) {
+        if (!queuedDelivery) {
+          await new Promise<void>(resolve => { wakeInput = resolve; });
+          wakeInput = undefined;
+          if (inputClosed) break;
+        }
+        const delivery = queuedDelivery;
+        queuedDelivery = undefined;
+        if (!delivery) continue;
+        activeDelivery = delivery;
+        try {
+          for (const message of delivery.messages) recordSteeringMessage(message);
+          await delivery.beforeSend();
+          if (inputClosed || signal?.aborted) throw new Error('Claude steering cancelled before delivery.');
+          pendingResults++;
+          yield {
+            type: 'user', parent_tool_use_id: null,
+            message: { role: 'user', content: delivery.messages.map(message =>
+              typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n\n') },
+          };
+          // Advancing the iterable means the SDK accepted the preceding write.
+          await delivery.acknowledge();
+        } catch (error) {
+          delivery.requeue();
+          steeringFailure = error;
+          abortController.abort();
+          throw error;
+        } finally {
+          activeDelivery = undefined;
+          settleDelivery?.();
+        }
+      }
     }
 
     const queryOptions: Parameters<typeof query>[0]['options'] = {
@@ -916,6 +963,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         request: { prompt: sdkPromptMessage, options: queryOptions },
       });
     } catch (archiveError) {
+      try { rethrowFlowExecutionAuthorityError(archiveError); }
+      catch (authorityError) {
+        closeInput();
+        signal?.removeEventListener('abort', onExternalAbort);
+        throw authorityError;
+      }
       log.warn('Could not archive Claude Agent SDK request', archiveError);
     }
 
@@ -923,61 +976,30 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     try {
       response = query({ prompt: promptStream(), options: queryOptions });
     } catch (error) {
+      closeInput();
+      signal?.removeEventListener('abort', onExternalAbort);
       if (dispatchId && onSdkRequestResult) {
         try {
           await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
         } catch (archiveError) {
+          rethrowFlowExecutionAuthorityError(archiveError);
           log.warn('Could not update Claude Agent SDK request archive', archiveError);
         }
       }
       throw error;
     }
 
-    // Streaming input is the Agent SDK's native mid-session steering seam. The
-    // original implementation completed promptStream after its first yield and
-    // then waited for the entire agentic loop, leaving accepted interventions in
-    // FLUJO's inbox until the model was already done. Poll at SDK message
-    // boundaries and feed pending user messages into the SAME query/session.
-    // streamInput queues them safely when the current assistant/tool turn has not
-    // quite settled yet.
-    let steeringDrain: Promise<boolean> | undefined;
-    const forwardSteeringMessages = async (): Promise<boolean> => {
-      if (!consumeSteeringMessages || typeof response.streamInput !== 'function') return false;
-      if (steeringDrain) return steeringDrain;
-
-      steeringDrain = (async () => {
-        const pending = consumeSteeringMessages();
-        if (pending.length === 0) return false;
-
-        for (const message of pending) recordSteeringMessage(message);
-        async function* steeringStream(): AsyncGenerator<SDKUserMessage> {
-          for (const message of pending) {
-            yield {
-              type: 'user',
-              parent_tool_use_id: null,
-              message: {
-                role: 'user',
-                content: typeof message.content === 'string'
-                  ? message.content
-                  : JSON.stringify(message.content),
-              },
-            };
-          }
-        }
-        await response.streamInput(steeringStream());
-        log.info('Forwarded mid-run steering message(s) into Claude Agent SDK session', {
-          conversationId,
-          count: pending.length,
-        });
-        return true;
-      })();
-
-      try {
-        return await steeringDrain;
-      } finally {
-        steeringDrain = undefined;
-      }
-    };
+    const watcher = watchSteering({
+      source: steeringSource({ steering, consumeSteeringMessages } as CompletionInput),
+      canDeliver: () => !inputClosed && !signal?.aborted && !queuedDelivery && !activeDelivery
+        && unansweredTools.size === 0 && handoffCalls.length === 0 && !shouldEndAgenticTurn?.(),
+      deliver: async delivery => {
+        deliverySettled = new Promise<void>(resolve => { settleDelivery = resolve; });
+        queuedDelivery = delivery;
+        wakeInput?.();
+      },
+      onError: error => { steeringFailure = error; closeInput(); abortController.abort(); },
+    });
 
     let resultText = '';
     let accumulatedText = '';
@@ -1049,7 +1071,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         }
         // This also runs for partial stream events, so a correction does not
         // wait for a long agentic SDK call to finish before reaching Claude.
-        await forwardSteeringMessages();
+        await watcher.poll();
         // Capture the SDK session id (present on system/assistant/result
         // messages) for the #154 session registry, before any early break.
         const sid = (message as { session_id?: unknown }).session_id;
@@ -1200,6 +1222,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
             throw new Error(`Claude subscription run failed: ${detail}`);
           }
+          pendingResults = Math.max(0, pendingResults - 1);
+          await watcher.poll();
+          if (pendingResults === 0 && (queuedDelivery || activeDelivery)) await deliverySettled;
+          if (pendingResults === 0 && !queuedDelivery && !activeDelivery) {
+            closeInput();
+            break;
+          }
         }
       }
     };
@@ -1232,6 +1261,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       } else {
         await messageLoop();
       }
+      if (steeringFailure) throw steeringFailure;
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
@@ -1244,11 +1274,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      closeInput();
+      await watcher.stop();
+      queuedDelivery?.requeue();
+      activeDelivery?.requeue();
       signal?.removeEventListener('abort', onExternalAbort);
       if (dispatchId && onSdkRequestResult) {
         try {
           await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
         } catch (archiveError) {
+          rethrowFlowExecutionAuthorityError(archiveError);
           log.warn('Could not update Claude Agent SDK request archive', archiveError);
         }
       }

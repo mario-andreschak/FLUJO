@@ -1,6 +1,33 @@
 import { observeSdkRequest } from '@/backend/services/model/adapters/types';
+import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 describe('observeSdkRequest', () => {
+  it('stops before the provider call when archive admission loses execution authority', async () => {
+    const task = jest.fn(async () => 'result');
+    const lost = new FlowExecutionAuthorityError('Persona was deleted');
+    await expect(observeSdkRequest(
+      { onSdkRequest: async () => { throw lost; } },
+      { adapter: 'test', operation: 'create', request: {} }, task,
+    )).rejects.toBe(lost);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('propagates lost authority after a completed provider call, but tolerates ordinary archive errors', async () => {
+    const snapshot = { adapter: 'test', operation: 'create', request: {} };
+    const lost = new FlowExecutionAuthorityError('Lease expired');
+    await expect(observeSdkRequest({
+      onSdkRequest: async () => 'dispatch_lost',
+      onSdkRequestResult: async () => { throw lost; },
+    }, snapshot, async () => 'result')).rejects.toBe(lost);
+    await expect(observeSdkRequest({
+      onSdkRequest: async () => { throw new Error('disk full'); },
+    }, snapshot, async () => 'result')).resolves.toBe('result');
+    await expect(observeSdkRequest({
+      onSdkRequest: async () => 'dispatch_ordinary',
+      onSdkRequestResult: async () => { throw new Error('disk full'); },
+    }, snapshot, async () => 'result')).resolves.toBe('result');
+  });
+
   it('keeps a streaming dispatch running until its iterator completes', async () => {
     const outcomes: string[] = [];
     const stream = await observeSdkRequest(

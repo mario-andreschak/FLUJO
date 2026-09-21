@@ -13,8 +13,7 @@
  *  - the concurrency cap refuses the (N+1)th launch instead of queueing silently;
  *  - cancel aborts the worker and a late child completion cannot resurrect the
  *    task to `completed`;
- *  - the detached child is launched WITHOUT a parent run id, so parent
- *    cancellation ancestry cannot reach it.
+ *  - child identity, parent lineage and runtime authority follow the handle.
  */
 jest.mock('@/utils/storage/backend', () => {
   const actual = jest.requireActual('@/utils/storage/backend');
@@ -47,6 +46,10 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
 }));
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: jest.fn() }));
+const publishCompletionMock = jest.fn(async (..._args: unknown[]) => undefined);
+jest.mock('@/backend/execution/flow/subflowCommunication', () => ({
+  publishSubflowCompletion: (...args: unknown[]) => publishCompletionMock(...args),
+}));
 
 const runSubflowLanesMock = jest.fn();
 jest.mock('@/backend/execution/flow/nodes/SubflowNode', () => ({
@@ -97,6 +100,7 @@ const seedParent = (conversationId = 'conv-parent'): SharedState => {
     conversationId,
     status: 'running',
     runDepth: 0,
+    logicalRunId: 'parent-run-1',
     subflowDetachedToolNameMap: { [TOOL]: 'subflow-node-1' },
   } as unknown as SharedState;
   conversationStates.set(conversationId, state);
@@ -128,6 +132,7 @@ beforeEach(() => {
     ],
     edges: [],
   });
+  publishCompletionMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe('detached subflow tool definition', () => {
@@ -165,15 +170,19 @@ describe('executeDetachedSubflowStart', () => {
     expect((await getTask(handle.taskId))!.status).toBe('working');
     expect(parent.launchedTaskIds).toEqual([handle.taskId]);
 
-    const polled = await executeTaskGet(handle.taskId);
+    const polled = await executeTaskGet(handle.taskId, { conversationId: 'conv-parent' });
     expect(polled.success).toBe(true);
     expect((polled.data as { task: { status: string } }).task.status).toBe('working');
 
-    // The launcher must not adopt the parent's cancellation ancestry.
+    // The handle must address the real child and preserve cancellation ancestry.
     const prep = runSubflowLanesMock.mock.calls[0][0] as SubflowNodePrepResult & { parentRunId?: string };
     expect(prep.persistConversation).toBe(true);
-    expect(prep.parentRunId).toBeUndefined();
+    expect(prep.parentRunId).toBe('conv-parent');
     expect(prep.lanes).toHaveLength(1);
+    expect(prep.lanes![0].conversationId).toBe((await getTask(handle.taskId))!.childConversationId);
+    expect(started.data).toMatchObject({ childConversationId: prep.lanes![0].conversationId, parentConversationId: 'conv-parent' });
+    expect((await getTask(handle.taskId))!.originLogicalRunId).toBe('parent-run-1');
+    expect(prep.abortSignal).toBe(detachedJobRegistry.get(handle.taskId)!.controller.signal);
     expect(prep.lanes![0].input).toEqual({ prompt: 'crunch the numbers' });
 
     child.resolve({ success: true, outputText: 'the answer is 42' });
@@ -184,6 +193,7 @@ describe('executeDetachedSubflowStart', () => {
     expect(done!.status).toBe('completed');
     expect(done!.outputText).toBe('the answer is 42');
     expect(detachedJobRegistry.has(handle.taskId)).toBe(false);
+    expect(publishCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ taskId: handle.taskId, status: 'completed' }));
   });
 
   it('falls back to the node prompt template when no task argument is supplied', async () => {
@@ -287,7 +297,7 @@ describe('subflow_task_get / subflow_task_cancel', () => {
     const { taskId } = started.data as { taskId: string };
     const entry = detachedJobRegistry.get(taskId)!;
 
-    const cancelled = await executeTaskCancel(taskId);
+    const cancelled = await executeTaskCancel(taskId, { conversationId: 'conv-parent' });
     expect(cancelled.success).toBe(true);
     expect((cancelled.data as { status: string }).status).toBe('cancelled');
     expect(entry.controller.signal.aborted).toBe(true);
@@ -310,11 +320,55 @@ describe('subflow_task_get / subflow_task_cancel', () => {
     await detachedJobRegistry.get(taskId)?.promise;
     await flush();
 
-    const polled = await executeTaskGet(taskId);
+    const polled = await executeTaskGet(taskId, { conversationId: 'conv-parent' });
     expect(polled.success).toBe(true);
     const body = polled.data as { task: { status: string; taskId: string }; result?: string };
     expect(body.task.status).toBe('completed');
     expect(body.task.taskId).toBe(taskId);
     expect(body.result).toBe('done and dusted');
   });
+
+  it('denies unrelated callers, absent context, child cancellation and stale parent runs', async () => {
+    const parent = seedParent();
+    seedParent('other-parent');
+    seedParent('conv-child');
+    const task = (await createTask({ originConversationId: 'conv-parent', originLogicalRunId: 'parent-run-1', flowId: 'flow-child', childConversationId: 'conv-child', input: { prompt: 'work' } }))!;
+    await expect(executeTaskGet(task.taskId)).resolves.toMatchObject({ success: false });
+    await expect(executeTaskGet(task.taskId, { conversationId: 'other-parent' })).resolves.toMatchObject({ success: false });
+    await expect(executeTaskCancel(task.taskId, { conversationId: 'other-parent' })).resolves.toMatchObject({ success: false });
+    await expect(executeTaskGet(task.taskId, { conversationId: 'conv-child' })).resolves.toMatchObject({ success: true });
+    await expect(executeTaskCancel(task.taskId, { conversationId: 'conv-child' })).resolves.toMatchObject({ success: false });
+    parent.logicalRunId = 'later-parent-run';
+    await expect(executeTaskCancel(task.taskId, { conversationId: 'conv-parent' })).resolves.toMatchObject({ success: false });
+    expect((await getTask(task.taskId))!.status).toBe('working');
+  });
+
+  it('passes exact Persona authority and keeps completed work successful if parent notification fails', async () => {
+    const parent = seedParent();
+    const authority = { signal: new AbortController().signal, assertCurrent: jest.fn(async () => undefined), commitWhileCurrent: async <T>(work: () => Promise<T>) => work() };
+    const attribution = { personaId: 'persona-1', activityId: 'activity-1', behaviorRevisionId: 'revision-1' };
+    parent.executionAuthority = authority;
+    parent.personaAttribution = attribution as SharedState['personaAttribution'];
+    runSubflowLanesMock.mockResolvedValue({ success: true, outputText: 'done' });
+    publishCompletionMock.mockRejectedValue(new Error('parent lease expired'));
+    const started = await executeDetachedSubflowStart(TOOL, {}, { conversationId: 'conv-parent' });
+    const taskId = (started.data as { taskId: string }).taskId;
+    await detachedJobRegistry.get(taskId)?.promise;
+    expect(runSubflowLanesMock.mock.calls[0][0]).toMatchObject({ personaAttribution: attribution });
+    expect(runSubflowLanesMock.mock.calls[0][0].executionAuthority).toBe(authority);
+    expect(authority.assertCurrent).toHaveBeenCalled();
+    expect((await getTask(taskId))!.status).toBe('completed');
+  });
+});
+
+
+it('serializes concurrent launches before admitting them to the worker limit', async () => {
+  seedParent();
+  const child = deferred<{ success: boolean; outputText?: string }>();
+  runSubflowLanesMock.mockReturnValue(child.promise);
+  const results = await Promise.all(Array.from({ length: 6 }, () => executeDetachedSubflowStart(TOOL, { task: 'work' }, { conversationId: 'conv-parent' })));
+  expect(results.filter(result => result.success)).toHaveLength(4);
+  const jobs = [...detachedJobRegistry.values()].map(entry => entry.promise);
+  child.resolve({ success: true, outputText: 'done' });
+  await Promise.all(jobs);
 });

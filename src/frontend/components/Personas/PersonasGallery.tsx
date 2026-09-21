@@ -176,7 +176,7 @@ export default function PersonasGallery({
             {t('personas.description')}
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Button
             startIcon={<RefreshRounded />}
             onClick={refresh}
@@ -191,8 +191,8 @@ export default function PersonasGallery({
       </Box>
 
       {loading && items.length === 0 ? (
-        <Stack alignItems="center" justifyContent="center" minHeight="45vh" spacing={2}>
-          <CircularProgress />
+        <Stack alignItems="center" justifyContent="center" minHeight="45vh" spacing={2} role="status">
+          <CircularProgress aria-hidden="true" />
           <Typography color="text.secondary">{t('personas.loading')}</Typography>
         </Stack>
       ) : error && items.length === 0 ? (
@@ -216,7 +216,7 @@ export default function PersonasGallery({
           >
             <PersonAddRounded />
           </Avatar>
-          <Typography variant="h5" fontWeight={750}>{t('personas.empty')}</Typography>
+          <Typography variant="h5" component="h2" fontWeight={750}>{t('personas.empty')}</Typography>
           <Typography color="text.secondary" sx={{ maxWidth: 520, mx: 'auto', my: 1.5 }}>
             {t('personas.emptyHelp')}
           </Typography>
@@ -238,7 +238,7 @@ export default function PersonasGallery({
             sx={{
               display: 'grid',
               gridTemplateColumns: {
-                xs: '1fr',
+                xs: 'minmax(0, 1fr)',
                 md: 'repeat(2, minmax(0, 1fr))',
                 xl: 'repeat(3, minmax(0, 1fr))',
               },

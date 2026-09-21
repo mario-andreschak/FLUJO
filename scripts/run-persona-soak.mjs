@@ -1,6 +1,8 @@
 import { spawn, execFileSync } from 'child_process';
 import path from 'path';
 import process from 'process';
+import { promises as fs } from 'node:fs';
+import { assertExactPersonaAcceptanceSource } from './persona-acceptance-source.mjs';
 
 const VALUE_OPTIONS = new Set([
   'days',
@@ -71,6 +73,7 @@ if (!/^[0-9a-f]{40}$/.test(expectedCommit)) {
 if (expectedCommit !== head) {
   throw new Error(`Requested soak commit ${expectedCommit} does not match checked-out HEAD ${head}.`);
 }
+if (mode === 'acceptance') assertExactPersonaAcceptanceSource(expectedCommit);
 const runId = values.get('run-id')
   ?? process.env.FLUJO_SOAK_RUN_ID
   ?? process.env.GITHUB_RUN_ID
@@ -114,6 +117,19 @@ const jestCode = await run(process.execPath, [
   '__tests__/enduringAgents/soak/evidence.test.ts',
   '__tests__/enduringAgents/soak/personaSoak.test.ts',
 ], { env });
+
+if (mode === 'acceptance') {
+  try {
+    assertExactPersonaAcceptanceSource(expectedCommit);
+  } catch (error) {
+    // Preserve diagnostics but make standalone validation reject this run too.
+    await fs.mkdir(output, { recursive: true });
+    await fs.writeFile(path.join(output, 'persona-soak-source-error.json'), JSON.stringify({
+      commit: expectedCommit, error: error.message, acceptanceEligible: false,
+    }, null, 2));
+    throw error;
+  }
+}
 
 if (jestCode !== 0) {
   process.exitCode = jestCode;

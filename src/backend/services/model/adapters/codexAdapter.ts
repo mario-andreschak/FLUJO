@@ -5,6 +5,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
+import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -16,7 +17,8 @@ import {
 } from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, type SteeringDelivery } from './types';
+import { steeringSource, watchSteering } from './liveSteering';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { paceToolCallArguments } from './toolArgumentPacing';
@@ -170,7 +172,6 @@ export class CodexAdapter implements CompletionAdapter {
       shouldEndAgenticTurn,
       requestToolApproval,
       onTranscriptMessage,
-      consumeSteeringMessages,
       onModelDelta,
       onToolProgress,
       signal,
@@ -212,6 +213,7 @@ export class CodexAdapter implements CompletionAdapter {
     // Transcript recording — identical contract to the Claude adapter: stable
     // ids, streamed live as produced, returned for persistence.
     const transcript: FlujoChatMessage[] = [];
+    const unansweredTools = new Set<string>();
     const baseTs = Date.now();
     let txSeq = 0;
     // Codex item ids (for example `item_0`) are only unique within one SDK
@@ -238,6 +240,7 @@ export class CodexAdapter implements CompletionAdapter {
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
       messageId?: string,
     ): void => {
+      unansweredTools.add(ti.id);
       recordMessage({
         role: 'assistant',
         content: '',
@@ -252,6 +255,8 @@ export class CodexAdapter implements CompletionAdapter {
     const streamToolCall = async (
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
     ): Promise<void> => {
+      // Reserve the tool boundary before paced argument projection yields.
+      unansweredTools.add(ti.id);
       const messageId = getStreamMessageId(`toolcall_${ti.id}`);
       await paceToolCallArguments({
         messageId,
@@ -269,6 +274,7 @@ export class CodexAdapter implements CompletionAdapter {
         content: ti.resultContent,
         ...(ti.ui ? { ui: ti.ui } : {}),
       });
+      unansweredTools.delete(ti.id);
     };
     const recordToolPair = (ti: ToolInteraction): void => {
       recordToolCall(ti);
@@ -764,9 +770,13 @@ export class CodexAdapter implements CompletionAdapter {
       let nextTurnWireMessages: OpenAI.ChatCompletionMessageParam[] | undefined;
       let connectionRetryUsed = false;
       let sdkTurnIndex = 0;
+      let nextTurnDelivery: SteeringDelivery | undefined;
+      let providerInputStarted = false;
+      const source = steeringSource(input);
       while (true) {
         let attemptFailure: Error | undefined;
-        let steeringMessages: FlujoChatMessage[] = [];
+        let turnSteering: SteeringDelivery | undefined;
+        let steeringFailure: unknown;
         let dispatchId: string | undefined;
         const streamedAgentText = new Map<string, string>();
         const turnIndex = sdkTurnIndex++;
@@ -778,8 +788,19 @@ export class CodexAdapter implements CompletionAdapter {
         const abortTurn = () => turnAbortController.abort();
         if (abortController.signal.aborted) turnAbortController.abort();
         else abortController.signal.addEventListener('abort', abortTurn, { once: true });
+        const watcher = watchSteering({
+          source,
+          canDeliver: () => !signal?.aborted && !turnSteering && !nextTurnDelivery
+            && handoffCalls.length === 0 && unansweredTools.size === 0,
+          deliver: async batch => { turnSteering = batch; turnAbortController.abort(); },
+          onError: error => { steeringFailure = error; turnAbortController.abort(); },
+        });
 
         try {
+          if (nextTurnDelivery) {
+            for (const message of nextTurnDelivery.messages) recordSteeringMessage(message);
+            await nextTurnDelivery.beforeSend();
+          }
           try {
             dispatchId = await onSdkRequest?.({
               adapter: 'codex-cli',
@@ -798,6 +819,7 @@ export class CodexAdapter implements CompletionAdapter {
                 : {}),
             });
           } catch (archiveError) {
+            rethrowFlowExecutionAuthorityError(archiveError);
             log.warn('Could not archive Codex SDK request', archiveError);
           }
           const { events } = await thread.runStreamed(nextTurnInput, {
@@ -806,6 +828,16 @@ export class CodexAdapter implements CompletionAdapter {
 
           for await (const event of events) {
             if (signal?.aborted) break;
+            if (turnSteering || steeringFailure) break;
+            providerInputStarted = true;
+            // runStreamed itself only returns a lazy iterator. Wait for a real
+            // accepted turn/event before acknowledging the new user input.
+            if (nextTurnDelivery && event.type !== 'thread.started' && event.type !== 'turn.failed'
+              && event.type !== 'error') {
+              const accepted = nextTurnDelivery;
+              nextTurnDelivery = undefined;
+              await accepted.acknowledge();
+            }
             // A terminal local control (meeting silence) ends this SDK turn at
             // the first safe event boundary, before post-control narration or
             // another tool dispatch can be observed.
@@ -898,33 +930,22 @@ export class CodexAdapter implements CompletionAdapter {
             // Poll after recording the current SDK event. If it carried the end
             // of a tool/message, that durable boundary stays ahead of the user's
             // correction in both the transcript and the resumed Codex thread.
-            if (handoffCalls.length === 0 && consumeSteeringMessages) {
-              steeringMessages = consumeSteeringMessages();
-              if (steeringMessages.length > 0) {
-                // Reconcile any live partial draft before aborting this turn; a
-                // draft without a terminal transcript message would otherwise
-                // remain as a ghost bubble in the UI.
-                for (const [itemId, text] of streamedAgentText) {
-                  if (text) recordMessage({ role: 'assistant', content: text }, streamId(itemId));
-                }
-                streamedAgentText.clear();
-                for (const message of steeringMessages) recordSteeringMessage(message);
-                turnAbortController.abort();
-                break;
-              }
-            }
+            await watcher.poll();
+            if (turnSteering) break;
           }
         } catch (err) {
+          rethrowFlowExecutionAuthorityError(err);
           // The SDK can yield turn.failed and then throw a generic CLI exit
           // error. Preserve the provider's actionable reason (for example a
           // model requiring a newer CLI) instead of replacing it with stderr.
           attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
+          await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
             const outcome = endedByCaller || handoffCalls.length > 0
               ? 'completed'
-              : steeringMessages.length > 0 || signal?.aborted
+              : turnSteering || signal?.aborted
                 ? 'cancelled'
                 : attemptFailure
                   ? 'error'
@@ -932,20 +953,37 @@ export class CodexAdapter implements CompletionAdapter {
             try {
               await onSdkRequestResult({ dispatchId, outcome });
             } catch (archiveError) {
+              rethrowFlowExecutionAuthorityError(archiveError);
               log.warn('Could not update Codex SDK request archive', archiveError);
             }
           }
         }
 
+        if (steeringFailure) throw steeringFailure;
         if (signal?.aborted && handoffCalls.length === 0 && !endedByCaller) {
+          turnSteering?.requeue();
+          nextTurnDelivery?.requeue();
           throw new Error('Codex run cancelled by user.');
         }
-        if (steeringMessages.length > 0) {
-          nextTurnInput = steeringMessages
+        if (nextTurnDelivery) {
+          nextTurnDelivery.requeue();
+          nextTurnDelivery = undefined;
+          throw attemptFailure ?? new Error('Codex did not accept the steering input.');
+        }
+        if (turnSteering) {
+          for (const [itemId, text] of streamedAgentText) {
+            if (text) recordMessage({ role: 'assistant', content: text }, streamId(itemId));
+          }
+          const steeringMessages = turnSteering.messages;
+          const steeringText = steeringMessages
             .map(message => typeof message.content === 'string'
               ? message.content
               : JSON.stringify(message.content))
             .join('\n\n');
+          nextTurnInput = providerInputStarted ? steeringText
+            : typeof initialInput === 'string' ? `${initialInput}\n\n${steeringText}`
+              : [...initialInput, { type: 'text' as const, text: steeringText }];
+          nextTurnDelivery = turnSteering;
           nextTurnWireMessages = structuredClone(steeringMessages);
           // The next answer, not the superseded pre-intervention draft, is the
           // node's effective final output. The earlier prose remains in transcript.
@@ -974,6 +1012,7 @@ export class CodexAdapter implements CompletionAdapter {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
+      rethrowFlowExecutionAuthorityError(err);
       if (sessionTracking) {
         invalidateCodexSession(sessionTracking.key);
         onCodexSessionChange?.(undefined);
@@ -981,7 +1020,8 @@ export class CodexAdapter implements CompletionAdapter {
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
       // Cancellation is terminal and must not start a replacement run.
-      if (resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller) {
+      if (resumeThreadId && !signal?.aborted && handoffCalls.length === 0 && !endedByCaller
+        && transcript.length === 0) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,
           nodeId,

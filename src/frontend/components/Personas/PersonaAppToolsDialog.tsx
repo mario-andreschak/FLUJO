@@ -14,6 +14,7 @@ interface PersonaAppToolsDialogProps {
   grant: PersonaAppGrant | null;
   workspaceRoots?: string[];
   busy: boolean;
+  saveError?: string | null;
   onClose: () => void;
   onSave: (value: {
     enabledTools: string[];
@@ -26,6 +27,7 @@ export default function PersonaAppToolsDialog({
   grant,
   workspaceRoots,
   busy,
+  saveError,
   onClose,
   onSave,
 }: PersonaAppToolsDialogProps) {
@@ -35,11 +37,14 @@ export default function PersonaAppToolsDialog({
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [toolParameterPresets, setToolParameterPresets] = useState<MCPToolParameterPresets>({});
   const [saving, setSaving] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<string | null>(null);
+  const saveErrorRef = useRef<HTMLDivElement>(null);
   const initializedGrantRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       initializedGrantRef.current = null;
+      setSaveFailure(null);
       return;
     }
     if (!grant || toolsServerName !== grant.mcpServerName) return;
@@ -54,9 +59,17 @@ export default function PersonaAppToolsDialog({
   }, [grant, open, tools, toolsServerName]);
 
   const save = async () => {
+    if (busy || saving) return;
     setSaving(true);
+    setSaveFailure(null);
     try {
-      if (await onSave({ enabledTools, toolParameterPresets })) onClose();
+      if (await onSave({ enabledTools, toolParameterPresets })) {
+        onClose();
+      } else {
+        setSaveFailure(t('personas.action.failed'));
+      }
+    } catch (cause) {
+      setSaveFailure(cause instanceof Error ? cause.message : t('personas.action.failed'));
     } finally {
       setSaving(false);
     }
@@ -64,6 +77,10 @@ export default function PersonaAppToolsDialog({
 
   const pending = busy || saving;
   const ready = !!grant && toolsServerName === grant.mcpServerName && !isLoading;
+
+  useEffect(() => {
+    if (saveFailure && !pending) saveErrorRef.current?.focus();
+  }, [saveFailure, pending]);
 
   return (
     <Dialog open={open} fullWidth maxWidth="lg" onClose={pending ? undefined : onClose}>
@@ -73,10 +90,11 @@ export default function PersonaAppToolsDialog({
       <DialogContent dividers>
         <Stack spacing={2}>
           <Typography color="text.secondary">{t('personas.apps.toolsHelp')}</Typography>
+          {saveFailure && <Alert severity="error" ref={saveErrorRef} tabIndex={-1}>{saveError || saveFailure}</Alert>}
           {isLoading && (
-            <Stack direction="row" spacing={1.5} alignItems="center">
-              <CircularProgress size={22} />
-              <Typography color="text.secondary">{t('personas.loading')}</Typography>
+            <Stack direction="row" spacing={1.5} alignItems="center" role="status">
+              <CircularProgress size={22} aria-hidden="true" />
+              <Typography color="text.secondary">{t('personas.apps.loadingTools')}</Typography>
             </Stack>
           )}
           {error && (
@@ -111,8 +129,8 @@ export default function PersonaAppToolsDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={pending}>{t('personas.action.cancel')}</Button>
-        <Button variant="contained" onClick={() => void save()} disabled={pending || !ready || !!error}>
-          {t('personas.action.save')}
+        <Button variant="contained" onClick={() => void save()} disabled={pending || !ready || !!error} aria-busy={pending}>
+          {t(pending ? 'personas.action.saving' : 'personas.action.save')}
         </Button>
       </DialogActions>
     </Dialog>

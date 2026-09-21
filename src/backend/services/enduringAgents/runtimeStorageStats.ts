@@ -18,6 +18,7 @@ import {
 import { getCurrentWorkspace } from '@/utils/workspace';
 
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import { BEHAVIOR_CALL_PINS_COLLECTION, BehaviorCallPinSchema, type BehaviorCallPin } from './behaviorCallPins';
 import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
 import { getPersonaRuntimeClock } from './runtimeClock';
@@ -49,6 +50,7 @@ export interface PersonaStorageStats {
     activities: PersonaStorageKindStats;
     flowDispatches: PersonaStorageKindStats;
     leaseHistory: PersonaStorageKindStats;
+    behaviorCallPins: PersonaStorageKindStats;
   };
   totals: {
     records: number;
@@ -213,6 +215,13 @@ const LEASE_HISTORY_DESCRIPTOR: RuntimeStorageDescriptor<PersonaLease> = {
 };
 
 const STORAGE_INDEX_PAGE_SIZE = 1_000;
+const BEHAVIOR_CALL_PIN_DESCRIPTOR: RuntimeStorageDescriptor<BehaviorCallPin> = {
+  collection: BEHAVIOR_CALL_PINS_COLLECTION,
+  schema: BehaviorCallPinSchema,
+  statusOf: (record) => record.status,
+  timestampOf: (record) => record.createdAt,
+  workspaceIdOf: (record) => record.workspaceId,
+};
 
 async function listAllIndexedPersonaRecords<T extends RuntimeStorageRecord>(
   personaId: string,
@@ -240,7 +249,7 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
     throw new PersonaStorageStatsNotFoundError();
   }
   const workspaceId = getCurrentWorkspace();
-  const [mailboxRecords, activityRecords, leaseRecords, flowDispatches] = await Promise.all([
+  const [mailboxRecords, activityRecords, leaseRecords, flowDispatches, behaviorCallPins] = await Promise.all([
     listAllIndexedPersonaRecords(
       validatedPersonaId,
       (id, query) => listPersonaMailboxItems(id, query),
@@ -254,13 +263,14 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
       (id, query) => listPersonaLeaseRecords(id, query),
     ),
     collectKind(validatedPersonaId, workspaceId, FLOW_DISPATCH_DESCRIPTOR),
+    collectKind(validatedPersonaId, workspaceId, BEHAVIOR_CALL_PIN_DESCRIPTOR),
   ]);
   const [mailboxItems, activities, leaseHistory] = await Promise.all([
     collectKind(validatedPersonaId, workspaceId, MAILBOX_DESCRIPTOR, mailboxRecords),
     collectKind(validatedPersonaId, workspaceId, ACTIVITY_DESCRIPTOR, activityRecords),
     collectKind(validatedPersonaId, workspaceId, LEASE_HISTORY_DESCRIPTOR, leaseRecords),
   ]);
-  const kinds = { mailboxItems, activities, flowDispatches, leaseHistory };
+  const kinds = { mailboxItems, activities, flowDispatches, leaseHistory, behaviorCallPins };
   const values = Object.values(kinds);
 
   return {
