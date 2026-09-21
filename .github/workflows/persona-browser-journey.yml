@@ -92,3 +92,17 @@ jobs:
           # SHA256SUMS includes Playwright's .last-run.json alongside the reports.
           include-hidden-files: true
           retention-days: 90
+      - name: Download the published evidence
+        if: success()
+        uses: actions/download-artifact@v4
+        with:
+          name: persona-browser-${{ inputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: published-persona-browser
+      - name: Verify the published files and journey
+        if: success()
+        run: |
+          (cd published-persona-browser && sha256sum -c persona-browser-artifacts/SHA256SUMS)
+          node scripts/persona-browser-acceptance/validate.mjs \
+            --directory published-persona-browser/persona-browser-artifacts \
+            --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID" \
+            --build-id "$(cat .next/BUILD_ID)"

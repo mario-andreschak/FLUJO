@@ -51,10 +51,11 @@ jobs:
           PERSONA_SOAK_COMMIT: ${{ github.sha }}
           PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-profile
           PERSONA_SOAK_DEBUG: '1'
+          PERSONA_SOAK_PROFILE_ALLOCATIONS: '1'
           PERSONA_SOAK_OUTPUT: profile-artifacts/soak
         run: |
           mkdir -p profile-artifacts
-          node --heap-prof --heap-prof-dir=profile-artifacts node_modules/jest/bin/jest.js \
+          node node_modules/jest/bin/jest.js \
             --selectProjects node --runInBand \
             __tests__/enduringAgents/runtimeClock.test.ts \
             __tests__/enduringAgents/soak/evidence.test.ts \
