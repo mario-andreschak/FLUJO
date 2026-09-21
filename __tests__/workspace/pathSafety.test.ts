@@ -121,6 +121,18 @@ describe('workspace path safety', () => {
     await expect(workspaceExists('planning')).resolves.toBe(false);
   });
 
+  it('recreates missing subtrees and rejects a replacement junction after initialization', async () => {
+    const root = await ensureWorkspaceDirs('revalidate-layout');
+    const artifacts = path.join(root, 'artifacts');
+    await fs.rmdir(artifacts);
+    await ensureWorkspaceDirs('revalidate-layout');
+    expect((await fs.lstat(artifacts)).isDirectory()).toBe(true);
+    await fs.rmdir(artifacts);
+    const foreign = await ensureWorkspaceDirs('foreign-layout');
+    await fs.symlink(foreign, artifacts, process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(ensureWorkspaceDirs('revalidate-layout')).rejects.toThrow(/real directory/i);
+  });
+
   it('persists absolute workspace roots and carries them through a rename', async () => {
     const first = path.join(dataRoot, 'projects', 'one');
     const second = path.join(dataRoot, 'projects', 'two');
