@@ -98,6 +98,9 @@ export async function saveTask(page) {
 
 export async function sendChat(page, text) {
   await page.getByRole('button', { name: /^(Chat|Chatten)$/ }).click();
+  // Conversation loading renders a composer before the Persona target is ready.
+  // Wait for the visible target before entering the first message.
+  await page.getByRole('button', { name: /^Journey Alex ·/ }).waitFor({ state: 'visible' });
   await page.getByRole('textbox', { name: /^(Message|Nachricht)$/ }).fill(text);
   await page.getByRole('button', { name: /^(Send message|Nachricht senden)$/ }).click();
 }
@@ -109,9 +112,9 @@ export async function assignTask(page) {
 
 export async function filterTaskHistory(page, since) {
   await page.getByRole('tab', { name: /^(History|Aktivitätsverlauf)$/ }).click();
-  await page.getByRole('combobox', { name: /^(Type|Typ)$/ }).click();
+  await page.getByRole('combobox', { name: /^(Type|Typ)(?:\s|$)/ }).click();
   await page.getByRole('option', { name: /^(Task|Aufgabe)$/ }).click();
-  await page.getByRole('combobox', { name: /^(Status|State)$/ }).click();
+  await page.getByRole('combobox', { name: /^(Status|State)(?:\s|$)/ }).click();
   await page.getByRole('option', { name: /^(Completed|Abgeschlossen)$/ }).click();
   await page.getByLabel(/^(On or after|Am oder nach)$/).fill(since);
 }

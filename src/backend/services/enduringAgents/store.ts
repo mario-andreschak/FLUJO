@@ -580,13 +580,18 @@ export interface PersonaSummaryRecords {
   roleVersions: RoleVersion[];
   behaviorBindings: BehaviorBinding[];
   appGrants: PersonaAppGrant[];
-  memoryItems: MemoryItem[];
+  memoryItems: Pick<MemoryItem, 'id' | 'personaId' | 'status'>[];
   workItems: PersonaWorkItem[];
   activities: PersonaActivity[];
   mailboxItems: PersonaMailboxItem[];
 }
 
 const SUMMARY_INDEX_PAGE_SIZE = 1_000;
+
+function isMemoryStatus(value: unknown): value is MemoryItem['status'] {
+  return value === 'candidate' || value === 'active'
+    || value === 'superseded' || value === 'forgotten';
+}
 
 async function listRequestedPersonaRecords<T extends IdentifiedRecord>(
   personaIds: readonly string[],
@@ -651,10 +656,11 @@ export async function listPersonaSummaryRecords(
       schema: PersonaAppGrantSchema,
       strict: true,
     }),
-    listRequestedPersonaRecords(
-      [...requested],
-      (personaId, query) => listMemoryItems(personaId, query),
-    ),
+    // Gallery cards only count Memories. Read their current index once instead
+    // of materializing every private Memory payload for every visible Persona.
+    getMemoryIndex().then(({ entries }) => entries.flatMap(({ id, personaId, status }) => (
+      requested.has(personaId) && isMemoryStatus(status) ? [{ id, personaId, status }] : []
+    ))),
     listRequestedPersonaRecords(
       [...requested],
       (personaId, query) => listPersonaWorkItems(personaId, query),

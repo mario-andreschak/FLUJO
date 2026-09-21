@@ -2,7 +2,15 @@
 
 ## Delivery correction
 
-The previous handoff stopped at local verification. That did not complete delivery: the implementation was still uncommitted and unpublished. Delivery is now proceeding through a selective commit, pushed pull request, repository CI and issue-by-issue acceptance reconciliation. The selected change set includes the tested shared runtime changes described below; unrelated staged outreach/research work remains outside it. Historical local evidence retains its original provenance and is not relabeled as CI evidence.
+The previous handoff stopped at local verification. That did not complete delivery: the implementation was still uncommitted and unpublished. The implementation is now committed as `601ed50a64bc356ee62b4e6b2708b87fb0efc673`, pushed, and published in [PR #522](https://github.com/mario-andreschak/FLUJO/pull/522). Repository CI and issue-by-issue acceptance reconciliation are in progress. The selected change set includes the tested shared runtime changes described below; unrelated staged outreach/research work remains outside it. Historical local evidence retains its original provenance and is not relabeled as CI evidence.
+
+### Delivery verification update
+
+- The PR's complete isolated stage passed all nine suites / 103 tests, including the two browser-driving suites excluded from the earlier local selection. Typecheck, lint, cross-platform release safety, all installer checks and the offline goal lifecycle also passed. The main suite was still running when this update was written.
+- A production API fixture with 100 Personas and 50 Memories each exposed a gallery summary defect: the route opened private Memory payloads merely to count them. Thirty warm requests measured p95 1,547.6203 ms. The fix reads current index metadata once, preserves workspace/Persona filtering and reflects Memory status changes. A regression test checks that private payload files are not opened.
+- The same fixture and unchanged predeclared budgets passed on rebuilt production build `aHP3sAgh4drEZEgN5Sqhq`: gallery p95 185.4008 ms / 44,137 bytes; detail p95 219.4681 ms / 47,566 bytes. Both latency budgets are 250 ms; payload budgets are 512 KiB and 256 KiB. These measurements cover HTTP response transfer and JSON parsing, not rendering or cold startup. The baseline and after reports are retained in `.tmp/persona-delivery-20260921/`.
+- The fix passed 22 focused tests, full typecheck, changed-file lint and a production build. Browser journey selectors now wait for the visible Persona target before typing and match filter labels that include their current selected value; the complete release browser run remains pending.
+- The manual soak workflow is enabled again. Selected-release soak, 50k recall and browser artifacts must still be generated and independently validated before their acceptance criteria are closed.
 
 The intended product is a persistent, editable AI teammate: choose a Role, configure its ordinary Core/Behavior Flows and Apps, give it an objective, and let it maintain work and Memory, verify results, recover after interruption and obey owner controls. A Role supplies instructions; it does not supply accounts or tools. The requirements come from #505, #489 and the 45-issue inventory in the [full audit](2026-09-19-persona-audit.md).
 
