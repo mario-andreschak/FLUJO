@@ -111,7 +111,7 @@ export async function assignTask(page) {
 }
 
 export async function filterTaskHistory(page, since) {
-  await page.getByRole('tab', { name: /^(History|Aktivitätsverlauf)$/ }).click();
+  await page.getByRole('tab', { name: /^(Activity history|Aktivitätsverlauf)$/ }).click();
   await page.getByRole('combobox', { name: /^(Type|Typ)(?:\s|$)/ }).click();
   await page.getByRole('option', { name: /^(Task|Aufgabe)$/ }).click();
   await page.getByRole('combobox', { name: /^(Status|State)(?:\s|$)/ }).click();
