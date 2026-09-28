@@ -171,6 +171,28 @@ describe('GlobalReferenceEditor (#318)', () => {
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith('@app[bank].name'));
   });
 
+  it.each(['file', 'folder'])('keeps a selected remote %s readable and valid after search closes', async kind => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ items: [
+      { path: '/workspace/report', name: 'report', isDirectory: kind === 'folder' },
+    ] }) })) as unknown as typeof fetch;
+    try {
+      const editorRef = createRef<GlobalReferenceEditorRef>();
+      const onChange = jest.fn();
+      render(<GlobalReferenceEditor ref={editorRef} value="" onChange={onChange}
+        suggestions={[]} enhancedHitlist ariaLabel="Test editor" />);
+      fireEvent.mouseDown(document.querySelector('.global-reference-editor') as HTMLElement);
+      act(() => { for (const character of `@${kind}.name:report`) editorRef.current?.insertText(character); });
+      fireEvent.click(await screen.findByRole('option', { name: 'report /workspace/report' }));
+      await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(`@${kind}[%2Fworkspace%2Freport].name`));
+      expect(screen.getByText(`@${kind}[report].name`)).toBeInTheDocument();
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+      expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('can open the completion hitlist above the editor', async () => {
     const editorRef = createRef<GlobalReferenceEditorRef>();
     render(

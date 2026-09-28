@@ -523,6 +523,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   const [enhancedSuggestions, setEnhancedSuggestions] = useState<PromptReferenceSuggestion[]>([]);
   const [configuredRoots, setConfiguredRoots] = useState<string[]>([]);
   const [asyncSuggestions, setAsyncSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  // Keep selected remote files/conversations recognizable after their search closes.
+  const [pickedSuggestions, setPickedSuggestions] = useState<PromptReferenceSuggestion[]>([]);
 
   useEffect(() => {
     // Entity/app discovery can fan out to several services. Load it on the
@@ -542,8 +544,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       name,
     ));
     return filterReferenceSuggestions([...(enhancedHitlist ? currentReferenceSuggestions : []),
-      ...(suggestions ?? []), ...globals, ...enhancedSuggestions], '');
-  }, [enhancedHitlist, enhancedSuggestions, globalNames, suggestions]);
+      ...(suggestions ?? []), ...globals, ...enhancedSuggestions, ...pickedSuggestions], '');
+  }, [enhancedHitlist, enhancedSuggestions, globalNames, suggestions, pickedSuggestions]);
   const validatedValues = useMemo(
     () => suggestions ? new Set(pickerSuggestions.map((item) => item.value)) : null,
     [pickerSuggestions, suggestions],
@@ -663,6 +665,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     Transforms.delete(editor);
     const parsed = parsePromptRefPill(item.value);
     if (parsed) insertReference(editor, parsed);
+    setPickedSuggestions(current => [...current.filter(candidate => candidate.value !== item.value), item]);
     setActiveCompletion(null);
     ReactEditor.focus(editor);
   }, [activeCompletion, editor]);
