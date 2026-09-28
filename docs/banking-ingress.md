@@ -131,7 +131,9 @@ frontend can retry with a fresh ingress assertion.
 This version supports **one FLUJO process with durable local state**. Admission,
 active cancellation and SSE registries are process-local. Multiple replicas need
 conversation routing plus shared fenced state before this profile can be enabled.
-Owner/tombstone/session records survive restart and require private retention
+Each banking turn uses one workspace writer admission; nested writes reuse it while
+individual banking commits retain their authority checks. Snapshot capture waits for
+active turns to finish. Owner/tombstone/session records survive restart and require private retention
 management. Expired ingress replay records are swept periodically.
 
 Automated tests cover forgery, replay, session rebinding, foreign/unknown/deleted
@@ -142,3 +144,25 @@ The ingress load test mocks flow execution and verifies real signed per-call
 principals. It is not a measurement of 500 paid provider calls or real S3 traffic.
 Read-only inquiries are implemented; disputes, consent and financial writes need
 their own authorization and idempotency implementation.
+
+
+## Verified local stdio deployment
+
+Banking MCP and its synthetic fixture run as Python stdio children of `next-server`
+inside the existing Docker worker. Extra MCP containers were removed; there is no
+banking HTTP endpoint or exposed banking port. Saved workspace and OAuth credentials
+were preserved, and Slack reconnects after restart.
+
+A burst of **500 requests from 500 separately signed subjects**, mapped privately to
+500 real dataset customers, completed through one pinned Static flow: 500 successful
+responses, and every saved tool result matched its expected customer. Admission was
+32 active runs plus a bounded queue; one transaction was returned per call. Including
+queue time, p50 was 26.399 s and p95 was 48.401 s. No provider calls or selected-source
+S3 readback were performed. The initial per-write admission path timed out under this
+burst; grouping one complete banking turn under the existing reentrant workspace gate
+resolved it without changing authorization lifetimes.
+
+Live checks also passed foreign read/delete/cancel/continue rejection, ingress replay
+rejection, ordinary tester denial, and signed revocation surviving worker restart.
+The actual frontend authentication and conversational API-provider flow still need
+acceptance tests. This result is a local backend measurement, not a production SLA.
