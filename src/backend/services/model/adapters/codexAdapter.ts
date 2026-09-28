@@ -176,6 +176,7 @@ export class CodexAdapter implements CompletionAdapter {
       onToolProgress,
       signal,
       beforeToolDispatch,
+    bankingContext,
       authorizePersonaCoreMcp,
       afterToolDispatch,
       commitDurableMutation,
@@ -480,6 +481,7 @@ export class CodexAdapter implements CompletionAdapter {
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
               conversationId ? { conversationId } : undefined,
+            bankingContext,
             );
             await afterToolDispatch?.();
             if (runId) {

@@ -1,5 +1,6 @@
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { FlowExecutionAuthority } from './types';
+import { assertBankingRunCurrent, commitBankingMutation, type BankingRunContext } from '@/backend/services/banking/authority';
 
 /**
  * A tagged run-level failure used at durable Flow mutation boundaries.
@@ -20,6 +21,7 @@ export class FlowExecutionAuthorityError extends Error {
 }
 
 export interface FlowDurableMutationContext {
+  bankingContext?: BankingRunContext;
   executionAuthority?: FlowExecutionAuthority;
   personaAttribution?: PersonaAttribution;
 }
@@ -50,6 +52,10 @@ export async function assertFlowExecutionCurrent(
   context: FlowDurableMutationContext,
 ): Promise<void> {
   const { executionAuthority, personaAttribution } = context;
+  if (context.bankingContext) {
+    try { await assertBankingRunCurrent(context.bankingContext); }
+    catch { throw new FlowExecutionAuthorityError('Banking execution authority was lost.'); }
+  }
   if (personaAttribution && !executionAuthority) throw missingAuthorityError();
   if (!executionAuthority) return;
   try {
@@ -73,6 +79,10 @@ export async function commitFlowDurableMutation<T>(
   context: FlowDurableMutationContext,
   task: () => Promise<T>,
 ): Promise<T> {
+  if (context.bankingContext) {
+    return commitBankingMutation(context.bankingContext, () => commitFlowDurableMutation(
+      { ...context, bankingContext: undefined }, task));
+  }
   const { executionAuthority, personaAttribution } = context;
   if (personaAttribution && !executionAuthority?.commitWhileCurrent) {
     throw missingAuthorityError();

@@ -90,6 +90,7 @@ export interface ModelCallInput {
   signal?: AbortSignal;
   /** Runtime-only fencing authority. It is never copied into provider input. */
   executionAuthority?: FlowExecutionAuthority;
+    bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */
   beforeModelDispatch?: () => Promise<void>;
@@ -179,6 +180,7 @@ export interface ToolCallProcessingInput {
    */
   unattended?: boolean;
   executionAuthority?: FlowExecutionAuthority;
+    bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
   personaAttribution?: PersonaAttribution;
   beforeToolDispatch?: () => Promise<void>;
 }

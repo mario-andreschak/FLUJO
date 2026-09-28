@@ -1,4 +1,6 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { assertBankingModelTool } from '@/backend/services/banking/authority';
+import { BankingError } from '@/backend/services/banking/errors';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -1129,6 +1131,7 @@ export class ModelHandler {
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      bankingContext: input.bankingContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -1569,7 +1572,7 @@ export class ModelHandler {
     // and handoff filtering. The result exists only on the provider wire; the
     // canonical `messages` array remains the base for returned/persisted output.
     const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
-    const compaction = await ModelHandler.maybeCompactWire(
+    const compaction = input.bankingContext ? undefined : await ModelHandler.maybeCompactWire(
       projectedMessages,
       conversationId,
       nodeId,
@@ -1627,6 +1630,7 @@ export class ModelHandler {
       wireMessageIds: effectiveMessages.map(message => message.id),
       nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
+      bankingContext: input.bankingContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
       durableContext,
@@ -1918,6 +1922,7 @@ export class ModelHandler {
       }) => void;
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
+      bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1959,6 +1964,11 @@ export class ModelHandler {
     try {
       // Get the model
       const model = await modelService.getModel(modelId);
+      await assertFlowExecutionCurrent(opts?.durableContext ?? {});
+      // CLI adapters have native filesystem/agent capabilities outside MCP's tool gate.
+      if (opts?.bankingContext && (model?.adapter === 'codex-cli' || model?.adapter === 'claude-cli')) {
+        throw new BankingError('banking_model_adapter_forbidden');
+      }
       if (!model) {
         return {
           success: false,
@@ -2052,6 +2062,7 @@ export class ModelHandler {
       // failed estimates, or non-positive savings remain on the text route.
       const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
       const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
+      if (opts?.bankingContext) visualConfig.enabled = false;
       const visual = await compactMessagesVisually({
         messages: apiMessages,
         model,
@@ -2085,7 +2096,7 @@ export class ModelHandler {
           undefined,
           ...apiSourceIds.slice(candidate.endIndex),
         ];
-        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        if (!opts?.bankingContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -2717,6 +2728,7 @@ export class ModelHandler {
               onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: opts?.beforeToolDispatch,
+              bankingContext: opts?.bankingContext,
               authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
               afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: <T>(task: () => Promise<T>) =>
@@ -3240,6 +3252,7 @@ export class ModelHandler {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      bankingContext: input.bankingContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -3335,6 +3348,10 @@ export class ModelHandler {
       const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
+        if (input.bankingContext) {
+          await assertBankingModelTool(input.bankingContext, name,
+            toolNameMap && Object.hasOwn(toolNameMap, name) ? toolNameMap[name] : undefined);
+        }
         const decodedForUi = decodeToolName(name, toolNameMap);
         let invocationArgsForUi: Record<string, unknown> | undefined;
         try {
@@ -3868,6 +3885,7 @@ export class ModelHandler {
                   'model',
                   runOwnerScope,
                   { conversationId },
+                  input.bankingContext,
                 )
               : await mcpService.callTool(
                   serverName,
@@ -3879,6 +3897,8 @@ export class ModelHandler {
                   callSignal,
                   'model',
                   runOwnerScope,
+                  undefined,
+                  input.bankingContext,
                 );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before

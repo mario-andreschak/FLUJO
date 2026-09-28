@@ -3,6 +3,8 @@ import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest'
 import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { assertBankingExecutionBearer, isBankingRoute } from '@/backend/services/banking/policy';
+import { bankingErrorResponse } from '@/backend/services/banking/errors';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -45,6 +47,18 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   const { pathname } = request.nextUrl;
+
+  // The banking execution credential grants only exact banking routes. It is
+  // independent of worker snapshot/admin authority. Routes verify user assertions again.
+  if (pathname.startsWith('/v1/banking')) {
+    if (!isBankingRoute(pathname)) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    try { assertBankingExecutionBearer(request); }
+    catch (error) {
+      const response = bankingErrorResponse(error);
+      return new NextResponse(response.body, { status: response.status, headers: response.headers });
+    }
+    return NextResponse.next();
+  }
 
   if (isWorkerMode()) {
     // Private network membership and a caller-supplied Host header are not

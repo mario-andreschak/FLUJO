@@ -101,7 +101,7 @@ export class StaticNode extends BaseNode<
       }
 
       const resolve = async (value: string): Promise<string> =>
-        resolveRunResourceRefs(
+        sharedState.bankingContext ? (value ?? '') : resolveRunResourceRefs(
           resolveRunVars(value ?? '', sharedState.variables),
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
@@ -196,14 +196,19 @@ export class StaticNode extends BaseNode<
                   // built-in filesystem/bash confinement see the authored overlay even
                   // when a Static node is the first consumer to touch the server.
                   mcpService.setNodeRoots(serverName, binding.id, binding.properties.roots);
-                  return mcpService.callTool(
+                  const callArguments = [
                     serverName,
                     toolName,
                     args,
                     binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
                     undefined,
                     binding.id,
-                  );
+                  ] as const;
+                  return sharedState.bankingContext
+                    ? mcpService.callTool(...callArguments,
+                        (await import('@/backend/services/banking/authority')).bankingRunSignal(sharedState.bankingContext),
+                        'host', undefined, undefined, sharedState.bankingContext)
+                    : mcpService.callTool(...callArguments);
                 })();
             resultContent = callResult.success
               ? JSON.stringify(callResult.data ?? null)

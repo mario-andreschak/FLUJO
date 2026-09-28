@@ -50,7 +50,8 @@ import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicRe
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
-import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { bankingRunSignal } from '@/backend/services/banking/authority';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -364,7 +365,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       nodeId,
       flowId,
       boundModel,
-      excludeModelPrompt,
+      excludeModelPrompt: sharedState.bankingContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt
     });
@@ -421,7 +422,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ? personaContext!.instruction + '\n\n' + renderedPrompt
       : renderedPrompt;
 
-    let completePrompt = await resolveRunResourceRefs(
+    let completePrompt = sharedState.bankingContext ? trustedPrompt : await resolveRunResourceRefs(
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
@@ -431,7 +432,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = await resolvePromptDynamicReferences(completePrompt, {
+    completePrompt = sharedState.bankingContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
       conversationId: sharedState.conversationId,
       flowId,
       nodeId,
@@ -611,6 +612,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
+    if (sharedState.bankingContext) {
+      const { bankingRunPolicy, bankingToolNames, authorizeBankingHandoffs } = await import('@/backend/services/banking/authority');
+      const bankServer = bankingRunPolicy(sharedState.bankingContext).bankServerName;
+      availableTools = availableTools.filter(tool =>
+        (tool.server === bankServer && bankingToolNames.includes(tool.originalName ?? tool.name))
+        || handoffTools.some(handoff => handoff.name === tool.name));
+      sharedState.toolNameMap = {};
+      authorizeBankingHandoffs(sharedState.bankingContext, handoffTools.map(tool => tool.name));
+    }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
@@ -667,6 +677,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     unattended: sharedState.unattended,
     behaviorRules: structuredClone(sharedState.behaviorRules ?? []),
     executionAuthority: sharedState.executionAuthority,
+    bankingContext: sharedState.bankingContext,
     personaAttribution: sharedState.personaAttribution,
     ...(sharedState.temperatureOverrideOnce !== undefined
       ? { temperatureOverride: sharedState.temperatureOverrideOnce }
@@ -786,7 +797,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
     // this ProcessNode and non-secret globals before the model sees them.
-    if (wireBase.some((message) =>
+    if (!sharedState.bankingContext && wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
@@ -832,7 +843,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         log.info('Using caller-supplied prompt for isolated process node', { nodeId });
       }
       const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
-      resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      resolvedIsolatedPrompt = sharedState.bankingContext ? isolatedPrompt : isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -840,7 +851,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             { nodeId }
           )
         : isolatedPrompt;
-      if (typeof resolvedIsolatedPrompt === 'string') {
+      if (!sharedState.bankingContext && typeof resolvedIsolatedPrompt === 'string') {
         resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
           conversationId: sharedState.conversationId,
           flowId,
@@ -1173,16 +1184,17 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
-            beforeToolDispatch: prepResult.executionAuthority?.assertCurrent,
-            beforeModelDispatch: prepResult.executionAuthority?.assertCurrent,
+            beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
+            beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
             executionAuthority: prepResult.executionAuthority,
+            bankingContext: prepResult.bankingContext,
             personaAttribution: prepResult.personaAttribution,
-            signal: prepResult.executionAuthority?.signal,
+            signal: prepResult.bankingContext ? bankingRunSignal(prepResult.bankingContext) : prepResult.executionAuthority?.signal,
           });
           // Provider abort is cooperative. A response can arrive after the
           // Persona heartbeat/fence was lost, so reject it before any message,
           // event, node, or conversation projection observes the stale result.
-          await prepResult.executionAuthority?.assertCurrent();
+          await assertFlowExecutionCurrent(prepResult);
           return result;
         };
 

@@ -373,6 +373,7 @@ export type FlowRunStatus = 'completed' | 'error' | 'awaiting_tool_approval' | '
  * (deferred) flows-as-MCP-tools (#17B).
  */
 export interface FlowRunInput {
+  bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
   /** Resolved flow id. Provide this OR `modelName`. */
   flowId?: string;
   /** OpenAI-style model string ("flow-<name>"); resolved to a flowId for a NEW
@@ -545,6 +546,24 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  const { assertBankingRunCurrent, bankingRunPolicy } = await import('@/backend/services/banking/authority');
+  const { getBankingPolicy } = await import('@/backend/services/banking/policy');
+  if (input.bankingContext) {
+    if (!input.conversationId || !input.flowDefinition || input.parentRunId || input.depth) {
+      throw new Error('banking_run_context_mismatch');
+    }
+    await assertBankingRunCurrent(input.bankingContext, { conversationId: input.conversationId });
+    const { assertBankingGraph } = await import('@/backend/services/banking/graph');
+    assertBankingGraph(input.flowDefinition, bankingRunPolicy(input.bankingContext));
+  } else if (input.conversationId) {
+    const policy = getBankingPolicy();
+    if (policy) {
+      const { BankingStore } = await import('@/backend/services/banking/store');
+      if (await new BankingStore(policy).isOwned(input.conversationId)) {
+        throw new Error('trusted_banking_context_required');
+      }
+    }
+  }
   const ownerSignal = combineAbortSignals(input.abortSignal, input.executionAuthority?.signal);
   const registration = await registerCancellableRun({
     runId: input.runId,
@@ -1090,6 +1109,13 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // Never inherit a stale in-memory authority from an earlier invocation. A
   // paused Persona Activity must be explicitly reacquired by its dispatcher;
   // ordinary/legacy resumes remain authority-free.
+  if (input.bankingContext) {
+    Object.defineProperty(sharedState, 'bankingContext', { value: input.bankingContext,
+      enumerable: false, configurable: true, writable: true });
+    sharedState.bankingOwned = true;
+  } else {
+    delete sharedState.bankingContext;
+  }
   if (input.executionAuthority) {
     Object.defineProperty(sharedState, 'executionAuthority', {
       value: input.executionAuthority,
@@ -1233,6 +1259,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
+  if (input.bankingContext) {
+    const { bindBankingRun } = await import('@/backend/services/banking/authority');
+    await bindBankingRun(input.bankingContext, effectiveConvId, logicalRunId);
+  }
   sharedState.toolRepeatGuard ??= { logicalRunId, entries: [] };
   if (sharedState.toolRepeatGuard.logicalRunId !== logicalRunId) {
     sharedState.toolRepeatGuard = { logicalRunId, entries: [] };
@@ -1844,6 +1874,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         signal: combineAbortSignals(args.signal, runtimeAbortSignal),
         beforeToolDispatch: input.executionAuthority?.assertCurrent,
         executionAuthority: sharedState.executionAuthority,
+        bankingContext: sharedState.bankingContext,
         personaAttribution: sharedState.personaAttribution,
       });
       if (!result.success) {
@@ -2162,6 +2193,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // between loop iterations without this process receiving an abort event.
         // Verify the authoritative fence before doing more Persona work.
         await input.executionAuthority?.assertCurrent();
+        if (input.bankingContext) await (await import('@/backend/services/banking/authority')).assertBankingRunCurrent(input.bankingContext);
 
         // Mid-run steering: deliver anything the user sent while this run has
         // been working, BEFORE the next model call, so the correction lands on
