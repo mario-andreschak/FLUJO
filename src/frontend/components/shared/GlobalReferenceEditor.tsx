@@ -148,6 +148,8 @@ export function parseHitlistQuery(query: string): { scope: HitlistScope; query: 
   if (long) return { scope: long[1] === 'flows' ? 'flow' : long[1] as HitlistScope,
     query: long[3] ?? '', ...(long[2] ? { field: long[2] as DynamicReferenceField } : {}) };
   const prefix: Record<string, HitlistScope> = { c: 'conversation', f: 'flow', m: 'model', a: 'app' };
+  const shortcut = /^([cfma])(?::(.*))?$/i.exec(query);
+  if (shortcut) return { scope: prefix[shortcut[1].toLocaleLowerCase()], query: shortcut[2] ?? '' };
   // Partial/full command names must not lose their first letter to a shortcut.
   if (['current', 'conversation', 'flow', 'flows', 'node', 'model', 'app', 'time', 'date', 'folder', 'file']
     .some(name => name.startsWith(query) || query.startsWith(`${name}.`))) return { scope: 'all', query };

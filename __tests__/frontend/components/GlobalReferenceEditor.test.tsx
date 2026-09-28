@@ -96,6 +96,10 @@ describe('GlobalReferenceEditor (#318)', () => {
     expect(parseHitlistQuery('file')).toEqual({ scope: 'file', query: '' });
     expect(parseHitlistQuery('folder')).toEqual({ scope: 'folder', query: '' });
     expect(parseHitlistQuery('flo')).toEqual({ scope: 'all', query: 'flo' });
+    for (const [command, scope] of [['c', 'conversation'], ['f', 'flow'], ['m', 'model'], ['a', 'app']]) {
+      expect(parseHitlistQuery(command)).toEqual({ scope, query: '' });
+      expect(parseHitlistQuery(`${command}:report`)).toEqual({ scope, query: 'report' });
+    }
   });
 
   it('renders current commands as their exact command text without an invalid-reference warning', () => {
