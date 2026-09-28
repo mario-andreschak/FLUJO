@@ -13,7 +13,10 @@ import GlobalReferenceEditor, {
 import { createPromptReferenceSuggestion } from '@/utils/shared/promptRefs';
 import { flowService } from '@/frontend/services/flow';
 
-jest.mock('@/frontend/services/flow', () => ({ flowService: { loadFlows: jest.fn(async () => [{ id: 'flow-real-id', name: 'Monthly report' }]) } }));
+jest.mock('@/frontend/services/flow', () => ({ flowService: { loadFlows: jest.fn(async () => [
+  { id: 'first-flow-id', name: 'Annual report' },
+  { id: 'flow-real-id', name: 'Monthly report' },
+]) } }));
 jest.mock('@/frontend/services/model', () => ({ modelService: { loadModels: jest.fn(async () => []) } }));
 jest.mock('@/frontend/services/chat', () => ({ chatService: { listConversationPage: jest.fn(async () => ({ items: [] })) } }));
 jest.mock('@/frontend/services/mcp', () => ({ mcpService: { loadServerConfigs: jest.fn(async () => []) } }));
@@ -124,10 +127,44 @@ describe('GlobalReferenceEditor (#318)', () => {
     fireEvent.mouseDown(document.querySelector('.global-reference-editor') as HTMLElement);
     act(() => { for (const character of '@flow.name') editorRef.current?.insertText(character); });
     const choice = await screen.findByText('Monthly report');
-    fireEvent.mouseDown(choice);
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    // Accessible activation dispatches click; it need not include mousedown.
+    fireEvent.click(choice);
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith('@flows[flow-real-id].name'));
+    expect(screen.getByText('@flow[Monthly report].name')).toBeInTheDocument();
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
+  });
+
+  it('inserts the second flow through keyboard navigation', async () => {
+    const editorRef = createRef<GlobalReferenceEditorRef>();
+    const onChange = jest.fn();
+    render(<GlobalReferenceEditor ref={editorRef} value="" onChange={onChange}
+      enhancedHitlist ariaLabel="Test editor" />);
+    fireEvent.mouseDown(document.querySelector('.global-reference-editor') as HTMLElement);
+    act(() => { for (const character of '@flow.updated') editorRef.current?.insertText(character); });
+    await screen.findByText('Monthly report');
+    const textbox = screen.getByRole('textbox');
+    // jsdom does not implement the contentEditable property Slate checks.
+    Object.defineProperty(textbox, 'isContentEditable', { value: true });
+    fireEvent.keyDown(textbox, { key: 'ArrowDown' });
+    expect(screen.getByRole('option', { name: /Monthly report/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(textbox, { key: 'Enter' });
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith('@flows[flow-real-id].updated'));
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('includes MCP servers alongside UI apps in the app picker', async () => {
+    const editorRef = createRef<GlobalReferenceEditorRef>();
+    const onChange = jest.fn();
+    render(<GlobalReferenceEditor ref={editorRef} value="" onChange={onChange}
+      suggestions={[{ kind: 'mention', server: 'bank', name: 'bank', label: 'Bank tools',
+        category: 'mcpserver', value: '@app[bank]' }]}
+      ariaLabel="Test editor" />);
+    fireEvent.mouseDown(document.querySelector('.global-reference-editor') as HTMLElement);
+    act(() => { for (const character of '@app.name') editorRef.current?.insertText(character); });
+    fireEvent.click(await screen.findByRole('option', { name: /Bank tools/ }));
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith('@app[bank].name'));
   });
 
   it('can open the completion hitlist above the editor', async () => {

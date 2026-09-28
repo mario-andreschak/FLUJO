@@ -217,7 +217,8 @@ const currentReferenceSuggestions: PromptReferenceSuggestion[] = builtInMentionS
 function selectHitlistSuggestions(suggestions: PromptReferenceSuggestion[], query: string): PromptReferenceSuggestion[] {
   const parsed = parseHitlistQuery(query);
   const source = suggestions.filter(item => parsed.scope === 'all'
-    || item.category === parsed.scope || (parsed.scope === 'file' && item.category === 'folder'));
+    || item.category === parsed.scope || (parsed.scope === 'file' && item.category === 'folder')
+    || (parsed.scope === 'app' && item.category === 'mcpserver'));
   return filterReferenceSuggestions(source.map(item => {
     const ref = parseDynamicReference(item.value);
     return parsed.field && ref?.target
@@ -428,10 +429,12 @@ const ReferencePill = ({
   element,
   disabled,
   invalid,
+  label = promptRefLabel(element),
 }: {
   element: ReferenceElement;
   disabled: boolean;
   invalid: boolean;
+  label?: string;
 }) => {
   const editor = useSlate();
   const { t } = useI18n();
@@ -457,15 +460,15 @@ const ReferencePill = ({
     <span
       contentEditable={false}
       className={`tool-reference-container ${className}${invalid ? ' invalid' : ''}`}
-      title={invalid ? t('references.invalid') : undefined}
+      title={invalid ? t('references.invalid') : encodePromptRefPill(element.kind, element.server, element.name)}
       aria-invalid={invalid || undefined}
     >
-      <span className={`tool-reference ${className}${invalid ? ' invalid' : ''}`}>{promptRefLabel(element)}</span>
+      <span className={`tool-reference ${className}${invalid ? ' invalid' : ''}`}>{label}</span>
       {!disabled && (
         <span
           className={`tool-reference-delete ${className}`}
           role="button"
-          aria-label={t('references.remove', { name: promptRefLabel(element) })}
+          aria-label={t('references.remove', { name: label })}
           tabIndex={0}
           onClick={(event) => {
             event.preventDefault();
@@ -755,11 +758,20 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     if (element.type === 'binding-reference') {
       const reference = element as ReferenceElement;
       const serialized = encodePromptRefPill(reference.kind, reference.server, reference.name);
+      const dynamic = reference.kind === 'mention' ? parseDynamicReference(serialized) : null;
+      const selected = dynamic?.target ? pickerSuggestions.find(item => {
+        const candidate = parseDynamicReference(item.value);
+        return candidate?.kind === dynamic.kind && candidate.target === dynamic.target;
+      }) : undefined;
+      const label = selected && dynamic
+        ? `@${dynamic.kind === 'flows' ? 'flow' : dynamic.kind}[${selected.label}].${dynamic.field}`
+        : undefined;
       return (
         <span {...attributes} className="tool-reference-wrapper">
           <ReferencePill
             element={reference}
             disabled={disabled}
+            label={label}
             invalid={validatedValues !== null && !validatedValues.has(serialized)
               && !(reference.kind === 'mention' && (() => {
                 const parsed = parseDynamicReference(serialized);
@@ -883,13 +895,24 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
                   </Typography>
                 )}
                 <Box
+                  component="button"
+                  type="button"
+                  tabIndex={-1}
                   role="option"
                   aria-selected={index === activeIndex}
                   onMouseDown={(event) => {
                     event.preventDefault();
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
                     chooseSuggestion(item);
                   }}
                   sx={{
+                    display: 'block',
+                    width: '100%',
+                    border: 0,
+                    textAlign: 'left',
+                    color: 'inherit',
                     px: 1.5,
                     py: 1,
                     cursor: 'pointer',

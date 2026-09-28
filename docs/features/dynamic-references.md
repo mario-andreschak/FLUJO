@@ -26,8 +26,10 @@ as an alias for `@current.flow`.
 
 `@conversation`, `@flow`, `@node`, `@model`, and `@app` open their respective
 pickers. Node choices in chat belong to the selected flow. Choose an item by name;
-the stored reference includes its stable ID. A field suffix selects which value
+the stored reference includes its stable ID. Selected chips show the item's name;
+hover over a chip to see the stored reference. A field suffix selects which value
 will resolve: for example, `@flow.name` chooses a flow and stores its name reference.
+`@app` includes both MCP servers and discovered MCP UI apps.
 
 Use `@conversation:budget`, `@flow:report`, `@file:README`, or `@folder:reports`
 to search. `@@README` is the file/folder search shortcut. Existing `@c`, `@f`,
@@ -37,6 +39,22 @@ precedence, so typing `@flow` no longer becomes a search for `low`.
 Existing serialized references such as `@conversation.id`, `@flows[id].name`,
 and `@file[path].updated` still resolve. Use `@current` in new flows to make
 the distinction explicit. Current commands cannot contain a selected entity ID.
+
+## Other references in the `@` picker
+
+Typing `@` also searches the references available to the current editor. Selecting
+one inserts its `${…}` expression. These are references, not extra named `@` commands.
+
+| Reference | Stored form | Availability |
+| --- | --- | --- |
+| MCP tool | `${tool:SERVER__TOOL}` | Tools enabled on the connected MCP node |
+| MCP resource | `${resource:SERVER__URI}` | Resources enabled on the connected MCP node |
+| Global variable | `${global:NAME}` | Editors supplied with global variable names |
+| Temporary run data | `${res:NAME}` | Prompt editors supplied with run resource names |
+
+Choosing a tool reference does not immediately execute the tool. Resource references
+are expanded through the flow's resource resolver. Secret globals can fill fixed
+tool parameters; their values are not expanded into model-visible prompts.
 
 ## Execution and hidden parameters
 
