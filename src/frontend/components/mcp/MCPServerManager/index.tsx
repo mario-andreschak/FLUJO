@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
+import { openOAuthPopup, reserveOAuthPopup } from '@/frontend/utils/oauth';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
@@ -414,7 +415,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       onServerModalToggle?.(false);
     };
 
+    let popup: Window | undefined;
     try {
+      popup = reserveOAuthPopup(`oauth_${config.name}`);
       // editingServer is the server as opened, so its name is the current storage key.
       if (editingServer) {
         await updateServer(config, editingServer.name);
@@ -444,8 +447,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         return { status: 'authorized' };
       }
 
-      const { openOAuthPopup } = await import('@/frontend/utils/oauth');
       await openOAuthPopup({
+        popup,
         url: data.authorizationUrl,
         windowName: `oauth_${config.name}`,
       });
@@ -457,6 +460,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     } catch (error) {
       log.warn(`Save & Authenticate failed for ${config.name}:`, error);
       return { status: 'error', error: error instanceof Error ? error.message : t('mcp.server.unknownError') };
+    } finally {
+      popup?.close();
     }
   };
 
@@ -640,22 +645,26 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // OAuth recommendations, finish the same initiate → popup flow without saving a
   // duplicate config from the wizard.
   const handleAiAuthenticate = async (serverName: string): Promise<void> => {
-    const response = await fetch('/api/oauth/initiate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serverName }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || (data.needsClientCredentials
-        ? t('mcp.ai.clientCredentialsRequired')
-        : t('mcp.server.oauthFailed')));
+    const popup = reserveOAuthPopup(`oauth_${serverName}`);
+    try {
+      const response = await fetch('/api/oauth/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || (data.needsClientCredentials
+          ? t('mcp.ai.clientCredentialsRequired')
+          : t('mcp.server.oauthFailed')));
+      }
+      if (!data.alreadyAuthorized && data.authorizationUrl) {
+        await openOAuthPopup({ popup, url: data.authorizationUrl, windowName: `oauth_${serverName}` });
+      }
+      await retryServer(serverName);
+    } finally {
+      popup.close();
     }
-    if (!data.alreadyAuthorized && data.authorizationUrl) {
-      const { openOAuthPopup } = await import('@/frontend/utils/oauth');
-      await openOAuthPopup({ url: data.authorizationUrl, windowName: `oauth_${serverName}` });
-    }
-    await retryServer(serverName);
   };
 
   const handleAiInstalled = async (serverName: string): Promise<void> => {

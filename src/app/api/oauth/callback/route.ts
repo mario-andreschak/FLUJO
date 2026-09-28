@@ -7,6 +7,7 @@ import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createOAuthClientProvider, matchesOAuthState } from '@/backend/services/mcp/oauth';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { requestOrigin } from '@/utils/http/requestOrigin';
 
 const log = createLogger('api/oauth/callback');
 
@@ -28,7 +29,7 @@ function redirectToMcp(
   workspace: string | undefined,
   params: Record<string, string>,
 ): NextResponse {
-  const url = new URL('/mcp', request.url);
+  const url = new URL('/mcp', requestOrigin(request));
   if (workspace) url.searchParams.set('workspace', workspace);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   return NextResponse.redirect(url);
@@ -72,7 +73,7 @@ async function handleCallback(
 
   log.info(`Processing OAuth callback for server: ${serverName}`);
 
-  const redirectUrl = new URL('/api/oauth/callback', request.nextUrl.origin);
+  const redirectUrl = new URL('/api/oauth/callback', requestOrigin(request));
   redirectUrl.searchParams.set('workspace', workspace);
   const redirectUri = redirectUrl.toString();
   const provider = createOAuthClientProvider(serverConfig, redirectUri);

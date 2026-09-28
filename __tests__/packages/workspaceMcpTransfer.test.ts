@@ -197,6 +197,17 @@ it('reuses prepared GitHub and Registry runtimes after restart, preserving job f
   expect(markers.join('')).not.toContain('TOKEN');
 });
 
+it('allows servers added to the worker after restore without reinstalling or overwriting them', async () => {
+  const original = server({ disabled: true });
+  const added = server({ name: 'added-later', transport: 'streamable', serverUrl: 'https://example.com/mcp' });
+  const plan = buildWorkspaceMcpTransferPlan([original], source);
+  loadConfigs.mockResolvedValue([original, added]);
+  expect((await reinstallWorkspaceMcpServers(plan)).ok).toBe(true);
+  expect(updateConfig.mock.calls.some(([name]) => name === added.name)).toBe(false);
+  loadConfigs.mockResolvedValue([added]);
+  await expect(reinstallWorkspaceMcpServers(plan)).rejects.toThrow('does not match');
+});
+
 it('retries failed preparation per server while retaining a successful build after handshake failure', async () => {
   const configs = [server({ name: 'prepared' }), server({ name: 'retry' })];
   const plan = buildWorkspaceMcpTransferPlan(configs, source);
