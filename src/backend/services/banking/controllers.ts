@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { runWithWorkspace } from '@/utils/workspace';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { flowService } from '@/backend/services/flow';
 import { createFlowExecutionSnapshot } from '@/backend/services/flow/executionSnapshot';
 import { runFlow } from '@/backend/execution/flow/runFlow';
@@ -90,10 +91,12 @@ export async function bankingChat(request: Request): Promise<Response> {
         try {
           const context = await createBankingRunContext(principal, id, controller.signal);
           // History, graph, providers, tool policy, routing and run identity are server-owned.
-          const result = await runFlow({ source: 'api', conversationId: id, flowDefinition: snapshot.flow,
+          // Admit the complete turn once. Nested storage writes reuse this workspace
+          // admission, while banking authority still fences each individual commit.
+          const result = await withWorkspaceMutation(() => runFlow({ source: 'api', conversationId: id, flowDefinition: snapshot.flow,
             runId: randomUUID(), prompt: parsed.data.message, resumeAsNewTurn: true,
             userTurn: true, flujo: true, debug: false, requireApproval: false,
-            onApprovalRequired: 'fail', abortSignal: controller.signal, bankingContext: context });
+            onApprovalRequired: 'fail', abortSignal: controller.signal, bankingContext: context }));
           await assertBankingRunCurrent(context, { conversationId: id, runId: result.runId });
           if (result.error || !['completed', 'waiting_for_input'].includes(result.status)) {
             throw new BankingError('banking_run_failed', 502);

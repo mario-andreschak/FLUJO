@@ -13,6 +13,7 @@ import { authenticateBankingRequest, bankingAdmission, bindBankingRun, signBanki
 import { assertBankingGraph } from '@/backend/services/banking/graph';
 import { requireBankingPolicy } from '@/backend/services/banking/policy';
 import * as localControl from '@/backend/services/banking/localControl';
+import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { withBankingAdmission } from '@/backend/services/banking/admission';
 
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn() } }));
@@ -21,6 +22,7 @@ jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConvers
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/cancellation', () => ({ markConversationDeleted: jest.fn() }));
 jest.mock('@/backend/services/banking/localControl', () => ({ propagateBankingRevocation: jest.fn() }));
+jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({ withWorkspaceMutation: jest.fn(async task => task()) }));
 
 describe('authenticated banking ingress and controls', () => {
   let directory: string;
@@ -70,6 +72,11 @@ describe('authenticated banking ingress and controls', () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
   async function saveConfig() { await fs.writeFile(process.env.FLUJO_BANKING_CONFIG!, JSON.stringify(config)); }
+
+  test('each banking turn uses one workspace writer admission', async () => {
+    expect((await chat()).status).toBe(200);
+    expect(withWorkspaceMutation).toHaveBeenCalledTimes(1);
+  });
   async function request(subject: string, body?: unknown, route = '/v1/banking/chat', method = 'POST',
     claims: Record<string, unknown> = {}) {
     const now = Math.floor(Date.now() / 1000);
