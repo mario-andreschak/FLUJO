@@ -10,6 +10,8 @@ import { FEATURES } from '@/config/features';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import { applyPresetArguments, resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
+import { mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   executePersonaMemoryMaintenanceCommit,
@@ -36,8 +38,8 @@ const log = createLogger('backend/flow/execution/nodes/StaticNode');
  *    message. Well-formed pairing is mandatory, otherwise provider adapters
  *    reject the history — invalid `argumentsJson` therefore fails loudly.
  *
- * Text fields support `${var:NAME}` (run scratchpad, Tier 2c) and `${res:NAME}`
- * (run resources, Tier 3), resolved in the same order as ProcessNode.
+ * Text fields support run variables/resources and dynamic @ references.
+ * Real calls apply the connected server/node's hidden presets at dispatch.
  *
  * Re-entry (issue #381): by default the node appends on every traversal; with
  * `injectOnce: true` it injects only once per **logical run**. The dedupe key is
@@ -100,7 +102,12 @@ export class StaticNode extends BaseNode<
         sharedState.messages = [];
       }
 
-      const resolve = async (value: string): Promise<string> =>
+      const referenceContext = {
+        conversationId: sharedState.conversationId,
+        flowId: sharedState.flowId,
+        nodeId,
+      };
+      const resolveRunText = async (value: string): Promise<string> =>
         sharedState.bankingContext ? (value ?? '') : resolveRunResourceRefs(
           resolveRunVars(value ?? '', sharedState.variables),
           sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -108,6 +115,10 @@ export class StaticNode extends BaseNode<
           { nodeId },
           sharedState,
         );
+      const resolve = async (value: string): Promise<string> => {
+        const text = await resolveRunText(value);
+        return sharedState.bankingContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
+      };
 
       const messages: FlujoChatMessage[] = [];
       for (const entry of prepResult.entries) {
@@ -150,13 +161,23 @@ export class StaticNode extends BaseNode<
           if (!toolName) {
             throw new Error(`Static node ${nodeId}: a tool-call entry requires a tool name.`);
           }
-          const argumentsJson = (await resolve(entry.argumentsJson ?? '')).trim() || '{}';
+          let argumentsJson = (await resolveRunText(entry.argumentsJson ?? '')).trim() || '{}';
+          let args: Record<string, unknown>;
           try {
-            JSON.parse(argumentsJson);
+            args = JSON.parse(argumentsJson) as Record<string, unknown>;
           } catch {
             throw new Error(
               `Static node ${nodeId}: tool-call entry for "${toolName}" has invalid JSON arguments.`
             );
+          }
+          if (!sharedState.bankingContext) {
+            // Resolve JSON values after parsing so quotes and nested structures
+            // remain valid; hidden preset values are added only at dispatch.
+            const resolvedArgs = await resolvePromptDynamicReferences(args, {
+              ...referenceContext, appId: (entry.serverName ?? '').trim() || undefined,
+            }) as Record<string, unknown>;
+            if (JSON.stringify(resolvedArgs) !== JSON.stringify(args)) argumentsJson = JSON.stringify(resolvedArgs);
+            args = resolvedArgs;
           }
 
           const toolCallId = `call_static_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
@@ -174,7 +195,6 @@ export class StaticNode extends BaseNode<
             if (!serverName) {
               throw new Error(`Static node ${nodeId}: real tool call "${toolName}" requires an MCP server.`);
             }
-            const args = JSON.parse(argumentsJson) as Record<string, unknown>;
             const callResult = serverName === PERSONA_MEMORY_GATEWAY_SERVER
               ? await executePersonaMemoryMaintenanceCommit(toolName, args, {
                   variables: sharedState.variables,
@@ -196,10 +216,20 @@ export class StaticNode extends BaseNode<
                   // built-in filesystem/bash confinement see the authored overlay even
                   // when a Static node is the first consumer to touch the server.
                   mcpService.setNodeRoots(serverName, binding.id, binding.properties.roots);
+                  const serverConfigs = await mcpService.loadServerConfigs();
+                  if (!Array.isArray(serverConfigs)) {
+                    throw new Error(`Static node ${nodeId}: could not load MCP parameter presets for "${serverName}".`);
+                  }
+                  const serverConfig = serverConfigs.find(config => config.name === serverName);
+                  const effectiveArgs = await applyPresetArguments(args, mergeToolParameterPresets(
+                    serverConfig?.toolParameterPresets,
+                    binding.properties.toolParameterPresets,
+                    toolName,
+                  ), { ...referenceContext, appId: serverName });
                   const callArguments = [
                     serverName,
                     toolName,
-                    args,
+                    effectiveArgs,
                     binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
                     undefined,
                     binding.id,

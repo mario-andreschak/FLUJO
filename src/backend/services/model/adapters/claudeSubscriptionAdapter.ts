@@ -678,7 +678,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // Codex paths, so run-owned Bash sessions are releasable here too.
             ownerScopeForRun({ runId, conversationId }),
             conversationId ? { conversationId } : undefined,
-            bankingContext,
+            ...(bankingContext ? [bankingContext] as const : [] as const),
           );
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));

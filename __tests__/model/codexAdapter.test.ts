@@ -16,6 +16,7 @@ import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/mod
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { hidePresetParameters } from '@/utils/shared/toolParameterPresets';
 
 const codexCtorMock = jest.fn();
 const startThreadMock = jest.fn();
@@ -64,6 +65,9 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
 const listServerToolsMock = jest.fn();
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: jest.fn(async () => null),
+}));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     callTool: (...a: unknown[]) => callToolMock(...(a as [])),
@@ -535,6 +539,29 @@ describe('CodexAdapter — cooperative terminal controls', () => {
 });
 
 describe('CodexAdapter — tool bridging', () => {
+  it('hides preset identity fields and overrides forged bridge arguments before MCP dispatch', async () => {
+    const presetArgs = { customer_id: 'fixed-customer-a', conversation_id: '@conversation.id' };
+    const originalSchema = {
+      type: 'object', properties: { q: { type: 'string' }, customer_id: { type: 'string' }, conversation_id: { type: 'string' } },
+      required: ['q', 'customer_id', 'conversation_id'],
+    };
+    const tool = { ...mcpTool, function: { ...mcpTool.function, parameters: hidePresetParameters(originalSchema, presetArgs) } };
+    callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'ok' }] } });
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      await capturedBridgeTools[0].handler({ q: 'recent', customer_id: 'customer-b', conversation_id: 'foreign-chat' });
+      yield agentMessage('done');
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+    const { transcript } = await new CodexAdapter().createCompletion(baseInput({
+      conversationId: 'slack-team-thread-a', tools: [tool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things', presetArgs,
+        context: { conversationId: 'slack-team-thread-a' } } },
+    }));
+    expect(capturedBridgeTools[0].inputSchema).toEqual({ type: 'object', properties: { q: { type: 'string' } }, required: ['q'] });
+    expect(callToolMock.mock.calls[0][2]).toEqual({ q: 'recent', customer_id: 'fixed-customer-a', conversation_id: 'slack-team-thread-a' });
+    expect(JSON.stringify(transcript)).not.toContain('fixed-customer-a');
+  });
+
   it('exposes MCP tools on the bridge under readable names and wires the config', async () => {
     await new CodexAdapter().createCompletion(
       baseInput({

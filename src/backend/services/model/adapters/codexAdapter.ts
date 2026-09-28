@@ -481,7 +481,7 @@ export class CodexAdapter implements CompletionAdapter {
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
               conversationId ? { conversationId } : undefined,
-            bankingContext,
+              ...(bankingContext ? [bankingContext] as const : [] as const),
             );
             await afterToolDispatch?.();
             if (runId) {
