@@ -32,6 +32,9 @@ import {
   PromptReferenceSuggestion,
   createPromptReferenceSuggestion,
   encodeDynamicReference,
+  encodeCurrentReference,
+  parseDynamicReference,
+  type DynamicReferenceField,
 } from '@/utils/shared/promptRefs';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
@@ -131,17 +134,25 @@ export function findAtCompletion(text: string, offset = text.length): AtCompleti
   const prefix = text.slice(0, offset);
   const match = prefix.match(/(?:^|\s)(@@?)([^\s@{}]*)$/);
   if (!match || match.index === undefined) return null;
+  // @current.* is execution-time substitution, never an entity search.
+  if (match[1] === '@' && match[2].startsWith('current.')) return null;
   const atOffset = match.index + (match[0].startsWith('@') ? 0 : 1);
   return { query: `${match[1] === '@@' ? '@' : ''}${match[2]}`, start: atOffset, end: offset };
 }
 
-type HitlistScope = 'all' | 'conversation' | 'flow' | 'model' | 'app' | 'file';
+type HitlistScope = 'all' | 'conversation' | 'flow' | 'node' | 'model' | 'app' | 'file' | 'folder';
 
-function parseHitlistQuery(query: string): { scope: HitlistScope; query: string } {
+export function parseHitlistQuery(query: string): { scope: HitlistScope; query: string; field?: DynamicReferenceField } {
   if (query.startsWith('@')) return { scope: 'file', query: query.slice(1) };
+  const long = /^(conversation|flows?|node|model|app|file|folder)(?:\.(id|name|created|updated))?(?::(.*))?$/.exec(query);
+  if (long) return { scope: long[1] === 'flows' ? 'flow' : long[1] as HitlistScope,
+    query: long[3] ?? '', ...(long[2] ? { field: long[2] as DynamicReferenceField } : {}) };
   const prefix: Record<string, HitlistScope> = { c: 'conversation', f: 'flow', m: 'model', a: 'app' };
+  // Partial/full command names must not lose their first letter to a shortcut.
+  if (['current', 'conversation', 'flow', 'flows', 'node', 'model', 'app', 'time', 'date', 'folder', 'file']
+    .some(name => name.startsWith(query) || query.startsWith(`${name}.`))) return { scope: 'all', query };
   const scope = prefix[query[0]?.toLocaleLowerCase()];
-  return scope ? { scope, query: query.slice(1) } : { scope: 'all', query };
+  return scope ? { scope, query: query.slice(1).replace(/^:/, '') } : { scope: 'all', query };
 }
 
 function fuzzyScore(haystack: string, needle: string): number | null {
@@ -179,7 +190,8 @@ export function filterReferenceSuggestions(
     })
     .sort((a, b) => {
       const kindOrder: Record<PromptRefKind, number> = { tool: 0, resource: 1, global: 2, runres: 3, mention: 4 };
-      return (a.score ?? 0) - (b.score ?? 0)
+      return Number(b.item.category === 'builtin') - Number(a.item.category === 'builtin')
+        || (a.score ?? 0) - (b.score ?? 0)
         || kindOrder[a.item.kind] - kindOrder[b.item.kind]
         || a.item.label.localeCompare(b.item.label);
     })
@@ -196,6 +208,23 @@ const builtInMentionSuggestions = [
   ['date', 'Current local date'],
   ['folder', 'Current flow folder'],
 ] as const;
+
+const currentReferenceSuggestions: PromptReferenceSuggestion[] = builtInMentionSuggestions.map(([kind, description]) => ({
+  kind: 'mention', server: '', name: encodeCurrentReference(kind), label: encodeCurrentReference(kind),
+  value: encodeCurrentReference(kind), description, category: 'builtin',
+}));
+
+function selectHitlistSuggestions(suggestions: PromptReferenceSuggestion[], query: string): PromptReferenceSuggestion[] {
+  const parsed = parseHitlistQuery(query);
+  const source = suggestions.filter(item => parsed.scope === 'all'
+    || item.category === parsed.scope || (parsed.scope === 'file' && item.category === 'folder'));
+  return filterReferenceSuggestions(source.map(item => {
+    const ref = parseDynamicReference(item.value);
+    return parsed.field && ref?.target
+      ? { ...item, value: encodeDynamicReference(ref.kind, ref.target, parsed.field) }
+      : item;
+  }), parsed.query);
+}
 
 const hitlistCache = new Map<string, { expires: number; suggestions: PromptReferenceSuggestion[]; roots: string[] }>();
 
@@ -242,15 +271,6 @@ async function loadEnhancedHitlist(): Promise<{ suggestions: PromptReferenceSugg
       return [...apps].map(([uri, app]) => ({ ...app, uri, serverName: config.name }));
     }))).flat();
   const suggestions: PromptReferenceSuggestion[] = [
-    ...builtInMentionSuggestions.map(([kind, description]) => ({
-      kind: 'mention' as const,
-      server: '',
-      name: `@${kind}`,
-      label: `@${kind}`,
-      value: `@${kind}`,
-      description,
-      category: 'builtin' as const,
-    })),
     ...flows.map((flow) => ({
       kind: 'mention' as const,
       server: '',
@@ -516,8 +536,9 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       { kind: 'global', server: '', name },
       name,
     ));
-    return filterReferenceSuggestions([...(suggestions ?? []), ...globals, ...enhancedSuggestions], '');
-  }, [enhancedSuggestions, globalNames, suggestions]);
+    return filterReferenceSuggestions([...(enhancedHitlist ? currentReferenceSuggestions : []),
+      ...(suggestions ?? []), ...globals, ...enhancedSuggestions], '');
+  }, [enhancedHitlist, enhancedSuggestions, globalNames, suggestions]);
   const validatedValues = useMemo(
     () => suggestions ? new Set(pickerSuggestions.map((item) => item.value)) : null,
     [pickerSuggestions, suggestions],
@@ -542,13 +563,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       return;
     }
     const mode = atCompletion ? 'at' : 'global';
-    const parsedQuery = parseHitlistQuery(completion.query);
-    const source = mode === 'at'
-      ? pickerSuggestions.filter((item) => parsedQuery.scope === 'all'
-        || item.category === parsedQuery.scope
-        || (parsedQuery.scope === 'file' && item.category === 'folder'))
-      : pickerSuggestions.filter((item) => item.kind === 'global');
-    const items = filterReferenceSuggestions(source, mode === 'at' ? parsedQuery.query : completion.query);
+    const items = mode === 'at' ? selectHitlistSuggestions(pickerSuggestions, completion.query)
+      : filterReferenceSuggestions(pickerSuggestions.filter(item => item.kind === 'global'), completion.query);
     setActiveIndex(0);
     setActiveCompletion({
       ...completion,
@@ -567,7 +583,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       return;
     }
     const parsed = parseHitlistQuery(activeCompletion.query);
-    if ((parsed.scope !== 'conversation' && parsed.scope !== 'file') || !parsed.query.trim()) {
+    if ((parsed.scope !== 'conversation' && parsed.scope !== 'file' && parsed.scope !== 'folder') || !parsed.query.trim()) {
       setAsyncSuggestions([]);
       return;
     }
@@ -617,19 +633,13 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   useEffect(() => {
     if (!activeCompletion) return;
     const parsed = parseHitlistQuery(activeCompletion.query);
-    const source = activeCompletion.mode === 'at'
-      ? pickerSuggestions.filter((item) => parsed.scope === 'all'
-        || item.category === parsed.scope
-        || (parsed.scope === 'file' && item.category === 'folder'))
-      : pickerSuggestions.filter((item) => item.kind === 'global');
     const remote = activeCompletion.mode === 'at'
-      && (parsed.scope === 'conversation' || parsed.scope === 'file')
+      && (parsed.scope === 'conversation' || parsed.scope === 'file' || parsed.scope === 'folder')
       ? asyncSuggestions
       : [];
-    const items = filterReferenceSuggestions(
-      [...source, ...remote],
-      activeCompletion.mode === 'at' ? parsed.query : activeCompletion.query,
-    );
+    const items = activeCompletion.mode === 'at'
+      ? selectHitlistSuggestions([...pickerSuggestions, ...remote], activeCompletion.query)
+      : filterReferenceSuggestions(pickerSuggestions.filter(item => item.kind === 'global'), activeCompletion.query);
     setActiveCompletion((current) => {
       if (!current
         || current.mode !== activeCompletion.mode
@@ -750,14 +760,21 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
           <ReferencePill
             element={reference}
             disabled={disabled}
-            invalid={validatedValues !== null && !validatedValues.has(serialized)}
+            invalid={validatedValues !== null && !validatedValues.has(serialized)
+              && !(reference.kind === 'mention' && (() => {
+                const parsed = parseDynamicReference(serialized);
+                return parsed && (!parsed.target || pickerSuggestions.some(item => {
+                  const allowed = parseDynamicReference(item.value);
+                  return allowed?.kind === parsed.kind && allowed.target === parsed.target;
+                }));
+              })())}
           />
           {children}
         </span>
       );
     }
     return <p {...attributes}>{children}</p>;
-  }, [disabled, validatedValues]);
+  }, [disabled, pickerSuggestions, validatedValues]);
 
   const lineHeight = 1.5;
   const editorMinHeight = `${Math.max(1, minRows) * lineHeight}em`;
@@ -841,6 +858,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
             const previousGroupKey = activeCompletion.items[index - 1]?.category || activeCompletion.items[index - 1]?.kind;
             const groupLabel = item.category === 'conversation' ? 'Conversations'
               : item.category === 'flow' ? 'Flows'
+              : item.category === 'node' ? 'Nodes in this flow'
               : item.category === 'model' ? 'Models'
                   : item.category === 'mcpserver' ? 'MCP servers'
                     : item.category === 'app' ? 'Apps'

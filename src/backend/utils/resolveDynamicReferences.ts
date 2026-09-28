@@ -130,7 +130,8 @@ async function resolveString(text: string, context: ToolReferenceContext): Promi
     const ref = parseDynamicReference(match.fullMatch);
     if (!ref) return { match, value: match.fullMatch as unknown };
     const entity = await entityForReference(ref, context);
-    return { match, value: entity[ref.field] ?? '' };
+    // An unavailable current-context value must not silently erase a command.
+    return { match, value: entity[ref.field] ?? (ref.fullMatch.startsWith('@current.') ? ref.fullMatch : '') };
   }));
 
   if (resolved.length === 1 && resolved[0].match.index === 0 && resolved[0].match.fullMatch.length === text.length) {

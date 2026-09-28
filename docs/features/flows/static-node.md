@@ -147,7 +147,7 @@ Keep the final substituted `argumentsJson` valid JSON. The modal validates the a
 ### Dynamic references and fixed tool parameters
 
 Static messages, mock results, and JSON argument values also resolve dynamic
-references such as `@conversation.id`, `@flows.id`, and `@node.id` from the current
+references such as `@current.conversation.id`, `@current.flow.id`, and `@current.node.id` from the current
 execution. JSON values resolve after parsing, preserving nested objects and quoted
 names. Conversation IDs retain their original form, including Slack thread IDs.
 
@@ -160,7 +160,9 @@ history. Tool results can still disclose values returned by the server.
 An enabled preset whose value is an empty string is still a fixed parameter. Disable
 the preset to allow the model or authored call to supply that parameter. A trusted
 customer binding must come from server-controlled configuration; `@conversation.id`
-provides correlation and does not authenticate the customer.
+provides correlation and does not authenticate the customer. See the
+[complete command reference](../dynamic-references.md) for current context,
+entity pickers, aliases, and available fields.
 
 ## Re-entry semantics
 
