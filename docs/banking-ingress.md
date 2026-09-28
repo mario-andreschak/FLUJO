@@ -71,8 +71,9 @@ Its JSON uses the following fields:
   "bankKeyId": "bank-1",
   "bankSigningKeyFile": "/run/banking/bank-signer.pem",
   "bankServerName": "Banking MCP",
-  "bankServerUrl": "http://banking-mcp:8000/mcp",
-  "bankServiceToken": "REPLACE_WITH_RANDOM_BANK_SERVICE_SECRET",
+  "bankCommand": "/opt/banking-mcp/.venv/bin/python",
+  "bankCwd": "/opt/banking-mcp",
+  "bankConfigFile": "/run/banking/bank-config.json",
   "flowId": "APPROVED_FLOW_ID",
   "graphHash": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
   "maxActiveRuns": 32,
@@ -89,7 +90,11 @@ read-only into the **existing Linux Docker worker**. Keep `stateDir` on its dura
 Do not use the worker's administrative/snapshot bearer as the banking execution credential.
 Do not publish the administrative UI through the customer frontend.
 
-Register the bank as MCP v1 Streamable HTTP with its fixed service bearer. Disable
+Install Banking MCP and its Python dependencies inside the existing FLUJO container.
+Register it as MCP v1 **stdio**, with command `bankCommand`, cwd/rootPath `bankCwd`,
+empty env, and args `-m banking_mcp serve --config <bankConfigFile> --transport stdio`.
+Mount the dataset and private configuration read-only; keep bank state on a writable
+durable volume. FLUJO owns the child process and connects through stdin/stdout. Disable
 MCP Apps, skills, sampling, elicitation and proxy exposure. Banking resource and
 prompt access are denied. Banking MCP calls require an opaque verified run context
 even through the ordinary tool tester, Apps or proxy.
@@ -115,7 +120,9 @@ the verified subject, namespaced session, conversation, logical run, graph, tool
 RFC 8785 digest of final arguments. Shared client headers never contain a current
 customer. Expiry, cancellation, revocation and ownership are checked again after
 long calls and before persistence. Logout revokes locally first, then propagates
-a separately typed signed request to the bank's private `/internal/revoke` endpoint.
+a separately typed signed assertion over stdin to the fixed local Python
+`revoke-session` command. This control command is not an advertised MCP tool.
+Authority never appears in command arguments or environment variables.
 A propagation failure returns 503; local authorization remains revoked and the
 frontend can retry with a fresh ingress assertion.
 

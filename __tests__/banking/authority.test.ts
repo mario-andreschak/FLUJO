@@ -6,7 +6,7 @@ import { generateKeyPair, exportSPKI, exportPKCS8, SignJWT, jwtVerify } from 'jo
 import canonicalize from 'canonicalize';
 import { authenticateBankingRequest, bankingAdmission, createBankingRunContext, bindBankingRun,
   assertBankingRunCurrent, signBankingCall, BANK_ASSERTION_META, validateBankingArguments,
-  type BankingRunContext } from '@/backend/services/banking/authority';
+  type BankingRunContext, assertBankingServerConfig } from '@/backend/services/banking/authority';
 import { assertBankingModelTool, authorizeBankingHandoffs } from '@/backend/services/banking/authority';
 import { commitBankingMutation } from '@/backend/services/banking/authority';
 import { BankingStore } from '@/backend/services/banking/store';
@@ -36,8 +36,7 @@ describe('banking identity authority', () => {
       stateDir: path.join(root, 'state'), frontendIssuer: 'frontend-test', frontendAudience: 'flujo-banking-ingress',
       frontendKeys: { front: await exportSPKI(frontend.publicKey) }, bankIssuer: 'banking-runtime-test',
       bankAudience: 'banking-mcp', bankKeyId: 'bank', bankSigningKeyFile: path.join(root, 'signer.pem'),
-      bankServerName: 'Banking MCP', bankServerUrl: 'http://banking-mcp:8000/mcp',
-      bankServiceToken: 'SERVICE_SENTINEL_' + 'y'.repeat(32), flowId: randomUUID(), graphHash: 'a'.repeat(64) };
+      bankServerName: 'Banking MCP', bankCommand: path.join(root, 'python'), bankCwd: root, bankConfigFile: path.join(root, 'bank.json'), flowId: randomUUID(), graphHash: 'a'.repeat(64) };
     policyFile = path.join(root, 'policy.json');
     await fs.writeFile(policyFile, JSON.stringify(policy));
     process.env.FLUJO_BANKING_CONFIG = policyFile;
@@ -77,6 +76,17 @@ describe('banking identity authority', () => {
     const foreign = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
     await expect(authenticateBankingRequest(await request('alice', {}, foreign.privateKey))).rejects.toThrow('authorization_denied');
     await expect(fs.stat(path.join(root, 'state'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('the protected server must launch the exact local stdio command', () => {
+    const config = { name: 'Banking MCP', transport: 'stdio', command: policy.bankCommand,
+      cwd: policy.bankCwd, rootPath: policy.bankCwd, env: {},
+      args: ['-m', 'banking_mcp', 'serve', '--config', policy.bankConfigFile, '--transport', 'stdio'] };
+    expect(() => assertBankingServerConfig(config as never)).not.toThrow();
+    for (const patch of [{ transport: 'streamable', serverUrl: 'http://banking-mcp:8000/mcp' },
+      { command: 'python' }, { cwd: 'other' }, { args: [] }, { env: { CUSTOMER_ID: 'bob' } }]) {
+      expect(() => assertBankingServerConfig({ ...config, ...patch } as never)).toThrow('banking_server_policy_mismatch');
+    }
   });
   test.each([{ aud: 'banking-mcp' }, { iss: 'other' }, { scope: ['bank:write'] },
     { exp: 0 }, { iat: '1' }, { sub: '' }, { customer_id: 'other-customer' }, { run_id: 'forged' }])(

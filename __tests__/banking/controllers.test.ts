@@ -12,6 +12,7 @@ import { bankingChat, bankingConversation, bankingCancel, bankingEvents, banking
 import { authenticateBankingRequest, bankingAdmission, bindBankingRun, signBankingCall } from '@/backend/services/banking/authority';
 import { assertBankingGraph } from '@/backend/services/banking/graph';
 import { requireBankingPolicy } from '@/backend/services/banking/policy';
+import * as localControl from '@/backend/services/banking/localControl';
 import { withBankingAdmission } from '@/backend/services/banking/admission';
 
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn() } }));
@@ -19,6 +20,7 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: jest.fn() }));
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn() }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/cancellation', () => ({ markConversationDeleted: jest.fn() }));
+jest.mock('@/backend/services/banking/localControl', () => ({ propagateBankingRevocation: jest.fn() }));
 
 describe('authenticated banking ingress and controls', () => {
   let directory: string;
@@ -44,7 +46,7 @@ describe('authenticated banking ingress and controls', () => {
       stateDir: path.join(directory, 'state'), frontendIssuer: 'test-frontend', frontendAudience: 'flujo-banking-ingress',
       frontendKeys: { test: await exportSPKI(front.publicKey) }, bankIssuer: 'test-runtime', bankAudience: 'banking-mcp',
       bankKeyId: 'test', bankSigningKeyFile: path.join(directory, 'bank.pem'), bankServerName: 'Banking MCP',
-      bankServerUrl: 'http://banking-mcp:8000/mcp', bankServiceToken: 'y'.repeat(48),
+      bankCommand: path.join(directory, 'python'), bankCwd: directory, bankConfigFile: path.join(directory, 'bank.json'),
       flowId: graph.id, graphHash: hashFlowExecutionSnapshot(graph), maxActiveRuns: 4, maxQueuedRuns: 512 };
     process.env.FLUJO_BANKING_CONFIG = path.join(directory, 'config.json');
     await saveConfig();
@@ -126,9 +128,9 @@ describe('authenticated banking ingress and controls', () => {
     const policy = { ...requireBankingPolicy(), graphHash: hashFlowExecutionSnapshot(graph) };
     expect(() => assertBankingGraph(graph, policy)).toThrow('banking_graph_feature_forbidden');
   });
-  test('local revocation stays effective if the bank control endpoint fails', async () => {
+  test('local revocation stays effective if the bank control process fails', async () => {
     const id = (await (await chat()).json()).conversation_id;
-    jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 503 }));
+    jest.mocked(localControl.propagateBankingRevocation).mockRejectedValueOnce(new Error('private failure'));
     expect((await bankingRevoke(await request('alice'))).status).toBe(503);
     expect((await bankingConversation(await request('alice'), id)).status).toBe(401);
     expect((await chat('bob')).status).toBe(200);

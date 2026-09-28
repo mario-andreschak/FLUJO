@@ -19,8 +19,9 @@ const schema = z.object({
   bankKeyId: identifier,
   bankSigningKeyFile: absolutePath,
   bankServerName: identifier,
-  bankServerUrl: z.url(),
-  bankServiceToken: z.string().min(32),
+  bankCommand: absolutePath,
+  bankCwd: absolutePath,
+  bankConfigFile: absolutePath,
   flowId: identifier,
   graphHash: z.string().regex(/^[a-f0-9]{64}$/),
   maxActiveRuns: z.number().int().min(1).max(128).default(32),
@@ -41,10 +42,6 @@ export function getBankingPolicy(): BankingPolicy | undefined {
     if (Buffer.byteLength(raw) > 65536) throw new Error();
     const parsed = schema.parse(JSON.parse(raw));
     if (!Object.keys(parsed.frontendKeys).length) throw new Error();
-    const url = new URL(parsed.bankServerUrl);
-    if (url.pathname !== '/mcp' || url.search || url.hash || url.username || url.password) throw new Error();
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:'
-      && ['127.0.0.1', 'localhost', 'banking-mcp'].includes(url.hostname))) throw new Error();
     return Object.freeze({ ...parsed, frontendKeys: Object.freeze(parsed.frontendKeys) });
   } catch {
     throw new BankingError('banking_configuration_unavailable', 503);

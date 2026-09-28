@@ -8,6 +8,7 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import { BankingError } from './errors';
 import { assertBankingExecutionBearer, requireBankingPolicy, type BankingPolicy } from './policy';
 import { BankingStore, type Identity } from './store';
+import { propagateBankingRevocation } from './localControl';
 
 export const BANK_ASSERTION_META = 'com.flujo.bank/assertion';
 declare const principalBrand: unique symbol;
@@ -152,8 +153,11 @@ export async function commitBankingMutation<T>(context: BankingRunContext, task:
 }
 
 export function assertBankingServerConfig(config: MCPServerConfig, policy = requireBankingPolicy()): void {
-  if (config.name !== policy.bankServerName || config.transport !== 'streamable'
-    || config.serverUrl !== policy.bankServerUrl || config.enableMcpApps || config.enableMcpSkills
+  if (config.name !== policy.bankServerName || config.transport !== 'stdio'
+    || config.command !== policy.bankCommand || config.cwd !== policy.bankCwd
+    || config.rootPath !== policy.bankCwd
+    || canonicalize(config.args) !== canonicalize(['-m', 'banking_mcp', 'serve', '--config', policy.bankConfigFile, '--transport', 'stdio'])
+    || Object.keys(config.env ?? {}).length !== 0 || config.enableMcpApps || config.enableMcpSkills
     || config.sampling?.enabled || config.elicitation?.enabled || config.exposeAsMcpServer) {
     throw new BankingError('banking_server_policy_mismatch');
   }
@@ -217,13 +221,9 @@ async function sign(policy: BankingPolicy, identity: Identity, conversation: str
 
 export async function revokeBankingSession(principal: BankingPrincipal): Promise<void> {
   const record = admission(principal);
-  // Local revocation is durable before attempting propagation, so calls fail closed during a network outage.
+  // Local revocation is durable before the private child process updates the bank store.
   await record.store.revoke(record.identity);
   const assertion = await sign(record.policy, record.identity, 'session-revocation', randomUUID(),
     'revoke_session', {}, 'bank:revoke', 'bank-revoke+jwt');
-  const url = new URL('/internal/revoke', record.policy.bankServerUrl);
-  const response = await fetch(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${record.policy.bankServiceToken}` },
-    body: JSON.stringify({ assertion }) });
-  if (!response.ok) throw new BankingError('bank_revocation_pending', 503);
+  await propagateBankingRevocation(record.policy, assertion);
 }
