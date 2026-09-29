@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 201.
+Route files: 202.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -132,6 +132,7 @@ Route files: 201.
 | `/api/workspaces` | DELETE, GET, PATCH, POST | [source](../../src/app/api/workspaces/route.ts) |
 | `/mcp-flows` | DELETE, GET, POST | [source](../../src/app/mcp-flows/route.ts) |
 | `/mcp-proxy/{server}` | DELETE, GET, POST | [source](../../src/app/mcp-proxy/[server]/route.ts) |
+| `/v1/banking/session/revoke` | POST | [source](../../src/app/v1/banking/session/revoke/route.ts) |
 | `/v1/chat/completions` | GET, OPTIONS, POST | [source](../../src/app/v1/chat/completions/route.ts) |
 | `/v1/chat/conversation-chains` | GET | [source](../../src/app/v1/chat/conversation-chains/route.ts) |
 | `/v1/chat/conversations` | DELETE, GET, POST | [source](../../src/app/v1/chat/conversations/route.ts) |

@@ -5,7 +5,7 @@ import {
   type ExecutionExtensionContext,
 } from '@/backend/execution/extensions';
 
-/** Test policy only. Application integrations verify their own signed identity separately. */
+/** Test policy only. Crypto/session ownership is tested against the banking adapter separately. */
 export interface FixtureRun {
   subject: string;
   conversation: string;

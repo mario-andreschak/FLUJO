@@ -77,6 +77,8 @@ const nextConfig = {
     ];
   },
   transpilePackages: [
+    'jose',
+    'canonicalize',
     '@mui/material',
     '@mui/icons-material',
     '@mui/system',

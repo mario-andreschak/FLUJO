@@ -44,6 +44,8 @@ const moduleNameMapper = {
 // transformation for a package the generated pattern already ignored. So we
 // widen that generated allowlist instead of appending to it.
 const esmOnlyTestPackages = [
+  "jose",
+  "canonicalize",
   "chokidar",
   "readdirp",
   "@modelcontextprotocol/ext-apps",
