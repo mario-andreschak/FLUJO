@@ -75,6 +75,9 @@ describe('restricted Codex credential/runtime isolation', () => {
 
   test.each([
     { verifiedCliVersion: 'unverified', verifiedCliSha256: 'a'.repeat(64) },
+    { verifiedCliVersion: '0.157.0', verifiedCliSha256: 'a'.repeat(64) },
+    { verifiedCliVersion: '0.157.2', verifiedCliSha256: 'a'.repeat(64) },
+    { verifiedCliVersion: '0.158.0', verifiedCliSha256: 'a'.repeat(64) },
     { verifiedCliVersion: '0.153.3', verifiedCliSha256: 'invalid' },
     { verifiedCliVersion: '0.153.3', verifiedCliSha256: 'a'.repeat(64), verifiedCliPath: 'relative/codex' },
   ])('invalid profile fails before binary invocation or credential access: %j', async profile => {
@@ -83,16 +86,24 @@ describe('restricted Codex credential/runtime isolation', () => {
     expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
   });
 
-  test('pins the exact executable digest, version and path; modified binary is rejected', async () => {
+  test.each([
+    ['0.153.3', 'gpt-6-sol'], ['0.153.3', 'gpt-6-luna'],
+    ['0.157.1', 'gpt-6-sol'], ['0.157.1', 'gpt-6-luna'],
+  ])('pins exact %s executable digest, version and path for %s independently of catalog source version', async (version, model) => {
     const executable = path.join(directory, 'fixture-codex.exe');
     const contents = 'synthetic executable, not an actual CLI';
     await fs.writeFile(executable, contents);
-    const profile = { ...await catalogProfile(), verifiedCliSha256: createHash('sha256').update(contents).digest('hex'),
+    const profile = { ...await catalogProfile({ client_version: '0.158.0', models: [{ ...selectedModel, slug: model }] }),
+      verifiedCliVersion: version, verifiedCliSha256: createHash('sha256').update(contents).digest('hex'),
       verifiedCliPath: executable };
-    await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).resolves.toBe(await fs.realpath(executable));
+    mockExecFile.mockResolvedValue({ stdout: `codex-cli ${version}\n`, stderr: '' });
+    await expect(assertRestrictedCodexProfile(profile, model)).resolves.toBe(await fs.realpath(executable));
     expect(mockExecFile).toHaveBeenCalledWith(await fs.realpath(executable), ['--version'], expect.objectContaining({ windowsHide: true }));
+    mockExecFile.mockResolvedValue({ stdout: `codex-cli ${version === '0.153.3' ? '0.157.1' : '0.153.3'}\n`, stderr: '' });
+    await expect(assertRestrictedCodexProfile(profile, model)).rejects.toThrow('differs from its verified profile');
+    mockExecFile.mockResolvedValue({ stdout: `codex-cli ${version}\n`, stderr: '' });
     await fs.writeFile(executable, 'replaced executable');
-    await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).rejects.toThrow('differs from its verified profile');
+    await expect(assertRestrictedCodexProfile(profile, model)).rejects.toThrow('differs from its verified profile');
     expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
   });
 
@@ -118,8 +129,12 @@ describe('restricted Codex credential/runtime isolation', () => {
     { client_version: '0.153.3', models: [{ ...selectedModel, use_responses_lite: true }] },
     { client_version: '0.153.3', models: [{ ...selectedModel, supports_search_tool: true }] },
     { client_version: '0.153.3', models: [{ ...selectedModel, multi_agent_version: 'v2' }] },
-  ])('incompatible or native-capable model catalogs fail before binary/auth access: %#', async catalog => {
-    await expect(assertRestrictedCodexProfile(await catalogProfile(catalog), 'gpt-6-sol')).rejects.toThrow('absent, incompatible, or has native capabilities');
+  ])('incompatible or native-capable model catalogs fail before binary/auth access for both admitted versions: %#', async catalog => {
+    const profile = await catalogProfile(catalog);
+    for (const version of ['0.153.3', '0.157.1']) {
+      await expect(assertRestrictedCodexProfile({ ...profile, verifiedCliVersion: version }, 'gpt-6-sol'))
+        .rejects.toThrow('absent, incompatible, or has native capabilities');
+    }
     expect(mockExecFile).not.toHaveBeenCalled();
     expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
   });
