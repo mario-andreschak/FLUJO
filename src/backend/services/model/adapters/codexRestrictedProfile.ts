@@ -162,11 +162,14 @@ function verifyExecutable(executable: string, digest: string, version: string): 
   return (async () => {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(executable)) hash.update(chunk);
+    if (hash.digest('hex') !== digest) {
+      throw new Error('Restricted Codex binary differs from its verified profile.');
+    }
     const { stdout } = await promisify(execFile)(executable, ['--version'], {
       env: { ...baseEnvironment(), NODE_ENV: 'production' }, encoding: 'utf8',
       timeout: 10000, maxBuffer: 4096, windowsHide: true,
     });
-    if (stdout.trim() !== `codex-cli ${version}` || hash.digest('hex') !== digest) {
+    if (stdout.trim() !== `codex-cli ${version}`) {
       throw new Error('Restricted Codex binary differs from its verified profile.');
     }
   })();
