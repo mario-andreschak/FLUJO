@@ -204,16 +204,117 @@ test('lost authority in a tool handler aborts the model run and escapes the brid
   expect(mockClose).toHaveBeenCalledTimes(1);
 });
 
-test('plain handoff stops cleanly and returns routing calls', async () => {
+test('plain handoff preserves terminal answer and usage while closing later tool dispatch', async () => {
+  const executor = jest.fn();
+  const delta = jest.fn();
   mockRun.mockImplementation(async (options: RunOptions) => {
     await start(options);
     await mockTools[0].handler({ task: 'route' });
+    expect(options.signal.aborted).toBe(false);
+    expect(await mockTools[1].handler({})).toMatchObject({ isError: true,
+      content: [{ type: 'text', text: expect.stringContaining('turn has ended') }] });
+    text(options, 'Final receipt');
+    options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response: 'Final receipt',
+      usage: { input_tokens: 20, cache_read_tokens: 5, output_tokens: 7, thinking_tokens: 2 } } });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next'), fnTool('local')],
+    localToolExecutors: { local: executor }, onModelDelta: delta }));
+  expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
+  expect(result.completion.choices[0].message.content).toBe('Final receipt');
+  expect(result.completion.choices[0].message.tool_calls![0]).toMatchObject({ function: { name: 'handoff_to_next', arguments: '{"task":"route"}' } });
+  expect(result.completion.usage).toMatchObject({ prompt_tokens: 25, completion_tokens: 7, total_tokens: 32,
+    completion_tokens_details: { reasoning_tokens: 2 } });
+  expect(result.transcript?.filter(message => message.role === 'assistant' && message.content === 'Final receipt')).toHaveLength(1);
+  expect(delta).toHaveBeenCalledWith({ messageId: result.liveMessageId, contentDelta: 'Final receipt' });
+  expect(executor).not.toHaveBeenCalled();
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+test('plain handoff finalization still aborts immediately on external cancellation', async () => {
+  const controller = new AbortController();
+  const delta = jest.fn();
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({});
+    expect(options.signal.aborted).toBe(false);
+    controller.abort();
     expect(options.signal.aborted).toBe(true);
     throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
   });
-  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')] }));
+  await expect(new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')],
+    signal: controller.signal, onModelDelta: delta }))).rejects.toMatchObject({ name: 'AbortError' });
+  expect(delta).not.toHaveBeenCalled();
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+  expect(mockClose).toHaveBeenCalledTimes(1);
+});
+
+test('plain handoff with a lost execution fence cannot enter finalization', async () => {
+  const error = new FlowExecutionAuthorityError('lease replaced');
+  const delta = jest.fn();
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await expect(mockTools[0].handler({})).rejects.toBe(error);
+    expect(options.signal.aborted).toBe(true);
+  });
+  await expect(new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')],
+    beforeToolDispatch: async () => { throw error; }, onModelDelta: delta }))).rejects.toBe(error);
+  expect(delta).not.toHaveBeenCalled();
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+  expect(mockClose).toHaveBeenCalledTimes(1);
+});
+
+test.each(['missing', 'error', 'identity', 'deadline'])('plain handoff finalization rejects %s native completion', async mode => {
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({});
+    if (mode === 'deadline') throw new Error('execution deadline exceeded');
+    if (mode !== 'missing') options.onEvent({ event: 'result', result: {
+      conversation_id: mode === 'identity' ? 'unexpected' : sessions.get(options)!,
+      status: mode === 'error' ? 'ERROR' : 'SUCCESS', response: '',
+    } });
+  });
+  await expect(new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')] })))
+    .rejects.toThrow(mode === 'deadline' ? /deadline/ : mode === 'identity' ? /identity/ : /failed to complete/);
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+  expect(mockClose).toHaveBeenCalledTimes(1);
+});
+
+test('plain handoff finalization honors an explicit caller stop before terminal text', async () => {
+  let ended = false;
+  const delta = jest.fn();
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({});
+    expect(options.signal.aborted).toBe(false);
+    ended = true;
+    text(options, 'Suppressed terminal text');
+    expect(options.signal.aborted).toBe(true);
+    throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')],
+    shouldEndAgenticTurn: () => ended, onModelDelta: delta }));
   expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
-  expect(result.completion.choices[0].message.tool_calls![0]).toMatchObject({ function: { name: 'handoff_to_next', arguments: '{"task":"route"}' } });
+  expect(result.completion.choices[0].message.content).toBeNull();
+  expect(delta).not.toHaveBeenCalled();
+});
+
+test('parallel spawn handoffs still stop before post-spawn narration', async () => {
+  const delta = jest.fn();
+  const tool = fnTool('handoff_to_worker');
+  tool.function.parameters.properties = { task: { type: 'string' } };
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({ task: 'one' });
+    await mockTools[0].handler({ task: 'two' });
+    expect(options.signal.aborted).toBe(false);
+    text(options, 'Post-spawn narration');
+    expect(options.signal.aborted).toBe(true);
+    throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [tool], onModelDelta: delta }));
+  expect(result.completion.choices[0].message.tool_calls).toHaveLength(2);
+  expect(result.completion.choices[0].message.content).toBeNull();
+  expect(delta).not.toHaveBeenCalled();
 });
 
 test('external cancellation stops the active child and always cleans resources', async () => {
@@ -235,6 +336,40 @@ test.each(['missing', 'error'])('rejects %s final result instead of returning su
   });
   await expect(new AntigravityCliAdapter().createCompletion(input())).rejects.toThrow(/failed to complete/);
   expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+test.each(['', ' \n\t'])('rejects native SUCCESS with only %j text and no useful dispatch', async response => {
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response, usage: {} } });
+  });
+  await expect(new AntigravityCliAdapter().createCompletion(input())).rejects.toThrow(/no assistant output or tool dispatch/);
+  expect(mockCleanup).toHaveBeenCalledTimes(1);
+});
+
+test('native SUCCESS can preserve a legitimate tool-only transcript', async () => {
+  const executor = jest.fn(async () => 'tool receipt');
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({});
+    options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response: '', usage: {} } });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('local')], localToolExecutors: { local: executor } }));
+  expect(result.transcript?.map(message => message.role)).toEqual(['assistant', 'tool']);
+  expect(executor).toHaveBeenCalledTimes(1);
+  expect(result.completion.choices[0].message.content).toBeNull();
+});
+
+test('native SUCCESS can preserve an intentional handoff-only route', async () => {
+  mockRun.mockImplementation(async (options: RunOptions) => {
+    await start(options);
+    await mockTools[0].handler({});
+    options.onEvent({ event: 'result', result: { conversation_id: sessions.get(options)!, status: 'SUCCESS', response: '', usage: {} } });
+  });
+  const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')] }));
+  expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
+  expect(result.completion.choices[0].message.tool_calls![0].function.name).toBe('handoff_to_next');
+  expect(result.completion.choices[0].message.content).toBeNull();
 });
 
 test('tool dispatch budget ends the run before another executor side effect', async () => {

@@ -213,6 +213,74 @@ describe('Antigravity pinned native executable integration', () => {
     }
   }, 45_000);
 
+  it('drains final text and usage after an approved handoff while rejecting further native MCP dispatch', async () => {
+    const finalText = 'Handoff receipt READY ' + randomBytes(12).toString('hex');
+    const executor = jest.fn(async () => 'must not execute after handoff');
+    const approval = jest.fn(async () => true);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 30_000);
+    let requestedHandoff = false;
+    let receivedHandoff = false;
+    let requestedLaterTool = false;
+    let receivedEndedReceipt = false;
+    const endpoint = await startFakeGenAi((body, res, streaming) => {
+      const names = body.tools?.flatMap(tool => tool.functionDeclarations?.map(declaration => declaration.name) ?? []) ?? [];
+      const response = body.contents?.flatMap(content => content.parts ?? []).filter(part => part.functionResponse).at(-1);
+      const responseText = JSON.stringify(response?.functionResponse ?? {});
+      if (requestedLaterTool && responseText.includes('This agentic turn has ended; no further tools may run.')) {
+        receivedEndedReceipt = true;
+        respond(res, streaming, [{ text: finalText }]);
+      } else if (requestedHandoff && !requestedLaterTool && responseText.includes('Handing off.')) {
+        receivedHandoff = true;
+        requestedLaterTool = true;
+        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+          ServerName: 'flujo', ToolName: 'controlled_nonce', Arguments: {},
+          toolSummary: 'Forbidden follow-up', toolAction: 'Testing the closed handoff boundary',
+        } } }]);
+      } else if (names.includes('call_mcp_tool') && !requestedHandoff) {
+        requestedHandoff = true;
+        respond(res, streaming, [{ functionCall: { name: 'call_mcp_tool', args: {
+          ServerName: 'flujo', ToolName: 'handoff_to_finish', Arguments: {},
+          toolSummary: 'Finish handoff', toolAction: 'Handing off the completed turn',
+        } } }]);
+      } else {
+        respond(res, streaming, [{ text: 'done' }]);
+      }
+    });
+    mockGenAiBaseUrl = endpoint.url;
+    try {
+      const result = await new AntigravityCliAdapter().createCompletion(input({
+        signal: controller.signal,
+        tools: ['handoff_to_finish', 'controlled_nonce'].map(name => ({ type: 'function' as const, function: {
+          name, description: 'Synthetic handoff boundary fixture.', parameters: { type: 'object', properties: {} },
+        } })),
+        localToolExecutors: { controlled_nonce: executor },
+        requestToolApproval: approval,
+      }));
+      expect(requestedHandoff).toBe(true);
+      expect(receivedHandoff).toBe(true);
+      expect(requestedLaterTool).toBe(true);
+      expect(receivedEndedReceipt).toBe(true);
+      expect(approval).toHaveBeenCalledTimes(1);
+      expect(executor).not.toHaveBeenCalled();
+      expect(mockMcpCallTool).not.toHaveBeenCalled();
+      expect(String(result.completion.choices[0].message.content).trim()).toBe(finalText);
+      expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
+      expect(result.completion.choices[0].message.tool_calls?.[0].function).toEqual({ name: 'handoff_to_finish', arguments: '{}' });
+      expect(result.completion.usage).toEqual({
+        prompt_tokens: 36, completion_tokens: 15, total_tokens: 51,
+        prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
+      });
+      expect(mockStdout).toContain('"status":"SUCCESS"');
+      assertNativeExited();
+      await expect(fs.stat(mockRuntime!.home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } catch (error) {
+      throw new Error(String(error) + '; synthetic CLI diagnostics: ' + mockStderr + '; native stream: ' + mockStdout);
+    } finally {
+      clearTimeout(deadline); controller.abort(); await endpoint.close();
+    }
+  }, 45_000);
+
   it('cancels the real native process during an outstanding model stream and removes its invocation home', async () => {
     const controller = new AbortController();
     const deadline = setTimeout(() => controller.abort(), 30_000);
@@ -342,6 +410,16 @@ describe('Antigravity pinned native executable integration', () => {
         expect(mockMcpCallTool).not.toHaveBeenCalled();
         assertNativeExited();
         await expect(fs.stat(mockRuntime!.home)).rejects.toMatchObject({ code: 'ENOENT' });
+      } catch (error) {
+        const effects = {
+          sentinelChanged: (await fs.readFile(source, 'utf8')) !== sentinel,
+          sentinelLeaked: JSON.stringify(endpoint.requests).includes(sentinel),
+          writePresent: await fs.access(target).then(() => true, () => false),
+          commandPresent: await fs.access(marker).then(() => true, () => false),
+          foreignRequests: endpoint.nonModelRequests(),
+          executorCalls: mockMcpCallTool.mock.calls.length,
+        };
+        throw new Error(String(error) + '; attack=' + attack + '; issued=' + issued + '; effects=' + JSON.stringify(effects) + '; native stream: ' + mockStdout + '; synthetic CLI diagnostics: ' + mockStderr);
       } finally {
         clearTimeout(deadline); controller.abort(); await endpoint.close();
       }

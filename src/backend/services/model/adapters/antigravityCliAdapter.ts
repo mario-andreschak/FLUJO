@@ -200,6 +200,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     // Spawn-with-brief bookkeeping (issue #156), mirroring the Claude adapter.
     const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
     let endSpawning = false;
+    let finalizingPlainHandoff = false;
 
     // Approval gate, applied inside every bridge handler before dispatch. The
     // caller has already recorded the assistant(tool_call), so a pending card is
@@ -265,10 +266,10 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                 }));
               }
               log.debug('Antigravity CLI requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
-              // Do NOT abort here — return cleanly so the CLI's tool round-trip
-              // completes; the event loop ends the run at the next streamed
-              // event (plain handoff) or when the model stops calling (spawn).
               if (!spawnable) {
+                // Close dispatch/steering, then drain the native final answer
+                // and usage within this invocation's existing budgets.
+                finalizingPlainHandoff = true;
                 endSpawning = true;
                 return { content: [{ type: 'text', text: 'Handing off.' }] };
               }
@@ -537,8 +538,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
         } finally {
           activeToolCount--;
           if (!activeToolCount) { onToolsIdle?.(); onToolsIdle = undefined; }
-          if (endSpawning || shouldEndAgenticTurn?.()) {
-            endedByCaller = handoffCalls.length === 0;
+          const callerEnded = shouldEndAgenticTurn?.() ?? false;
+          if ((endSpawning && !finalizingPlainHandoff) || callerEnded) {
+            endedByCaller = callerEnded || handoffCalls.length === 0;
             activeChild?.abort();
           }
         }
@@ -600,6 +602,8 @@ export class AntigravityCliAdapter implements CompletionAdapter {
           let cliConversationId: string | undefined;
           let streamError = false;
           let textSinceTool = false;
+          let producedAssistantOutput = false;
+          const dispatchesBeforeRun = bridgeDispatches;
           const transcriptStart = transcript.length;
           try {
             await observeSdkRequest(input, {
@@ -631,9 +635,13 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                     if (textSinceTool) { flushText(); textSinceTool = false; }
                   }
                   if (step.step_type !== 'agent_response') return;
-                  if (handoffCalls.length) { endSpawning = true; activeChild?.abort(); return; }
+                  // Parallel spawn routing stops at narration as before. A plain
+                  // handoff has already closed every bridge handler; preserve
+                  // its terminal answer and usage before returning routing calls.
+                  if (handoffCalls.length && !finalizingPlainHandoff) { endSpawning = true; activeChild?.abort(); return; }
                   if (finalResult) throw new Error('Antigravity CLI emitted text after its final result.');
                   const delta = step.text_delta ?? '';
+                  producedAssistantOutput ||= Boolean(delta.trim());
                   pendingText += delta;
                   textSinceTool ||= Boolean(delta);
                   if (delta) onModelDelta?.({ messageId: pendingMessageId, contentDelta: delta });
@@ -641,6 +649,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                   if (finalResult) throw new Error('Antigravity CLI emitted duplicate final results.');
                   if (event.result.conversation_id !== cliConversationId) throw new Error('Antigravity CLI changed conversation identity.');
                   finalResult = event.result;
+                  producedAssistantOutput ||= Boolean(finalResult.response.trim());
                   if (!pendingText && finalResult.response) {
                     pendingText = finalResult.response;
                     onModelDelta?.({ messageId: pendingMessageId, contentDelta: finalResult.response });
@@ -661,9 +670,16 @@ export class AntigravityCliAdapter implements CompletionAdapter {
               },
             }));
             if (!finalResult || finalResult.status !== 'SUCCESS' || streamError) throw new Error(`Antigravity CLI failed to complete a valid response. Check model access and your Google account login or Gemini API key.${antigravityCliFailureHint(finalResult?.error ?? '')}`);
+            if (!producedAssistantOutput && bridgeDispatches === dispatchesBeforeRun && !handoffCalls.length && !endedByCaller) {
+              throw new Error('Antigravity CLI failed to complete a valid response: no assistant output or tool dispatch was returned.');
+            }
           } catch (error) {
             if (fatalError) throw fatalError;
             if (abortController.signal.aborted) throw antigravityCliAbortError();
+            // Plain handoffs now require normal native finalization. Preserve
+            // protocol/deadline/provider failures instead of masking them as
+            // the intentional abort used by parallel spawn routing.
+            if (finalizingPlainHandoff && !endedByCaller) throw error;
             if (!steeringDelivery && !endSpawning && !handoffCalls.length && !endedByCaller) throw error;
           } finally {
             startedChild = false;
