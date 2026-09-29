@@ -17,7 +17,7 @@ const handle = z.string().regex(/^[A-Za-z0-9_-]{32,64}$/);
 const common = { conversationId: z.string().regex(conversationPattern) };
 export const actionBody = z.discriminatedUnion('operation', [
   z.object({ ...common, operation: z.literal('prepare'), transactionId: z.string().min(1).max(128),
-    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/) }).strict(),
+    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/), requestId: z.string().uuid().optional() }).strict(),
   z.object({ ...common, operation: z.literal('confirm'), pendingHandle: handle,
     confirmed: z.literal(true) }).strict(),
   z.object({ ...common, operation: z.literal('receipt'), pendingHandle: handle }).strict(),
@@ -93,7 +93,8 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
             action: prepared.action, decision: prepared.decision, reason: prepared.reason,
             transaction: prepared.transaction };
           outcome = prepared.decision === 'handoff'
-            ? { ...publicPrepared, ...await verifiedHandoff(String(prepared.reason), String(prepared.pending_handle)) }
+            ? { ...publicPrepared, ...await verifiedHandoff(String(prepared.reason),
+              String(prepared.pending_handle), body.requestId) }
             : { ...publicPrepared, state: 'pending_confirmation' };
         } else if (body.operation === 'confirm') {
           try {
