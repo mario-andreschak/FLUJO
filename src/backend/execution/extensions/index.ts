@@ -38,23 +38,33 @@ export interface ExecutionExtensionAdapter {
 }
 type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
-type Registry = { adapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
+type Registry = { adapter?: ExecutionExtensionAdapter; configuredAdapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
 const root = globalThis as typeof globalThis & { __flujoExecutionExtensions?: Registry };
 const registry = root.__flujoExecutionExtensions ??= { contexts: new WeakMap(), input: new AsyncLocalStorage(), access: new AsyncLocalStorage(), committing: new AsyncLocalStorage() };
 
+function configuredAdapterInProcess(): ExecutionExtensionAdapter | undefined {
+  // Next evaluates the static module in multiple server graphs. MCP services
+  // and capabilities share this process registry, so their adapter must too.
+  // Proxy runtimes have their own registry and authenticate independently.
+  return registry.configuredAdapter ??= configuredExecutionAdapter;
+}
+function canonicalAdapter(adapter: ExecutionExtensionAdapter): ExecutionExtensionAdapter {
+  return adapter === configuredExecutionAdapter ? configuredAdapterInProcess() ?? adapter : adapter;
+}
 export function registerExecutionExtension(adapter: ExecutionExtensionAdapter): () => void {
+  adapter = canonicalAdapter(adapter);
   const previous = registry.adapter;
   registry.adapter = adapter;
   return () => { if (registry.adapter === adapter) registry.adapter = previous; };
 }
 export function executionExtensionAdapter(): ExecutionExtensionAdapter | undefined {
-  const adapter = registry.adapter ?? configuredExecutionAdapter;
+  const adapter = registry.adapter ?? configuredAdapterInProcess();
   if (!adapter && process.env.FLUJO_EXECUTION_ADAPTER_MODULE) throw new ExecutionExtensionError('execution_adapter_not_loaded', 503);
   return adapter;
 }
 export function createExecutionExtensionContext(adapter: ExecutionExtensionAdapter, value: object): ExecutionExtensionContext {
   const context = Object.freeze({}) as ExecutionExtensionContext;
-  registry.contexts.set(context, { adapter, value });
+  registry.contexts.set(context, { adapter: canonicalAdapter(adapter), value });
   return context;
 }
 function record(context: ExecutionExtensionContext | undefined): ContextRecord {
