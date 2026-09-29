@@ -123,5 +123,7 @@ describe('distinct customers use one normal Process graph with bounded admission
       p95Ms: timings[Math.ceil(count * .95) - 1], elapsedMs: performance.now() - started,
       paidModelCalls: 0, staticNodes: 0 }) + '\n');
     expect(completed).toHaveLength(count);
-  }, 120_000);
+  // Match the 450-second client budget for the approved lease of up to 410 seconds;
+  // admission still enforces its own queue and active deadlines under CI load.
+  }, 450_000);
 });
