@@ -196,7 +196,7 @@ const toolSchemas = {
 export const bankingToolNames = Object.freeze(Object.keys(toolSchemas));
 const hostActionSchemas = {
   prepare_unrecognized_charge: z.object({ transaction_id: z.string().min(1).max(128),
-    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/) }).strict(),
+    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/), request_id: z.string().uuid() }).strict(),
   confirm_simulated_intake: z.object({ pending_handle: reference, confirmed: z.literal(true) }).strict(),
   read_intake_receipt: z.object({ pending_handle: reference }).strict(),
   create_verified_handoff: z.object({ reason: z.enum(['high_risk', 'missing_evidence', 'out_of_policy',

@@ -221,7 +221,7 @@ describe('banking identity authority', () => {
   });
   test('action scope needs a one-call exact host grant; static host identity is insufficient', async () => {
     const alice = await context();
-    const args = { transaction_id: 'synthetic-owned-id', snapshot: 'synthetic-build' };
+    const args = { transaction_id: 'synthetic-owned-id', snapshot: 'synthetic-build', request_id: randomUUID() };
     await expect(signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge', args))
       .rejects.toThrow('banking_action_consent_required');
     await expect(assertBankingModelTool(alice.ctx, 'Banking_MCP__prepare_unrecognized_charge',

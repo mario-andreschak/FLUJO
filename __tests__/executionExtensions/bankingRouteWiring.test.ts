@@ -162,6 +162,10 @@ describe('optional banking profile through exported HTTP routes', () => {
       .mockResolvedValueOnce(result({ state: 'created', handoff: { id: handoffId } }) as never)
       .mockResolvedValueOnce(result({ state: 'created', handoff: { id: handoffId,
         reason: 'missing_evidence', human_responded: false } }) as never);
+    const missingId = await action(await fixture.request('A', { operation: 'prepare', conversationId,
+      transactionId: 'private-owned-transaction', snapshot: 'build-1' }, '/v1/banking/action'));
+    expect(missingId.status).toBe(400);
+    expect(mcpService.callTool).not.toHaveBeenCalled();
     const requestId = randomUUID();
     const response = await action(await fixture.request('A', { operation: 'prepare', conversationId,
       transactionId: 'private-owned-transaction', snapshot: 'build-1', requestId }, '/v1/banking/action'));
@@ -171,10 +175,13 @@ describe('optional banking profile through exported HTTP routes', () => {
     expect(body.handoff.id).toBe(handoffId);
     expect(JSON.stringify(body)).not.toContain('unrecognized_count_24h');
     expect(mcpService.callTool).toHaveBeenCalledTimes(3);
+    expect(jest.mocked(mcpService.callTool).mock.calls[0][2]).toEqual({
+      transaction_id: 'private-owned-transaction', snapshot: 'build-1', request_id: requestId });
     expect(jest.mocked(mcpService.callTool).mock.calls[1][2]).toEqual({ reason: 'missing_evidence',
       pending_handle: pendingHandle, request_id: requestId });
     expect((await action(await fixture.request('B', { operation: 'prepare', conversationId,
-      transactionId: 'private-owned-transaction', snapshot: 'build-1' }, '/v1/banking/action'))).status).toBe(404);
+      transactionId: 'private-owned-transaction', snapshot: 'build-1', requestId: randomUUID() },
+    '/v1/banking/action'))).status).toBe(404);
     expect(mcpService.callTool).toHaveBeenCalledTimes(3);
   });
 

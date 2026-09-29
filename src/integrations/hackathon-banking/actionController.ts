@@ -17,7 +17,7 @@ const handle = z.string().regex(/^[A-Za-z0-9_-]{32,64}$/);
 const common = { conversationId: z.string().regex(conversationPattern) };
 export const actionBody = z.discriminatedUnion('operation', [
   z.object({ ...common, operation: z.literal('prepare'), transactionId: z.string().min(1).max(128),
-    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/), requestId: z.string().uuid().optional() }).strict(),
+    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/), requestId: z.string().uuid() }).strict(),
   z.object({ ...common, operation: z.literal('confirm'), pendingHandle: handle,
     confirmed: z.literal(true) }).strict(),
   z.object({ ...common, operation: z.literal('receipt'), pendingHandle: handle }).strict(),
@@ -88,7 +88,7 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
         let outcome: Record<string, unknown>;
         if (body.operation === 'prepare') {
           const prepared = await invoke('prepare_unrecognized_charge',
-            { transaction_id: body.transactionId, snapshot: body.snapshot });
+            { transaction_id: body.transactionId, snapshot: body.snapshot, request_id: body.requestId });
           const publicPrepared = { pending_handle: prepared.pending_handle, snapshot: prepared.snapshot,
             action: prepared.action, decision: prepared.decision, reason: prepared.reason,
             transaction: prepared.transaction };
