@@ -180,12 +180,12 @@ const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
     summary: 'models.wizard.codex.summary',
     note: 'models.wizard.codex.note',
   },
-  'gemini-cli': {
-    eyebrow: 'models.wizard.geminiCli.eyebrow',
-    title: 'models.wizard.geminiCli.title',
-    summary: 'models.wizard.geminiCli.summary',
+  'antigravity-cli': {
+    eyebrow: 'models.wizard.antigravityCli.eyebrow',
+    title: 'models.wizard.antigravityCli.title',
+    summary: 'models.wizard.antigravityCli.summary',
     keyLabel: 'models.wizard.gemini.key',
-    note: 'models.wizard.geminiCli.note',
+    note: 'models.wizard.antigravityCli.note',
   },
   'gemini-native': {
     eyebrow: 'models.wizard.copy.googleNative',
@@ -372,7 +372,7 @@ export default function ModelConnectionWizard({
   const selectSetup = (nextKind: GuidedConnectionKind) => {
     setKind(nextKind);
     setConfirmedLogin(false);
-    if (nextKind === 'gemini-cli' || nextKind === 'codex-subscription') setApiKey('');
+    if (nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
     go('setup');
   };
 
@@ -466,7 +466,7 @@ export default function ModelConnectionWizard({
 
   const finishStandardSetup = async () => {
     if (!kind || kind === 'ollama') return;
-    const supportsLocalLogin = kind === 'codex-subscription' || kind === 'gemini-cli';
+    const supportsLocalLogin = kind === 'codex-subscription' || kind === 'antigravity-cli';
     const requiresKey = !supportsLocalLogin;
     if (requiresKey && !apiKey.trim()) {
       setError(kind === 'claude-subscription'
@@ -475,7 +475,7 @@ export default function ModelConnectionWizard({
       return;
     }
     if (supportsLocalLogin && !apiKey.trim() && !confirmedLogin) {
-      setError(t(kind === 'gemini-cli' ? 'models.wizard.confirmGeminiCliLogin' : 'models.wizard.confirmCodexLogin'));
+      setError(t(kind === 'antigravity-cli' ? 'models.wizard.confirmAntigravityCliLogin' : 'models.wizard.confirmCodexLogin'));
       return;
     }
     if (kind === 'azure') {
@@ -552,22 +552,27 @@ export default function ModelConnectionWizard({
   const bundleNames = useMemo(
     () => kind === 'azure'
       ? [`Azure ${azureDeployment.trim() || 'OpenAI deployment'}`]
-      : kind ? guidedBundleNames(kind) : [],
-    [azureDeployment, kind],
+      : kind ? guidedBundleNames(kind, apiKey) : [],
+    [azureDeployment, kind, apiKey],
   );
   const ollamaModel = ollama?.suggestedModel || 'llama3.2:3b';
   const ollamaInstalled = Boolean(ollama?.installedModels?.includes(ollamaModel));
 
-  const installerPanel = (tool: InstallTool | 'gemini', windowsCommand?: string, authCommand?: string) => {
-    const oneClickInstall = setupHost?.oneClickInstall && tool !== 'gemini';
-    const installCommand = tool === 'gemini' ? 'npm install -g @google/gemini-cli@0.61.0'
+  const installerPanel = (tool: InstallTool | 'antigravity', windowsCommand?: string, authCommand?: string) => {
+    const oneClickInstall = setupHost?.oneClickInstall && tool !== 'antigravity';
+    const installCommand = tool === 'antigravity'
+      ? setupHost?.platform === 'win32'
+        ? 'irm https://antigravity.google/cli/install.ps1 | iex'
+        : setupHost?.platform === 'darwin' || setupHost?.platform === 'linux'
+          ? 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+          : null
       : oneClickInstall ? windowsCommand
       : setupHost && setupHost.installMode !== 'container' && tool !== 'ollama'
         ? `npm install -g ${tool === 'claude' ? '@anthropic-ai/claude-code' : '@openai/codex'}`
         : null;
     const documentationUrl = tool === 'claude' ? 'https://code.claude.com/docs/en/setup'
       : tool === 'codex' ? 'https://github.com/openai/codex#installation'
-        : tool === 'gemini' ? 'https://geminicli.com/docs/get-started/authentication/'
+        : tool === 'antigravity' ? 'https://antigravity.google/docs/cli/install/'
         : `https://ollama.com/download${setupHost?.platform === 'darwin' ? '/mac' : setupHost?.platform === 'linux' ? '/linux' : ''}`;
     return <Stack spacing={1.1}>
       <Alert severity="info">
@@ -575,6 +580,12 @@ export default function ModelConnectionWizard({
           : setupHost ? t('models.wizard.serverSetup', { platform: setupHost.platform === 'win32' ? 'Windows' : setupHost.platform === 'darwin' ? 'macOS' : setupHost.platform === 'linux' ? 'Linux' : setupHost.platform })
             : t('models.wizard.unknownHostSetup')}
       </Alert>
+      {tool === 'antigravity' && authCommand ? (
+        <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
+      ) : null}
+      {tool === 'antigravity' && installCommand ? (
+        <Typography variant="body2" color="text.secondary">{t('models.wizard.antigravityCli.standaloneAlternative')}</Typography>
+      ) : null}
       {installCommand && <CommandRow command={installCommand} copied={copiedCommand === installCommand} onCopy={() => void copyCommand(installCommand)} />}
       {oneClickInstall && <Button
         variant="outlined"
@@ -588,7 +599,7 @@ export default function ModelConnectionWizard({
       <Button href={documentationUrl} target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ alignSelf: 'flex-start' }}>
         {t('models.wizard.installationInstructions')}
       </Button>
-      {authCommand ? (
+      {authCommand && tool !== 'antigravity' ? (
         <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
       ) : null}
       {installResult === 'success' ? <Alert severity="success">{t('models.wizard.installedContinue')}</Alert> : null}
@@ -666,6 +677,7 @@ export default function ModelConnectionWizard({
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterFreeDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-free')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyFreeDescription')} onClick={() => selectSetup('requesty-free')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </Box>
         </>
       );
@@ -682,7 +694,7 @@ export default function ModelConnectionWizard({
           <ChoiceGrid>
             <OptionCard icon={SmartToyRoundedIcon} title="Claude" description={t('models.wizard.claudeDescription')} onClick={() => selectSetup('claude-subscription')} />
             <OptionCard icon={TerminalRoundedIcon} title="ChatGPT / Codex" description={t('models.wizard.codexDescription')} badge={t('models.wizard.noKeyPaste')} onClick={() => selectSetup('codex-subscription')} />
-            <OptionCard icon={TerminalRoundedIcon} title="Gemini CLI" description={t('models.wizard.geminiCliDescription')} onClick={() => selectSetup('gemini-cli')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
             <OptionCard icon={AutoAwesomeRoundedIcon} title={t('models.wizard.geminiNative')} description={t('models.wizard.geminiDescription')} onClick={() => selectSetup('gemini-native')} />
           </ChoiceGrid>
         </>
@@ -701,7 +713,7 @@ export default function ModelConnectionWizard({
             <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
             <OptionCard icon={CloudQueueRoundedIcon} title="Azure OpenAI" description={t('models.wizard.azureDescription')} onClick={() => selectSetup('azure')} />
-            <OptionCard icon={TerminalRoundedIcon} title="Gemini CLI" description={t('models.wizard.geminiCliDescription')} onClick={() => selectSetup('gemini-cli')} />
+            <OptionCard icon={TerminalRoundedIcon} title="Antigravity CLI" description={t('models.wizard.antigravityCliDescription')} onClick={() => selectSetup('antigravity-cli')} />
           </ChoiceGrid>
         </>
       );
@@ -762,7 +774,7 @@ export default function ModelConnectionWizard({
     if (step === 'setup' && kind && setup) {
       const isClaude = kind === 'claude-subscription';
       const isCodex = kind === 'codex-subscription';
-      const isGeminiCli = kind === 'gemini-cli';
+      const isAntigravityCli = kind === 'antigravity-cli';
       const isAzure = kind === 'azure';
       return (
         <>
@@ -770,7 +782,7 @@ export default function ModelConnectionWizard({
           <Typography variant="h4">{t(setup.title)}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2, maxWidth: 720 }}>{t(setup.summary)}</Typography>
 
-          {isGeminiCli ? (
+          {isAntigravityCli ? (
             <Box sx={{ mb: 2 }}>
               <TextField
                 fullWidth
@@ -780,10 +792,10 @@ export default function ModelConnectionWizard({
                 value={apiKey}
                 onChange={(event) => { setApiKey(event.target.value); setError(null); }}
                 InputProps={{ startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> }}
-                helperText={t('models.wizard.geminiCli.keyHelp')}
+                helperText={t('models.wizard.antigravityCli.keyHelp')}
               />
-              <Button href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals" target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ mt: 1 }}>
-                {t('models.wizard.geminiCli.supportedAccounts')}
+              <Button href="https://antigravity.google/docs/plans/" target="_blank" rel="noreferrer" startIcon={<OpenInNewRoundedIcon />} sx={{ mt: 1 }}>
+                {t('models.wizard.antigravityCli.supportedAccounts')}
               </Button>
             </Box>
           ) : null}
@@ -805,15 +817,15 @@ export default function ModelConnectionWizard({
               />
             </Box>
           ) : null}
-          {isGeminiCli && !apiKey.trim() ? (
+          {isAntigravityCli && !apiKey.trim() ? (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installGeminiCli')}</Typography>
-              {installerPanel('gemini', undefined, 'gemini')}
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('models.wizard.geminiCli.signInHelp')}</Typography>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installAntigravityCli')}</Typography>
+              {installerPanel('antigravity', undefined, 'flujo-agy')}
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{t('models.wizard.antigravityCli.signInHelp')}</Typography>
               <FormControlLabel
                 sx={{ mt: 1 }}
                 control={<Checkbox checked={confirmedLogin} onChange={(event) => setConfirmedLogin(event.target.checked)} />}
-                label={t('models.wizard.geminiCliLoginComplete')}
+                label={t('models.wizard.antigravityCliLoginComplete')}
               />
             </Box>
           ) : null}
@@ -854,7 +866,7 @@ export default function ModelConnectionWizard({
             </Stack>
           ) : null}
 
-          {!isCodex && !isGeminiCli ? (
+          {!isCodex && !isAntigravityCli ? (
             <TextField
               fullWidth
               type="password"
@@ -870,7 +882,7 @@ export default function ModelConnectionWizard({
 
           <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
-          {!isCodex && (!isGeminiCli || apiKey.trim()) && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
+          {!isCodex && (!isAntigravityCli || apiKey.trim()) && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('models.wizard.existingCredentialUpdate')}</Typography>}
           <Stack direction="row" gap={0.8} flexWrap="wrap" sx={{ mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>

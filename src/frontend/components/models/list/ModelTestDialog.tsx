@@ -103,8 +103,8 @@ export const ModelTestDialog = ({
   const { t } = useI18n();
   const sdkTitle = result?.provider === 'codex'
     ? t('models.test.codexSdk')
-    : result?.provider === 'gemini-cli'
-      ? t('models.test.geminiCli')
+    : result?.provider === 'antigravity-cli'
+      ? t('models.test.antigravityCli')
       : t('models.test.openaiSdk');
 
   return (

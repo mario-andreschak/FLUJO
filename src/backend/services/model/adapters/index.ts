@@ -8,7 +8,7 @@ import { AnthropicAdapter } from './anthropicAdapter';
 import { GeminiAdapter } from './geminiAdapter';
 import { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 import { CodexAdapter } from './codexAdapter';
-import { GeminiCliAdapter } from './geminiCliAdapter';
+import { AntigravityCliAdapter } from './antigravityCliAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 
@@ -20,7 +20,7 @@ export { AnthropicAdapter } from './anthropicAdapter';
 export { GeminiAdapter } from './geminiAdapter';
 export { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 export { CodexAdapter } from './codexAdapter';
-export { GeminiCliAdapter } from './geminiCliAdapter';
+export { AntigravityCliAdapter } from './antigravityCliAdapter';
 export { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 export {
   resolveOpenRouterMediaRoute,
@@ -52,8 +52,8 @@ export function getCompletionAdapter(model: Model): CompletionAdapter {
       return new ClaudeSubscriptionAdapter();
     case 'codex-cli':
       return new CodexAdapter();
-    case 'gemini-cli':
-      return new GeminiCliAdapter();
+    case 'antigravity-cli':
+      return new AntigravityCliAdapter();
     case 'openai':
     default:
       return new OpenAiAdapter();
@@ -98,8 +98,8 @@ export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
       return { adapterId: 'claude-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
     case 'codex-cli':
       return { adapterId: 'codex-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
-    case 'gemini-cli':
-      return { adapterId: 'gemini-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
+    case 'antigravity-cli':
+      return { adapterId: 'antigravity-cli', endpoint: 'local CLI', reason: mediaRoute.reason };
     case 'openai':
     default:
       return { adapterId: 'openai', endpoint: '/chat/completions', reason: mediaRoute.reason };

@@ -1,12 +1,12 @@
 import { getModelConfigurationCapabilities } from '@/shared/types/model/provider';
 
 describe('provider-aware model configuration capabilities (#329)', () => {
-  it('hides generation settings that Gemini CLI does not expose', () => {
-    for (const name of ['auto', 'pro', 'flash', 'flash-lite', 'gemini-2.5-pro']) {
-      expect(getModelConfigurationCapabilities('gemini-cli', 'gemini-cli', name))
+  it('hides generation settings without a verified Antigravity CLI mapping', () => {
+    for (const name of ['default', 'custom-model']) {
+      expect(getModelConfigurationCapabilities('antigravity-cli', 'antigravity-cli', name))
         .toEqual({ maxOutputTokens: false });
     }
-    expect(getModelConfigurationCapabilities('gemini-cli', undefined, 'auto'))
+    expect(getModelConfigurationCapabilities('antigravity-cli', undefined, 'default'))
       .toEqual({ maxOutputTokens: false });
   });
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {

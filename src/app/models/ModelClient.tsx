@@ -267,11 +267,11 @@ export default function ModelClient() {
           ))
         );
         if (match) {
-          // The Gemini wizard explicitly chooses between an API key and an
-          // eligible Google login. Clearing a saved key applies that choice.
-          const clearsGeminiKey = candidate.provider === 'gemini-cli' &&
+          // The Antigravity wizard explicitly chooses between an API key and
+          // the host account login. Clearing a saved key applies that choice.
+          const clearsAntigravityKey = candidate.provider === 'antigravity-cli' &&
             !candidate.ApiKey?.trim() && Boolean(match.ApiKey?.trim());
-          if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsGeminiKey) {
+          if ((candidate.ApiKey?.trim() && candidate.provider !== 'ollama') || clearsAntigravityKey) {
             const result = await service.updateModel({ ...match, ApiKey: candidate.ApiKey ?? '' });
             if (!result.success || !result.model) {
               setModels(await service.loadModels());

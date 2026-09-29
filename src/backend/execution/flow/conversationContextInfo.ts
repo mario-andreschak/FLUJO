@@ -28,7 +28,7 @@ export async function buildContextInfo(state: SharedState): Promise<Conversation
   // Historical SDK records contain aggregate run usage. Do not reinterpret it
   // as context, even when it happens to be below the configured window.
   if (!model || isSelfOrchestratingAdapter(model.adapter) || model.provider === 'codex'
-    || model.provider === 'claude-subscription' || model.provider === 'gemini-cli') return info;
+    || model.provider === 'claude-subscription' || model.provider === 'antigravity-cli') return info;
   if (message.usage && !resolveOpenRouterMediaRoute(model).useMediaRoute) {
     Object.assign(info, contextUsageFromCompletion({
       prompt_tokens: message.usage.promptTokens,

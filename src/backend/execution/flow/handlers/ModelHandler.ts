@@ -2018,10 +2018,10 @@ export class ModelHandler {
         return media === message.media ? message : { ...message, media };
       }));
       const projectedMessages = toApiMessages(messagesWithMaterializedMedia);
-      // Gemini CLI rejects unsupported attachments explicitly in its preflight.
+      // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
       // Filtering them here would turn an image request into text before that
       // check and allow a response from a model that never received the image.
-      let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'gemini-cli'
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'antigravity-cli'
         ? projectedMessages
         : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;

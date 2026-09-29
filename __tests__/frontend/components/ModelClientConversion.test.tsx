@@ -216,27 +216,27 @@ describe('model-to-agent conversion navigation', () => {
     expect(mockAddModel).not.toHaveBeenCalled();
   });
 
-  it.each(['gemini-cli', undefined] as const)('applies Gemini local-login selection to an existing API-key model with adapter %s', async adapter => {
+  it.each(['antigravity-cli', undefined] as const)('applies Antigravity local-login selection to an existing API-key model with adapter %s', async adapter => {
     const existing: Model = {
-      id: 'existing-cli', name: 'flash', displayName: 'Custom Gemini',
-      provider: 'gemini-cli', adapter, ApiKey: 'masked-key', baseUrl: '',
+      id: 'existing-cli', name: 'default', displayName: 'Custom Antigravity',
+      provider: 'antigravity-cli', adapter, ApiKey: 'masked-key', baseUrl: '',
       promptTemplate: 'Keep this prompt', maxTurns: 7,
     };
     mockLoadModels.mockResolvedValue([existing]);
-    mockGuidedCandidate = { ...existing, id: 'new-guided', adapter: 'gemini-cli', ApiKey: '' };
+    mockGuidedCandidate = { ...existing, id: 'new-guided', adapter: 'antigravity-cli', ApiKey: '' };
     render(<ModelClient />);
     fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
     await waitFor(() => expect(mockGuidedResult).toHaveBeenCalled());
     expect(mockUpdateModel).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'existing-cli', ApiKey: '', displayName: 'Custom Gemini',
+      id: 'existing-cli', ApiKey: '', displayName: 'Custom Antigravity',
       promptTemplate: 'Keep this prompt', maxTurns: 7,
     }));
     expect(mockAddModel).not.toHaveBeenCalled();
   });
 
-  it('keeps repeated Gemini local-login setup idempotent when no key is saved', async () => {
+  it('keeps repeated Antigravity local-login setup idempotent when no key is saved', async () => {
     const existing: Model = {
-      id: 'existing-cli', name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli',
+      id: 'existing-cli', name: 'default', provider: 'antigravity-cli', adapter: 'antigravity-cli',
       ApiKey: '', baseUrl: '', promptTemplate: '',
     };
     mockLoadModels.mockResolvedValue([existing]);

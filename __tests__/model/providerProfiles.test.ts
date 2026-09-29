@@ -7,6 +7,7 @@ import {
   resolveModelAdapter,
   isSelfOrchestratingAdapter,
   supportsLocalModelAuth,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
 } from '@/shared/types/model/provider';
 
 describe('provider profiles', () => {
@@ -26,7 +27,7 @@ describe('provider profiles', () => {
       'anthropic-native',
       'claude-subscription',
       'codex',
-      'gemini-cli',
+      'antigravity-cli',
       'openai',
     ]);
     // Mistral must not be selectable in the modal.
@@ -40,7 +41,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('anthropic', 'openai').id).toBe('anthropic-openai');
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
     expect(getProviderProfile('codex', 'codex-cli').id).toBe('codex');
-    expect(getProviderProfile('gemini-cli', 'gemini-cli').id).toBe('gemini-cli');
+    expect(getProviderProfile('antigravity-cli', 'antigravity-cli').id).toBe('antigravity-cli');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
     expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
@@ -135,22 +136,39 @@ describe('provider profiles', () => {
     ]);
   });
 
-  it('keeps Gemini CLI local authentication separate from native Gemini', () => {
-    expect(getProviderProfileById('gemini-cli')).toMatchObject({
-      provider: 'gemini-cli', adapter: 'gemini-cli', sdkLabel: 'Gemini CLI',
+  it('keeps Antigravity CLI local authentication separate from native Gemini', () => {
+    expect(getProviderProfileById('antigravity-cli')).toMatchObject({
+      provider: 'antigravity-cli', adapter: 'antigravity-cli', sdkLabel: 'Antigravity CLI',
       baseUrl: '', showBaseUrl: false, supportsModelDiscovery: false,
-      defaultModels: ['auto', 'pro', 'flash', 'flash-lite'],
+      defaultModels: [
+        'default',
+        'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+        'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
+        'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
+        'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
+        'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium',
+      ],
     });
-    expect(resolveModelAdapter('gemini-cli')).toBe('gemini-cli');
-    expect(getProviderProfile('gemini-cli').id).toBe('gemini-cli');
-    expect(supportsProviderModelDiscovery(getProviderProfileById('gemini-cli')!, '')).toBe(false);
-    for (const adapter of ['codex-cli', 'gemini-cli']) {
+    expect(resolveModelAdapter('antigravity-cli')).toBe('antigravity-cli');
+    expect(getProviderProfile('antigravity-cli').id).toBe('antigravity-cli');
+    expect(supportsProviderModelDiscovery(getProviderProfileById('antigravity-cli')!, '')).toBe(false);
+    for (const adapter of ['codex-cli', 'antigravity-cli']) {
       expect(supportsLocalModelAuth(adapter)).toBe(true);
       expect(isSelfOrchestratingAdapter(adapter)).toBe(true);
     }
-    for (const adapter of [undefined, 'gemini', 'openai', 'claude-cli']) {
+    for (const adapter of [undefined, 'gemini', 'gemini-cli', 'openai', 'claude-cli']) {
       expect(supportsLocalModelAuth(adapter)).toBe(false);
     }
     expect(isSelfOrchestratingAdapter('gemini')).toBe(false);
+  });
+
+  it('suggests only the verified Gemini slugs for Antigravity API-key mode', () => {
+    expect(ANTIGRAVITY_CLI_API_KEY_MODELS).toEqual([
+      'default',
+      'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+      'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
+      'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
+      'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
+    ]);
   });
 });

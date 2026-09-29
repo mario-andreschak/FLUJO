@@ -10,8 +10,8 @@ import {
  * hold on the persistence and execution paths.
  */
 describe('generation settings validation (#329)', () => {
-  it('rejects native generation settings on Gemini CLI connections', () => {
-    const model = { provider: 'gemini-cli' as const, adapter: 'gemini-cli' as const, name: 'auto' };
+  it('rejects native generation settings on Antigravity CLI connections', () => {
+    const model = { provider: 'antigravity-cli' as const, adapter: 'antigravity-cli' as const, name: 'default' };
     expect(validateModelConfiguration(model)).toBeUndefined();
     for (const setting of [
       { temperature: '0.5' }, { reasoningEffort: 'high' },
@@ -19,7 +19,7 @@ describe('generation settings validation (#329)', () => {
     ]) {
       expect(validateModelConfiguration({ ...model, ...setting })).toBeDefined();
     }
-    expect(normalizeModelTemperature('0.5', 'gemini-cli', 'gemini-cli', 'auto')).toBeUndefined();
+    expect(normalizeModelTemperature('0.5', 'antigravity-cli', 'antigravity-cli', 'default')).toBeUndefined();
   });
   it('accepts creativity inside the provider range and rejects it outside', () => {
     expect(validateModelConfiguration({

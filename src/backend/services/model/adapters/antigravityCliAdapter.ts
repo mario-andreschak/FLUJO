@@ -23,11 +23,11 @@ import { extractMediaParts, extractNativeMediaParts } from './messageUtils';
 import { classifyStatisticsError, createStatisticsEvent, recordStatisticsEvent } from '@/backend/services/statistics';
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
-import { prepareGeminiCliRuntime, type GeminiCliRuntime } from './geminiCliRuntime';
-import { runGeminiCli, geminiCliAbortError, prepareGeminiCliPrompt } from './geminiCliProcess';
-import { mapGeminiCliUsage, type GeminiCliStats } from './geminiCliEvents';
+import { prepareAntigravityCliRuntime, ANTIGRAVITY_CLI_TIMEOUT_MS, type AntigravityCliRuntime } from './antigravityCliRuntime';
+import { runAntigravityCli, antigravityCliAbortError, prepareAntigravityCliPrompt, antigravityCliFailureHint } from './antigravityCliProcess';
+import { mapAntigravityCliUsage, type AntigravityCliEvent } from './antigravityCliEvents';
 
-const log = createLogger('backend/services/model/adapters/geminiCliAdapter');
+const log = createLogger('backend/services/model/adapters/antigravityCliAdapter');
 const MAX_TOOL_NAME_LEN = 110;
 function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -50,10 +50,9 @@ function isHandoffName(name: string): boolean {
   return name.startsWith('handoff_to_') || name === 'handoff';
 }
 
-function geminiBridgeResult(result: CallToolResult): CallToolResult {
-  // Gemini CLI tries to promote the first JSON text block to structuredContent.
-  // MCP requires a record there, so its promotion rejects primitive/array/null
-  // results. Supply a record while keeping the original content and transcript.
+function antigravityBridgeResult(result: CallToolResult): CallToolResult {
+  // Preserve JSON primitive/array/null results for MCP clients that promote
+  // text to structuredContent, which must be a record. Content stays unchanged.
   if (result.structuredContent || result.content[0]?.type !== 'text') return result;
   try {
     const parsed: unknown = JSON.parse(result.content[0].text);
@@ -78,8 +77,8 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
   media?: import('@/shared/types/model/media').ModelMediaPart[];
 };
 
-/** Official Gemini CLI owns the model loop; FLUJO owns every exposed tool. */
-export class GeminiCliAdapter implements CompletionAdapter {
+/** Official Antigravity CLI owns the model loop; FLUJO owns every exposed tool. */
+export class AntigravityCliAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
     const {
       model,
@@ -106,10 +105,15 @@ export class GeminiCliAdapter implements CompletionAdapter {
     const fullInput = normalizeMessageInput(messages, runResourceMarkers);
     const attachments = messages.flatMap(message => message.role === 'user' ? extractMediaParts(message.content) : []);
     if (fullInput.images.length || attachments.length || messages.some(message => extractNativeMediaParts(message.content).length > 0)) {
-      throw new Error('Gemini CLI connections currently support text input only. Use a native Gemini connection for image, document, audio, or video attachments.');
+      throw new Error('Antigravity CLI connections currently support text input only. Use a native Gemini connection for image, document, audio, or video attachments.');
     }
 
     const abortController = new AbortController();
+    const maxTurns = Number.isFinite(input.maxTurns) && (input.maxTurns ?? 0) > 0
+      ? Math.floor(input.maxTurns!) : DEFAULT_AGENTIC_MAX_TURNS;
+    const deadlineAt = Date.now() + ANTIGRAVITY_CLI_TIMEOUT_MS;
+    let bridgeDispatches = 0;
+    const seenSteps = new Set<string>();
     let endedByCaller = false;
     let activeChild: AbortController | undefined;
     let fatalError: unknown;
@@ -134,7 +138,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
     // entries reuse the same id so React reconciles them without duplication.
     const streamMessageNamespace = `${baseTs}_${uuidv4()}`;
     const getStreamMessageId = (itemId: string): string =>
-      `stream_gemini_cli_${streamMessageNamespace}_${itemId}`;
+      `stream_antigravity_cli_${streamMessageNamespace}_${itemId}`;
     const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
       const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
@@ -254,7 +258,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
                   durationMs: Math.max(0, Date.now() - toolStartedAt),
                 }));
               }
-              log.debug('Gemini CLI requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
+              log.debug('Antigravity CLI requested handoff', { tool: fnName, callIndex: handoffCalls.length, spawnable });
               // Do NOT abort here — return cleanly so the CLI's tool round-trip
               // completes; the event loop ends the run at the next streamed
               // event (plain handoff) or when the model stops calling (spawn).
@@ -281,7 +285,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
               if (abortController.signal.aborted || shouldEndAgenticTurn?.()) return endedToolResult();
               const callId = `call_${uuidv4()}`;
               const argsJson = JSON.stringify(args ?? {});
-              // The bridge receives a call only after Gemini CLI has assembled its
+              // The bridge receives a call only after Antigravity CLI has assembled its
               // arguments. Surface it immediately, before approval or execution,
               // so the existing UI renders a live pending tool card whose
               // arguments stream in (#337) instead of appearing all at once.
@@ -289,7 +293,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
               await checkToolFence();
-              log.debug('Gemini CLI local tool call', { tool: fnName });
+              log.debug('Antigravity CLI local tool call', { tool: fnName });
               const toolStartedAt = Date.now();
               let resultContent: string;
               let isError = false;
@@ -366,7 +370,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
             if (denied) return denied;
             await checkToolFence();
             await authorizePersonaCoreMcp?.(server, callerNodeId);
-            log.debug('Gemini CLI tool call', { server, tool: originalTool, exposedAs: readableName });
+            log.debug('Antigravity CLI tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
               server,
@@ -387,7 +391,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
               'model',
               // Issue #413: the self-orchestrating adapters must derive the SAME
               // run owner key as the normal ModelHandler path. Without it a
-              // Gemini CLI-driven Bash session landed under `caller:<nodeId>` and was
+              // Antigravity CLI-driven Bash session landed under `caller:<nodeId>` and was
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
               conversationId ? { conversationId } : undefined,
@@ -419,7 +423,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
               resultContent = JSON.stringify(textResult);
               // Tool-boundary bound (#251), same as the subscription path: this
               // bypasses ModelHandler's processToolCalls, so bound here or the
-              // guarantee silently wouldn't apply on Gemini CLI runs.
+              // guarantee silently wouldn't apply on Antigravity CLI runs.
               if (conversationId) {
                 const bound = async () => {
                   try {
@@ -435,7 +439,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
                     });
                   } catch (err) {
                     rethrowFlowExecutionAuthorityError(err);
-                    log.warn('boundToolResult failed on Gemini CLI path; keeping full result', err);
+                    log.warn('boundToolResult failed on Antigravity CLI path; keeping full result', err);
                     return null;
                   }
                 };
@@ -485,10 +489,10 @@ export class GeminiCliAdapter implements CompletionAdapter {
 
 
     const checkToolFence = async (): Promise<void> => {
-      if (abortController.signal.aborted) throw geminiCliAbortError();
+      if (abortController.signal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) throw new Error('This agentic turn has ended.');
       await beforeToolDispatch?.();
-      if (abortController.signal.aborted) throw geminiCliAbortError();
+      if (abortController.signal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) throw new Error('This agentic turn has ended.');
     };
     let activeToolCount = 0;
@@ -508,7 +512,12 @@ export class GeminiCliAdapter implements CompletionAdapter {
         }
         activeToolCount++;
         try {
-          return geminiBridgeResult(await tool.handler(args));
+          if (++bridgeDispatches > maxTurns) {
+            fatalError = new Error('Antigravity CLI exceeded the FLUJO tool dispatch budget.');
+            abortController.abort(); activeChild?.abort();
+            throw fatalError;
+          }
+          return antigravityBridgeResult(await tool.handler(args));
         } catch (error) {
           // The HTTP bridge converts thrown failures to MCP errors. Keep a lost
           // execution fence fatal to the model run, rather than letting it retry.
@@ -560,71 +569,95 @@ export class GeminiCliAdapter implements CompletionAdapter {
       },
       onError: error => { fatalError = error; activeChild?.abort(); },
     });
-    let runtime: GeminiCliRuntime | undefined;
+    let runtime: AntigravityCliRuntime | undefined;
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
-    const usage = mapGeminiCliUsage(undefined);
+    const usage = mapAntigravityCliUsage(undefined);
     const runMessages: OpenAI.ChatCompletionMessageParam[] = [...messages];
     try {
-      if (abortController.signal.aborted) throw geminiCliAbortError();
+      if (abortController.signal.aborted) throw antigravityCliAbortError();
       if (shouldEndAgenticTurn?.()) endedByCaller = true;
       if (!endedByCaller) {
         if (bridgeTools.length) bridge = await startCodexToolBridge(bridgeTools);
-        const maxTurns = Number.isFinite(input.maxTurns) && (input.maxTurns ?? 0) > 0
-          ? Math.floor(input.maxTurns!) : DEFAULT_AGENTIC_MAX_TURNS;
-        runtime = await prepareGeminiCliRuntime({
+        runtime = await prepareAntigravityCliRuntime({
           model: model.name, apiKey, maxTurns,
-          ...(bridge ? { bridge: { url: bridge.url, tools: bridgeTools.map(tool => tool.name) } } : {}),
+          ...(bridge ? { bridge: { url: bridge.url, tools: bridgeTools.map(tool => tool.name), definitions: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) } } : {}),
         });
         let remainingTurns = maxTurns;
         while (!endedByCaller && !endSpawning && !handoffCalls.length) {
-          if (abortController.signal.aborted) throw geminiCliAbortError();
+          if (abortController.signal.aborted) throw antigravityCliAbortError();
           if (fatalError) throw fatalError;
-          if (remainingTurns-- <= 0) throw new Error('Gemini CLI exceeded the steering turn limit.');
+          if (remainingTurns-- <= 0) throw new Error('Antigravity CLI exceeded the steering turn limit.');
           activeChild = new AbortController();
           const normalized = normalizeMessageInput(runMessages, runResourceMarkers);
-          const prompt = prepareGeminiCliPrompt([normalized.systemPrompt ? `<system_instructions>\n${normalized.systemPrompt}\n</system_instructions>` : '', normalized.text].filter(Boolean).join('\n\n'));
-          let finalResult: { status: 'success' | 'error'; error?: { message?: string }; stats?: GeminiCliStats } | undefined;
+          const prompt = prepareAntigravityCliPrompt([normalized.systemPrompt ? `<system_instructions>\n${normalized.systemPrompt}\n</system_instructions>` : '', normalized.text].filter(Boolean).join('\n\n'));
+          let finalResult: Extract<AntigravityCliEvent, { event: 'result' }>['result'] | undefined;
+          let cliConversationId: string | undefined;
           let streamError = false;
           let textSinceTool = false;
           const transcriptStart = transcript.length;
           try {
             await observeSdkRequest(input, {
-              adapter: 'gemini-cli', operation: 'gemini --output-format stream-json',
-              request: { model: model.name, prompt, maxSessionTurns: maxTurns, tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
+              adapter: 'antigravity-cli', operation: 'agy --input-format stream-json --output-format stream-json',
+              request: { model: model.name, prompt, toolDispatchBudget: maxTurns, stepBudget: maxTurns * 8 + 16, tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
               wireMessages: [...runMessages],
-            }, () => runGeminiCli({
-              runtime: runtime!, model: model.name, prompt, signal: activeChild!.signal, hasBridge: Boolean(bridge),
+            }, () => runAntigravityCli({
+              runtime: runtime!, model: model.name, prompt, signal: activeChild!.signal, timeoutMs: deadlineAt - Date.now(),
               onStarted: async () => { startedChild = true; await activeDelivery?.acknowledge(); activeDelivery = undefined; },
               onEvent: event => {
                 if (fatalError) throw fatalError;
                 if (shouldEndAgenticTurn?.()) { endedByCaller = true; activeChild?.abort(); return; }
-                if (event.type === 'message' && event.role === 'assistant') {
+                if (event.event === 'init') {
+                  if (cliConversationId || event.init.agent !== 'flujo' || event.init.permission_mode !== 'request-review') throw new Error('Antigravity CLI returned an unexpected invocation configuration.');
+                  cliConversationId = event.conversation_id;
+                } else if (event.event === 'step_update') {
+                  const step = event.step_update;
+                  if (step.conversation_id !== cliConversationId) throw new Error('Antigravity CLI changed conversation identity.');
+                  seenSteps.add(`${cliConversationId}:${step.step_index}`);
+                  if (seenSteps.size > maxTurns * 8 + 16) throw new Error('Antigravity CLI exceeded the FLUJO execution step budget.');
+                  if (step.step_type === 'error_message') streamError = true;
+                  if (step.step_type === 'tool') {
+                    if (!['call_mcp_tool', 'list_resources', 'read_resource', 'manage_task'].includes(step.tool_name ?? '')) throw new Error('Antigravity CLI attempted an unbound native tool.');
+                    if (step.tool_name !== 'manage_task') {
+                      const parameters = step.tool_info?.parameters;
+                      if (parameters?.ServerName !== 'flujo'
+                        || (step.tool_name === 'call_mcp_tool' && !bridgeTools.some(tool => tool.name === parameters.ToolName))) throw new Error('Antigravity CLI attempted an unbound MCP tool.');
+                    }
+                    if (textSinceTool) { flushText(); textSinceTool = false; }
+                  }
+                  if (step.step_type !== 'agent_response') return;
                   if (handoffCalls.length) { endSpawning = true; activeChild?.abort(); return; }
-                  if (finalResult) throw new Error('Gemini CLI emitted text after its final result.');
-                  const delta = event.delta === false ? event.content.slice(pendingText.length) : event.content;
+                  if (finalResult) throw new Error('Antigravity CLI emitted text after its final result.');
+                  const delta = step.text_delta ?? '';
                   pendingText += delta;
                   textSinceTool ||= Boolean(delta);
                   if (delta) onModelDelta?.({ messageId: pendingMessageId, contentDelta: delta });
-                } else if (event.type === 'tool_use') {
-                  if (textSinceTool) { flushText(); textSinceTool = false; }
-                } else if (event.type === 'error' && event.severity === 'error') {
-                  streamError = true;
-                } else if (event.type === 'result') {
-                  if (finalResult) throw new Error('Gemini CLI emitted duplicate final results.');
-                  finalResult = event;
-                  const turnUsage = mapGeminiCliUsage(event.stats);
+                } else if (event.event === 'result') {
+                  if (finalResult) throw new Error('Antigravity CLI emitted duplicate final results.');
+                  if (event.result.conversation_id !== cliConversationId) throw new Error('Antigravity CLI changed conversation identity.');
+                  finalResult = event.result;
+                  if (!pendingText && finalResult.response) {
+                    pendingText = finalResult.response;
+                    onModelDelta?.({ messageId: pendingMessageId, contentDelta: finalResult.response });
+                  } else if (finalResult.response && finalResult.response !== pendingText) {
+                    if (!finalResult.response.startsWith(pendingText)) throw new Error('Antigravity CLI final text disagreed with its stream.');
+                    const suffix = finalResult.response.slice(pendingText.length);
+                    pendingText += suffix;
+                    if (suffix) onModelDelta?.({ messageId: pendingMessageId, contentDelta: suffix });
+                  }
+                  const turnUsage = mapAntigravityCliUsage(event.result.usage);
                   usage.prompt_tokens += turnUsage.prompt_tokens;
                   usage.completion_tokens += turnUsage.completion_tokens;
                   usage.total_tokens += turnUsage.total_tokens;
                   usage.prompt_tokens_details!.cached_tokens! += turnUsage.prompt_tokens_details?.cached_tokens ?? 0;
-                  if (event.status === 'error') streamError = true;
+                  usage.completion_tokens_details!.reasoning_tokens! += turnUsage.completion_tokens_details?.reasoning_tokens ?? 0;
+                  if (event.result.status !== 'SUCCESS') streamError = true;
                 }
               },
             }));
-            if (!finalResult || finalResult.status !== 'success' || streamError) throw new Error('Gemini CLI failed to complete a valid response. Check model access and your Gemini API key or supported Code Assist Standard/Enterprise account.');
+            if (!finalResult || finalResult.status !== 'SUCCESS' || streamError) throw new Error(`Antigravity CLI failed to complete a valid response. Check model access and your Google account login or Gemini API key.${antigravityCliFailureHint(finalResult?.error ?? '')}`);
           } catch (error) {
             if (fatalError) throw fatalError;
-            if (abortController.signal.aborted) throw geminiCliAbortError();
+            if (abortController.signal.aborted) throw antigravityCliAbortError();
             if (!steeringDelivery && !endSpawning && !handoffCalls.length && !endedByCaller) throw error;
           } finally {
             startedChild = false;
@@ -655,7 +688,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
       try { await bridge?.close(); } finally { await runtime?.cleanup(); }
     }
     if (fatalError) throw fatalError;
-    if (abortController.signal.aborted) throw geminiCliAbortError();
+    if (abortController.signal.aborted) throw antigravityCliAbortError();
     const finalToolCalls = handoffCalls.length ? handoffCalls.map(handoff => ({
       id: `call_${uuidv4()}`, type: 'function' as const,
       function: { name: handoff.name, arguments: JSON.stringify(handoff.args) },
@@ -663,7 +696,7 @@ export class GeminiCliAdapter implements CompletionAdapter {
     if (finalToolCalls) recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
     return {
       completion: {
-        id: `gemini_cli_${uuidv4()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: model.name,
+        id: `antigravity_cli_${uuidv4()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: model.name,
         choices: [{ index: 0, finish_reason: finalToolCalls ? 'tool_calls' : 'stop', logprobs: null,
           message: { role: 'assistant', content: resultText || null, refusal: null, ...(finalToolCalls ? { tool_calls: finalToolCalls } : {}) } }],
         usage,

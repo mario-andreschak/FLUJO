@@ -37,6 +37,8 @@ import {
   resolveModelAdapter,
   supportsProviderModelDiscovery,
   supportsLocalModelAuth,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
+  getAntigravityCliModelLabel,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
@@ -393,14 +395,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     if (!profile) return;
     setFormState(prev => {
       const previousAdapter = resolveModelAdapter(prev.provider, prev.adapter);
-      const leavesGeminiCli = previousAdapter === 'gemini-cli' && profile.adapter !== 'gemini-cli';
+      const leavesAntigravityCli = previousAdapter === 'antigravity-cli' && profile.adapter !== 'antigravity-cli';
       return {
         ...prev,
         provider: profile.provider,
         adapter: profile.adapter,
         baseUrl: profile.baseUrl,
         azureApiVersion: profile.defaultApiVersion ?? '',
-        ...(leavesGeminiCli ? {
+        ...(leavesAntigravityCli ? {
           // Remove only the restrictions imposed by the CLI profile. Other
           // provider changes retain discovered or explicitly saved metadata.
           inputModalities: prev.inputModalities?.length === 1 && prev.inputModalities[0] === 'text'
@@ -408,7 +410,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
           visionInputCapability: prev.visionInputCapability === 'unsupported'
             ? undefined : prev.visionInputCapability,
         } : {}),
-        ...(profile.adapter === 'gemini-cli'
+        ...(profile.adapter === 'antigravity-cli'
           ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const, supportsTools: true }
           : {}),
       };
@@ -660,8 +662,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     ? ` ${t('models.modal.claudeAuthHelp')}`
                     : currentProfile.adapter === 'codex-cli'
                       ? ` ${t('models.modal.codexAuthHelp')}`
-                      : currentProfile.adapter === 'gemini-cli'
-                        ? ` ${t('models.modal.geminiCliAuthHelp')}`
+                      : currentProfile.adapter === 'antigravity-cli'
+                        ? ` ${t('models.modal.antigravityCliAuthHelp')}`
                         : ''}
                 </Typography>
 
@@ -712,8 +714,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     error={!!errors.ApiKey}
                     helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
                       ? t('models.modal.apiKeyOptionalCodex')
-                      : currentProfile.adapter === 'gemini-cli'
-                        ? t('models.modal.apiKeyOptionalGeminiCli')
+                      : currentProfile.adapter === 'antigravity-cli'
+                        ? t('models.modal.apiKeyOptionalAntigravityCli')
                         : t('models.modal.apiKeyRequiredProvider'))}
                     InputProps={{
                       readOnly: isApiKeyBound,
@@ -748,8 +750,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   options={
                     canDiscoverProviderModels && visibleProviderModels.length > 0
                       ? visibleProviderModels.map(model => model.id)
-                      : (currentProfile.defaultModels ?? [])
+                      : currentProfile.adapter === 'antigravity-cli' && (isApiKeyBound || formState.ApiKey?.trim())
+                        ? [...ANTIGRAVITY_CLI_API_KEY_MODELS]
+                        : (currentProfile.defaultModels ?? [])
                   }
+                  groupBy={currentProfile.adapter === 'antigravity-cli'
+                    ? option => option === 'default' ? t('models.modal.antigravityCli.defaultGroup')
+                      : option.startsWith('gemini-') ? 'Gemini'
+                        : option.startsWith('claude-') ? 'Claude' : 'GPT-OSS'
+                    : undefined}
                   value={formState.name || ''}
                   onChange={(_, newValue) => {
                     const selected = openRouterModels.find(candidate => candidate.id === newValue);
@@ -813,7 +822,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       error={!!errors.name}
                       helperText={errors.name || (currentProfile.adapter === 'azure'
                         ? t('models.modal.azureDeploymentHelp')
-                        : t('models.modal.technicalNameHelp'))}
+                        : currentProfile.adapter === 'antigravity-cli'
+                          ? t('models.modal.antigravityCli.modelHelp')
+                          : t('models.modal.technicalNameHelp'))}
                       InputProps={{
                         ...params.InputProps,
                         endAdornment: (
@@ -832,7 +843,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     return (
                       <li key={key} {...otherProps} style={{ borderBottom: '1px solid rgba(0,0,0,0.1)', padding: '8px 16px' }}>
                         <Box>
-                          <Typography variant="body1" fontWeight="bold">{option}</Typography>
+                          <Typography variant="body1" fontWeight="bold">{currentProfile.adapter === 'antigravity-cli' ? getAntigravityCliModelLabel(option) : option}</Typography>
+                          {currentProfile.adapter === 'antigravity-cli' && <Typography variant="caption" color="text.secondary">{option}</Typography>}
                           {model?.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
                               {model.description}

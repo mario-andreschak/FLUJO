@@ -29,24 +29,73 @@ function showModel(provider: Model['provider'], adapter: Model['adapter'], name 
   return onSave;
 }
 
-it('saves a Gemini CLI connection without a key and removes unsupported generation settings', async () => {
-  const onSave = showModel('gemini-cli', 'gemini-cli');
+it('saves a Antigravity CLI connection without a key and removes unsupported generation settings', async () => {
+  const onSave = showModel('openai', 'openai');
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Provider$/ }));
+  fireEvent.click(screen.getByRole('option', { name: 'Antigravity CLI (Google)' }));
   expect(screen.getByLabelText('API key')).not.toBeRequired();
-  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'My Gemini CLI' } });
-  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'auto' } });
+  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'My Antigravity CLI' } });
+  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'default' } });
   fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
   await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
   expect(onSave.mock.calls[0][0]).toMatchObject({
-    provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '', name: 'auto',
+    provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '', name: 'default',
+    inputModalities: ['text'], visionInputCapability: 'unsupported', supportsTools: true,
     temperature: undefined, reasoningEffort: undefined, thinkingLevel: undefined,
     thinkingBudget: undefined, serviceTier: undefined, maxTokens: undefined,
   });
 });
 
-it.each(['gemini-cli', undefined] as const)('shows an empty key when editing a saved Gemini CLI local-login connection with adapter %s', adapter => {
-  showModel('gemini-cli', adapter, 'auto');
+it.each(['antigravity-cli', undefined] as const)('shows an empty key when editing a saved Antigravity CLI local-login connection with adapter %s', adapter => {
+  showModel('antigravity-cli', adapter, 'default');
   expect(screen.getByLabelText('API key')).toHaveValue('');
-  expect(screen.getByText(/Optional for an eligible Code Assist Standard or Enterprise/)).toBeInTheDocument();
+  expect(screen.getByText(/Optional when Antigravity account sign-in is available/)).toBeInTheDocument();
+});
+
+it('saves an explicit Gemini API key for the Antigravity CLI advanced profile', async () => {
+  const onSave = showModel('antigravity-cli', 'antigravity-cli');
+  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'API Antigravity' } });
+  fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'default' } });
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gemini-api-key' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  expect(onSave.mock.calls[0][0]).toMatchObject({
+    provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: 'gemini-api-key',
+  });
+});
+
+it('groups the verified account catalog and removes account-only suggestions in API-key mode', () => {
+  showModel('antigravity-cli', 'antigravity-cli');
+  const modelName = screen.getByLabelText(/Technical name/);
+  fireEvent.mouseDown(modelName);
+  expect(screen.getByRole('option', { name: /gemini-3.8-flash-medium/ })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /claude-opus-4-6-thinking/ })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /gpt-oss-120b-medium/ })).toBeInTheDocument();
+  expect(screen.getByText('CLI default')).toBeInTheDocument();
+  expect(screen.getByText('Gemini')).toBeInTheDocument();
+  expect(screen.getByText('Claude')).toBeInTheDocument();
+  expect(screen.getByText('GPT-OSS')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gemini-api-key' } });
+  fireEvent.keyDown(modelName, { key: 'ArrowDown' });
+  expect(screen.getByRole('option', { name: /Antigravity CLI Default/ })).toBeInTheDocument();
+  expect(screen.getAllByRole('option')).toHaveLength(12);
+  expect(screen.getByRole('option', { name: /gemini-3.8-flash-medium/ })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /gemini-3.1-pro-high/ })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: /claude-/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: /gpt-oss-/ })).not.toBeInTheDocument();
+});
+
+it.each(['claude-opus-4-6-thinking', 'gpt-oss-120b-medium'])('saves the account catalog choice %s with its exact technical name', async name => {
+  const onSave = showModel('antigravity-cli', 'antigravity-cli');
+  fireEvent.mouseDown(screen.getByLabelText(/Technical name/));
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(name) }));
+  expect(screen.getByLabelText(/Technical name/)).toHaveValue(name);
+  fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'My Antigravity model' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  expect(onSave.mock.calls[0][0]).toMatchObject({
+    provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '', name,
+  });
 });
 
 it('still requires a key for the native Gemini provider', () => {
@@ -60,8 +109,8 @@ it('still requires a key for the native Gemini provider', () => {
   expect(screen.getByText('API key is required')).toBeInTheDocument();
 });
 
-it.each(['gemini-cli', undefined] as const)('removes CLI input restrictions when switching adapter %s to native Gemini', async adapter => {
-  const onSave = showModel('gemini-cli', adapter, '', {
+it.each(['antigravity-cli', undefined] as const)('removes CLI input restrictions when switching adapter %s to native Gemini', async adapter => {
+  const onSave = showModel('antigravity-cli', adapter, '', {
     inputModalities: ['text'], visionInputCapability: 'unsupported',
     outputModalities: ['text'], contextWindow: 32768,
   });

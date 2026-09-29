@@ -3,7 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { Model } from '@/shared/types';
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
-  GEMINI_CLI_MODELS,
+  ANTIGRAVITY_CLI_API_KEY_MODELS,
+  ANTIGRAVITY_CLI_GUIDED_MODELS,
+  getAntigravityCliModelLabel,
   GEMINI_NATIVE_GUIDED_MODELS,
 } from '@/shared/types/model/provider';
 
@@ -15,7 +17,7 @@ export type GuidedConnectionKind =
   | 'azure'
   | 'claude-subscription'
   | 'codex-subscription'
-  | 'gemini-cli'
+  | 'antigravity-cli'
   | 'gemini-native'
   | 'ollama';
 
@@ -223,12 +225,12 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
     adapter: 'gemini' as const,
     supportsTools: true,
   })),
-  'gemini-cli': GEMINI_CLI_MODELS.map((name) => ({
+  'antigravity-cli': ANTIGRAVITY_CLI_GUIDED_MODELS.map((name) => ({
     name,
-    displayName: `Gemini CLI ${name === 'auto' ? 'Auto' : name === 'pro' ? 'Pro' : name === 'flash' ? 'Flash' : 'Flash-Lite'}`,
-    description: 'Uses the official Gemini CLI with a Gemini API key or an eligible Code Assist Standard or Enterprise account on this host.',
-    provider: 'gemini-cli' as const,
-    adapter: 'gemini-cli' as const,
+    displayName: name === 'default' ? getAntigravityCliModelLabel(name) : `Antigravity ${getAntigravityCliModelLabel(name)}`,
+    description: 'Uses the official Antigravity CLI with an Antigravity account login or a Gemini API key on this host. Model availability depends on the chosen authentication mode.',
+    provider: 'antigravity-cli' as const,
+    adapter: 'antigravity-cli' as const,
     supportsTools: true,
   })),
 };
@@ -262,7 +264,10 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
           supportsTools: true,
         },
       ]
-    : TEMPLATES[input.kind];
+    : input.kind === 'antigravity-cli' && apiKey
+      ? TEMPLATES[input.kind].filter(template =>
+        (ANTIGRAVITY_CLI_API_KEY_MODELS as readonly string[]).includes(template.name))
+      : TEMPLATES[input.kind];
 
   return templates.map((template) => ({
     id: uuidv4(),
@@ -273,7 +278,7 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
     baseUrl: template.baseUrl || '',
     provider: template.provider,
     adapter: template.adapter,
-    ...(input.kind === 'gemini-cli'
+    ...(input.kind === 'antigravity-cli'
       ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const }
       : {}),
     ...(input.kind === 'azure'
@@ -288,6 +293,6 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
   }));
 }
 
-export function guidedBundleNames(kind: GuidedConnectionKind): string[] {
-  return buildGuidedModels({ kind }).map((model) => model.displayName || model.name);
+export function guidedBundleNames(kind: GuidedConnectionKind, apiKey?: string): string[] {
+  return buildGuidedModels({ kind, apiKey }).map((model) => model.displayName || model.name);
 }

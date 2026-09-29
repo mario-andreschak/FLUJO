@@ -15,6 +15,7 @@ jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
 
 import ModelConnectionWizard from '@/frontend/components/models/ModelConnectionWizard';
 import { Model } from '@/shared/types';
+import { ANTIGRAVITY_CLI_GUIDED_MODELS } from '@/shared/types/model/provider';
 
 const originalFetch = global.fetch;
 
@@ -120,54 +121,80 @@ describe('ModelConnectionWizard', () => {
     });
   });
 
-  it('requires an eligible Google login confirmation and creates keyless Gemini CLI models', async () => {
+  it.each(['subscription', 'free'] as const)('requires account login confirmation and creates Antigravity CLI models through %s setup', async route => {
     const props = renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
-    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
-    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
+    if (route === 'subscription') {
+      fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /let’s start free/i }));
+      fireEvent.click(screen.getByRole('heading', { name: 'Online' }).closest('button')!);
+    }
+    fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
 
-    expect(await screen.findByText('npm install -g @google/gemini-cli@0.61.0')).toBeInTheDocument();
-    expect(screen.getByText('gemini', { exact: true })).toBeInTheDocument();
-    expect(screen.getByText(/choose Sign in with Google/)).toBeInTheDocument();
-    expect(screen.getByText(/Personal Google accounts no longer have Gemini CLI access/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Google account eligibility and consumer deprecation' })).toHaveAttribute('href', 'https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals');
+    expect(await screen.findByText('irm https://antigravity.google/cli/install.ps1 | iex')).toBeInTheDocument();
+    expect(screen.getByText('flujo-agy', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/Optional standalone alternative/)).toBeInTheDocument();
+    expect(screen.getByText(/Over SSH, open the printed authorization URL locally/)).toBeInTheDocument();
+    expect(screen.getByText(/Personal Google accounts can use Antigravity/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Account plans and model availability' })).toHaveAttribute('href', 'https://antigravity.google/docs/plans/');
     expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Gemini API key')).toHaveValue('');
 
-    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
     expect(props.onCreateModels).not.toHaveBeenCalled();
-    expect(screen.getByText(/Enter a Gemini API key, or confirm Google sign-in/)).toBeInTheDocument();
+    expect(screen.getByText(/Enter a Gemini API key, or confirm Antigravity account sign-in/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /completed Google sign-in with an eligible Code Assist/i }));
-    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /completed Antigravity account sign-in/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
     await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
     const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
-    expect(models.map(model => model.name)).toEqual(['auto', 'pro', 'flash', 'flash-lite']);
-    expect(models.every(model => model.provider === 'gemini-cli' && model.adapter === 'gemini-cli' && model.ApiKey === '')).toBe(true);
+    expect(models.map(model => model.name)).toEqual([...ANTIGRAVITY_CLI_GUIDED_MODELS]);
+    expect(models.every(model => model.provider === 'antigravity-cli' && model.adapter === 'antigravity-cli' && model.ApiKey === '')).toBe(true);
   });
 
-  it('creates Gemini CLI API-key models without requiring a Google login confirmation', async () => {
+  it('creates Antigravity CLI API-key models without requiring an account login confirmation', async () => {
     const props = renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
     fireEvent.click(screen.getByRole('button', { name: /i can pay/i }));
-    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
+    fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
     fireEvent.change(screen.getByLabelText('Gemini API key'), { target: { value: '  gemini-api-test  ' } });
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    expect(screen.getByText('Antigravity Gemini 3.8 Flash (Medium)')).toBeInTheDocument();
+    expect(screen.getByText('Antigravity Gemini 3.1 Pro (High)')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /create my(?: \d+)? models?/i }));
     await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
     const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
-    expect(models.every(model => model.ApiKey === 'gemini-api-test' && model.adapter === 'gemini-cli')).toBe(true);
+    expect(models.map(model => model.name)).toEqual(['default', 'gemini-3.8-flash-medium', 'gemini-3.1-pro-high']);
+    expect(models.every(model => model.ApiKey === 'gemini-api-test' && model.adapter === 'antigravity-cli')).toBe(true);
   });
 
-  it('does not reuse a Codex login confirmation for Gemini CLI', () => {
+  it('does not reuse a Codex login confirmation for Antigravity CLI', () => {
     renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
     fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
     fireEvent.click(screen.getByRole('heading', { name: 'ChatGPT / Codex' }).closest('button')!);
     fireEvent.click(screen.getByRole('checkbox', { name: /completed the Codex browser sign-in/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Back$/ }));
-    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
-    expect(screen.getByRole('checkbox', { name: /completed Google sign-in with an eligible Code Assist/i })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
+    expect(screen.getByRole('checkbox', { name: /completed Antigravity account sign-in/i })).not.toBeChecked();
+  });
+
+  it.each([
+    ['win32', 'git', 'irm https://antigravity.google/cli/install.ps1 | iex'],
+    ['darwin', 'npm', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+    ['linux', 'git', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+    ['linux', 'container', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'],
+  ])('shows official Antigravity instructions on the %s/%s host without a WinGet button', async (platform, installMode, installCommand) => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => ({ platform, installMode, oneClickInstall: true }) });
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /i know a bit/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Antigravity CLI' }).closest('button')!);
+    expect(await screen.findByText(installCommand)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Official installation instructions' })).toHaveAttribute('href', 'https://antigravity.google/docs/cli/install/');
+    expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
+    expect(screen.getByText(/same operating-system user.*native keyring or CLI credential cache/)).toBeInTheDocument();
   });
 
   it.each([

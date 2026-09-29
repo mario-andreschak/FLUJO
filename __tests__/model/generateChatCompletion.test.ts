@@ -136,32 +136,32 @@ describe('/v1/models listing', () => {
 });
 
 describe('ModelService.testModel — local CLI authentication', () => {
-  it('tests a saved Gemini CLI model with an empty key', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '' })];
+  it('tests a saved Antigravity CLI model with an empty key', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '' })];
     await modelService.testModel({ modelId: 'm1' });
-    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'gemini-cli', provider: 'gemini-cli', modelName: 'flash' }));
+    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'antigravity-cli', provider: 'antigravity-cli', modelName: 'flash' }));
   });
 
-  it('tests an unsaved Gemini CLI connection without requiring an API key', async () => {
-    await modelService.testModel({ name: 'flash', adapter: 'gemini-cli', provider: 'gemini-cli' });
-    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'gemini-cli' }));
+  it('tests an unsaved Antigravity CLI connection without requiring an API key', async () => {
+    await modelService.testModel({ name: 'flash', adapter: 'antigravity-cli', provider: 'antigravity-cli' });
+    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'antigravity-cli' }));
   });
 
-  it('resolves a provider-only Gemini CLI diagnostic request to the local-auth adapter', async () => {
-    await modelService.testModel({ name: 'flash', provider: 'gemini-cli' });
+  it('resolves a provider-only Antigravity CLI diagnostic request to the local-auth adapter', async () => {
+    await modelService.testModel({ name: 'flash', provider: 'antigravity-cli' });
     expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({
-      apiKey: '', adapter: 'gemini-cli', provider: 'gemini-cli', modelName: 'flash',
+      apiKey: '', adapter: 'antigravity-cli', provider: 'antigravity-cli', modelName: 'flash',
     }));
   });
 
-  it('tests a saved provider-only Gemini CLI connection without requiring a key', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'gemini-cli', adapter: undefined, ApiKey: '' })];
+  it('tests a saved provider-only Antigravity CLI connection without requiring a key', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'antigravity-cli', adapter: undefined, ApiKey: '' })];
     await modelService.testModel({ modelId: 'm1' });
-    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'gemini-cli' }));
+    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'antigravity-cli' }));
   });
 
   it('does not substitute a saved key after an explicitly supplied draft binding fails', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: 'gemini-cli' })];
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: 'antigravity-cli' })];
     jest.mocked(resolveAndDecryptApiKey).mockClear();
     jest.mocked(resolveAndDecryptApiKey).mockResolvedValueOnce(null);
     await expect(modelService.testModel({ modelId: 'm1', apiKey: '${env:MISSING_DRAFT_KEY}' }))
@@ -172,13 +172,13 @@ describe('ModelService.testModel — local CLI authentication', () => {
   });
 
   it('uses local Google authentication when a saved connection key is explicitly cleared for testing', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: 'gemini-cli' })];
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: 'antigravity-cli' })];
     await modelService.testModel({ modelId: 'm1', apiKey: '' });
-    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'gemini-cli' }));
+    expect(testModelConnection).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', adapter: 'antigravity-cli' }));
   });
 
   it('fails a key binding instead of switching the test to local Google authentication', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '${env:MISSING_KEY}' })];
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '${env:MISSING_KEY}' })];
     jest.mocked(resolveAndDecryptApiKey).mockResolvedValueOnce(null);
     await expect(modelService.testModel({ modelId: 'm1' })).rejects.toThrow('Could not resolve an API key');
     expect(testModelConnection).not.toHaveBeenCalled();
@@ -278,26 +278,26 @@ describe('ModelService.generateChatCompletion — resolution', () => {
     expect(mockCreateCompletion).not.toHaveBeenCalled();
   });
 
-  it('runs an empty-key Gemini CLI connection using local Google authentication', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '' })];
+  it('runs an empty-key Antigravity CLI connection using local Google authentication', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '' })];
     mockCreateCompletion.mockResolvedValue({ completion: completionFixture() });
     const result = await modelService.generateChatCompletion({ modelIdentifier: 'GPT Test', messages });
     expect(result.success).toBe(true);
-    expect(mockCreateCompletion).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', model: expect.objectContaining({ adapter: 'gemini-cli' }) }));
+    expect(mockCreateCompletion).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '', model: expect.objectContaining({ adapter: 'antigravity-cli' }) }));
   });
 
-  it('runs a provider-only Gemini CLI connection with its default local-auth adapter', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'gemini-cli', adapter: undefined, ApiKey: '' })];
+  it('runs a provider-only Antigravity CLI connection with its default local-auth adapter', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ name: 'flash', provider: 'antigravity-cli', adapter: undefined, ApiKey: '' })];
     mockCreateCompletion.mockResolvedValue({ completion: completionFixture() });
     const result = await modelService.generateChatCompletion({ modelIdentifier: 'GPT Test', messages });
     expect(result.success).toBe(true);
     expect(mockCreateCompletion).toHaveBeenCalledWith(expect.objectContaining({
-      apiKey: '', model: expect.objectContaining({ provider: 'gemini-cli' }),
+      apiKey: '', model: expect.objectContaining({ provider: 'antigravity-cli' }),
     }));
   });
 
-  it('rejects caller-owned tools for a provider-only Gemini CLI connection before dispatch', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: undefined })];
+  it('rejects caller-owned tools for a provider-only Antigravity CLI connection before dispatch', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: undefined })];
     const result = await modelService.generateChatCompletion({
       modelIdentifier: 'GPT Test', messages,
       tools: [{ type: 'function', function: { name: 'outside', parameters: {} } }],
@@ -307,8 +307,8 @@ describe('ModelService.generateChatCompletion — resolution', () => {
     expect(mockCreateCompletion).not.toHaveBeenCalled();
   });
 
-  it('rejects caller-owned tools for Gemini CLI, whose tool loop runs in FLUJO', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '' })];
+  it('rejects caller-owned tools for Antigravity CLI, whose tool loop runs in FLUJO', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '' })];
     const result = await modelService.generateChatCompletion({
       modelIdentifier: 'GPT Test', messages,
       tools: [{ type: 'function', function: { name: 'outside', parameters: {} } }],
@@ -318,8 +318,8 @@ describe('ModelService.generateChatCompletion — resolution', () => {
     expect(mockCreateCompletion).not.toHaveBeenCalled();
   });
 
-  it('does not switch a failed Gemini CLI key binding to the local Google account', async () => {
-    store[StorageKey.MODELS] = [modelFixture({ provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '${env:MISSING_KEY}' })];
+  it('does not switch a failed Antigravity CLI key binding to the local Google account', async () => {
+    store[StorageKey.MODELS] = [modelFixture({ provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '${env:MISSING_KEY}' })];
     jest.mocked(resolveAndDecryptApiKey).mockResolvedValueOnce(null);
     const result = await modelService.generateChatCompletion({ modelIdentifier: 'GPT Test', messages });
     expect(result.success).toBe(false);

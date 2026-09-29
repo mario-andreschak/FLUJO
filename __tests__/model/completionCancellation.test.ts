@@ -57,16 +57,16 @@ jest.mock('@/backend/services/model/adapters', () => ({
   getCompletionAdapter: () => ({ createCompletion: createCompletionMock }),
 }));
 
-const mockGeminiMediaRuntime = jest.fn(async () => {
-  throw new Error('Gemini runtime must not start during an attachment preflight.');
+const mockAntigravityMediaRuntime = jest.fn(async () => {
+  throw new Error('Antigravity runtime must not start during an attachment preflight.');
 });
-jest.mock('@/backend/services/model/adapters/geminiCliRuntime', () => ({
-  prepareGeminiCliRuntime: () => mockGeminiMediaRuntime(),
+jest.mock('@/backend/services/model/adapters/antigravityCliRuntime', () => ({
+  prepareAntigravityCliRuntime: () => mockAntigravityMediaRuntime(),
 }));
-const mockGeminiMediaProcess = jest.fn();
-jest.mock('@/backend/services/model/adapters/geminiCliProcess', () => ({
-  ...jest.requireActual('@/backend/services/model/adapters/geminiCliProcess'),
-  runGeminiCli: (...args: unknown[]) => mockGeminiMediaProcess(...args),
+const mockAntigravityMediaProcess = jest.fn();
+jest.mock('@/backend/services/model/adapters/antigravityCliProcess', () => ({
+  ...jest.requireActual('@/backend/services/model/adapters/antigravityCliProcess'),
+  runAntigravityCli: (...args: unknown[]) => mockAntigravityMediaProcess(...args),
 }));
 
 const mockAppendRawForState = jest.fn().mockResolvedValue(undefined);
@@ -101,7 +101,7 @@ jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import { GeminiCliAdapter } from '@/backend/services/model/adapters/geminiCliAdapter';
+import { AntigravityCliAdapter } from '@/backend/services/model/adapters/antigravityCliAdapter';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -143,21 +143,21 @@ beforeEach(() => {
   adapterBehavior = 'complete';
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
-  mockGeminiMediaRuntime.mockClear();
-  mockGeminiMediaProcess.mockClear();
+  mockAntigravityMediaRuntime.mockClear();
+  mockAntigravityMediaProcess.mockClear();
 });
 
-test('Gemini CLI chat attachments reach authoritative adapter rejection before runtime launch', async () => {
-  getModelMock.mockResolvedValue({ id: 'model-1', name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '', inputModalities: ['text'], visionInputCapability: 'unsupported' });
-  createCompletionMock.mockImplementationOnce(input => new GeminiCliAdapter().createCompletion(input));
+test('Antigravity CLI chat attachments reach authoritative adapter rejection before runtime launch', async () => {
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'flash', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '', inputModalities: ['text'], visionInputCapability: 'unsupported' });
+  createCompletionMock.mockImplementationOnce(input => new AntigravityCliAdapter().createCompletion(input));
   const result = await ModelHandler.callModel({
     modelId: 'model-1', prompt: 'Describe this image.',
     messages: [{ role: 'user', id: 'image-request', timestamp: 1, content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }],
     iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
   } as Parameters<typeof ModelHandler.callModel>[0]);
   expect(result).toMatchObject({ success: false, error: { message: expect.stringContaining('text input only') } });
-  expect(mockGeminiMediaRuntime).not.toHaveBeenCalled();
-  expect(mockGeminiMediaProcess).not.toHaveBeenCalled();
+  expect(mockAntigravityMediaRuntime).not.toHaveBeenCalled();
+  expect(mockAntigravityMediaProcess).not.toHaveBeenCalled();
 });
 
 test('existing text-only providers retain the generic unsupported-media filter', async () => {

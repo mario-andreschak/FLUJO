@@ -63,16 +63,16 @@ describe('parseVerdict', () => {
 });
 
 describe('evaluateLlmGate', () => {
-  it.each(['gemini-cli', undefined])('uses local authentication for a Gemini CLI gate with adapter %s', async adapter => {
-    getModelMock.mockResolvedValue({ id: 'model-1', name: 'flash', provider: 'gemini-cli', adapter, ApiKey: '' });
+  it.each(['antigravity-cli', undefined])('uses local authentication for an Antigravity CLI gate with adapter %s', async adapter => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter, ApiKey: '' });
     resolveKeyMock.mockResolvedValue(null);
     const result = await evaluateAiGate({ v: 2 }, gateConfig(), { lastHash: hashResult({ v: 1 }) });
     expect(result.fire).toBe(true);
     expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
   });
 
-  it('rejects a failed Gemini CLI key binding instead of using the local account for a gate', async () => {
-    getModelMock.mockResolvedValue({ id: 'model-1', name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '${env:MISSING_KEY}' });
+  it('rejects a failed Antigravity CLI key binding instead of using the local account for a gate', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '${env:MISSING_KEY}' });
     resolveKeyMock.mockResolvedValue(null);
     const result = await evaluateAiGate({ v: 2 }, gateConfig(), { lastHash: hashResult({ v: 1 }) });
     expect(result.fire).toBe(false);
