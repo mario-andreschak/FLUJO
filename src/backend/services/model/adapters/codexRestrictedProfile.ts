@@ -19,7 +19,7 @@ export interface RestrictedCodexProfile {
 
 // A version string alone is insufficient: admission also pins the native binary
 // digest after the integration's inventory and forced-tool denial probes pass.
-const SUPPORTED_VERSIONS = new Set(['0.153.3']);
+const SUPPORTED_VERSIONS = new Set(['0.153.3', '0.157.1']);
 const SUPPORTED_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna']);
 
 /** Optional policy for private tool-only runs; ordinary Codex settings are unchanged. */
