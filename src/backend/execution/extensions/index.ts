@@ -7,8 +7,17 @@ import { configuredExecutionAdapter } from '@/backend/execution/extensions/confi
 declare const contextBrand: unique symbol;
 /** Opaque capability minted by trusted server code, never by request metadata. */
 export interface ExecutionExtensionContext { readonly [contextBrand]: true }
+const errorRoot = globalThis as typeof globalThis & { __flujoExecutionExtensionErrors?: WeakSet<object> };
+const trustedErrors = errorRoot.__flujoExecutionExtensionErrors ??= new WeakSet<object>();
 export class ExecutionExtensionError extends Error {
-  constructor(readonly code: string, readonly status = 403) { super(code); this.name = 'ExecutionExtensionError'; }
+  constructor(readonly code: string, readonly status = 403) {
+    super(code); this.name = 'ExecutionExtensionError'; trustedErrors.add(this);
+  }
+  // Trusted adapters are shared across Next server graphs; their errors must
+  // retain provenance too. Serialized names/codes never establish that trust.
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return typeof value === 'object' && value !== null && trustedErrors.has(value);
+  }
 }
 export interface ExecutionExtensionAdapter {
   /** undefined = ordinary transport policy; null = accepted narrow transport. */
