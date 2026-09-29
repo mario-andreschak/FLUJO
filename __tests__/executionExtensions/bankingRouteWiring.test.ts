@@ -221,6 +221,26 @@ describe('optional banking profile through exported HTTP routes', () => {
     ]);
   });
 
+  test('action route refuses locked encryption before dispatch and admits the same action after unlock', async () => {
+    const { identity, store } = await owner();
+    const conversationId = randomUUID();
+    await store.createConversation(conversationId, identity);
+    jest.mocked(flowService.getFlow).mockResolvedValue(fixture.graph);
+    jest.mocked(mcpService.callTool).mockResolvedValue({ success: true, data: {
+      structuredContent: { state: 'created', handoff: { id: 'HOF-abcdefgh' } },
+    } } as never);
+    jest.mocked(assertUnlocked).mockResolvedValueOnce(NextResponse.json({ error: {
+      type: 'encryption_locked', code: 'encryption_locked' } }, { status: 423 }));
+    const body = { operation: 'handoff', conversationId, reason: 'customer_request', requestId: randomUUID() };
+    const locked = await action(await fixture.request('A', body, '/v1/banking/action'));
+    expect(locked.status).toBe(423);
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+    const unlocked = await action(await fixture.request('A', body, '/v1/banking/action'));
+    expect(unlocked.status).toBe(200);
+    expect((await unlocked.json()).state).toBe('handoff_verified');
+    expect(assertUnlocked).toHaveBeenCalledWith({ openai: true });
+  });
+
   test.each(['/v1/chat/conversation-chains', '/v1/chat/conversation-chains?root=customer&limit=25',
     '/v1/chat/conversation-chains/', '/v1/chat/conversation-%63hains',
     '/v1/chat/events', '/v1/chat/events?fromSeq=0', '/v1/chat/events?scope=sidebar', '/v1/chat/events/', '/v1/chat/%65vents'])
