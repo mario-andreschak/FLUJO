@@ -925,17 +925,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
     );
     const shouldArmReadResource =
-      hasMcpTools ||
-      hasWriteResource ||
-      hasResourceNodes ||
-      hasNativeResources ||
-      historyHasRunResourceUri;
+      !sharedState.executionExtensionContext && (
+        hasMcpTools ||
+        hasWriteResource ||
+        hasResourceNodes ||
+        hasNativeResources ||
+        historyHasRunResourceUri
+      );
 
     // Sticky arming: a synthetic tool offered once on this conversation keeps
     // being offered. Guards the reverse flip — e.g. a server's resource listing
     // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
     // which would otherwise drop the tool and rewrite the block.
-    const armed = new Set(sharedState.armedSyntheticTools ?? []);
+    // A private execution's approved tool set cannot acquire local capabilities
+    // after the earlier filter, including sticky tools from a prior failed turn.
+    const armed = new Set(sharedState.executionExtensionContext ? [] : sharedState.armedSyntheticTools ?? []);
     if (shouldArmReadResource) {
       armed.add(READ_RESOURCE_TOOL_NAME);
       // Any step that can mint a run resource must also be able to enumerate
