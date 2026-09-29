@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { BankingPolicy } from './policy';
 import { BankingError } from './errors';
+import { assertBankingJobLease, type BankingAcceptedJob } from './executionLease';
 
 export interface Identity {
   issuer: string;
@@ -80,12 +81,33 @@ export class BankingStore {
   }
 
   async assertSession(identity: Identity): Promise<void> {
-    if (identity.expires <= Date.now() / 1000 || identity.sessionExpires <= Date.now() / 1000
-      || await this.read('revoked', identity.session)) throw new BankingError('authorization_expired', 401);
+    this.assertRequestTime(identity);
+    await this.assertDurableSession(identity);
+    this.assertRequestTime(identity);
+  }
+
+  private assertRequestTime(identity: Identity): void {
+    if (identity.expires <= Date.now() / 1000 || identity.sessionExpires <= Date.now() / 1000) {
+      throw new BankingError('authorization_expired', 401);
+    }
+  }
+
+  private async assertDurableSession(identity: Identity): Promise<void> {
+    if (identity.sessionExpires <= Date.now() / 1000 || await this.read('revoked', identity.session)) {
+      throw new BankingError('authorization_expired', 401);
+    }
     const old = await this.read('sessions', identity.session) as { issuer?: string; subject?: string; expires?: number } | undefined;
     if (!old || old.issuer !== identity.issuer || old.subject !== identity.subject || old.expires !== identity.sessionExpires) {
       throw new BankingError('authorization_denied');
     }
+    if (identity.sessionExpires <= Date.now() / 1000) throw new BankingError('authorization_expired', 401);
+  }
+
+  async assertExecutionSession(job: BankingAcceptedJob): Promise<void> {
+    const record = assertBankingJobLease(job);
+    if (record.store !== this) throw new BankingError('authorization_denied');
+    await this.assertDurableSession(record.identity);
+    assertBankingJobLease(job);
   }
 
   async consumeAssertion(issuer: string, jti: string, expires: number): Promise<void> {
@@ -122,6 +144,7 @@ export class BankingStore {
     await this.withLock('session:' + identity.session, async () => {
       const old = await this.read('sessions', identity.session) as { issuer?: string; subject?: string } | undefined;
       if (!old || old.issuer !== identity.issuer || old.subject !== identity.subject) throw new BankingError('authorization_denied');
+      this.assertRequestTime(identity);
       await this.insert('revoked', identity.session, { revoked: true });
     });
   }
@@ -141,6 +164,11 @@ export class BankingStore {
 
   async assertOwner(id: string, identity: Identity): Promise<void> {
     await this.assertSession(identity);
+    await this.assertDurableOwner(id, identity);
+    await this.assertSession(identity);
+  }
+
+  private async assertDurableOwner(id: string, identity: Identity): Promise<void> {
     if (!conversationPattern.test(id)) throw new BankingError('conversation_unavailable', 404);
     const owner = await this.read('owners', id);
     if (await this.read('deleted', id) || JSON.stringify(owner) !== JSON.stringify(this.owner(identity))) {
@@ -148,12 +176,33 @@ export class BankingStore {
     }
   }
 
+  async assertExecutionOwner(id: string, job: BankingAcceptedJob): Promise<void> {
+    const record = assertBankingJobLease(job);
+    if (record.conversation !== id || record.store !== this) throw new BankingError('authorization_denied');
+    await this.assertDurableSession(record.identity);
+    await this.assertDurableOwner(id, record.identity);
+    await this.assertDurableSession(record.identity);
+    assertBankingJobLease(job);
+  }
+
+  async createExecutionConversation(id: string, job: BankingAcceptedJob): Promise<void> {
+    const record = assertBankingJobLease(job, 'active');
+    if (record.conversation !== id || record.store !== this || record.existingOwner
+      || !conversationPattern.test(id)) throw new BankingError('authorization_denied');
+    await this.assertExecutionSession(job);
+    if (await this.read('deleted', id)) throw new BankingError('conversation_unavailable', 404);
+    assertBankingJobLease(job, 'active');
+    if (!await this.insert('owners', id, this.owner(record.identity))) throw new BankingError('conversation_unavailable', 404);
+    await this.assertExecutionSession(job);
+  }
+
   async tombstone(id: string, identity: Identity): Promise<void> {
     await this.assertOwner(id, identity);
     await this.insert('deleted', id, { deleted: true });
   }
 
-  async withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  async withLock<T>(key: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal && !key.startsWith('turn:')) throw new BankingError('banking_lock_signal_forbidden');
     const globalStore = globalThis as typeof globalThis & { __flujoBankingLocks?: Map<string, Promise<void>> };
     const locks = globalStore.__flujoBankingLocks ??= new Map();
     const lockKey = this.policy.stateDir + '\0' + this.policy.deploymentId + '\0' + key;
@@ -161,12 +210,31 @@ export class BankingStore {
     let release!: () => void;
     const current = new Promise<void>(resolve => { release = resolve; });
     locks.set(lockKey, current);
-    await previous;
+    const releaseSlot = () => {
+      release();
+      if (locks.get(lockKey) === current) locks.delete(lockKey);
+    };
+    let abort: (() => void) | undefined;
+    try {
+      if (signal) {
+        const cancelled = new Promise<never>((_resolve, reject) => {
+          abort = () => reject(new BankingError('banking_run_cancelled', 409));
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+        });
+        await Promise.race([previous, cancelled]);
+        if (signal.aborted) throw new BankingError('banking_run_cancelled', 409);
+      } else await previous;
+    } catch (error) {
+      // Keep this placeholder in the chain until the predecessor settles;
+      // prompt cancellation must not let a later turn bypass that predecessor.
+      void previous.then(releaseSlot);
+      throw error;
+    } finally { if (signal && abort) signal.removeEventListener('abort', abort); }
     try {
       return await operation();
     } finally {
-      release();
-      if (locks.get(lockKey) === current) locks.delete(lockKey);
+      releaseSlot();
     }
   }
 }

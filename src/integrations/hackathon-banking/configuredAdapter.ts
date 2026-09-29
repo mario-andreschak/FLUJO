@@ -18,10 +18,11 @@ import { getBankingPolicy, requireBankingPolicy, assertBankingExecutionBearer, i
 import { BankingStore, conversationPattern } from './store';
 import { assertBankingGraph } from './graph';
 import { withBankingAdmission } from './admission';
+import { bankingJob } from './executionLease';
 import { BankingError, bankingErrorResponse } from './errors';
 import { validateBankingResult } from './protocol';
 import type { SharedState } from '@/backend/execution/flow/types';
-import { bankingConversation, bankingCancel, bankingEvents, registerBankingActiveRun } from './controllers';
+import { bankingConversation, bankingCancel, bankingEvents } from './controllers';
 
 // This module is selected explicitly by a trusted build alias. Its policy and
 // private keys never come from an HTTP DTO, saved graph or MCP server preset.
@@ -92,52 +93,42 @@ async function ordinaryCompletion(request: Request, task: (request: Request) => 
   return runWithWorkspace(policy.workspace, async () => {
     const locked = await assertUnlocked({ openai: true });
     if (locked) return locked;
-    return withBankingAdmission(principal, async () => {
-      await store.assertSession(identity);
-      const flow = await flowService.getFlow(policy.flowId);
-      if (!flow) throw new BankingError('approved_banking_graph_unavailable', 503);
-      const snapshot = createFlowExecutionSnapshot(policy.workspace, flow);
-      assertBankingGraph(snapshot.flow, policy);
-      if (parsed.model !== 'flow-' + flow.name) throw new BankingError('approved_banking_graph_required');
-      const id = existingId ?? randomUUID();
+    const flow = await flowService.getFlow(policy.flowId);
+    if (!flow) throw new BankingError('approved_banking_graph_unavailable', 503);
+    const snapshot = createFlowExecutionSnapshot(policy.workspace, flow);
+    assertBankingGraph(snapshot.flow, policy);
+    if (parsed.model !== 'flow-' + flow.name) throw new BankingError('approved_banking_graph_required');
+    const id = existingId ?? randomUUID();
+    return withBankingAdmission(principal, { conversationId: id, existingOwner: Boolean(existingId),
+      signal: request.signal }, async job => {
+      const signal = bankingJob(job).signal;
       if (!existingId) {
         // Never adopt an old operator transcript or native provider session.
         if (await loadConversationStateReadOnly(id)) throw new BankingError('conversation_unavailable', 404);
-        await store.createConversation(id, identity);
+        await store.createExecutionConversation(id, job);
       }
       return store.withLock('turn:' + id, async () => {
-        await store.assertOwner(id, identity);
-        const controller = new AbortController();
-        const abort = () => controller.abort(new BankingError('banking_run_cancelled', 409));
-        request.signal.addEventListener('abort', abort, { once: true });
-        if (request.signal.aborted) abort();
-        const timeout = setTimeout(abort, Math.max(1, Math.min(policy.maxRunSeconds * 1000,
-          identity.expires * 1000 - Date.now())));
-        const release = registerBankingActiveRun(principal, id, controller);
-        try {
-          const rawContext = await createBankingRunContext(principal, id, controller.signal);
-          const context = createExecutionExtensionContext(configuredExecutionAdapter, rawContext);
-          const url = new URL(request.url);
-          url.searchParams.set('workspace', policy.workspace);
-          const headers = new Headers(request.headers);
-          headers.delete('x-flujo-user-assertion');
-          const admitted = new NextRequest(url, { method: 'POST', headers, signal: controller.signal,
-            body: JSON.stringify({ model: parsed.model, messages: parsed.messages,
-              metadata: { flujo: 'true', appendMessages: 'true', conversationId: id } }) });
-          const response = await runWithExecutionInput({ modelName: undefined, flowDefinition: snapshot.flow,
-            conversationId: id, runId: randomUUID(), source: 'api', resumeAsNewTurn: true, userTurn: true,
-            flujo: true, debug: false, requireApproval: false, onApprovalRequired: 'fail',
-            abortSignal: controller.signal, executionExtensionContext: context },
-          () => withWorkspaceMutation(() => task(admitted)));
-          await assertBankingRunCurrent(rawContext, { conversationId: id });
-          // Synchronous profile: completion response is assembled before the
-          // authority check; tasks, streaming and approvals are not admitted.
-          for (const [name, value] of Object.entries(noCache)) response.headers.set(name, value);
-          return response;
-        } finally {
-          clearTimeout(timeout); release(); request.signal.removeEventListener('abort', abort);
-        }
-      });
+        await store.assertExecutionOwner(id, job);
+        const rawContext = await createBankingRunContext(job, id);
+        const context = createExecutionExtensionContext(configuredExecutionAdapter, rawContext);
+        const url = new URL(request.url);
+        url.searchParams.set('workspace', policy.workspace);
+        const headers = new Headers(request.headers);
+        headers.delete('x-flujo-user-assertion');
+        const admitted = new NextRequest(url, { method: 'POST', headers, signal,
+          body: JSON.stringify({ model: parsed.model, messages: parsed.messages,
+            metadata: { flujo: 'true', appendMessages: 'true', conversationId: id } }) });
+        const response = await runWithExecutionInput({ modelName: undefined, flowDefinition: snapshot.flow,
+          conversationId: id, runId: randomUUID(), source: 'api', resumeAsNewTurn: true, userTurn: true,
+          flujo: true, debug: false, requireApproval: false, onApprovalRequired: 'fail',
+          abortSignal: signal, executionExtensionContext: context },
+        () => withWorkspaceMutation(() => task(admitted)));
+        await assertBankingRunCurrent(rawContext, { conversationId: id });
+        // Synchronous profile: completion response is assembled before the
+        // authority check; tasks, streaming and approvals are not admitted.
+        for (const [name, value] of Object.entries(noCache)) response.headers.set(name, value);
+        return response;
+      }, signal);
     });
   });
 }

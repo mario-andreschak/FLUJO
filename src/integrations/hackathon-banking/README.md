@@ -11,3 +11,21 @@ Approved synthetic operator tests use ordinary FLUJO chat and Slack without this
 Normal conversation GET, DELETE, events and cancellation receive authenticated owner checks and sanitized responses, including for previously owned banking transcripts. Execution and conversation controls use the ordinary `/v1/chat` routes. The specialized `/v1/banking/chat` and `/v1/banking/conversations` routes are retired and return 404; `POST /v1/banking/session/revoke` remains available. Existing ownership records and transcript data are preserved.
 
 Native CLI execution remains denied unless an explicitly verified restricted profile is configured and the exact CLI attestation passes.
+
+Fresh ingress assertions remain valid for at most 120 seconds and are single-use.
+An approved, capacity-accepted completion receives a separate server-owned execution
+lease: queue wait is at most `maxQueueWaitSeconds` (default/cap 300), active work uses
+the lower of `maxRunSeconds` and 110 seconds, and total authority is at most 410
+seconds from acceptance or the earlier verified session expiry. Active time includes
+owner/setup and conversation-lock waiting. Fresh GET/control/SSE and continuation
+requests still use their original request assertion validity; an execution lease
+cannot authorize them.
+
+Queued and active jobs register separately so overlapping turns cannot replace each
+other's cancellation registration. Cancellation, deletion and session revocation
+cover every matching job. Policy/revocation/owner checks remain fresh at dequeue and
+existing execution boundaries, and per-call bank assertions remain at most 60
+seconds within the active/job/session deadlines. Job authority is private process
+memory, never persisted or passed to models; restart requires fresh admission.
+Use a 450-second client timeout for default-budget load acceptance without changing
+server deadlines, model choice, native capabilities or admission capacity.

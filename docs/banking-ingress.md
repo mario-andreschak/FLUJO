@@ -52,6 +52,29 @@ most eight hours. Keep `session_id` and `session_exp` constant for the entire br
 session; rebinding a session to another subject or extending its expiry is rejected.
 Derive `sub` from the verified login. Never accept a browser-supplied subject.
 
+### Accepted work and request expiry
+
+The short assertion authorizes a fresh request. After authentication, graph/model
+approval, ownership checks and bounded admission, the server grants that completion
+a separate execution lease. The original assertion still expires within 120 seconds;
+every read, control, SSE reconnect and continuation requires a fresh valid assertion.
+An accepted completion can continue after its original assertion expires.
+
+Queue wait is bounded by `maxQueueWaitSeconds` (default and maximum 300 seconds).
+Active work is bounded by the lower of `maxRunSeconds` and 110 seconds, including
+conversation-lock waits and setup. The complete lease never exceeds 410 seconds from
+acceptance. All three deadlines are clamped to the verified session expiry and cannot
+be renewed. Use a 450-second client timeout when testing the full default queue and
+active budgets; that client timeout does not grant additional server authority.
+
+Cancellation and revocation cover queued and active work. Policy, session and existing
+owner/tombstone checks run again before queued work activates and at execution
+boundaries. Rejected or cancelled queued requests start no model or tool call. New
+conversations receive no durable owner/state while queued. Leases remain in server
+memory and never appear in request metadata, model input, transcripts or tool arguments.
+Worker restart interrupts accepted jobs; a retry or continuation needs a new assertion
+and JTI. No durable queue or automatic model retry is provided.
+
 Completions retain the normal completion response shape and conversation correlation.
 Read/SSE expose only bounded user/assistant messages. Authentication failures never
 return raw provider errors, tool traces or signing material.
@@ -90,6 +113,7 @@ Its JSON uses the following fields:
   "maxActiveRuns": 32,
   "maxQueuedRuns": 512,
   "maxPendingPerSubject": 3,
+  "maxQueueWaitSeconds": 300,
   "maxRunSeconds": 110
 }
 ```
@@ -126,8 +150,8 @@ prompt templates are excluded. API provider adapters are supported. Codex/Claude
 adapters are denied by default because their native capabilities exceed the
 banking tool boundary. Codex may be admitted only with an explicitly attested binary
 and pinned model catalog that pass forced native-call rejection and approved MCP
-tests. The current real-catalog probes exposed a native patch handler, so private CLI
-runtime enrollment is still pending. Claude remains denied. Other FLUJO flows retain
+tests and the restricted catalog gates described in the generic contract.
+Claude remains denied. Other FLUJO flows retain
 their existing behavior. See [the generic adapter contract](features/execution-extensions.md).
 
 Each MCP call uses a fresh bank JWT in `_meta["com.flujo.bank/assertion"]`, bound to
@@ -150,6 +174,15 @@ Each banking turn uses one workspace writer admission; nested writes reuse it wh
 individual banking commits retain their authority checks. Snapshot capture waits for
 active turns to finish. Owner/tombstone/session records survive restart and require private retention
 management. Expired ingress replay records are swept periodically.
+
+The request principal and accepted execution lease are separate server authorities.
+Only a still-fresh request can receive a lease after all asynchronous admission
+checks. Queue expiry, request disconnect and owner/session controls remove pending
+work; an aborted or expired wake cannot dispatch later or release another job's slot.
+Out-of-band policy-file changes are checked at dequeue before any owner creation,
+provider/tool execution or persistence; immediate file-change notifications are not
+part of this profile. Bank assertions remain single-use and at most 60 seconds,
+clamped to the remaining active/job/session deadlines.
 
 Automated tests cover forgery, replay, session rebinding, foreign/unknown/deleted
 IDs, graph/routing/history injection, key removal, cancellation, SSE revocation,

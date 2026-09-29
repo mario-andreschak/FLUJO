@@ -19,6 +19,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { StaticNode } from '@/backend/execution/flow/nodes/StaticNode';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type { SharedState, StaticNodeParams } from '@/backend/execution/flow/types';
+import { acceptBankingJob, activateBankingJob, reserveBankingJob } from '@/integrations/hackathon-banking/executionLease';
 
 describe('banking identity authority', () => {
   let root: string;
@@ -72,7 +73,10 @@ describe('banking identity authority', () => {
     const { store, identity } = bankingAdmission(principal);
     const id = randomUUID();
     await store.createConversation(id, identity);
-    const ctx = await createBankingRunContext(principal, id);
+    const { job } = await acceptBankingJob(principal, id, true, new AbortController().signal, mint => ({ job: mint() }));
+    reserveBankingJob(job);
+    await activateBankingJob(job);
+    const ctx = await createBankingRunContext(job, id);
     await bindBankingRun(ctx, id, randomUUID());
     return { principal, store, identity, id, ctx, extensionContext: createExecutionExtensionContext(configuredExecutionAdapter, ctx) };
   }

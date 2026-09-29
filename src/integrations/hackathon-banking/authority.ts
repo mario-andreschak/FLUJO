@@ -9,6 +9,7 @@ import { BankingError } from './errors';
 import { assertBankingExecutionBearer, requireBankingPolicy, type BankingPolicy } from './policy';
 import { BankingStore, type Identity } from './store';
 import { propagateBankingRevocation } from './localControl';
+import { assertBankingJobLease, type BankingAcceptedJob } from './executionLease';
 
 export const BANK_ASSERTION_META = 'com.flujo.bank/assertion';
 declare const principalBrand: unique symbol;
@@ -16,7 +17,7 @@ declare const runBrand: unique symbol;
 export interface BankingPrincipal { readonly [principalBrand]: true }
 export interface BankingRunContext { readonly [runBrand]: true }
 interface Admission { identity: Identity; policy: BankingPolicy; store: BankingStore }
-interface Run extends Admission { conversation: string; runId?: string; signal?: AbortSignal; handoffs?: ReadonlySet<string> }
+interface Run extends Admission { job: BankingAcceptedJob; conversation: string; runId?: string; signal?: AbortSignal; handoffs?: ReadonlySet<string> }
 type Registries = { principals: WeakMap<object, Admission>; runs: WeakMap<object, Run> };
 const shared = globalThis as typeof globalThis & { __flujoBankingAuthority?: Registries };
 const registries = shared.__flujoBankingAuthority ??= { principals: new WeakMap(), runs: new WeakMap() };
@@ -30,6 +31,7 @@ function admission(principal: BankingPrincipal): Admission {
 function run(context: BankingRunContext | undefined): Run {
   const record = context && registries.runs.get(context);
   if (!record) throw new BankingError('trusted_banking_context_required');
+  assertBankingJobLease(record.job, 'active');
   return record;
 }
 
@@ -65,8 +67,8 @@ export async function authenticateBankingRequest(request: Request, revocation = 
     if (claims.nbf !== claims.iat || claims.iat > now || claims.exp - claims.iat <= 0
       || claims.exp - claims.iat > 120 || claims.exp > claims.session_exp
       || claims.session_exp - claims.iat > 8 * 3600) throw new Error();
-    identity = { issuer: claims.iss, subject: claims.sub, session: claims.session_id,
-      expires: claims.exp, sessionExpires: claims.session_exp };
+    identity = Object.freeze({ issuer: claims.iss, subject: claims.sub, session: claims.session_id,
+      expires: claims.exp, sessionExpires: claims.session_exp });
     jti = claims.jti;
   } catch {
     throw new BankingError('authorization_denied', 401);
@@ -77,33 +79,37 @@ export async function authenticateBankingRequest(request: Request, revocation = 
   // Fresh ingress assertions are single-use, including retries/reconnects.
   await store.consumeAssertion(identity.issuer, jti, identity.expires);
   const principal = Object.freeze({}) as BankingPrincipal;
-  registries.principals.set(principal, { policy, identity, store });
+  registries.principals.set(principal, Object.freeze({ policy, identity, store }));
+  assertBankingPrincipalFresh(principal);
   return principal;
 }
 
 export function bankingAdmission(principal: BankingPrincipal): Admission { return admission(principal); }
 
-export async function createBankingRunContext(principal: BankingPrincipal, conversation: string,
+export async function createBankingRunContext(job: BankingAcceptedJob, conversation?: string,
   signal?: AbortSignal): Promise<BankingRunContext> {
-  const record = admission(principal);
-  await record.store.assertOwner(conversation, record.identity);
+  const record = assertBankingJobLease(job, 'active');
+  if ((conversation !== undefined && conversation !== record.conversation)
+    || (signal !== undefined && signal !== record.signal)) throw new BankingError('authorization_denied');
+  await record.store.assertExecutionOwner(record.conversation, job);
+  assertBankingJobLease(job, 'active');
   const context = Object.freeze({}) as BankingRunContext;
-  registries.runs.set(context, { ...record, conversation, signal });
+  registries.runs.set(context, { identity: record.identity, policy: record.policy, store: record.store,
+    job, conversation: record.conversation, signal: record.signal });
   return context;
 }
 
 export async function assertBankingRunCurrent(context: BankingRunContext | undefined,
   expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void> {
   const record = run(context);
-  assertPolicyCurrent(record);
-  if (record.signal?.aborted) throw new BankingError('banking_run_cancelled', 409);
   if (getCurrentWorkspace() !== record.policy.workspace
     || (expected?.conversationId !== undefined && expected.conversationId !== record.conversation)
     || (expected?.runId !== undefined && expected.runId !== record.runId)
     || (expected?.graphHash !== undefined && expected.graphHash !== record.policy.graphHash)) {
     throw new BankingError('authorization_denied');
   }
-  await record.store.assertOwner(record.conversation, record.identity);
+  await record.store.assertExecutionOwner(record.conversation, record.job);
+  assertBankingJobLease(record.job, 'active');
 }
 
 function assertPolicyCurrent(record: Admission): void {
@@ -115,8 +121,19 @@ function assertPolicyCurrent(record: Admission): void {
 
 export async function assertBankingPrincipalCurrent(principal: BankingPrincipal): Promise<void> {
   const record = admission(principal);
-  assertPolicyCurrent(record);
+  assertBankingPrincipalFresh(principal);
   await record.store.assertSession(record.identity);
+  assertBankingPrincipalFresh(principal);
+}
+
+/** Original HTTP proof freshness; this is never replaced by job deadlines. */
+export function assertBankingPrincipalFresh(principal: BankingPrincipal, signal?: AbortSignal): void {
+  const record = admission(principal);
+  assertPolicyCurrent(record);
+  if (record.identity.expires <= Date.now() / 1000 || record.identity.sessionExpires <= Date.now() / 1000) {
+    throw new BankingError('authorization_expired', 401);
+  }
+  if (signal?.aborted) throw new BankingError('banking_run_cancelled', 409);
 }
 
 export async function bindBankingRun(context: BankingRunContext, conversation: string, runId: string): Promise<void> {
@@ -208,15 +225,21 @@ export async function signBankingCall(context: BankingRunContext, serverName: st
   if (args.conversation_id != null && args.conversation_id !== record.conversation) {
     throw new BankingError('authorization_denied');
   }
-  return sign(record.policy, record.identity, record.conversation, record.runId!, tool, args, 'bank:read', 'bank-mcp+jwt');
+  const assertion = await sign(record.policy, record.identity, record.conversation, record.runId!, tool, args,
+    'bank:read', 'bank-mcp+jwt', () => {
+      const job = assertBankingJobLease(record.job, 'active');
+      return Math.min(job.activeDeadline!, job.totalDeadline, job.identity.sessionExpires);
+    });
+  await assertBankingRunCurrent(context);
+  return assertion;
 }
 
 async function sign(policy: BankingPolicy, identity: Identity, conversation: string, runId: string,
-  tool: string, args: Record<string, unknown>, scope: string, type: string): Promise<string> {
+  tool: string, args: Record<string, unknown>, scope: string, type: string, executionExpiry?: () => number): Promise<string> {
   const key = await importPKCS8(await readFile(policy.bankSigningKeyFile, 'utf8'), 'EdDSA');
   if (key.algorithm.name !== 'Ed25519') throw new BankingError('banking_signer_unavailable', 503);
   const now = Math.floor(Date.now() / 1000);
-  const expires = Math.min(now + 60, identity.expires, identity.sessionExpires);
+  const expires = Math.floor(Math.min(now + 60, executionExpiry ? executionExpiry() : identity.expires, identity.sessionExpires));
   if (expires <= now) throw new BankingError('authorization_expired', 401);
   return new SignJWT({ sub: identity.subject, session_id: bankSessionId(policy, identity),
     conversation_id: conversation, run_id: runId, graph_revision: policy.graphHash,
@@ -226,10 +249,12 @@ async function sign(policy: BankingPolicy, identity: Identity, conversation: str
     .setExpirationTime(expires).setJti(randomUUID()).sign(key);
 }
 
-export async function revokeBankingSession(principal: BankingPrincipal): Promise<void> {
+export async function revokeBankingSession(principal: BankingPrincipal, onRevoked?: () => void): Promise<void> {
   const record = admission(principal);
+  assertBankingPrincipalFresh(principal);
   // Local revocation is durable before the private child process updates the bank store.
   await record.store.revoke(record.identity);
+  onRevoked?.();
   const assertion = await sign(record.policy, record.identity, 'session-revocation', randomUUID(),
     'revoke_session', {}, 'bank:revoke', 'bank-revoke+jwt');
   await propagateBankingRevocation(record.policy, assertion);

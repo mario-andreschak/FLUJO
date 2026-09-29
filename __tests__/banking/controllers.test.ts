@@ -173,11 +173,12 @@ describe('authenticated normal completion and banking owner controls', () => {
     const bob = await authenticateBankingRequest(await request('bob'));
     let release!: () => void; let started!: () => void;
     const ready = new Promise<void>(resolve => { started = resolve; });
-    const held = withBankingAdmission(alice, async () => { started(); await new Promise<void>(resolve => { release = resolve; }); });
+    const options = () => ({ conversationId: randomUUID(), existingOwner: false, signal: new AbortController().signal });
+    const held = withBankingAdmission(alice, options(), async () => { started(); await new Promise<void>(resolve => { release = resolve; }); });
     await ready;
-    await expect(withBankingAdmission(bob, async () => undefined)).rejects.toThrow('banking_busy');
+    await expect(withBankingAdmission(bob, options(), async () => undefined)).rejects.toThrow('banking_busy');
     release(); await held;
-    await expect(withBankingAdmission(bob, async () => 'ok')).resolves.toBe('ok');
+    await expect(withBankingAdmission(bob, options(), async () => 'ok')).resolves.toBe('ok');
   });
   test('only the owner can cancel an active run, and its late response is discarded', async () => {
     const id = (await (await chat()).json()).conversation_id;

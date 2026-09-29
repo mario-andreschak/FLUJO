@@ -27,6 +27,7 @@ const schema = z.object({
   maxActiveRuns: z.number().int().min(1).max(128).default(32),
   maxQueuedRuns: z.number().int().min(0).max(1024).default(512),
   maxPendingPerSubject: z.number().int().min(1).max(16).default(3),
+  maxQueueWaitSeconds: z.number().int().min(1).max(300).default(300),
   maxRunSeconds: z.number().int().min(1).max(300).default(110),
   // Opt-in only after the exact installed CLI build has passed restricted
   // profile acceptance. Absence keeps authenticated native CLI runs denied.

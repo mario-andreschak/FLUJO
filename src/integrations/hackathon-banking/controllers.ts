@@ -11,15 +11,21 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 
 const noCache = { 'Cache-Control': 'no-store, private', Pragma: 'no-cache', Vary: 'Authorization, X-Flujo-User-Assertion' };
 interface ActiveRun { controller: AbortController; session: string }
-const registry = globalThis as typeof globalThis & { __flujoBankingActive?: Map<string, ActiveRun>; __flujoBankingStreams?: Map<string, number> };
+const registry = globalThis as typeof globalThis & { __flujoBankingActive?: Map<string, Set<ActiveRun>>; __flujoBankingStreams?: Map<string, number> };
 const activeRuns = registry.__flujoBankingActive ??= new Map();
 const streams = registry.__flujoBankingStreams ??= new Map();
 
 /** Shared registry for ordinary completion admission and owner controls. */
 export function registerBankingActiveRun(principal: BankingPrincipal, id: string, controller: AbortController): () => void {
   const runKey = key(principal, id);
-  activeRuns.set(runKey, { controller, session: bankingAdmission(principal).identity.session });
-  return () => { if (activeRuns.get(runKey)?.controller === controller) activeRuns.delete(runKey); };
+  let jobs = activeRuns.get(runKey);
+  if (!jobs) { jobs = new Set(); activeRuns.set(runKey, jobs); }
+  const job = { controller, session: bankingAdmission(principal).identity.session };
+  jobs.add(job);
+  return () => {
+    jobs.delete(job);
+    if (!jobs.size && activeRuns.get(runKey) === jobs) activeRuns.delete(runKey);
+  };
 }
 
 function key(principal: BankingPrincipal, id: string): string {
@@ -53,7 +59,7 @@ export async function bankingConversation(request: Request, id: string, remove =
       if (locked) return locked;
       if (remove) {
         await store.tombstone(id, identity);
-        activeRuns.get(key(principal, id))?.controller.abort();
+        for (const job of activeRuns.get(key(principal, id)) ?? []) job.controller.abort();
         markConversationDeleted(id);
         FlowExecutor.conversationStates.delete(id);
         return new Response(null, { status: 204, headers: noCache });
@@ -73,9 +79,10 @@ export async function bankingCancel(request: Request, id: string): Promise<Respo
     await store.assertOwner(id, identity);
     const locked = await runWithWorkspace(policy.workspace, () => assertUnlocked({ openai: true }));
     if (locked) return locked;
-    const active = activeRuns.get(key(principal, id));
-    active?.controller.abort(new BankingError('banking_run_cancelled', 409));
-    return Response.json({ cancelled: Boolean(active) }, { headers: noCache });
+    const jobs = activeRuns.get(key(principal, id));
+    const cancelled = Boolean(jobs?.size);
+    for (const job of jobs ?? []) job.controller.abort(new BankingError('banking_run_cancelled', 409));
+    return Response.json({ cancelled }, { headers: noCache });
   } catch (error) { return bankingErrorResponse(error); }
 }
 
@@ -85,11 +92,13 @@ export async function bankingRevoke(request: Request): Promise<Response> {
     const { identity, policy } = bankingAdmission(principal);
     const locked = await runWithWorkspace(policy.workspace, () => assertUnlocked({ openai: true }));
     if (locked) return locked;
-    for (const [runKey, active] of activeRuns) {
-      if (runKey.startsWith(JSON.stringify([policy.deploymentId, policy.workspace]).slice(0, -1))
-        && active.session === identity.session) active.controller.abort();
-    }
-    await revokeBankingSession(principal);
+    await revokeBankingSession(principal, () => {
+      for (const [runKey, jobs] of activeRuns) {
+        if (runKey.startsWith(JSON.stringify([policy.deploymentId, policy.workspace]).slice(0, -1))) {
+          for (const job of jobs) if (job.session === identity.session) job.controller.abort();
+        }
+      }
+    });
     return Response.json({ revoked: true }, { headers: noCache });
   } catch (error) { return bankingErrorResponse(error); }
 }
