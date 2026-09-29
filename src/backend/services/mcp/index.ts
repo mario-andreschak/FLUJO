@@ -16,6 +16,7 @@ import { runWithConcurrency } from "./utils/boundedConcurrency";
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
+import { shippedDescriptorForConfig } from './shippedServers';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -2848,6 +2849,14 @@ export class MCPService {
       const resolved = path.resolve(getWorkspaceDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
+      const shipped = config.transport === 'stdio' ? shippedDescriptorForConfig(config) : undefined;
+      if (shipped && resolved === path.resolve(getWorkspaceDataDir(), 'mcp-servers', shipped.packageDirectory)) {
+        // Shipped marketplace records have a clone step at transport start.
+        // Creating an empty destination here would make that step treat it as
+        // an existing package and reject its missing manifest. Leave both new
+        // and existing reserved directories to the strict package copier.
+        return;
+      }
       if (isRegistryPackage) {
         // Registry stdio roots are FLUJO-managed. Refuse an unexpected absolute or
         // traversing value even if a malformed config reaches this boundary.
