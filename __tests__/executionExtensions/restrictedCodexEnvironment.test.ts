@@ -9,6 +9,9 @@ import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/c
 
 let mockWorkspaceRoot: string;
 const mockExecFile = jest.fn();
+const mockReadStream = jest.fn();
+jest.mock('node:fs', () => ({ ...jest.requireActual('node:fs'),
+  createReadStream: (...args: unknown[]) => mockReadStream(...args) }));
 jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => mockWorkspaceRoot }));
 jest.mock('@/backend/services/model/adapters/codexAuth', () => ({ readCodexAuthForTransfer: jest.fn() }));
 jest.mock('node:child_process', () => {
@@ -24,9 +27,11 @@ describe('restricted Codex credential/runtime isolation', () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-boundary-'));
     mockWorkspaceRoot = directory;
     mockExecFile.mockReset().mockResolvedValue({ stdout: 'codex-cli 0.153.3\n', stderr: '' });
+    mockReadStream.mockReset().mockImplementation(jest.requireActual('node:fs').createReadStream);
     jest.mocked(readCodexAuthForTransfer).mockReset().mockResolvedValue(Buffer.from('{"synthetic_test_auth":true}'));
   });
   afterEach(async () => {
+    jest.restoreAllMocks();
     if (path.dirname(directory) !== path.resolve(os.tmpdir()) || !path.basename(directory).startsWith('codex-boundary-')) {
       throw new Error('Unsafe test cleanup');
     }
@@ -43,6 +48,185 @@ describe('restricted Codex credential/runtime isolation', () => {
     return { verifiedCliVersion: '0.153.3', verifiedCliSha256: 'a'.repeat(64),
       verifiedModelCatalogPath, verifiedModelCatalogSha256: createHash('sha256').update(bytes).digest('hex') };
   }
+
+  async function executableProfile(): Promise<RestrictedCodexProfile> {
+    const verifiedCliPath = path.join(directory, 'fixture-codex.exe');
+    const contents = 'synthetic executable, not an actual CLI';
+    await fs.writeFile(verifiedCliPath, contents);
+    return { ...await catalogProfile(), verifiedCliPath,
+      verifiedCliSha256: createHash('sha256').update(contents).digest('hex') };
+  }
+
+  // Keep --version pending until every concurrent caller has completed its own
+  // two lstat reads. Tests exercise real streaming hashes and filesystem drift.
+  function pendingVerification(callers: number, executable: string) {
+    let release!: (value: { stdout: string; stderr: string }) => void;
+    let ready!: () => void;
+    let started!: () => void;
+    const identitiesRead = new Promise<void>(resolve => { ready = resolve; });
+    const invoked = new Promise<void>(resolve => { started = resolve; });
+    const result = new Promise<{ stdout: string; stderr: string }>(resolve => { release = resolve; });
+    let reads = 0;
+    const lstat = fs.lstat.bind(fs);
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+      const stat = await lstat(...args);
+      if (args[0] === executable && ++reads === callers * 2) ready();
+      return stat;
+    });
+    mockExecFile.mockImplementation(() => { started(); return result; });
+    return { identitiesRead, invoked, release: () => release({ stdout: 'codex-cli 0.153.3\n', stderr: '' }) };
+  }
+
+  test('concurrent matching attestations share one hash/version check; each caller checks before and after', async () => {
+    const profile = await executableProfile();
+    const gate = pendingVerification(8, profile.verifiedCliPath!);
+    const calls = Array.from({ length: 8 }, () => assertRestrictedCodexProfile(profile, 'gpt-6-sol'));
+    await gate.identitiesRead;
+    await gate.invoked;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(mockReadStream).toHaveBeenCalledTimes(1);
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+    gate.release();
+    await expect(Promise.all(calls)).resolves.toEqual(Array(8).fill(await fs.realpath(profile.verifiedCliPath!)));
+    expect(jest.mocked(fs.lstat).mock.calls.filter(([file]) => file === profile.verifiedCliPath)).toHaveLength(32);
+    await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).resolves.toBe(await fs.realpath(profile.verifiedCliPath!));
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+  });
+
+  test('a rejected concurrent verification is evicted and a later call verifies again', async () => {
+    const profile = await executableProfile();
+    const gate = pendingVerification(2, profile.verifiedCliPath!);
+    const calls = Promise.allSettled([assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol'),
+      assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol')]);
+    await gate.identitiesRead;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    gate.release();
+    expect((await calls).map(result => result.status)).toEqual(['rejected', 'rejected']);
+    expect(mockReadStream).toHaveBeenCalledTimes(1);
+    await expect(assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol'))
+      .rejects.toThrow('differs from its verified profile');
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).resolves.toBe(await fs.realpath(profile.verifiedCliPath!));
+    expect(mockReadStream).toHaveBeenCalledTimes(3);
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
+
+  test('concurrent distinct digest or version attestations cannot borrow another verification', async () => {
+    const profile = await executableProfile();
+    const gate = pendingVerification(3, profile.verifiedCliPath!);
+    const calls = Promise.allSettled([assertRestrictedCodexProfile(profile, 'gpt-6-sol'),
+      assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol'),
+      assertRestrictedCodexProfile({ ...profile, verifiedCliVersion: '0.157.1' }, 'gpt-6-sol')]);
+    await gate.identitiesRead;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    gate.release();
+    expect((await calls).map(result => result.status)).toEqual(['fulfilled', 'rejected', 'rejected']);
+    expect(mockReadStream).toHaveBeenCalledTimes(3);
+    expect(mockExecFile).toHaveBeenCalledTimes(3);
+  });
+
+  test('in-flight byte drift rejects every subscriber and a changed file starts a separate hash', async () => {
+    const profile = await executableProfile();
+    // A whole-ms fixture avoids Date conversion changing the original mtime.
+    const fixedTime = new Date(1700000000000);
+    await fs.utimes(profile.verifiedCliPath!, fixedTime, fixedTime);
+    const gate = pendingVerification(2, profile.verifiedCliPath!);
+    const first = Promise.allSettled([assertRestrictedCodexProfile(profile, 'gpt-6-sol'),
+      assertRestrictedCodexProfile(profile, 'gpt-6-sol')]);
+    await gate.identitiesRead;
+    await gate.invoked;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    // Preserve length and mtime: ctime is still part of the sharing identity.
+    const original = await fs.stat(profile.verifiedCliPath!);
+    await fs.writeFile(profile.verifiedCliPath!, 'x'.repeat(original.size));
+    await fs.utimes(profile.verifiedCliPath!, original.atime, original.mtime);
+    const rewritten = await fs.stat(profile.verifiedCliPath!);
+    expect(rewritten.mtimeMs).toBe(original.mtimeMs);
+    expect(rewritten.ctimeMs).not.toBe(original.ctimeMs);
+    const changed = assertRestrictedCodexProfile(profile, 'gpt-6-sol');
+    const changedResult = Promise.allSettled([changed]);
+    gate.release();
+    expect((await first).map(result => result.status)).toEqual(['rejected', 'rejected']);
+    expect((await changedResult)[0].status).toBe('rejected');
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
+
+  test('an identical replacement at the same path gets fresh verification and rejects the old file identity', async () => {
+    const profile = await executableProfile();
+    const gate = pendingVerification(1, profile.verifiedCliPath!);
+    const old = Promise.allSettled([assertRestrictedCodexProfile(profile, 'gpt-6-sol')]);
+    await gate.invoked;
+    const replacement = path.join(directory, 'replacement.exe');
+    await fs.copyFile(profile.verifiedCliPath!, replacement);
+    await fs.unlink(profile.verifiedCliPath!);
+    await fs.rename(replacement, profile.verifiedCliPath!);
+    const next = Promise.allSettled([assertRestrictedCodexProfile(profile, 'gpt-6-sol')]);
+    gate.release();
+    expect((await old)[0].status).toBe('rejected');
+    expect((await next)[0].status).toBe('fulfilled');
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
+
+  test('different executable paths do not share verification even for matching bytes and expected versions', async () => {
+    const profile = await executableProfile();
+    const anotherPath = path.join(directory, 'another-codex.exe');
+    await fs.copyFile(profile.verifiedCliPath!, anotherPath);
+    await expect(Promise.all([assertRestrictedCodexProfile(profile, 'gpt-6-sol'),
+      assertRestrictedCodexProfile({ ...profile, verifiedCliPath: anotherPath }, 'gpt-6-sol')]))
+      .resolves.toEqual([await fs.realpath(profile.verifiedCliPath!), await fs.realpath(anotherPath)]);
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+  });
+
+  test('every concurrent caller validates its own catalog and policy before joining verification', async () => {
+    const profile = await executableProfile();
+    const gate = pendingVerification(1, profile.verifiedCliPath!);
+    const valid = assertRestrictedCodexProfile(profile, 'gpt-6-sol');
+    await gate.identitiesRead;
+    const unsafe = await catalogProfile({ client_version: '0.153.3', models: [{ ...selectedModel, tool_mode: 'auto' }] });
+    await expect(assertRestrictedCodexProfile({ ...profile, ...unsafe }, 'gpt-6-sol')).rejects.toThrow('native capabilities');
+    await expect(assertRestrictedCodexProfile(profile, 'unapproved-model')).rejects.toThrow('approved model');
+    gate.release();
+    await expect(valid).resolves.toBe(await fs.realpath(profile.verifiedCliPath!));
+    expect(mockReadStream).toHaveBeenCalledTimes(1);
+    await expect(prepareRestrictedCodexRuntimeEnvironment(profile)).rejects.toThrow('differs from its verified profile');
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
+
+  test('a retargeted parent symlink cannot reuse an in-flight canonical path verification', async () => {
+    const profile = await executableProfile();
+    const targetA = path.join(directory, 'target-a');
+    const targetB = path.join(directory, 'target-b');
+    const link = path.join(directory, 'current');
+    await fs.mkdir(targetA);
+    await fs.mkdir(targetB);
+    await fs.copyFile(profile.verifiedCliPath!, path.join(targetA, 'codex.exe'));
+    await fs.writeFile(path.join(targetB, 'codex.exe'), 'different binary');
+    await fs.symlink(targetA, link, 'junction');
+    const linked = { ...profile, verifiedCliPath: path.join(link, 'codex.exe') };
+    let release!: (value: { stdout: string; stderr: string }) => void;
+    let started!: () => void;
+    const invoked = new Promise<void>(resolve => { started = resolve; });
+    mockExecFile.mockImplementation(() => { started(); return new Promise(resolve => { release = resolve; }); });
+    const old = Promise.allSettled([assertRestrictedCodexProfile(linked, 'gpt-6-sol')]);
+    await invoked;
+    await fs.unlink(link);
+    await fs.symlink(targetB, link, 'junction');
+    // The old invocation must fail its caller's fresh canonical resolution.
+    mockExecFile.mockResolvedValue({ stdout: 'codex-cli 0.153.3\n', stderr: '' });
+    const next = Promise.allSettled([assertRestrictedCodexProfile(linked, 'gpt-6-sol')]);
+    release({ stdout: 'codex-cli 0.153.3\n', stderr: '' });
+    expect((await old)[0].status).toBe('rejected');
+    expect((await next)[0].status).toBe('rejected');
+    expect(mockReadStream).toHaveBeenCalledTimes(2);
+    expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
+  });
 
   test('concurrent invocations receive distinct homes/cwds and exclude application/private environment', async () => {
     const runtimes = await Promise.all([prepareRestrictedCodexRuntimeEnvironment(), prepareRestrictedCodexRuntimeEnvironment()]);

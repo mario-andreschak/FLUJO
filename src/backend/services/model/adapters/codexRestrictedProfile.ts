@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createReadStream, promises as fs } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -138,6 +139,39 @@ function assertCatalogModel(bytes: Buffer, model: string): void {
   }
 }
 
+// Share only work that is still running. Each caller independently checks its
+// file identity before joining and after verification, and validates its catalog.
+const executableVerifications = new Map<string, Promise<void>>();
+
+function fileIdentity(stat: Stats): string {
+  return JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode]);
+}
+
+async function executableIdentity(requestedPath: string) {
+  const requested = await fs.lstat(requestedPath);
+  const executable = await fs.realpath(requestedPath);
+  const resolved = await fs.lstat(executable);
+  if ((!requested.isFile() && !requested.isSymbolicLink())
+    || !resolved.isFile() || resolved.isSymbolicLink()) {
+    throw new Error('Restricted Codex binary differs from its verified profile.');
+  }
+  return { executable, identity: JSON.stringify([fileIdentity(requested), fileIdentity(resolved)]) };
+}
+
+function verifyExecutable(executable: string, digest: string, version: string): Promise<void> {
+  return (async () => {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(executable)) hash.update(chunk);
+    const { stdout } = await promisify(execFile)(executable, ['--version'], {
+      env: { ...baseEnvironment(), NODE_ENV: 'production' }, encoding: 'utf8',
+      timeout: 10000, maxBuffer: 4096, windowsHide: true,
+    });
+    if (stdout.trim() !== `codex-cli ${version}` || hash.digest('hex') !== digest) {
+      throw new Error('Restricted Codex binary differs from its verified profile.');
+    }
+  })();
+}
+
 /** Reject drift before creating a credential-bearing runtime or sending model input. */
 export async function assertRestrictedCodexProfile(
   profile: RestrictedCodexProfile,
@@ -151,21 +185,29 @@ export async function assertRestrictedCodexProfile(
   if (profile.verifiedCliPath !== undefined && !path.isAbsolute(profile.verifiedCliPath)) {
     throw new Error('Restricted Codex binary path must be absolute.');
   }
-  const executable = await fs.realpath(profile.verifiedCliPath ?? bundledExecutable());
-  const before = await fs.stat(executable);
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(executable)) hash.update(chunk);
-  const { stdout } = await promisify(execFile)(executable, ['--version'], {
-    env: { ...baseEnvironment(), NODE_ENV: 'production' }, encoding: 'utf8',
-    timeout: 10000, maxBuffer: 4096, windowsHide: true,
-  });
-  const after = await fs.stat(executable);
-  if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-    || stdout.trim() !== `codex-cli ${profile.verifiedCliVersion}`
-    || hash.digest('hex') !== profile.verifiedCliSha256) {
-    throw new Error('Restricted Codex binary differs from its verified profile.');
+  const requestedPath = profile.verifiedCliPath ?? bundledExecutable();
+  const before = await executableIdentity(requestedPath);
+  const key = JSON.stringify([requestedPath, before.executable, profile.verifiedCliSha256,
+    profile.verifiedCliVersion, before.identity]);
+  let verification = executableVerifications.get(key);
+  if (!verification) {
+    // Evict on both outcomes without leaving a detached rejecting promise.
+    verification = verifyExecutable(before.executable, profile.verifiedCliSha256, profile.verifiedCliVersion)
+      .then(() => { executableVerifications.delete(key); }, error => {
+        executableVerifications.delete(key);
+        throw error;
+      });
+    executableVerifications.set(key, verification);
   }
-  return executable;
+  try {
+    await verification;
+  } finally {
+    const after = await executableIdentity(requestedPath);
+    if (before.executable !== after.executable || before.identity !== after.identity) {
+      throw new Error('Restricted Codex binary differs from its verified profile.');
+    }
+  }
+  return before.executable;
 }
 
 export interface RestrictedCodexRuntimeEnvironment {
