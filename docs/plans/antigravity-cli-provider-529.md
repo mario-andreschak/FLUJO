@@ -269,7 +269,8 @@ CI and recordings remain historical evidence and do not establish new acceptance
 - Account OAuth and Google's required phone/device verification completed using
   the authorized account. A real Gemini 3.8 Flash Medium run called a FLUJO nonce
   tool exactly once after approval, returned its random value and recalled it in
-  a fresh-process follow-up. Production UI/video acceptance is still pending.
+  a fresh-process follow-up. Final production UI acceptance also passed, as
+  recorded below.
 - This Windows environment writes the official `antigravity-oauth-token` file.
   Fresh HOME alone fails authentication; copying only that validated file makes
   the private-home account model listing and real completion work. No OS keyring
@@ -289,5 +290,56 @@ CI and recordings remain historical evidence and do not establish new acceptance
   the actual adversarial fixture now passes with zero foreign requests/effects.
 - Source installation and a packed Windows production consumer execute their
   verified package-owned runtime. A Linux Docker wrapper probe executes as the
-  nonroot user with networking disabled. Final full-image validation follows the
-  production application build.
+  nonroot user with networking disabled. Full-image validation passed at
+  `6a4c259db131eb82794709935bc5e4dc10419a1c`; it establishes distribution and
+  startup before the final adapter-only handoff/output fixes.
+
+## Final implementation and acceptance
+
+- Current main, including the banking work from PR #528, was merged before final
+  acceptance. Both ModelHandler and the direct adapter reject Antigravity in
+  authenticated restricted execution. The linked banking chat confirmed that
+  Antigravity remains excluded until the same attestation/isolation requirements
+  are met. Existing banking workers, flows, models and data were not changed.
+- Live graphical acceptance used the final production build at implementation
+  revision `1a75cb004de028402c299151adc6670174bc2a15`, the pinned native CLI
+  `1.2.13`, account authentication and `gemini-3.8-flash-medium`. An empty isolated
+  instance created all three guided models; advanced editing persisted after
+  reload. The real model diagnostic and FLUJO tool round-trip both passed.
+- A saved Start → Chat → Finish flow, connected only to the synthetic nonce MCP
+  fixture, executed approved `get_nonce` exactly once. Its unpredictable value
+  `7d6139b5612d4aab37fa4653` appeared in the matched tool result and final answer.
+  The first run recorded 12,684 input / 417 output / 13,101 total tokens. A new
+  CLI process recalled the same nonce without replaying the tool, adding 10,572
+  input / 2,108 output / 12,680 total tokens. Cumulative totals reconcile with
+  durable message usage and the by-node ledger.
+- Stop was tested after an approved slow fixture tool started. The conversation
+  recorded cancelled recovery metadata and a matched cancelled tool result,
+  visible again after reload. Its owned native PID exited and its private
+  invocation directory was removed. No usage was invented for the interrupted
+  invocation; earlier cumulative totals were preserved.
+- Browser acceptance exposed a handoff bug: aborting the CLI immediately lost
+  its final answer and terminal usage. Plain handoffs now close later tool and
+  steering access while draining the bounded final response. Cancellation,
+  execution fences and parallel spawn routing keep their existing behavior.
+  An ordinary native SUCCESS with neither useful output nor dispatch is rejected;
+  intentional tool-only and routing-only completions remain valid.
+- Final controlled checks passed: 36 adapter tests; 13 real-native integration
+  tests plus 9 snapshot tests; 37 frontend wizard/modal/conversion/diagnostic
+  tests; and 108 merged model/restriction compatibility assertions. The native
+  handoff regression retains all 51 terminal tokens and denies a later MCP call
+  with zero executor effects. Source artifact checks, the packed Windows
+  production consumer and nonroot offline Docker distribution checks passed.
+  The final local production build and MCP release validation passed.
+- The playable recording and its manifest are local deliverables under
+  `antigravity-cli-529/final` in this chat's artifact directory. It records actual
+  browser frames with long waits shortened. Nonce, recall, cancellation,
+  process-cleanup and diagnostic proofs are separate from controlled native
+  fixtures. Password, account consent, authorization codes, tokens and private
+  runtime data are absent from the recording and Git changes.
+- Delivery uses the issue's commit-and-push alternative and attached PR #531.
+  Final exact-head CI results and raw suite/test counts are recorded in the PR
+  and evidence manifest. Historical Gemini-only CI does not establish Antigravity
+  acceptance. Ubuntu/Windows verification includes source artifacts, production
+  builds and packed production consumers, alongside the existing full test,
+  isolated-process, baseline, memory and release-safety gates.
