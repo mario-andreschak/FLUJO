@@ -348,3 +348,8 @@ CI and recordings remain historical evidence and do not establish new acceptance
   has its own CI step so its exit code is enforced. The PowerShell encoding
   fixture retains its exact assertions with a bounded startup budget and error
   receipt; its earlier failure cause was not observable from the old assertion.
+- The packed Windows production-consumer test then hit its eight-minute npm
+  child limit while the build and native artifact checks passed. The test now
+  reports pack/install phase and elapsed progress, permits a bounded longer
+  production install, and terminates its owned process tree on timeout. Its
+  clean tarball, native binary and production-only dependency assertions remain.
