@@ -132,10 +132,6 @@ Route files: 206.
 | `/api/workspaces` | DELETE, GET, PATCH, POST | [source](../../src/app/api/workspaces/route.ts) |
 | `/mcp-flows` | DELETE, GET, POST | [source](../../src/app/mcp-flows/route.ts) |
 | `/mcp-proxy/{server}` | DELETE, GET, POST | [source](../../src/app/mcp-proxy/[server]/route.ts) |
-| `/v1/banking/chat` | POST | [source](../../src/app/v1/banking/chat/route.ts) |
-| `/v1/banking/conversations/{conversationId}` | DELETE, GET | [source](../../src/app/v1/banking/conversations/[conversationId]/route.ts) |
-| `/v1/banking/conversations/{conversationId}/cancel` | POST | [source](../../src/app/v1/banking/conversations/[conversationId]/cancel/route.ts) |
-| `/v1/banking/conversations/{conversationId}/events` | GET | [source](../../src/app/v1/banking/conversations/[conversationId]/events/route.ts) |
 | `/v1/banking/session/revoke` | POST | [source](../../src/app/v1/banking/session/revoke/route.ts) |
 | `/v1/chat/completions` | GET, OPTIONS, POST | [source](../../src/app/v1/chat/completions/route.ts) |
 | `/v1/chat/conversation-chains` | GET | [source](../../src/app/v1/chat/conversation-chains/route.ts) |

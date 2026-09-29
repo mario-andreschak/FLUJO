@@ -56,8 +56,12 @@ Completions retain the normal completion response shape and conversation correla
 Read/SSE expose only bounded user/assistant messages. Authentication failures never
 return raw provider errors, tool traces or signing material.
 
-Legacy `/v1/banking/chat` and conversation controls remain compatibility routes in
-the optional integration branch until ordinary-route parity is accepted.
+The specialized `/v1/banking/chat` and `/v1/banking/conversations` routes are retired
+and return 404. Execution and conversation controls use the ordinary routes above;
+`POST /v1/banking/session/revoke` remains available. Previously owned transcripts
+continue to use their existing owner records through ordinary read, events,
+cancellation and deletion routes. Retirement does not rewrite transcript data or
+change the configured deployment, workspace, graph identity or authority storage.
 
 ## Private configuration
 

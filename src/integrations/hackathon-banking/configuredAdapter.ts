@@ -147,10 +147,10 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
     try {
       requireBankingPolicy();
       const path = new URL(request.url).pathname;
-      // Legacy ingress stays protected during migration; no wider worker/admin
-      // credential is substituted for customer execution authority.
+      // Session revocation is the only specialized route. Retired ingress and
+      // controls must never fall through to ordinary transport admission.
       if (path.startsWith('/v1/banking')) {
-        if (!isBankingRoute(path)) return Response.json({ error: 'not_found' }, { status: 404 });
+        if (!isBankingRoute(path) || request.method !== 'POST') return Response.json({ error: 'not_found' }, { status: 404 });
         assertBankingExecutionBearer(request); return null;
       }
       if (!usesBankingCredential(request)) return undefined;
@@ -162,8 +162,10 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
     try {
       requireBankingPolicy();
       const path = new URL(request.url).pathname;
-      // Existing legacy controllers enforce their own equivalent owner checks.
-      if (path.startsWith('/v1/banking')) return task(request);
+      if (path.startsWith('/v1/banking')) {
+        if (!isBankingRoute(path) || request.method !== 'POST') return Response.json({ error: 'not_found' }, { status: 404 });
+        return task(request);
+      }
       if (usesBankingCredential(request)) {
         if (!allowedBoundRoute(request)) throw new BankingError('banking_control_forbidden');
         if (path === '/v1/chat/completions') return await ordinaryCompletion(request, task);

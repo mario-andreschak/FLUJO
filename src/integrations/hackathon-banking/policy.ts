@@ -70,9 +70,7 @@ export function assertBankingExecutionBearer(request: Request, policy = requireB
 }
 
 export function isBankingRoute(pathname: string): boolean {
-  return pathname === '/v1/banking/chat'
-    || pathname === '/v1/banking/session/revoke'
-    || /^\/v1\/banking\/conversations\/[a-f0-9-]{36}(?:\/events|\/cancel)?$/.test(pathname);
+  return pathname === '/v1/banking/session/revoke';
 }
 
 export function isProtectedBankServer(serverName: string): boolean {

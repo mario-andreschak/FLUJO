@@ -3,8 +3,10 @@ import fs from 'node:fs/promises';
 import { jwtVerify } from 'jose';
 import { flowService } from '@/backend/services/flow';
 import { loadConversationState, loadConversationStateReadOnly } from '@/backend/execution/flow/loadConversationState';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { configuredExecutionAdapter as adapter } from '@/integrations/hackathon-banking/configuredAdapter';
 import { authenticateBankingRequest, bankingAdmission } from '@/integrations/hackathon-banking/authority';
+import { registerBankingActiveRun } from '@/integrations/hackathon-banking/controllers';
 import { applyExecutionRunInput, bindExecutionExtensionRun, executionToolRequestMeta, registerExecutionExtension,
   withExecutionExtensionRoute } from '@/backend/execution/extensions';
 import { bankingFixture } from './bankingFixture';
@@ -21,7 +23,7 @@ describe('normal HTTP admission uses verified owners before private state access
   let restore: () => void;
   const states = new Map<string, unknown>();
   beforeEach(async () => {
-    jest.clearAllMocks(); states.clear();
+    jest.clearAllMocks(); states.clear(); FlowExecutor.conversationStates.clear();
     fixture = await bankingFixture();
     restore = registerExecutionExtension(adapter);
     jest.mocked(flowService.getFlow).mockResolvedValue(fixture.graph);
@@ -46,6 +48,93 @@ describe('normal HTTP admission uses verified owners before private state access
     expect(response.status).toBe(200);
     return (await response.json()).conversation_id as string;
   }
+  async function legacyOwner(subject = 'A') {
+    const principal = await authenticateBankingRequest(await fixture.request(subject));
+    const { store, identity } = bankingAdmission(principal);
+    const id = randomUUID();
+    await store.createConversation(id, identity);
+    const state = { conversationId: id, bankingOwned: true, status: 'completed',
+      flowId: fixture.graph.id, flowSnapshot: fixture.graph,
+      messages: [{ role: 'user', content: 'legacy inquiry' },
+        { role: 'assistant', content: 'legacy-owner:' + subject },
+        { role: 'tool', content: 'PRIVATE_LEGACY_TOOL' }, { role: 'system', content: 'PRIVATE_LEGACY_SYSTEM' }],
+      privateFixture: 'PRIVATE_LEGACY_STATE' };
+    states.set(id, state);
+    FlowExecutor.conversationStates.set(id, state as never);
+    return { id, principal, store, identity };
+  }
+
+  test.each([['', 'GET'], ['/events', 'GET'], ['/cancel', 'POST'], ['', 'DELETE']])(
+    'legacy bankingOwned owner record remains accessible through normal %s %s', async (suffix, method) => {
+      const { id, principal, store, identity } = await legacyOwner();
+      const controller = new AbortController();
+      const release = registerBankingActiveRun(principal, id, controller);
+      const rawRoute = jest.fn(task);
+      try {
+        const response = await withExecutionExtensionRoute(await fixture.request('A', undefined,
+          `/v1/chat/conversations/${id}${suffix}`, method), rawRoute);
+        expect(response.status).toBe(method === 'DELETE' ? 204 : 200);
+        expect(rawRoute).not.toHaveBeenCalled();
+        expect(response.headers.get('cache-control')).toContain('no-store');
+        if (method === 'DELETE') {
+          expect(controller.signal.aborted).toBe(true);
+          expect(FlowExecutor.conversationStates.has(id)).toBe(false);
+          expect(await store.isOwned(id)).toBe(true);
+          await expect(store.assertOwner(id, identity)).rejects.toThrow('conversation_unavailable');
+        } else if (suffix === '/cancel') {
+          expect(await response.json()).toEqual({ cancelled: true });
+          expect(controller.signal.aborted).toBe(true);
+        } else {
+          const text = await response.text();
+          expect(text).toContain('legacy-owner:A');
+          expect(text).not.toContain('PRIVATE_LEGACY');
+          if (suffix === '/events') expect(response.headers.get('content-type')).toBe('text/event-stream');
+          else expect(JSON.parse(text).messages).toEqual([
+            { role: 'user', content: 'legacy inquiry' }, { role: 'assistant', content: 'legacy-owner:A' },
+          ]);
+        }
+      } finally { release(); }
+    });
+
+  test.each([['', 'GET'], ['/events', 'GET'], ['/cancel', 'POST'], ['', 'DELETE']])(
+    'foreign legacy owner is denied on normal %s %s before state/control access', async (suffix, method) => {
+      const { id, principal } = await legacyOwner('B');
+      const controller = new AbortController();
+      const release = registerBankingActiveRun(principal, id, controller);
+      jest.mocked(loadConversationState).mockClear();
+      jest.mocked(loadConversationStateReadOnly).mockClear();
+      jest.mocked(flowService.getFlow).mockClear();
+      const rawRoute = jest.fn(task);
+      try {
+        const response = await withExecutionExtensionRoute(await fixture.request('A', undefined,
+          `/v1/chat/conversations/${id}${suffix}`, method), rawRoute);
+        expect(response.status).toBe(404);
+        expect(loadConversationState).not.toHaveBeenCalled();
+        expect(loadConversationStateReadOnly).not.toHaveBeenCalled();
+        expect(flowService.getFlow).not.toHaveBeenCalled();
+        expect(rawRoute).not.toHaveBeenCalled();
+        expect(controller.signal.aborted).toBe(false);
+        expect(FlowExecutor.conversationStates.has(id)).toBe(true);
+      } finally { release(); }
+    });
+
+  test('deleting a legacy-owned conversation prevents normal resumption before state and graph access', async () => {
+    const { id, store } = await legacyOwner();
+    expect((await withExecutionExtensionRoute(await fixture.request('A', undefined,
+      `/v1/chat/conversations/${id}`, 'DELETE'), jest.fn(task))).status).toBe(204);
+    expect(await store.isOwned(id)).toBe(true);
+    jest.mocked(loadConversationState).mockClear();
+    jest.mocked(loadConversationStateReadOnly).mockClear();
+    jest.mocked(flowService.getFlow).mockClear();
+    const run = jest.fn(task);
+    const response = await withExecutionExtensionRoute(await fixture.request('A', fixture.completion('resume',
+      { metadata: { conversationId: id } })), run);
+    expect(response.status).toBe(404);
+    expect(loadConversationState).not.toHaveBeenCalled();
+    expect(loadConversationStateReadOnly).not.toHaveBeenCalled();
+    expect(flowService.getFlow).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
 
   test('rejects foreign normal continuation before any graph/state/provider access', async () => {
     const id = await create('B');

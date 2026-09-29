@@ -62,7 +62,7 @@ describe('banking identity authority', () => {
       iat: now, nbf: now, exp: now + 120, session_exp: session.expires, jti: randomUUID(),
       session_id: session.id, scope: ['bank:read'], ...overrides })
       .setProtectedHeader({ alg: 'EdDSA', kid: 'front', typ: 'flujo-ingress+jwt' }).sign(key);
-    return new Request('http://127.0.0.1/v1/banking/chat', { method: 'POST', headers: {
+    return new Request('http://127.0.0.1/v1/chat/completions', { method: 'POST', headers: {
       Authorization: `Bearer ${policy.executionToken}`, 'X-Flujo-User-Assertion': token,
     } });
   }

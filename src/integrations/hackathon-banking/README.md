@@ -8,4 +8,6 @@ The MCP assertion remains the existing single-use `bank-mcp+jwt` profile. It is 
 
 Approved synthetic operator tests use ordinary FLUJO chat and Slack without this authenticated admission contract. They explicitly select an approved customer in the MCP's operator-test mode and supply conversation correlation, optionally through a nonsecret `@current.conversation.id` preset. Missing authentication never falls back to operator mode.
 
-Normal conversation GET, DELETE, events and cancellation receive authenticated owner checks and sanitized responses. Existing banking controllers remain compatibility code during migration; they do not replace the ordinary completion path. Native CLI execution remains denied unless an explicitly verified restricted profile is configured and the exact CLI attestation passes.
+Normal conversation GET, DELETE, events and cancellation receive authenticated owner checks and sanitized responses, including for previously owned banking transcripts. Execution and conversation controls use the ordinary `/v1/chat` routes. The specialized `/v1/banking/chat` and `/v1/banking/conversations` routes are retired and return 404; `POST /v1/banking/session/revoke` remains available. Existing ownership records and transcript data are preserved.
+
+Native CLI execution remains denied unless an explicitly verified restricted profile is configured and the exact CLI attestation passes.
