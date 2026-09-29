@@ -368,7 +368,7 @@ test('native SUCCESS can preserve an intentional handoff-only route', async () =
   });
   const result = await new AntigravityCliAdapter().createCompletion(input({ tools: [fnTool('handoff_to_next')] }));
   expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
-  expect(result.completion.choices[0].message.tool_calls![0].function.name).toBe('handoff_to_next');
+  expect(result.completion.choices[0].message.tool_calls![0]).toMatchObject({ type: 'function', function: { name: 'handoff_to_next' } });
   expect(result.completion.choices[0].message.content).toBeNull();
 });
 

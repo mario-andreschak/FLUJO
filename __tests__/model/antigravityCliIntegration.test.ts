@@ -266,7 +266,7 @@ describe('Antigravity pinned native executable integration', () => {
       expect(mockMcpCallTool).not.toHaveBeenCalled();
       expect(String(result.completion.choices[0].message.content).trim()).toBe(finalText);
       expect(result.completion.choices[0].finish_reason).toBe('tool_calls');
-      expect(result.completion.choices[0].message.tool_calls?.[0].function).toEqual({ name: 'handoff_to_finish', arguments: '{}' });
+      expect(result.completion.choices[0].message.tool_calls?.[0]).toMatchObject({ type: 'function', function: { name: 'handoff_to_finish', arguments: '{}' } });
       expect(result.completion.usage).toEqual({
         prompt_tokens: 36, completion_tokens: 15, total_tokens: 51,
         prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
