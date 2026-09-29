@@ -81,7 +81,7 @@ export interface PromptReferenceSuggestion extends PromptRef {
   /** Optional context shown under the label (description, URI, or server). */
   description?: string;
   /** Hitlist routing metadata (`@c`, `@f`, `@m`, `@a`, and `@@`). */
-  category?: 'conversation' | 'flow' | 'model' | 'mcpserver' | 'app' | 'file' | 'folder' | 'builtin';
+  category?: 'conversation' | 'flow' | 'node' | 'model' | 'mcpserver' | 'app' | 'file' | 'folder' | 'builtin';
   /** Additional fuzzy-search text, such as a conversation preview. */
   searchText?: string;
 }
@@ -90,12 +90,14 @@ export interface PromptReferenceSuggestion extends PromptRef {
 const RES_REF_SCAN = /\$\{res:([^}]+)\}/g;
 /** Matches `${global:NAME}` without accepting an empty name or nested closing brace. */
 const GLOBAL_REF_SCAN = /\$\{global:([^}]+)\}/g;
-const DYNAMIC_REF_SCAN = /@(conversation|flows|flow|node|model|app|time|date|folder|file)(?:\[([^\]\r\n]+)\])?(?:\.(id|name|created|updated))?(?![\w[])/g;
+const DYNAMIC_REF_SCAN = /@(?:current\.)?(conversation|flows|flow|node|model|app|time|date|folder|file)(?:\[([^\]\r\n]+)\])?(?:\.(id|name|created|updated))?(?![\w[]|\.[A-Za-z_])/g;
 
 /** Parse one complete dynamic `@` reference. `@flow` is accepted as an alias for `@flows`. */
 export function parseDynamicReference(full: string): DynamicReference | null {
-  const match = /^@(conversation|flows|flow|node|model|app|time|date|folder|file)(?:\[([^\]\r\n]+)\])?(?:\.(id|name|created|updated))?$/.exec(full);
+  const match = /^@(?:current\.)?(conversation|flows|flow|node|model|app|time|date|folder|file)(?:\[([^\]\r\n]+)\])?(?:\.(id|name|created|updated))?$/.exec(full);
   if (!match) return null;
+  // Current-context commands cannot select a different entity.
+  if (full.startsWith('@current.') && match[2]) return null;
   let target: string | undefined;
   if (match[2]) {
     try { target = decodeURIComponent(match[2]); } catch { target = match[2]; }
@@ -116,6 +118,11 @@ export function encodeDynamicReference(
 ): string {
   const suffix = field === 'id' ? '' : `.${field}`;
   return `@${kind}${target ? `[${encodeURIComponent(target)}]` : ''}${suffix}`;
+}
+
+/** Unambiguous current-context command; legacy aliases remain readable. */
+export function encodeCurrentReference(kind: DynamicReferenceKind, field: DynamicReferenceField = 'id'): string {
+  return `@current.${kind === 'flows' ? 'flow' : kind}.${field}`;
 }
 
 /**
@@ -165,6 +172,7 @@ export function findPromptRefs(text: string): PromptRefMatch[] {
     // overlapping Slate pill or an independently resolved dynamic reference.
     const preceding = text.slice(0, m.index);
     if (preceding.lastIndexOf('${') > preceding.lastIndexOf('}')) continue;
+    if (!parseDynamicReference(m[0])) continue;
     out.push({
       kind: 'mention',
       server: '',
@@ -221,6 +229,7 @@ export function promptRefLabel(ref: PromptRef): string {
   if (ref.kind === 'mention') {
     const parsed = parseDynamicReference(ref.name);
     if (!parsed) return ref.name;
+    if (!parsed.target) return ref.name;
     const target = parsed.target ? `:${parsed.target}` : '';
     const field = parsed.field === 'id' ? '' : `.${parsed.field}`;
     return `${parsed.kind}${target}${field}`;

@@ -23,7 +23,8 @@ RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
-RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
+ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
+RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime

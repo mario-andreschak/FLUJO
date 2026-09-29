@@ -1,4 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { isProtectedExecutionServer } from '@/backend/execution/extensions';
+import { assertExecutionServerConfig } from '@/backend/execution/extensions';
 import {
   StdioClientTransport,
   StdioServerParameters,
@@ -356,6 +358,13 @@ export function httpConfigKey(config: MCPServerConfig): string {
  */
 export function createNewClient(config: MCPServerConfig): Client {
   log.debug("Entering createNewClient method");
+  if (isProtectedExecutionServer(config.name)) {
+    assertExecutionServerConfig(config);
+    // The configured private integration accepts only synchronous tool calls.
+    const client = new Client({ name: `flujo-${config.name}-client`, version: '1.0.0' }, { capabilities: {} });
+    (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    return client;
+  }
 
   // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the server —
   // e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER capabilities and

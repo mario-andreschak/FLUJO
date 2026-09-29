@@ -7,6 +7,7 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { commitExecutionExtensionMutation, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { persistConversationState } from './persistConversationState';
 import type { StorageKey } from '@/shared/types/storage';
 import { isConversationDeleted } from './cancellation';
@@ -265,6 +266,8 @@ async function commitConversationWrite<T>(
   state: SharedState,
   task: () => Promise<T>,
 ): Promise<T> {
+  if (isExecutionProtectedState(state) && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
+  if (state.executionExtensionContext) return commitExecutionExtensionMutation(state.executionExtensionContext, task);
   if (state.personaAttribution && !state.executionAuthority) {
     throw new Error(
       'Persona-attributed transcript persistence requires current execution authority.',
@@ -329,7 +332,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
     // Persona-related input is acknowledged only after this append succeeds;
     // surface the failure so runFlow can requeue the stable message ids.
-    if (state.executionAuthority || state.personaAttribution) throw err;
+    if (state.executionExtensionContext || state.executionAuthority || state.personaAttribution) throw err;
   }
 }
 
@@ -779,6 +782,7 @@ export async function repairTruncatedConversationLog(
   state: SharedState,
 ): Promise<FlujoChatMessage[] | undefined> {
   if (state.ephemeral) return undefined;
+  if (isExecutionProtectedState(state) && !state.executionExtensionContext) return undefined;
   if (state.personaAttribution && !state.executionAuthority) {
     // A read/detail route must never rewrite a Persona-owned transcript. The
     // dispatcher may perform this repair only after reinstalling live authority.
