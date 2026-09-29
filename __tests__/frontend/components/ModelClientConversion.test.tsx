@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WORKSPACE_STORAGE_KEY } from '@/frontend/utils/workspaceSelection';
+import type { Model } from '@/shared/types';
 
 const mockRouter = {
   push: jest.fn(),
@@ -14,6 +15,7 @@ const mockAddModel = jest.fn();
 const mockGuidedResult = jest.fn();
 const mockNavigateWorkspaceRoute = jest.fn();
 const mockT = (key: string) => key;
+let mockGuidedCandidate: Model;
 
 jest.mock('next/navigation', () => ({
   useRouter: () => mockRouter,
@@ -95,10 +97,7 @@ jest.mock('@/frontend/components/models/modal', () => ({
 jest.mock('@/frontend/components/models/ModelConnectionWizard', () => ({
   __esModule: true,
   default: ({ onCreateModels }: { onCreateModels: (models: unknown[]) => Promise<unknown> }) => (
-    <button onClick={() => void onCreateModels([{
-      id: 'new-draft-id', name: 'source-model', displayName: 'Wizard name',
-      provider: 'openai', ApiKey: 'corrected-key', baseUrl: '', promptTemplate: '',
-    }]).then(mockGuidedResult)}>Save guided credentials</button>
+    <button onClick={() => void onCreateModels([mockGuidedCandidate]).then(mockGuidedResult)}>Save guided credentials</button>
   ),
 }));
 
@@ -152,6 +151,10 @@ describe('model-to-agent conversion navigation', () => {
     mockUpdateModel.mockReset().mockImplementation(async model => ({ success: true, model: { ...model, ApiKey: 'masked' } }));
     mockAddModel.mockReset();
     mockGuidedResult.mockReset();
+    mockGuidedCandidate = {
+      id: 'new-draft-id', name: 'source-model', displayName: 'Wizard name',
+      provider: 'openai', ApiKey: 'corrected-key', baseUrl: '', promptTemplate: '',
+    };
     mockLoadModels.mockReset().mockResolvedValue([{
       id: 'model-1',
       name: 'source-model',
@@ -210,6 +213,38 @@ describe('model-to-agent conversion navigation', () => {
     render(<ModelClient />);
     fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
     await waitFor(() => expect(mockGuidedResult).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Cannot save key' })));
+    expect(mockAddModel).not.toHaveBeenCalled();
+  });
+
+  it.each(['gemini-cli', undefined] as const)('applies Gemini local-login selection to an existing API-key model with adapter %s', async adapter => {
+    const existing: Model = {
+      id: 'existing-cli', name: 'flash', displayName: 'Custom Gemini',
+      provider: 'gemini-cli', adapter, ApiKey: 'masked-key', baseUrl: '',
+      promptTemplate: 'Keep this prompt', maxTurns: 7,
+    };
+    mockLoadModels.mockResolvedValue([existing]);
+    mockGuidedCandidate = { ...existing, id: 'new-guided', adapter: 'gemini-cli', ApiKey: '' };
+    render(<ModelClient />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
+    await waitFor(() => expect(mockGuidedResult).toHaveBeenCalled());
+    expect(mockUpdateModel).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'existing-cli', ApiKey: '', displayName: 'Custom Gemini',
+      promptTemplate: 'Keep this prompt', maxTurns: 7,
+    }));
+    expect(mockAddModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps repeated Gemini local-login setup idempotent when no key is saved', async () => {
+    const existing: Model = {
+      id: 'existing-cli', name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli',
+      ApiKey: '', baseUrl: '', promptTemplate: '',
+    };
+    mockLoadModels.mockResolvedValue([existing]);
+    mockGuidedCandidate = { ...existing, id: 'new-guided' };
+    render(<ModelClient />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save guided credentials' }));
+    await waitFor(() => expect(mockGuidedResult).toHaveBeenCalled());
+    expect(mockUpdateModel).not.toHaveBeenCalled();
     expect(mockAddModel).not.toHaveBeenCalled();
   });
 });

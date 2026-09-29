@@ -6,6 +6,8 @@ Choose the provider profile that implements your endpoint; it determines the ada
 
 Generation controls such as temperature and output limits must be supported by the selected adapter/model. Start from the provider defaults and change one setting at a time. A larger context or output limit can increase latency and cost.
 
+For **Gemini CLI**, the CLI manages its generation settings; FLUJO does not forward temperature or output-token controls. Supported Code Assist Standard/Enterprise Google login can use an empty API key; personal consumer subscriptions no longer provide Gemini CLI access. The separate Gemini native API profile requires a key. See [Gemini CLI setup](connecting.md#gemini-cli) for authentication and host requirements.
+
 After changing an endpoint, credential, or model name, use **Test model** on the saved model card. Then open dependent agents and confirm their model binding still exists. Replacing or deleting a model can leave an existing step unable to run.
 
 See [connecting a model](connecting.md) and [running agents](../flows/running-flows.md).

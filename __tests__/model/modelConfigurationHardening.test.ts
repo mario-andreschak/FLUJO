@@ -10,6 +10,17 @@ import {
  * hold on the persistence and execution paths.
  */
 describe('generation settings validation (#329)', () => {
+  it('rejects native generation settings on Gemini CLI connections', () => {
+    const model = { provider: 'gemini-cli' as const, adapter: 'gemini-cli' as const, name: 'auto' };
+    expect(validateModelConfiguration(model)).toBeUndefined();
+    for (const setting of [
+      { temperature: '0.5' }, { reasoningEffort: 'high' },
+      { thinkingLevel: 'high' }, { thinkingBudget: 1024 }, { serviceTier: 'priority' },
+    ]) {
+      expect(validateModelConfiguration({ ...model, ...setting })).toBeDefined();
+    }
+    expect(normalizeModelTemperature('0.5', 'gemini-cli', 'gemini-cli', 'auto')).toBeUndefined();
+  });
   it('accepts creativity inside the provider range and rejects it outside', () => {
     expect(validateModelConfiguration({
       provider: 'openrouter', adapter: 'openai', name: 'vendor/model', temperature: '1.4',

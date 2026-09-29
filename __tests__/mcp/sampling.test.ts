@@ -67,6 +67,31 @@ describe('samplingEnabled / samplingConfigKey', () => {
 });
 
 describe('sampling handler', () => {
+  it.each(['gemini-cli', undefined])('uses local authentication for Gemini CLI with adapter %s', async adapter => {
+    getModelMock.mockResolvedValue({ name: 'flash', provider: 'gemini-cli', adapter, ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+    const result = await handler({ params: { messages: [{ role: 'user', content: { type: 'text', text: 'Hello' } }] } });
+    expect(result.content).toEqual({ type: 'text', text: 'Hi there' });
+    expect(createCompletionMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
+  });
+
+  it('rejects a failed Gemini CLI key binding instead of selecting the local account', async () => {
+    getModelMock.mockResolvedValue({ name: 'flash', provider: 'gemini-cli', adapter: 'gemini-cli', ApiKey: '${env:MISSING_KEY}' });
+    resolveKeyMock.mockResolvedValue(null);
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+    await expect(handler(sampleRequest)).rejects.toThrow('Could not resolve the sampling model API key');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('still requires an API key for native Gemini sampling', async () => {
+    getModelMock.mockResolvedValue({ name: 'gemini-2.5-flash', provider: 'gemini', adapter: 'gemini', ApiKey: '' });
+    resolveKeyMock.mockResolvedValue(null);
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+    await expect(handler(sampleRequest)).rejects.toThrow('Could not resolve the sampling model API key');
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('converts the request, routes through the adapter, and returns a CreateMessageResult', async () => {
     const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
     const result = await handler(sampleRequest);

@@ -120,6 +120,56 @@ describe('ModelConnectionWizard', () => {
     });
   });
 
+  it('requires an eligible Google login confirmation and creates keyless Gemini CLI models', async () => {
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
+
+    expect(await screen.findByText('npm install -g @google/gemini-cli@0.61.0')).toBeInTheDocument();
+    expect(screen.getByText('gemini', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/choose Sign in with Google/)).toBeInTheDocument();
+    expect(screen.getByText(/Personal Google accounts no longer have Gemini CLI access/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Google account eligibility and consumer deprecation' })).toHaveAttribute('href', 'https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals');
+    expect(screen.queryByRole('button', { name: 'Install with WinGet' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Gemini API key')).toHaveValue('');
+
+    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    expect(props.onCreateModels).not.toHaveBeenCalled();
+    expect(screen.getByText(/Enter a Gemini API key, or confirm Google sign-in/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /completed Google sign-in with an eligible Code Assist/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+    const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
+    expect(models.map(model => model.name)).toEqual(['auto', 'pro', 'flash', 'flash-lite']);
+    expect(models.every(model => model.provider === 'gemini-cli' && model.adapter === 'gemini-cli' && model.ApiKey === '')).toBe(true);
+  });
+
+  it('creates Gemini CLI API-key models without requiring a Google login confirmation', async () => {
+    const props = renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /i can pay/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
+    fireEvent.change(screen.getByLabelText('Gemini API key'), { target: { value: '  gemini-api-test  ' } });
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /create my 4 models/i }));
+    await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+    const models = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
+    expect(models.every(model => model.ApiKey === 'gemini-api-test' && model.adapter === 'gemini-cli')).toBe(true);
+  });
+
+  it('does not reuse a Codex login confirmation for Gemini CLI', () => {
+    renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /I already subscribe/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'ChatGPT / Codex' }).closest('button')!);
+    fireEvent.click(screen.getByRole('checkbox', { name: /completed the Codex browser sign-in/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Back$/ }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Gemini CLI' }).closest('button')!);
+    expect(screen.getByRole('checkbox', { name: /completed Google sign-in with an eligible Code Assist/i })).not.toBeChecked();
+  });
+
   it.each([
     ['win32', 'git', true, 'Windows'],
     ['darwin', 'npm', false, 'macOS'],

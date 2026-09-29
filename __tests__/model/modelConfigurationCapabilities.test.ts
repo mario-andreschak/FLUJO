@@ -1,6 +1,14 @@
 import { getModelConfigurationCapabilities } from '@/shared/types/model/provider';
 
 describe('provider-aware model configuration capabilities (#329)', () => {
+  it('hides generation settings that Gemini CLI does not expose', () => {
+    for (const name of ['auto', 'pro', 'flash', 'flash-lite', 'gemini-2.5-pro']) {
+      expect(getModelConfigurationCapabilities('gemini-cli', 'gemini-cli', name))
+        .toEqual({ maxOutputTokens: false });
+    }
+    expect(getModelConfigurationCapabilities('gemini-cli', undefined, 'auto'))
+      .toEqual({ maxOutputTokens: false });
+  });
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {
     expect(getModelConfigurationCapabilities('codex', 'codex-cli', 'gpt-6-astra')).toEqual({
       effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],

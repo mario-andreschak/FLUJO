@@ -36,6 +36,7 @@ import {
   getProviderProfile,
   resolveModelAdapter,
   supportsProviderModelDiscovery,
+  supportsLocalModelAuth,
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
@@ -342,7 +343,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         // Otherwise, mask the existing API key
         setFormState(prev => ({
           ...prev,
-          ApiKey: !model.name ? '' : MASKED_API_KEY
+          ApiKey: !model.name || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim())
+            ? '' : MASKED_API_KEY
         }));
       }
     } else {
@@ -389,13 +391,28 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const handleSelectProfile = (profileId: string) => {
     const profile = PROVIDER_PROFILES.find(p => p.id === profileId);
     if (!profile) return;
-    setFormState(prev => ({
-      ...prev,
-      provider: profile.provider,
-      adapter: profile.adapter,
-      baseUrl: profile.baseUrl,
-      azureApiVersion: profile.defaultApiVersion ?? '',
-    }));
+    setFormState(prev => {
+      const previousAdapter = resolveModelAdapter(prev.provider, prev.adapter);
+      const leavesGeminiCli = previousAdapter === 'gemini-cli' && profile.adapter !== 'gemini-cli';
+      return {
+        ...prev,
+        provider: profile.provider,
+        adapter: profile.adapter,
+        baseUrl: profile.baseUrl,
+        azureApiVersion: profile.defaultApiVersion ?? '',
+        ...(leavesGeminiCli ? {
+          // Remove only the restrictions imposed by the CLI profile. Other
+          // provider changes retain discovered or explicitly saved metadata.
+          inputModalities: prev.inputModalities?.length === 1 && prev.inputModalities[0] === 'text'
+            ? undefined : prev.inputModalities,
+          visionInputCapability: prev.visionInputCapability === 'unsupported'
+            ? undefined : prev.visionInputCapability,
+        } : {}),
+        ...(profile.adapter === 'gemini-cli'
+          ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const, supportsTools: true }
+          : {}),
+      };
+    });
     setErrors(prev => ({ ...prev, baseUrl: '' }));
   };
 
@@ -465,8 +482,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         });
       }
     }
-    // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
-    if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
+    // Local-auth CLI profiles can use the login on the host running FLUJO.
+    if (!isApiKeyBound && !formState.ApiKey?.trim() && !supportsLocalModelAuth(currentProfile.adapter)) {
       newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
@@ -643,7 +660,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     ? ` ${t('models.modal.claudeAuthHelp')}`
                     : currentProfile.adapter === 'codex-cli'
                       ? ` ${t('models.modal.codexAuthHelp')}`
-                      : ''}
+                      : currentProfile.adapter === 'gemini-cli'
+                        ? ` ${t('models.modal.geminiCliAuthHelp')}`
+                        : ''}
                 </Typography>
 
                 {currentProfile.showBaseUrl && (
@@ -686,14 +705,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     margin="dense"
                     label={t('models.modal.apiKey')}
                     fullWidth
-                    required={!isApiKeyBound && currentProfile.adapter !== 'codex-cli'}
+                    required={!isApiKeyBound && !supportsLocalModelAuth(currentProfile.adapter)}
                     type={isApiKeyBound ? "text" : "password"}
                     value={formState.ApiKey || ''}
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
                     error={!!errors.ApiKey}
                     helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
                       ? t('models.modal.apiKeyOptionalCodex')
-                      : t('models.modal.apiKeyRequiredProvider'))}
+                      : currentProfile.adapter === 'gemini-cli'
+                        ? t('models.modal.apiKeyOptionalGeminiCli')
+                        : t('models.modal.apiKeyRequiredProvider'))}
                     InputProps={{
                       readOnly: isApiKeyBound,
                       endAdornment: (

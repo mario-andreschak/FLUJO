@@ -25,6 +25,12 @@ it('reports old SDK records and explicitly unavailable snapshots as unknown', as
   expect(await buildContextInfo(state({ contextUsage: null }))).not.toHaveProperty('promptTokens');
 });
 
+it('does not reinterpret aggregate Gemini CLI usage as current context', async () => {
+  getModel.mockResolvedValue({ adapter: 'gemini-cli', provider: 'gemini-cli', name: 'Gemini CLI', contextWindow: 1000000 });
+  expect(await buildContextInfo(state({}))).toEqual({ nodeId: 'node', modelDisplayName: 'Gemini CLI' });
+  expect(await buildContextInfo(state({ contextUsage: null }))).not.toHaveProperty('promptTokens');
+});
+
 it('does not replace an unknown runtime limit with the configured 1M', async () => {
   const { contextWindow: _window, ...snapshot } = contextUsage;
   expect(await buildContextInfo(state({ contextUsage: snapshot }))).not.toHaveProperty('contextWindow');

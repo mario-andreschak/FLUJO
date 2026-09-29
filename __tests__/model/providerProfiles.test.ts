@@ -5,6 +5,8 @@ import {
   getProviderProfileById,
   supportsProviderModelDiscovery,
   resolveModelAdapter,
+  isSelfOrchestratingAdapter,
+  supportsLocalModelAuth,
 } from '@/shared/types/model/provider';
 
 describe('provider profiles', () => {
@@ -24,6 +26,7 @@ describe('provider profiles', () => {
       'anthropic-native',
       'claude-subscription',
       'codex',
+      'gemini-cli',
       'openai',
     ]);
     // Mistral must not be selectable in the modal.
@@ -37,6 +40,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('anthropic', 'openai').id).toBe('anthropic-openai');
     expect(getProviderProfile('claude-subscription', 'claude-cli').id).toBe('claude-subscription');
     expect(getProviderProfile('codex', 'codex-cli').id).toBe('codex');
+    expect(getProviderProfile('gemini-cli', 'gemini-cli').id).toBe('gemini-cli');
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
     expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
@@ -129,5 +133,24 @@ describe('provider profiles', () => {
       'gpt-5.4',
       'gpt-5.4-mini',
     ]);
+  });
+
+  it('keeps Gemini CLI local authentication separate from native Gemini', () => {
+    expect(getProviderProfileById('gemini-cli')).toMatchObject({
+      provider: 'gemini-cli', adapter: 'gemini-cli', sdkLabel: 'Gemini CLI',
+      baseUrl: '', showBaseUrl: false, supportsModelDiscovery: false,
+      defaultModels: ['auto', 'pro', 'flash', 'flash-lite'],
+    });
+    expect(resolveModelAdapter('gemini-cli')).toBe('gemini-cli');
+    expect(getProviderProfile('gemini-cli').id).toBe('gemini-cli');
+    expect(supportsProviderModelDiscovery(getProviderProfileById('gemini-cli')!, '')).toBe(false);
+    for (const adapter of ['codex-cli', 'gemini-cli']) {
+      expect(supportsLocalModelAuth(adapter)).toBe(true);
+      expect(isSelfOrchestratingAdapter(adapter)).toBe(true);
+    }
+    for (const adapter of [undefined, 'gemini', 'openai', 'claude-cli']) {
+      expect(supportsLocalModelAuth(adapter)).toBe(false);
+    }
+    expect(isSelfOrchestratingAdapter('gemini')).toBe(false);
   });
 });

@@ -49,7 +49,7 @@ import {
   type CompactionProjectionIdentity,
 } from '../compaction/types';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import { normalizeModelTemperature } from '@/shared/types/model/provider';
+import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
   refitCodexMessagesForInputLimit,
@@ -529,7 +529,7 @@ export class ModelHandler {
     conversationId: string | undefined,
     nodeId: string | undefined,
     projectionView: CompactionProjectionIdentity['view'],
-    model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
+    model: { id: string; adapter?: ModelAdapter; provider?: ModelProvider; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
@@ -546,7 +546,7 @@ export class ModelHandler {
         const message = source[i];
         const promptTokens = message.contextUsage !== undefined
           ? message.contextUsage?.promptTokens
-          : model.adapter === 'codex-cli' || model.adapter === 'claude-cli'
+          : isSelfOrchestratingAdapter(resolveModelAdapter(model.provider, model.adapter))
             ? undefined
             : message.usage?.promptTokens;
         if (typeof promptTokens === 'number' && promptTokens > 0) {
@@ -1137,7 +1137,7 @@ export class ModelHandler {
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
-    let modelAdapter: string | undefined;
+    let modelAdapter: ModelAdapter | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
     const nodeDisplayName = nodeName;
@@ -1148,7 +1148,7 @@ export class ModelHandler {
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
-        modelAdapter = model.adapter;
+        modelAdapter = resolveModelAdapter(model.provider, model.adapter);
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
       }
@@ -1313,7 +1313,7 @@ export class ModelHandler {
     // then acknowledge acceptance or return it to the inbox on rejection.
     const steeringWorkspace = getCurrentWorkspace();
     const steering: ModelSteering | undefined = conversationId &&
-      (modelAdapter === 'claude-cli' || modelAdapter === 'codex-cli')
+      isSelfOrchestratingAdapter(modelAdapter)
       ? {
         take: () => runWithWorkspace(steeringWorkspace, async () => {
           await assertFlowExecutionCurrent(durableContext);
@@ -1980,12 +1980,11 @@ export class ModelHandler {
         model.name,
       ) ?? (configuredTemperature === undefined || configuredTemperature === '' ? 0.0 : undefined);
 
-      // Resolve and decrypt the API key. Codex may run keyless: an empty key
-      // means "use the machine's ChatGPT plan login from `codex login`" (the
-      // adapter then omits the apiKey and the CLI falls back to its own auth).
+      // Resolve and decrypt the API key. Local-auth adapters accept an empty
+      // key to use the host CLI's supported login; each adapter owns that auth.
       const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+        resolvedKey || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim() ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -2018,10 +2017,13 @@ export class ModelHandler {
         );
         return media === message.media ? message : { ...message, media };
       }));
-      let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
-        toApiMessages(messagesWithMaterializedMedia),
-        model.inputModalities,
-      );
+      const projectedMessages = toApiMessages(messagesWithMaterializedMedia);
+      // Gemini CLI rejects unsupported attachments explicitly in its preflight.
+      // Filtering them here would turn an image request into text before that
+      // check and allow a response from a model that never received the image.
+      let apiMessages: OpenAI.ChatCompletionMessageParam[] = resolveModelAdapter(model.provider, model.adapter) === 'gemini-cli'
+        ? projectedMessages
+        : filterUnsupportedMediaInputs(projectedMessages, model.inputModalities);
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
       const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
       let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
@@ -2982,7 +2984,7 @@ export class ModelHandler {
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
-          if (model.adapter === 'codex-cli') return attemptResult;
+          if (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter))) return attemptResult;
           if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
             log.warn('Automatic session-limit retries exhausted; returning the provider error', {
               modelId,

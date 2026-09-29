@@ -86,6 +86,7 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@google/gemini-cli": "0.61.0",
     "@google/genai": "^2.15.0",
     "@isomorphic-git/lightning-fs": "^4.7.0",
     "@mario.andreschak/mcp-bash": "3.46.1",

@@ -42,3 +42,14 @@ it('labels an unavailable tool test as skipped and explains why', () => {
   expect(screen.getByText('Skipped')).toBeInTheDocument();
   expect(screen.getByText('Dedicated media model; tool test unavailable.')).toBeInTheDocument();
 });
+
+it('identifies the Gemini CLI transport used by saved connections', () => {
+  showResult({
+    ...baseResult, provider: 'gemini-cli',
+    adapterRoute: { adapterId: 'gemini-cli', endpoint: 'local CLI', reason: 'Official Gemini CLI' },
+    axios: { ok: false, skipped: true, durationMs: 0, content: 'CLI transport.' },
+  });
+  expect(screen.getByText('Gemini CLI (used by flows)')).toBeInTheDocument();
+  expect(screen.getByText('Endpoint: local CLI')).toBeInTheDocument();
+  expect(screen.queryByText('OpenAI SDK')).not.toBeInTheDocument();
+});

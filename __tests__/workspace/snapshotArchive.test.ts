@@ -104,6 +104,30 @@ describe('portable workspace capture', () => {
     expect(captured.manifest.files.find(file => file.path.endsWith('/auth.json'))?.mode).toBe(0o600);
   });
 
+  it('keeps Gemini model configurations portable without exporting Google login or CLI sessions', async () => {
+    const model = '[{"id":"gemini","provider":"gemini-cli","adapter":"gemini-cli","name":"gemini-3-flash-preview","ApiKey":""}]';
+    const authPath = 'db/gemini-cli-runtime/invocation-one/.gemini/oauth_creds.json';
+    const credentials = '{"access_token":"private-google-access","refresh_token":"private-google-refresh"}';
+    await put('db/models.json', model);
+    await put(authPath, credentials);
+    await put('db/gemini-cli-runtime/invocation-one/.gemini/settings.json', '{"private":"host-settings"}');
+    await put('db/gemini-cli-runtime/invocation-one/.gemini/tmp/session/chat.json', '{"private":"cli-transcript"}');
+    await put('db/gemini-cli-runtime-metadata.json', '{"description":"ordinary workspace record"}');
+
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const archive = await writeWorkspaceSnapshotArchive(captured);
+    try {
+      const unpacked = await JSZip.loadAsync(await fs.readFile(archive.archivePath));
+      expect(await unpacked.file('db/models.json')!.async('string')).toBe(model);
+      expect(unpacked.file('db/gemini-cli-runtime-metadata.json')).not.toBeNull();
+      expect(Object.keys(unpacked.files).some(name => name.startsWith('db/gemini-cli-runtime/'))).toBe(false);
+      expect(captured.manifest.files.some(file => file.path.startsWith('db/gemini-cli-runtime/'))).toBe(false);
+      expect(await fs.readFile(path.join(workspace, authPath), 'utf8')).toBe(credentials);
+    } finally {
+      await fs.rm(archive.stagingDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails before producing a clone when subscription credentials are unavailable', async () => {
     await put('db/models.json', '[{"provider":"codex"}]');
     await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });

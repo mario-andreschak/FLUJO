@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Model } from '@/shared/types';
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
+  GEMINI_CLI_MODELS,
   GEMINI_NATIVE_GUIDED_MODELS,
 } from '@/shared/types/model/provider';
 
@@ -14,6 +15,7 @@ export type GuidedConnectionKind =
   | 'azure'
   | 'claude-subscription'
   | 'codex-subscription'
+  | 'gemini-cli'
   | 'gemini-native'
   | 'ollama';
 
@@ -221,6 +223,14 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, Model
     adapter: 'gemini' as const,
     supportsTools: true,
   })),
+  'gemini-cli': GEMINI_CLI_MODELS.map((name) => ({
+    name,
+    displayName: `Gemini CLI ${name === 'auto' ? 'Auto' : name === 'pro' ? 'Pro' : name === 'flash' ? 'Flash' : 'Flash-Lite'}`,
+    description: 'Uses the official Gemini CLI with a Gemini API key or an eligible Code Assist Standard or Enterprise account on this host.',
+    provider: 'gemini-cli' as const,
+    adapter: 'gemini-cli' as const,
+    supportsTools: true,
+  })),
 };
 
 /** Build the concrete FLUJO model records produced by a completed wizard path. */
@@ -263,6 +273,9 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
     baseUrl: template.baseUrl || '',
     provider: template.provider,
     adapter: template.adapter,
+    ...(input.kind === 'gemini-cli'
+      ? { inputModalities: ['text'], visionInputCapability: 'unsupported' as const }
+      : {}),
     ...(input.kind === 'azure'
       ? { azureApiVersion: input.azureApiVersion?.trim() || AZURE_OPENAI_DEFAULT_API_VERSION }
       : {}),

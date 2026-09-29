@@ -13,7 +13,8 @@ export type ModelProvider =
   | 'ollama'
   | 'litellm'
   | 'claude-subscription'
-  | 'codex';
+  | 'codex'
+  | 'gemini-cli';
 
 /** Stable Azure OpenAI data-plane API version used for new connections. */
 export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
@@ -39,6 +40,8 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
  *                   Claude Pro/Max subscription (OAuth token in the API Key field).
  * - 'codex-cli'  -> CodexAdapter, drives the `codex` CLI through the Codex SDK
  *                   against a ChatGPT plan (`codex login`) or an OpenAI API key.
+ * - 'gemini-cli' -> GeminiCliAdapter, drives the official Gemini CLI with its
+ *                   local Google sign-in or a Gemini API key.
  */
 export type ModelAdapter =
   | 'openai'
@@ -47,10 +50,17 @@ export type ModelAdapter =
   | 'gemini'
   | 'anthropic'
   | 'claude-cli'
-  | 'codex-cli';
+  | 'codex-cli'
+  | 'gemini-cli';
+
+/** CLI adapters that can use a host login when no API key was configured. */
+export function supportsLocalModelAuth(adapter?: string): boolean {
+  return adapter === 'codex-cli' || adapter === 'gemini-cli';
+}
 
 /** Gateways use Responses, including connections saved before that became their default. */
 export function resolveModelAdapter(provider?: ModelProvider, adapter?: ModelAdapter): ModelAdapter {
+  if (provider === 'gemini-cli' && !adapter) return 'gemini-cli';
   if ((provider === 'requesty' || provider === 'openrouter') && (!adapter || adapter === 'openai')) {
     return 'openai-responses';
   }
@@ -196,9 +206,15 @@ export function getModelConfigurationCapabilities(
   adapter?: ModelAdapter,
   modelName = ''
 ): ModelConfigurationCapabilities {
-  const resolvedAdapter = adapter || 'openai';
+  const resolvedAdapter = resolveModelAdapter(provider, adapter);
   const resolvedProvider = provider || 'openai';
   const name = modelName.trim();
+
+  if (resolvedAdapter === 'gemini-cli') {
+    // The CLI manages generation internally; these controls have no supported
+    // mapping on its headless invocation contract.
+    return { maxOutputTokens: false };
+  }
 
   if (resolvedAdapter === 'codex-cli') {
     const effortLevels: ModelReasoningEffort[] =
@@ -267,13 +283,13 @@ export function getModelConfigurationCapabilities(
 
 /**
  * Adapters that run their OWN agentic tool loop inside a single
- * `createCompletion` call (Claude subscription / Codex), instead of the
+ * `createCompletion` call (Claude subscription / Codex / Gemini CLI), instead of the
  * request/response contract where FLUJO drives the loop. These adapters flatten
  * the wire themselves, manage their own truncation markers, and return a
  * `transcript` — so ModelHandler skips its wire-side compaction/refit for them.
  */
 export function isSelfOrchestratingAdapter(adapter?: string): boolean {
-  return adapter === 'claude-cli' || adapter === 'codex-cli';
+  return adapter === 'claude-cli' || supportsLocalModelAuth(adapter);
 }
 
 /**
@@ -336,6 +352,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
   codex: {
     label: 'Codex (OpenAI)',
     baseUrl: ''
+  },
+  'gemini-cli': {
+    label: 'Gemini CLI (Google)',
+    baseUrl: ''
   }
 };
 
@@ -373,6 +393,9 @@ export const GEMINI_NATIVE_GUIDED_MODELS = [
   'gemini-3.8-flash',
   'gemini-2.5-pro',
 ] as const;
+
+/** Official CLI aliases resolve to the models available to the signed-in account. */
+export const GEMINI_CLI_MODELS = ['auto', 'pro', 'flash', 'flash-lite'] as const;
 
 /**
  * A selectable entry in the model modal's "Provider" dropdown.
@@ -576,6 +599,17 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
       'gpt-5.4',
       'gpt-5.4-mini',
     ],
+  },
+  {
+    id: 'gemini-cli',
+    label: 'Gemini CLI (Google)',
+    provider: 'gemini-cli',
+    adapter: 'gemini-cli',
+    sdkLabel: 'Gemini CLI',
+    baseUrl: '',
+    showBaseUrl: false,
+    supportsModelDiscovery: false,
+    defaultModels: [...GEMINI_CLI_MODELS],
   },
   {
     id: 'openai',

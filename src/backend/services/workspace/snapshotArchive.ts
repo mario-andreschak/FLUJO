@@ -215,7 +215,7 @@ export async function captureWorkspaceSnapshot(
   await addWorkspaceMetadata(zip, root, recordFile, maxFileBytes, signal);
 
   const excludedRuntimePaths = [
-    'mcp-servers', 'db/codex-runtime', 'userdata/mcp-runtime',
+    'mcp-servers', 'db/codex-runtime', 'db/gemini-cli-runtime', 'userdata/mcp-runtime',
     'browser-profile', 'bash-utils', 'db/worker-bootstrap-secrets.json',
   ];
   const skipRuntimePath = (entryPath: string): boolean =>

@@ -2,6 +2,7 @@ import { buildGuidedModels } from '@/frontend/components/models/connectionWizard
 import {
   GEMINI_NATIVE_FALLBACK_MODELS,
   GEMINI_NATIVE_GUIDED_MODELS,
+  GEMINI_CLI_MODELS,
 } from '@/shared/types/model/provider';
 
 describe('guided model bundles', () => {
@@ -44,6 +45,17 @@ describe('guided model bundles', () => {
       model.ApiKey === 'gemini-key'
     )).toBe(true);
     expect(models.map(model => model.name)).toContain('gemini-3.8-flash');
+  });
+
+  it('creates separate keyless Gemini CLI aliases without native generation controls', () => {
+    const models = buildGuidedModels({ kind: 'gemini-cli' });
+    expect(models.map(model => model.name)).toEqual([...GEMINI_CLI_MODELS]);
+    expect(models.every(model => model.provider === 'gemini-cli' && model.adapter === 'gemini-cli')).toBe(true);
+    expect(models.every(model => model.ApiKey === '' && model.baseUrl === '')).toBe(true);
+    expect(models.every(model => model.temperature === undefined && model.reasoningEffort === undefined)).toBe(true);
+    expect(models.every(model => model.visionInputCapability === 'unsupported')).toBe(true);
+    for (const model of models) expect(model.inputModalities).toEqual(['text']);
+    expect(new Set(models.map(model => model.id)).size).toBe(models.length);
   });
 
   it('normalizes an Ollama server root to its OpenAI-compatible endpoint', () => {
