@@ -11,6 +11,7 @@ import {
 } from './recoveryCheckpoint';
 import { coalesceLoad, noteRead, noteWrite } from './conversationStateCache';
 import { validateCompactionState } from './compaction/state';
+import { assertExecutionConversationAccess, assertExecutionStateAccess, isExecutionProtectedState } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
 
@@ -23,6 +24,7 @@ const log = createLogger('backend/execution/flow/loadConversationState');
 export async function loadConversationStateReadOnly(
   conversationId: string,
 ): Promise<Readonly<SharedState> | undefined> {
+  await assertExecutionConversationAccess(conversationId);
   try {
     assertSafeCollectionId(conversationId);
   } catch {
@@ -32,6 +34,7 @@ export async function loadConversationStateReadOnly(
 
   const live = FlowExecutor.conversationStates.get(conversationId);
   if (live) {
+    await assertExecutionStateAccess(live, conversationId);
     log.debug('Read state from memory without cache mutation', { conversationId });
     return live;
   }
@@ -39,6 +42,7 @@ export async function loadConversationStateReadOnly(
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
     const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
+    await assertExecutionStateAccess(state, conversationId);
     return state || undefined;
   } catch (error) {
     log.warn('Error reading conversation state without recovery', { conversationId, error });
@@ -63,6 +67,7 @@ export async function loadConversationStateReadOnly(
  * and re-persist the same dangling-tool repair.
  */
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
+  await assertExecutionConversationAccess(conversationId);
   // Path-traversal guard (issue #126): the conversationId becomes a filesystem
   // path via getFilePath(). Reject unsafe ids as "not found" to preserve the
   // existing undefined-on-failure contract for callers.
@@ -73,6 +78,7 @@ export async function loadConversationState(conversationId: string): Promise<Sha
     return undefined;
   }
   if (FlowExecutor.conversationStates.has(conversationId)) {
+    await assertExecutionStateAccess(FlowExecutor.conversationStates.get(conversationId), conversationId);
     log.debug('Loaded state from memory', { conversationId });
     noteRead(conversationId, true);
     return FlowExecutor.conversationStates.get(conversationId);
@@ -90,6 +96,7 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
     const state = await loadItemBackend<SharedState | undefined>(storageKey, undefined);
+    await assertExecutionStateAccess(state, conversationId);
     if (state) {
       log.debug('Loaded state from storage', { conversationId });
       // Persona snapshots deliberately omit their runtime capability. A read or
@@ -98,7 +105,7 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
       // replacement snapshot without first reacquiring the owning Activity.
       // The Persona dispatcher installs authority before runFlow performs these
       // recovery steps.
-      if (state.personaAttribution && !state.executionAuthority) {
+      if ((state.personaAttribution && !state.executionAuthority) || (isExecutionProtectedState(state) && !state.executionExtensionContext)) {
         FlowExecutor.conversationStates.set(conversationId, state);
         noteWrite(conversationId, state);
         return state;

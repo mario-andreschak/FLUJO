@@ -44,6 +44,7 @@ describe('tool parameter presets', () => {
     expect(coercePresetEditorValue('{"owner":"@model.name"}', { type: 'object' }))
       .toEqual({ owner: '@model.name' });
     expect(coercePresetEditorValue('@conversation.name', { type: 'string' })).toBe('@conversation.name');
+    expect(coercePresetEditorValue('@current.model.id', { type: 'boolean' })).toBe('@current.model.id');
     expect(coercePresetEditorValue('${global:LIMIT}', { type: 'integer' })).toBe('${global:LIMIT}');
     expect(presetEditorValue({ deep: true })).toBe('{"deep":true}');
   });

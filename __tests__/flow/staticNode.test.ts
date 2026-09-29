@@ -23,7 +23,17 @@ jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
 }));
 
 jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { callTool: jest.fn(), setNodeRoots: jest.fn() },
+  mcpService: { callTool: jest.fn(), setNodeRoots: jest.fn(), loadServerConfigs: jest.fn(async () => []) },
+}));
+
+jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn(async () => null) } }));
+jest.mock('@/backend/services/model', () => ({ modelService: { getModel: jest.fn(async () => null) } }));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: jest.fn(async () => ({ title: 'A "quoted" title' })),
+}));
+jest.mock('@/backend/utils/resolveGlobalVars', () => ({
+  resolveGlobalVars: jest.fn(async (value: unknown) => value),
+  resolveNonSecretGlobalVars: jest.fn(async (value: unknown) => value),
 }));
 
 function makeState(overrides: Partial<SharedState> = {}): SharedState {
@@ -144,6 +154,64 @@ describe('StaticNode', () => {
       [(state.messages[0] as any).tool_calls[0].id]: { serverName: 'files', toolName: 'read_file' },
     });
     expect(state.messages[1].content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'live result' }] }));
+  });
+
+  it('resolves @ references in authored messages and nested tool JSON without breaking quoting', async () => {
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, params({ entries: [
+      { kind: 'message', role: 'user', content: 'Current chat: @conversation.id' },
+      { kind: 'toolCall', toolName: 'lookup', argumentsJson: '{"nested":{"id":"@conversation.id","title":"@conversation.name"}}', result: '@conversation.id' },
+    ] }));
+    expect(state.messages[0].content).toBe('Current chat: conv-1');
+    expect(JSON.parse((state.messages[1] as any).tool_calls[0].function.arguments)).toEqual({
+      nested: { id: 'conv-1', title: 'A "quoted" title' },
+    });
+    expect(state.messages[2].content).toBe('conv-1');
+  });
+
+  it('applies server and node presets at dispatch and keeps fixed values out of model history', async () => {
+    (mcpService.callTool as jest.Mock).mockClear().mockResolvedValue({ success: true, data: { ok: true } });
+    (mcpService.loadServerConfigs as jest.Mock).mockResolvedValueOnce([{
+      name: 'bank', toolParameterPresets: { lookup: { customer_id: 'server-default', tenant: 'private-tenant' } },
+    }]);
+    const state = makeState();
+    await run(nodeWithSuccessor(), state, params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup',
+        argumentsJson: '{"customer_id":"forged-customer","query":"recent","chat":"@conversation.id"}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'],
+        toolParameterPresets: { lookup: { customer_id: 'fixed-customer', conversation_id: '@conversation.id', node_id: '@node.id' } } } }],
+    }));
+    expect(mcpService.callTool).toHaveBeenCalledWith('bank', 'lookup', {
+      customer_id: 'fixed-customer', tenant: 'private-tenant', conversation_id: 'conv-1',
+      node_id: 'stat', query: 'recent', chat: 'conv-1',
+    }, expect.any(Number), undefined, 'mcp-bank');
+    expect(JSON.stringify(state.messages)).not.toContain('fixed-customer');
+    expect(JSON.stringify(state.messages)).not.toContain('private-tenant');
+  });
+
+  it('keeps current-conversation presets separate for overlapping executions of the same node', async () => {
+    (mcpService.callTool as jest.Mock).mockClear().mockResolvedValue({ success: true, data: { ok: true } });
+    const p = params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup', argumentsJson: '{}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'],
+        toolParameterPresets: { lookup: { conversation_id: '@conversation.id' } } } }],
+    });
+    await Promise.all(['chat-a', 'slack-team-thread-b'].map(conversationId =>
+      run(nodeWithSuccessor(), makeState({ conversationId }), p)));
+    expect((mcpService.callTool as jest.Mock).mock.calls.map(call => call[2].conversation_id).sort())
+      .toEqual(['chat-a', 'slack-team-thread-b']);
+    expect(p.properties?.mcpNodes?.[0].properties?.toolParameterPresets?.lookup)
+      .toEqual({ conversation_id: '@conversation.id' });
+  });
+
+  it('does not dispatch without server presets when configuration loading fails', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    (mcpService.loadServerConfigs as jest.Mock).mockResolvedValueOnce({ success: false, error: 'storage unavailable' });
+    await expect(run(nodeWithSuccessor(), makeState(), params({
+      entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'bank', toolName: 'lookup', argumentsJson: '{}', result: '' }],
+      mcpNodes: [{ id: 'mcp-bank', properties: { boundServer: 'bank', enabledTools: ['lookup'] } }],
+    }))).rejects.toThrow('could not load MCP parameter presets');
+    expect(mcpService.callTool).not.toHaveBeenCalled();
   });
 
   it('executes the internal maintenance gateway without an authored MCP binding', async () => {

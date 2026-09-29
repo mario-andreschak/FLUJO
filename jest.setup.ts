@@ -9,7 +9,12 @@
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
+import { TextDecoder, TextEncoder } from 'node:util';
 import { setWorkspaceLayoutPreparation } from '@/backend/services/workspace/layoutReadiness';
+
+// Backend modules imported by jsdom tests also use the platform UTF-8 codecs.
+if (typeof globalThis.TextEncoder === 'undefined') Object.defineProperty(globalThis, 'TextEncoder', { value: TextEncoder, configurable: true, writable: true });
+if (typeof globalThis.TextDecoder === 'undefined') Object.defineProperty(globalThis, 'TextDecoder', { value: TextDecoder, configurable: true, writable: true });
 
 jest.setTimeout(15_000);
 

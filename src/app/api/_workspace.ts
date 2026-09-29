@@ -8,6 +8,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
 import { assertWorkerRequestReady } from '@/backend/services/workspace/workerMode';
+import { withExecutionExtensionRoute } from '@/backend/execution/extensions';
 
 const log = createLogger('app/api/_workspace');
 
@@ -176,9 +177,14 @@ export function withWorkspaceRoute<
     // `{ json: async () => body }`) for the handler itself. Only workspace
     // parsing needs the normalized Fetch Request.
     const handlerRequest = request ?? normalizedRequest;
-    return withWorkspace((request ?? normalizedRequest) as Request, () =>
-      Promise.resolve(
-        (handler as unknown as (...a: unknown[]) => Promise<Response>)(handlerRequest, ...rest),
+    return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
+      const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
+        (handler as unknown as (...a: unknown[]) => Promise<Response>)(
+          admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
+          ...rest,
+        ),
       ));
+      return selected;
+    });
   }) as unknown as H;
 }
