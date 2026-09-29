@@ -1968,9 +1968,10 @@ export class ModelHandler {
       const model = await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
       // Native adapters require a trusted, verified restriction profile. Claude
-      // remains excluded until its native capabilities can be equivalently gated.
+      // and Antigravity remain excluded from authenticated private execution.
       if (opts?.executionExtensionContext) {
-        if (model?.adapter === 'claude-cli' || (model?.adapter === 'codex-cli'
+        const restrictedAdapter = resolveModelAdapter(model?.provider, model?.adapter);
+        if (restrictedAdapter === 'claude-cli' || restrictedAdapter === 'antigravity-cli' || (restrictedAdapter === 'codex-cli'
           && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
           throw new ExecutionExtensionError('execution_model_adapter_forbidden');
         }

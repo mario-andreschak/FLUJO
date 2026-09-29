@@ -2,6 +2,8 @@ import type { CompletionInput, ModelSteering, SdkRequestSnapshot } from '@/backe
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { AntigravityCliEvent } from '@/backend/services/model/adapters/antigravityCliEvents';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { ExecutionExtensionError, registerExecutionExtension } from '@/backend/execution/extensions';
+import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 
 const mockRun = jest.fn();
 jest.mock('@/backend/services/model/adapters/antigravityCliProcess', () => ({
@@ -50,6 +52,26 @@ beforeEach(() => {
   mockRun.mockReset().mockImplementation(async (options: RunOptions) => { await start(options); finish(options); });
   mockCallTool.mockReset().mockResolvedValue({ success: true, data: { content: [{ type: 'text', text: 'tool output' }] } });
   mockBound.mockReset().mockImplementation(async ({ content }: { content: string }) => ({ spilled: false, content }));
+});
+
+test.each(['', 'configured-key'])('rejects direct trusted execution before CLI or tool setup with key %s', async apiKey => {
+  const adapter = fixtureAdapter();
+  const restore = registerExecutionExtension(adapter);
+  const observed = jest.fn();
+  const executor = jest.fn();
+  try {
+    const request = input({ apiKey, executionExtensionContext: mintFixture(adapter),
+      onSdkRequest: observed, tools: [fnTool('local')], localToolExecutors: { local: executor } });
+    const error = await new AntigravityCliAdapter().createCompletion(request).catch(failure => failure);
+    expect(error).toBeInstanceOf(ExecutionExtensionError);
+    expect(error).toMatchObject({ code: 'execution_model_adapter_forbidden', status: 403 });
+    expect(mockPrepare).not.toHaveBeenCalled();
+    expect(mockRun).not.toHaveBeenCalled();
+    expect(mockTools).toEqual([]);
+    expect(mockCallTool).not.toHaveBeenCalled();
+    expect(executor).not.toHaveBeenCalled();
+    expect(observed).not.toHaveBeenCalled();
+  } finally { restore(); }
 });
 
 test('streams stable invocation-unique IDs, records once, archives exact stdin and maps usage', async () => {

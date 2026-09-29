@@ -102,6 +102,8 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { AntigravityCliAdapter } from '@/backend/services/model/adapters/antigravityCliAdapter';
+import { registerExecutionExtension } from '@/backend/execution/extensions';
+import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -145,6 +147,32 @@ beforeEach(() => {
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
   mockAntigravityMediaRuntime.mockClear();
   mockAntigravityMediaProcess.mockClear();
+});
+
+test.each([
+  ['antigravity-cli', ''], [undefined, ''],
+  ['antigravity-cli', 'configured-key'], [undefined, 'configured-key'],
+])('trusted execution rejects Antigravity adapter %s with saved key %s before dispatch', async (adapter, ApiKey) => {
+  const codexProfile = jest.fn(async () => ({ verifiedCliVersion: '0.157.1', verifiedCliSha256: 'a'.repeat(64),
+    verifiedModelCatalogPath: '/catalog', verifiedModelCatalogSha256: 'b'.repeat(64) }));
+  const policy = fixtureAdapter({ codexProfile });
+  const restore = registerExecutionExtension(policy);
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter, ApiKey });
+  try {
+    const result = await ModelHandler.callModel({
+      modelId: 'model-1', prompt: 'private request',
+      messages: [{ role: 'user', id: 'private', timestamp: 1, content: 'private request' }],
+      iteration: 1, maxIterations: 1, nodeName: 'Private', nodeId: 'private',
+      executionExtensionContext: mintFixture(policy),
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+    expect(result).toMatchObject({ success: false, error: { message: 'execution_model_adapter_forbidden' } });
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+    expect(codexProfile).not.toHaveBeenCalled();
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(archiveModelDispatchMock).not.toHaveBeenCalled();
+    expect(mockAntigravityMediaRuntime).not.toHaveBeenCalled();
+    expect(mockAntigravityMediaProcess).not.toHaveBeenCalled();
+  } finally { restore(); }
 });
 
 test('Antigravity CLI chat attachments reach authoritative adapter rejection before runtime launch', async () => {
