@@ -1,3 +1,5 @@
+import { configuredExecutionAdapter } from '@/integrations/hackathon-banking/configuredAdapter';
+import { registerExecutionExtension, createExecutionExtensionContext } from '@/backend/execution/extensions';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +28,7 @@ describe('banking identity authority', () => {
   let policyFile: string;
   const sessions = new Map<string, { id: string; expires: number }>();
   const priorConfig = process.env.FLUJO_BANKING_CONFIG;
+  let restoreExtension: () => void;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-bank-auth-'));
@@ -41,9 +44,11 @@ describe('banking identity authority', () => {
     await fs.writeFile(policyFile, JSON.stringify(policy));
     process.env.FLUJO_BANKING_CONFIG = policyFile;
     sessions.clear();
+    restoreExtension = registerExecutionExtension(configuredExecutionAdapter);
   });
   afterEach(async () => {
     jest.restoreAllMocks();
+    restoreExtension();
     if (priorConfig === undefined) delete process.env.FLUJO_BANKING_CONFIG;
     else process.env.FLUJO_BANKING_CONFIG = priorConfig;
     await fs.rm(root, { recursive: true, force: true });
@@ -69,7 +74,7 @@ describe('banking identity authority', () => {
     await store.createConversation(id, identity);
     const ctx = await createBankingRunContext(principal, id);
     await bindBankingRun(ctx, id, randomUUID());
-    return { principal, store, identity, id, ctx };
+    return { principal, store, identity, id, ctx, extensionContext: createExecutionExtensionContext(configuredExecutionAdapter, ctx) };
   }
 
   test('forgery is rejected before any customer state is created', async () => {
@@ -152,7 +157,7 @@ describe('banking identity authority', () => {
     await expect(assertBankingRunCurrent(alice.ctx)).rejects.toThrow('authorization_expired');
   });
   test('caller/model authority fields and shared-variable interpolation are rejected', () => {
-    for (const args of [{ customer_id: 'bob' }, { _meta: { [BANK_ASSERTION_META]: 'forged' } },
+    for (const args of [{ customer_id: '' }, { conversation_id: '' }, { _meta: { [BANK_ASSERTION_META]: 'forged' } },
       { limit: '1' }, { limit: 500 }, { cursor: '${global:EXECUTION_TOKEN}' }]) {
       expect(() => validateBankingArguments('list_my_transactions', args)).toThrow('invalid_banking_arguments');
     }
@@ -164,7 +169,7 @@ describe('banking identity authority', () => {
       content: [{ type: 'text', text: JSON.stringify(resultData) }], structuredContent: resultData })) };
     const args = { limit: 2 };
     const result = await callTool(client as never, 'Banking MCP', 'list_my_transactions', args,
-      10, undefined, undefined, 'host', undefined, undefined, alice.ctx);
+      10, undefined, undefined, 'host', undefined, undefined, alice.extensionContext);
     expect(result.success).toBe(true);
     const params = client.callTool.mock.calls[0]?.[0] as unknown as { arguments: unknown; _meta: Record<string, string> };
     expect(params.arguments).toEqual(args);
@@ -217,7 +222,7 @@ describe('banking identity authority', () => {
       return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data };
     }) };
     const result = await callTool(client as never, 'Banking MCP', 'list_my_transactions', {},
-      10, undefined, undefined, 'host', undefined, undefined, alice.ctx);
+      10, undefined, undefined, 'host', undefined, undefined, alice.extensionContext);
     expect(result.success).toBe(false);
     expect(JSON.stringify(result)).not.toContain('reference_unavailable');
   });
@@ -225,7 +230,7 @@ describe('banking identity authority', () => {
     const connect = jest.spyOn(mcpService, 'connectServer');
     const result = await mcpService.callTool('Banking MCP', 'list_my_transactions', {});
     expect(result.success).toBe(false); expect(connect).not.toHaveBeenCalled();
-    expect(await mcpService.listServerResources('Banking MCP')).toEqual({ resources: [], error: 'banking_protocol_surface_forbidden' });
+    expect(await mcpService.listServerResources('Banking MCP')).toEqual({ resources: [], error: 'execution_protocol_surface_forbidden' });
     expect((await mcpService.readResource('Banking MCP', 's3://foreign')).success).toBe(false);
     expect((await mcpService.getPrompt('Banking MCP', 'foreign')).success).toBe(false);
     expect(connect).not.toHaveBeenCalled();
@@ -244,11 +249,11 @@ describe('banking identity authority', () => {
     jest.spyOn(mcpService, 'setNodeRoots').mockImplementation(() => undefined);
     const dispatch = jest.spyOn(mcpService, 'callTool').mockImplementation(async (server, tool, args,
       timeout, progress, node, signal, source, owner, trusted, ctx) => {
-      expect(ctx).toBe(alice.ctx);
+      expect(ctx).toBe(alice.extensionContext);
       return callTool(client as never, server, tool, args, timeout, progress, signal, source, node, owner, ctx);
     });
     const staticNode = new StaticNode();
-    const state = { conversationId: alice.id, logicalRunId: 'static-test', bankingContext: alice.ctx,
+    const state = { conversationId: alice.id, logicalRunId: 'static-test', executionExtensionContext: alice.extensionContext,
       messages: [], variables: { customer: 'bob' }, trackingInfo: { executionId: 'test', startTime: 0, nodeExecutionTracker: [] } } as unknown as SharedState;
     const params = { id: 'static', type: 'static', label: 'Static', properties: {
       entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'Banking MCP',
@@ -256,7 +261,7 @@ describe('banking identity authority', () => {
       mcpNodes: [{ id: 'bank', properties: { boundServer: 'Banking MCP', enabledTools: ['list_my_transactions'] } }],
     } } as StaticNodeParams;
     await staticNode.post(await staticNode.prep(state, params), {}, state, params);
-    const model = await ModelHandler.processToolCalls({ bankingContext: alice.ctx,
+    const model = await ModelHandler.processToolCalls({ executionExtensionContext: alice.extensionContext,
       toolCalls: [{ id: 'tool-1', type: 'function', function: { name: 'bank_list', arguments: '{"limit":2}' } }],
       toolNameMap: { bank_list: { server: 'Banking MCP', tool: 'list_my_transactions' } } });
     expect(model.success).toBe(true); expect(dispatch).toHaveBeenCalledTimes(2);
@@ -264,7 +269,7 @@ describe('banking identity authority', () => {
     const claims = await Promise.all(tokens.map(token => jwtVerify(token, bank.publicKey).then(value => value.payload)));
     expect(claims.every(claim => claim.sub === 'alice' && claim.conversation_id === alice.id)).toBe(true);
     expect(claims[0].jti).not.toBe(claims[1].jti);
-    const hostile = await ModelHandler.processToolCalls({ bankingContext: alice.ctx,
+    const hostile = await ModelHandler.processToolCalls({ executionExtensionContext: alice.extensionContext,
       toolCalls: [{ id: 'tool-2', type: 'function', function: { name: 'read_resource', arguments: '{"uri":"foreign"}' } }] });
     expect(hostile.success).toBe(false); expect(dispatch).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(state)).not.toContain(tokens[0]);

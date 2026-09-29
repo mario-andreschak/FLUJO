@@ -108,7 +108,7 @@ export class StaticNode extends BaseNode<
         nodeId,
       };
       const resolveRunText = async (value: string): Promise<string> =>
-        sharedState.bankingContext ? (value ?? '') : resolveRunResourceRefs(
+        sharedState.executionExtensionContext ? (value ?? '') : resolveRunResourceRefs(
           resolveRunVars(value ?? '', sharedState.variables),
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
@@ -117,7 +117,7 @@ export class StaticNode extends BaseNode<
         );
       const resolve = async (value: string): Promise<string> => {
         const text = await resolveRunText(value);
-        return sharedState.bankingContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
+        return sharedState.executionExtensionContext ? text : String(await resolvePromptDynamicReferences(text, referenceContext));
       };
 
       const messages: FlujoChatMessage[] = [];
@@ -170,7 +170,7 @@ export class StaticNode extends BaseNode<
               `Static node ${nodeId}: tool-call entry for "${toolName}" has invalid JSON arguments.`
             );
           }
-          if (!sharedState.bankingContext) {
+          if (!sharedState.executionExtensionContext) {
             // Resolve JSON values after parsing so quotes and nested structures
             // remain valid; hidden preset values are added only at dispatch.
             const resolvedArgs = await resolvePromptDynamicReferences(args, {
@@ -234,10 +234,10 @@ export class StaticNode extends BaseNode<
                     undefined,
                     binding.id,
                   ] as const;
-                  return sharedState.bankingContext
+                  return sharedState.executionExtensionContext
                     ? mcpService.callTool(...callArguments,
-                        (await import('@/backend/services/banking/authority')).bankingRunSignal(sharedState.bankingContext),
-                        'host', undefined, undefined, sharedState.bankingContext)
+                        (await import('@/backend/execution/extensions')).executionExtensionSignal(sharedState.executionExtensionContext),
+                        'host', undefined, undefined, sharedState.executionExtensionContext)
                     : mcpService.callTool(...callArguments);
                 })();
             resultContent = callResult.success

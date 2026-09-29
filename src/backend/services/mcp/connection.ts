@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { isProtectedBankServer } from '@/backend/services/banking/policy';
-import { assertBankingServerConfig } from '@/backend/services/banking/authority';
+import { isProtectedExecutionServer } from '@/backend/execution/extensions';
+import { assertExecutionServerConfig } from '@/backend/execution/extensions';
 import {
   StdioClientTransport,
   StdioServerParameters,
@@ -358,10 +358,10 @@ export function httpConfigKey(config: MCPServerConfig): string {
  */
 export function createNewClient(config: MCPServerConfig): Client {
   log.debug("Entering createNewClient method");
-  if (isProtectedBankServer(config.name)) {
-    assertBankingServerConfig(config);
-    // No roots, sampling, elicitation, Apps, skills or tasks on the banking client.
-    const client = new Client({ name: 'flujo-banking-client', version: '1.0.0' }, { capabilities: {} });
+  if (isProtectedExecutionServer(config.name)) {
+    assertExecutionServerConfig(config);
+    // The configured private integration accepts only synchronous tool calls.
+    const client = new Client({ name: `flujo-${config.name}-client`, version: '1.0.0' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
     return client;
   }

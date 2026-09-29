@@ -1,3 +1,5 @@
+import { configuredExecutionAdapter } from '@/integrations/hackathon-banking/configuredAdapter';
+import { registerExecutionExtension, bindExecutionExtensionRun, executionToolRequestMeta } from '@/backend/execution/extensions';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,19 +11,19 @@ import { flowService } from '@/backend/services/flow';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { bankingChat, bankingConversation, bankingCancel, bankingEvents, bankingRevoke } from '@/backend/services/banking/controllers';
-import { authenticateBankingRequest, bankingAdmission, bindBankingRun, signBankingCall } from '@/backend/services/banking/authority';
+import { authenticateBankingRequest, bankingAdmission } from '@/backend/services/banking/authority';
 import { assertBankingGraph } from '@/backend/services/banking/graph';
 import { requireBankingPolicy } from '@/backend/services/banking/policy';
-import * as localControl from '@/backend/services/banking/localControl';
+import * as localControl from '@/integrations/hackathon-banking/localControl';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { withBankingAdmission } from '@/backend/services/banking/admission';
 
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn() } }));
 jest.mock('@/backend/execution/flow/runFlow', () => ({ runFlow: jest.fn() }));
-jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn() }));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationState: jest.fn(), loadConversationStateReadOnly: (...args: unknown[]) => jest.mocked(loadConversationState)(...(args as [string])) }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/execution/flow/cancellation', () => ({ markConversationDeleted: jest.fn() }));
-jest.mock('@/backend/services/banking/localControl', () => ({ propagateBankingRevocation: jest.fn() }));
+jest.mock('@/integrations/hackathon-banking/localControl', () => ({ propagateBankingRevocation: jest.fn() }));
 jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({ withWorkspaceMutation: jest.fn(async task => task()) }));
 
 describe('authenticated banking ingress and controls', () => {
@@ -31,6 +33,7 @@ describe('authenticated banking ingress and controls', () => {
   let config: Record<string, unknown>;
   let graph: Flow;
   const previous = process.env.FLUJO_BANKING_CONFIG;
+  let restoreExtension: () => void;
   const sessions = new Map<string, { id: string; expires: number }>();
   const states = new Map<string, unknown>();
   const runMock = jest.mocked(runFlow);
@@ -52,11 +55,13 @@ describe('authenticated banking ingress and controls', () => {
       flowId: graph.id, graphHash: hashFlowExecutionSnapshot(graph), maxActiveRuns: 4, maxQueuedRuns: 512 };
     process.env.FLUJO_BANKING_CONFIG = path.join(directory, 'config.json');
     await saveConfig();
+    restoreExtension = registerExecutionExtension(configuredExecutionAdapter);
     jest.mocked(flowService.getFlow).mockResolvedValue(graph);
     loadMock.mockImplementation(async id => states.get(id) as never);
     runMock.mockImplementation(async input => {
-      await bindBankingRun(input.bankingContext!, input.conversationId!, input.runId!);
-      const assertion = await signBankingCall(input.bankingContext!, 'Banking MCP', 'list_my_transactions', { limit: 1 });
+      await bindExecutionExtensionRun(input.executionExtensionContext!, input.conversationId!, input.runId!);
+      const meta = await executionToolRequestMeta(input.executionExtensionContext!, 'Banking MCP', 'list_my_transactions', { limit: 1 });
+      const assertion = meta['com.flujo.bank/assertion'] as string;
       const principal = (await jwtVerify(assertion, bank.publicKey)).payload.sub;
       const state = { status: 'completed', messages: [
         { role: 'system', content: 'private instructions' }, { role: 'tool', content: 'private tool details' },
@@ -68,6 +73,7 @@ describe('authenticated banking ingress and controls', () => {
   });
   afterEach(async () => {
     jest.restoreAllMocks();
+    restoreExtension();
     if (previous === undefined) delete process.env.FLUJO_BANKING_CONFIG; else process.env.FLUJO_BANKING_CONFIG = previous;
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -160,7 +166,7 @@ describe('authenticated banking ingress and controls', () => {
     const ready = new Promise<void>(resolve => { started = resolve; });
     let activeSignal: AbortSignal | undefined;
     runMock.mockImplementationOnce(async input => {
-      await bindBankingRun(input.bankingContext!, id, input.runId!);
+      await bindExecutionExtensionRun(input.executionExtensionContext!, id, input.runId!);
       activeSignal = input.abortSignal;
       started();
       await new Promise<void>(resolve => input.abortSignal!.addEventListener('abort', () => resolve(), { once: true }));

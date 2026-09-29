@@ -1,9 +1,13 @@
-# Banking ingress
+# Optional hackathon banking ingress
 
 FLUJO can run one shared banking flow for many customers. A frontend backend verifies
 the browser session and signs a short-lived user assertion. FLUJO verifies that
 assertion, owns the conversation, and signs each finalized banking tool call.
 Customer identity never comes from tool arguments, conversation metadata or URL parameters.
+
+The optional implementation lives in `src/integrations/hackathon-banking`. Select its
+`configuredAdapter.ts` with the absolute build setting `FLUJO_EXECUTION_ADAPTER_MODULE`.
+The generic FLUJO build contains no banking routes, policy, dependencies or adapter.
 
 ## Frontend contract
 
@@ -12,16 +16,16 @@ Keep both the execution credential and signing key out of browser JavaScript.
 
 | Route | Method | Body |
 | --- | --- | --- |
-| `/v1/banking/chat` | POST | `{ "message": "…", "conversation_id": "optional existing owned UUID" }` |
-| `/v1/banking/conversations/{id}` | GET | None |
-| `/v1/banking/conversations/{id}/events` | GET | None; bounded SSE snapshots |
-| `/v1/banking/conversations/{id}/cancel` | POST | None |
-| `/v1/banking/conversations/{id}` | DELETE | None; permanent ownership tombstone |
+| `/v1/chat/completions` | POST | `{ "model": "flow-APPROVED_FLOW_NAME", "messages": [{ "role": "user", "content": "…" }], "metadata": { "flujo": "true", "appendMessages": "true", "conversationId": "optional existing owned UUID" }, "stream": false }` |
+| `/v1/chat/conversations/{id}` | GET | None |
+| `/v1/chat/conversations/{id}/events` | GET | None; bounded SSE snapshots |
+| `/v1/chat/conversations/{id}/cancel` | POST | None |
+| `/v1/chat/conversations/{id}` | DELETE | None; permanent ownership tombstone |
 | `/v1/banking/session/revoke` | POST | None; revoke the authenticated session |
 
 Every request needs `Authorization: Bearer <banking execution credential>` and
 `X-Flujo-User-Assertion: <JWT>`. Mint a fresh assertion/JTI for retries and SSE reconnects.
-New conversations omit `conversation_id`; unknown supplied IDs are rejected.
+New conversations omit `metadata.conversationId`; unknown supplied IDs are rejected.
 Foreign and unknown IDs both return 404. Routing, history, role, provider, graph,
 debug and arbitrary metadata fields are rejected. Query strings and workspace headers are forbidden.
 
@@ -48,9 +52,12 @@ most eight hours. Keep `session_id` and `session_exp` constant for the entire br
 session; rebinding a session to another subject or extending its expiry is rejected.
 Derive `sub` from the verified login. Never accept a browser-supplied subject.
 
-The chat response contains `conversation_id`, `status` and assistant `message`.
+Completions retain the normal completion response shape and conversation correlation.
 Read/SSE expose only bounded user/assistant messages. Authentication failures never
 return raw provider errors, tool traces or signing material.
+
+Legacy `/v1/banking/chat` and conversation controls remain compatibility routes in
+the optional integration branch until ordinary-route parity is accepted.
 
 ## Private configuration
 
@@ -112,8 +119,12 @@ interpolation, subflows, detached tasks and tool approval/resume. User text is l
 input; embedded FLUJO reference commands do not expand into shared data. Authored
 handoffs remain available. Process prompts come from the approved flow; mutable model
 prompt templates are excluded. API provider adapters are supported. Codex/Claude CLI
-adapters are denied in this profile because their native capabilities exceed the
-banking tool boundary. Other FLUJO flows retain their existing behavior.
+adapters are denied by default because their native capabilities exceed the
+banking tool boundary. Codex may be admitted only with an explicitly attested binary
+and pinned model catalog that pass forced native-call rejection and approved MCP
+tests. The current real-catalog probes exposed a native patch handler, so private CLI
+runtime enrollment is still pending. Claude remains denied. Other FLUJO flows retain
+their existing behavior. See [the generic adapter contract](features/execution-extensions.md).
 
 Each MCP call uses a fresh bank JWT in `_meta["com.flujo.bank/assertion"]`, bound to
 the verified subject, namespaced session, conversation, logical run, graph, tool and
@@ -140,8 +151,10 @@ Automated tests cover forgery, replay, session rebinding, foreign/unknown/delete
 IDs, graph/routing/history injection, key removal, cancellation, SSE revocation,
 durable writes, protocol minimization, Static/model dispatch and 500 concurrent
 authenticated ingress requests with distinct subjects and bounded active work.
-The ingress load test mocks flow execution and verifies real signed per-call
-principals. It is not a measurement of 500 paid provider calls or real S3 traffic.
+The deterministic ordinary completion load test runs the real `runFlow` and Process
+path for 1, 10, 50 and 500 owners, with mocked provider responses and verified signed
+per-call principals, durable histories and buffered events. It is not a measurement
+of 500 paid provider calls or real S3 traffic.
 Read-only inquiries are implemented; disputes, consent and financial writes need
 their own authorization and idempotency implementation.
 

@@ -4,7 +4,7 @@ import { SharedState } from './types';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { persistConversationSummary } from './conversationSummaryStore';
-import { commitBankingMutation } from '@/backend/services/banking/authority';
+import { commitExecutionExtensionMutation } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/execution/flow/persistConversationState');
 
@@ -26,7 +26,7 @@ const log = createLogger('backend/execution/flow/persistConversationState');
  * to disk. Do NOT add call-site `if (!ephemeral)` guards; they are redundant.
  */
 export async function persistConversationState(key: StorageKey, state: SharedState): Promise<void> {
-  if (state.bankingOwned && !state.bankingContext) throw new Error('trusted_banking_context_required');
+  if (state.executionExtensionOwned && !state.executionExtensionContext) throw new Error('trusted_execution_context_required');
   // Path-traversal guard (issue #126): the key/id becomes a filesystem path via
   // getFilePath(), so an id like "../encryption_key" would escape db/conversations/
   // and yield an arbitrary .json write. Validate the id embedded in the key AND
@@ -60,13 +60,13 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
       executionTrace: undefined,
       emit: undefined,
       executionAuthority: undefined,
-      bankingContext: undefined,
+      executionExtensionContext: undefined,
       // Persona App bindings are an out-of-band runtime capability input. Keep
       // this explicit even though runFlow installs them non-enumerably.
       personaCoreAppRefs: undefined,
     });
-  if (state.bankingContext) {
-    await commitBankingMutation(state.bankingContext, async () => {
+  if (state.executionExtensionContext) {
+    await commitExecutionExtensionMutation(state.executionExtensionContext, async () => {
       await writeSnapshot();
       await persistConversationSummary(idFromKey, state);
     });

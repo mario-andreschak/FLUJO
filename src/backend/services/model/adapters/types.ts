@@ -218,7 +218,7 @@ export interface CompletionInput {
   signal?: AbortSignal;
   /** Runtime-only lease/fence assertion immediately before a tool side effect. */
   beforeToolDispatch?: () => Promise<void>;
-  bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Call-time authorization for Persona Core-injected MCP handles. */
   authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   /** Runtime-only lease/generation assertion immediately after a long tool call. */

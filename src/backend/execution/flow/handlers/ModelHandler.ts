@@ -1,6 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { assertBankingModelTool } from '@/backend/services/banking/authority';
-import { BankingError } from '@/backend/services/banking/errors';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -1131,7 +1130,7 @@ export class ModelHandler {
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
-      bankingContext: input.bankingContext,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -1572,7 +1571,7 @@ export class ModelHandler {
     // and handoff filtering. The result exists only on the provider wire; the
     // canonical `messages` array remains the base for returned/persisted output.
     const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
-    const compaction = input.bankingContext ? undefined : await ModelHandler.maybeCompactWire(
+    const compaction = input.executionExtensionContext ? undefined : await ModelHandler.maybeCompactWire(
       projectedMessages,
       conversationId,
       nodeId,
@@ -1630,7 +1629,7 @@ export class ModelHandler {
       wireMessageIds: effectiveMessages.map(message => message.id),
       nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
-      bankingContext: input.bankingContext,
+      executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
       durableContext,
@@ -1922,7 +1921,7 @@ export class ModelHandler {
       }) => void;
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
-      bankingContext?: import('@/backend/services/banking/authority').BankingRunContext;
+      executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1962,12 +1961,19 @@ export class ModelHandler {
     let automaticRetriesUsed = 0;
 
     try {
+      if (opts?.executionExtensionContext) {
+        await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+      }
       // Get the model
       const model = await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
-      // CLI adapters have native filesystem/agent capabilities outside MCP's tool gate.
-      if (opts?.bankingContext && (model?.adapter === 'codex-cli' || model?.adapter === 'claude-cli')) {
-        throw new BankingError('banking_model_adapter_forbidden');
+      // Native adapters require a trusted, verified restriction profile. Claude
+      // remains excluded until its native capabilities can be equivalently gated.
+      if (opts?.executionExtensionContext) {
+        if (model?.adapter === 'claude-cli' || (model?.adapter === 'codex-cli'
+          && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
+          throw new ExecutionExtensionError('execution_model_adapter_forbidden');
+        }
       }
       if (!model) {
         return {
@@ -2062,7 +2068,7 @@ export class ModelHandler {
       // failed estimates, or non-positive savings remain on the text route.
       const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
       const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
-      if (opts?.bankingContext) visualConfig.enabled = false;
+      if (opts?.executionExtensionContext) visualConfig.enabled = false;
       const visual = await compactMessagesVisually({
         messages: apiMessages,
         model,
@@ -2096,7 +2102,7 @@ export class ModelHandler {
           undefined,
           ...apiSourceIds.slice(candidate.endIndex),
         ];
-        if (!opts?.bankingContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        if (!opts?.executionExtensionContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -2108,7 +2114,7 @@ export class ModelHandler {
       // runs for every adapter; self-orchestrating adapters flatten this safer
       // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (couldCompact(apiMessages, { keepRecentMessages })) {
+      if (!opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
         const beforeLosslessRefit = apiMessages;
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
@@ -2245,6 +2251,15 @@ export class ModelHandler {
       if (inputBudget !== undefined) {
         let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
         if (estimatedInputTokens > inputBudget) {
+          // A constrained private run cannot introduce resource tools or persist
+          // model content while recovering from an oversized provider request.
+          if (opts?.executionExtensionContext) {
+            return {
+              success: false,
+              error: createModelError('context_budget_exceeded',
+                "The private execution request exceeds the model's context budget.", modelId),
+            };
+          }
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
             budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
@@ -2728,7 +2743,7 @@ export class ModelHandler {
               onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: opts?.beforeToolDispatch,
-              bankingContext: opts?.bankingContext,
+              executionExtensionContext: opts?.executionExtensionContext,
               authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
               afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: <T>(task: () => Promise<T>) =>
@@ -2754,6 +2769,9 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
+              if (opts?.executionExtensionContext) {
+                await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+              }
               await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
@@ -3114,6 +3132,7 @@ export class ModelHandler {
       // insufficient, apply the same structurally-safe emergency refit used by
       // proactive budgeting. This path is adapter-neutral.
       if (
+        !opts?.executionExtensionContext &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
@@ -3252,7 +3271,7 @@ export class ModelHandler {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
-      bankingContext: input.bankingContext,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -3348,8 +3367,8 @@ export class ModelHandler {
       const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
-        if (input.bankingContext) {
-          await assertBankingModelTool(input.bankingContext, name,
+        if (input.executionExtensionContext) {
+          await assertExecutionModelTool(input.executionExtensionContext, name,
             toolNameMap && Object.hasOwn(toolNameMap, name) ? toolNameMap[name] : undefined);
         }
         const decodedForUi = decodeToolName(name, toolNameMap);
@@ -3873,8 +3892,7 @@ export class ModelHandler {
               total: progress.total,
               message: progress.message,
             });
-            result = conversationId
-              ? await mcpService.callTool(
+            result = await mcpService.callTool(
                   serverName,
                   toolName,
                   args,
@@ -3884,21 +3902,10 @@ export class ModelHandler {
                   callSignal,
                   'model',
                   runOwnerScope,
-                  { conversationId },
-                  input.bankingContext,
-                )
-              : await mcpService.callTool(
-                  serverName,
-                  toolName,
-                  args,
-                  timeout,
-                  onProgress,
-                  decoded.nodeId,
-                  callSignal,
-                  'model',
-                  runOwnerScope,
-                  undefined,
-                  input.bankingContext,
+                  ...(conversationId || input.executionExtensionContext
+                    ? [conversationId ? { conversationId } : undefined] as const
+                    : [] as const),
+                  ...(input.executionExtensionContext ? [input.executionExtensionContext] as const : [] as const),
                 );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before

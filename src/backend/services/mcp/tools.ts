@@ -28,11 +28,16 @@ import {
 } from "./externalAuthorization";
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
-import { BANK_ASSERTION_META, assertBankingToolDispatch, assertBankingRunCurrent,
-  signBankingCall, validateBankingArguments, type BankingRunContext } from '@/backend/services/banking/authority';
-import { isProtectedBankServer } from '@/backend/services/banking/policy';
-import { BankingError } from '@/backend/services/banking/errors';
-import { validateBankingResult } from '@/backend/services/banking/protocol';
+import {
+  assertExecutionToolDispatch,
+  assertExecutionExtensionCurrent,
+  executionToolRequestMeta,
+  normalizeExecutionToolArguments,
+  validateExecutionToolResult,
+  isProtectedExecutionServer,
+  ExecutionExtensionError,
+  type ExecutionExtensionContext,
+} from '@/backend/execution/extensions';
 
 const log = createLogger("backend/services/mcp/tools");
 
@@ -192,7 +197,7 @@ export async function callTool(
   source: ToolCallSource = "host",
   callerNodeId?: string,
   ownerScope?: string,
-  bankingContext?: BankingRunContext,
+  executionExtensionContext?: ExecutionExtensionContext,
 ): Promise<MCPServiceResponse> {
   log.debug("Entering callTool method");
   if (!client) {
@@ -210,8 +215,8 @@ export async function callTool(
       : MAX_TIMEOUT_MS;
 
   try {
-    const protectedBanking = Boolean(bankingContext) || isProtectedBankServer(serverName);
-    if (protectedBanking) await assertBankingToolDispatch(bankingContext, serverName, source);
+    const privateExecution = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
+    if (privateExecution) await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
     // MCP Apps may call tools only on their own backing server, and only when
     // the server's definition grants the "app" audience. The service passes
     // the exact client belonging to the frame's server; listing and dispatch
@@ -245,9 +250,9 @@ export async function callTool(
     }
 
     // Resolve any global variable references in the arguments
-    if (!protectedBanking) log.debug(`Original args for tool ${toolName}:`, args);
-    // Banking business args do not read the shared interpolation/secret store.
-    const resolvedArgs = protectedBanking ? args : await resolveGlobalVars(args);
+    if (!privateExecution) log.debug(`Original args for tool ${toolName}:`, args);
+    // Private execution arguments do not read the shared interpolation/secret store.
+    const resolvedArgs = privateExecution ? args : await resolveGlobalVars(args);
 
     // Ensure resolvedArgs is a record before normalizing
     const argsRecord =
@@ -257,9 +262,9 @@ export async function callTool(
 
     // Normalize undefined/null values based on parameter types
     // This ensures we don't pass undefined values to MCP servers
-    const normalizedArgs = protectedBanking ? validateBankingArguments(toolName, argsRecord)
+    const normalizedArgs = privateExecution ? normalizeExecutionToolArguments(executionExtensionContext!, toolName, argsRecord)
       : normalizeToolArguments(argsRecord, toolName);
-    if (!protectedBanking) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
+    if (!privateExecution) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
     const callOptions = {
@@ -267,10 +272,12 @@ export async function callTool(
       resetTimeoutOnProgress: true,
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
-        log.debug(
-          `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
-        );
-        if (!protectedBanking) onProgress?.(progress);
+        if (!privateExecution) {
+          log.debug(
+            `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
+          );
+          onProgress?.(progress);
+        }
       },
     };
     // MCP Tasks negotiation (issue #404). Task-augmented execution is
@@ -279,8 +286,8 @@ export async function callTool(
     // `capabilities.tasks.requests.tools.call`, and the tool itself declares
     // `execution.taskSupport` (required/optional). Classic or incompatible
     // servers therefore never receive any Tasks metadata.
-    const taskDecision = protectedBanking
-      ? { request: false, reason: 'banking synchronous profile' } as Awaited<ReturnType<typeof decideTaskAugmentation>>
+    const taskDecision = privateExecution
+      ? { request: false, reason: 'private synchronous profile' } as Awaited<ReturnType<typeof decideTaskAugmentation>>
       : await decideTaskAugmentation(client, toolName);
     if (taskDecision.request) {
       log.info(
@@ -292,13 +299,15 @@ export async function callTool(
     // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
     // schema parameter — passing options in the v1 slot would silently discard
     // the timeout and progress forwarding.
-    const bankAssertion = protectedBanking
-      ? await signBankingCall(bankingContext!, serverName, toolName, normalizedArgs) : undefined;
+    // This hook sees finalized business arguments. Authority never enters tool maps
+    // or transcript payloads, and every actual dispatch receives fresh metadata.
+    const privateMeta = privateExecution
+      ? await executionToolRequestMeta(executionExtensionContext!, serverName, toolName, normalizedArgs) : undefined;
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
       ...(taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
-      ...(bankAssertion ? { _meta: { [BANK_ASSERTION_META]: bankAssertion } } : callerNodeId || ownerScope
+      ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope
         ? {
             _meta: {
               flujo: {
@@ -318,9 +327,9 @@ export async function callTool(
         ).call(client, requestParams, callOptions)
       : await client.callTool(requestParams, undefined, callOptions);
 
-    if (protectedBanking) {
-      await assertBankingRunCurrent(bankingContext);
-      return { success: true, data: validateBankingResult(toolName, response) };
+    if (privateExecution) {
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      return { success: true, data: validateExecutionToolResult(executionExtensionContext!, toolName, response) };
     }
 
     // -----------------------------------------------------------------------
@@ -391,10 +400,10 @@ export async function callTool(
       data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
-    if (bankingContext || isProtectedBankServer(serverName)) {
+    if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
       // SDK exceptions can contain request metadata. Never log or serialize them.
-      return { success: false, error: error instanceof BankingError ? error.code : 'banking_tool_unavailable',
-        statusCode: error instanceof BankingError ? error.status : 503, errorType: 'banking-call' };
+      return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',
+        statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-call' };
     }
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : "Unknown error";

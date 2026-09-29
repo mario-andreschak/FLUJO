@@ -1,6 +1,11 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { bankingCancel } from '@/backend/services/banking/controllers';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export async function POST(request: Request, context: { params: Promise<{ conversationId: string }> }) {
+async function POST_handler(request: Request, context: { params: Promise<{ conversationId: string }> }) {
+  const locked = await assertUnlocked({ openai: true });
+  if (locked) return locked;
   return bankingCancel(request, (await context.params).conversationId);
 }
+export const POST = withWorkspaceRoute(POST_handler);

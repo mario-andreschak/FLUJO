@@ -3,8 +3,7 @@ import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest'
 import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
-import { assertBankingExecutionBearer, isBankingRoute } from '@/backend/services/banking/policy';
-import { bankingErrorResponse } from '@/backend/services/banking/errors';
+import { authorizeExecutionTransport } from '@/backend/execution/extensions';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -48,17 +47,12 @@ export function proxy(request: NextRequest): NextResponse {
 
   const { pathname } = request.nextUrl;
 
-  // The banking execution credential grants only exact banking routes. It is
-  // independent of worker snapshot/admin authority. Routes verify user assertions again.
-  if (pathname.startsWith('/v1/banking')) {
-    if (!isBankingRoute(pathname)) return NextResponse.json({ error: 'not_found' }, { status: 404 });
-    try { assertBankingExecutionBearer(request); }
-    catch (error) {
-      const response = bankingErrorResponse(error);
-      return new NextResponse(response.body, { status: response.status, headers: response.headers });
-    }
-    return NextResponse.next();
-  }
+  // Optional trusted integrations may admit only their narrow execution surface.
+  // The route authenticates again; proxy and handler need not share runtime state.
+  const extensionResponse = authorizeExecutionTransport(request);
+  if (extensionResponse !== undefined) return extensionResponse === null
+    ? NextResponse.next()
+    : new NextResponse(extensionResponse.body, { status: extensionResponse.status, headers: extensionResponse.headers });
 
   if (isWorkerMode()) {
     // Private network membership and a caller-supplied Host header are not

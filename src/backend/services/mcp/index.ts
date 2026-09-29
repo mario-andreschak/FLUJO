@@ -13,9 +13,9 @@ import {
   getWorkspaceDataDir,
 } from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
-import { isProtectedBankServer } from '@/backend/services/banking/policy';
-import { assertBankingServerConfig, assertBankingToolDispatch, type BankingRunContext } from '@/backend/services/banking/authority';
-import { BankingError } from '@/backend/services/banking/errors';
+import { isProtectedExecutionServer } from '@/backend/execution/extensions';
+import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { ExecutionExtensionError } from '@/backend/execution/extensions';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -983,7 +983,7 @@ export class MCPService {
       // shouldRecreateClient and the factories below agree; websocket configs always
       // stay on the v1 SDK (the v2 SDK has no websocket transport).
       const useBeta =
-        !isProtectedBankServer(config.name) && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
+        !isProtectedExecutionServer(config.name) && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
       const isolateRuntimeHome = await resolveRuntimeHomeIsolation(config);
       const transportOptions = {
         enableRuntimeBroker: true,
@@ -1518,7 +1518,7 @@ export class MCPService {
       // Same experimental v2-beta routing as the live connection, so Test Run
       // probes exactly what connectServer would build.
       const useBeta =
-        !isProtectedBankServer(connectConfig.name) && (await isMcpBetaProtocolEnabled()) &&
+        !isProtectedExecutionServer(connectConfig.name) && (await isMcpBetaProtocolEnabled()) &&
         connectConfig.transport !== "websocket";
       const isolateRuntimeHome = await resolveRuntimeHomeIsolation(connectConfig);
       const transportOptions = { isolateRuntimeHome };
@@ -2051,20 +2051,20 @@ export class MCPService {
     source: ToolCallSource = "host",
     ownerScope?: string,
     trustedContext?: TrustedMcpToolInvocationContext,
-    bankingContext?: BankingRunContext,
+    executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<MCPServiceResponse> {
     // Customer authority is checked before config side effects, connections or leases.
     // Testers, Apps, proxy, scheduler and missing-context resumes cannot mint assertions.
     try {
-      if (bankingContext || isProtectedBankServer(serverName)) {
-        await assertBankingToolDispatch(bankingContext, serverName, source);
+      if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
+        await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
         const config = await this.getServerConfig(serverName);
-        if (!config) throw new BankingError('banking_server_policy_mismatch');
-        assertBankingServerConfig(config);
+        if (!config) throw new ExecutionExtensionError('execution_server_policy_mismatch');
+        assertExecutionServerConfig(config);
       }
     } catch (error) {
-      return { success: false, error: error instanceof BankingError ? error.code : 'banking_authorization_unavailable',
-        statusCode: error instanceof BankingError ? error.status : 503, errorType: 'banking-authorization' };
+      return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_authorization_unavailable',
+        statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-authorization' };
     }
     log.debug(
       `callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`,
@@ -2183,7 +2183,7 @@ export class MCPService {
         source,
         callerNodeId,
         ownerScope,
-        bankingContext,
+        executionExtensionContext,
       );
       if (result.success && trustedTicketConversationId) {
         const ticketId = createdTicketIdFromMcpResult(result.data);
@@ -2375,7 +2375,7 @@ export class MCPService {
   async listServerResources(
     serverName: string,
   ): Promise<{ resources: MCPResource[]; error?: string }> {
-    if (isProtectedBankServer(serverName)) return { resources: [], error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { resources: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerResources: Entering method for server ${serverName}`);
     return this.listWithReconnect(serverName, listResources, { resources: [] });
   }
@@ -2386,7 +2386,7 @@ export class MCPService {
   async listServerResourceTemplates(
     serverName: string,
   ): Promise<{ resourceTemplates: MCPResourceTemplate[]; error?: string }> {
-    if (isProtectedBankServer(serverName)) return { resourceTemplates: [], error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { resourceTemplates: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(
       `listServerResourceTemplates: Entering method for server ${serverName}`,
     );
@@ -2402,7 +2402,7 @@ export class MCPService {
     serverName: string,
     uri: string,
   ): Promise<MCPServiceResponse<MCPReadResourceResult>> {
-    if (isProtectedBankServer(serverName)) return { success: false, error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
     log.debug(
       `readResource: Entering method for server ${serverName}, uri ${uri}`,
     );
@@ -2418,7 +2418,7 @@ export class MCPService {
   private async prepareMcpSkillsClient(
     serverName: string,
   ): Promise<MCPServiceResponse<{ client: Client; capability: McpSkillsExtensionCapability }>> {
-    if (isProtectedBankServer(serverName)) return { success: false, error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
     const config = await this.getServerConfig(serverName);
     if (!config) {
       return { success: false, error: `MCP server '${serverName}' was not found.`, statusCode: 404 };
@@ -2681,7 +2681,7 @@ export class MCPService {
   async listServerPrompts(
     serverName: string,
   ): Promise<{ prompts: MCPPrompt[]; error?: string }> {
-    if (isProtectedBankServer(serverName)) return { prompts: [], error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { prompts: [], error: 'execution_protocol_surface_forbidden' };
     log.debug(`listServerPrompts: Entering method for server ${serverName}`);
     return this.listWithReconnect(serverName, listPrompts, { prompts: [] });
   }
@@ -2694,7 +2694,7 @@ export class MCPService {
     promptName: string,
     args?: Record<string, string>,
   ): Promise<MCPServiceResponse<MCPGetPromptResult>> {
-    if (isProtectedBankServer(serverName)) return { success: false, error: 'banking_protocol_surface_forbidden' };
+    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
     log.debug(
       `getPrompt: Entering method for server ${serverName}, prompt ${promptName}`,
     );
