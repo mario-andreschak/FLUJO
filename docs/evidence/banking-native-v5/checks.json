@@ -1,0 +1,171 @@
+{
+  "scope": "saved post-burst HTTP/completed-conversation lifecycle and privacy receipts",
+  "http": [
+    {
+      "name": "own_history",
+      "status": 200
+    },
+    {
+      "name": "foreign_GET_history",
+      "status": 404
+    },
+    {
+      "name": "foreign_DELETE_history",
+      "status": 404
+    },
+    {
+      "name": "foreign_POST_/cancel",
+      "status": 404
+    },
+    {
+      "name": "foreign_GET_/events",
+      "status": 404
+    },
+    {
+      "name": "foreign_continue",
+      "status": 404
+    },
+    {
+      "name": "fresh_assertion",
+      "status": 200
+    },
+    {
+      "name": "replay",
+      "status": 401
+    },
+    {
+      "name": "missing_assertion",
+      "status": 401
+    },
+    {
+      "name": "customer_admin_escape",
+      "status": 403
+    },
+    {
+      "name": "forged_customer_body",
+      "status": 400
+    },
+    {
+      "name": "forged_metadata",
+      "status": 400
+    },
+    {
+      "name": "operator_graph_escape",
+      "status": 403
+    },
+    {
+      "name": "expired_history",
+      "status": 401
+    },
+    {
+      "name": "expired_cancel",
+      "status": 401
+    },
+    {
+      "name": "expired_revoke",
+      "status": 401
+    },
+    {
+      "name": "expired_continue",
+      "status": 401
+    },
+    {
+      "name": "forged_job_lease",
+      "status": 400
+    },
+    {
+      "name": "forged_job_metadata",
+      "status": 400
+    }
+  ],
+  "lifecycle_before_restart": [
+    {
+      "name": "own_completed_events",
+      "status": 200
+    },
+    {
+      "name": "own_completed_cancel",
+      "status": 200
+    },
+    {
+      "name": "revoke",
+      "status": 200
+    },
+    {
+      "name": "revoked_session_history",
+      "status": 401
+    },
+    {
+      "name": "same_owner_fresh_session",
+      "status": 200
+    }
+  ],
+  "lifecycle_after_restart": [
+    {
+      "name": "revocation_survives_restart",
+      "status": 401
+    },
+    {
+      "name": "owner_survives_restart",
+      "status": 200
+    },
+    {
+      "name": "delete_own_conversation",
+      "status": 204
+    },
+    {
+      "name": "tombstone_history_denied",
+      "status": 404
+    }
+  ],
+  "revocation_and_owner_durable": true,
+  "tombstone_enforced": true,
+  "mcp": {
+    "mcp_authenticated_session_matches": true,
+    "owned_capabilities_created": 2,
+    "mcp_revocation_durable": true,
+    "read_only_diagnostic": true
+  },
+  "privacy": {
+    "persisted_owner_states": 500,
+    "states_audited": 500,
+    "tool_results_audited": 500,
+    "authority_leaks": 0,
+    "foreign_result_states": 0,
+    "missing_ownership_markers": 0,
+    "remaining_private_cli_homes": 0,
+    "passed": true
+  },
+  "policy": {
+    "sha256": "a30e69338666e2605cefa7385c7c5d55cf3464314c6bd336b8f2566d1ca646af",
+    "exact_staging_bytes": true,
+    "service_uid": 1000,
+    "effective_capabilities": "0000000000000000",
+    "permissions": [
+      {
+        "role": "runtime_parent",
+        "uid": 0,
+        "gid": 0,
+        "mode": "755",
+        "symlink": false,
+        "writable": false
+      },
+      {
+        "role": "protected_policy_directory",
+        "uid": 0,
+        "gid": 1000,
+        "mode": "750",
+        "symlink": false,
+        "writable": false
+      },
+      {
+        "role": "protected_policy_file",
+        "uid": 0,
+        "gid": 1000,
+        "mode": "440",
+        "symlink": false,
+        "writable": false
+      }
+    ]
+  }
+}
