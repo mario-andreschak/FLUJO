@@ -5,12 +5,18 @@ import { CodexAdapter } from '@/backend/services/model/adapters/codexAdapter';
 import { RESTRICTED_CODEX_CONFIG, RESTRICTED_CODEX_THREAD_OPTIONS } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import { registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, fixtureRun, mintFixture, type FixtureRun } from './fixtureAdapter';
+import { recordStatisticsEvent } from '@/backend/services/statistics';
 
 const mockCtor = jest.fn(); const mockStart = jest.fn(); const mockResume = jest.fn(); const mockStream = jest.fn();
 const mockCheckProfile = jest.fn(); const mockRuntime = jest.fn(); const mockCleanup = jest.fn();
 const mockCallTool = jest.fn(); const mockBridgeClose = jest.fn();
 let mockBridgeTools: BridgeTool[] = [];
-jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), verbose: jest.fn() }) }));
+const mockLog = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), verbose: jest.fn() };
+jest.mock('@/utils/logger', () => ({ createLogger: () => ({
+  debug: (...args: unknown[]) => mockLog.debug(...args), info: (...args: unknown[]) => mockLog.info(...args),
+  warn: (...args: unknown[]) => mockLog.warn(...args), error: (...args: unknown[]) => mockLog.error(...args),
+  verbose: (...args: unknown[]) => mockLog.verbose(...args),
+}) }));
 jest.mock('@openai/codex-sdk', () => ({ Codex: class {
   constructor(options: unknown) { mockCtor(options); }
   startThread(options: unknown) { mockStart(options); return { runStreamed: mockStream }; }
@@ -151,5 +157,61 @@ describe('private Codex profile cannot borrow native/local capabilities or stale
     await expect(new CodexAdapter().createCompletion(input())).rejects.toThrow();
     expect(mockStream).toHaveBeenCalledTimes(1); expect(mockStart).toHaveBeenCalledTimes(1);
     expect(mockResume).not.toHaveBeenCalled(); expect(mockCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['request timed out', 'timeout', true],
+    ['opaque native failure', 'unknown', true],
+    ['opaque native failure', 'unknown', false],
+  ])('a pre-handler native failure exposes only fixed diagnostics: %s / %s / known tool %s', async (prefix, category, known) => {
+    const secret = 'SENSITIVE_NATIVE_CUSTOMER_TOKEN';
+    const transcript = jest.fn(); const delta = jest.fn();
+    mockStream.mockImplementation(async () => ({ events: (async function* () {
+      const item = { id: `${secret}-item`, type: 'mcp_tool_call', status: 'failed',
+        server: known ? 'flujo' : `${secret}-server`, tool: known ? mockBridgeTools[0].name : `${secret}-tool`,
+        arguments: { customer: secret }, error: { message: `${prefix}: https://private.example/${secret} Authorization: Bearer ${secret}` },
+        result: { content: [{ type: 'text', text: secret }], _meta: { bearer: secret } } };
+      yield { type: 'item.started', item };
+      yield { type: 'item.updated', item };
+      yield { type: 'item.completed', item };
+      yield { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'own reply' } };
+      yield { type: 'turn.completed', usage: {} };
+    })() }));
+    const result = await new CodexAdapter().createCompletion(input(fixtureRun(), {
+      tools: [readTool], toolNameMap: mapped, onTranscriptMessage: transcript, onModelDelta: delta,
+    }));
+    expect(mockLog.error).toHaveBeenCalledTimes(1);
+    expect(mockLog.error).toHaveBeenCalledWith('Codex native MCP tool call failed', {
+      code: 'codex_native_mcp_tool_failed', category, runId: 'run-A', nodeId: 'process',
+      tool: known ? 'protected-fixture__read' : 'unknown',
+    });
+    expect(mockCallTool).not.toHaveBeenCalled();
+    expect(jest.mocked(recordStatisticsEvent).mock.calls.filter(([event]) => event.type === 'tool.invocation')).toHaveLength(0);
+    expect(result.transcript?.filter(message => message.role === 'tool')).toHaveLength(0);
+    expect(JSON.stringify([mockLog.error.mock.calls, mockLog.warn.mock.calls, mockLog.debug.mock.calls,
+      mockLog.info.mock.calls, result, transcript.mock.calls, delta.mock.calls, jest.mocked(recordStatisticsEvent).mock.calls]))
+      .not.toContain(secret);
+    expect(mockStream).toHaveBeenCalledTimes(1);
+    expect(mockCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  test('native MCP items do not duplicate a bridge-recorded call/result pair or invocation statistic', async () => {
+    const secret = 'SENSITIVE_NATIVE_ERROR_DETAILS';
+    mockStream.mockImplementation(async () => ({ events: (async function* () {
+      await mockBridgeTools[0].handler({});
+      yield { type: 'item.completed', item: { id: 'native-success', type: 'mcp_tool_call', status: 'completed',
+        server: 'flujo', tool: mockBridgeTools[0].name, arguments: {} } };
+      yield { type: 'item.completed', item: { id: 'native-failed', type: 'mcp_tool_call', status: 'failed',
+        server: 'flujo', tool: mockBridgeTools[0].name, arguments: { customer: secret },
+        error: { message: `${secret}: https://private.example/?token=${secret}` } } };
+      yield { type: 'turn.completed', usage: {} };
+    })() }));
+    const result = await new CodexAdapter().createCompletion(input(fixtureRun(), { tools: [readTool], toolNameMap: mapped }));
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+    expect(result.transcript?.filter(message => message.role === 'assistant' && message.tool_calls?.length)).toHaveLength(1);
+    expect(result.transcript?.filter(message => message.role === 'tool')).toHaveLength(1);
+    expect(jest.mocked(recordStatisticsEvent).mock.calls.filter(([event]) => event.type === 'tool.invocation')).toHaveLength(1);
+    expect(mockLog.error).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([result, mockLog.error.mock.calls, jest.mocked(recordStatisticsEvent).mock.calls])).not.toContain(secret);
   });
 });
