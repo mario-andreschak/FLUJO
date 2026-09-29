@@ -16,4 +16,6 @@ CLI `0.157.1` was exercised on Linux x64 and Windows x64 with the same restricte
 
 Private calls use subscription authentication, a fresh isolated home, restrictive environment and config, no shared model catalog, and no session reuse. API credentials, local tool executors, interactive approvals, and unverified profiles are rejected. Other model adapters retain their own existing behavior; Claude subscription calls cannot carry this private context.
 
+Concurrent calls may share an in-flight executable digest and version check only when their expected path, digest, version, and current file identity match. Each caller still checks the executable before and after verification and validates its own catalog and model policy before credential transfer. Completed or rejected verification is discarded; subsequent calls rehash the executable. This reduces repeated reads during an admission burst without retaining a verification cache for mutable files.
+
 Authentication refresh from an isolated child is currently discarded when its home is cleaned up. Sustained or concurrent real-model runs require separate validation of subscription token refresh and capacity. Mock provider load tests establish admission and isolation behavior, not paid-model throughput.
