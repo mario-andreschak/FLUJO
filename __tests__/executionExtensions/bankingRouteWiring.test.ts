@@ -196,6 +196,28 @@ describe('optional banking profile through exported HTTP routes', () => {
       'confirm_simulated_intake', 'read_intake_receipt', 'create_verified_handoff', 'read_verified_handoff']);
   });
 
+  test('separate no-target human requests carry separate exact idempotency identities', async () => {
+    const { identity, store } = await owner();
+    const conversationId = randomUUID();
+    await store.createConversation(conversationId, identity);
+    jest.mocked(flowService.getFlow).mockResolvedValue(fixture.graph);
+    const result = (data: Record<string, unknown>) => ({ success: true, data: { structuredContent: data } });
+    jest.mocked(mcpService.callTool).mockImplementation(async () =>
+      result({ state: 'created', handoff: { id: 'HOF-abcdefgh' } }) as never);
+    const firstId = randomUUID(), secondId = randomUUID();
+    for (const requestId of [firstId, secondId]) {
+      const response = await action(await fixture.request('A', { operation: 'handoff', conversationId,
+        reason: 'customer_request', requestId }, '/v1/banking/action'));
+      expect(response.status).toBe(200);
+      expect((await response.json()).state).toBe('handoff_verified');
+    }
+    const created = jest.mocked(mcpService.callTool).mock.calls.filter(call => call[1] === 'create_verified_handoff');
+    expect(created.map(call => call[2])).toEqual([
+      { reason: 'customer_request', request_id: firstId },
+      { reason: 'customer_request', request_id: secondId },
+    ]);
+  });
+
   test.each(['/v1/chat/conversation-chains', '/v1/chat/conversation-chains?root=customer&limit=25',
     '/v1/chat/conversation-chains/', '/v1/chat/conversation-%63hains',
     '/v1/chat/events', '/v1/chat/events?fromSeq=0', '/v1/chat/events?scope=sidebar', '/v1/chat/events/', '/v1/chat/%65vents'])

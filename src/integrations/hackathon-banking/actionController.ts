@@ -24,7 +24,7 @@ export const actionBody = z.discriminatedUnion('operation', [
   z.object({ ...common, operation: z.literal('handoff'), reason: z.enum(['missing_evidence',
     'out_of_policy', 'emergency', 'action_unverified', 'customer_request', 'clarification_exhausted',
     'high_risk', 'duplicate_review', 'no_match_exhausted', 'tool_failure']),
-    pendingHandle: handle.optional() }).strict(),
+    pendingHandle: handle.optional(), requestId: z.string().uuid().optional() }).strict(),
   z.object({ ...common, operation: z.literal('handoff_read'),
     handoffId: z.string().regex(/^HOF-[A-Za-z0-9_-]{8}$/) }).strict(),
 ]);
@@ -74,8 +74,9 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
             return data as Record<string, unknown>;
           } finally { clearBankingActionGrant(rawContext); }
         };
-        const verifiedHandoff = async (reason: string, pendingHandle?: string) => {
-          const args = { reason, ...(pendingHandle ? { pending_handle: pendingHandle } : {}) };
+        const verifiedHandoff = async (reason: string, pendingHandle?: string, requestId?: string) => {
+          const args = { reason, ...(pendingHandle ? { pending_handle: pendingHandle } : {}),
+            ...(requestId ? { request_id: requestId } : {}) };
           try {
             const created = await invoke('create_verified_handoff', args);
             const handoff = created.handoff as { id?: unknown } | undefined;
@@ -119,7 +120,8 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
           outcome = read.state === 'created' ? { state: 'intake_verified', receipt: read.receipt }
             : { state: 'action_unverified' };
         } else if (body.operation === 'handoff') {
-          outcome = await verifiedHandoff(body.reason, body.pendingHandle);
+          if (!body.pendingHandle && !body.requestId) throw new BankingError('invalid_arguments', 400);
+          outcome = await verifiedHandoff(body.reason, body.pendingHandle, body.requestId);
         } else {
           const read = await invoke('read_verified_handoff', { handoff_id: body.handoffId });
           outcome = { state: 'handoff_verified', handoff: read.handoff };
