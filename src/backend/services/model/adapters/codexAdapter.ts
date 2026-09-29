@@ -117,6 +117,19 @@ function isRetryableCodexConnectionClose(error: unknown): boolean {
   return message.includes(CODEX_CONNECTION_CLOSED_MID_RESPONSE);
 }
 
+function nativeMcpFailureCategory(message: string | undefined): string {
+  // Native MCP errors can contain credentials, URLs and tool arguments. Only
+  // these fixed categories may leave this classifier; never log the message.
+  const text = (typeof message === 'string' ? message : '').slice(0, 4096).toLowerCase();
+  if (/\btimeout\b|\btimed out\b/.test(text)) return 'timeout';
+  if (/\b401\b|\bunauthorized\b/.test(text)) return 'authentication';
+  if (/\b403\b|\bforbidden\b/.test(text)) return 'authorization';
+  if (/\b429\b|\brate limit\b/.test(text)) return 'rate_limit';
+  if (/\bconnection (?:closed|refused|reset)\b|\btransport error\b/.test(text)) return 'network';
+  if (/\bmcp error:\s*-3260[02]\b|\binvalid (?:arguments|params)\b/.test(text)) return 'validation';
+  return 'unknown';
+}
+
 interface ToolInteraction {
   id: string;
   name: string;
@@ -942,6 +955,21 @@ export class CodexAdapter implements CompletionAdapter {
             }
             if (event.type === 'item.completed') {
               const item = event.item;
+              if (item.type === 'mcp_tool_call' && item.status === 'failed') {
+                // Native connection/schema failures can happen before the
+                // bridge handler, leaving no FLUJO tool pair. Log a bounded
+                // diagnostic without copying any native labels or payloads.
+                const knownTool = item.server === 'flujo'
+                  ? bridgeTools.find(tool => tool.name === item.tool)?.name
+                  : undefined;
+                log.error('Codex native MCP tool call failed', {
+                  code: 'codex_native_mcp_tool_failed',
+                  category: nativeMcpFailureCategory(item.error?.message),
+                  ...(runId ? { runId } : {}),
+                  ...(nodeId ? { nodeId } : {}),
+                  tool: knownTool ?? 'unknown',
+                });
+              }
               const itemMedia = extractNativeMediaParts(item);
               if (itemMedia.length > 0 && item.type !== 'agent_message') {
                 recordMessage(
