@@ -121,7 +121,7 @@ import {
 import { LiveLanes, EMPTY_LIVE_LANES, applyLaneEvent } from '@/utils/shared/liveLanes';
 import { deriveExecutedNodeIds } from '@/utils/shared/executedNodes';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
-import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
+import { createSameOriginChatClient } from '@/frontend/services/chat/openaiClient';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
@@ -935,17 +935,7 @@ const Chat: React.FC = () => {
 
   // Initialize OpenAI client
   useEffect(() => {
-    const baseURL = window.location.origin + '/v1';
-    openaiRef.current = new OpenAI({
-      baseURL,
-      apiKey: 'FLUJO', // Replace with actual key if needed, though likely handled by backend proxy
-      dangerouslyAllowBrowser: true,
-      maxRetries: 0, // Add this line to disable automatic retries
-      // A flow run is one blocking request that can take a long time (long
-      // agentic loops, slow external tools). Use the shared generous ceiling so
-      // the browser doesn't abort a healthy run and discard the whole result.
-      timeout: LLM_REQUEST_TIMEOUT_MS,
-    });
+    openaiRef.current = createSameOriginChatClient(window.location.origin);
   }, []);
 
   // Load available flows on mount

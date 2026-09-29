@@ -95,8 +95,13 @@ const nextConfig = {
         throw new Error('FLUJO_EXECUTION_ADAPTER_MODULE must name an existing absolute server module.');
       }
       config.resolve ??= {};
+      // Next's tsconfig paths plugin rewrites @/* before Webpack's alias hook.
+      // Match the rewritten source as well, including explicit .ts imports.
+      const defaultAdapterModule = path.join(__dirname, 'src/backend/execution/extensions/configuredAdapter');
       config.resolve.alias = { ...config.resolve.alias,
         '@/backend/execution/extensions/configuredAdapter$': adapterModule,
+        [`${defaultAdapterModule}$`]: adapterModule,
+        [`${defaultAdapterModule}.ts$`]: adapterModule,
       };
     }
     // Failed/partial production compiles can leave multi-gigabyte filesystem
