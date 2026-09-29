@@ -89,6 +89,13 @@ export async function bankingCancel(request: Request, id: string): Promise<Respo
 export async function bankingRevoke(request: Request): Promise<Response> {
   try {
     const principal = await authenticateBankingRequest(request, true);
+    return bankingRevokePrincipal(principal);
+  } catch (error) { return bankingErrorResponse(error); }
+}
+
+/** Only the optional adapter can pass its verified, opaque principal here. */
+export async function bankingRevokePrincipal(principal: BankingPrincipal): Promise<Response> {
+  try {
     const { identity, policy } = bankingAdmission(principal);
     const locked = await runWithWorkspace(policy.workspace, () => assertUnlocked({ openai: true }));
     if (locked) return locked;

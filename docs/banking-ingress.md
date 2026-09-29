@@ -7,7 +7,10 @@ Customer identity never comes from tool arguments, conversation metadata or URL 
 
 The optional implementation lives in `src/integrations/hackathon-banking`. Select its
 `configuredAdapter.ts` with the absolute build setting `FLUJO_EXECUTION_ADAPTER_MODULE`.
-The generic FLUJO build contains no banking routes, policy, dependencies or adapter.
+The generic FLUJO build keeps an inactive revocation route placeholder returning
+404 after its ordinary workspace and encryption gates. Its implementation uses
+only the generic extension interface; banking controllers, authority and policy are included only
+when the optional adapter is selected. Shared package dependencies remain installed.
 
 ## Frontend contract
 
@@ -85,6 +88,13 @@ and return 404. Execution and conversation controls use the ordinary routes abov
 continue to use their existing owner records through ordinary read, events,
 cancellation and deletion routes. Retirement does not rewrite transcript data or
 change the configured deployment, workspace, graph identity or authority storage.
+
+In the banking profile, ordinary local/operator access to global conversation
+chains and the global events firehose is denied. These projections carry customer
+summaries, previews or raw events; customer history uses the owner-bound, bounded
+read/SSE routes above. Revocation authenticates the original routing-free request,
+then binds its policy workspace before the standard existence, storage and worker
+readiness checks. The JWT is consumed once; no client workspace selector is accepted.
 
 ## Private configuration
 

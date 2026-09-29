@@ -74,7 +74,8 @@ describe('retired optional banking namespace', () => {
   test('exact session revoke POST remains admitted to its existing handler', async () => {
     const request = await fixture.request('A', undefined, '/v1/banking/session/revoke');
     const task = jest.fn(async (received: Request) => {
-      expect(received).toBe(request);
+      expect(new URL(received.url).searchParams.get('workspace')).toBe(fixture.policy.workspace);
+      expect(received.headers.has('x-flujo-user-assertion')).toBe(false);
       return Response.json({ revoked: true });
     });
     expect(authorizeExecutionTransport(request)).toBeNull();

@@ -45,7 +45,7 @@ const claimsSchema = z.object({
 export async function authenticateBankingRequest(request: Request, revocation = false): Promise<BankingPrincipal> {
   const policy = requireBankingPolicy();
   assertBankingExecutionBearer(request, policy);
-  // The routes have no workspace wrapper: caller routing is rejected before any workspace lookup.
+  // Reject caller routing before the adapter binds a trusted workspace request.
   if (new URL(request.url).search || request.headers.has('x-workspace')
     || request.headers.has('x-flujo-workspace')) throw new BankingError('routing_fields_forbidden', 400);
   const token = request.headers.get('x-flujo-user-assertion');

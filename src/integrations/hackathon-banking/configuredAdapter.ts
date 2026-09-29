@@ -13,7 +13,7 @@ import { authenticateBankingRequest, bankingAdmission, createBankingRunContext,
   assertBankingRunCurrent, bankingRunPolicy, bindBankingRun, bankingRunSignal,
   commitBankingMutation, authorizeBankingHandoffs, assertBankingModelTool,
   assertBankingToolDispatch, validateBankingArguments, signBankingCall,
-  assertBankingServerConfig, BANK_ASSERTION_META, type BankingRunContext } from './authority';
+  assertBankingServerConfig, BANK_ASSERTION_META, type BankingPrincipal, type BankingRunContext } from './authority';
 import { getBankingPolicy, requireBankingPolicy, assertBankingExecutionBearer, isBankingRoute } from './policy';
 import { BankingStore, conversationPattern } from './store';
 import { assertBankingGraph } from './graph';
@@ -22,7 +22,7 @@ import { bankingJob } from './executionLease';
 import { BankingError, bankingErrorResponse } from './errors';
 import { validateBankingResult } from './protocol';
 import type { SharedState } from '@/backend/execution/flow/types';
-import { bankingConversation, bankingCancel, bankingEvents } from './controllers';
+import { bankingConversation, bankingCancel, bankingEvents, bankingRevokePrincipal } from './controllers';
 
 // This module is selected explicitly by a trusted build alias. Its policy and
 // private keys never come from an HTTP DTO, saved graph or MCP server preset.
@@ -33,6 +33,10 @@ const requestSchema = z.object({ model: z.string().min(1).max(256),
   metadata: metadataSchema.optional(), stream: z.literal(false).optional() }).strict();
 const normalConversation = /^\/v1\/chat\/conversations\/([a-f0-9-]{36})(?:\/(.*))?$/;
 const noCache = { 'Cache-Control': 'no-store, private', Pragma: 'no-cache', Vary: 'Authorization, X-Flujo-User-Assertion' };
+// A server-minted request capability bridges admission and the route handler.
+// It is never serialized and is consumed once, after workspace/worker checks.
+const revokeRequests = new WeakMap<Request, BankingPrincipal>();
+const protectedProjections = new Set(['/v1/chat/conversation-chains', '/v1/chat/events']);
 
 function extensionError(error: unknown): never {
   if (error instanceof BankingError) throw new ExecutionExtensionError(error.code, error.status);
@@ -155,7 +159,16 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
       const path = new URL(request.url).pathname;
       if (path.startsWith('/v1/banking')) {
         if (!isBankingRoute(path) || request.method !== 'POST') return Response.json({ error: 'not_found' }, { status: 404 });
-        return task(request);
+        const principal = await authenticateBankingRequest(request, true);
+        const { policy } = bankingAdmission(principal);
+        const url = new URL(request.url);
+        url.searchParams.set('workspace', policy.workspace);
+        const headers = new Headers(request.headers);
+        headers.delete('x-flujo-user-assertion');
+        const admitted = new NextRequest(url, { method: 'POST', headers, signal: request.signal });
+        revokeRequests.set(admitted, principal);
+        try { return await task(admitted); }
+        finally { revokeRequests.delete(admitted); }
       }
       if (usesBankingCredential(request)) {
         if (!allowedBoundRoute(request)) throw new BankingError('banking_control_forbidden');
@@ -167,10 +180,21 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
         if (match[2] === 'cancel') return bankingCancel(request, match[1]);
         return bankingConversation(request, match[1], request.method === 'DELETE');
       }
+      // These global projections contain summaries/previews or raw tool/message
+      // events without a customer-safe ownership projection. Deny them for
+      // ordinary operators too; owned reads use the bounded controls above.
+      if (protectedProjections.has(decodeURIComponent(path).replace(/\/+$/, ''))) throw new BankingError('banking_control_forbidden');
       const match = normalConversation.exec(path);
       if (match) await configuredExecutionAdapter.assertConversationAccess!(match[1]);
       return task(request);
     } catch (error) { return bankingErrorResponse(error); }
+  },
+  async handleRoute(request) {
+    if (!isBankingRoute(new URL(request.url).pathname) || request.method !== 'POST') return undefined;
+    const principal = revokeRequests.get(request);
+    revokeRequests.delete(request);
+    if (!principal) return bankingErrorResponse(new BankingError('authorization_denied', 401));
+    return bankingRevokePrincipal(principal);
   },
   isProtectedServer(server) { return synchronous(() => requireBankingPolicy().bankServerName === server); },
   assertServerConfig(config) { synchronous(() => { if (requireBankingPolicy().bankServerName === config.name) assertBankingServerConfig(config); }); },
