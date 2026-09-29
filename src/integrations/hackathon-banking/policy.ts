@@ -71,7 +71,7 @@ export function assertBankingExecutionBearer(request: Request, policy = requireB
 }
 
 export function isBankingRoute(pathname: string): boolean {
-  return pathname === '/v1/banking/session/revoke';
+  return pathname === '/v1/banking/session/revoke' || pathname === '/v1/banking/action';
 }
 
 export function isProtectedBankServer(serverName: string): boolean {

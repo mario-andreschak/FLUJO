@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { POST as revoke } from '@/app/v1/banking/session/revoke/route';
+import { POST as action } from '@/app/v1/banking/action/route';
 import { GET as chains } from '@/app/v1/chat/conversation-chains/route';
 import { GET as events } from '@/app/v1/chat/events/route';
 import { proxy } from '@/proxy';
@@ -16,6 +17,8 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { listConversationSummaries } from '@/backend/execution/flow/conversationSummaryStore';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { flowService } from '@/backend/services/flow';
+import { mcpService } from '@/backend/services/mcp';
 import { bankingFixture } from './bankingFixture';
 
 // Keep the actual route exports, extension admission, workspace selection,
@@ -27,6 +30,7 @@ jest.mock('@/backend/services/workspace/layoutReadiness', () => ({ waitForWorksp
 jest.mock('@/utils/workspace', () => ({ ...jest.requireActual('@/utils/workspace'),
   workspaceExists: jest.fn(async () => true), ensureWorkspaceDirs: jest.fn(async () => undefined) }));
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: jest.fn() } }));
+jest.mock('@/backend/services/mcp', () => ({ mcpService: { callTool: jest.fn() } }));
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({ loadConversationStateReadOnly: jest.fn() }));
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({ FlowExecutor: { conversationStates: new Map() } }));
 jest.mock('@/backend/services/workspace/workspaceMutationGate', () => ({ withWorkspaceMutation: async (task: () => Promise<unknown>) => task() }));
@@ -138,6 +142,58 @@ describe('optional banking profile through exported HTTP routes', () => {
   test('direct handler dispatch cannot fabricate the server-minted revocation capability', async () => {
     expect((await executionExtensionRouteResponse(await fixture.request('A', undefined, '/v1/banking/session/revoke'))).status).toBe(401);
     expect(propagateBankingRevocation).not.toHaveBeenCalled();
+  });
+
+  test('action route binds an owned conversation and reads back a verified sandbox handoff', async () => {
+    const { identity, store } = await owner();
+    const conversationId = randomUUID();
+    await store.createConversation(conversationId, identity);
+    jest.mocked(flowService.getFlow).mockResolvedValue(fixture.graph);
+    const pendingHandle = 'a'.repeat(43);
+    const handoffId = 'HOF-abcdefgh';
+    const transaction = { transaction_reference: 'txn_' + 'a'.repeat(12),
+      transaction_date: '2026-09-29T00:00:00Z', process_date: '2026-09-29', amount: '12.00',
+      currency: 'COP', status: 'Approved', merchant: null, transaction_type: 'Purchase',
+      channel: 'App', product: 'Card' };
+    const result = (data: Record<string, unknown>) => ({ success: true, data: { structuredContent: data } });
+    jest.mocked(mcpService.callTool).mockResolvedValueOnce(result({ pending_handle: pendingHandle,
+      snapshot: 'build-1', action: 'simulated_intake', decision: 'handoff', reason: 'missing_evidence',
+      transaction, risk: { unrecognized_count_24h: null, risk_data_complete: false } }) as never)
+      .mockResolvedValueOnce(result({ state: 'created', handoff: { id: handoffId } }) as never)
+      .mockResolvedValueOnce(result({ state: 'created', handoff: { id: handoffId,
+        reason: 'missing_evidence', human_responded: false } }) as never);
+    const response = await action(await fixture.request('A', { operation: 'prepare', conversationId,
+      transactionId: 'private-owned-transaction', snapshot: 'build-1' }, '/v1/banking/action'));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.state).toBe('handoff_verified');
+    expect(body.handoff.id).toBe(handoffId);
+    expect(JSON.stringify(body)).not.toContain('unrecognized_count_24h');
+    expect(mcpService.callTool).toHaveBeenCalledTimes(3);
+    expect((await action(await fixture.request('B', { operation: 'prepare', conversationId,
+      transactionId: 'private-owned-transaction', snapshot: 'build-1' }, '/v1/banking/action'))).status).toBe(404);
+    expect(mcpService.callTool).toHaveBeenCalledTimes(3);
+  });
+
+  test('uncertain confirmation reads once and separately verifies a handoff', async () => {
+    const { identity, store } = await owner();
+    const conversationId = randomUUID();
+    await store.createConversation(conversationId, identity);
+    jest.mocked(flowService.getFlow).mockResolvedValue(fixture.graph);
+    const result = (data: Record<string, unknown>) => ({ success: true, data: { structuredContent: data } });
+    jest.mocked(mcpService.callTool).mockRejectedValueOnce(new Error('lost confirm response'))
+      .mockResolvedValueOnce(result({ state: 'action_unverified', receipt: null }) as never)
+      .mockResolvedValueOnce(result({ state: 'created', handoff: { id: 'HOF-abcdefgh' } }) as never)
+      .mockResolvedValueOnce(result({ state: 'created', handoff: { id: 'HOF-abcdefgh' } }) as never);
+    const response = await action(await fixture.request('A', { operation: 'confirm', conversationId,
+      pendingHandle: 'a'.repeat(43), confirmed: true }, '/v1/banking/action'));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.state).toBe('action_unverified');
+    expect(body.handoff.state).toBe('handoff_verified');
+    expect(mcpService.callTool).toHaveBeenCalledTimes(4);
+    expect(jest.mocked(mcpService.callTool).mock.calls.map(call => call[1])).toEqual([
+      'confirm_simulated_intake', 'read_intake_receipt', 'create_verified_handoff', 'read_verified_handoff']);
   });
 
   test.each(['/v1/chat/conversation-chains', '/v1/chat/conversation-chains?root=customer&limit=25',

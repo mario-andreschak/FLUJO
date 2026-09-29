@@ -11,6 +11,7 @@ import { authenticateBankingRequest, bankingAdmission, createBankingRunContext, 
   type BankingRunContext, assertBankingServerConfig } from '@/backend/services/banking/authority';
 import { assertBankingModelTool, authorizeBankingHandoffs } from '@/backend/services/banking/authority';
 import { commitBankingMutation } from '@/backend/services/banking/authority';
+import { grantBankingActionTool } from '@/integrations/hackathon-banking/authority';
 import { BankingStore } from '@/backend/services/banking/store';
 import { callTool } from '@/backend/services/mcp/tools';
 import { validateBankingResult } from '@/backend/services/banking/protocol';
@@ -217,6 +218,22 @@ describe('banking identity authority', () => {
     await expect(assertBankingModelTool(alice.ctx, 'handoff_to_finish', undefined)).resolves.toBeUndefined();
     await expect(assertBankingModelTool(alice.ctx, 'Banking_MCP__list_my_transactions',
       { server: 'Banking MCP', tool: 'list_my_transactions' })).resolves.toBeUndefined();
+  });
+  test('action scope needs a one-call exact host grant; static host identity is insufficient', async () => {
+    const alice = await context();
+    const args = { transaction_id: 'synthetic-owned-id', snapshot: 'synthetic-build' };
+    await expect(signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge', args))
+      .rejects.toThrow('banking_action_consent_required');
+    await expect(assertBankingModelTool(alice.ctx, 'Banking_MCP__prepare_unrecognized_charge',
+      { server: 'Banking MCP', tool: 'prepare_unrecognized_charge' })).rejects.toThrow('banking_tool_forbidden');
+    await grantBankingActionTool(alice.ctx, 'prepare_unrecognized_charge', args);
+    await expect(signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge',
+      { ...args, transaction_id: 'changed' })).rejects.toThrow('banking_action_consent_required');
+    const signed = await signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge', args);
+    const verified = await jwtVerify(signed, bank.publicKey, { issuer: 'banking-runtime-test', audience: 'banking-mcp' });
+    expect(verified.payload.scope).toEqual(['bank:prepare']);
+    await expect(signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge', args))
+      .rejects.toThrow('banking_action_consent_required');
   });
   test('revocation during an in-flight MCP read discards the result', async () => {
     const alice = await context();

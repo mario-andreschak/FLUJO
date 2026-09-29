@@ -17,7 +17,8 @@ declare const runBrand: unique symbol;
 export interface BankingPrincipal { readonly [principalBrand]: true }
 export interface BankingRunContext { readonly [runBrand]: true }
 interface Admission { identity: Identity; policy: BankingPolicy; store: BankingStore }
-interface Run extends Admission { job: BankingAcceptedJob; conversation: string; runId?: string; signal?: AbortSignal; handoffs?: ReadonlySet<string> }
+interface Run extends Admission { job: BankingAcceptedJob; conversation: string; runId?: string; signal?: AbortSignal; handoffs?: ReadonlySet<string>;
+  actionGrant?: { tool: string; args: string } }
 type Registries = { principals: WeakMap<object, Admission>; runs: WeakMap<object, Run> };
 const shared = globalThis as typeof globalThis & { __flujoBankingAuthority?: Registries };
 const registries = shared.__flujoBankingAuthority ??= { principals: new WeakMap(), runs: new WeakMap() };
@@ -193,15 +194,45 @@ const toolSchemas = {
     selection_handle: reference, verify_source: z.boolean().optional() }).strict(),
 };
 export const bankingToolNames = Object.freeze(Object.keys(toolSchemas));
+const hostActionSchemas = {
+  prepare_unrecognized_charge: z.object({ transaction_id: z.string().min(1).max(128),
+    snapshot: z.string().regex(/^[A-Za-z0-9_-]{1,96}$/) }).strict(),
+  confirm_simulated_intake: z.object({ pending_handle: reference, confirmed: z.literal(true) }).strict(),
+  read_intake_receipt: z.object({ pending_handle: reference }).strict(),
+  create_verified_handoff: z.object({ reason: z.enum(['high_risk', 'missing_evidence', 'out_of_policy',
+    'emergency', 'action_unverified', 'customer_request', 'clarification_exhausted',
+    'duplicate_review', 'no_match_exhausted', 'tool_failure']), pending_handle: reference.optional() }).strict(),
+  read_verified_handoff: z.object({ handoff_id: z.string().regex(/^HOF-[A-Za-z0-9_-]{8}$/) }).strict(),
+};
+export const bankingHostActionToolNames = Object.freeze(Object.keys(hostActionSchemas));
+const actionScopes: Record<string, string> = { prepare_unrecognized_charge: 'bank:prepare',
+  confirm_simulated_intake: 'bank:write', read_intake_receipt: 'bank:receipt',
+  create_verified_handoff: 'bank:handoff', read_verified_handoff: 'bank:handoff-read' };
 
 export function validateBankingArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {
-  const schema = toolSchemas[tool as keyof typeof toolSchemas];
+  const schema = toolSchemas[tool as keyof typeof toolSchemas]
+    ?? hostActionSchemas[tool as keyof typeof hostActionSchemas];
   if (!schema) throw new BankingError('banking_tool_forbidden');
   try {
     return schema.parse(args);
   } catch {
     throw new BankingError('invalid_banking_arguments', 400);
   }
+}
+
+/** A one-call host capability, minted only by the trusted action route. */
+export async function grantBankingActionTool(context: BankingRunContext, tool: string,
+  args: Record<string, unknown>): Promise<void> {
+  if (!bankingHostActionToolNames.includes(tool)) throw new BankingError('banking_tool_forbidden');
+  const record = run(context);
+  await assertBankingRunCurrent(context);
+  const normalized = validateBankingArguments(tool, args);
+  record.actionGrant = { tool, args: canonicalize(normalized)! };
+}
+
+export function clearBankingActionGrant(context: BankingRunContext): void {
+  const record = registries.runs.get(context);
+  if (record) record.actionGrant = undefined;
 }
 
 export async function assertBankingToolDispatch(context: BankingRunContext | undefined, serverName: string,
@@ -225,8 +256,15 @@ export async function signBankingCall(context: BankingRunContext, serverName: st
   if (args.conversation_id != null && args.conversation_id !== record.conversation) {
     throw new BankingError('authorization_denied');
   }
+  const scope = actionScopes[tool];
+  if (scope) {
+    if (record.actionGrant?.tool !== tool || record.actionGrant.args !== canonicalize(args)) {
+      throw new BankingError('banking_action_consent_required');
+    }
+    record.actionGrant = undefined;
+  }
   const assertion = await sign(record.policy, record.identity, record.conversation, record.runId!, tool, args,
-    'bank:read', 'bank-mcp+jwt', () => {
+    scope ?? 'bank:read', 'bank-mcp+jwt', () => {
       const job = assertBankingJobLease(record.job, 'active');
       return Math.min(job.activeDeadline!, job.totalDeadline, job.identity.sessionExpires);
     });
