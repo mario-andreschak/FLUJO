@@ -128,7 +128,11 @@ function assertCatalogModel(bytes: Buffer, model: string): void {
       // Disabling shell does not disable a catalog-enabled native apply_patch handler.
       || selected.apply_patch_tool_type !== null
       || !Array.isArray(selected.experimental_supported_tools) || selected.experimental_supported_tools.length !== 0
-      || selected.node_repl_disabled !== true || selected.tool_mode !== 'direct') throw new Error();
+      || selected.node_repl_disabled !== true || selected.tool_mode !== 'direct'
+      // Lite requests hide tool definitions; v2 collaboration metadata can
+      // activate subagents independently of the corresponding feature flags.
+      || selected.use_responses_lite !== false || selected.supports_search_tool !== false
+      || selected.multi_agent_version !== null) throw new Error();
   } catch {
     throw new Error('Restricted Codex selected model is absent, incompatible, or has native capabilities.');
   }

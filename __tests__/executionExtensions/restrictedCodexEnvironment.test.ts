@@ -34,7 +34,8 @@ describe('restricted Codex credential/runtime isolation', () => {
   });
 
   const selectedModel = { slug: 'gpt-6-sol', model_messages: { instructions_template: 'synthetic fixture' },
-    apply_patch_tool_type: null, experimental_supported_tools: [], node_repl_disabled: true, tool_mode: 'direct' };
+    apply_patch_tool_type: null, experimental_supported_tools: [], node_repl_disabled: true, tool_mode: 'direct',
+    use_responses_lite: false, supports_search_tool: false, multi_agent_version: null };
   async function catalogProfile(catalog: unknown = { client_version: '0.153.3', models: [selectedModel] }): Promise<RestrictedCodexProfile> {
     const verifiedModelCatalogPath = path.join(directory, 'verified-models.json');
     const bytes = JSON.stringify(catalog);
@@ -114,6 +115,9 @@ describe('restricted Codex credential/runtime isolation', () => {
     { client_version: '0.153.3', models: [{ ...selectedModel, experimental_supported_tools: ['shell'] }] },
     { client_version: '0.153.3', models: [{ ...selectedModel, node_repl_disabled: false }] },
     { client_version: '0.153.3', models: [{ ...selectedModel, tool_mode: 'auto' }] },
+    { client_version: '0.153.3', models: [{ ...selectedModel, use_responses_lite: true }] },
+    { client_version: '0.153.3', models: [{ ...selectedModel, supports_search_tool: true }] },
+    { client_version: '0.153.3', models: [{ ...selectedModel, multi_agent_version: 'v2' }] },
   ])('incompatible or native-capable model catalogs fail before binary/auth access: %#', async catalog => {
     await expect(assertRestrictedCodexProfile(await catalogProfile(catalog), 'gpt-6-sol')).rejects.toThrow('absent, incompatible, or has native capabilities');
     expect(mockExecFile).not.toHaveBeenCalled();
