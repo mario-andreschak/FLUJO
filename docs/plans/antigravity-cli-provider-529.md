@@ -343,3 +343,8 @@ CI and recordings remain historical evidence and do not establish new acceptance
   acceptance. Ubuntu/Windows verification includes source artifacts, production
   builds and packed production consumers, alongside the existing full test,
   isolated-process, baseline, memory and release-safety gates.
+- A hosted Windows installer log exposed a process-boundary assertion failure
+  hidden by a later success in the same PowerShell step. Each native command now
+  has its own CI step so its exit code is enforced. The PowerShell encoding
+  fixture retains its exact assertions with a bounded startup budget and error
+  receipt; its earlier failure cause was not observable from the old assertion.

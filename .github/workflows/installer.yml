@@ -48,17 +48,25 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Install production build dependencies
+        run: npm ci --include=dev
+
       - name: Build production artifacts
-        run: |
-          npm ci --include=dev
-          npm run build
+        run: npm run build
+
+      # Separate native commands so a later success cannot mask an earlier
+      # nonzero exit code in PowerShell.
+      - name: Verify browser installer helpers
+        run: node --test mcp-servers/browser/scripts/install-browser.test.mjs
 
       - name: Exercise MCP process boundaries
-        run: |
-          node --test mcp-servers/browser/scripts/install-browser.test.mjs
-          npm run test:mcp-process-boundary
-          npm run validate:mcp-release
-          node --test scripts/antigravity-cli-artifact.test.mjs
+        run: npm run test:mcp-process-boundary
+
+      - name: Validate MCP release artifacts
+        run: npm run validate:mcp-release
+
+      - name: Verify the packaged Antigravity CLI
+        run: node --test scripts/antigravity-cli-artifact.test.mjs
 
       # A clean consumer install is intentionally expensive on hosted Windows.
       # Keep it as a release/manual gate instead of paying that cost on every
