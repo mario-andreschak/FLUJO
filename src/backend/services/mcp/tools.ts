@@ -28,6 +28,16 @@ import {
 } from "./externalAuthorization";
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
+import {
+  assertExecutionToolDispatch,
+  assertExecutionExtensionCurrent,
+  executionToolRequestMeta,
+  normalizeExecutionToolArguments,
+  validateExecutionToolResult,
+  isProtectedExecutionServer,
+  ExecutionExtensionError,
+  type ExecutionExtensionContext,
+} from '@/backend/execution/extensions';
 
 const log = createLogger("backend/services/mcp/tools");
 
@@ -187,6 +197,7 @@ export async function callTool(
   source: ToolCallSource = "host",
   callerNodeId?: string,
   ownerScope?: string,
+  executionExtensionContext?: ExecutionExtensionContext,
 ): Promise<MCPServiceResponse> {
   log.debug("Entering callTool method");
   if (!client) {
@@ -204,6 +215,8 @@ export async function callTool(
       : MAX_TIMEOUT_MS;
 
   try {
+    const privateExecution = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
+    if (privateExecution) await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
     // MCP Apps may call tools only on their own backing server, and only when
     // the server's definition grants the "app" audience. The service passes
     // the exact client belonging to the frame's server; listing and dispatch
@@ -237,8 +250,9 @@ export async function callTool(
     }
 
     // Resolve any global variable references in the arguments
-    log.debug(`Original args for tool ${toolName}:`, args);
-    const resolvedArgs = await resolveGlobalVars(args);
+    if (!privateExecution) log.debug(`Original args for tool ${toolName}:`, args);
+    // Private execution arguments do not read the shared interpolation/secret store.
+    const resolvedArgs = privateExecution ? args : await resolveGlobalVars(args);
 
     // Ensure resolvedArgs is a record before normalizing
     const argsRecord =
@@ -248,8 +262,9 @@ export async function callTool(
 
     // Normalize undefined/null values based on parameter types
     // This ensures we don't pass undefined values to MCP servers
-    const normalizedArgs = normalizeToolArguments(argsRecord, toolName);
-    log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
+    const normalizedArgs = privateExecution ? normalizeExecutionToolArguments(executionExtensionContext!, toolName, argsRecord)
+      : normalizeToolArguments(argsRecord, toolName);
+    if (!privateExecution) log.debug(`Normalized args for tool ${toolName}:`, normalizedArgs);
 
     log.debug(`Calling tool ${toolName} with SDK timeout ${timeoutMs}ms`);
     const callOptions = {
@@ -257,10 +272,12 @@ export async function callTool(
       resetTimeoutOnProgress: true,
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
-        log.debug(
-          `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
-        );
-        onProgress?.(progress);
+        if (!privateExecution) {
+          log.debug(
+            `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
+          );
+          onProgress?.(progress);
+        }
       },
     };
     // MCP Tasks negotiation (issue #404). Task-augmented execution is
@@ -269,7 +286,9 @@ export async function callTool(
     // `capabilities.tasks.requests.tools.call`, and the tool itself declares
     // `execution.taskSupport` (required/optional). Classic or incompatible
     // servers therefore never receive any Tasks metadata.
-    const taskDecision = await decideTaskAugmentation(client, toolName);
+    const taskDecision = privateExecution
+      ? { request: false, reason: 'private synchronous profile' } as Awaited<ReturnType<typeof decideTaskAugmentation>>
+      : await decideTaskAugmentation(client, toolName);
     if (taskDecision.request) {
       log.info(
         `Requesting task-augmented execution of ${toolName} on ${serverName} (${taskDecision.reason})`,
@@ -280,11 +299,15 @@ export async function callTool(
     // callTool(params, resultSchema?, options?), the v2-beta SDK dropped the
     // schema parameter — passing options in the v1 slot would silently discard
     // the timeout and progress forwarding.
+    // This hook sees finalized business arguments. Authority never enters tool maps
+    // or transcript payloads, and every actual dispatch receives fresh metadata.
+    const privateMeta = privateExecution
+      ? await executionToolRequestMeta(executionExtensionContext!, serverName, toolName, normalizedArgs) : undefined;
     const requestParams = {
       name: toolName,
       arguments: normalizedArgs,
       ...(taskDecision.request ? buildTaskAugmentation(taskDecision.ttlMs) : {}),
-      ...(callerNodeId || ownerScope
+      ...(privateMeta ? { _meta: privateMeta } : callerNodeId || ownerScope
         ? {
             _meta: {
               flujo: {
@@ -303,6 +326,11 @@ export async function callTool(
           ) => ReturnType<Client["callTool"]>
         ).call(client, requestParams, callOptions)
       : await client.callTool(requestParams, undefined, callOptions);
+
+    if (privateExecution) {
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      return { success: true, data: validateExecutionToolResult(executionExtensionContext!, toolName, response) };
+    }
 
     // -----------------------------------------------------------------------
     // MCP Tasks extension (io.modelcontextprotocol/tasks)
@@ -372,6 +400,11 @@ export async function callTool(
       data: stampMcpAppOwnerScope(response, ownerScope),
     };
   } catch (error) {
+    if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
+      // SDK exceptions can contain request metadata. Never log or serialize them.
+      return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',
+        statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-call' };
+    }
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
     let errorMessage = error instanceof Error ? error.message : "Unknown error";
     let statusCode = 500;

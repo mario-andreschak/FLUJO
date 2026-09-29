@@ -1,4 +1,5 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { exposeExecutionConversationInList, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import { promises as fs } from 'fs';
@@ -264,17 +265,23 @@ async function GET_handler(request: NextRequest) {
     const files = await fs.readdir(conversationsDir);
     log.debug(`Found ${files.length} items in directory`, { requestId });
 
-    const jsonFiles = files.filter(file => file.endsWith('.json'));
+    const jsonFiles: string[] = [];
+    for (const file of files.filter(file => file.endsWith('.json'))) {
+      if (await exposeExecutionConversationInList(file.slice(0, -5))) jsonFiles.push(file);
+    }
     log.debug(`Found ${jsonFiles.length} JSON files`, { requestId });
 
     // The dashboard only needs to know whether saved chats exist. Avoid reading
     // and projecting every conversation file for that lightweight status check.
     if (presenceOnly) {
-      if (personaControlAllowed) return NextResponse.json({ count: jsonFiles.length });
       const summaries = await listConversationSummaries();
+      if (personaControlAllowed) {
+        const protectedIds = new Set(summaries.filter(summary => summary.executionExtensionOwned).map(summary => summary.id));
+        return NextResponse.json({ count: jsonFiles.filter(file => !protectedIds.has(file.slice(0, -5))).length });
+      }
       const count = summaries.filter((summary) => (
-        !summary.personaOwned
-        && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
+        !summary.executionExtensionOwned && jsonFiles.includes(summary.id + '.json')
+        && !summary.personaOwned && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
       )).length;
       return NextResponse.json({ count });
     }
@@ -290,6 +297,7 @@ async function GET_handler(request: NextRequest) {
         ? new Map((await flowService.loadFlows()).map((flow) => [flow.id, flow.name]))
         : new Map<string, string>();
       let visible = summaries
+        .filter((summary) => !summary.executionExtensionOwned && jsonFiles.includes(summary.id + '.json'))
         .filter((summary) => personaControlAllowed || (
           !summary.personaOwned
           && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
@@ -383,6 +391,7 @@ async function GET_handler(request: NextRequest) {
             ? await fs.readFile(filePath, { encoding: 'utf-8', signal: request.signal })
             : await fs.readFile(filePath, 'utf-8');
           const state = JSON.parse(fileContent) as SharedState;
+          if (isExecutionProtectedState(state)) return null;
           parsedState = state;
           if (!personaControlAllowed && isPersonaOwnedConversationState(state)) return null;
           // On the first sidebar load after a process restart, convert a running

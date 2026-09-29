@@ -3,6 +3,7 @@ import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest'
 import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { authorizeExecutionTransport } from '@/backend/execution/extensions';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -45,6 +46,13 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   const { pathname } = request.nextUrl;
+
+  // Optional trusted integrations may admit only their narrow execution surface.
+  // The route authenticates again; proxy and handler need not share runtime state.
+  const extensionResponse = authorizeExecutionTransport(request);
+  if (extensionResponse !== undefined) return extensionResponse === null
+    ? NextResponse.next()
+    : new NextResponse(extensionResponse.body, { status: extensionResponse.status, headers: extensionResponse.headers });
 
   if (isWorkerMode()) {
     // Private network membership and a caller-supplied Host header are not

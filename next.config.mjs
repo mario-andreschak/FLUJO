@@ -2,6 +2,7 @@
 // on end-user machines without TypeScript installed, and a next.config.ts would
 // make Next try to npm-install typescript there at runtime (which fails).
 import path from 'path';
+import { statSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,23 @@ const nextConfig = {
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {
+    // Trusted build-time composition, not a runtime plugin loader. Ordinary
+    // builds keep the empty adapter and retain their existing behavior.
+    const adapterModule = process.env.FLUJO_EXECUTION_ADAPTER_MODULE;
+    if (adapterModule) {
+      if (!path.isAbsolute(adapterModule) || !statSync(adapterModule).isFile()) {
+        throw new Error('FLUJO_EXECUTION_ADAPTER_MODULE must name an existing absolute server module.');
+      }
+      config.resolve ??= {};
+      // Next's tsconfig paths plugin rewrites @/* before Webpack's alias hook.
+      // Match the rewritten source as well, including explicit .ts imports.
+      const defaultAdapterModule = path.join(__dirname, 'src/backend/execution/extensions/configuredAdapter');
+      config.resolve.alias = { ...config.resolve.alias,
+        '@/backend/execution/extensions/configuredAdapter$': adapterModule,
+        [`${defaultAdapterModule}$`]: adapterModule,
+        [`${defaultAdapterModule}.ts$`]: adapterModule,
+      };
+    }
     // Failed/partial production compiles can leave multi-gigabyte filesystem
     // caches (the workspace route fan-out once produced a 2.8 GB server cache).
     // Loading that cache alone can exhaust Node's normal heap on the next build.

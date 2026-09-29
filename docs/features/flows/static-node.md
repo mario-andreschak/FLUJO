@@ -144,6 +144,26 @@ Text fields (`content`, `argumentsJson`, and `result`) resolve run variables bef
 
 Keep the final substituted `argumentsJson` valid JSON. The modal validates the authored value, while execution parses the resolved value.
 
+### Dynamic references and fixed tool parameters
+
+Static messages, mock results, and JSON argument values also resolve dynamic
+references such as `@current.conversation.id`, `@current.flow.id`, and `@current.node.id` from the current
+execution. JSON values resolve after parsing, preserving nested objects and quoted
+names. Conversation IDs retain their original form, including Slack thread IDs.
+
+For real MCP calls, server parameter presets apply first and connected MCP node
+presets override them per parameter. These presets override the authored call's
+arguments, matching Process-node dispatch. Fixed values resolve immediately before
+the MCP call and are excluded from the assistant tool-call message added to model
+history. Tool results can still disclose values returned by the server.
+
+An enabled preset whose value is an empty string is still a fixed parameter. Disable
+the preset to allow the model or authored call to supply that parameter. A trusted
+customer binding must come from server-controlled configuration; `@conversation.id`
+provides correlation and does not authenticate the customer. See the
+[complete command reference](../dynamic-references.md) for current context,
+entity pickers, aliases, and available fields.
+
 ## Re-entry semantics
 
 A Static node can be traversed more than once in a single run — inside a loop, or via two
