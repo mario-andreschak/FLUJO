@@ -95,22 +95,32 @@ describe('restricted Codex credential/runtime isolation', () => {
     expect(mockExecFile).toHaveBeenCalledTimes(2);
   });
 
-  test('a rejected concurrent verification is evicted and a later call verifies again', async () => {
+  test('bad digests never launch the executable; rejected concurrent work is evicted and identical retries rehash', async () => {
     const profile = await executableProfile();
     const gate = pendingVerification(2, profile.verifiedCliPath!);
+    let releaseHash!: () => void;
+    const hashGate = new Promise<void>(resolve => { releaseHash = resolve; });
+    const readStream = jest.requireActual('node:fs').createReadStream;
+    mockReadStream.mockImplementation((...args: unknown[]) => (async function* () {
+      await hashGate;
+      yield* readStream(...args);
+    })());
     const calls = Promise.allSettled([assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol'),
       assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol')]);
     await gate.identitiesRead;
     await new Promise<void>(resolve => setImmediate(resolve));
     gate.release();
+    releaseHash();
     expect((await calls).map(result => result.status)).toEqual(['rejected', 'rejected']);
     expect(mockReadStream).toHaveBeenCalledTimes(1);
+    expect(mockExecFile).not.toHaveBeenCalled();
     await expect(assertRestrictedCodexProfile({ ...profile, verifiedCliSha256: 'b'.repeat(64) }, 'gpt-6-sol'))
       .rejects.toThrow('differs from its verified profile');
     expect(mockReadStream).toHaveBeenCalledTimes(2);
-    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    expect(mockExecFile).not.toHaveBeenCalled();
     await expect(assertRestrictedCodexProfile(profile, 'gpt-6-sol')).resolves.toBe(await fs.realpath(profile.verifiedCliPath!));
     expect(mockReadStream).toHaveBeenCalledTimes(3);
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
     expect(readCodexAuthForTransfer).not.toHaveBeenCalled();
   });
 
@@ -125,7 +135,7 @@ describe('restricted Codex credential/runtime isolation', () => {
     gate.release();
     expect((await calls).map(result => result.status)).toEqual(['fulfilled', 'rejected', 'rejected']);
     expect(mockReadStream).toHaveBeenCalledTimes(3);
-    expect(mockExecFile).toHaveBeenCalledTimes(3);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
   });
 
   test('in-flight byte drift rejects every subscriber and a changed file starts a separate hash', async () => {
