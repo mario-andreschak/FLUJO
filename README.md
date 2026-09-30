@@ -27,6 +27,8 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 
 <img width="1336" height="839" alt="image" src="https://github.com/user-attachments/assets/7adb5b58-bffa-48dc-82f3-bf1ac585db55" />
 
+> **Hackathon branch:** `codex/hackathon-banking` preserves the combined banking implementation from PRs #530, #532 and #533. Generic FLUJO stays on `main`. For the hackathon worker, follow [the dedicated deployment guide](docs/HACKATHON_DEPLOYMENT.md); the installers below select generic FLUJO.
+
 ## ⚡ Quick Install (recommended)
 
 The installer sets up everything FLUJO needs (Git, Node.js, Python, uv, ripgrep), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.

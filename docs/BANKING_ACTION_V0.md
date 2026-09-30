@@ -1,5 +1,7 @@
 # Protected banking action route v0
 
+This route belongs to the dedicated `codex/hackathon-banking` branch, not generic FLUJO `main`. See [the branch deployment guide](HACKATHON_DEPLOYMENT.md). Source preservation does not enable frontend actions or establish joined customer acceptance.
+
 `POST /v1/banking/action` is an optional route selected by the private banking execution adapter. The generic route itself has no banking policy import. A fresh frontend assertion is consumed before the bounded JSON body is parsed. The adapter binds the request to its configured workspace and passes a one-use in-process capability to the controller. The controller verifies conversation ownership and the approved graph, admits a bounded job, and calls the existing private stdio banking MCP.
 
 The graph and model tool allowlist still contains only the three read tools. Five sandbox action tools have separate schemas and scopes and can be signed only after the host grants one exact tool call with exact arguments. The grant is consumed during signing and cleared after the call. A model tool call or saved graph cannot mint it.

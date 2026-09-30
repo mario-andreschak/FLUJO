@@ -1,5 +1,7 @@
 # Optional hackathon banking ingress
 
+This implementation is maintained on `codex/hackathon-banking`, separately from generic FLUJO `main`. See [the branch deployment guide](HACKATHON_DEPLOYMENT.md) for the preserved source revision, Docker build selection and current deployment status. The contracts below describe that source; preserving it does not upgrade the running worker.
+
 FLUJO can run one shared banking flow for many customers. A frontend backend verifies
 the browser session and signs a short-lived user assertion. FLUJO verifies that
 assertion, owns the conversation, and signs each finalized banking tool call.

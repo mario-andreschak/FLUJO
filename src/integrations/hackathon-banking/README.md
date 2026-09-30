@@ -1,5 +1,7 @@
 # Optional hackathon banking adapter
 
+This source is preserved on the dedicated `codex/hackathon-banking` branch. Generic FLUJO `main` remains separate. Follow [the branch deployment guide](../../../docs/HACKATHON_DEPLOYMENT.md) for source pins, build selection and rollout status.
+
 This adapter is selected by the trusted build setting `FLUJO_EXECUTION_ADAPTER_MODULE`, pointing to this directory's `configuredAdapter.ts`. The default FLUJO build has no adapter. `FLUJO_BANKING_CONFIG` points to the private, absolute policy file; neither configuration belongs in a graphical flow or request metadata.
 
 Authenticated callers use ordinary `POST /v1/chat/completions`. The adapter requires the execution bearer and a fresh frontend assertion, verifies the immutable conversation owner before state reads, admits the turn through the bounded pool, pins the approved graph, and supplies opaque runtime authority to the existing completion path. Its synchronous profile accepts one user message, the approved `flow-<name>` model, optional owned `metadata.conversationId`, and ordinary `flujo`/`appendMessages` flags. Debugging, approvals, detached execution, shared references and arbitrary controls remain unavailable.
