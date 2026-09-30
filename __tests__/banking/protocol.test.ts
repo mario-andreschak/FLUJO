@@ -15,7 +15,7 @@ const status = { service: 'banking-mcp', version: '1.0', read_only: false, sandb
 const list = { transactions: [{ ...transaction, selection_handle: 'a'.repeat(32) }], next_cursor: null,
   date_window: { start: '2026-01-01', end: '2026-01-31', basis: 'transaction_date',
     calendar: 'source_timestamp_calendar_date', anchor: '2026-01-31', max_calendar_days: 90 },
-  snapshot_event_dates: { first: '2026-01-02', last: '2026-01-31',
+  snapshot_event_dates: { first: '2026-01-01', last: '2026-01-31',
     basis: 'transaction_date', calendar: 'source_timestamp_calendar_date' }, snapshot: 'fixture_snapshot',
   freshness: 'derived_snapshot', read_only: true, synthetic: false, operator_test: false };
 const get = { transaction, snapshot: 'fixture_snapshot', freshness: 'derived_snapshot',
@@ -98,6 +98,24 @@ describe('delegated Python banking result contract', () => {
       date_window: { ...list.date_window, start: '2026-01-02', end: '2026-01-02', anchor: '2026-01-02' },
       snapshot_event_dates: { ...list.snapshot_event_dates, first: '2026-01-02', last: '2026-01-02' } };
     expect(() => validateBankingResult('list_my_transactions', response(value))).not.toThrow();
+  });
+
+  test('an explicit older window is valid anywhere within the disclosed snapshot bounds', () => {
+    const value = { ...list, date_window: { ...list.date_window, anchor: '2026-12-31' },
+      snapshot_event_dates: { ...list.snapshot_event_dates, last: '2026-12-31' } };
+    expect(() => validateBankingResult('list_my_transactions', response(value))).not.toThrow();
+  });
+
+  test('a short serving snapshot can bound a default window to fewer than 90 dates', () => {
+    const value = { ...list, date_window: { ...list.date_window, start: '2026-01-02' },
+      snapshot_event_dates: { ...list.snapshot_event_dates, first: '2026-01-02' } };
+    expect(() => validateBankingResult('list_my_transactions', response(value))).not.toThrow();
+  });
+
+  test('91 inclusive calendar dates are rejected even when covered by the snapshot', () => {
+    const value = { ...list, date_window: { ...list.date_window, end: '2026-04-01', anchor: '2026-04-01' },
+      snapshot_event_dates: { ...list.snapshot_event_dates, last: '2026-04-01' } };
+    expect(() => validateBankingResult('list_my_transactions', response(value))).toThrow('banking_protocol_result_rejected');
   });
 
   test('a matching existing receipt retains its original case snapshot', () => {

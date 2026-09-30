@@ -19,8 +19,11 @@ lists disclose `date_window` with `basis: "transaction_date"`,
 `calendar: "source_timestamp_calendar_date"`, the serving snapshot's last
 ownership-valid event date as `anchor`, and `max_calendar_days: 90`.
 `snapshot_event_dates` contains `first`, `last`, `basis` and `calendar`. The
-inclusive search window uses those source calendar dates; process partitions,
-snapshot build time and wall time do not select it. Intake age, authentication,
+default inclusive window covers up to 90 source calendar dates, bounded by
+`first` and `last`. An explicit start/end pair may select any covered window of
+at most 90 inclusive dates; its endpoints are preserved. Partial or uncovered
+dates fail safely. Process partitions, snapshot build time and wall time do not
+select the window. Intake age, authentication,
 consent and pending-action deadlines retain their real wall clocks.
 
 `get_my_transaction` and prepare results contain an `existing_case` projection:

@@ -59,7 +59,8 @@ const resultSchemas = {
     read_only: z.literal(true), synthetic: z.literal(false), operator_test: z.literal(false) }).strict().refine(value => {
       const { start, end, anchor } = value.date_window;
       return start <= end && end <= anchor && value.snapshot_event_dates.first <= value.snapshot_event_dates.last
-        && anchor === value.snapshot_event_dates.last && Date.parse(anchor) - Date.parse(start) < 90 * 86400000
+        && anchor === value.snapshot_event_dates.last && start >= value.snapshot_event_dates.first
+        && Date.parse(end) - Date.parse(start) < 90 * 86400000
         && value.transactions.every(item => calendarDate.safeParse(item.transaction_date.slice(0, 10)).success
           && item.transaction_date.slice(0, 10) >= start && item.transaction_date.slice(0, 10) <= end);
     }),
