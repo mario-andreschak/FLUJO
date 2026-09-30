@@ -191,7 +191,7 @@ describe('optional banking profile through exported HTTP routes', () => {
     expect(jest.mocked(mcpService.callTool).mock.calls[0][2]).toEqual({
       transaction_id: 'private-owned-transaction', snapshot: 'build-1', request_id: requestId });
     expect(jest.mocked(mcpService.callTool).mock.calls[1][2]).toEqual({ reason: 'missing_evidence',
-      pending_handle: pendingHandle, request_id: requestId });
+      pending_handle: pendingHandle, request_id: requestId, unanswered_questions: [] });
     expect((await action(await fixture.request('B', { operation: 'prepare', conversationId,
       transactionId: 'private-owned-transaction', snapshot: 'build-1', requestId: randomUUID() },
     '/v1/banking/action'))).status).toBe(404);
@@ -236,8 +236,8 @@ describe('optional banking profile through exported HTTP routes', () => {
     }
     const created = jest.mocked(mcpService.callTool).mock.calls.filter(call => call[1] === 'create_verified_handoff');
     expect(created.map(call => call[2])).toEqual([
-      { reason: 'customer_request', request_id: firstId },
-      { reason: 'customer_request', request_id: secondId },
+      { reason: 'customer_request', request_id: firstId, unanswered_questions: [] },
+      { reason: 'customer_request', request_id: secondId, unanswered_questions: [] },
     ]);
   });
 
@@ -304,7 +304,8 @@ describe('optional banking profile through exported HTTP routes', () => {
         transaction_currentness: 'different_snapshot' } }) as never);
     const requestId = randomUUID();
     const response = await action(await fixture.request('A', { operation: 'handoff', conversationId,
-      reason: 'customer_request', pendingHandle: 'a'.repeat(43), requestId, unansweredQuestions: questions }, '/v1/banking/action'));
+      reason: 'customer_request', pendingHandle: 'a'.repeat(43), requestId,
+      unanswered_questions: questions.map(question => `  ${question}  `) }, '/v1/banking/action'));
     const value = await response.json();
     expect(value.state).toBe('handoff_verified');
     expect(value.handoff.transaction_currentness).toBe('different_snapshot');
@@ -337,7 +338,14 @@ describe('optional banking profile through exported HTTP routes', () => {
 
   test('unbounded question input is rejected before any host dispatch', async () => {
     const response = await action(await fixture.request('A', { operation: 'handoff', conversationId: randomUUID(),
-      reason: 'customer_request', requestId: randomUUID(), unansweredQuestions: Array(9).fill('Question') }, '/v1/banking/action'));
+      reason: 'customer_request', requestId: randomUUID(), unanswered_questions: Array(9).fill('Question') }, '/v1/banking/action'));
+    expect(response.status).toBe(400);
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+  });
+
+  test('the obsolete camelCase question field is rejected before dispatch', async () => {
+    const response = await action(await fixture.request('A', { operation: 'handoff', conversationId: randomUUID(),
+      reason: 'customer_request', requestId: randomUUID(), unansweredQuestions: ['Question'] }, '/v1/banking/action'));
     expect(response.status).toBe(400);
     expect(mcpService.callTool).not.toHaveBeenCalled();
   });

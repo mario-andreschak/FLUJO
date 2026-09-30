@@ -39,9 +39,10 @@ or conflicting readback returns `action_unverified` without a receipt claim.
 The frontend must preserve and render `existing_case_verified` as an existing
 case, using the verified receipt rather than offering another confirmation.
 
-The host HTTP handoff operation accepts optional `unansweredQuestions` (at most
-eight strings of 1–240 characters), forwarded as `unanswered_questions` in the
-exact signed host call. The saved `packet` has schema
+The host HTTP handoff operation accepts optional `unanswered_questions` (at most
+eight strings of 1–240 characters). Omission normalizes to `[]`; values are trimmed
+before the exact signed host call and receipt comparison. The frontend freezes
+that normalized list with the request ID before any retry. The saved `packet` has schema
 `banking-sandbox-handoff/v1`, selected `transaction` facts or null, `reason`,
 `unanswered_questions`, `human_responded: false`, and `transaction_provenance`.
 Provenance is null for general help; otherwise it contains

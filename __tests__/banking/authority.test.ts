@@ -259,6 +259,18 @@ describe('banking identity authority', () => {
       .toEqual({ ...args, unanswered_questions: ['😀'.repeat(240)] });
   });
 
+  test('omitted handoff questions normalize to the same signed empty list', async () => {
+    const alice = await context();
+    const normalized = validateBankingArguments('create_verified_handoff', {
+      reason: 'customer_request', request_id: randomUUID(),
+    });
+    expect(normalized.unanswered_questions).toEqual([]);
+    await grantBankingActionTool(alice.ctx, 'create_verified_handoff', normalized);
+    const signed = await signBankingCall(alice.ctx, 'Banking MCP', 'create_verified_handoff', normalized);
+    expect((await jwtVerify(signed, bank.publicKey)).payload.args_sha256)
+      .toBe(createHash('sha256').update(canonicalize(normalized)!).digest('hex'));
+  });
+
   test('revocation during an in-flight MCP read discards the result', async () => {
     const alice = await context();
     const data = { error: 'reference_unavailable' };

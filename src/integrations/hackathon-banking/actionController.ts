@@ -27,7 +27,7 @@ export const actionBody = z.discriminatedUnion('operation', [
     'out_of_policy', 'emergency', 'action_unverified', 'customer_request', 'clarification_exhausted',
     'high_risk', 'duplicate_review', 'no_match_exhausted', 'tool_failure']),
     pendingHandle: handle.optional(), requestId: z.string().uuid().optional(),
-    unansweredQuestions: bankingUnansweredQuestions.optional() }).strict(),
+    unanswered_questions: bankingUnansweredQuestions.default([]) }).strict(),
   z.object({ ...common, operation: z.literal('handoff_read'),
     handoffId: z.string().regex(/^HOF-[A-Za-z0-9_-]{8}$/) }).strict(),
 ]);
@@ -81,7 +81,7 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
           unansweredQuestions?: string[], expectedTransaction?: unknown) => {
           const args = { reason, ...(pendingHandle ? { pending_handle: pendingHandle } : {}),
             ...(requestId ? { request_id: requestId } : {}),
-            ...(unansweredQuestions ? { unanswered_questions: unansweredQuestions } : {}) };
+            unanswered_questions: unansweredQuestions ?? [] };
           try {
             const created = await invoke('create_verified_handoff', args);
             if (created.state !== 'created') throw new BankingError('banking_protocol_result_rejected', 502);
@@ -156,7 +156,7 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
             : { state: 'action_unverified' };
         } else if (body.operation === 'handoff') {
           if (!body.pendingHandle && !body.requestId) throw new BankingError('invalid_arguments', 400);
-          outcome = await verifiedHandoff(body.reason, body.pendingHandle, body.requestId, body.unansweredQuestions);
+          outcome = await verifiedHandoff(body.reason, body.pendingHandle, body.requestId, body.unanswered_questions);
         } else {
           const read = await invoke('read_verified_handoff', { handoff_id: body.handoffId });
           const handoff = bankingHandoffSchema.safeParse(read.handoff);
