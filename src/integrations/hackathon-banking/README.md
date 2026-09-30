@@ -12,6 +12,51 @@ Normal conversation GET, DELETE, events and cancellation receive authenticated o
 
 Native CLI execution remains denied unless an explicitly verified restricted profile is configured and the exact CLI attestation passes.
 
+## Event dates, existing cases and saved handoffs
+
+The three model read tools and five host action tools are unchanged. Transaction
+lists disclose `date_window` with `basis: "transaction_date"`,
+`calendar: "source_timestamp_calendar_date"`, the serving snapshot's last
+ownership-valid event date as `anchor`, and `max_calendar_days: 90`.
+`snapshot_event_dates` contains `first`, `last`, `basis` and `calendar`. The
+default inclusive window covers up to 90 source calendar dates, bounded by
+`first` and `last`. An explicit start/end pair may select any covered window of
+at most 90 inclusive dates; its endpoints are preserved. Partial or uncovered
+dates fail safely. Process partitions, snapshot build time and wall time do not
+select the window. Intake age, authentication,
+consent and pending-action deadlines retain their real wall clocks.
+
+`get_my_transaction` and prepare results contain an `existing_case` projection:
+`state` is `verified`, `not_found` or `action_unverified`, with a receipt only
+for `verified`, `coverage: "sandbox_only"` and `source: "sandbox_cases"`.
+A receipt includes `status: "received"` for the simulated local intake. Its
+snapshot is the original case snapshot and may differ from the current selected
+transaction snapshot when the exact public transaction facts still match.
+Legacy, missing or corrupt receipt evidence cannot establish a verified case.
+
+A prepare decision of `existing_case` reads `read_intake_receipt` again by the
+same pending handle and requires exact receipt equality. Success returns the
+terminal frontend state `existing_case_verified` and `receipt`. It never enters
+`pending_confirmation` or invokes confirmation or new handoff creation. Failed
+or conflicting readback returns `action_unverified` without a receipt claim.
+The frontend must preserve and render `existing_case_verified` as an existing
+case, using the verified receipt rather than offering another confirmation.
+
+The host HTTP handoff operation accepts optional `unanswered_questions` (at most
+eight strings of 1–240 characters). Omission normalizes to `[]`; values are trimmed
+before the exact signed host call and receipt comparison. The frontend freezes
+that normalized list with the request ID before any retry. The saved `packet` has schema
+`banking-sandbox-handoff/v1`, selected `transaction` facts or null, `reason`,
+`unanswered_questions`, `human_responded: false`, and `transaction_provenance`.
+Provenance is null for general help; otherwise it contains
+`source: "owned_serving_snapshot"`, `snapshot` and real wall UTC `as_of`.
+The packet reason and facts must agree with the handoff's top-level fields.
+Creation and readback must return the same saved packet and receipt identity.
+The separately observed `transaction_currentness` may be `same_snapshot`,
+`different_snapshot`, `unknown` or `not_applicable`; it does not rewrite saved
+facts or imply that a human responded. Legacy packets and mismatched readback
+remain unverified.
+
 Fresh ingress assertions remain valid for at most 120 seconds and are single-use.
 An approved, capacity-accepted completion receives a separate server-owned execution
 lease: queue wait is at most `maxQueueWaitSeconds` (default/cap 300), active work uses

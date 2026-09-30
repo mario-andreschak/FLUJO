@@ -11,7 +11,7 @@ import { authenticateBankingRequest, bankingAdmission, createBankingRunContext, 
   type BankingRunContext, assertBankingServerConfig } from '@/backend/services/banking/authority';
 import { assertBankingModelTool, authorizeBankingHandoffs } from '@/backend/services/banking/authority';
 import { commitBankingMutation } from '@/backend/services/banking/authority';
-import { grantBankingActionTool } from '@/integrations/hackathon-banking/authority';
+import { grantBankingActionTool, bankingToolNames, bankingHostActionToolNames } from '@/integrations/hackathon-banking/authority';
 import { BankingStore } from '@/backend/services/banking/store';
 import { callTool } from '@/backend/services/mcp/tools';
 import { validateBankingResult } from '@/backend/services/banking/protocol';
@@ -235,6 +235,42 @@ describe('banking identity authority', () => {
     await expect(signBankingCall(alice.ctx, 'Banking MCP', 'prepare_unrecognized_charge', args))
       .rejects.toThrow('banking_action_consent_required');
   });
+  test('handoff questions are bounded and included in the exact one-call host grant', async () => {
+    expect(bankingToolNames).toEqual(['banking_status', 'list_my_transactions', 'get_my_transaction']);
+    expect(bankingHostActionToolNames).toHaveLength(5);
+    const alice = await context();
+    const args = { reason: 'customer_request', request_id: randomUUID(), unanswered_questions: ['¿Reconoce el cargo?'] };
+    await expect(assertBankingModelTool(alice.ctx, 'Banking_MCP__create_verified_handoff',
+      { server: 'Banking MCP', tool: 'create_verified_handoff' })).rejects.toThrow('banking_tool_forbidden');
+    await grantBankingActionTool(alice.ctx, 'create_verified_handoff', args);
+    await expect(signBankingCall(alice.ctx, 'Banking MCP', 'create_verified_handoff',
+      { ...args, unanswered_questions: ['Changed question'] })).rejects.toThrow('banking_action_consent_required');
+    const token = await signBankingCall(alice.ctx, 'Banking MCP', 'create_verified_handoff', args);
+    const claims = (await jwtVerify(token, bank.publicKey)).payload;
+    expect(claims.scope).toEqual(['bank:handoff']);
+    expect(claims.args_sha256).toBe(createHash('sha256').update(canonicalize(args)!).digest('hex'));
+    await expect(signBankingCall(alice.ctx, 'Banking MCP', 'create_verified_handoff', args))
+      .rejects.toThrow('banking_action_consent_required');
+    for (const questions of [Array(9).fill('Question'), ['x'.repeat(241)], [' '], ['\u0000'], ['\ud800']]) {
+      expect(() => validateBankingArguments('create_verified_handoff', { ...args, unanswered_questions: questions }))
+        .toThrow('invalid_banking_arguments');
+    }
+    expect(validateBankingArguments('create_verified_handoff', { ...args, unanswered_questions: ['😀'.repeat(240)] }))
+      .toEqual({ ...args, unanswered_questions: ['😀'.repeat(240)] });
+  });
+
+  test('omitted handoff questions normalize to the same signed empty list', async () => {
+    const alice = await context();
+    const normalized = validateBankingArguments('create_verified_handoff', {
+      reason: 'customer_request', request_id: randomUUID(),
+    });
+    expect(normalized.unanswered_questions).toEqual([]);
+    await grantBankingActionTool(alice.ctx, 'create_verified_handoff', normalized);
+    const signed = await signBankingCall(alice.ctx, 'Banking MCP', 'create_verified_handoff', normalized);
+    expect((await jwtVerify(signed, bank.publicKey)).payload.args_sha256)
+      .toBe(createHash('sha256').update(canonicalize(normalized)!).digest('hex'));
+  });
+
   test('revocation during an in-flight MCP read discards the result', async () => {
     const alice = await context();
     const data = { error: 'reference_unavailable' };

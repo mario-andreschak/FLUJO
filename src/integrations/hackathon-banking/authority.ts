@@ -10,6 +10,7 @@ import { assertBankingExecutionBearer, requireBankingPolicy, type BankingPolicy 
 import { BankingStore, type Identity } from './store';
 import { propagateBankingRevocation } from './localControl';
 import { assertBankingJobLease, type BankingAcceptedJob } from './executionLease';
+import { bankingUnansweredQuestions } from './protocol';
 
 export const BANK_ASSERTION_META = 'com.flujo.bank/assertion';
 declare const principalBrand: unique symbol;
@@ -202,7 +203,7 @@ const hostActionSchemas = {
   create_verified_handoff: z.object({ reason: z.enum(['high_risk', 'missing_evidence', 'out_of_policy',
     'emergency', 'action_unverified', 'customer_request', 'clarification_exhausted',
       'duplicate_review', 'no_match_exhausted', 'tool_failure']), pending_handle: reference.optional(),
-      request_id: z.string().uuid().optional() }).strict(),
+      request_id: z.string().uuid().optional(), unanswered_questions: bankingUnansweredQuestions.default([]) }).strict(),
   read_verified_handoff: z.object({ handoff_id: z.string().regex(/^HOF-[A-Za-z0-9_-]{8}$/) }).strict(),
 };
 export const bankingHostActionToolNames = Object.freeze(Object.keys(hostActionSchemas));
