@@ -23,6 +23,7 @@ import { BankingError, bankingErrorResponse } from './errors';
 import { validateBankingResult } from './protocol';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { bankingConversation, bankingCancel, bankingEvents, bankingRevokePrincipal } from './controllers';
+import { bankingActionPrincipal, actionBody, type ActionBody } from './actionController';
 
 // This module is selected explicitly by a trusted build alias. Its policy and
 // private keys never come from an HTTP DTO, saved graph or MCP server preset.
@@ -36,6 +37,7 @@ const noCache = { 'Cache-Control': 'no-store, private', Pragma: 'no-cache', Vary
 // A server-minted request capability bridges admission and the route handler.
 // It is never serialized and is consumed once, after workspace/worker checks.
 const revokeRequests = new WeakMap<Request, BankingPrincipal>();
+const actionRequests = new WeakMap<Request, { principal: BankingPrincipal; body: ActionBody }>();
 const protectedProjections = new Set(['/v1/chat/conversation-chains', '/v1/chat/events']);
 
 function extensionError(error: unknown): never {
@@ -80,6 +82,28 @@ async function readCompletion(request: Request) {
       chunks.push(part.value);
     }
     return requestSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  } catch (error) {
+    if (error instanceof BankingError) throw error;
+    throw new BankingError('invalid_banking_request', 400);
+  } finally { reader.releaseLock(); }
+}
+
+async function readAction(request: Request): Promise<ActionBody> {
+  if (!request.body || !(request.headers.get('content-type') ?? '').startsWith('application/json')) {
+    throw new BankingError('invalid_banking_request', 400);
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 8192) { await reader.cancel(); throw new BankingError('banking_request_too_large', 413); }
+      chunks.push(part.value);
+    }
+    return actionBody.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
   } catch (error) {
     if (error instanceof BankingError) throw error;
     throw new BankingError('invalid_banking_request', 400);
@@ -159,16 +183,19 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
       const path = new URL(request.url).pathname;
       if (path.startsWith('/v1/banking')) {
         if (!isBankingRoute(path) || request.method !== 'POST') return Response.json({ error: 'not_found' }, { status: 404 });
-        const principal = await authenticateBankingRequest(request, true);
+        const revocation = path === '/v1/banking/session/revoke';
+        const principal = await authenticateBankingRequest(request, revocation);
+        const body = revocation ? undefined : await readAction(request);
         const { policy } = bankingAdmission(principal);
         const url = new URL(request.url);
         url.searchParams.set('workspace', policy.workspace);
         const headers = new Headers(request.headers);
         headers.delete('x-flujo-user-assertion');
         const admitted = new NextRequest(url, { method: 'POST', headers, signal: request.signal });
-        revokeRequests.set(admitted, principal);
+        if (revocation) revokeRequests.set(admitted, principal);
+        else actionRequests.set(admitted, { principal, body: body! });
         try { return await task(admitted); }
-        finally { revokeRequests.delete(admitted); }
+        finally { revokeRequests.delete(admitted); actionRequests.delete(admitted); }
       }
       if (usesBankingCredential(request)) {
         if (!allowedBoundRoute(request)) throw new BankingError('banking_control_forbidden');
@@ -190,7 +217,14 @@ export const configuredExecutionAdapter: ExecutionExtensionAdapter = {
     } catch (error) { return bankingErrorResponse(error); }
   },
   async handleRoute(request) {
-    if (!isBankingRoute(new URL(request.url).pathname) || request.method !== 'POST') return undefined;
+    const path = new URL(request.url).pathname;
+    if (!isBankingRoute(path) || request.method !== 'POST') return undefined;
+    if (path === '/v1/banking/action') {
+      const action = actionRequests.get(request);
+      actionRequests.delete(request);
+      if (!action) return bankingErrorResponse(new BankingError('authorization_denied', 401));
+      return bankingActionPrincipal(action.principal, action.body, request.signal, configuredExecutionAdapter);
+    }
     const principal = revokeRequests.get(request);
     revokeRequests.delete(request);
     if (!principal) return bankingErrorResponse(new BankingError('authorization_denied', 401));
