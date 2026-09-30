@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import canonicalize from 'canonicalize';
 import { z } from 'zod';
 import { runWithWorkspace } from '@/utils/workspace';
 import { flowService } from '@/backend/services/flow';
@@ -12,6 +13,7 @@ import { withBankingAdmission } from './admission';
 import { assertBankingGraph } from './graph';
 import { BankingError, bankingErrorResponse } from './errors';
 import { conversationPattern } from './store';
+import { bankingHandoffSchema, bankingReceiptSchema, bankingUnansweredQuestions } from './protocol';
 
 const handle = z.string().regex(/^[A-Za-z0-9_-]{32,64}$/);
 const common = { conversationId: z.string().regex(conversationPattern) };
@@ -24,7 +26,8 @@ export const actionBody = z.discriminatedUnion('operation', [
   z.object({ ...common, operation: z.literal('handoff'), reason: z.enum(['missing_evidence',
     'out_of_policy', 'emergency', 'action_unverified', 'customer_request', 'clarification_exhausted',
     'high_risk', 'duplicate_review', 'no_match_exhausted', 'tool_failure']),
-    pendingHandle: handle.optional(), requestId: z.string().uuid().optional() }).strict(),
+    pendingHandle: handle.optional(), requestId: z.string().uuid().optional(),
+    unansweredQuestions: bankingUnansweredQuestions.optional() }).strict(),
   z.object({ ...common, operation: z.literal('handoff_read'),
     handoffId: z.string().regex(/^HOF-[A-Za-z0-9_-]{8}$/) }).strict(),
 ]);
@@ -74,15 +77,29 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
             return data as Record<string, unknown>;
           } finally { clearBankingActionGrant(rawContext); }
         };
-        const verifiedHandoff = async (reason: string, pendingHandle?: string, requestId?: string) => {
+        const verifiedHandoff = async (reason: string, pendingHandle?: string, requestId?: string,
+          unansweredQuestions?: string[], expectedTransaction?: unknown) => {
           const args = { reason, ...(pendingHandle ? { pending_handle: pendingHandle } : {}),
-            ...(requestId ? { request_id: requestId } : {}) };
+            ...(requestId ? { request_id: requestId } : {}),
+            ...(unansweredQuestions ? { unanswered_questions: unansweredQuestions } : {}) };
           try {
             const created = await invoke('create_verified_handoff', args);
-            const handoff = created.handoff as { id?: unknown } | undefined;
-            if (typeof handoff?.id !== 'string') throw new BankingError('banking_protocol_result_rejected', 502);
+            if (created.state !== 'created') throw new BankingError('banking_protocol_result_rejected', 502);
+            const handoff = bankingHandoffSchema.parse(created.handoff);
             const read = await invoke('read_verified_handoff', { handoff_id: handoff.id });
-            return { state: 'handoff_verified', handoff: read.handoff };
+            if (read.state !== 'created') throw new BankingError('banking_protocol_result_rejected', 502);
+            const readback = bankingHandoffSchema.parse(read.handoff);
+            // Currentness is observed again at read time; the persisted packet
+            // and its historical provenance must remain identical.
+            if (canonicalize({ ...handoff, transaction_currentness: readback.transaction_currentness }) !== canonicalize(readback)
+                || readback.reason !== reason
+                || canonicalize(readback.packet.unanswered_questions) !== canonicalize(unansweredQuestions ?? [])
+                || Boolean(pendingHandle) !== (readback.packet.transaction !== null)
+                || expectedTransaction !== undefined
+                  && canonicalize(readback.packet.transaction) !== canonicalize(expectedTransaction)) {
+              throw new BankingError('banking_protocol_result_rejected', 502);
+            }
+            return { state: 'handoff_verified', handoff: readback };
           } catch { return { state: 'handoff_unverified', reason }; }
         };
         let outcome: Record<string, unknown>;
@@ -92,10 +109,27 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
           const publicPrepared = { pending_handle: prepared.pending_handle, snapshot: prepared.snapshot,
             action: prepared.action, decision: prepared.decision, reason: prepared.reason,
             transaction: prepared.transaction };
-          outcome = prepared.decision === 'handoff'
-            ? { ...publicPrepared, ...await verifiedHandoff(String(prepared.reason),
-              String(prepared.pending_handle), body.requestId) }
-            : { ...publicPrepared, state: 'pending_confirmation' };
+          if (prepared.decision === 'existing_case') {
+            // The prepare projection cannot establish the final claim. Read the
+            // persisted receipt by the same pending identity without confirming.
+            try {
+              const existing = prepared.existing_case as { state?: unknown; receipt?: unknown } | undefined;
+              if (existing?.state !== 'verified') throw new BankingError('banking_protocol_result_rejected', 502);
+              const expected = bankingReceiptSchema.parse(existing.receipt);
+              const read = await invoke('read_intake_receipt', { pending_handle: prepared.pending_handle });
+              const receipt = bankingReceiptSchema.parse(read.receipt);
+              if (read.state !== 'created' || canonicalize(receipt) !== canonicalize(expected)
+                  || canonicalize(receipt.transaction) !== canonicalize(prepared.transaction)) {
+                throw new BankingError('banking_protocol_result_rejected', 502);
+              }
+              outcome = { ...publicPrepared, state: 'existing_case_verified', receipt };
+            } catch { outcome = { ...publicPrepared, state: 'action_unverified' }; }
+          } else {
+            outcome = prepared.decision === 'handoff'
+              ? { ...publicPrepared, ...await verifiedHandoff(String(prepared.reason),
+                String(prepared.pending_handle), body.requestId, undefined, prepared.transaction) }
+              : { ...publicPrepared, state: 'pending_confirmation' };
+          }
         } else if (body.operation === 'confirm') {
           try {
             await invoke('confirm_simulated_intake',
@@ -122,10 +156,14 @@ export async function bankingActionPrincipal(principal: BankingPrincipal, body: 
             : { state: 'action_unverified' };
         } else if (body.operation === 'handoff') {
           if (!body.pendingHandle && !body.requestId) throw new BankingError('invalid_arguments', 400);
-          outcome = await verifiedHandoff(body.reason, body.pendingHandle, body.requestId);
+          outcome = await verifiedHandoff(body.reason, body.pendingHandle, body.requestId, body.unansweredQuestions);
         } else {
           const read = await invoke('read_verified_handoff', { handoff_id: body.handoffId });
-          outcome = { state: 'handoff_verified', handoff: read.handoff };
+          const handoff = bankingHandoffSchema.safeParse(read.handoff);
+          if (read.state !== 'created' || !handoff.success || handoff.data.id !== body.handoffId) {
+            throw new BankingError('banking_protocol_result_rejected', 502);
+          }
+          outcome = { state: 'handoff_verified', handoff: handoff.data };
         }
         return Response.json(outcome, { headers: noCache });
       });
