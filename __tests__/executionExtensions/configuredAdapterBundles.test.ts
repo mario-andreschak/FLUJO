@@ -58,23 +58,6 @@ describe('trusted configured adapter across server module graphs', () => {
     await expect(mcp.assertExecutionExtensionCurrent(context)).resolves.toBeUndefined();
   });
 
-  test('optional route dispatch uses the same canonical adapter as admission across server graphs', async () => {
-    const admitted = new WeakSet<Request>();
-    const first = fixtureAdapter({
-      withRoute: async (request, task) => { admitted.add(request); return task(request); },
-      handleRoute: async request => Response.json({ accepted: admitted.delete(request) }),
-    });
-    const route = bundle(first);
-    const unrelatedHandler = jest.fn(async () => Response.json({ accepted: false }));
-    const handler = bundle(fixtureAdapter({ handleRoute: unrelatedHandler }));
-    const request = new Request('http://localhost/fixture-control', { method: 'POST' });
-    const response = await route.withExecutionExtensionRoute(request,
-      admittedRequest => handler.executionExtensionRouteResponse(admittedRequest));
-    expect(await response.json()).toEqual({ accepted: true });
-    expect(unrelatedHandler).not.toHaveBeenCalled();
-    expect(await (await handler.executionExtensionRouteResponse(request)).json()).toEqual({ accepted: false });
-  });
-
   test('trusted errors keep their identity across server module graphs without trusting serialized lookalikes', () => {
     const route = bundle(fixtureAdapter());
     const mcp = bundle(fixtureAdapter());

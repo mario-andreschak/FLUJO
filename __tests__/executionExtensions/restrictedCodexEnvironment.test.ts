@@ -248,7 +248,7 @@ describe('restricted Codex credential/runtime isolation', () => {
         expect(runtime.env.HOME).toBe(runtime.home);
         expect(runtime.env.USERPROFILE).toBe(runtime.home);
         expect(path.dirname(runtime.workingDirectory)).toBe(runtime.home);
-        for (const field of ['FLUJO_BANKING_CONFIG', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CODEX_CONFIG_OVERRIDES']) {
+        for (const field of ['FLUJO_EXECUTION_ADAPTER_MODULE', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CODEX_CONFIG_OVERRIDES']) {
           expect(Object.keys(runtime.env)).not.toContain(field);
         }
         expect(runtime.configOverrides).toContain('project_root_markers=[]');

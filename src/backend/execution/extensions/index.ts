@@ -23,8 +23,6 @@ export interface ExecutionExtensionAdapter {
   /** undefined = ordinary transport policy; null = accepted narrow transport. */
   authorizeTransport?(request: Request): Response | null | undefined;
   withRoute?(request: Request, task: (request: Request) => Promise<Response>): Promise<Response>;
-  /** Optional route implementation, called after the ordinary workspace gates. */
-  handleRoute?(request: Request): Promise<Response | undefined>;
   isProtectedServer(server: string): boolean;
   assertServerConfig(config: MCPServerConfig): void;
   assertRun(context: object, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void>;
@@ -91,10 +89,6 @@ export function applyExecutionRunInput(input: FlowRunInput): FlowRunInput {
 export async function withExecutionExtensionRoute(request: Request, task: (request: Request) => Promise<Response>): Promise<Response> {
   const adapter = executionExtensionAdapter();
   return adapter?.withRoute ? adapter.withRoute(request, task) : task(request);
-}
-export async function executionExtensionRouteResponse(request: Request): Promise<Response> {
-  return await executionExtensionAdapter()?.handleRoute?.(request)
-    ?? Response.json({ error: 'not_found' }, { status: 404 });
 }
 export function authorizeExecutionTransport(request: Request): Response | null | undefined { return executionExtensionAdapter()?.authorizeTransport?.(request); }
 export function isProtectedExecutionServer(server: string): boolean { return executionExtensionAdapter()?.isProtectedServer(server) ?? false; }
