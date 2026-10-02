@@ -26,7 +26,6 @@ import { ArmedTrigger } from './triggers/types';
 import {
   armSchedule,
   catchUpOccurrence,
-  isCatchUpDue,
   validateSchedule,
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
@@ -236,6 +235,9 @@ interface PersonaAdmissionObserver {
 export class SchedulerService {
   /** Armed trigger per enabled execution id. */
   private armed = new Map<string, ArmedTrigger>();
+  /** Config captured by each callback; unchanged timers survive reconciliation. */
+  private armedConfigurations = new Map<string, string>();
+  private scheduleStateChains = new Map<string, Promise<unknown>>();
   /**
    * In-flight runs per execution id, mapped runId → ISO start time. A nested
    * map (rather than a single start time) lets the 'parallel' overlap strategy
@@ -325,7 +327,7 @@ export class SchedulerService {
   }
 
   /**
-   * Dispose every armed trigger and re-arm from the persisted configs. The
+   * Reconcile armed triggers with the persisted configs. The
    * single write-path for arming state; all mutations funnel through here.
    */
   reconcile(): Promise<void> {
@@ -337,21 +339,36 @@ export class SchedulerService {
   }
 
   private async doReconcile(): Promise<void> {
+    // Keep timers alive while reading storage. Disposing before this await can
+    // lose a due occurrence and re-arm directly at the following cron boundary.
+    const file = await this.loadFile();
+    this.pausedCache = file.paused;
+    const configurations = new Map(file.executions
+      .filter(execution => !file.paused && execution.enabled
+        && !execution.personaRetired && !execution.personaArchived
+        && !isIncompletePersonaControlledExecution(execution))
+      .map(execution => {
+        const runtimeConfig: Partial<PlannedExecution> = { ...execution };
+        delete runtimeConfig.folder;
+        // Organizational/timestamp updates do not change callback behavior.
+        delete runtimeConfig.updatedAt;
+        return [execution.id, JSON.stringify(runtimeConfig)] as const;
+      }));
     for (const [id, trigger] of this.armed) {
+      if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
       try {
         trigger.dispose();
       } catch (error) {
         log.warn(`Failed to dispose trigger for ${id}:`, error);
       }
+      this.armed.delete(id);
+      this.armedConfigurations.delete(id);
     }
-    this.armed.clear();
-
-    const file = await this.loadFile();
-    this.pausedCache = file.paused;
     if (file.paused) {
       log.info('Scheduler is paused — nothing armed');
       return;
     }
+    const arming: Promise<void>[] = [];
     for (const execution of file.executions) {
       if (!execution.enabled || execution.personaRetired || execution.personaArchived) {
         continue;
@@ -364,98 +381,127 @@ export class SchedulerService {
         );
         continue;
       }
-      try {
-        await this.armExecution(execution);
-      } catch (error) {
+      if (this.armed.has(execution.id)) {
+        if (execution.trigger.type === 'schedule') {
+          arming.push(this.initializeSchedule(execution, Date.now()));
+        }
+        continue;
+      }
+      arming.push(this.armExecution(execution).then(() => {
+        if (this.armed.has(execution.id)) {
+          this.armedConfigurations.set(execution.id, configurations.get(execution.id)!);
+        }
+      }).catch(error => {
+        this.armed.get(execution.id)?.dispose();
+        this.armed.delete(execution.id);
+        this.armedConfigurations.delete(execution.id);
         const message = error instanceof Error ? error.message : String(error);
         this.lastTriggerErrors.set(execution.id, message);
         log.error(`Failed to arm "${execution.name}" (${execution.id}):`, error);
-      }
+      }));
     }
+    // Install all cron timers before awaiting any cursor initialization.
+    await Promise.all(arming);
     log.info(`Scheduler armed ${this.armed.size} execution(s)`);
+  }
+
+  private withScheduleState<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const pending = (this.scheduleStateChains.get(id) ?? Promise.resolve())
+      .catch(() => undefined).then(task);
+    this.scheduleStateChains.set(id, pending);
+    void pending.finally(() => {
+      if (this.scheduleStateChains.get(id) === pending) this.scheduleStateChains.delete(id);
+    }).catch(() => undefined);
+    return pending;
+  }
+
+  private initializeSchedule(execution: PlannedExecution, armedAt: number): Promise<void> {
+    return this.withScheduleState(execution.id, () => this.initializeScheduleState(execution, armedAt));
+  }
+
+  private async initializeScheduleState(execution: PlannedExecution, armedAt: number): Promise<void> {
+    const trigger = execution.trigger;
+    if (trigger.type !== 'schedule') return;
+    const state = await loadExecutionState(execution.id);
+    const baseline = new Date(armedAt).toISOString();
+    if (!state.lastScheduledFireAt) {
+      await advanceLastScheduledFireAt(execution.id, baseline);
+      return;
+    }
+    // Catch up only occurrences due before arming. A future tick during slow
+    // storage initialization is owned by the already-installed live timer.
+    const occurrence = trigger.catchUp
+      ? catchUpOccurrence(trigger, state.lastScheduledFireAt, armedAt)
+      : null;
+    if (!occurrence) return;
+    const payload: TriggerFirePayload = {
+      kind: 'schedule-catchup',
+      summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
+      context: { scheduledOccurrence: occurrence.toISOString() },
+      ...(execution.personaId
+        ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
+        : {}),
+    };
+    if (execution.personaId) {
+      const admitted = await this.admitPersonaFire(execution, payload);
+      await advanceLastScheduledFireAt(execution.id, baseline);
+      void admitted.completion.catch(error =>
+        log.error(`Catch-up continuation failed for ${execution.id}:`, error));
+    } else {
+      await advanceLastScheduledFireAt(execution.id, baseline);
+      void this.fire(execution, payload).catch(error => {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.lastTriggerErrors.set(execution.id, `Schedule catch-up failed: ${reason.slice(0, 1024)}`);
+        log.error(`Catch-up fire failed for ${execution.id}:`, error);
+      });
+    }
   }
 
   private async armExecution(execution: PlannedExecution): Promise<void> {
     const trigger = execution.trigger;
     switch (trigger.type) {
       case 'schedule': {
-        const state = await loadExecutionState(execution.id);
-        if (!state.lastScheduledFireAt) {
-          // Prime the catch-up baseline so a brand-new schedule never
-          // "catches up" a run that was simply never due.
-          const baseline = new Date().toISOString();
-          if (execution.personaId) {
-            await advanceLastScheduledFireAt(execution.id, baseline);
-          } else {
-            await saveExecutionState(execution.id, {
-              ...state,
-              lastScheduledFireAt: baseline,
-            });
-          }
-        } else if (trigger.catchUp && isCatchUpDue(trigger, state.lastScheduledFireAt)) {
-          // One catch-up run, never a replay of every missed occurrence.
-          log.info(`Catch-up run for "${execution.name}" (missed while closed)`);
-          const occurrence = catchUpOccurrence(trigger, state.lastScheduledFireAt)
-            ?? new Date(state.lastScheduledFireAt);
-          const payload: TriggerFirePayload = {
-            kind: 'schedule-catchup',
-            summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
-            ...(execution.personaId
-              ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
-              : {}),
-          };
-          if (execution.personaId) {
-            // The baseline moves only after the mailbox durably owns this exact
-            // missed occurrence. A crash before this state write re-admits the
-            // same delivery id and the mailbox deduplicates it.
-            const admitted = await this.admitPersonaFire(execution, payload);
-            await advanceLastScheduledFireAt(execution.id, new Date().toISOString());
-            void admitted.completion.catch((error) =>
-              log.error(`Catch-up continuation failed for ${execution.id}:`, error)
-            );
-          } else {
-            // Preserve the legacy catch-up ordering and fire-and-forget behavior.
-            await saveExecutionState(execution.id, {
-              ...state,
-              lastScheduledFireAt: new Date().toISOString(),
-            });
-            void this.fire(execution, payload);
-          }
-        }
-        this.armed.set(
-          execution.id,
-          armSchedule(trigger, this.bindToWorkspace(async (occurrence) => {
-            try {
+        const armedAt = Date.now();
+        // Arm synchronously before loading/priming the cursor. A tick during
+        // that I/O waits for initialization rather than disappearing entirely.
+        this.armed.set(execution.id, armSchedule(trigger, this.bindToWorkspace(async (occurrence) => {
+          try {
+            await initialized;
+            const payload: TriggerFirePayload = {
+              kind: 'schedule',
+              summary: 'Schedule',
+              context: { scheduledOccurrence: occurrence.toISOString() },
+              ...(execution.personaId
+                ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
+                : {}),
+            };
+            let completion: Promise<RunRecord> | undefined;
+            await this.withScheduleState(execution.id, async () => {
               const current = await loadExecutionState(execution.id);
-              const payload: TriggerFirePayload = {
-                kind: 'schedule',
-                summary: 'Schedule',
-                ...(execution.personaId
-                  ? { deliveryId: this.sourceDeliveryId(
-                    execution,
-                    'schedule',
-                    occurrence.toISOString(),
-                  ) }
-                  : {}),
-              };
+              if (current.lastScheduledFireAt
+                && Date.parse(current.lastScheduledFireAt) >= occurrence.getTime()) return;
               if (execution.personaId) {
                 const admitted = await this.admitPersonaFire(execution, payload);
-                await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
-                void admitted.completion.catch((error) =>
-                  log.error(`Scheduled continuation failed for ${execution.id}:`, error)
-                );
-                return;
+                completion = admitted.completion;
               }
-              await saveExecutionState(execution.id, {
-                ...current,
-                lastScheduledFireAt: new Date().toISOString(),
-              });
-              await this.fire(execution, payload);
-            } catch (error) {
-              log.error(`Scheduled fire failed for ${execution.id}:`, error);
-            }
-          }))
-        );
+              await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
+              this.lastTriggerErrors.delete(execution.id);
+              if (!execution.personaId) completion = this.fire(execution, payload);
+            });
+            // Cursor/admission serialization does not serialize Flow lifetimes:
+            // the authored overlap policy still handles later occurrences.
+            await completion;
+          } catch (error) {
+            // Operators must see a failed callback even when storage failure
+            // prevents writing the history/cursor for this occurrence.
+            const reason = error instanceof Error ? error.message : String(error);
+            this.lastTriggerErrors.set(execution.id,
+              `Schedule occurrence ${occurrence.toISOString()} failed: ${reason.slice(0, 1024)}`);
+            log.error(`Scheduled fire failed for ${execution.id}:`, error);
+          }
+        })));
+        const initialized = this.initializeSchedule(execution, armedAt);
+        await initialized;
         break;
       }
       case 'webhook':
