@@ -33,6 +33,7 @@ import {
   canonicalJson,
   hashBehaviorFlow,
   snapshotBehaviorFlow,
+  snapshotBehaviorFlowDependencies,
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
@@ -474,7 +475,7 @@ export async function createBehaviorProposal(
   let evalResults: BehaviorProposalEvalResult[] = [];
   if (compiled.success && compiled.flow) {
     try {
-      candidateFlow = snapshotBehaviorFlow({
+      candidateFlow = await snapshotBehaviorFlowDependencies({
         ...compiled.flow,
         id: stableEnduringAgentId('flow', {
           purpose: 'behavior-proposal-candidate-v1',
@@ -827,7 +828,7 @@ async function revisionForProposal(proposal: BehaviorProposal, persona: Persona)
           `Persona Core Flow ${JSON.stringify(flowRef)} no longer exists.`,
         );
       }
-      const authoredSnapshot = snapshotBehaviorFlow(authoredFlow);
+      const authoredSnapshot = await snapshotBehaviorFlowDependencies(authoredFlow);
       authoredFlowProvenance = {
         flowRef,
         contentHash: hashBehaviorFlow(authoredSnapshot),

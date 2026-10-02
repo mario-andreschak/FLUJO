@@ -6,6 +6,7 @@ import { flowService } from '@/backend/services/flow';
 import { WorkspaceFlowRefSchema } from '@/shared/types/enduringAgent';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { snapshotBehaviorFlowDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,9 +32,12 @@ async function GET_handler(request: NextRequest, context: RouteContext) {
     issue.severity === 'error'
     && !(allowModelFallback && issue.code === 'process-missing-model')
   ));
+  const issues = blockingIssues.map((issue) => issue.message);
+  try { await snapshotBehaviorFlowDependencies(flow); }
+  catch (error) { issues.push(error instanceof Error ? error.message : 'Subflow dependencies could not be pinned.'); }
   return NextResponse.json({
-    state: blockingIssues.length === 0 ? 'ready' : 'invalid',
-    issues: blockingIssues.map((issue) => issue.message),
+    state: issues.length === 0 ? 'ready' : 'invalid',
+    issues,
   });
 }
 

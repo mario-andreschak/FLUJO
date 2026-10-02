@@ -22,6 +22,9 @@ export interface SubflowTaskHandle {
 }
 
 export interface SubflowTaskRecord extends SubflowTaskHandle {
+  /** Trusted immutable child graph and audit triple captured before admission. */
+  flowSnapshot?: import('./flow').Flow;
+  personaAttribution?: import('./enduringAgent').PersonaAttribution;
   /** Local launch provenance. Installation identity is never part of a workspace snapshot. */
   launchOwner?: {
     installationId: string;

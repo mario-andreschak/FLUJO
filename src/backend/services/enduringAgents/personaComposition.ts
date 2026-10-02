@@ -30,7 +30,7 @@ import {
   behaviorCompositionFlowRefs,
   behaviorRevisionId,
   hashBehaviorFlow,
-  snapshotBehaviorFlow,
+  snapshotBehaviorFlowDependencies,
 } from './behaviorRevisions';
 import { reconcilePersonaRoleBehaviors } from './factory';
 import { stableEnduringAgentId } from './ids';
@@ -103,12 +103,14 @@ async function projectFlowCard(
   const issues = validation.issues
     .filter((issue) => issue.severity === 'error')
     .map((issue) => issue.message);
+  try { await snapshotBehaviorFlowDependencies(flow); }
+  catch (error) { issues.push(error instanceof Error ? error.message : 'Subflow dependencies could not be pinned.'); }
   return {
     binding,
     effectiveFlowRef: flowRef,
     flow,
     readiness: {
-      state: validation.isRunnable ? 'ready' : 'invalid',
+      state: issues.length === 0 ? 'ready' : 'invalid',
       issues,
     },
   };
@@ -531,7 +533,7 @@ export async function addPersonaCompositionBehavior(
       let durableBinding = bundle.behaviorBindings.find((binding) => binding.id === behaviorId);
       if (!durableBinding) {
         const slotKey = `picked_${behaviorId.slice(-40)}`;
-        const snapshot = snapshotBehaviorFlow({
+        const snapshot = await snapshotBehaviorFlowDependencies({
           ...source,
           id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
         });
