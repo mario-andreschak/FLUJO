@@ -58,7 +58,10 @@ jest.mock('@/backend/execution/flow/nodes/SubflowNode', () => ({
 
 const getFlowMock = jest.fn();
 jest.mock('@/backend/services/flow', () => ({
-  flowService: { getFlow: (...args: unknown[]) => getFlowMock(...args) },
+  flowService: {
+    getFlow: (...args: unknown[]) => getFlowMock(...args),
+    readFlowExecutionSnapshot: async (id: string) => ({ workspaceId: getCurrentWorkspace(), flow: await getFlowMock(id) }),
+  },
 }));
 
 import {
@@ -73,7 +76,11 @@ import {
   _clearSubflowTaskSettingsCache,
   createTask,
   getTask,
+  listTasks,
 } from '@/backend/services/subflowTasks';
+import { snapshotBehaviorFlowDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
+import type { Flow } from '@/shared/types/flow';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { DEFAULT_SUBFLOW_TASK_SETTINGS, SUBFLOW_TASK_SCHEME } from '@/shared/types/subflowTasks';
 import type { SharedState, SubflowNodePrepResult } from '@/backend/execution/flow/types';
 import * as backend from '@/utils/storage/backend';
@@ -343,21 +350,64 @@ describe('subflow_task_get / subflow_task_cancel', () => {
     expect((await getTask(task.taskId))!.status).toBe('working');
   });
 
-  it('passes exact Persona authority and keeps completed work successful if parent notification fails', async () => {
+  it('passes pinned Persona dependencies and only child fencing, keeping completed work successful if parent notification fails', async () => {
     const parent = seedParent();
-    const authority = { signal: new AbortController().signal, assertCurrent: jest.fn(async () => undefined), commitWhileCurrent: async <T>(work: () => Promise<T>) => work() };
+    const authority = {
+      signal: new AbortController().signal,
+      assertCurrent: jest.fn(async () => undefined),
+      commitWhileCurrent: async <T>(work: () => Promise<T>) => work(),
+      authorizePersonaCoreMcp: jest.fn(async () => undefined),
+      pollRelatedInputs: jest.fn(async () => undefined),
+      commitPersonaMemoryMaintenance: jest.fn(async () => undefined),
+    };
     const attribution = { personaId: 'persona-1', activityId: 'activity-1', behaviorRevisionId: 'revision-1' };
     parent.executionAuthority = authority;
     parent.personaAttribution = attribution as SharedState['personaAttribution'];
+    const child: Flow = { id: 'flow-child', name: 'Pinned worker', nodes: [
+      { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { type: 'start', label: 'Start' } },
+      { id: 'finish', type: 'finish', position: { x: 1, y: 0 }, data: { type: 'finish', label: 'Finish' } },
+    ], edges: [{ id: 'end', source: 'start', target: 'finish' }] };
+    getFlowMock.mockResolvedValue(child);
+    parent.flowSnapshot = await snapshotBehaviorFlowDependencies({ id: 'flow-parent', name: 'Pinned supervisor', nodes: [
+      { id: 'subflow-node-1', type: 'subflow', position: { x: 0, y: 0 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: child.id } } },
+    ], edges: [] });
+    getFlowMock.mockClear().mockRejectedValue(new Error('The mutable source worker was deleted.'));
     runSubflowLanesMock.mockResolvedValue({ success: true, outputText: 'done' });
     publishCompletionMock.mockRejectedValue(new Error('parent lease expired'));
     const started = await executeDetachedSubflowStart(TOOL, {}, { conversationId: 'conv-parent' });
+    expect(started.success).toBe(true);
     const taskId = (started.data as { taskId: string }).taskId;
     await detachedJobRegistry.get(taskId)?.promise;
-    expect(runSubflowLanesMock.mock.calls[0][0]).toMatchObject({ personaAttribution: attribution });
-    expect(runSubflowLanesMock.mock.calls[0][0].executionAuthority).toBe(authority);
+    const preparation = runSubflowLanesMock.mock.calls[0][0] as SubflowNodePrepResult;
+    expect(preparation.personaAttribution).toBe(attribution);
+    expect(preparation.parentFlowSnapshot).toBe(parent.flowSnapshot);
+    expect(preparation.executionAuthority).not.toBe(authority);
+    expect(preparation.executionAuthority!.signal).toBe(authority.signal);
+    expect(Object.keys(preparation.executionAuthority!).sort()).toEqual(['assertCurrent', 'commitWhileCurrent', 'signal']);
+    await preparation.executionAuthority!.assertCurrent();
+    await expect(preparation.executionAuthority!.commitWhileCurrent!(async () => 'fenced')).resolves.toBe('fenced');
     expect(authority.assertCurrent).toHaveBeenCalled();
-    expect((await getTask(taskId))!.status).toBe('completed');
+    expect(authority.authorizePersonaCoreMcp).not.toHaveBeenCalled();
+    expect(authority.pollRelatedInputs).not.toHaveBeenCalled();
+    expect(authority.commitPersonaMemoryMaintenance).not.toHaveBeenCalled();
+    expect(getFlowMock).not.toHaveBeenCalled();
+    expect(await getTask(taskId)).toMatchObject({ status: 'completed', outputText: 'done',
+      flowSnapshot: parent.flowSnapshot.executionDependencies!.flows[0].flowSnapshot, personaAttribution: attribution });
+  });
+
+  it('rejects an attributed parent without immutable dependencies before admitting a detached task', async () => {
+    const parent = seedParent();
+    parent.executionAuthority = {
+      signal: new AbortController().signal, assertCurrent: async () => undefined,
+      commitWhileCurrent: async <T>(work: () => Promise<T>) => work(),
+    };
+    parent.personaAttribution = { personaId: 'persona-1', activityId: 'activity-1' };
+    await expect(executeDetachedSubflowStart(TOOL, {}, { conversationId: 'conv-parent' })).resolves.toMatchObject({
+      success: false, error: expect.stringContaining('missing its pinned parent snapshot'),
+    });
+    expect(await listTasks()).toEqual([]);
+    expect(runSubflowLanesMock).not.toHaveBeenCalled();
+    expect(detachedJobRegistry.size).toBe(0);
   });
 });
 
