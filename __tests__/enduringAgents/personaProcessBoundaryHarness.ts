@@ -21,6 +21,9 @@ export interface PersonaLeaseFence {
 }
 
 export type PersonaProcessCommand =
+  | { type: 'launchDetachedTask'; childConversationId: string }
+  | { type: 'getDetachedTask'; taskId: string }
+  | { type: 'reconcileDetachedTasks' }
   | {
       type: 'createPersona';
       name: string;
