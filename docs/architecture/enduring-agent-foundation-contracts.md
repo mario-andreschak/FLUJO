@@ -72,9 +72,9 @@ only through a trusted target saved locally on the planned execution. Persisted
 execution attribution is safe metadata and never a lease capability. Core/Behavior
 publication supports Subflow nodes through the pinned, versioned executable
 dependency closure described below. Configuration-only Persona export is also
-implemented. Broader compatibility coverage, cross-system archive anonymization
-beyond the implemented Persona-conversation backup/restore guards, broader
-WorkItem automation, and remaining UI follow-ups remain gated work.
+implemented. Broader compatibility coverage, additional archive/privacy coverage
+beyond the implemented deletion and backup/restore guards, further WorkItem
+automation, and remaining UI follow-ups remain gated work.
 
 ## Context
 
