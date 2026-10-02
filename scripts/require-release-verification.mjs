@@ -6,10 +6,13 @@ import { pathToFileURL } from 'node:url';
 const REPOSITORY = 'mario-andreschak/FLUJO';
 const WORKFLOW_PATH = '.github/workflows/verify.yml';
 
-export function validatePublicationContext({ repository, revision, checkout, ref, publication, version }) {
+export function validatePublicationContext({ repository, revision, checkout, ref, publication, version, expectedRevision, expectedVersion }) {
   if (repository?.toLowerCase() !== REPOSITORY.toLowerCase()) throw new Error('Publication is restricted to the official FLUJO repository.');
   if (!/^[a-f0-9]{40}$/.test(revision || '') || checkout !== revision) throw new Error('Publication checkout must match the exact GitHub commit.');
-  if (publication === 'image' && ref === 'refs/heads/main') return;
+  if ((expectedRevision || expectedVersion) && (expectedRevision !== revision || expectedVersion !== version)) {
+    throw new Error('Publication moved away from the requested npm release revision or version.');
+  }
+  if (['image', 'npm'].includes(publication) && ref === 'refs/heads/main') return;
   if (publication === 'installer' && /^\d+\.\d+\.\d+$/.test(version || '') && ref === `refs/tags/v${version}`) return;
   throw new Error('Publication ref is not the expected main branch or matching release tag.');
 }
@@ -55,6 +58,7 @@ async function main() {
     repository: process.env.GITHUB_REPOSITORY, revision,
     checkout: exec('git', ['rev-parse', 'HEAD']), ref: process.env.GITHUB_REF,
     publication, version: JSON.parse(readFileSync('package.json', 'utf8')).version,
+    expectedRevision: process.env.RELEASE_SHA, expectedVersion: process.env.RELEASE_VERSION,
   });
   const workflow = JSON.parse(exec('gh', ['api', `repos/${REPOSITORY}/actions/workflows/verify.yml`]));
   if (workflow.path !== WORKFLOW_PATH || !Number.isSafeInteger(workflow.id) || workflow.state !== 'active') {
