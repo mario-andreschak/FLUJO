@@ -12,9 +12,9 @@ export const PUBLIC_PACKAGES = [
   '@mario.andreschak/mcp-bash', '@mario.andreschak/mcp-browser', 'flujo-ai',
 ];
 const REGISTRY = 'https://registry.npmjs.org';
-const PUBLISHED_INTEGRITY_ATTEMPTS = 31;
+const PUBLISHED_INTEGRITY_ATTEMPTS = 91;
 const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
-const PUBLISHED_INTEGRITY_TIMEOUT_MS = 5 * 60_000;
+const PUBLISHED_INTEGRITY_TIMEOUT_MS = 15 * 60_000;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
 const exec = (command, args, options = {}) => {

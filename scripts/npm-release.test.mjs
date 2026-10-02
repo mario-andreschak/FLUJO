@@ -413,7 +413,7 @@ test('a missing post-publish version becomes visible before any following packag
   let missingReadbacks = 0;
   let elapsed = 0;
   const run = (command, args, options) => {
-    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey) && missingReadbacks++ < 13) {
+    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey) && missingReadbacks++ < 73) {
       // A fresh server response can still omit a successfully written version.
       assert.ok(args.includes('--prefer-online'));
       assert.ok(args.includes('--offline=false') && args.includes('--prefer-offline=false'));
@@ -430,13 +430,13 @@ test('a missing post-publish version becomes visible before any following packag
       waits.push(delay);
     },
   });
-  assert.deepEqual(waits, Array(13).fill(10_000));
-  assert.equal(elapsed, 130_000);
+  assert.deepEqual(waits, Array(73).fill(10_000));
+  assert.equal(elapsed, 730_000);
   assert.deepEqual(result, PUBLIC_PACKAGES.map((name) => ({ name, published: true })));
   assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, PUBLIC_PACKAGES.length);
 });
 
-test('persistent missing readback stops after five minutes and resumes the original artifacts without republishing', async (t) => {
+test('persistent missing readback stops after fifteen minutes and resumes the original artifacts without republishing', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
@@ -454,9 +454,9 @@ test('persistent missing readback stops after five minutes and resumes the origi
     run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
     now: () => elapsed, wait: async (delay) => { elapsed += delay; waits += 1; },
   }), /remains missing.*Resume the original release run's failed jobs/);
-  assert.equal(readbacks, 31);
-  assert.equal(waits, 30);
-  assert.equal(elapsed, 300_000);
+  assert.equal(readbacks, 91);
+  assert.equal(waits, 90);
+  assert.equal(elapsed, 900_000);
   assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
   assert.deepEqual(await publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
@@ -474,7 +474,7 @@ test('slow missing responses consume the readback deadline instead of extending 
   let readbacks = 0;
   const run = (command, args, options) => {
     if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey)) {
-      elapsed += 149_000;
+      elapsed += 449_000;
       readbacks += 1;
       throw missingPackage();
     }
@@ -486,7 +486,7 @@ test('slow missing responses consume the readback deadline instead of extending 
   }), /remains missing/);
   assert.equal(readbacks, 2);
   assert.deepEqual(waits, [10_000]);
-  assert.equal(elapsed, 308_000);
+  assert.equal(elapsed, 908_000);
 });
 
 for (const [label, failure, response] of [
