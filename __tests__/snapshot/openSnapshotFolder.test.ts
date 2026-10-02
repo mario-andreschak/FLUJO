@@ -52,7 +52,7 @@ describe('openSnapshotFolder', () => {
     expect(snapshotFolderAccessSupported()).toBe(true);
   });
 
-  it('tracks concurrent dispatches and clears activity after every outcome', async () => {
+  it.each([0, 1])('tracks concurrent dispatches when launcher %i completes first', async (firstRelease) => {
     const releases: Array<() => void> = [];
     const launch = jest.fn(() => new Promise<void>((resolve) => {
       releases.push(resolve);
@@ -69,11 +69,13 @@ describe('openSnapshotFolder', () => {
     }
 
     expect(snapshotFolderAccessActivity(root)).toBe(2);
-    releases[0]();
-    await first;
+    // mkdir may complete in either order, so launcher order does not identify
+    // which openFolder promise will settle first.
+    releases[firstRelease]();
+    await Promise.race([first, second]);
     expect(snapshotFolderAccessActivity(root)).toBe(1);
-    releases[1]();
-    await second;
+    releases[1 - firstRelease]();
+    await Promise.all([first, second]);
     expect(snapshotFolderAccessActivity(root)).toBe(0);
   });
 
