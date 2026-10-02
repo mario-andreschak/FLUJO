@@ -56,6 +56,10 @@ jobs:
         run: |
           mkdir -p persona-browser-artifacts
           cp next-env.d.ts persona-browser-artifacts/next-env.d.ts
+          if git ls-files --error-unmatch next-env.d.ts >/dev/null 2>&1; then
+            git diff -- next-env.d.ts > persona-browser-artifacts/next-env-build.patch
+            git restore -- next-env.d.ts
+          fi
       - run: npm run test:persona-browser-environment
       - name: Record clean source and build identity before the journey
         run: node scripts/persona-browser-acceptance/check-source.mjs --phase before --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID"
