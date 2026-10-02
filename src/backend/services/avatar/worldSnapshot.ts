@@ -31,7 +31,7 @@ export async function getAvatarWorldSnapshot(): Promise<AvatarWorldSnapshot> {
     }),
     listPersonaSummaries({ pageSize: 50 }).then(page => {
       if (page.hasMore) truncated.push('personas');
-      limit('personas', page.items.map(persona => ({ id: persona.id, name: persona.name, kind: 'persona', state: persona.status, href: `/personas/${encodeURIComponent(persona.id)}` })));
+      limit('personas', page.items.map(persona => ({ id: persona.id, name: persona.name, kind: 'persona', state: persona.status, canTalk: persona.capabilities.talk, href: `/personas/${encodeURIComponent(persona.id)}` })));
     }),
     getSchedulerService().list().then(entries => limit('automations', entries.map(({ execution, status }) => ({ id: execution.id, name: execution.name, kind: 'automation', state: status.lastTriggerError ? 'error' : status.running ? 'running' : status.armed ? 'armed' : status.notArmedReason || 'inactive', href: '/automation/triggers' })))),
     listMeetingSummaries().then(meetings => limit('meetings', meetings.map(meeting => ({ id: meeting.id, name: meeting.title, kind: 'meeting', state: meeting.status, href: `/meetings?meeting=${encodeURIComponent(meeting.id)}` })))),

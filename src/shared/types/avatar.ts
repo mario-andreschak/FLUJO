@@ -26,6 +26,7 @@ export interface AvatarWorldObject {
   kind: 'flow' | 'app' | 'persona' | 'automation' | 'meeting' | 'artifact';
   state: string;
   href: string;
+  canTalk?: boolean;
   resource?: { conversationId: string; id: string; kind: 'text' | 'image' | 'audio' | 'blob' | 'link'; mimeType?: string; size: number; createdAt: number };
 }
 

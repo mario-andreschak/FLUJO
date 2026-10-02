@@ -74,4 +74,43 @@ describe('avatar work uses the existing runtime', () => {
     expect(chatService.createConversation).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it('addresses an authored Flow without replacing its graph or requiring a workspace default', async () => {
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), flowId: 'authored-flow', title: 'Researcher' });
+    const { result } = renderHook(() => useAvatarWork({ modelId: null, locale: 'es', context }));
+    act(() => { result.current.newChat({ kind: 'flow', id: 'authored-flow', name: 'Researcher' }); });
+    await act(() => result.current.send('Use your existing configuration'));
+    expect(chatService.createConversation).toHaveBeenCalledWith(expect.objectContaining({ flowId: 'authored-flow', title: 'Researcher' }));
+    expect(jest.mocked(chatService.createConversation).mock.calls[0][0]).not.toHaveProperty('flowSnapshot');
+    expect(chatService.synthesizeQuickChat).not.toHaveBeenCalled();
+    expect(mcpService.loadServerConfigs).not.toHaveBeenCalled();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata).not.toHaveProperty('personaId');
+    expect(result.current.target).toMatchObject({ kind: 'flow', id: 'authored-flow' });
+  });
+  it('creates a Persona draft without Flow authority and uses canonical dispatcher routing', async () => {
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), flowId: null, personaId: 'resident', personaBehaviorSlotKey: 'primary', title: 'Resident' });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'unrelated-default', locale: 'pt', context }));
+    act(() => { result.current.newChat({ kind: 'persona', id: 'resident', name: 'Resident' }); });
+    await act(() => result.current.send('What is your mission?'));
+    expect(chatService.createConversation).toHaveBeenCalledWith(expect.objectContaining({ flowId: null, personaTargetId: 'resident', personaBehaviorSlotKey: 'primary' }));
+    expect(chatService.synthesizeQuickChat).not.toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('flow-Persona');
+    expect(body.metadata).toMatchObject({ personaId: 'resident', behaviorSlotKey: 'primary', appendMessages: 'true' });
+    expect(body.metadata).not.toHaveProperty('processNodeId');
+  });
+  it('restores a Persona behavior and refuses an identity switch while work is running', async () => {
+    const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'resident-chat');
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), id: 'resident-chat', flowId: 'server-owned-revision', personaId: 'resident', personaBehaviorSlotKey: 'research', title: 'Resident' });
+    const { result } = renderHook(() => useAvatarWork({ modelId: null, locale: 'en', context }));
+    await waitFor(() => expect(result.current.target).toMatchObject({ kind: 'persona', id: 'resident' }));
+    await act(() => result.current.send('Continue your research'));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata).toMatchObject({ personaId: 'resident', behaviorSlotKey: 'research' });
+    expect(chatService.createConversation).not.toHaveBeenCalled();
+    act(() => handlers.onEvent({ type: 'run:start', seq: 1, timestamp: 1, conversationId: 'resident-chat', flowId: 'server-owned-revision' }));
+    let changed = true;
+    act(() => { changed = result.current.newChat({ kind: 'flow', id: 'another', name: 'Other' }); });
+    expect(changed).toBe(false);
+    expect(result.current.target).toMatchObject({ kind: 'persona', id: 'resident' });
+  });
 });
