@@ -44,10 +44,14 @@ jobs:
           node-version: 22.13.1
           cache: npm
       - run: npm ci --include=dev
+      - name: Verify the packaged Antigravity CLI on this operating system
+        run: node --test scripts/antigravity-cli-artifact.test.mjs
       - name: Verify tracing against a populated runtime directory
         run: node --test scripts/exclude-workspaces-from-next-glob.test.mjs
       - name: Build with the ordinary command and default Node heap
         run: npm run build
+      - name: Verify the packed Antigravity production consumer
+        run: node --test scripts/antigravity-cli-consumer.test.mjs
 
   persona-memory-profile:
     if: github.event_name == 'workflow_dispatch' && inputs.persona_memory_profile

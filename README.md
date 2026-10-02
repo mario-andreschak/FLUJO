@@ -81,6 +81,7 @@ FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.i
 - **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, Codex, and local models via Ollama
 - **Guided or expert setup**: choose a gentle walkthrough, a faster guided path, or the complete configuration form
 - **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
+- **Antigravity CLI**: use the bundled `flujo-agy` CLI with your local Google account login or a Gemini API key. See [Antigravity CLI setup and host requirements](docs/features/models/connecting.md#antigravity-cli).
 - **Reusable connections**: organize configured AIs into folders, mark favorites, and reuse them across agents and conversations
 
 ![AI Setup — Configured AI Connections](docs/images/readme/models.png)

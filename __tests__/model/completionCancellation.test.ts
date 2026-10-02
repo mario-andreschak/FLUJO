@@ -57,6 +57,18 @@ jest.mock('@/backend/services/model/adapters', () => ({
   getCompletionAdapter: () => ({ createCompletion: createCompletionMock }),
 }));
 
+const mockAntigravityMediaRuntime = jest.fn(async () => {
+  throw new Error('Antigravity runtime must not start during an attachment preflight.');
+});
+jest.mock('@/backend/services/model/adapters/antigravityCliRuntime', () => ({
+  prepareAntigravityCliRuntime: () => mockAntigravityMediaRuntime(),
+}));
+const mockAntigravityMediaProcess = jest.fn();
+jest.mock('@/backend/services/model/adapters/antigravityCliProcess', () => ({
+  ...jest.requireActual('@/backend/services/model/adapters/antigravityCliProcess'),
+  runAntigravityCli: (...args: unknown[]) => mockAntigravityMediaProcess(...args),
+}));
+
 const mockAppendRawForState = jest.fn().mockResolvedValue(undefined);
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   ...jest.requireActual('@/backend/execution/flow/conversationLog'),
@@ -89,6 +101,9 @@ jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { AntigravityCliAdapter } from '@/backend/services/model/adapters/antigravityCliAdapter';
+import { registerExecutionExtension } from '@/backend/execution/extensions';
+import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -130,6 +145,58 @@ beforeEach(() => {
   adapterBehavior = 'complete';
   getModelMock.mockReset().mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai' });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
+  mockAntigravityMediaRuntime.mockClear();
+  mockAntigravityMediaProcess.mockClear();
+});
+
+test.each([
+  ['antigravity-cli', ''], [undefined, ''],
+  ['antigravity-cli', 'configured-key'], [undefined, 'configured-key'],
+])('trusted execution rejects Antigravity adapter %s with saved key %s before dispatch', async (adapter, ApiKey) => {
+  const codexProfile = jest.fn(async () => ({ verifiedCliVersion: '0.157.1', verifiedCliSha256: 'a'.repeat(64),
+    verifiedModelCatalogPath: '/catalog', verifiedModelCatalogSha256: 'b'.repeat(64) }));
+  const policy = fixtureAdapter({ codexProfile });
+  const restore = registerExecutionExtension(policy);
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'default', provider: 'antigravity-cli', adapter, ApiKey });
+  try {
+    const result = await ModelHandler.callModel({
+      modelId: 'model-1', prompt: 'private request',
+      messages: [{ role: 'user', id: 'private', timestamp: 1, content: 'private request' }],
+      iteration: 1, maxIterations: 1, nodeName: 'Private', nodeId: 'private',
+      executionExtensionContext: mintFixture(policy),
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+    expect(result).toMatchObject({ success: false, error: { message: 'execution_model_adapter_forbidden' } });
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+    expect(codexProfile).not.toHaveBeenCalled();
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(archiveModelDispatchMock).not.toHaveBeenCalled();
+    expect(mockAntigravityMediaRuntime).not.toHaveBeenCalled();
+    expect(mockAntigravityMediaProcess).not.toHaveBeenCalled();
+  } finally { restore(); }
+});
+
+test('Antigravity CLI chat attachments reach authoritative adapter rejection before runtime launch', async () => {
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'flash', provider: 'antigravity-cli', adapter: 'antigravity-cli', ApiKey: '', inputModalities: ['text'], visionInputCapability: 'unsupported' });
+  createCompletionMock.mockImplementationOnce(input => new AntigravityCliAdapter().createCompletion(input));
+  const result = await ModelHandler.callModel({
+    modelId: 'model-1', prompt: 'Describe this image.',
+    messages: [{ role: 'user', id: 'image-request', timestamp: 1, content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }],
+    iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
+  } as Parameters<typeof ModelHandler.callModel>[0]);
+  expect(result).toMatchObject({ success: false, error: { message: expect.stringContaining('text input only') } });
+  expect(mockAntigravityMediaRuntime).not.toHaveBeenCalled();
+  expect(mockAntigravityMediaProcess).not.toHaveBeenCalled();
+});
+
+test('existing text-only providers retain the generic unsupported-media filter', async () => {
+  getModelMock.mockResolvedValue({ id: 'model-1', name: 'text-model', provider: 'openai', adapter: 'openai', inputModalities: ['text'] });
+  const result = await ModelHandler.callModel({
+    modelId: 'model-1', prompt: 'Describe this image.',
+    messages: [{ role: 'user', id: 'image-request', timestamp: 1, content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }],
+    iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
+  } as Parameters<typeof ModelHandler.callModel>[0]);
+  expect(result.success).toBe(true);
+  expect(createCompletionMock.mock.calls[0][0].messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'Describe this image.' }] }]);
 });
 
 describe('mid-flight completion cancellation', () => {

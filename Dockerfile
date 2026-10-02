@@ -19,6 +19,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 # production build has its build-time tooling (typescript, webpack, etc.).
 COPY package.json package-lock.json ./
 COPY mcp-servers ./mcp-servers
+COPY packages/antigravity-cli ./packages/antigravity-cli
 RUN npm ci --include=dev
 
 # Build the Next.js production output.
@@ -95,6 +96,7 @@ RUN if [ -n "$FLUJO_APPLICATION_VERSION" ]; then \
       node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION)) process.exit(1)'; \
     fi
 COPY --from=builder /app/mcp-servers ./mcp-servers
+COPY --from=builder /app/packages/antigravity-cli ./packages/antigravity-cli
 # Reuse the browser payload downloaded by the workspace install lifecycle in the
 # builder. The following npm ci sees the version marker and does not download it again.
 COPY --from=builder /home/node/.cache/ms-playwright /home/node/.cache/ms-playwright
