@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
+import { diagnoseOidc, redactDiagnostic } from './npm-oidc-diagnostic.mjs';
 import {
   PUBLIC_PACKAGES,
   assertCurrentMain,
@@ -139,6 +140,89 @@ test('publishing requires the dedicated GitHub-hosted OIDC workflow', () => {
     ['NPM_TOKEN', 'synthetic-legacy-npm-token'],
   ]) {
     assert.throws(() => assertOidcOnly({ ...oidcEnvironment(), [field]: value }), `invalid ${field} must stop publication`);
+  }
+});
+
+test('OIDC diagnostics exchange fresh package-specific identities without publishing or exposing tokens', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from(JSON.stringify({ repository: REPOSITORY, sha: SHA, workflow_ref: `${REPOSITORY}/.github/workflows/publish-npm.yml@refs/heads/main` })).toString('base64url')}.signature`;
+  const requests = [];
+  const report = await diagnoseOidc({ env: { ...oidcEnvironment(), CI: 'true' }, request: async (url, options) => {
+    requests.push({ url: String(url), method: options.method ?? 'GET', headers: options.headers });
+    if (!options.method) return { ok: true, status: 200, json: async () => ({ value: identity }) };
+    assert.equal(options.method, 'POST');
+    assert.ok(String(url).includes('/oidc/token/exchange/package/'));
+    return { ok: true, status: 200, json: async () => ({ token: 'npm_sensitiveExchangeToken' }) };
+  } });
+  assert.equal(requests.length, PUBLIC_PACKAGES.length * 2);
+  assert.equal(report.results.every(result => result.authenticated), true);
+  assert.deepEqual(report.results.map(result => result.name), PUBLIC_PACKAGES);
+  assert.ok(requests.filter(item => item.method === 'GET').every(item => new URL(item.url).searchParams.get('audience') === 'npm:registry.npmjs.org'));
+  assert.equal(JSON.stringify(report).includes(identity), false);
+  assert.equal(JSON.stringify(report).includes('npm_sensitiveExchangeToken'), false);
+});
+
+test('OIDC diagnostics expose rejected exchanges safely and do not treat a response without token as authentication', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from('{}').toString('base64url')}.signature`;
+  let exchange = 0;
+  const report = await diagnoseOidc({ env: { ...oidcEnvironment(), CI: 'false', NPM_ID_TOKEN: 'unexpected-override' }, request: async (_url, options) => {
+    if (!options.method) return { ok: true, status: 200, json: async () => ({ value: identity }) };
+    exchange++;
+    return { ok: exchange !== 1, status: exchange === 1 ? 403 : 200, json: async () => ({ message: `Rejected Bearer ${identity}; npm_sensitiveExchangeToken` }) };
+  } });
+  assert.equal(report.results.some(result => result.authenticated), false);
+  assert.equal(report.context.ci, 'false');
+  assert.equal(report.context.inheritedNpmIdToken, true);
+  assert.equal(report.results[0].status, 403);
+  assert.equal(JSON.stringify(report).includes(identity), false);
+  assert.equal(JSON.stringify(report).includes('npm_sensitiveExchangeToken'), false);
+  assert.equal(redactDiagnostic('x'.repeat(2000)).length, 1024);
+});
+
+test('OIDC identity rejection never reaches the npm exchange', async () => {
+  const report = await diagnoseOidc({ env: oidcEnvironment(), request: async (_url, options) => {
+    assert.equal(options.method, undefined);
+    return { ok: false, status: 403, json: async () => ({ message: 'Permission denied' }) };
+  } });
+  assert.equal(report.results.length, PUBLIC_PACKAGES.length);
+  assert.equal(report.results.every(result => result.stage === 'github-identity' && !result.authenticated), true);
+});
+
+test('OIDC diagnostics redact opaque credentials reflected by the issuer and exchange', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from('{}').toString('base64url')}.signature`;
+  const env = { ...oidcEnvironment(), NPM_ID_TOKEN: 'opaque-inherited-token' };
+  const token = 'opaque-exchange-secret_XYZ';
+  const report = await diagnoseOidc({ env, request: async (_url, options) => {
+    if (!options.method) return { ok: true, status: 200, json: async () => ({ value: identity }) };
+    return { ok: false, status: 403, json: async () => ({ token,
+      message: [env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, env.NPM_ID_TOKEN, identity, token].join(' ') }) };
+  } });
+  for (const secret of [env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, env.NPM_ID_TOKEN, identity, token]) {
+    assert.equal(JSON.stringify(report).includes(secret), false);
+  }
+  assert.equal(report.results.every(result => !result.authenticated && result.message.includes('[redacted credential]')), true);
+  assert.equal(redactDiagnostic('opaque-token-long opaque-token', ['opaque-token', 'opaque-token-long']), '[redacted credential] [redacted credential]');
+});
+
+test('OIDC diagnostics retain successful results and continue after transport, JSON and identity failures', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from('{}').toString('base64url')}.signature`;
+  let packageIndex = -1;
+  const report = await diagnoseOidc({ env: oidcEnvironment(), request: async (_url, options) => {
+    if (!options.method) {
+      packageIndex++;
+      if (packageIndex === 2) return { ok: true, status: 200, json: async () => { throw new SyntaxError('Non-JSON issuer response synthetic-job-token'); } };
+      return { ok: true, status: 200, json: async () => ({ value: packageIndex === 3 ? 'malformed-opaque-identity' : identity }) };
+    }
+    if (packageIndex === 1) throw new Error(`Exchange request timed out: ${identity}`);
+    return { ok: true, status: 200, json: async () => ({ token: 'opaque-exchange-token' }) };
+  } });
+  assert.deepEqual(report.results.map(result => result.name), PUBLIC_PACKAGES);
+  assert.deepEqual(report.results.map(result => result.authenticated), [true, false, false, false, true]);
+  assert.equal(report.results[1].stage, 'npm-exchange');
+  assert.equal(report.results[1].status, null);
+  assert.equal(report.results[2].stage, 'github-identity');
+  assert.equal(report.results[2].status, 200);
+  for (const secret of ['synthetic-job-token', identity, 'malformed-opaque-identity', 'opaque-exchange-token']) {
+    assert.equal(JSON.stringify(report).includes(secret), false);
   }
 });
 
@@ -422,6 +506,13 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.equal(workflow.permissions.contents, 'read');
   const { prepare, publish, finalize, 'verify-main': verifyMain } = workflow.jobs;
+  const diagnostic = workflow.jobs['diagnose-oidc'];
+  assert.equal(workflow.on.workflow_dispatch.inputs.diagnose_oidc.default, false);
+  assert.equal(diagnostic.if, 'inputs.diagnose_oidc');
+  assert.equal(diagnostic.permissions['id-token'], 'write');
+  assert.ok(diagnostic.steps.some(({ run }) => run === 'node scripts/npm-oidc-diagnostic.mjs'));
+  assert.equal(diagnostic.steps.some(({ run }) => /npm-release\.mjs (publish|finalize)/.test(run ?? '')), false);
+  for (const job of [prepare, verifyMain, publish, finalize]) assert.equal(job.if, '${{ !inputs.diagnose_oidc }}');
   assert.deepEqual(publish.needs, ['prepare', 'verify-main']);
   assert.ok(finalize.needs.includes('prepare') && finalize.needs.includes('publish'));
   assert.equal(publish.permissions['id-token'], 'write');
