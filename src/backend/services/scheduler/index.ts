@@ -103,6 +103,14 @@ function hasOwn(value: object, field: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(value, field);
 }
 
+function runtimeConfiguration(execution: PlannedExecution): string {
+  const config: Partial<PlannedExecution> = { ...execution };
+  delete config.folder;
+  delete config.updatedAt;
+  return JSON.stringify(config, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value);
+}
+
 function isIncompletePersonaControlledExecution(
   execution: PlannedExecution | null | undefined,
 ): boolean {
@@ -347,13 +355,7 @@ export class SchedulerService {
       .filter(execution => !file.paused && execution.enabled
         && !execution.personaRetired && !execution.personaArchived
         && !isIncompletePersonaControlledExecution(execution))
-      .map(execution => {
-        const runtimeConfig: Partial<PlannedExecution> = { ...execution };
-        delete runtimeConfig.folder;
-        // Organizational/timestamp updates do not change callback behavior.
-        delete runtimeConfig.updatedAt;
-        return [execution.id, JSON.stringify(runtimeConfig)] as const;
-      }));
+      .map(execution => [execution.id, runtimeConfiguration(execution)] as const));
     for (const [id, trigger] of this.armed) {
       if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
       try {
@@ -419,10 +421,18 @@ export class SchedulerService {
     return this.withScheduleState(execution.id, () => this.initializeScheduleState(execution, armedAt));
   }
 
+  private async isCurrentSchedule(execution: PlannedExecution): Promise<boolean> {
+    const file = await this.loadFile();
+    const current = file.executions.find(candidate => candidate.id === execution.id);
+    return !file.paused && !!current?.enabled && !current.personaRetired && !current.personaArchived
+      && runtimeConfiguration(current) === runtimeConfiguration(execution);
+  }
+
   private async initializeScheduleState(execution: PlannedExecution, armedAt: number): Promise<void> {
     const trigger = execution.trigger;
     if (trigger.type !== 'schedule') return;
     const state = await loadExecutionState(execution.id);
+    if (!await this.isCurrentSchedule(execution)) return;
     const baseline = new Date(armedAt).toISOString();
     if (!state.lastScheduledFireAt) {
       await advanceLastScheduledFireAt(execution.id, baseline);
@@ -477,6 +487,10 @@ export class SchedulerService {
             };
             let completion: Promise<RunRecord> | undefined;
             await this.withScheduleState(execution.id, async () => {
+              // Config changes persist before their reconcile can finish. A
+              // tick queued behind initialization must honor pause/disable/
+              // deletion and replacement rather than dispatch its old snapshot.
+              if (!await this.isCurrentSchedule(execution)) return;
               const current = await loadExecutionState(execution.id);
               if (current.lastScheduledFireAt
                 && Date.parse(current.lastScheduledFireAt) >= occurrence.getTime()) return;
