@@ -1639,6 +1639,8 @@ export interface MCPNodePrepResult extends BasePrepResult {
 
 // SubflowNode prep result
 export interface SubflowNodePrepResult extends BasePrepResult {
+    /** Parent's verified immutable executable closure; never looked up on replay. */
+    parentFlowSnapshot?: Flow;
     nodeType: 'subflow';
     /** Runtime-only cancellation for an independently running child task. */
     abortSignal?: AbortSignal;

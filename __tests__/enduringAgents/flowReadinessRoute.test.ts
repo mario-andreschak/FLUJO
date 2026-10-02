@@ -97,4 +97,13 @@ describe('Persona Flow readiness', () => {
       ],
     });
   });
+
+  it('exposes immutable dynamic-subflow repair guidance before Persona creation', async () => {
+    getFlowMock.mockResolvedValue({ id: 'shared_core', name: 'Coordinator', edges: [], nodes: [
+      { id: 'workers', type: 'subflow', position: { x: 0, y: 0 }, data: { type: 'subflow', label: 'Workers', properties: { parallelSubflowIdsVar: 'workerIds' } } },
+    ] });
+    validateFlowMock.mockResolvedValue({ isRunnable: true, errorCount: 0, warningCount: 0, issues: [] });
+    const response = await GET(request(), context);
+    expect(await response.json()).toEqual({ state: 'invalid', issues: [expect.stringMatching(/1–32 authored.*allow-list.*Repair the Subflow targets/)] });
+  });
 });

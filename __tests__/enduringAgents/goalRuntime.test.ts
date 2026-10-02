@@ -51,8 +51,16 @@ import {
 import type { PersonaActivity, PersonaActivityOutcome, PersonaGoalConfig, PersonaWorkItem } from '@/shared/types/enduringAgent';
 import type { SubmitPersonaFlowDispatchInput, PersonaFlowDispatchRecord } from '@/backend/services/enduringAgents/personaDispatcher';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
-import { runWithWorkspace } from '@/utils/workspace';
+import { runWithWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+import { flowService } from '@/backend/services/flow';
+import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
+import { authoredCoreFlowRef } from '@/backend/services/enduringAgents/personaComposition';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { executeDetachedSubflowStart, detachedJobRegistry, executeTaskGet } from '@/backend/execution/flow/handlers/subflowDetachedInvocation';
+import { getTask } from '@/backend/services/subflowTasks';
+import type { Flow } from '@/shared/types/flow';
+import type { SharedState } from '@/backend/execution/flow/types';
 
 let sequence = 0;
 let now = Date.now();
@@ -146,6 +154,82 @@ describe('ongoing Persona goal runtime', () => {
     _setPersonaRuntimeClockForTests(undefined);
     _setPersonaRuntimeLockProcessBirthProbeForTests();
   });
+
+  it('delegates to immutable detached workers, verifies and checkpoints output, restarts the controller, and finishes a fresh native round', async () => {
+    await inWorkspace(async () => {
+      const { task, persona } = await goal();
+      const claims = useRealActivityAdmission();
+      const worker = (text: string): Flow => ({ id: 'goal-worker', name: 'Isolated verification worker',
+        nodes: [
+          { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { type: 'start', label: 'Start' } },
+          { id: 'artifact', type: 'static', position: { x: 1, y: 0 }, data: { type: 'static', label: 'Verified artifact', properties: { entries: [{ kind: 'message', role: 'assistant', content: text }] } } },
+          { id: 'finish', type: 'finish', position: { x: 2, y: 0 }, data: { type: 'finish', label: 'Finish' } },
+        ], edges: [{ id: 'a', source: 'start', target: 'artifact' }, { id: 'b', source: 'artifact', target: 'finish' }],
+      });
+      expect((await flowService.saveFlow(worker('verified-deliverable-v1'))).success).toBe(true);
+      const coreRef = authoredCoreFlowRef(persona)!;
+      const core = (await flowService.getFlow(coreRef))!;
+      core.nodes.push({ id: 'delegate', type: 'subflow', position: { x: 3, y: 0 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: 'goal-worker', inputMode: 'isolated' } } });
+      expect((await flowService.saveFlow(core)).success).toBe(true);
+      let previousRevisionId: string | undefined;
+      const taskIds: string[] = [];
+      for (const round of [1, 2]) {
+        await reconcilePersonaGoals(task.personaId);
+        const claim = claims[round - 1];
+        expect(claim).toBeDefined();
+        const revision = await resolvePersonaCoreRevision(persona.id);
+        if (previousRevisionId) expect(revision.id).not.toBe(previousRevisionId);
+        previousRevisionId = revision.id;
+        const authority: FlowExecutionAuthority = {
+          signal: new AbortController().signal,
+          assertCurrent: async () => { await assertPersonaActivityLease(leaseFence(claim)); },
+          commitWhileCurrent: async <T>(mutation: () => Promise<T>) => {
+            await assertPersonaActivityLease(leaseFence(claim));
+            const result = await mutation();
+            await assertPersonaActivityLease(leaseFence(claim));
+            return result;
+          },
+        };
+        const conversationId = `goal-supervisor-round-${round}`;
+        FlowExecutor.conversationStates.set(conversationId, {
+          conversationId, logicalRunId: claim.activity.id, flowId: revision.flowSnapshot.id,
+          flowSnapshot: revision.flowSnapshot, executionAuthority: authority,
+          personaAttribution: { personaId: persona.id, activityId: claim.activity.id, behaviorRevisionId: revision.id },
+          subflowDetachedToolNameMap: { start_subflow_worker: 'delegate' },
+          messages: [], title: 'Supervisor', createdAt: now, updatedAt: now,
+          trackingInfo: { executionId: claim.activity.id, startTime: now, nodeExecutionTracker: [] },
+        } as SharedState);
+        const started = await executeDetachedSubflowStart('start_subflow_worker', { task: `Verify round ${round}` }, { conversationId });
+        expect(started.success).toBe(true);
+        const handle = started.data as { taskId: string };
+        taskIds.push(handle.taskId);
+        await detachedJobRegistry.get(workspaceCacheKey(handle.taskId))!.promise;
+        const completed = (await getTask(handle.taskId))!;
+        expect(completed).toMatchObject({ status: 'completed', outputText: `verified-deliverable-v${round}`, flowSnapshot: { id: 'goal-worker' }, personaAttribution: { activityId: claim.activity.id } });
+        expect((await executeTaskGet(handle.taskId, { conversationId })).success).toBe(true);
+        const dispatch = [...dispatches.values()].find(item => item.activityId === claim.activity.id)!;
+        dispatches.set(dispatch.id, { ...dispatch, state: 'completed' });
+        const outcome = await completePersonaActivity({ ...leaseFence(claim), outcome: { schemaVersion: 1,
+          resolution: round === 2 ? 'succeeded' : 'partial', summary: `Verified ${completed.outputText}`,
+          nextAction: round === 1 ? 'Verify the fresh worker revision in the next round.' : undefined,
+          goalAchieved: round === 2, decisionSource: 'persona_claim', evidenceRefs: [], decidedAt: now } });
+        await synchronizeAssignedWorkItemFromActivity(outcome.activity);
+        const checkpointed = await current(task);
+        if (round === 1) {
+          expect(checkpointed.goal).toMatchObject({ state: 'active', rounds: 1 });
+          expect((await flowService.saveFlow(worker('verified-deliverable-v2'))).success).toBe(true);
+          stopPersonaGoalRuntime();
+          now = checkpointed.goal!.nextRunAt!;
+          await startPersonaGoalRuntime();
+        }
+      }
+      expect(taskIds[0]).not.toBe(taskIds[1]);
+      expect(await current(task)).toMatchObject({ status: 'completed', goal: { state: 'completed', rounds: 2 } });
+      now += 100_000;
+      await reconcilePersonaGoals(persona.id);
+      expect(submitMock).toHaveBeenCalledTimes(2);
+    });
+  }, 30_000);
 
   it('continues partial/successful rounds from one goal, and completes only on verified goal success', async () => {
     await inWorkspace(async () => {

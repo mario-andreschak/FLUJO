@@ -185,7 +185,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       if (target.type === 'subflow') {
         const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
         sharedState.subflowDetachedToolNameMap[toolName] = target.id;
-        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget) : `Start ${target.label} as a detached subflow`;
+        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined) : `Start ${target.label} as a detached subflow`;
         const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
       }
@@ -195,7 +195,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
         sharedState.subflowToolNameMap[toolName] = target.id;
         const description = flowNodeForTarget
-          ? await buildHandoffDescription(flowNodeForTarget)
+          ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
           : `Run ${target.label} as a callable subflow tool`;
         const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
@@ -211,7 +211,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
       const flowNode = flowNodesById?.get(target.id);
       const description = flowNode
-        ? await buildHandoffDescription(flowNode)
+        ? await buildHandoffDescription(flowNode, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
         : `Hand off execution to ${target.label} (${target.type})`;
 
       // A subflow OR process node in 'isolated' inputMode that opted into
