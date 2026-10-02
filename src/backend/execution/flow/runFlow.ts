@@ -1847,6 +1847,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     input.abortSignal,
     input.executionAuthority?.signal,
   );
+  Object.defineProperty(sharedState, 'abortSignal', {
+    value: runtimeAbortSignal,
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
   const runCancelled = (): boolean => {
     if (runtimeAbortSignal?.aborted) {
       sharedState.isCancelled = true;
