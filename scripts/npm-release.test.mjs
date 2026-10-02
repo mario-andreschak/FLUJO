@@ -664,6 +664,12 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   assert.equal(diagnostic.steps.some(({ run }) => /npm-release\.mjs (publish|finalize)/.test(run ?? '')), false);
   for (const job of [prepare, verifyMain, publish, finalize]) assert.equal(job.if, '${{ !inputs.diagnose_oidc }}');
   assert.deepEqual(publish.needs, ['prepare', 'verify-main']);
+  // Each package may use a fifteen-minute readback window after its
+  // ten-minute publish call. Keep setup/verification time outside that sum.
+  const sequentialPublicationMinutes = PUBLIC_PACKAGES.length * (15 + 10);
+  const setupAndVerificationMinutes = 25;
+  assert.ok(publish['timeout-minutes'] >= sequentialPublicationMinutes + setupAndVerificationMinutes,
+    'the publish job must accommodate every sequential package budget plus setup and verification');
   assert.ok(finalize.needs.includes('prepare') && finalize.needs.includes('publish'));
   assert.equal(publish.permissions['id-token'], 'write');
   assert.equal(publish.permissions.contents, 'read');
