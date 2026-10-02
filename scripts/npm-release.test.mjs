@@ -187,6 +187,45 @@ test('OIDC identity rejection never reaches the npm exchange', async () => {
   assert.equal(report.results.every(result => result.stage === 'github-identity' && !result.authenticated), true);
 });
 
+test('OIDC diagnostics redact opaque credentials reflected by the issuer and exchange', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from('{}').toString('base64url')}.signature`;
+  const env = { ...oidcEnvironment(), NPM_ID_TOKEN: 'opaque-inherited-token' };
+  const token = 'opaque-exchange-secret_XYZ';
+  const report = await diagnoseOidc({ env, request: async (_url, options) => {
+    if (!options.method) return { ok: true, status: 200, json: async () => ({ value: identity }) };
+    return { ok: false, status: 403, json: async () => ({ token,
+      message: [env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, env.NPM_ID_TOKEN, identity, token].join(' ') }) };
+  } });
+  for (const secret of [env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, env.NPM_ID_TOKEN, identity, token]) {
+    assert.equal(JSON.stringify(report).includes(secret), false);
+  }
+  assert.equal(report.results.every(result => !result.authenticated && result.message.includes('[redacted credential]')), true);
+  assert.equal(redactDiagnostic('opaque-token-long opaque-token', ['opaque-token', 'opaque-token-long']), '[redacted credential] [redacted credential]');
+});
+
+test('OIDC diagnostics retain successful results and continue after transport, JSON and identity failures', async () => {
+  const identity = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from('{}').toString('base64url')}.signature`;
+  let packageIndex = -1;
+  const report = await diagnoseOidc({ env: oidcEnvironment(), request: async (_url, options) => {
+    if (!options.method) {
+      packageIndex++;
+      if (packageIndex === 2) return { ok: true, status: 200, json: async () => { throw new SyntaxError('Non-JSON issuer response synthetic-job-token'); } };
+      return { ok: true, status: 200, json: async () => ({ value: packageIndex === 3 ? 'malformed-opaque-identity' : identity }) };
+    }
+    if (packageIndex === 1) throw new Error(`Exchange request timed out: ${identity}`);
+    return { ok: true, status: 200, json: async () => ({ token: 'opaque-exchange-token' }) };
+  } });
+  assert.deepEqual(report.results.map(result => result.name), PUBLIC_PACKAGES);
+  assert.deepEqual(report.results.map(result => result.authenticated), [true, false, false, false, true]);
+  assert.equal(report.results[1].stage, 'npm-exchange');
+  assert.equal(report.results[1].status, null);
+  assert.equal(report.results[2].stage, 'github-identity');
+  assert.equal(report.results[2].status, 200);
+  for (const secret of ['synthetic-job-token', identity, 'malformed-opaque-identity', 'opaque-exchange-token']) {
+    assert.equal(JSON.stringify(report).includes(secret), false);
+  }
+});
+
 test('current-main verification queries the official repository and stops when main advances', () => {
   const run = (command, args) => {
     assert.equal(command, 'gh');
