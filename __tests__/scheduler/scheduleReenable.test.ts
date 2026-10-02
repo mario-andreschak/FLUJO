@@ -121,6 +121,35 @@ describe('cron occurrence accounting across re-enable/reconcile (#539)', () => {
     expect(rows(execution.id)[0].status).toBe('completed');
   });
 
+  it.each(['disable', 'pause', 'delete', 'replace'] as const)(
+    'does not dispatch a tick waiting for initialization after durable %s', async action => {
+      execution = (await scheduler.create({ ...input, enabled: false })).execution!;
+      const gate = deferred();
+      const normalLoad = jest.mocked(loadItem).getMockImplementation()!;
+      jest.mocked(loadItem).mockImplementation(async (key, fallback) => {
+        if (key === `planned-execution-state/${execution.id}`) {
+          jest.mocked(loadItem).mockImplementation(normalLoad);
+          await gate.promise;
+        }
+        return (mockStore.get(key) ?? fallback) as typeof fallback;
+      });
+      const enabling = scheduler.update(execution.id, { enabled: true });
+      await flush();
+      await jest.advanceTimersByTimeAsync(216000);
+      const stopping = action === 'pause' ? scheduler.setPaused(true)
+        : action === 'delete' ? scheduler.delete(execution.id)
+        : scheduler.update(execution.id, action === 'disable' ? { enabled: false } : {
+            prompt: 'Replacement check', trigger: { ...input.trigger, catchUp: false },
+          });
+      await flush();
+      gate.resolve();
+      await Promise.all([enabling, stopping]);
+      await flush();
+      expect(mockRunFlow).not.toHaveBeenCalled();
+      expect(rows(execution.id)).toHaveLength(0);
+    },
+  );
+
   it('surfaces the exact occurrence when a cursor write fails and clears it after recovery', async () => {
     execution = (await scheduler.create(input)).execution!;
     jest.mocked(saveItem).mockRejectedValueOnce(new Error('disk unavailable'));
