@@ -13,7 +13,7 @@ const positions: Record<WorldPlace, [number, number]> = {
   packages: [RIVER_SCENES.packages.x, RIVER_SCENES.packages.y], archive: [RIVER_SCENES.docs.x, RIVER_SCENES.docs.y],
   settings: [RIVER_SCENES.settings.x, RIVER_SCENES.settings.y], personas: [21, 72], meetings: [82, 73],
 };
-export const PLACE_KINDS: Partial<Record<WorldPlace, AvatarWorldObject['kind']>> = { apps: 'app', flows: 'flow', personas: 'persona', automations: 'automation', meetings: 'meeting' };
+export const PLACE_KINDS: Partial<Record<WorldPlace, AvatarWorldObject['kind']>> = { apps: 'app', flows: 'flow', personas: 'persona', automations: 'automation', meetings: 'meeting', archive: 'artifact' };
 
 export default function Watershed({ snapshot, locale, selected, onSelect }: { snapshot: AvatarWorldSnapshot | null; locale: WorldLocale; selected: WorldPlace | null; onSelect: (place: WorldPlace) => void }) {
   const c = worldCopy(locale);

@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AskFlujoPageContext, AskFlujoUiAction, AskFlujoActionResult } from '@/frontend/types/askFlujo';
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import { AVATAR_PANEL_PROTOCOL, panelRoute } from './AvatarPanelBridge';
+import type { WorldLocale } from './copy';
 
-export function useWorldPanel(onAsk: () => void) {
+export function useWorldPanel(onAsk: () => void, locale: WorldLocale = 'es') {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -12,6 +13,7 @@ export function useWorldPanel(onAsk: () => void) {
   const queued = useRef<string | null>(null);
   const pending = useRef(new Map<string, { resolve: (value: unknown) => void; timeout: ReturnType<typeof setTimeout> }>());
   const askRef = useRef(onAsk); askRef.current = onAsk;
+  const localeRef = useRef(locale); localeRef.current = locale;
   const request = useCallback((action: string, extra: Record<string, unknown> = {}): Promise<unknown> => {
     if (!ready.current || !iframeRef.current?.contentWindow) return Promise.resolve(null);
     const id = crypto.randomUUID();
@@ -26,6 +28,7 @@ export function useWorldPanel(onAsk: () => void) {
       if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow || event.data?.protocol !== AVATAR_PANEL_PROTOCOL || event.data.workspace !== getSelectedWorkspace()) return;
       if (event.data.ready) {
         ready.current = true;
+        void request('locale', { locale: localeRef.current });
         if (queued.current) { void request('navigate', { path: queued.current }); queued.current = null; }
       }
       if (event.data.ask) askRef.current();
@@ -36,6 +39,7 @@ export function useWorldPanel(onAsk: () => void) {
     const waiters = pending.current;
     return () => { window.removeEventListener('message', receive); for (const waiter of waiters.values()) { clearTimeout(waiter.timeout); waiter.resolve(null); } waiters.clear(); };
   }, [request]);
+  useEffect(() => { if (ready.current) void request('locale', { locale }); }, [locale, request]);
   const navigate = useCallback((path: string) => {
     const route = panelRoute(path, window.location.origin, getSelectedWorkspace());
     if (!route) return;

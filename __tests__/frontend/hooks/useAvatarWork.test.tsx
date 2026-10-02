@@ -27,7 +27,7 @@ describe('avatar work uses the existing runtime', () => {
   it('binds the chosen work model only to a new snapshot and uses renamed shipped connections', async () => {
     const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
     await act(() => result.current.send('Build me an agent'));
-    expect(chatService.synthesizeQuickChat).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chosen-brain', servers: [{ name: 'My renamed Flujo' }] }));
+    expect(chatService.synthesizeQuickChat).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chosen-brain', servers: [{ name: 'My renamed Flujo' }], runArtifactName: 'world-result' }));
     expect(chatService.createConversation).toHaveBeenCalledTimes(1);
     const completion = fetchMock.mock.calls.find(([url]) => url === '/v1/chat/completions');
     const body = JSON.parse(completion![1].body);

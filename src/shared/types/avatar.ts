@@ -10,7 +10,7 @@ export interface AvatarConnectionCandidate {
   nextAction: 'use-and-test' | 'sign-in' | 'connect-token' | 'repair' | 'manual';
   reasonCode?: string;
   modelId?: string;
-  modelChoices: Array<{ id: string; label: string; source: 'saved' | 'fallback' }>;
+  modelChoices: Array<{ id: string; label: string; source: 'saved' | 'host-cache' | 'fallback' }>;
 }
 
 export interface AvatarConnectionDiscovery {
@@ -23,9 +23,10 @@ export interface AvatarConnectionDiscovery {
 export interface AvatarWorldObject {
   id: string;
   name: string;
-  kind: 'flow' | 'app' | 'persona' | 'automation' | 'meeting';
+  kind: 'flow' | 'app' | 'persona' | 'automation' | 'meeting' | 'artifact';
   state: string;
   href: string;
+  resource?: { conversationId: string; id: string; kind: 'text' | 'image' | 'audio' | 'blob' | 'link'; mimeType?: string; size: number; createdAt: number };
 }
 
 export interface AvatarWorldSnapshot {

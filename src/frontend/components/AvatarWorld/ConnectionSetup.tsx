@@ -43,7 +43,7 @@ export default function ConnectionSetup({ locale, onClose, onVerified, onOther }
         const signature = JSON.stringify([candidate.id, choice, token]);
         if (savedDraft.current?.signature === signature) id = savedDraft.current.id;
         else {
-          const model: Model = { id: crypto.randomUUID(), name: choice.trim(), displayName: `${candidate.label} · ${choice.trim()}`,
+          const model: Model = { id: savedDraft.current?.id ?? crypto.randomUUID(), name: choice.trim(), displayName: `${candidate.label} · ${choice.trim()}`,
             ApiKey: candidate.kind === 'claude-subscription' ? token.trim() : '',
             provider: candidate.kind === 'claude-subscription' ? 'claude-subscription' : 'codex',
             adapter: candidate.kind === 'claude-subscription' ? 'claude-cli' : 'codex-cli', supportsTools: true };

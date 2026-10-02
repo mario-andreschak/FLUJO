@@ -35,4 +35,8 @@ describe('passive avatar connection discovery', () => {
     const result = await discoverAvatarConnections([], { ...dependencies(), codexRuntime: async () => 'missing' });
     expect(result.candidates[0]).toMatchObject({ runtime: 'missing', authentication: 'login-detected', nextAction: 'repair' });
   });
+  it('offers cached model hints without turning catalog visibility into verification', async () => {
+    const result = await discoverAvatarConnections([], { ...dependencies(), codexModels: async () => [{ id: 'cached-model', label: 'cached-model', source: 'host-cache' }] });
+    expect(result.candidates[0]).toMatchObject({ verification: 'untested', modelChoices: [{ id: 'cached-model', source: 'host-cache' }] });
+  });
 });

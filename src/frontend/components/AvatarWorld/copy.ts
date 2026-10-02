@@ -25,7 +25,7 @@ const es = {
   apply: 'Aplicar', applied: 'Aplicado', steer: 'La indicación llegó al trabajo en curso.',
   uncertain: 'No pudimos confirmar la entrega. Revisa la conversación antes de reenviar.',
   connectFailed: 'La conexión no pasó la prueba. Puedes corregirla y volver a intentar.',
-  voice: 'Hablar', voiceOff: 'Voz desconectada', resources: 'Resultados', loading: 'Cargando tu mundo…',
+  voice: 'Hablar', voiceOutput: 'Escuchar al compañero', voiceOff: 'Voz desconectada', resources: 'Resultados', loading: 'Cargando tu mundo…',
 };
 type Copy = typeof es;
 const pt: Copy = {
@@ -49,7 +49,7 @@ const pt: Copy = {
   stale: 'Sua conexão mudou. Vamos verificá-la novamente.', noWork: 'Conecte uma IA para começar a trabalhar.',
   apply: 'Aplicar', applied: 'Aplicado', steer: 'A orientação chegou ao trabalho em andamento.',
   uncertain: 'Não foi possível confirmar a entrega. Confira a conversa antes de reenviar.', connectFailed: 'A conexão não passou no teste. Você pode corrigi-la e tentar novamente.',
-  voice: 'Conversar', voiceOff: 'Voz desconectada', resources: 'Resultados', loading: 'Carregando seu mundo…',
+  voice: 'Conversar', voiceOutput: 'Ouvir o companheiro', voiceOff: 'Voz desconectada', resources: 'Resultados', loading: 'Carregando seu mundo…',
 };
 const en: Copy = {
   hello: 'A world waiting to wake.', guide: 'I’m here. Let’s start with the AI you already use.', ready: 'What shall we do today?', readyBody: 'Tell me what you need. Your AI handles the work.',
@@ -64,6 +64,6 @@ const en: Copy = {
   flows: 'Agents', apps: 'Apps', personas: 'Personas', automations: 'Routines', meetings: 'Meetings', empty: 'This place starts with you.', viewAll: 'View all', create: 'Open this place',
   unavailable: 'Some parts of the world are unavailable. Try again.', stale: 'Your connection changed. Let’s verify it again.', noWork: 'Connect an AI to start working.', apply: 'Apply', applied: 'Applied',
   steer: 'Your instruction reached the work in progress.', uncertain: 'Delivery could not be confirmed. Check the conversation before resending.', connectFailed: 'The connection did not pass the test. You can correct it and try again.',
-  voice: 'Talk', voiceOff: 'Voice disconnected', resources: 'Results', loading: 'Loading your world…',
+  voice: 'Talk', voiceOutput: 'Hear the companion', voiceOff: 'Voice disconnected', resources: 'Results', loading: 'Loading your world…',
 };
 export function worldCopy(locale: WorldLocale): Copy { return ({ es, pt, en })[locale]; }

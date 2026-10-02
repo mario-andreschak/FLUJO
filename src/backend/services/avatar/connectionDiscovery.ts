@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Model } from '@/shared/types/model';
 import { getProviderProfileById } from '@/shared/types/model/provider';
 import type { AvatarConnectionDiscovery, AvatarConnectionCandidate } from '@/shared/types/avatar';
-import { inspectCodexLogin } from '@/backend/services/model/adapters/codexAuth';
+import { inspectCodexLogin, userCodexHome } from '@/backend/services/model/adapters/codexAuth';
 
 type Runtime = AvatarConnectionCandidate['runtime'];
 
@@ -43,18 +43,38 @@ function choices(provider: string): AvatarConnectionCandidate['modelChoices'] {
   return (getProviderProfileById(provider)?.defaultModels ?? []).map(id => ({ id, label: id, source: 'fallback' }));
 }
 
+/** Cached public catalog hints, never personal configuration or proof of entitlement. */
+export async function inspectCodexModelHints(): Promise<AvatarConnectionCandidate['modelChoices']> {
+  try {
+    const file = path.join(userCodexHome(), 'models_cache.json');
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) return [];
+    const handle = await fs.open(file, 'r');
+    let bytes: Buffer;
+    try { bytes = Buffer.alloc(8 * 1024 * 1024 + 1); const read = await handle.read(bytes, 0, bytes.length, 0); if (read.bytesRead > 8 * 1024 * 1024) return []; bytes = bytes.subarray(0, read.bytesRead); }
+    finally { await handle.close(); }
+    const value: unknown = JSON.parse(bytes.toString('utf8'));
+    if (!value || typeof value !== 'object' || !('models' in value) || !Array.isArray(value.models)) return [];
+    return value.models.filter(model => model && typeof model === 'object' && model.visibility === 'list'
+      && typeof model.slug === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(model.slug)).slice(0, 20)
+      .map(model => ({ id: model.slug, label: model.slug, source: 'host-cache' as const }));
+  } catch { return []; }
+}
+
 export interface DiscoveryDependencies {
   codexRuntime: () => Promise<Runtime>;
   claudeRuntime: () => Promise<Runtime>;
   codexLogin: typeof inspectCodexLogin;
+  codexModels?: typeof inspectCodexModelHints;
 }
 
 /** No tests, paid calls, mutations, account identities, or personal settings. */
 export async function discoverAvatarConnections(models: Model[], dependencies: DiscoveryDependencies = {
-  codexRuntime: inspectCodexRuntime, claudeRuntime: inspectClaudeRuntime, codexLogin: inspectCodexLogin,
+  codexRuntime: inspectCodexRuntime, claudeRuntime: inspectClaudeRuntime, codexLogin: inspectCodexLogin, codexModels: inspectCodexModelHints,
 }): Promise<AvatarConnectionDiscovery> {
-  const [codexRuntime, claudeRuntime, login] = await Promise.all([
+  const [codexRuntime, claudeRuntime, login, cachedModels] = await Promise.all([
     dependencies.codexRuntime(), dependencies.claudeRuntime(), dependencies.codexLogin(),
+    dependencies.codexModels?.() ?? Promise.resolve([]),
   ]);
   const saved: AvatarConnectionCandidate[] = models.filter(m => m.supportsTools !== false).map(model => ({
     id: `saved:${model.id}`, kind: 'saved-model', label: model.displayName || model.name,
@@ -75,7 +95,7 @@ export async function discoverAvatarConnections(models: Model[], dependencies: D
       runtime: codexRuntime, ...login, verification: 'untested',
       nextAction: codexRuntime !== 'available' ? 'repair' : login.authentication === 'login-detected' ? 'use-and-test'
         : login.authentication === 'needs-connection' ? 'sign-in' : 'repair',
-      modelChoices: choices('codex'),
+      modelChoices: cachedModels.length ? cachedModels : choices('codex'),
     }, {
       id: 'claude-subscription', kind: 'claude-subscription', label: 'Claude', host: 'flujo-server',
       runtime: claudeRuntime, authentication: 'needs-connection', verification: 'untested',
