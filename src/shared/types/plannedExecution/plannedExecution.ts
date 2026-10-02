@@ -336,6 +336,15 @@ export interface RunRecord {
   outputText?: string;
   usage?: UsageTotals;
   error?: string;
+  /** Bounded Static MCP failure classification, retained even for ephemeral runs.
+   * Does not include raw protocol results, arguments, or provider stacks. */
+  errorDetails?: {
+    type?: string;
+    code?: string;
+    name?: string;
+    param?: string;
+    status?: number;
+  };
   /**
    * Set when a HEADLESS run hit a tool that needs approval (issue #115): the
    * run either failed fast (approvalPolicy 'fail') or is parked awaiting

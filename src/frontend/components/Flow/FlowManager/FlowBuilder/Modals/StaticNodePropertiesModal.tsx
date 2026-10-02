@@ -58,6 +58,7 @@ import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import type { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import type { CardGroup } from '@/utils/shared/cardGrouping';
+import { isValidRunVarName } from '@/utils/shared/resolveRunVars';
 import {
   createPromptReferenceSuggestion,
   type PromptReferenceSuggestion,
@@ -93,6 +94,9 @@ type StaticEntry =
       result: string;
       executionMode?: 'mock' | 'real';
       serverName?: string;
+      captureVariable?: string;
+      resultFormat?: 'text' | 'json';
+      onError?: 'continue' | 'fail';
     };
 
 const EMPTY_STATIC_ENTRIES: StaticEntry[] = [];
@@ -343,7 +347,7 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
         fullWidth
         size="small"
         value={executionMode}
-        onChange={(_, value: 'real' | 'mock' | null) => value && onChange({ executionMode: value })}
+        onChange={(_, value: 'real' | 'mock' | null) => value && onChange({ executionMode: value, ...(value === 'mock' ? { onError: undefined } : {}) })}
         aria-label={t('flows.static.toolCallBehavior')}
         sx={{ '& .MuiToggleButton-root': { py: 1.1, textTransform: 'none', fontWeight: 700 } }}
       >
@@ -354,6 +358,42 @@ const ToolCallEditor = ({ entry, onChange, onChooseServer }: ToolCallEditorProps
           <AutoAwesomeRoundedIcon fontSize="small" sx={{ mr: 0.75 }} /> {t('flows.static.mockCall')}
         </ToggleButton>
       </ToggleButtonGroup>
+
+      <TextField
+        label={t('flows.static.captureVariable')}
+        value={entry.captureVariable ?? ''}
+        onChange={(event) => onChange({ captureVariable: event.target.value || undefined })}
+        error={!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim())}
+        helperText={t('flows.static.captureVariableHelp')}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        select
+        label={t('flows.static.resultFormat')}
+        value={entry.resultFormat ?? 'text'}
+        onChange={(event) => onChange({ resultFormat: event.target.value as 'text' | 'json' })}
+        helperText={t('flows.static.resultFormatHelp')}
+        fullWidth
+        size="small"
+      >
+        <MenuItem value="text">{t('flows.static.resultText')}</MenuItem>
+        <MenuItem value="json">{t('flows.static.resultJson')}</MenuItem>
+      </TextField>
+      {executionMode === 'real' && (
+        <TextField
+          select
+          label={t('flows.static.onError')}
+          value={entry.onError ?? 'continue'}
+          onChange={(event) => onChange({ onError: event.target.value as 'continue' | 'fail' })}
+          helperText={t('flows.static.onErrorHelp')}
+          fullWidth
+          size="small"
+        >
+          <MenuItem value="continue">{t('flows.static.continueOnError')}</MenuItem>
+          <MenuItem value="fail">{t('flows.static.failOnError')}</MenuItem>
+        </TextField>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
         <Stack spacing={2}>
@@ -581,7 +621,11 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     && !entry.serverName?.trim() ? [index] : []);
   const cannotSave = invalidJsonIndexes.length > 0
     || incompleteToolIndexes.length > 0
-    || incompleteRealIndexes.length > 0;
+    || incompleteRealIndexes.length > 0
+    || entries.some((entry) => entry.kind === 'toolCall' && (
+      (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
+      || (entry.onError === 'fail' && entry.executionMode !== 'real')
+    ));
 
   if (!node || !nodeData) return null;
 
@@ -673,6 +717,18 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
                     />
                     <FormHelperText>{t('flows.static.injectOnce.help')}</FormHelperText>
                   </Box>
+                  <TextField
+                    label={t('flows.static.outputTemplate')}
+                    value={nodeData.properties?.outputTemplate ?? ''}
+                    onChange={(event) => setNodeData((previous) => previous ? {
+                      ...previous,
+                      properties: { ...previous.properties, outputTemplate: event.target.value || undefined },
+                    } : previous)}
+                    helperText={t('flows.static.outputTemplateHelp')}
+                    placeholder={'${var:health}'}
+                    fullWidth
+                    multiline
+                  />
                 </Stack>
               </AccordionDetails>
             </Accordion>
