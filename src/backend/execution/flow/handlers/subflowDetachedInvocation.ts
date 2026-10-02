@@ -25,7 +25,8 @@ import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import type { SubflowLanePlan, SubflowNodePrepResult, SubflowNodeProperties, ToolDefinition } from '../types';
 import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { runInWriteChain } from '@/utils/storage/backend';
-import { assertFlowExecutionCurrent, commitFlowDurableMutation, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { assertFlowExecutionCurrent, commitFlowDurableMutation, rethrowFlowExecutionAuthorityError, subflowExecutionAuthority } from '../executionAuthority';
+import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { isCancelledByAncestry } from '../cancellation';
 import { publishSubflowCompletion } from '../subflowCommunication';
 
@@ -200,6 +201,7 @@ async function startDetachedSubflow(
     const node = flow?.nodes.find(item => item.id === targetNodeId);
     const props = node?.data?.properties as SubflowNodeProperties | undefined;
     if (!props?.subflowId) return { success: false, error: 'Target subflow node has no configured subflowId.' };
+    const pinned = pinnedSubflowDefinition({ personaAttribution: shared.personaAttribution, parentFlowSnapshot: shared.flowSnapshot, nodeId: targetNodeId }, props.subflowId);
     const rawTask = typeof args.task === 'string' ? args.task.trim() : '';
     const prompt = rawTask || props.promptTemplate || '';
     const task = await commitFlowDurableMutation(shared, () => createTask({
@@ -214,6 +216,7 @@ async function startDetachedSubflow(
       flowId: props.subflowId!,
       childConversationId: crypto.randomUUID(),
       input: { prompt },
+      ...(pinned.flowDefinition ? { flowSnapshot: pinned.flowDefinition, personaAttribution: shared.personaAttribution } : {}),
     }));
     if (!task) return { success: false, error: 'Unable to persist detached subflow task.' };
 
@@ -227,14 +230,15 @@ async function startDetachedSubflow(
       chainDepth: shared.chainDepth, plannedExecutionId: shared.plannedExecutionId,
       parentRunId: task.originConversationId,
       personaAttribution: shared.personaAttribution,
-      executionAuthority: shared.executionAuthority,
+      executionAuthority: subflowExecutionAuthority(shared.executionAuthority),
+      parentFlowSnapshot: shared.flowSnapshot,
       abortSignal: controller.signal,
       persistConversation: true, showSteps: true, emit: ctx.emit, lanes: [lane],
       concurrencyLimit: 1, joinSeparator: '\n\n', errorStrategy: 'collect-all',
     };
     let subflowName: string | undefined;
     try {
-      subflowName = (await flowService.getFlow(props.subflowId))?.name;
+      subflowName = pinned.flowDefinition?.name ?? (await flowService.getFlow(props.subflowId))?.name;
     } catch {
       // Display names are best-effort; the stable subflow id is authoritative.
     }

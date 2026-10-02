@@ -39,6 +39,9 @@ export interface SubflowTaskRecord extends SubflowTaskHandle {
     classification: 'interrupted';
     manualActionRequired: true;
   };
+  /** Trusted immutable child graph and audit triple captured before admission. */
+  flowSnapshot?: import('./flow').Flow;
+  personaAttribution?: import('./enduringAgent').PersonaAttribution;
   originConversationId: string;
   originNodeId?: string;
   originLogicalRunId?: string;

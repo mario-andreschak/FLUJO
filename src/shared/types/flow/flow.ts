@@ -27,6 +27,12 @@ export interface BehaviorRule {
 }
 
 export interface Flow {
+  /** Durable immutable executable closure for Persona Core/Behavior revisions. */
+  executionDependencies?: {
+    schemaVersion: 1;
+    workspaceId: string;
+    flows: { flowId: string; contentHash: string; flowSnapshot: Flow }[];
+  };
   id: string;
   name: string;
   /** Optional, user-authored free-text description shown on the Flow Card. */
