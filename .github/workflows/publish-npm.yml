@@ -1,5 +1,5 @@
 name: Publish npm release
-run-name: Release FLUJO ${{ inputs.version }} at ${{ inputs.expected_sha }}
+run-name: ${{ inputs.diagnose_oidc && format('Diagnose npm OIDC at {0}', inputs.expected_sha) || format('Release FLUJO {0} at {1}', inputs.version, inputs.expected_sha) }}
 
 on:
   workflow_dispatch:
@@ -12,6 +12,10 @@ on:
         description: Synchronized package version (x.y.z)
         type: string
         required: true
+      diagnose_oidc:
+        description: Check all five trusted publisher exchanges without publishing
+        type: boolean
+        default: false
 
 concurrency:
   group: official-npm-release
@@ -25,7 +29,33 @@ env:
   RELEASE_VERSION: ${{ inputs.version }}
 
 jobs:
+  diagnose-oidc:
+    if: inputs.diagnose_oidc
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - name: Report npm and CI identity
+        run: |
+          node --version
+          npm --version
+          command -v npm
+      - name: Check trusted publisher exchanges without registry writes
+        run: node scripts/npm-oidc-diagnostic.mjs
+
   prepare:
+    if: ${{ !inputs.diagnose_oidc }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     outputs:
@@ -56,6 +86,7 @@ jobs:
           retention-days: 30
 
   verify-main:
+    if: ${{ !inputs.diagnose_oidc }}
     runs-on: ubuntu-latest
     timeout-minutes: 125
     permissions:
@@ -76,6 +107,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   publish:
+    if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, verify-main]
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -107,6 +139,7 @@ jobs:
           RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
 
   finalize:
+    if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 240
