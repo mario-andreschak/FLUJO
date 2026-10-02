@@ -52,11 +52,10 @@ jobs:
       - name: Verify clean source before building
         run: node --input-type=module -e "import { assertExactPersonaAcceptanceSource } from './scripts/persona-acceptance-source.mjs'; assertExactPersonaAcceptanceSource(process.env.PERSONA_JOURNEY_COMMIT);"
       - run: npm run build
-      - name: Retain and normalize generated Next type references
+      - name: Retain generated Next type references
         run: |
           mkdir -p persona-browser-artifacts
-          git diff -- next-env.d.ts > persona-browser-artifacts/next-env-build.patch
-          git restore -- next-env.d.ts
+          cp next-env.d.ts persona-browser-artifacts/next-env.d.ts
       - run: npm run test:persona-browser-environment
       - name: Record clean source and build identity before the journey
         run: node scripts/persona-browser-acceptance/check-source.mjs --phase before --commit "$PERSONA_JOURNEY_COMMIT" --run-id "$PERSONA_JOURNEY_RUN_ID"
