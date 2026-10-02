@@ -431,13 +431,12 @@ async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
   if (!isWorkerMode()) await ensureDefaultFlujoAgent();
-  // Detached task execution is process-local in v1. Any persisted working task
-  // left behind by a prior process is visible as a terminal restart failure.
-  if (!isWorkerMode()) {
-    reconcileOrphanedTasks().catch(error =>
-      log.warn('Detached subflow task reconciliation failed at startup:', error)
-    );
-  }
+  // Local detached launches can be reconciled in Worker mode too. Ownership and
+  // exact child interruption checks protect copied snapshot records; this never
+  // resumes tasks or replays scheduler effects. Task reads catch later recovery.
+  reconcileOrphanedTasks().catch(error =>
+    log.warn('Detached subflow task reconciliation failed at startup:', error)
+  );
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay

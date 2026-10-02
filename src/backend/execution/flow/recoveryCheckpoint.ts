@@ -17,7 +17,9 @@ import { appendRawForState, flushConversationLog } from './conversationLog';
 import { persistConversationState } from './persistConversationState';
 import { parseRetryAfterMs } from './retryAfter';
 
-const RECOVERY_OWNER_ID = randomUUID();
+// Route bundles and hot reloads in one process must agree on the recovery owner.
+const recoveryRuntime = globalThis as typeof globalThis & { __flujoRecoveryOwnerId?: string };
+const RECOVERY_OWNER_ID = recoveryRuntime.__flujoRecoveryOwnerId ??= randomUUID();
 const UNKNOWN_TOOL_EFFECT_WARNING =
   'A tool may have produced an external side effect before execution stopped. Automatic replay is disabled; restart the turn or confirm the effect before retrying.';
 
