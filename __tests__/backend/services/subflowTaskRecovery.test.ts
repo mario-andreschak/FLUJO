@@ -168,3 +168,17 @@ it('requires a persisted terminal child and refuses to manufacture success or te
   expect(await getTask(completed.taskId)).toMatchObject({ status: 'working' });
   expect(runSubflowLanes).not.toHaveBeenCalled();
 }));
+
+it('preserves a detached Persona dependency snapshot and attribution while recording interruption without replay', async () => runWithWorkspace('worker', async () => {
+  const task = await seed('pinned-persona-child');
+  const flowSnapshot = {
+    id: 'child-flow', name: 'Pinned child', nodes: [{ id: 'action', type: 'finish' }], edges: [],
+    subflowManifest: { 'dependency-flow': { id: 'dependency-flow', name: 'Original dependency', nodes: [], edges: [] } },
+  };
+  const personaAttribution = { personaId: 'persona-1', activityId: 'activity-1', behaviorRevisionId: 'behavior-1' };
+  await saveCollectionItem('subflow-tasks', task.taskId, { ...task, flowSnapshot, personaAttribution });
+  expect(await reconcileOrphanedTasks()).toEqual({ failed: 1 });
+  expect(await getTask(task.taskId)).toMatchObject({ status: 'failed', flowSnapshot, personaAttribution });
+  expect(await reconcileOrphanedTasks()).toEqual({ failed: 0 });
+  expect(runSubflowLanes).not.toHaveBeenCalled();
+}));
