@@ -361,7 +361,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (isProtectedExecutionServer(config.name)) {
     assertExecutionServerConfig(config);
     // The configured private integration accepts only synchronous tool calls.
-    const client = new Client({ name: `flujo-${config.name}-client`, version: '1.0.0' }, { capabilities: {} });
+    const client = new Client({ name: `flujo-${config.name}-client`, version: '3.46.2' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
     return client;
   }
