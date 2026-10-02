@@ -6,6 +6,8 @@ import {
   reconcilePersonaRoleBehaviors,
 } from '@/backend/services/enduringAgents';
 import { flowService } from '@/backend/services/flow';
+import { resolveEffectiveBehaviorRevision } from '@/backend/services/enduringAgents/behaviorFlowResolver';
+import { snapshotBehaviorFlowDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   createRoleVersion,
   getBehaviorRevision,
@@ -228,6 +230,68 @@ describe('workspace-authored Roles', () => {
 });
 
 describe('createPersonaFromRole', () => {
+  it('requires a destination Role publication instead of executing a source-workspace closure', async () => {
+    await inFreshWorkspace(async () => {
+      const base = exactToolsRoleVersion().behaviorSlots[0].flowTemplate;
+      const worker = { ...clone(base), id: 'foreign-role-worker', name: 'Foreign Role worker' };
+      expect((await flowService.saveFlow(worker)).success).toBe(true);
+      const coordinator = { ...clone(base), id: 'foreign-role-coordinator', name: 'Foreign Role coordinator' };
+      coordinator.nodes.push({ id: 'delegate', type: 'subflow', position: { x: 240, y: 360 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id } } });
+      const pinned = await snapshotBehaviorFlowDependencies(coordinator);
+      pinned.executionDependencies!.workspaceId = 'original-source-workspace';
+      const roleVersion = await createRoleVersion(RoleVersionSchema.parse({ ...buildTestRoleVersion(),
+        id: 'rolever_foreign_worker', version: 81, coreFlowTemplate: pinned,
+        behaviorSlots: [{ key: 'primary', name: 'Coordinator', requiredCapabilities: [], flowTemplate: pinned }],
+      }));
+      const readiness = await getPersonaCreationReadiness({ roleVersionId: roleVersion.id });
+      expect(readiness.state).toBe('invalid');
+      expect(readiness.issues.join(' ')).toContain('Publish a new Role version from authored Flows in this workspace');
+      await expect(createPersonaFromRoleProduction({ name: 'Foreign template supervisor', roleVersionId: roleVersion.id }))
+        .rejects.toThrow('another workspace');
+      expect(await listPersonas()).toEqual([]);
+    });
+  });
+  it('preserves a trusted immutable Role dependency closure after its original mutable child is deleted', async () => {
+    await inFreshWorkspace(async () => {
+      const base = exactToolsRoleVersion().behaviorSlots[0].flowTemplate;
+      const worker = { ...clone(base), id: 'immutable-role-worker', name: 'Immutable Role worker' };
+      expect((await flowService.saveFlow(worker)).success).toBe(true);
+      const coordinator = { ...clone(base), id: 'immutable-role-coordinator', name: 'Immutable Role coordinator' };
+      delete node(coordinator, 'develop').data.properties!.boundModel;
+      coordinator.nodes.push({ id: 'delegate', type: 'subflow', position: { x: 240, y: 360 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id } } });
+      const pinned = await snapshotBehaviorFlowDependencies(coordinator);
+      const roleVersion = await createRoleVersion(RoleVersionSchema.parse({ ...buildTestRoleVersion(),
+        id: 'rolever_pinned_worker', version: 80, coreFlowTemplate: pinned,
+        behaviorSlots: [{ key: 'primary', name: 'Coordinator', requiredCapabilities: [], flowTemplate: pinned }],
+      }));
+      expect((await flowService.deleteFlow(worker.id)).success).toBe(true);
+      expect(await getPersonaCreationReadiness({ roleVersionId: roleVersion.id })).toMatchObject({ state: 'ready' });
+      const bundle = await createPersonaFromRoleProduction({ name: 'Pinned template supervisor', roleVersionId: roleVersion.id });
+      expect(bundle.behaviorRevisions[0].flowSnapshot.executionDependencies).toEqual(pinned.executionDependencies);
+      expect(bundle.behaviorRevisions[0].flowSnapshot.id).not.toBe(pinned.id);
+      expect(node(bundle.behaviorRevisions[0].flowSnapshot, 'develop').data.properties!.boundModel).toBe('model-test');
+    });
+  });
+  it('publishes selected specialist Behavior closures and picks up child edits on the next resolution', async () => {
+    await inFreshWorkspace(async () => {
+      const base = exactToolsRoleVersion().behaviorSlots[0].flowTemplate;
+      const worker = { ...clone(base), id: 'specialist-worker', name: 'Specialist worker' };
+      const specialist = { ...clone(base), id: 'specialist-coordinator', name: 'Specialist coordinator' };
+      specialist.nodes.push({ id: 'delegate', type: 'subflow', position: { x: 240, y: 360 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id, inputMode: 'isolated' } } });
+      expect((await flowService.saveFlow(worker)).success).toBe(true);
+      expect((await flowService.saveFlow(specialist)).success).toBe(true);
+      const bundle = await createPersonaFromRole({ name: 'Specialist supervisor', behaviorFlowRefs: [specialist.id] });
+      const binding = bundle.behaviorBindings.find(item => item.slotKey.startsWith('picked_'))!;
+      const first = (await resolveEffectiveBehaviorRevision(bundle.persona.id, binding.slotKey)).revision;
+      expect(first.flowSnapshot.executionDependencies!.flows[0].flowId).toBe(worker.id);
+      node(worker, 'develop').data.properties!.promptTemplate = 'Verify the edited specialist implementation.';
+      expect((await flowService.saveFlow(worker)).success).toBe(true);
+      const next = (await resolveEffectiveBehaviorRevision(bundle.persona.id, binding.slotKey)).revision;
+      expect(next.id).not.toBe(first.id);
+      expect(next.flowSnapshot.nodes).toEqual(first.flowSnapshot.nodes);
+      expect(await getBehaviorRevision(first.id)).toEqual(first);
+    });
+  });
   it('uses conservative autonomy defaults while preserving explicit overrides', async () => {
     await inFreshWorkspace(async () => {
       const cases = [

@@ -22,6 +22,26 @@ export interface SubflowTaskHandle {
 }
 
 export interface SubflowTaskRecord extends SubflowTaskHandle {
+  /** Local launch provenance. Installation identity is never part of a workspace snapshot. */
+  launchOwner?: {
+    installationId: string;
+    workspace: string;
+    recoveryOwnerId: string;
+    processInstanceId: string;
+    pid: number;
+    processBirthMarkerV2?: string;
+  };
+  interruption?: {
+    childConversationId: string;
+    recoveryOwnerId: string;
+    terminalAt: number;
+    reconciledAt: number;
+    classification: 'interrupted';
+    manualActionRequired: true;
+  };
+  /** Trusted immutable child graph and audit triple captured before admission. */
+  flowSnapshot?: import('./flow').Flow;
+  personaAttribution?: import('./enduringAgent').PersonaAttribution;
   originConversationId: string;
   originNodeId?: string;
   originLogicalRunId?: string;

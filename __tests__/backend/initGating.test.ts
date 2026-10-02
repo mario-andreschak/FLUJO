@@ -308,7 +308,7 @@ describe('backend init startup gating (#78)', () => {
     expect(unlockWorkerSnapshotMock).toHaveBeenCalledTimes(1);
     expect(reinstallWorkspaceMcpServersMock).toHaveBeenCalledTimes(1);
     expect(reinstallWorkspaceMcpServersMock.mock.invocationCallOrder[0]).toBeLessThan(startEnabledServersMock.mock.invocationCallOrder[0]);
-    expect(reconcileOrphanedTasksMock).not.toHaveBeenCalled();
+    expect(reconcileOrphanedTasksMock).toHaveBeenCalledTimes(1);
     expect(resumeRemoteMcpTasksMock).not.toHaveBeenCalled();
     expect(reconcilePersonaRoleBehaviorsMock).not.toHaveBeenCalled();
     expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();

@@ -9,7 +9,7 @@ import {
   behaviorRevisionId,
   canonicalJson,
   hashBehaviorFlow,
-  snapshotBehaviorFlow,
+  snapshotBehaviorFlowDependencies,
 } from './behaviorRevisions';
 import { authoredCoreFlowRef } from './personaComposition';
 import {
@@ -128,7 +128,7 @@ export async function resolvePersonaCoreRevision(
         `Persona Core Flow ${JSON.stringify(coreFlowRef)} no longer exists.`,
       );
     }
-    const flowSnapshot = snapshotBehaviorFlow(authoredFlow);
+    const flowSnapshot = await snapshotBehaviorFlowDependencies(authoredFlow);
     const contentHash = hashBehaviorFlow(flowSnapshot);
     if (
       active.contentHash === contentHash

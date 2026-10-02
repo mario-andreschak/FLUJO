@@ -47,6 +47,7 @@ for (const setting of ['true', 'TRUE', '1']) {
     assert.ok(buildIndex >= 0);
     assert.ok(result.commands.indexOf('npm run validate:mcp-release') > buildIndex);
     assert.ok(!result.commands.some(attemptedPublish));
+    assert.ok(!result.commands.some((command) => /^(npm whoami|npm view .* maintainers|gh auth|git fetch)/.test(command)));
   });
 }
 
@@ -97,7 +98,8 @@ test('an intentional release reaches the intercepted version boundary without ru
   assert.ok(result.commands.includes('npm run build:mcp'));
   assert.ok(!result.commands.includes('npm run build'));
   assert.ok(!result.commands.includes('npm run validate:mcp-release'));
-  assert.deepEqual(result.commands.filter(attemptedPublish), ['npm version patch -m "Bump version to %s"']);
+  assert.deepEqual(result.commands.filter(attemptedPublish), ['npm version patch --no-git-tag-version']);
+  assert.ok(!result.commands.some((command) => /^npm (whoami|view .* maintainers)/.test(command)));
 });
 
 for (const side of ['RELEASE_TEST_FETCH_ORIGIN', 'RELEASE_TEST_PUSH_ORIGIN']) {
@@ -110,10 +112,71 @@ for (const side of ['RELEASE_TEST_FETCH_ORIGIN', 'RELEASE_TEST_PUSH_ORIGIN']) {
 }
 
 test('default and explicit releases retain version selection', () => {
-  assert.deepEqual(parseReleaseArguments([], {}), { bump: 'minor', dryRun: false, help: false });
+  assert.deepEqual(parseReleaseArguments([], {}), { bump: 'minor', dryRun: false, help: false, resume: null });
   for (const bump of ['patch', 'minor', 'major', '1.2.3']) assert.equal(parseReleaseArguments([bump], {}).bump, bump);
   for (const setting of ['', 'false', 'FALSE', '0']) {
     assert.equal(parseReleaseArguments([], { npm_config_dry_run: setting }).dryRun, false);
   }
   assert.equal(parseReleaseArguments([], { NPM_CONFIG_DRY_RUN: 'true' }).dryRun, true);
+});
+
+test('resume selects the original workflow run without selecting a new version', () => {
+  assert.deepEqual(parseReleaseArguments(['--resume', '123456'], {}), {
+    bump: 'minor', dryRun: false, help: false, resume: '123456',
+  });
+});
+
+for (const args of [
+  ['--resume'],
+  ['--resume', '0'],
+  ['--resume', '-1'],
+  ['--resume', 'NaN'],
+  ['--resume', '1.5'],
+  ['--resume', '123', '--resume', '456'],
+  ['patch', '--resume', '123'],
+  ['--resume', '123', '3.40.1'],
+  ['--resume', '123', '--dry-run'],
+]) {
+  test(`invalid resume arguments ${args.join(' ')} invoke no commands`, (t) => {
+    assert.throws(() => parseReleaseArguments(args, {}));
+    const result = runRelease(t, args);
+    assert.equal(result.status, 1);
+    assert.deepEqual(result.commands, []);
+  });
+}
+
+test('npm environment dry-run cannot be combined with a resume request', () => {
+  assert.throws(() => parseReleaseArguments(['--resume', '123'], { npm_config_dry_run: 'true' }));
+});
+
+for (const [label, overrides] of [
+  ['local revision differs', { RELEASE_TEST_LOCAL_HEAD: 'b'.repeat(40) }],
+  ['local version differs', { RELEASE_TEST_RUN_VERSION: '0.0.2' }],
+  ['official main advanced', { RELEASE_TEST_MAIN_HEAD: 'b'.repeat(40) }],
+  ['run belongs to a fork', { RELEASE_TEST_RUN_REPOSITORY: 'fork/FLUJO' }],
+]) {
+  test(`resume with ${label} cannot rerun jobs, version, push or publish`, (t) => {
+    const result = runRelease(t, ['--resume', '123'], overrides);
+    assert.equal(result.status, 1);
+    assert.ok(!result.commands.some((command) => command.startsWith('gh run rerun')));
+    assert.ok(!result.commands.some(attemptedPublish));
+  });
+}
+
+test('failed release resume reruns only failed jobs of the original run without a new version', (t) => {
+  const result = runRelease(t, ['--resume', '123']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Resume the same tested artifacts.*--resume 123/);
+  assert.deepEqual(result.commands.filter((command) => command.startsWith('gh run rerun')), [
+    'gh run rerun 123 --repo mario-andreschak/FLUJO --failed',
+  ]);
+  assert.ok(!result.commands.some(attemptedPublish));
+});
+
+test('an already successful release can be confirmed without rerunning or changing versions', (t) => {
+  const result = runRelease(t, ['--resume', '123'], { RELEASE_TEST_RUN_CONCLUSION: 'success' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Released FLUJO 0\.0\.1/);
+  assert.ok(!result.commands.some((command) => command.startsWith('gh run rerun')));
+  assert.ok(!result.commands.some(attemptedPublish));
 });

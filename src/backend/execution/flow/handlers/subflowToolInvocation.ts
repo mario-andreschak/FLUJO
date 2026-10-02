@@ -19,6 +19,8 @@ import {
   startStatisticsTimer,
 } from '@/backend/services/statistics/metadata';
 import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
+import { pinnedSubflowDefinition } from '../subflowDependencies';
+import { subflowExecutionAuthority } from '../executionAuthority';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -204,9 +206,10 @@ export async function executeSubflowToolCall(
       return { success: false, error: 'Target subflow node has no configured subflowId.' };
     }
 
+    const pinned = pinnedSubflowDefinition({ personaAttribution: sharedState.personaAttribution, parentFlowSnapshot: sharedState.flowSnapshot, nodeId: targetNodeId }, subflowId);
     let subflowName: string | undefined;
     try {
-      subflowName = (await flowService.getFlow(subflowId))?.name;
+      subflowName = pinned.flowDefinition?.name ?? (await flowService.getFlow(subflowId))?.name;
     } catch (err) {
       log.warn('Could not resolve subflow display name; continuing without it', { err });
     }
@@ -240,7 +243,8 @@ export async function executeSubflowToolCall(
       parentRunId: sharedState.conversationId,
       plannedExecutionId: sharedState.plannedExecutionId,
       personaAttribution: sharedState.personaAttribution,
-      executionAuthority: sharedState.executionAuthority,
+      executionAuthority: subflowExecutionAuthority(sharedState.executionAuthority),
+      parentFlowSnapshot: sharedState.flowSnapshot,
       // Tool-mode invocations attach no durable invocation record (v1 is
       // non-resumable), so this stays ephemeral regardless of the target
       // node's own `saveConversation` setting.

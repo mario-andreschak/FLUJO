@@ -659,6 +659,33 @@ export async function _isPersonaRuntimeLockOwnerAliveForTests(
   }, new Set());
 }
 
+/** Process identity shared by durable local jobs, including detached subflows. */
+export interface RuntimeProcessIdentity {
+  pid: number;
+  processInstanceId: string;
+  processBirthMarkerV2?: string;
+}
+
+export async function getRuntimeProcessIdentity(): Promise<RuntimeProcessIdentity> {
+  const birth = await getOwnProcessBirthMarkerV2();
+  return {
+    pid: process.pid,
+    processInstanceId: PROCESS_INSTANCE_ID,
+    ...(birth ? { processBirthMarkerV2: birth } : {}),
+  };
+}
+
+/** Uncertain probes and PID reuse without comparable birth metadata stay live. */
+export async function isRuntimeProcessIdentityAlive(identity: RuntimeProcessIdentity): Promise<boolean> {
+  if (identity.pid === process.pid && identity.processInstanceId === PROCESS_INSTANCE_ID) return true;
+  return isOwnerProcessAlive({
+    ...identity,
+    ownerId: 'detached-process-owner',
+    workspace: getCurrentWorkspace(),
+    acquiredAt: 0,
+  }, new Set());
+}
+
 async function unlinkWithRetry(filePath: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {

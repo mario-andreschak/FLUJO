@@ -26,6 +26,16 @@ export interface FlowDurableMutationContext {
   personaAttribution?: PersonaAttribution;
 }
 
+/** Causal children inherit fencing and audit attribution, never Persona abilities. */
+export function subflowExecutionAuthority(authority?: FlowExecutionAuthority): FlowExecutionAuthority | undefined {
+  if (!authority) return undefined;
+  return {
+    signal: authority.signal,
+    assertCurrent: () => authority.assertCurrent(),
+    ...(authority.commitWhileCurrent ? { commitWhileCurrent: authority.commitWhileCurrent.bind(authority) } : {}),
+  };
+}
+
 export function isFlowExecutionAuthorityError(
   error: unknown,
 ): error is FlowExecutionAuthorityError {

@@ -82,6 +82,7 @@ describe('scheduler callback workspace isolation', () => {
   };
 
   beforeEach(() => {
+    jest.useFakeTimers({ now: new Date('2026-08-14T08:59:00.000Z') });
     mockStores.clear();
     mockStorageAccesses.length = 0;
     mockScheduleCallback = undefined;
@@ -89,7 +90,13 @@ describe('scheduler callback workspace isolation', () => {
     mockRunFlow.mockReset();
   });
 
-  afterEach(disposeScheduler);
+  afterEach(async () => {
+    try {
+      await disposeScheduler();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 
   it('re-enters the scheduler workspace before a timer reads or writes trigger state', async () => {
     const ownerWorkspace = 'scheduler-owner';
@@ -117,10 +124,13 @@ describe('scheduler callback workspace isolation', () => {
       sharedState: {},
     });
 
+    const occurrence = new Date('2026-08-14T09:00:00.000Z');
+    jest.setSystemTime(occurrence);
     await runWithWorkspace(
       wrongAmbientWorkspace,
-      () => mockScheduleCallback!(new Date('2026-08-14T09:00:00.000Z')),
+      () => mockScheduleCallback!(occurrence),
     );
+    expect(mockRunFlow).toHaveBeenCalledTimes(1);
 
     const triggerStateAccesses = mockStorageAccesses.filter(({ key }) =>
       key.startsWith('planned-execution-state/'),

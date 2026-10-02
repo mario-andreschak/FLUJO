@@ -9,7 +9,7 @@ import {
 import { assertValidWorkspaceName } from '@/utils/workspace';
 import { PERSONA_SHARDED_COLLECTIONS } from '@/utils/storage/backend';
 import { ENDURING_AGENT_COLLECTIONS as c } from './collections';
-import { canonicalJson } from './behaviorRevisions';
+import { canonicalJson, verifyBehaviorDependencies } from './behaviorRevisions';
 import { validatePersonaRecoveryGraph, type PersonaRecoveryRecordInput } from './personaRecoveryGraph';
 import { PERSONA_RECOVERY_RECORD_SPECS } from './personaRecoveryRecords';
 import { PersonaRuntimeEventManifestSchema, PersonaRuntimeEventSchema } from './runtimeEvents';
@@ -170,13 +170,17 @@ export function inspectPersonaRecoveryFiles(files: readonly PersonaRecoveryZipFi
     const nodeIds = new Set(flow.nodes.map((node) => node.id));
     if (nodeIds.size !== flow.nodes.length) throw new PersonaRecoveryError('Recovery Flow has duplicate node identities.');
     if (flow.personaOwnership && !ownerExists(id(flow.personaOwnership.personaId))) throw new PersonaRecoveryError('Recovery Flow belongs to an unknown Persona.');
+    if (flow.executionDependencies) {
+      verifyBehaviorDependencies(flow);
+      for (const dependency of flow.executionDependencies.flows) checkFlow(dependency.flowSnapshot, false);
+    }
     for (const node of flow.nodes) {
       const props = node.data.properties ?? {};
       if (typeof props.boundModel === 'string' && props.boundModel) modelIds.add(props.boundModel);
       if (typeof props.model === 'string' && props.model) modelIds.add(props.model);
       if (typeof props.modelId === 'string' && props.modelId) modelIds.add(props.modelId);
       if (typeof props.boundServer === 'string' && props.boundServer) appNames.add(props.boundServer);
-      if (checkDependencies) {
+      if (checkDependencies && !flow.executionDependencies) {
         const dependencies = [props.subflowId, ...(Array.isArray(props.parallelSubflowIds) ? props.parallelSubflowIds : [])];
         for (const ref of dependencies) if (typeof ref === 'string' && ref && !flows.has(ref)) throw new PersonaRecoveryError(`Recovery archive is missing callable Flow ${ref}.`);
       }
