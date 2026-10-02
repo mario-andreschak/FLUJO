@@ -69,12 +69,12 @@ Network/public or reverse-proxied exposure cannot select,
 inspect, mutate, resume, cancel, or administratively recover Persona work, even if
 a remote client spoofs `Host: localhost`; external webhooks can reach a Persona
 only through a trusted target saved locally on the planned execution. Persisted
-execution attribution is safe metadata and never a lease capability. Dependency
-manifests (Behavior publication
-currently rejects Subflow nodes), the complete compatibility matrix, privacy-aware
-configuration export, cross-system archive anonymization beyond the implemented
-Persona-conversation backup/restore guards, broader WorkItem automation, and the
-remaining UI remain gated follow-up work.
+execution attribution is safe metadata and never a lease capability. Core/Behavior
+publication supports Subflow nodes through the pinned, versioned executable
+dependency closure described below. Configuration-only Persona export is also
+implemented. Broader compatibility coverage, cross-system archive anonymization
+beyond the implemented Persona-conversation backup/restore guards, broader
+WorkItem automation, and remaining UI follow-ups remain gated work.
 
 ## Context
 
