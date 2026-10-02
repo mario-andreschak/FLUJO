@@ -85,4 +85,14 @@ describe('armSchedule', () => {
     expect(new Date(next as string).getTime()).toBeGreaterThan(Date.now());
     trigger.dispose();
   });
+
+  it('reports the intended occurrence when the timer callback arrives late', () => {
+    jest.setSystemTime(new Date('2026-10-01T12:59:59.000Z'));
+    const onFire = jest.fn();
+    const trigger = armSchedule({ type: 'schedule', cron: '*/15 * * * *', timezone: 'America/Bogota' }, onFire);
+    jest.setSystemTime(new Date('2026-10-01T13:00:05.000Z'));
+    jest.advanceTimersByTime(1000);
+    expect(onFire).toHaveBeenCalledWith(new Date('2026-10-01T13:00:00.000Z'));
+    trigger.dispose();
+  });
 });
