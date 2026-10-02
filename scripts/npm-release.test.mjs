@@ -257,6 +257,21 @@ test('a successful npm response without an integrity value is not evidence of an
   }
 });
 
+test('registry integrity reads force online revalidation and bound a failed request', () => {
+  const integrity = `sha512-${createHash('sha512').update('registry fixture').digest('base64')}`;
+  const result = readPublishedIntegrity((command, args, options) => {
+    assert.equal(command, 'npm');
+    assert.equal(args[0], 'view');
+    assert.ok(args.includes(`${PUBLIC_PACKAGES[0]}@${VERSION}`));
+    for (const flag of ['--prefer-online', '--prefer-offline=false', '--offline=false', '--fetch-retries=0', '--fetch-timeout=10000']) {
+      assert.ok(args.includes(flag), `${flag} must override inherited npm preferences`);
+    }
+    assert.equal(options.timeout, 15_000);
+    return JSON.stringify(integrity);
+  }, PUBLIC_PACKAGES[0], VERSION);
+  assert.equal(result, integrity);
+});
+
 test('candidate identity and every artifact checksum are verified before publication', (t) => {
   const candidate = fixture(t);
   validateCandidate({ directory: candidate.directory, sha: SHA, version: VERSION });
@@ -320,11 +335,11 @@ for (const [label, mutate] of [
   });
 }
 
-test('fresh publication uses each original artifact and publishes the app after all MCP packages', (t) => {
+test('fresh publication uses each original artifact and publishes the app after all MCP packages', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   let mainChecks = 0;
-  const result = publishCandidate({
+  const result = await publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION,
     assertCurrent: () => { mainChecks += 1; },
   });
@@ -335,18 +350,18 @@ test('fresh publication uses each original artifact and publishes the app after 
   assert.equal(PUBLIC_PACKAGES.at(-1), 'flujo-ai');
 });
 
-test('a partial release resumes only missing packages and skips identical published bytes', (t) => {
+test('a partial release resumes only missing packages and skips identical published bytes', async (t) => {
   const candidate = fixture(t);
   const initial = new Map(candidate.manifest.packages.slice(0, 2).map(({ name, integrity }) => [`${name}@${VERSION}`, integrity]));
   const registry = registryRunner(candidate.manifest, initial);
-  const result = publishCandidate({
+  const result = await publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
   });
   assert.deepEqual(result, PUBLIC_PACKAGES.map((name, index) => ({ name, published: index >= 2 })));
   assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, PUBLIC_PACKAGES.length - 2);
 });
 
-test('retry after a mid-release failure reuses the artifact set and does not republish earlier packages', (t) => {
+test('retry after a mid-release failure reuses the artifact set and does not republish earlier packages', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   let failed = false;
@@ -358,23 +373,23 @@ test('retry after a mid-release failure reuses the artifact set and does not rep
     return registry.run(command, args, options);
   };
   const options = { run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {} };
-  assert.throws(() => publishCandidate(options), /temporary npm publishing failure/);
-  assert.deepEqual(publishCandidate(options), PUBLIC_PACKAGES.map((name, index) => ({ name, published: index >= 2 })));
+  await assert.rejects(() => publishCandidate(options), /temporary npm publishing failure/);
+  assert.deepEqual(await publishCandidate(options), PUBLIC_PACKAGES.map((name, index) => ({ name, published: index >= 2 })));
   const publishedArtifacts = registry.commands.filter(({ args }) => args[0] === 'publish').map(({ args }) => path.basename(args.find((argument) => argument.endsWith('.tgz'))));
   assert.deepEqual(publishedArtifacts, candidate.manifest.packages.map(({ filename }) => filename));
 });
 
-test('a published version with different bytes aborts before any further publication', (t) => {
+test('a published version with different bytes aborts before any further publication', async (t) => {
   const candidate = fixture(t);
   const first = candidate.manifest.packages[0];
   const registry = registryRunner(candidate.manifest, new Map([[`${first.name}@${VERSION}`, 'sha512-conflicting-immutable-content']]));
-  assert.throws(() => publishCandidate({
+  await assert.rejects(() => publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
   }));
   assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 0);
 });
 
-test('a successful publish command cannot advance the release without matching registry readback', (t) => {
+test('a successful publish command cannot advance the release without matching registry readback', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   const first = candidate.manifest.packages[0];
@@ -383,29 +398,164 @@ test('a successful publish command cannot advance the release without matching r
     if (args[0] === 'publish') registry.published.set(`${first.name}@${VERSION}`, `sha512-${createHash('sha512').update('different registry bytes').digest('base64')}`);
     return result;
   };
-  assert.throws(() => publishCandidate({
+  await assert.rejects(() => publishCandidate({
     run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+    wait: async () => assert.fail('a conflicting registry integrity must never be retried'),
   }));
   assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
 });
 
-test('a main advance after the first package prevents publishing the remaining release', (t) => {
+test('a missing post-publish version becomes visible before any following package is published', async (t) => {
+  const candidate = fixture(t);
+  const registry = registryRunner(candidate.manifest);
+  const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
+  const waits = [];
+  let missingReadbacks = 0;
+  let elapsed = 0;
+  const run = (command, args, options) => {
+    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey) && missingReadbacks++ < 73) {
+      // A fresh server response can still omit a successfully written version.
+      assert.ok(args.includes('--prefer-online'));
+      assert.ok(args.includes('--offline=false') && args.includes('--prefer-offline=false'));
+      throw missingPackage();
+    }
+    return registry.run(command, args, options);
+  };
+  const result = await publishCandidate({
+    run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+    now: () => elapsed,
+    wait: async (delay) => {
+      assert.equal(registry.published.size, 1, 'later packages must wait for the first integrity confirmation');
+      elapsed += delay;
+      waits.push(delay);
+    },
+  });
+  assert.deepEqual(waits, Array(73).fill(10_000));
+  assert.equal(elapsed, 730_000);
+  assert.deepEqual(result, PUBLIC_PACKAGES.map((name) => ({ name, published: true })));
+  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, PUBLIC_PACKAGES.length);
+});
+
+test('persistent missing readback stops after fifteen minutes and resumes the original artifacts without republishing', async (t) => {
+  const candidate = fixture(t);
+  const registry = registryRunner(candidate.manifest);
+  const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
+  let elapsed = 0;
+  let readbacks = 0;
+  let waits = 0;
+  const run = (command, args, options) => {
+    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey)) {
+      readbacks += 1;
+      throw missingPackage();
+    }
+    return registry.run(command, args, options);
+  };
+  await assert.rejects(() => publishCandidate({
+    run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+    now: () => elapsed, wait: async (delay) => { elapsed += delay; waits += 1; },
+  }), /remains missing.*Resume the original release run's failed jobs/);
+  assert.equal(readbacks, 91);
+  assert.equal(waits, 90);
+  assert.equal(elapsed, 900_000);
+  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+  assert.deepEqual(await publishCandidate({
+    run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+  }), PUBLIC_PACKAGES.map((name, index) => ({ name, published: index !== 0 })));
+  assert.deepEqual(registry.commands.filter(({ args }) => args[0] === 'publish').map(({ args }) => path.basename(args[1])),
+    candidate.manifest.packages.map(({ filename }) => filename));
+});
+
+test('slow missing responses consume the readback deadline instead of extending every delay', async (t) => {
+  const candidate = fixture(t);
+  const registry = registryRunner(candidate.manifest);
+  const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
+  let elapsed = 0;
+  const waits = [];
+  let readbacks = 0;
+  const run = (command, args, options) => {
+    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey)) {
+      elapsed += 449_000;
+      readbacks += 1;
+      throw missingPackage();
+    }
+    return registry.run(command, args, options);
+  };
+  await assert.rejects(() => publishCandidate({
+    run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+    now: () => elapsed, wait: async (delay) => { elapsed += delay; waits.push(delay); },
+  }), /remains missing/);
+  assert.equal(readbacks, 2);
+  assert.deepEqual(waits, [10_000]);
+  assert.equal(elapsed, 908_000);
+});
+
+for (const [label, failure, response] of [
+  ['authentication', Object.assign(new Error('credentials rejected'), { stdout: JSON.stringify({ error: { code: 'E401' } }) })],
+  ['registry service', Object.assign(new Error('registry unavailable'), { stderr: 'npm error code E503' })],
+  ['transport', new Error('connection reset')],
+  ['malformed JSON', null, '{broken JSON'],
+  ['missing integrity metadata', null, 'null'],
+]) {
+  test(`post-publish ${label} errors fail immediately without retries or further writes`, async (t) => {
+    const candidate = fixture(t);
+    const registry = registryRunner(candidate.manifest);
+    const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
+    let readbacks = 0;
+    const run = (command, args, options) => {
+      if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey)) {
+        readbacks += 1;
+        if (failure) throw failure;
+        return response;
+      }
+      return registry.run(command, args, options);
+    };
+    await assert.rejects(() => publishCandidate({
+      run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
+      wait: async () => assert.fail('only an explicit missing version can be retried'),
+    }), (error) => failure ? error === failure : error instanceof Error);
+    assert.equal(readbacks, 1);
+    assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+  });
+}
+
+test('main moving during a readback delay prevents every remaining package write', async (t) => {
+  const candidate = fixture(t);
+  const registry = registryRunner(candidate.manifest);
+  const firstKey = `${PUBLIC_PACKAGES[0]}@${VERSION}`;
+  let firstReadback = true;
+  let current = true;
+  const run = (command, args, options) => {
+    if (args[0] === 'view' && args.includes(firstKey) && registry.published.has(firstKey) && firstReadback) {
+      firstReadback = false;
+      throw missingPackage();
+    }
+    return registry.run(command, args, options);
+  };
+  await assert.rejects(() => publishCandidate({
+    run, directory: candidate.directory, sha: SHA, version: VERSION,
+    assertCurrent: () => { if (!current) throw new Error('main advanced during propagation'); },
+    wait: async () => { current = false; },
+  }), /main advanced during propagation/);
+  assert.equal(registry.commands.filter(({ args }) => args[0] === 'publish').length, 1);
+});
+
+test('a main advance after the first package prevents publishing the remaining release', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   let mainChecks = 0;
-  assert.throws(() => publishCandidate({
+  await assert.rejects(() => publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION,
     assertCurrent: () => { if (++mainChecks > 1) throw new Error('main advanced'); },
   }), /main advanced/);
   assert.ok(registry.commands.filter(({ args }) => args[0] === 'publish').length <= 1);
 });
 
-test('candidate checksum failure never reaches a registry write', (t) => {
+test('candidate checksum failure never reaches a registry write', async (t) => {
   const candidate = fixture(t);
   const registry = registryRunner(candidate.manifest);
   const original = readFileSync(path.join(candidate.directory, candidate.manifest.packages.at(-1).filename));
   writeFileSync(path.join(candidate.directory, candidate.manifest.packages.at(-1).filename), Buffer.concat([original, Buffer.from(' changed')]));
-  assert.throws(() => publishCandidate({
+  await assert.rejects(() => publishCandidate({
     run: registry.run, directory: candidate.directory, sha: SHA, version: VERSION, assertCurrent: () => {},
   }));
   assert.equal(registry.commands.length, 0);
@@ -514,6 +664,12 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   assert.equal(diagnostic.steps.some(({ run }) => /npm-release\.mjs (publish|finalize)/.test(run ?? '')), false);
   for (const job of [prepare, verifyMain, publish, finalize]) assert.equal(job.if, '${{ !inputs.diagnose_oidc }}');
   assert.deepEqual(publish.needs, ['prepare', 'verify-main']);
+  // Each package may use a fifteen-minute readback window after its
+  // ten-minute publish call. Keep setup/verification time outside that sum.
+  const sequentialPublicationMinutes = PUBLIC_PACKAGES.length * (15 + 10);
+  const setupAndVerificationMinutes = 25;
+  assert.ok(publish['timeout-minutes'] >= sequentialPublicationMinutes + setupAndVerificationMinutes,
+    'the publish job must accommodate every sequential package budget plus setup and verification');
   assert.ok(finalize.needs.includes('prepare') && finalize.needs.includes('publish'));
   assert.equal(publish.permissions['id-token'], 'write');
   assert.equal(publish.permissions.contents, 'read');

@@ -110,7 +110,7 @@ jobs:
     if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, verify-main]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     permissions:
       contents: read
       actions: read
