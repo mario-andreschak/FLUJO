@@ -801,12 +801,19 @@ export type StaticEntry =
         result: string;
         executionMode?: 'mock' | 'real';
         serverName?: string;
+        /** Save a bounded text/JSON snapshot into a run variable. */
+        captureVariable?: string;
+        resultFormat?: 'text' | 'json';
+        /** Real calls only. Omission preserves context injection and continuation. */
+        onError?: 'continue' | 'fail';
       };
 
 export interface StaticNodeProperties {
     name?: string;
     /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
+    /** Explicit deterministic output, resolved after entries (e.g. ${var:health}). */
+    outputTemplate?: string;
     /** MCP attachments derived from static↔MCP graph edges at conversion time. */
     mcpNodes?: MCPNodeReference[];
     /**
@@ -958,6 +965,8 @@ export interface SharedState {
      * field and asserts it immediately before every attributed state write.
      */
     executionAuthority?: FlowExecutionAuthority;
+    /** Runtime cancellation forwarded to fixed Static MCP calls; never serialized. */
+    abortSignal?: AbortSignal;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
     /**
      * Exact MCP server config names projected from the owning Persona Activity.

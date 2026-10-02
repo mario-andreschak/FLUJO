@@ -2941,6 +2941,13 @@ export class SchedulerService {
         result.status === 'completed' || result.status === 'capped'
           ? undefined
           : result.error?.message ?? `Run ended with status "${result.status}"`,
+      ...(result.error?.details?.code?.startsWith('static_') ? { errorDetails: {
+        type: result.error.details.type?.slice(0, 200),
+        code: result.error.details.code.slice(0, 200),
+        name: result.error.details.name?.slice(0, 200),
+        param: result.error.details.param?.slice(0, 200),
+        status: result.error.details.status,
+      } } : {}),
     };
   }
 
