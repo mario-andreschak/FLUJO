@@ -539,6 +539,8 @@ Have a feature request? [Open a GitHub issue](https://github.com/mario-andrescha
 
 Contributions are welcome! Feel free to open issues or submit pull requests.
 
+Maintainers can [publish a release through GitHub's npm connection](docs/npm-release.md) with `npm run release -- patch`.
+
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add some amazing feature'`)
