@@ -9,6 +9,7 @@
  * dependencies: a fresh npm cache does not contain registry packuments merely
  * because `npm ci` previously fetched their lockfile-pinned tarballs.
  * `--proxy-only <url>` probes an already-running image.
+ * `--candidate-dir <directory>` installs the exact validated release tarballs.
  */
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -22,6 +23,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { validateCandidate } from './npm-release.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -331,7 +333,7 @@ async function startFakeFlujoApi() {
   };
 }
 
-async function smokePackedArtifacts() {
+async function smokePackedArtifacts(candidateDirectory) {
   await fs.access(path.join(root, '.next', 'BUILD_ID')).catch(() => {
     throw new Error('The root production build is missing. Run `npm run build` before the artifact smoke test.');
   });
@@ -351,9 +353,17 @@ async function smokePackedArtifacts() {
   let appChild;
   const appLogs = [];
   try {
-    const tarballs = [await pack('.', tarballsDir)];
-    for (const packageName of publicPackages) {
-      tarballs.push(await pack(`./mcp-servers/${packageName}`, tarballsDir));
+    let tarballs;
+    if (candidateDirectory) {
+      const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
+      const sha = (await run('git', ['rev-parse', 'HEAD'])).trim();
+      const manifest = validateCandidate({ directory: candidateDirectory, sha, version });
+      tarballs = manifest.packages.map((item) => path.join(candidateDirectory, item.filename));
+    } else {
+      tarballs = [await pack('.', tarballsDir)];
+      for (const packageName of publicPackages) {
+        tarballs.push(await pack(`./mcp-servers/${packageName}`, tarballsDir));
+      }
     }
     await fs.writeFile(path.join(installDir, 'package.json'), JSON.stringify({ private: true }), 'utf8');
     await run(npmCommand, [
@@ -482,6 +492,9 @@ if (proxyOnlyIndex !== -1) {
   await probeProxy(baseUrl, process.env.FLUJO_SMOKE_EXPECTED_ROOT);
   console.log(`Validated the live MCP proxy at ${baseUrl}.`);
 } else {
-  await smokePackedArtifacts();
+  const candidateIndex = process.argv.indexOf('--candidate-dir');
+  const candidateDirectory = candidateIndex === -1 ? undefined : process.argv[candidateIndex + 1];
+  if (candidateIndex !== -1 && (!candidateDirectory || !path.isAbsolute(candidateDirectory))) throw new Error('--candidate-dir requires an absolute artifact directory.');
+  await smokePackedArtifacts(candidateDirectory);
   console.log('Validated isolated packed MCP binaries and the installed FLUJO proxy.');
 }

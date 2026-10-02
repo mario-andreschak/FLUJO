@@ -9,9 +9,26 @@ const context = { repository: 'mario-andreschak/FLUJO', revision, checkout: revi
 
 test('only official exact-SHA main images or matching version installers can publish', () => {
   validatePublicationContext(context);
+  validatePublicationContext({ ...context, publication: 'npm' });
   validatePublicationContext({ ...context, publication: 'installer', ref: 'refs/tags/v3.45.2' });
   for (const change of [{ repository: 'attacker/FLUJO' }, { checkout: 'b'.repeat(40) }, { ref: 'refs/heads/feature' }, { publication: 'installer', ref: 'refs/tags/v3.45.1' }, { revision: 'main' }]) {
     assert.throws(() => validatePublicationContext({ ...context, ...change }));
+  }
+});
+
+test('a release-dispatched image must match both the npm revision and package version', () => {
+  validatePublicationContext({ ...context, expectedRevision: revision, expectedVersion: context.version });
+  for (const change of [
+    { expectedRevision: 'b'.repeat(40), expectedVersion: context.version },
+    { expectedRevision: revision, expectedVersion: '3.45.3' },
+    { expectedRevision: revision },
+    { expectedVersion: context.version },
+  ]) assert.throws(() => validatePublicationContext({ ...context, ...change }), /requested npm release/);
+});
+
+test('npm verification refuses tags and non-main branches', () => {
+  for (const ref of ['refs/tags/v3.45.2', 'refs/heads/hackathon']) {
+    assert.throws(() => validatePublicationContext({ ...context, publication: 'npm', ref }));
   }
 });
 

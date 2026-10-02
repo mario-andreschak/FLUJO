@@ -1,0 +1,135 @@
+name: Publish npm release
+run-name: Release FLUJO ${{ inputs.version }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact version commit already pushed to main
+        type: string
+        required: true
+      version:
+        description: Synchronized package version (x.y.z)
+        type: string
+        required: true
+
+concurrency:
+  group: official-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_SHA: ${{ inputs.expected_sha }}
+  RELEASE_VERSION: ${{ inputs.version }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - run: npm ci --include=dev
+      # This verification builds and packs the exact version commit and smoke
+      # tests those same tarballs. It overlaps the existing main-push CI run.
+      - run: node scripts/npm-release.mjs prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+      - uses: actions/upload-artifact@v4
+        id: artifact
+        with:
+          name: npm-release-${{ inputs.version }}-${{ inputs.expected_sha }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          if-no-files-found: error
+          retention-days: 30
+
+  verify-main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - run: node scripts/npm-release.mjs check
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Require successful exact-commit main-push verification
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish:
+    needs: [prepare, verify-main]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - run: npm install --global npm@11.21.0 --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      # No npm secret. npm exchanges this job's workflow-specific OIDC identity.
+      # Rerun failed jobs to preserve the successful prepare job's tarballs.
+      - name: Recheck exact main CI when resuming a failed publication
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: node scripts/npm-release.mjs publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release
+
+  finalize:
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.17.0
+          package-manager-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/flujo-npm-release
+          merge-multiple: true
+      - name: Recheck exact main CI before tagging
+        run: node scripts/require-release-verification.mjs npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Confirm all npm bytes, tag, then dispatch and await image and installer
+        run: node scripts/npm-release.mjs finalize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARTIFACT_DIR: ${{ runner.temp }}/flujo-npm-release

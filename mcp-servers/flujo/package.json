@@ -1,6 +1,7 @@
 {
   "name": "@mario.andreschak/mcp-flujo",
   "version": "3.46.1",
+  "repository": { "type": "git", "url": "git+https://github.com/mario-andreschak/FLUJO.git", "directory": "mcp-servers/flujo" },
   "description": "FLUJO's standalone application MCP server",
   "type": "module",
   "main": "dist/index.js",

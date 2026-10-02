@@ -12,6 +12,15 @@ name: Publish Docker Image
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Optional exact npm release commit
+        type: string
+        required: false
+      expected_version:
+        description: Optional exact npm release version
+        type: string
+        required: false
 
 concurrency:
   group: publish-image-${{ github.ref }}
@@ -35,6 +44,8 @@ jobs:
       - name: Require exact-commit main verification
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.expected_sha }}
+          RELEASE_VERSION: ${{ inputs.expected_version }}
         run: node scripts/require-release-verification.mjs image
 
       - name: Build and validate synchronized MCP release artifacts
