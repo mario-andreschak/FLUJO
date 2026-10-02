@@ -19,6 +19,8 @@ import {
   type SubflowTaskStatus,
 } from '@/shared/types/subflowTasks';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
+import type { SharedState } from '@/backend/execution/flow/types';
+import { getDetachedTaskLaunchOwner, isPriorLocalTaskOwner } from './ownership';
 
 const log = createLogger('backend/services/subflowTasks');
 const COLLECTION = 'subflow-tasks';
@@ -88,6 +90,7 @@ export async function createTask(input: Omit<SubflowTaskRecord, keyof SubflowTas
       pollInterval: input.pollInterval ?? settings.defaultPollIntervalMs,
       createdAt: now,
       updatedAt: now,
+      launchOwner: await getDetachedTaskLaunchOwner(),
     };
     await saveCollectionItem(COLLECTION, taskId, record);
     return record;
@@ -100,14 +103,15 @@ export async function createTask(input: Omit<SubflowTaskRecord, keyof SubflowTas
 export async function getTask(taskId: string): Promise<SubflowTaskRecord | null> {
   try {
     assertSafeCollectionId(taskId);
-    return await loadCollectionItem<SubflowTaskRecord | null>(COLLECTION, taskId, null);
+    const task = await loadCollectionItem<SubflowTaskRecord | null>(COLLECTION, taskId, null);
+    return task ? await reconcileTaskInterruption(task) : null;
   } catch (error) {
     log.warn('Failed to load detached subflow task', { taskId, error });
     return null;
   }
 }
 
-export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskRecord, 'taskId' | 'uri' | 'version' | 'createdAt'>>, options: { ifStatus?: SubflowTaskStatus } = {}): Promise<SubflowTaskRecord | null> {
+export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskRecord, 'taskId' | 'uri' | 'version' | 'createdAt' | 'launchOwner'>>, options: { ifStatus?: SubflowTaskStatus } = {}): Promise<SubflowTaskRecord | null> {
   try {
     assertSafeCollectionId(taskId);
     return await runInWriteChain(`subflow-task:${taskId}`, async () => {
@@ -122,6 +126,7 @@ export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskR
         uri: current.uri,
         version: 1,
         createdAt: current.createdAt,
+        launchOwner: current.launchOwner,
         updatedAt: now,
       };
       if (TERMINAL.has(next.status) && !next.completedAt) next.completedAt = now;
@@ -137,8 +142,9 @@ export async function patchTask(taskId: string, patch: Partial<Omit<SubflowTaskR
 export async function listTasks(options: { conversationId?: string; status?: SubflowTaskStatus; limit?: number; offset?: number } = {}): Promise<SubflowTaskRecord[]> {
   try {
     const items = await listCollectionItems<SubflowTaskRecord>(COLLECTION);
-    const filtered = items
-      .filter(task => !options.conversationId || task.originConversationId === options.conversationId)
+    const selected = items.filter(task => !options.conversationId || task.originConversationId === options.conversationId);
+    const reconciled = await Promise.all(selected.map(task => reconcileTaskInterruption(task)));
+    const filtered = reconciled
       .filter(task => !options.status || task.status === options.status)
       .sort((a, b) => b.createdAt - a.createdAt);
     return filtered.slice(options.offset ?? 0, (options.offset ?? 0) + Math.max(1, Math.min(options.limit ?? 100, 500)));
@@ -166,10 +172,73 @@ export async function sweepOldSubflowTasks(now = Date.now()): Promise<{ removed:
   return { removed };
 }
 
+/** Reconcile only proven local launches; imported and legacy tasks stay untouched. */
+async function reconcileTaskInterruption(task: SubflowTaskRecord): Promise<SubflowTaskRecord> {
+  if (task.status !== 'working' || !task.launchOwner) return task;
+  try {
+    return await runInWriteChain(`subflow-task:${task.taskId}`, async () => {
+      const current = await loadCollectionItem<SubflowTaskRecord | null>(COLLECTION, task.taskId, null);
+      if (!current || current.status !== 'working' || !await isPriorLocalTaskOwner(current.launchOwner)) return current ?? task;
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
+      const live = FlowExecutor.conversationStates.get(current.childConversationId);
+      if (live && ['running', 'paused_debug', 'awaiting_tool_approval'].includes(live.status ?? '')) return current;
+      assertSafeCollectionId(current.childConversationId);
+      const key = `conversations/${current.childConversationId}` as StorageKey;
+      let child = await loadItem<SharedState | undefined>(key, undefined);
+      if (!child || child.conversationId !== current.childConversationId || child.flowId !== current.flowId
+        || child.parentRunId !== current.originConversationId
+        || (current.originLogicalRunId && child.parentLogicalRunId !== current.originLogicalRunId)
+        || child.recovery?.ownerId !== current.launchOwner!.recoveryOwnerId
+        || child.recovery.startedAt < current.createdAt) return current;
+
+      // Proven dead, locally owned ordinary children can use normal interruption
+      // recovery. Persona/extension snapshots require their own runtime authority.
+      if (child.status === 'running' && !child.personaAttribution && !child.executionExtensionOwned && !child.ephemeral) {
+        const { reconcileInterruptedRecovery } = await import('@/backend/execution/flow/recoveryCheckpoint');
+        await reconcileInterruptedRecovery(key, child);
+        // Persistence can legitimately refuse a deleted/ephemeral snapshot.
+        // An in-memory transition alone is never evidence for task recovery.
+        child = await loadItem<SharedState | undefined>(key, undefined);
+      }
+      const recovery = child?.recovery;
+      if (child?.conversationId !== current.childConversationId || child.flowId !== current.flowId
+        || child.parentRunId !== current.originConversationId
+        || (current.originLogicalRunId && child.parentLogicalRunId !== current.originLogicalRunId)
+        || recovery?.ownerId !== current.launchOwner!.recoveryOwnerId
+        || child.status !== 'error' || recovery.classification !== 'interrupted'
+        || !recovery.terminalAt || recovery.manualActionRequired !== true || recovery.failure?.retryable !== false) return current;
+      const now = Date.now();
+      const next: SubflowTaskRecord = {
+        ...current,
+        status: 'failed',
+        failureReason: 'process-restart',
+        error: 'Detached subflow task was interrupted by a process restart. Manual recovery is required; interrupted work was not replayed.',
+        completedAt: current.completedAt ?? now,
+        updatedAt: now,
+        interruption: {
+          childConversationId: current.childConversationId,
+          recoveryOwnerId: recovery.ownerId!,
+          terminalAt: recovery.terminalAt,
+          reconciledAt: now,
+          classification: 'interrupted',
+          manualActionRequired: true,
+        },
+      };
+      await saveCollectionItem(COLLECTION, current.taskId, next);
+      return next;
+    });
+  } catch (error) {
+    log.warn('Could not reconcile detached task interruption', { taskId: task.taskId, error });
+    return task;
+  }
+}
+
 export async function reconcileOrphanedTasks(): Promise<{ failed: number }> {
   let failed = 0;
-  for (const task of await listTasks({ status: 'working', limit: 500 })) {
-    if (await patchTask(task.taskId, { status: 'failed', failureReason: 'process-restart', error: 'Detached subflow task was interrupted by a process restart.' })) failed++;
+  // Do not limit recovery to the first page or reuse listTasks, which already
+  // reconciles reads and would hide the number of startup transitions.
+  for (const task of await listCollectionItems<SubflowTaskRecord>(COLLECTION)) {
+    if (task.status === 'working' && (await reconcileTaskInterruption(task)).status === 'failed') failed++;
   }
   return { failed };
 }
