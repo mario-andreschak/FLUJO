@@ -54,11 +54,12 @@ import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 import { runWithWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
+import { mcpService } from '@/backend/services/mcp';
 import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
 import { authoredCoreFlowRef } from '@/backend/services/enduringAgents/personaComposition';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executeDetachedSubflowStart, detachedJobRegistry, executeTaskGet } from '@/backend/execution/flow/handlers/subflowDetachedInvocation';
-import { getTask } from '@/backend/services/subflowTasks';
+import { getTask, listTasks } from '@/backend/services/subflowTasks';
 import type { Flow } from '@/shared/types/flow';
 import type { SharedState } from '@/backend/execution/flow/types';
 
@@ -155,16 +156,35 @@ describe('ongoing Persona goal runtime', () => {
     _setPersonaRuntimeLockProcessBirthProbeForTests();
   });
 
-  it('delegates to immutable detached workers, verifies and checkpoints output, restarts the controller, and finishes a fresh native round', async () => {
-    await inWorkspace(async () => {
+  it('restarts the native controller while an immutable detached worker is executing without duplicating its effect or admission, then checkpoints and finishes a fresh round', async () => {
+    let releaseEffect!: () => void;
+    let signalEffectStarted!: () => void;
+    const effectBlocked = new Promise<void>(resolve => { releaseEffect = resolve; });
+    const effectStarted = new Promise<void>(resolve => { signalEffectStarted = resolve; });
+    let effectCount = 0;
+    // Only the external MCP leaf is a fixture. Real Flow conversion, Static
+    // execution, detached task persistence and Activity/goal control remain live.
+    const configs = jest.spyOn(mcpService, 'loadServerConfigs').mockResolvedValue([]);
+    const effect = jest.spyOn(mcpService, 'callTool').mockImplementation(async () => {
+      effectCount++;
+      signalEffectStarted();
+      if (effectCount === 1) await effectBlocked;
+      return { success: true, data: { verified: true } };
+    });
+    try { await inWorkspace(async () => {
       const { task, persona } = await goal();
       const claims = useRealActivityAdmission();
       const worker = (text: string): Flow => ({ id: 'goal-worker', name: 'Isolated verification worker',
         nodes: [
           { id: 'start', type: 'start', position: { x: 0, y: 0 }, data: { type: 'start', label: 'Start' } },
-          { id: 'artifact', type: 'static', position: { x: 1, y: 0 }, data: { type: 'static', label: 'Verified artifact', properties: { entries: [{ kind: 'message', role: 'assistant', content: text }] } } },
+          { id: 'artifact', type: 'static', position: { x: 1, y: 0 }, data: { type: 'static', label: 'Verified artifact', properties: { entries: [
+            { kind: 'toolCall', executionMode: 'real', serverName: 'verification', toolName: 'record_verified_deliverable', argumentsJson: '{}', result: '' },
+            { kind: 'message', role: 'assistant', content: text },
+          ] } } },
+          { id: 'worker-tools', type: 'mcp', position: { x: 1, y: 1 }, data: { type: 'mcp', label: 'Worker verification', properties: { boundServer: 'verification', enabledTools: ['record_verified_deliverable'] } } },
           { id: 'finish', type: 'finish', position: { x: 2, y: 0 }, data: { type: 'finish', label: 'Finish' } },
-        ], edges: [{ id: 'a', source: 'start', target: 'artifact' }, { id: 'b', source: 'artifact', target: 'finish' }],
+        ], edges: [{ id: 'a', source: 'start', target: 'artifact' }, { id: 'b', source: 'artifact', target: 'finish' },
+          { id: 'tools', source: 'artifact', target: 'worker-tools', sourceHandle: 'static-right-mcp', targetHandle: 'mcp-left', data: { edgeType: 'mcp' } }],
       });
       expect((await flowService.saveFlow(worker('verified-deliverable-v1'))).success).toBe(true);
       const coreRef = authoredCoreFlowRef(persona)!;
@@ -203,6 +223,29 @@ describe('ongoing Persona goal runtime', () => {
         expect(started.success).toBe(true);
         const handle = started.data as { taskId: string };
         taskIds.push(handle.taskId);
+        if (round === 1) {
+          await effectStarted;
+          const activeWorker = (await getTask(handle.taskId))!;
+          expect(activeWorker.status).toBe('working');
+          expect(FlowExecutor.conversationStates.get(activeWorker.childConversationId)?.status).toBe('running');
+          const activeGoal = await current(task);
+          expect((await flowService.saveFlow(worker('verified-deliverable-v2'))).success).toBe(true);
+          stopPersonaGoalRuntime();
+          await startPersonaGoalRuntime();
+          await Promise.all([reconcilePersonaGoals(persona.id), reconcilePersonaGoals(persona.id)]);
+          expect((await current(task)).goal).toMatchObject({ rounds: 1,
+            pendingDispatchId: activeGoal.goal!.pendingDispatchId, pendingTaskId: activeGoal.goal!.pendingTaskId,
+            pendingAttemptKey: activeGoal.goal!.pendingAttemptKey });
+          expect(submitMock).toHaveBeenCalledTimes(1);
+          expect(claims).toHaveLength(1);
+          expect(effect).toHaveBeenCalledTimes(1);
+          expect((await listTasks({ status: 'working' })).map(item => item.taskId)).toEqual([handle.taskId]);
+          expect(await getTask(handle.taskId)).toMatchObject({ status: 'working',
+            flowSnapshot: activeWorker.flowSnapshot, personaAttribution: activeWorker.personaAttribution });
+          expect(revision.flowSnapshot.executionDependencies!.flows[0].flowSnapshot.nodes
+            .find(node => node.id === 'artifact')!.data.properties!.entries).toContainEqual({ kind: 'message', role: 'assistant', content: 'verified-deliverable-v1' });
+          releaseEffect();
+        }
         await detachedJobRegistry.get(workspaceCacheKey(handle.taskId))!.promise;
         const completed = (await getTask(handle.taskId))!;
         expect(completed).toMatchObject({ status: 'completed', outputText: `verified-deliverable-v${round}`, flowSnapshot: { id: 'goal-worker' }, personaAttribution: { activityId: claim.activity.id } });
@@ -217,7 +260,6 @@ describe('ongoing Persona goal runtime', () => {
         const checkpointed = await current(task);
         if (round === 1) {
           expect(checkpointed.goal).toMatchObject({ state: 'active', rounds: 1 });
-          expect((await flowService.saveFlow(worker('verified-deliverable-v2'))).success).toBe(true);
           stopPersonaGoalRuntime();
           now = checkpointed.goal!.nextRunAt!;
           await startPersonaGoalRuntime();
@@ -228,7 +270,13 @@ describe('ongoing Persona goal runtime', () => {
       now += 100_000;
       await reconcilePersonaGoals(persona.id);
       expect(submitMock).toHaveBeenCalledTimes(2);
-    });
+      expect(effect).toHaveBeenCalledTimes(2);
+      expect(effectCount).toBe(2);
+    }); } finally {
+      releaseEffect();
+      effect.mockRestore();
+      configs.mockRestore();
+    }
   }, 30_000);
 
   it('continues partial/successful rounds from one goal, and completes only on verified goal success', async () => {
