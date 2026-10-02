@@ -444,3 +444,12 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   }
   assert.ok(verifyMain.steps.some(({ run }) => run === 'node scripts/require-release-verification.mjs npm'));
 });
+
+test('both release-safety runners install pinned dependencies before the workflow structure checks', () => {
+  const verification = YAML.parse(readFileSync(new URL('../.github/workflows/verify.yml', import.meta.url), 'utf8'));
+  const job = verification.jobs['release-safety'];
+  assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  const install = job.steps.findIndex(({ run }) => run === 'npm ci --include=dev');
+  const tests = job.steps.findIndex(({ run }) => run?.startsWith('node --test ') && run.includes('scripts/npm-release.test.mjs'));
+  assert.ok(install >= 0 && tests > install, 'YAML-dependent checks need a clean lockfile installation first');
+});

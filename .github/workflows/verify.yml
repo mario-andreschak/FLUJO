@@ -100,7 +100,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Built-in-only tests intercept every release subprocess before execution.
+      # Workflow structure checks use the lockfile-pinned YAML dependency.
+      - run: npm ci --include=dev
+      # Tests intercept every release subprocess before execution.
       - run: node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
       - run: node --test tests/installer-repository.test.mjs
 
