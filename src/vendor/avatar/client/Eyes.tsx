@@ -5,7 +5,8 @@ import styles from './eyes.module.css';
 export type AvatarStyle = 'moss' | 'orbit' | 'spark';
 export type EyePhase = 'idle' | 'listening' | 'thinking' | 'speaking' | 'usingApp' | 'waiting' | 'error';
 
-export default function Eyes({ phase, avatar, small = false }: { phase: EyePhase; avatar: AvatarStyle; small?: boolean }) {
+export interface EyesProps { phase: EyePhase; avatar: AvatarStyle; small?: boolean }
+export default function Eyes({ phase, avatar, small = false }: EyesProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [gaze, setGaze] = useState({ x: 0, y: 0 });
   useEffect(() => {

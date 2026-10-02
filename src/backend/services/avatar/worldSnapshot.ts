@@ -23,7 +23,7 @@ export async function getAvatarWorldSnapshot(): Promise<AvatarWorldSnapshot> {
     modelService.loadModels().then(async models => { workModel = await readAvatarWorkModel(models); }),
     flowService.listFlows().then(result => {
       if (!result.success) throw new Error('Unavailable');
-      limit('flows', (result.flows ?? []).map(flow => ({ id: flow.id, name: flow.name, kind: 'flow', state: 'saved', href: `/flows?flow=${encodeURIComponent(flow.id)}` })));
+      limit('flows', (result.flows ?? []).map(flow => ({ id: flow.id, name: flow.name, kind: 'flow', state: 'saved', canTalk: !flow.personaOwnership, href: `/flows?flow=${encodeURIComponent(flow.id)}` })));
     }),
     mcpService.loadServerConfigs().then(configs => {
       if (!Array.isArray(configs)) throw new Error('Unavailable');
