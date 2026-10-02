@@ -12,6 +12,9 @@ export const PUBLIC_PACKAGES = [
   '@mario.andreschak/mcp-bash', '@mario.andreschak/mcp-browser', 'flujo-ai',
 ];
 const REGISTRY = 'https://registry.npmjs.org';
+const PUBLISHED_INTEGRITY_ATTEMPTS = 31;
+const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
+const PUBLISHED_INTEGRITY_TIMEOUT_MS = 5 * 60_000;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
 const exec = (command, args, options = {}) => {
@@ -41,7 +44,10 @@ export function assertCurrentMain(run, sha) {
 
 export function readPublishedIntegrity(run, name, version) {
   try {
-    const integrity = JSON.parse(run('npm', ['view', `${name}@${version}`, 'dist.integrity', '--json', '--registry', REGISTRY]));
+    // Revalidate even a fresh pre-publication packument. Explicitly disable
+    // offline preferences, which npm prioritizes above prefer-online.
+    const integrity = JSON.parse(run('npm', ['view', `${name}@${version}`, 'dist.integrity', '--json', '--registry', REGISTRY,
+      '--prefer-online', '--prefer-offline=false', '--offline=false', '--fetch-retries=0', '--fetch-timeout=10000'], { timeout: 15_000 }));
     if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+=*$/.test(integrity)) throw new Error(`Invalid registry integrity for ${name}@${version}.`);
     return integrity;
   } catch (error) {
@@ -91,7 +97,22 @@ export function prepareCandidate({ run, directory, sha, version }) {
   return validateCandidate({ directory, sha, version });
 }
 
-export function publishCandidate({ run, directory, sha, version, assertCurrent = () => assertCurrentMain(run, sha) }) {
+async function confirmPublishedIntegrity({ run, item, version, wait, now }) {
+  const deadline = now() + PUBLISHED_INTEGRITY_TIMEOUT_MS;
+  for (let attempt = 0; attempt < PUBLISHED_INTEGRITY_ATTEMPTS; attempt++) {
+    const integrity = readPublishedIntegrity(run, item.name, version);
+    if (integrity === item.integrity) return;
+    if (integrity !== null) throw new Error(`Published ${item.name}@${version} did not confirm the tested tarball integrity.`);
+    // Only an explicit missing-version response can be propagation delay.
+    // Different bytes, authentication, transport and metadata errors stop now.
+    const remaining = deadline - now();
+    if (remaining <= 0 || attempt + 1 === PUBLISHED_INTEGRITY_ATTEMPTS) break;
+    await wait(Math.min(PUBLISHED_INTEGRITY_DELAY_MS, remaining));
+  }
+  throw new Error(`Published ${item.name}@${version} remains missing after the bounded registry checks. Resume the original release run's failed jobs.`);
+}
+
+export async function publishCandidate({ run, directory, sha, version, assertCurrent = () => assertCurrentMain(run, sha), wait = setTimeout, now = () => performance.now() }) {
   const manifest = validateCandidate({ directory, sha, version });
   // Check every existing version before making any new immutable publication.
   const existing = manifest.packages.map((item) => {
@@ -99,13 +120,18 @@ export function publishCandidate({ run, directory, sha, version, assertCurrent =
     if (integrity !== null && integrity !== item.integrity) throw new Error(`Existing ${item.name}@${version} has different bytes; refusing to skip or overwrite it. Resume the original release run's failed jobs.`);
     return integrity;
   });
-  return manifest.packages.map((item, index) => {
+  const results = [];
+  for (const [index, item] of manifest.packages.entries()) {
     assertCurrent();
-    if (existing[index] !== null) return { name: item.name, published: false };
+    if (existing[index] !== null) {
+      results.push({ name: item.name, published: false });
+      continue;
+    }
     run('npm', ['publish', path.join(directory, item.filename), '--access', 'public', '--ignore-scripts', '--registry', REGISTRY], { stdio: 'inherit', timeout: 10 * 60_000 });
-    if (readPublishedIntegrity(run, item.name, version) !== item.integrity) throw new Error(`Published ${item.name}@${version} did not confirm the tested tarball integrity.`);
-    return { name: item.name, published: true };
-  });
+    await confirmPublishedIntegrity({ run, item, version, wait, now });
+    results.push({ name: item.name, published: true });
+  }
+  return results;
 }
 
 export function assertOidcOnly(env) {
@@ -190,7 +216,7 @@ async function main() {
     writeFileSync(globalConfig, '');
     env.NPM_CONFIG_USERCONFIG = config;
     env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
-    publishCandidate({ run: exec, directory, sha, version });
+    await publishCandidate({ run: exec, directory, sha, version });
   } else {
     await finalizeCandidate({ run: exec, directory, sha, version });
   }
