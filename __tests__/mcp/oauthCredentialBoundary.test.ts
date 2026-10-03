@@ -34,6 +34,7 @@ describe('OAuth credential logging and persistence acknowledgements', () => {
     config = {
       name: 'synthetic-server', transport: 'streamable', serverUrl: 'https://mcp.invalid/mcp',
       rootPath: '', env: {}, disabled: true,
+      _buildCommand: '', _installCommand: '',
       oauthTokens: { access_token: 'synthetic-old-access', refresh_token: 'synthetic-old-refresh', token_type: 'bearer' },
       oauthClientInformation: { client_id: 'old-client', client_secret: 'synthetic-old-client-secret' },
       oauthCodeVerifier: 'synthetic-old-verifier',
