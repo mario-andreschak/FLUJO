@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { RECOVERY_SUITES, drillEnvironment, evaluateRecovery, evaluateTap, runDrill } from './maintainer-drill.mjs';
+import { RECOVERY_SUITES, drillEnvironment, evaluateRecovery, evaluateTap, runDrill, verifyDrillEvidence } from './maintainer-drill.mjs';
 
 const tap = '# tests 2\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n';
 const recovery = root => ({
@@ -142,4 +142,84 @@ test('timeouts, signals and missing recovery JSON never create a passing receipt
   const missing = runDrill({ root, run: (_command, args) => ({ status: 0, stdout: args[0] === '--test' ? tap : '' }) });
   t.after(() => removeOwned(missing.directory));
   assert.equal(missing.receipt.result, 'failed'); assert.match(missing.receipt.failure, /ENOENT/);
+});
+
+function evidenceFixture(t, { status = 0 } = {}) {
+  const root = fixture(t);
+  const output = runDrill({ root, run: (_command, args) => {
+    if (args[0] === '--test') return { status: 0, stdout: tap };
+    writeFileSync(args.find(arg => arg.startsWith('--outputFile=')).slice('--outputFile='.length), JSON.stringify(recovery(root)));
+    return { status, stdout: '', stderr: 'synthetic recovery report' };
+  } });
+  t.after(() => removeOwned(output.directory));
+  const verify = () => verifyDrillEvidence({ directory: output.directory, revision: output.receipt.revision, version: '0.0.0' });
+  const save = receipt => {
+    const bytes = JSON.stringify(receipt, null, 2) + '\n';
+    writeFileSync(path.join(output.directory, 'receipt.json'), bytes);
+    writeFileSync(path.join(output.directory, 'receipt.sha256'),
+      `${createHash('sha256').update(bytes).digest('hex')}  receipt.json\n`);
+  };
+  return { ...output, verify, save };
+}
+
+test('read-only evidence verification checks raw bytes and rejects a different trusted revision/version', t => {
+  const output = evidenceFixture(t);
+  assert.equal(output.verify().result, 'verified-source-rehearsal');
+  for (const change of [{ revision: 'f'.repeat(40) }, { version: '1.0.0' }]) {
+    assert.throws(() => verifyDrillEvidence({ directory: output.directory,
+      revision: output.receipt.revision, version: '0.0.0', ...change }), /stale, incomplete/);
+  }
+  writeFileSync(path.join(output.directory, 'release-guards.stdout.txt'), tap + 'edited output');
+  assert.throws(output.verify, /checksum\/size mismatch/);
+});
+
+test('recomputed receipt checksums cannot hide missing gates, fabricated counts or changed commands', t => {
+  const output = evidenceFixture(t);
+  for (const mutate of [
+    receipt => { receipt.pending = []; },
+    receipt => { receipt.gates[1].exitCode = 1; },
+    receipt => { receipt.gates[1].assertions.tests = 999; },
+    receipt => { receipt.gates[0].command.push('--test-name-pattern=skip-everything'); },
+    receipt => { receipt.gates[1].stdout.path = '../outside'; },
+    receipt => { receipt.result = 'partial'; },
+    receipt => { receipt.sourceCleanAfter = null; },
+  ]) {
+    const receipt = structuredClone(output.receipt); mutate(receipt); output.save(receipt);
+    assert.throws(output.verify);
+  }
+});
+
+test('v1 source-root inference and Windows path verification work after copying evidence across platforms', t => {
+  const output = evidenceFixture(t); delete output.receipt.sourceRoot;
+  output.save(output.receipt); assert.equal(output.verify().recovery.suites, 4);
+  const receipt = structuredClone(output.receipt);
+  receipt.platform = 'win32'; receipt.gates.forEach(gate => { gate.command[0] = 'C:\\node\\node.exe'; });
+  receipt.gates[1].command[7] = '--outputFile=C:\\original\\evidence\\recovery-results.json';
+  const result = recovery('unused');
+  result.testResults = RECOVERY_SUITES.map(file => ({ name: path.win32.resolve('C:\\source\\.codex\\FLUJO', file),
+    status: 'passed', assertionResults: [{ status: 'passed' }] }));
+  const bytes = JSON.stringify(result);
+  writeFileSync(path.join(output.directory, 'recovery-results.json'), bytes);
+  receipt.recoveryResults.sha256 = createHash('sha256').update(bytes).digest('hex');
+  receipt.recoveryResults.bytes = Buffer.byteLength(bytes); output.save(receipt);
+  assert.equal(output.verify().result, 'verified-source-rehearsal');
+});
+
+test('failed recovery subprocess reports remain hashed and incomplete evidence cannot verify', t => {
+  const output = evidenceFixture(t, { status: 1 });
+  assert.equal(output.receipt.result, 'failed');
+  assert.match(output.receipt.recoveryResults.sha256, /^[a-f0-9]{64}$/);
+  assert.throws(output.verify, /stale, incomplete/);
+});
+
+test('evidence verification refuses linked files and directory junctions', t => {
+  const output = evidenceFixture(t);
+  const target = path.join(output.directory, 'release-guards.stdout.txt');
+  const original = path.join(output.directory, 'original-output.txt');
+  writeFileSync(original, readFileSync(target)); rmSync(target); linkSync(original, target);
+  assert.throws(output.verify, /Unsafe or oversized/);
+  rmSync(target); writeFileSync(target, tap);
+  const linkedRoot = path.join(output.directory, 'linked-root');
+  symlinkSync(output.directory, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => verifyDrillEvidence({ directory: linkedRoot, revision: output.receipt.revision, version: '0.0.0' }), /ordinary directory/);
 });

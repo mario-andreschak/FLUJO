@@ -36,6 +36,7 @@ data. Logs and `receipt.json` remain for inspection. Each raw output and recover
 JSON result has SHA-256, byte size, exact command, exit status and elapsed time;
 `receipt.sha256` covers the receipt. Preserve this directory outside ephemeral CI
 storage if it is used as evidence. Review it for privacy before sharing.
+Recovery JSON is retained and hashed even when that subprocess exits unsuccessfully.
 
 Green aggregates are insufficient: all four exact recovery suites and every
 assertion must complete without skips, todos or pending results. Source must be
@@ -59,6 +60,35 @@ node scripts/maintainer-drill.mjs --release-only
 This produces a **partial** receipt, records recovery as not run and exits 1.
 It cannot satisfy the drill. A failed run is evidence of the failure, not permission
 to weaken checks or reuse an older green receipt.
+
+## Verify retained or copied source evidence
+
+Obtain the exact source SHA and package version from the reviewed PR/commit or
+qualified candidate, independently of the bundle you are checking. Replace the
+three values below with that trusted identity and the retained directory:
+
+```sh
+node scripts/maintainer-drill.mjs --verify=EVIDENCE_DIR --expected-revision=SOURCE_SHA --expected-version=PACKAGE_VERSION
+```
+
+This read-only command executes no recorded command and accesses only fixed
+bundle filenames. It checks the receipt digest, each raw output/report's digest
+and size, successful subprocess exits, the two prescribed commands, the raw TAP
+summary, and all four exact recovery suites/assertions. It rejects partial/failed
+receipts, stale revision/version, changed commands, incomplete assertion counts,
+missing human/release gaps, linked files and oversized evidence. Exit 0 returns
+`verified-source-rehearsal`; an error exits 1.
+
+Copied Windows receipts can be checked on another OS: serialized source paths are
+interpreted using their original platform and never opened. Earlier v1 receipts
+that omit `sourceRoot` remain readable by inferring the common root from a known
+suite suffix, then checking all four paths under it.
+
+Checksums establish byte integrity and internal consistency. They are not a
+signature from a trusted runner, evidence of a human's independence, or acceptance
+of an installed release. Retain the trusted run/commit provenance and independent
+observer record alongside the bundle. Every successful verification still reports
+the human, installed-artifact and elapsed-observation gates as pending.
 
 ## Human operator / observer exercise
 

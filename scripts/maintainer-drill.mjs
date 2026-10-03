@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -15,6 +15,10 @@ const RELEASE_SUITES = [
   'scripts/release-verification.test.mjs',
   'scripts/require-release-verification.test.mjs',
 ];
+const PENDING_GATES = Object.freeze([
+  'independent-human-review', 'human-operated-drill', 'private-triage-tabletop',
+  'installed-artifact-release-upgrade-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment',
+]);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 export function evaluateTap(output) {
@@ -27,11 +31,11 @@ export function evaluateTap(output) {
   return { tests, passed: tests, skipped: 0 };
 }
 
-export function evaluateRecovery(results, root) {
-  const expected = RECOVERY_SUITES.map(file => path.resolve(root, file)).sort();
+export function evaluateRecovery(results, root, sourcePath = path) {
+  const expected = RECOVERY_SUITES.map(file => sourcePath.resolve(root, file)).sort();
   const suites = results.testResults;
   if (!results.success || !Array.isArray(suites)
-      || JSON.stringify(suites.map(suite => path.resolve(suite.name)).sort()) !== JSON.stringify(expected)
+      || JSON.stringify(suites.map(suite => sourcePath.resolve(suite.name)).sort()) !== JSON.stringify(expected)
       || results.numTotalTestSuites !== expected.length
       || results.numPassedTestSuites !== expected.length
       || !(results.numTotalTests > 0) || results.numPassedTests !== results.numTotalTests
@@ -43,6 +47,82 @@ export function evaluateRecovery(results, root) {
     throw new Error('Recovery rehearsal requires all four exact suites and every assertion to pass without skips.');
   }
   return { suites: expected.length, tests: results.numTotalTests, passed: results.numPassedTests, skipped: 0 };
+}
+
+/** Check copied evidence without executing its commands or following embedded paths. */
+export function verifyDrillEvidence({ directory, revision, version }) {
+  if (!/^[a-f0-9]{40}$/.test(revision ?? '') || typeof version !== 'string' || !version) {
+    throw new Error('Supply the trusted exact source revision and package version.');
+  }
+  const rootStats = lstatSync(directory);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error('Evidence root must be an ordinary directory.');
+  const readMember = (name, limit = 20 * 1024 * 1024) => {
+    // The caller and receipt can never select arbitrary paths: all names below
+    // are fixed single components, and links/hard links are refused.
+    const filename = path.join(directory, name);
+    const stats = lstatSync(filename);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink > 1 || stats.size > limit) {
+      throw new Error(`Unsafe or oversized evidence member: ${name}`);
+    }
+    return readFileSync(filename);
+  };
+  const bytes = readMember('receipt.json', 1024 * 1024);
+  const expectedDigest = readMember('receipt.sha256', 128).toString('utf8');
+  if (expectedDigest !== `${digest(bytes)}  receipt.json\n`) throw new Error('Receipt checksum mismatch.');
+  const receipt = JSON.parse(bytes);
+  if (receipt.schemaVersion !== 1 || receipt.kind !== 'automated-source-rehearsal'
+      || receipt.revision !== revision || receipt.version !== version || receipt.result !== 'passed'
+      || receipt.sourceCleanBefore !== true || receipt.sourceCleanAfter !== true
+      || !Array.isArray(receipt.pending) || PENDING_GATES.some(gate => !receipt.pending.includes(gate))
+      || !Array.isArray(receipt.gates) || receipt.gates.length !== 2) {
+    throw new Error('Receipt is stale, incomplete or missing its explicit acceptance gaps.');
+  }
+  const sourcePath = receipt.platform === 'win32' ? path.win32 : path.posix;
+  const assertCommands = (actual, expected) => {
+    if (!Array.isArray(actual) || !['node', 'node.exe'].includes(sourcePath.basename(actual[0] ?? ''))
+        || JSON.stringify(actual.slice(1)) !== JSON.stringify(expected)) throw new Error('Unexpected recorded drill command.');
+  };
+  const evidence = (reference, name) => {
+    if (reference?.path !== name) throw new Error(`Unexpected evidence reference for ${name}.`);
+    const content = readMember(name);
+    if (reference.sha256 !== digest(content) || reference.bytes !== content.length) {
+      throw new Error(`Evidence checksum/size mismatch: ${name}`);
+    }
+    return content;
+  };
+  for (const [index, name] of ['release-guards', 'recovery-fixtures'].entries()) {
+    const gate = receipt.gates[index];
+    if (gate?.name !== name || gate.result !== 'passed' || gate.exitCode !== 0 || gate.signal !== null
+        || !Number.isFinite(gate.elapsedMs) || gate.elapsedMs < 0) throw new Error(`Incomplete subprocess evidence: ${name}`);
+    evidence(gate.stdout, `${name}.stdout.txt`);
+    evidence(gate.stderr, `${name}.stderr.txt`);
+  }
+  assertCommands(receipt.gates[0].command, ['--test', '--test-reporter=tap', ...RELEASE_SUITES]);
+  const release = evaluateTap(evidence(receipt.gates[0].stdout, 'release-guards.stdout.txt').toString('utf8'));
+  const results = JSON.parse(evidence(receipt.recoveryResults, 'recovery-results.json'));
+  // v1 receipts initially omitted sourceRoot. Infer it only from a known exact
+  // suite suffix; evaluateRecovery then requires all four paths under that root.
+  const suffix = RECOVERY_SUITES[0];
+  const first = results.testResults?.find(suite => typeof suite.name === 'string'
+    && suite.name.replaceAll('\\', '/').endsWith(`/${suffix}`))?.name.replaceAll('\\', '/');
+  const sourceRoot = receipt.sourceRoot ?? first?.slice(0, -suffix.length - 1);
+  if (typeof sourceRoot !== 'string' || !sourcePath.isAbsolute(sourceRoot)) throw new Error('Missing absolute source root in recovery evidence.');
+  const recovery = evaluateRecovery(results, sourceRoot, sourcePath);
+  const recoveryCommand = receipt.gates[1].command;
+  const outputFlag = recoveryCommand?.[7];
+  if (typeof outputFlag !== 'string' || !outputFlag.startsWith('--outputFile=')
+      || !sourcePath.isAbsolute(outputFlag.slice('--outputFile='.length))
+      || sourcePath.basename(outputFlag.slice('--outputFile='.length)) !== 'recovery-results.json') {
+    throw new Error('Unexpected recovery results command path.');
+  }
+  assertCommands(recoveryCommand, ['scripts/run-local-jest.cjs', '--selectProjects', 'node', '--runInBand',
+    '--testMatch=**/__tests__/**/*.test.ts', '--json', outputFlag, '--runTestsByPath', ...RECOVERY_SUITES]);
+  for (const [actual, expected] of [[receipt.gates[0].assertions, release], [receipt.gates[1].assertions, recovery]]) {
+    if (Object.entries(expected).some(([key, value]) => actual?.[key] !== value)) {
+      throw new Error('Recorded assertion counts disagree with raw evidence.');
+    }
+  }
+  return { result: 'verified-source-rehearsal', revision, version, release, recovery, pending: receipt.pending };
 }
 
 // Do not inherit provider credentials, worker flags, npm hooks or NODE_OPTIONS.
@@ -80,17 +160,16 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
   for (const name of ['home', 'tmp', 'data']) mkdirSync(path.join(directory, name));
   const env = drillEnvironment(process.env, directory);
   const receipt = {
-    schemaVersion: 1, kind: 'automated-source-rehearsal', revision, version,
+    schemaVersion: 1, kind: 'automated-source-rehearsal', revision, version, sourceRoot: root,
     startedAt: new Date().toISOString(), platform: process.platform, arch: process.arch, node: process.version,
     sourceCleanBefore: true, sourceCleanAfter: null, result: 'failed', gates: [],
-    pending: ['independent-human-review', 'human-operated-drill', 'private-triage-tabletop',
-      'installed-artifact-release-upgrade-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
+    pending: [...PENDING_GATES],
   };
   const capture = (name, bytes) => {
     writeFileSync(path.join(directory, name), bytes, { flag: 'wx' });
     return { path: name, sha256: digest(bytes), bytes: Buffer.byteLength(bytes) };
   };
-  const gate = (name, args, evaluate) => {
+  const gate = (name, args, evaluate, collect = () => undefined) => {
     const started = Date.now();
     const result = run(process.execPath, args, {
       cwd: root, env, encoding: 'utf8', windowsHide: true, timeout: 300_000, maxBuffer: 20 * 1024 * 1024,
@@ -100,6 +179,8 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
       stdout: capture(`${name}.stdout.txt`, result.stdout ?? ''),
       stderr: capture(`${name}.stderr.txt`, result.stderr ?? '') };
     receipt.gates.push(record);
+    // Retain the raw recovery report on failed subprocess exits as well.
+    collect();
     if (result.error || result.status !== 0 || result.signal) {
       throw new Error(`${name} did not complete successfully (${result.error?.code ?? result.signal ?? result.status}).`);
     }
@@ -118,9 +199,11 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
         // these exact files, and evaluateRecovery independently verifies them.
         '--testMatch=**/__tests__/**/*.test.ts',
         '--json', `--outputFile=${resultsPath}`, '--runTestsByPath', ...RECOVERY_SUITES], () => {
+        return evaluateRecovery(JSON.parse(readFileSync(resultsPath)), root);
+      }, () => {
+        if (!existsSync(resultsPath)) return;
         const bytes = readFileSync(resultsPath);
         receipt.recoveryResults = { path: 'recovery-results.json', sha256: digest(bytes), bytes: bytes.length };
-        return evaluateRecovery(JSON.parse(bytes), root);
       });
     }
     if (git(['rev-parse', 'HEAD']) !== revision || git(['status', '--porcelain', '--untracked-files=normal'])) {
@@ -141,8 +224,18 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
-  if (args.some(arg => arg !== '--release-only') || args.length > 1) {
-    console.error('Usage: node scripts/maintainer-drill.mjs [--release-only]');
+  if (args.length === 3 && args[0].startsWith('--verify=')
+      && args[1].startsWith('--expected-revision=') && args[2].startsWith('--expected-version=')) {
+    try {
+      console.log(JSON.stringify(verifyDrillEvidence({ directory: args[0].slice('--verify='.length),
+        revision: args[1].slice('--expected-revision='.length), version: args[2].slice('--expected-version='.length) }), null, 2));
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  } else if (args.some(arg => arg !== '--release-only') || args.length > 1) {
+    console.error('Usage: node scripts/maintainer-drill.mjs [--release-only]\n'
+      + '       node scripts/maintainer-drill.mjs --verify=DIR --expected-revision=SHA --expected-version=VERSION');
     process.exitCode = 1;
   } else {
     try {
