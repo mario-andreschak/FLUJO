@@ -56,7 +56,7 @@
     "test:persona-browser-fixture": "node --test scripts/persona-browser-acceptance/fixture-server.test.mjs",
     "test:persona-browser-environment": "node --test scripts/persona-browser-acceptance/environment.test.mjs",
     "test:persona-browser": "playwright test --config=playwright.personas.config.mjs",
-    "test:persona-goal-endurance-evidence": "node --test scripts/persona-acceptance-source.test.mjs scripts/persona-goal-acceptance/endurance-data-root.test.cjs scripts/persona-goal-acceptance/endurance-evidence.test.mjs scripts/persona-goal-acceptance/runtime-provenance.test.mjs scripts/persona-goal-acceptance/public-fixture-server.test.mjs",
+    "test:persona-goal-endurance-evidence": "node --test scripts/persona-acceptance-source.test.mjs scripts/persona-goal-acceptance/endurance-data-root.test.cjs scripts/persona-goal-acceptance/endurance-evidence.test.mjs scripts/persona-goal-acceptance/model-turn-archive.test.mjs scripts/persona-goal-acceptance/runtime-provenance.test.mjs scripts/persona-goal-acceptance/public-fixture-server.test.mjs",
     "validate:persona-goal-endurance": "node scripts/validate-persona-goal-endurance.mjs",
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
     "smoke:mcp-artifacts": "node scripts/smoke-mcp-artifacts.mjs",
