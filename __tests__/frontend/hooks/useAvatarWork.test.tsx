@@ -86,6 +86,43 @@ describe('avatar work uses the existing runtime', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata).not.toHaveProperty('personaId');
     expect(result.current.target).toMatchObject({ kind: 'flow', id: 'authored-flow' });
   });
+  it('restores a UI proposal with the originating panel scope from canonical history', async () => {
+    const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'proposal-chat');
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), id: 'proposal-chat', messages: [
+      { id: 'request', timestamp: 1, role: 'user', content: `<current-page-context encoding="json">\n${JSON.stringify(await context())}\n</current-page-context>\n<user-request>\nHighlight the name\n</user-request>` },
+      { id: 'proposal', timestamp: 2, role: 'assistant', content: 'Review this highlight. <flujo-ui-actions>{"actions":[{"id":"highlight","type":"highlight","target":{"kind":"model-field","field":"displayName"}}]}</flujo-ui-actions>' },
+    ] });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    expect(result.current.messages[1]).toMatchObject({ scopeId: 'panel:model:m', actions: [{ id: 'highlight' }] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('restores hidden tool proposals onto the visible root response', async () => {
+    const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'proposal-chat');
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), id: 'proposal-chat', messages: [
+      { id: 'request', timestamp: 1, role: 'user', content: `<current-page-context encoding="json">\n${JSON.stringify(await context())}\n</current-page-context>\n<user-request>\nHighlight the name\n</user-request>` },
+      { id: 'tool', timestamp: 2, role: 'assistant', depth: 1, content: '', tool_calls: [{ id: 'proposal-tool', type: 'function', function: { name: 'flujo__propose_ui_action', arguments: '{"type":"highlight","target":{"kind":"model-field","field":"displayName"}}' } }] },
+      { id: 'reply', timestamp: 3, role: 'assistant', content: 'You can review this highlight.' },
+    ] });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    expect(result.current.messages[1]).toMatchObject({ scopeId: 'panel:model:m', actions: [{ id: 'proposal-tool' }] });
+  });
+  it('does not lend an earlier panel scope to an unrelated root request', async () => {
+    const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'proposal-chat');
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), id: 'proposal-chat', messages: [
+      { id: 'old', timestamp: 1, role: 'user', content: `<current-page-context encoding="json">\n${JSON.stringify(await context())}\n</current-page-context>\n<user-request>\nOld request\n</user-request>` },
+      { id: 'new', timestamp: 2, role: 'user', content: 'An ordinary request without a panel context' },
+      { id: 'reply', timestamp: 3, role: 'assistant', content: '<flujo-ui-actions>{"actions":[{"id":"highlight","type":"highlight","target":{"kind":"model-field","field":"displayName"}}]}</flujo-ui-actions>' },
+    ] });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await waitFor(() => expect(result.current.messages).toHaveLength(3));
+    expect(result.current.messages[2].scopeId).toBeUndefined();
+    expect(result.current.messages[2].actions).toHaveLength(1);
+  });
   it('creates a Persona draft without Flow authority and uses canonical dispatcher routing', async () => {
     jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), flowId: null, personaId: 'resident', personaBehaviorSlotKey: 'primary', title: 'Resident' });
     const { result } = renderHook(() => useAvatarWork({ modelId: 'unrelated-default', locale: 'pt', context }));
@@ -189,7 +226,7 @@ describe('avatar work uses the existing runtime', () => {
     await act(async () => { handlers.onEvent({ type: 'message', seq: 2, timestamp: 2, conversationId: id, message: { id: 'tool', timestamp: 1, role: 'assistant', content: '' } }); });
     expect(result.current.phase).toBe('waiting');
     expect(result.current.busy).toBe(true);
-    act(() => handlers.onEvent({ type: 'model:start', seq: 3, timestamp: 3, conversationId: id, modelId: 'brain' }));
+    act(() => handlers.onEvent({ type: 'model:start', seq: 3, timestamp: 3, conversationId: id, model: 'brain' }));
     expect(result.current.phase).toBe('thinking');
   });
 });

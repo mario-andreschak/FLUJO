@@ -16,6 +16,7 @@ import { useWorldPanel } from './useWorldPanel';
 import { useNativeRouterVoice, voiceHeaders } from '@/vendor/avatar/client/useNativeRouterVoice';
 import ResourcePreview from './ResourcePreview';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
+import WorldLink from './WorldLink';
 import styles from './world.module.css';
 
 export default function AvatarWorld() {
@@ -56,7 +57,8 @@ export default function AvatarWorld() {
   }, [reload]);
   const pageContext = async (): Promise<AskFlujoPageContext> => await panel.context() ?? {
     scopeId: `world:${getSelectedWorkspace()}`, pageType: 'generic', route: '/world', title: 'Flujo world',
-    data: { locale, avatarStyle: avatar, activeIdentity: work.target, selectedPlace: place, world: snapshot },
+    data: { locale, avatarStyle: avatar, activeIdentity: work.target, selectedPlace: place, world: snapshot,
+      destinations: Object.entries(PLACE_ROUTES).map(([id, href]) => ({ id, href })) },
     capabilities: { notes: ['The world is a passive projection of Flujo entities. Setup secrets are excluded. Open a real Flujo panel for precise edits.'] },
   };
   const work = useAvatarWork({ modelId: snapshot?.workModel?.ready ? snapshot.workModel.modelId : null, locale, context: pageContext });
@@ -130,7 +132,7 @@ export default function AvatarWorld() {
       <div className={styles.stylePicker} role="group" aria-label={c.style}>{(['moss', 'orbit', 'spark'] as AvatarStyle[]).map(style => <button key={style} aria-pressed={avatar === style} onClick={() => { setAvatar(style); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:style'), style); }} title={c[style === 'moss' ? 'quiet' : style === 'orbit' ? 'measured' : 'bright']}>{style === 'moss' ? '··' : style === 'orbit' ? '◉' : '✧'}<span>{style[0].toUpperCase() + style.slice(1)}</span></button>)}</div>
     </section>
     {work.messages.length > 0 && <div className={styles.transcript} ref={transcript} aria-label={c.history} aria-hidden={exploring} inert={exploring}>{work.messages.map(message => <article key={message.id} className={styles.message} data-role={message.role}>
-      <small>{message.role === 'user' ? locale === 'es' ? 'Tú' : locale === 'pt' ? 'Você' : 'You' : actor}</small><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+      <small>{message.role === 'user' ? locale === 'es' ? 'Tú' : locale === 'pt' ? 'Você' : 'You' : actor}</small><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, title, children }) => <WorldLink href={href} title={title} workspace={getSelectedWorkspace()} onNavigate={panel.navigate} onOpen={voice.disconnect}>{children}</WorldLink> }}>{message.text}</ReactMarkdown>
       {message.actions?.map(action => <div className={styles.proposal} key={action.id}><p>{action.label || action.evidence || action.type}</p><button onClick={async () => { const result = await panel.apply(message.scopeId || '', action); setActionResults(current => ({ ...current, [action.id]: result.message })); }}>{c.apply}</button>{actionResults[action.id] && <small>{actionResults[action.id]}</small>}</div>)}
     </article>)}{voice.connected && voiceMessages.at(-1)?.role === 'assistant' && voiceMessages.at(-1)?.text && <article className={styles.message} aria-live="polite"><small>{avatar}</small><p>{voiceMessages.at(-1)?.text}</p></article>}</div>}
     <div className={styles.bottomBar}>

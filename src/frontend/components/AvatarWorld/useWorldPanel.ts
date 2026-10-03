@@ -50,7 +50,10 @@ export function useWorldPanel(onAsk: () => void, locale: WorldLocale = 'es') {
   }, [src, request]);
   return { iframeRef, src, open, navigate, close: () => setOpen(false),
     context: async (): Promise<AskFlujoPageContext | null> => open ? await request('context') as AskFlujoPageContext | null : null,
-    apply: async (scopeId: string, proposal: AskFlujoUiAction): Promise<AskFlujoActionResult> =>
-      await request('apply', { scopeId, proposal }) as AskFlujoActionResult || { success: false, message: 'Open the original panel to apply this proposal.' },
+    apply: async (scopeId: string, proposal: AskFlujoUiAction): Promise<AskFlujoActionResult> => {
+      const result = await request('apply', { scopeId, proposal }) as AskFlujoActionResult || { success: false, message: 'Open the original panel to apply this proposal.' };
+      if (result.success) setOpen(true);
+      return result;
+    },
   };
 }
