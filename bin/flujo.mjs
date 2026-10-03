@@ -100,12 +100,13 @@ const url = `http://localhost:${port}`;
 console.log(`[FLUJO] Starting on ${url} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`);
 console.log(`[FLUJO] Data directory: ${process.env.FLUJO_DATA_DIR}`);
 
-const { prepareLocalInstance, withLocalInstanceHostname } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'local-instance.mjs')).href);
+const { prepareLocalInstance, withLocalInstanceHostname, privateStorageFailureStage } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'local-instance.mjs')).href);
 const nextArgs = withLocalInstanceHostname(withExposureHostname(['start', '-p', String(port)], env), env);
 let instance;
 try { instance = await prepareLocalInstance({ env, args: nextArgs, appRoot: packageRoot }); }
-catch {
-  console.error('[FLUJO] Could not prepare a private local instance.');
+catch (error) {
+  const stage = privateStorageFailureStage(error);
+  console.error(`[FLUJO] Could not prepare a private local instance.${stage ? ` Storage stage: ${stage}.` : ''}`);
   process.exit(1);
 }
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {

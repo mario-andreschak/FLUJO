@@ -120,6 +120,8 @@ jobs:
       - run: node --test scripts/run-local-jest.test.mjs
       - run: node --test scripts/release-evidence.test.mjs
       - run: npm run test:dependency-glob
+      - name: Verify native private storage before building release artifacts
+        run: node --test scripts/local-instance.test.mjs
 
   typecheck:
     name: typecheck

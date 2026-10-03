@@ -453,6 +453,7 @@ async function smokePackedArtifacts(candidateDirectory) {
       cwd: appRoot,
       env: cleanEnv({
         FLUJO_DATA_DIR: dataDir,
+        FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'instances'),
         FLUJO_FS_ROOTS: rootsDir,
         FLUJO_BASH_ROOTS: rootsDir,
         FLUJO_PORT: String(port),
