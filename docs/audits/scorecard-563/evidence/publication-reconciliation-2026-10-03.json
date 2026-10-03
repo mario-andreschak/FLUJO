@@ -1,0 +1,489 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "publication-reconciliation-2026-10-03",
+  "sourceSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "capturedAt": "2026-10-03T22:41:47.685Z",
+  "artifactId": "source-main",
+  "result": "captured",
+  "scope": "Manual bounded publication reconciliation of twelve named source documents. Exact Git blobs and selected text excerpts only; no runtime, installed release, independent threat-model review, all-repository claim completeness or grade acceptance.",
+  "commands": [
+    "git rev-parse 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+    "git show <sourceSha>:<path> (raw Git blob bytes for SHA-256; paths below)",
+    "git ls-tree <sourceSha> -- SECURITY.md"
+  ],
+  "documents": [
+    {
+      "path": "README.md",
+      "status": "present",
+      "gitBlobOid": "f877e97fe4997d59cd7367c74854e8ac607e7017",
+      "byteLength": 30532,
+      "sha256": "dba4f1401715cc75f2d398bdd0d51b0c44a2647a55b4f4516b40cf931f51a3e0",
+      "excerpts": [
+        {
+          "startLine": 67,
+          "endLine": 77,
+          "text": "## 🌟 Key Features\n\n### 🔐 Local-first Security & Workspace Controls\n\n- **Local-first by default**: keep FLUJO on localhost, allow devices on your private network, or configure it for a public deployment\n- **Encrypted at rest**: API keys and other secrets are encrypted in local storage, with an optional custom encryption password for extra protection\n- **Never sent to the browser**: secrets stay server-side — the frontend only ever sees a masked placeholder, even in your own DevTools\n- **Reusable global variables**: define a key once and bind it into any AI or connected-app configuration instead of pasting it repeatedly\n- **Backup & restore** your encrypted workspace from Settings\n\n![Settings — Network Access](docs/images/readme/settings.png)"
+        },
+        {
+          "startLine": 181,
+          "endLine": 192,
+          "text": "### 🔄 External Tool Integration\n\n- **OpenAI-compatible endpoint**: point Cline, Roo Code, Cursor, or any OpenAI-SDK client at `http://localhost:4200/v1`, use any API key value, and pick a model named `flow-<your-flow-name>`\n- **FLUJO as an MCP server (proxy)**: point an external MCP client at `http://localhost:4200/mcp-proxy/<server-name>` to reuse a server you configured once in FLUJO (localhost-only in the current version)\n\n> **Note:** FLUJO does not expose an Ollama-compatible *server* endpoint — use the OpenAI-compatible provider above to consume flows from other apps. (Connecting FLUJO *to* a local Ollama instance as a model provider is a separate, supported feature.)\n\n### 📖 Built-in API Documentation\n\nA searchable `/docs` page inside the app provides a curated HTTP reference for chat, conversations, models, flows, MCP, automations, and administration. See the [API guide](docs/api-reference/README.md) for integration boundaries and the generated route inventory.\n\n![Built-in API Documentation](docs/images/readme/docs.png)"
+        },
+        {
+          "startLine": 275,
+          "endLine": 288,
+          "text": "> ⚠️ **Security:** FLUJO has no authentication layer and its git API runs\n> commands on the server, so the port is bound to **localhost only** by default.\n> Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind\n> your own authenticating reverse proxy on a trusted network.\n\n### Network exposure\n\nUse **Settings → Network access** to choose one deployment posture:\n\n- **Localhost** (default) — only this computer; both listeners bind loopback.\n- **Local Network** — listen on all interfaces and accept private LAN addresses\n  and this machine's hostnames.\n- **Public** — accept any hostname. FLUJO has no built-in authentication, so use\n  this only behind an authenticating HTTPS reverse proxy."
+        },
+        {
+          "startLine": 310,
+          "endLine": 322,
+          "text": "### Run via npx (npm package)\n\n```bash\nnpx flujo-ai\n```\n\nThis runs a prebuilt FLUJO with no git clone or local build. Your data lives in\n`~/.flujo` by default (override with `FLUJO_DATA_DIR`); the port defaults to 4200\n(`--port` / `FLUJO_PORT`), and the browser opens automatically unless you pass\n`--no-open`. MCP servers may still need `git`, `python`/`uv`, or Node on your\n`PATH`. To update, just rerun with `npx flujo-ai@latest`. (The npm package is\n`flujo-ai` — the name `flujo` is blocked by npm's similarity rules — but the\ninstalled command is still `flujo`.)"
+        },
+        {
+          "startLine": 347,
+          "endLine": 363,
+          "text": "The Windows installer is a networked bootstrapper, not an offline file-copy\npackage. It requires Windows App Installer (`winget`) and access to GitHub, the\nwinget catalog, npm, and Python package sources. Missing Git, Node.js, Python,\nuv, and ripgrep are installed through winget; Ollama is optional. The installer also\ninstalls the Claude Code CLI used by the optional Claude Subscription provider.\nInstaller builds from the current source pin versioned Windows releases to their\ntag and commit. The one-line scripts default to the `main` development channel;\ntheir installed revision and channel are recorded in the installation manifest.\nOlder released installers may still follow `main`; check their release notes.\n\nReruns require an official FLUJO checkout with a clean working tree and no local\ncommits that the update would discard. Dirty, diverged, unrelated, or wrong-branch\ntargets stop with recovery guidance. Commit or back up your work before retrying.\nDevelopment updates are fast-forward only. A stable detached-tag install is\nupgraded with a newer versioned installer; the in-app updater does not switch it\nto `main`.\n"
+        },
+        {
+          "startLine": 517,
+          "endLine": 534,
+          "text": "## 🚀 Roadmap\n\n| Capability | Current scope |\n| --- | --- |\n| Interactive agents and visual flows | Available, including branching, subflows, debugging, and tool approvals |\n| AI-assisted flow generation | Available; review the generated graph and tool access before running it |\n| MCP connections | Tools, resources, prompts, roots, sampling, and interactive Apps are available; servers have their own requirements |\n| Automation triggers | Available while the FLUJO server runs; provider and tool failures still need recovery |\n| Workspaces and portable workers | Available; workers use a separate authentication boundary and credential-transfer rules |\n| Personas and Roles | Experimental persistent agents with memory and goals; indefinite unattended reliability is not established |\n| MCP Skills and experimental generators | Opt-in; see the relevant feature flags and guides |\n\nSee [project status](docs/project-status.md), [release history](CHANGELOG.md), and the [Persona endurance acceptance criteria](docs/performance/persona-goal-endurance-acceptance.md) for evidence and limitations.\n\nBeyond that, ideas we're keeping an eye on:\n- Real-time voice input/output\n- Deeper MCP roots support (checkpoints/restore)\n- Edge-device-friendly builds"
+        },
+        {
+          "startLine": 559,
+          "endLine": 566,
+          "text": "## Privacy & usage\n\nFLUJO stores workspace data locally. Requests to cloud models send prompts, selected context, and authentication to the provider you choose. Connected apps can send data to their configured services. A local Ollama model can keep inference on your computer; review the tools you enable as well. A custom encryption password protects stored credentials against access to the data files; the default password is public and is not a private vault.\n\nFLUJO shares one anonymous daily-active pulse by default. The payload is limited\nto the app version, platform, install method, UTC date, and a random identifier\nthat changes every day; it contains no flows, prompts, models, keys, filenames,\naccount details, or permanent installation identifier. A daily in-app notice"
+        }
+      ]
+    },
+    {
+      "path": "docs/project-status.md",
+      "status": "present",
+      "gitBlobOid": "e9c0cadae705dd3d6b12f2008805d773e20d6305",
+      "byteLength": 3854,
+      "sha256": "3dc45b43a04934ed0801201282bef28d862501a6e132d97b35ddd4caec662262",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 30,
+          "text": "# Project status and release channels\n\nThis page describes capability maturity. The [dated audit](audits/2026-09-16-project-audit.md) records the September 16 baseline; the [remediation record](audits/2026-09-16-remediation.md) tracks subsequent changes and validation. Neither is an automatically updated health badge.\n\n| Capability | Status | Evidence and limits |\n| --- | --- | --- |\n| Model connections, interactive chat, visual agents | Available | Credentials, quotas, model compatibility, and tools remain external dependencies |\n| Natural-language flow generation | Available | Generated flows require review and validation before use |\n| MCP tools/resources/prompts/Apps | Available | Local servers execute on the host; remote servers receive request data |\n| Workspaces and portable workers | Available | Logical isolation is not multi-user auth; snapshots can contain credentials |\n| Schedules and triggers | Available | Server must be running; failures and approvals may need owner attention |\n| Personas, Roles, persistent goals | Experimental | Short tests and controlled acceptance do not prove indefinite unattended operation |\n| Conversation-scoped MCP Skills / experimental generator | Opt-in | Feature/server configuration determines availability |\n\n## Release identity\n\nThe package version identifies a published release only when installed from that release. A source checkout on `main` can be ahead of the latest tag while retaining its package version. Record `git rev-parse HEAD` and `git status --short` when reporting source-build problems. Include install method, operating system, and relevant error; omit credentials and private prompts.\n\nThe npm package uses versioned releases. Windows bootstrappers built from the current source pin the release tag and commit; earlier published installers can still follow moving `main`. Shell/source installs use the development branch unless explicitly configured otherwise. Stable detached installs upgrade through a newer versioned installer, while clean development checkouts support fast-forward updates. Read the release notes before upgrading and back up workspace data before changing versions.\n\n## Acceptance evidence\n\nThe [CI workflow](https://github.com/mario-andreschak/FLUJO/actions/workflows/verify.yml) checks types, lint, ordinary tests, and isolated process-boundary tests. The current source counts completed assertions and has no active test quarantines. Six opt-in acceptance/performance assertions remain outside the ordinary Windows run; Unix additionally skips five Windows-specific assertions. Read the raw results and the [quarantine retirement record](audits/quarantine-status.md) alongside the overall status, especially when assessing older releases.\n\nPersona readiness has separate [goal acceptance](performance/persona-goal-acceptance.md), [endurance acceptance](performance/persona-goal-endurance-acceptance.md), and [runtime soak](performance/persona-runtime-soak-acceptance.md) criteria. Full endurance claims require a successful run for the assessed implementation revision. A memory benchmark or short smoke test proves only its measured scope.\n\nThe September 16 remediation's full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but failed the event-append latency criterion: one daily p95 was 169.6893 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall acceptance did not. The remediation record preserves the exact snapshot, evidence and unresolved profiling work. This is neither 28 elapsed days nor proof of live-provider unattended operation.\n\nOpen issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues). Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration requirements, known regressions, and experimental limits.\n"
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "status": "present",
+      "gitBlobOid": "fe521d46922b0a429159e6cdb25ba446caa7b3d1",
+      "byteLength": 16522,
+      "sha256": "8b49afa09a221e4f3261870b76ba58ce0d0efee09a8bb9d55a24a0ce6f94e65f",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 5,
+          "text": "# Changelog\n\n## [Unreleased]\n\n### Personas"
+        },
+        {
+          "startLine": 20,
+          "endLine": 26,
+          "text": "- Keep Skip to content focus and browser history aligned, so returning from Persona chat restores the Persona page instead of leaving Chat beneath its URL.\n- Show translated chat loading statuses while a Persona conversation opens, without flashing new-conversation guidance or remounting the draft composer.\n- Announce observed Task and goal state changes with their names and translated status across Persona areas, without moving focus or repeating unchanged refreshes. Bound simultaneous updates and avoid duplicate generic lifecycle announcements.\n- Complete Persona translations in seven languages and improve narrow layouts, contrast, loading messages and dialog focus. Replace browser confirmations, retain failed-save drafts, localize generated History and default Role Behavior labels, correct Role page landmarks, and prevent translated navigation from overlapping workspace controls.\n- Add a separate Persona recovery ZIP with integrity validation, private-data disclosure and restoration into a new disabled workspace. Model/App connections require reconnection; saved work does not resume automatically.\n- Erase Persona-owned Flow copies/history, specialist-call payloads and private model archives during deletion; prevent stale writers from restoring erased data and protect Role versions referenced by historical work.\n- Bound detailed specialist-call retention, improve complete 50k Memory recall, share conversation log counters across server bundles and strengthen runtime/recovery evidence. Run endurance with the production Role factory and verify its saved setup independently; preserve earlier generic-Core results with their limits. Personas remain experimental; see the [audit and verification record](docs/audits/2026-09-19-persona-audit.md) for measured results and outstanding release gates."
+        },
+        {
+          "startLine": 45,
+          "endLine": 74,
+          "text": "\n- Upgrade Next.js to 16.3.5 and sharp to 0.35.4, and refresh affected transitive dependencies.\n- Reject public DNS names that resemble private IPv6 addresses in Network mode.\n- Fail model, registry, and secret environment-variable saves when encryption fails; retain previous values and never store an encryption-failure prefix followed by plaintext.\n- Add versioned authenticated encryption and stronger new data keys while retaining legacy ciphertext compatibility.\n- Preserve tracked edits and local commits during installer reruns; validate the target repository and update only by fast-forward.\n- Pin new stable Windows bootstrappers to their release tag and commit; record channel/revision and refuse unsafe in-app updates before stopping the server.\n- Honor explicit Windows installer shortcut/start choices, and stop updates when dependency installation, compilation, or artifact validation fails.\n- Restore the package wizard's missing build endpoint in clean installations; a broad build-output ignore rule had excluded its route source.\n\nEncryption migration: new writes use authenticated AES-256-GCM and a 32-byte random key. Existing ciphertext remains readable through a versioned keyring; re-entering and saving a secret gives it the new format, while an unchanged masked field may retain its original ciphertext. The public default password provides obfuscation only; configure a private password for storage protection. Historical plaintext failure records also require the explicit repair steps in the migration guide. Make a complete workspace backup before upgrading: older versions cannot read migrated v2 metadata, so downgrade requires restoring that backup. See the [encryption format and migration guide](src/utils/encryption/README.md).\n\n### First-run experience and documentation\n\n- Require and repair model bindings before tutorial execution, and show recovery when a tutorial run fails.\n- Make the longer Stage 1 tutorial optional from Onboarding settings; skipping the introduction returns to setup instead of opening another tour.\n- Distinguish saved AI configurations from tested connections; preserve corrected credentials on guided setup retries.\n- Return manual model creation to its originating page without reopening the connection wizard.\n- Show runtime installation guidance for the server's operating system and container mode.\n- Add a complete first-conversation guide, missing model/MCP/flow guides, accurate privacy and maturity descriptions, and a generated HTTP route inventory.\n- Count completed tests in verification, retire all nine test quarantines with fresh passing evidence, and require verification of the release commit and official repository before publication.\n\n### Workspace and MCP runtime\n\n- Keep the built-in MCP package source canonical while preserving workspace edits and sharing installed dependencies safely.\n- Preserve workspace isolation through MCP migration, process startup and portable-worker transfer.\n- Preserve cancelled Codex resume sessions without silently starting a fresh conversation.\n\nKnown limitation: Personas remain experimental. The full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but one daily event-append p95 was 169.69 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall endurance acceptance did not. This release does not claim indefinite unattended reliability. See the [September 16 remediation record](docs/audits/2026-09-16-remediation.md) for validation scope and the [original audit](docs/audits/2026-09-16-project-audit.md) for the pre-fix findings.\n"
+        },
+        {
+          "startLine": 83,
+          "endLine": 91,
+          "text": "## [3.45.1] — 2026-09-06\n\n- Add experimental persistent Personas, reusable Roles, durable memory, goal follow-up/recovery, and owner pause/continue/stop controls.\n- Add portable authenticated cloud-worker execution, supported credential/dependency transfer, and native private discovery.\n- Improve MCP credential storage, conversations, model connections, automation/meetings, corporate-network installation, and release argument handling.\n\nKnown limitation: this version's clean Windows startup test failed during process-identity initialization; 3.45.2 contains the fix. Personas and MCP Skills remain experimental. Controlled goal acceptance does not establish indefinite unattended reliability. Browser capture/recording exceptions remain tracked. Worker snapshots can contain transferable credentials and must be treated as secrets.\n\n[Release notes](https://github.com/mario-andreschak/FLUJO/releases/tag/v3.45.1) · [Changes](https://github.com/mario-andreschak/FLUJO/compare/v3.45.0...v3.45.1). See [all earlier releases](https://github.com/mario-andreschak/FLUJO/releases) for version-specific history before these summaries."
+        }
+      ]
+    },
+    {
+      "path": "SECURITY.md",
+      "status": "absent-from-source-tree",
+      "gitBlobOid": null,
+      "byteLength": null,
+      "sha256": null,
+      "excerpts": [],
+      "absenceCommand": "git ls-tree 3511ba49514fe8cf525f5a22c16c3806bf3886ba -- SECURITY.md",
+      "absenceOutput": ""
+    },
+    {
+      "path": "docs/architecture/README.md",
+      "status": "present",
+      "gitBlobOid": "c43a0e161cd5e3d727350ac69e8a895c59154c58",
+      "byteLength": 3317,
+      "sha256": "06ed001b39a78db722c1bdb2bc77b9bd7d0ec78f1f1289527639849f7e9ad00b",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 21,
+          "text": "# Flujo Architecture\n\nFLUJO is a single-user Next.js App Router application. The React frontend calls workspace-aware HTTP handlers; backend services manage models, MCP connections, flow execution, schedules, and persistence. Local MCP servers run in child processes. Persistent state lives under the selected workspace's data directory.\n\n## System Architecture\n\nThe request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. Worker deployments add a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state.\n\n## Backend Architecture\n\nBackend modules live under `src/backend`. Flow execution runs through nodes and emits conversation events; model adapters translate provider requests, and MCP services own connection lifecycle and tool calls. File-backed storage uses atomic writes. AsyncLocalStorage carries the selected workspace so concurrent requests resolve their own paths and caches. See [workspaces](../features/workspaces.md), [MCP lifecycle](../features/mcp-lifecycle-hardening.md), and [API reference](../api-reference/README.md).\n\n## Frontend Architecture\n\nRoutes live under `src/app`; reusable components, hooks, services, contexts, and localization live under `src/frontend`. Client services manage HTTP/streaming requests; components should surface loading, failed, and successful states distinctly. Shared contracts live under `src/shared`.\n\n## Integration Architecture\n\nCloud model adapters send selected context to configured providers. MCP integrations may execute local code or call remote services. Tool approvals mediate requested actions, while process/network permissions remain the host operator's responsibility. See [Connected Apps](../features/mcp/overview.md) and [project status](../project-status.md) for supported and experimental scope.\n\n## Decision Records"
+        }
+      ]
+    },
+    {
+      "path": "docs/api-reference/README.md",
+      "status": "present",
+      "gitBlobOid": "7cd2561ba08bd2a27cbda1c745c4b88822311dcf",
+      "byteLength": 3098,
+      "sha256": "292e521e6cc358bf3132fbff6a8a5886311dbd9228708c1b11bdbda9df2f4ed4",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 29,
+          "text": "# API Reference\n\nThe in-app **/docs** page is a curated reference with request examples. The [generated route inventory](routes.md) lists every explicit App Router handler in this revision; it does not make internal routes stable public APIs.\n\n## REST API\n\nFor external chat clients, configure an OpenAI-compatible base URL of `http://localhost:4200/v1` and select a flow model returned by `GET /v1/models`. The ordinary local app accepts arbitrary client API-key values; that compatibility value is **not authentication**. Keep the service on localhost or put deliberately exposed deployments behind authenticating network controls. Worker deployments require their own bearer credential.\n\nSelect a workspace explicitly with `x-flujo-workspace` or the supported `workspace` query parameter when addressing workspace-owned resources. Workspace names identify logical data partitions, not users. The installation-wide workspace management endpoint is separate. Locked workspaces must be unlocked through the owner UI before secret-dependent execution.\n\n| Surface | Purpose | Contract |\n| --- | --- | --- |\n| `/v1/models`, `/v1/chat/completions` | OpenAI-compatible model discovery and execution | Curated in-app docs describe supported fields; not every OpenAI feature is implemented |\n| `/api/model`, `/api/flow`, `/api/mcp` | Manage model, agent, and app configuration | Internal administration; use current schemas and do not forward these endpoints publicly |\n| `/api/workspaces` | GET list; POST create; PATCH rename/roots; DELETE remove | Installation-wide; names and roots are validated; removal affects stored data |\n| `/api/tickets` | Query/create tickets and delete by IDs | Workspace-scoped, local/unlocked; child routes manage individual tickets |\n| `/v1/personas` and child routes | Create/list experimental persistent Personas, goals, and controls | Workspace-scoped; lifecycle and version checks apply |\n| `/v1/roles` and child routes | Role definitions and immutable versions for Personas | Experimental administration contract |\n\nRead the source handler and its validation schema for internal/experimental request bodies before writing an integration. Handle validation errors, forbidden exposure/auth responses, locked-workspace responses, conflicts, and temporary initialization failures. Retry only operations whose side effects you understand.\n\n## MCP API\n\nFLUJO can connect to MCP servers and expose configured servers through `/mcp-proxy/{server}` or flows through `/mcp-flows`. These transports have their own local/exposure and worker-auth gates. See [Connected Apps](../features/mcp/overview.md), [MCP Apps](../features/mcp/apps.md), and the in-app reference for the selected transport.\n\n## Keeping the reference current\n\nRun `node scripts/generate-api-inventory.mjs` after route changes. CI checks it with `--check`, so added or removed handlers cannot silently disappear from the inventory. Update the curated examples separately when public request/response behavior changes. There is no separately documented stable JavaScript SDK; use the supported HTTP/MCP surfaces.\n"
+        }
+      ]
+    },
+    {
+      "path": "docs/features/workspaces.md",
+      "status": "present",
+      "gitBlobOid": "b8a8572a480460f61ec363c5d6f120deba387739",
+      "byteLength": 13162,
+      "sha256": "cccad37a8d49749b878f8f369530bc93697ca2f45877e63c0dc5b456bf8c51a4",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 23,
+          "text": "# Workspaces\n\nWorkspaces (issue #406) give one FLUJO installation several independent sets of\ndata. Each workspace has its own flows, models, conversations, MCP servers,\nplanned executions and settings; no workspace-owned application data is shared\nbetween them. Process-level controls such as update checks, network exposure,\ntelemetry and workspace discovery remain installation-wide because they do not\ncontain workspace user data.\n\nA workspace is a **logical namespace inside the existing data root**, not a\nsecond installation. There is still one FLUJO process, one application install\nand one `FLUJO_DATA_DIR`.\n\nEach workspace can also own a list of backend filesystem folders. Use **Edit\nworkspace** in the workspace menu to add or remove them. The list is stored in\n`.workspace.json` inside the managed workspace directory and is inherited by\nevery MCP server at runtime through `roots/list`; individual server and flow-node\nroots remain additive. Editing the list does not rewrite server configuration or\nrestart processes: connected servers receive `notifications/roots/list_changed`\nand the next roots request resolves the current workspace list.\n\n## On-disk layout\n"
+        },
+        {
+          "startLine": 69,
+          "endLine": 89,
+          "text": "individual package links for mixed hoisting.\nThis resolves ESM imports even when `FLUJO_DATA_DIR` is outside the repository,\nwithout a background npm install or browser download. It does not create a\nprocess or dependency security boundary.\n\nStartup preserves existing workspace package files, including edits and older\nversions. Updating the application changes the templates for future copies;\nit does not silently overwrite workspace edits. Shipped launch records use\nworkspace-relative paths so renaming a workspace does not leave its servers\npointing at the old directory. User-owned configurations keep their own paths.\n\nFor managed workspace copies, snapshot worker preparation reconstructs ordinary\nbuilt-ins from the target installation and verifies the required package assets\nagainst provenance and runtime hashes. This does not prove identical dependency\ntrees; legacy app-root transfer plans retain their existing behavior. Edited or\nunverifiable workspace package code must be packaged explicitly before transfer;\nthe snapshot path must not silently substitute different code. Dependencies are\nprepared on the destination, not transferred as links to the source computer.\n\nManaged MCP children also receive an internal `FLUJO_PARENT_DATA_DIR` marker\ncontaining the installation data root. MCP packages continue to use their"
+        },
+        {
+          "startLine": 155,
+          "endLine": 175,
+          "text": "transaction journals, heartbeat locks and Python rename helpers are no longer\npart of this mover; their obsolete artifacts are cleaned up. Do not infer\ntransactional rollback or mid-move crash recovery from the marker. Inspect the\nrecorded paths and errors before manually repairing an interrupted migration.\n\n## Selecting a workspace\n\n### API\n\nEvery workspace-sensitive endpoint accepts an **optional** `workspace` query\nparameter (or an `x-flujo-workspace` header):\n\n```http\nGET /v1/chat/conversations                      # default-workspace\nGET /v1/chat/conversations?workspace=research    # the \"research\" workspace\n```\n\n| Situation | Response |\n| --- | --- |\n| parameter omitted | uses `default-workspace` — identical to pre-#406 behaviour |\n| syntactically invalid name | `400` |"
+        },
+        {
+          "startLine": 235,
+          "endLine": 257,
+          "text": "archive can never contain another workspace's files, and restore refuses archive\nentries that would escape the target workspace.\n\nNew archives record `workspace` and `workspaceLayoutVersion` in\n`backup-info.json`. Legacy archives that lack those fields restore into the\nselected workspace, which for an untouched client means `default-workspace` —\nexactly where their data used to live.\n\nAggregate multi-workspace export/import is deliberately out of scope.\n\n## Notes for contributors\n\n- Use `getWorkspaceDataDir()` (from `src/utils/workspace.ts`) for anything that\n  belongs to a workspace — including databases, MCP runtime installs, userdata,\n  profiles and generated media. Use `getDataDir()` only for installation-wide\n  layout metadata and migration sources.\n- Never capture a workspace path in a module-level constant. The workspace is\n  per-request ambient context (`AsyncLocalStorage`); a constant pins the whole\n  process to whichever workspace loaded the module first.\n- Any process-wide cache, write chain or registry keyed by an id that is only\n  unique *within* a workspace (conversation id, MCP server name, KV scope) must\n  include `workspaceCacheKey(...)`, or one workspace will serve another's data.\n- Callbacks that outlive the request (timers, watchers, event listeners) must"
+        }
+      ]
+    },
+    {
+      "path": "docs/features/mcp/overview.md",
+      "status": "present",
+      "gitBlobOid": "f23ec3ab26d609c9c6a0694293de07295e6f4e6f",
+      "byteLength": 1134,
+      "sha256": "3fe5f3ea0451f775509d55d4657271ab007a23e42e016f4f2e0adc662f82db25",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 14,
+          "text": "# Connected Apps and MCP\n\nAn MCP server exposes tools, resources, prompts, or interactive Apps to FLUJO. A model can use only the capabilities that its agent and connection configuration make available. Connecting a server does not automatically make every tool appropriate for every agent.\n\n1. Open **Connected Apps → Connect App**.\n2. Choose a curated app, remote URL, GitHub repository, or local command.\n3. Review where it runs and any credentials it needs.\n4. Connect and inspect its discovered capabilities.\n5. Test one harmless operation, then explicitly add the needed tools to your agent.\n\nLocal servers run as processes with the host user's permissions. Installing a repository can execute its installation/build scripts. A remote server receives requests at its configured URL. Tool approvals help review actions but do not turn arbitrary local processes into a sandbox.\n\nUse [local server setup](local-servers.md), [GitHub server setup](github-servers.md), or [launch-and-connect](launch-and-connect.md) for the relevant transport. See [MCP Apps](apps.md) for the separate sandbox origin used by interactive interfaces.\n"
+        }
+      ]
+    },
+    {
+      "path": "docs/features/hot-clone-workspace.md",
+      "status": "present",
+      "gitBlobOid": "06ae4938de54c6973c74304f4ae12310e5e6fa3e",
+      "byteLength": 11903,
+      "sha256": "f4b289859445610f5f8cb7487c9cd1b7ec19a8b1d483ba87474b4c5b21d00399",
+      "excerpts": [
+        {
+          "startLine": 63,
+          "endLine": 96,
+          "text": "## Snapshot contents and coherence\n\nThe version-2 archive preserves FLUJO's JSON/sharded records and JSONL conversation\nlogs, including model/flow/MCP names and IDs, credentials, and conversations. The\nmanifest records the FLUJO version, layout, generation, member sizes/hashes,\nportable MCP installation recipes, and required authentication mode. Restore\nrequires the same FLUJO version and layout, plus an independently supplied archive\nSHA-256. Use an immutable image digest built from the corresponding FLUJO code.\n\nMCP installations, `node_modules`, Python virtual environments, browser profiles,\nand `userdata/mcp-runtime` are omitted and reconstructed where supported. Codex's\n`db/codex-runtime` is omitted except for a selected ChatGPT authentication cache\nand its workspace ownership marker. Its SQLite databases/WAL files are not copied;\nFLUJO conversation history survives, and the Codex adapter's existing missing-thread\nfallback starts a new provider thread from that history. Other SQLite databases in\nuser data fail capture because arbitrary live SQLite copying is not coherent.\n\nThe generation boundary covers registered FLUJO-managed writers:\n\n- JSON and sharded storage writes;\n- append-only conversation logs;\n- run-resource payload/index changes and derived hard links; and\n- Git-backed snapshot-store mutations.\n\nNew managed writes wait while the current generation's bytes are captured.\nReads continue normally. Compression and archive persistence happen after the\nboundary is released.\n\nExternal roots named by `.workspace.json` are not traversed or copied. Direct\nfilesystem changes made by programs outside FLUJO are unsupported; unsafe,\nsymbolic-linked, disappearing, or changing entries fail the capture instead of being\nsilently omitted. The remote workspace is a fork at this snapshot point; ongoing\nor bidirectional synchronization is out of scope.\n"
+        },
+        {
+          "startLine": 150,
+          "endLine": 160,
+          "text": "in an owner-only bootstrap file, so existing FLUJO decryption works unattended on\nthe worker and after restart. Locked workspaces must be unlocked before capture.\nThe archive therefore contains sensitive credentials and must be encrypted before\nit leaves the local control plane.\n\n## Worker bootstrap\n\nConfigure a fresh worker volume before starting the existing FLUJO image:\n\n```text\nFLUJO_WORKER_MODE=1"
+        },
+        {
+          "startLine": 171,
+          "endLine": 215,
+          "text": "\nRestore validates archive paths, aliases, duplicate names, file types, size bounds,\nmember hashes, version, credentials and layout before publishing the workspace.\nFiles are owner-only, preserving only the executable bit. Existing workspaces are\nnever overwritten. A matching restore marker makes process restarts reuse worker\nresults instead of restoring the original archive again. Host external roots are\ncleared. Only the restored workspace is initialized.\n\nWorker mode suppresses scheduler catch-up, Persona dispatch and remote task resume.\nIt rebuilds the MCP dependencies, verifies connection status, and exposes\n`GET /api/worker/status`. States include `restoring`, `locked`, `installing`,\n`ready`, and `error`. Worker API/MCP ingress requires the worker bearer token;\nexecution is rejected until ready. The shipped FLUJO MCP receives this token only\nin its child environment for its existing internal HTTP calls.\n\nThe cloud bridge should bind a local loopback tunnel to a private worker with no\npublic service allocation. Invoke existing flows with `/v1/chat/completions`, the\nworkspace selector and conversation ID. Interactive questions/tool approvals keep\ntheir existing execution-engine policy, with worker requests classified as\nunattended internal runs. This does not clone in-flight process memory or resume local\nbackground jobs on the cloud machine.\n\nDetached tasks launched locally after this upgrade carry installation, workspace,\nand process ownership. Startup and task reads can mark a task `failed` with\n`failureReason: process-restart` once its exact child has a durable interruption\noutcome and its launching process is proven dead. The task records that manual\nrecovery is required. This never replays a child or its effects. The installation\nidentity is stored outside snapshot subtrees, so copied tasks are not treated as\nlocal launches. Live owners, unknown ownership, and older tasks without launch\nprovenance are left untouched; older task records still require manual recovery.\n\n## Validation\n\n`node scripts/smoke-cloud-worker.mjs` starts isolated real Next instances from a\nsynthetic encrypted workspace. It verifies bearer protection, restore/readiness,\nan actual ExecutionEngine flow using a local mock provider, unattended behavior,\nthe worker healthcheck, and conversation preservation after process restart. It\ndoes not use a real model account or provision cloud resources.\n\nThe focused package tests also start a real rebuilt bundled filesystem MCP over\nstdio and write/read a file in the target workspace, verifying the source is\nunchanged. A live subscription test should then run the same flow locally and on\nthe private cloud worker, checking its saved conversation and proof files; this\nis what validates the current account and Linux runtime together.\n"
+        }
+      ]
+    },
+    {
+      "path": "src/utils/encryption/README.md",
+      "status": "present",
+      "gitBlobOid": "095e0243a9538964f387e50c96722e072c4c9073",
+      "byteLength": 5900,
+      "sha256": "cb4199fb6cb212220301744e0ef024f783253d00a00f45f80375f009c95b0a44",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 42,
+          "text": "# Workspace secret encryption\n\nFLUJO stores provider keys, registry tokens and secret environment variables in the selected workspace. Password encryption protects stored secrets while the workspace is locked. It is not HTTP authentication: once unlocked, authorized local backend operations can use the keys until the process stops or the workspace is explicitly locked.\n\n## Current format (version 2)\n\nNew data-encryption keys contain 32 cryptographically random bytes from Node's `crypto.randomBytes`. Secrets use AES-256-GCM with a fresh 12-byte nonce and a 16-byte authentication tag. The stored payload is `v2:nonceHex:tagHex:ciphertextBase64`, normally inside the existing `encrypted:` application envelope. A changed nonce, tag, ciphertext or format is rejected.\n\nThe password wraps a versioned keyring using AES-256-GCM. PBKDF2-HMAC-SHA256 derives a 32-byte wrapping key using a fresh 16-byte salt and 600,000 iterations. Authenticated associated data binds the envelope to its purpose, format version, encryption mode and key identity. Metadata is atomically replaced only after the wrapped keyring is complete; concurrent initialization and metadata changes are serialized per workspace.\n\n**Default mode is storage obfuscation, not protection from someone who can read the workspace files.** It intentionally uses a published compatibility password so FLUJO works without asking for a password. Set a strong user password for meaningful protection of secrets at rest. Neither mode protects secrets from code already running as the same OS user while the workspace is unlocked.\n\n## Legacy data and upgrades\n\nVersion 1 used an eight-random-byte key represented as hexadecimal text and unauthenticated AES-CBC. It remains readable for compatibility, with exactly its original effective key representation. Legacy ciphertext cannot gain authentication retroactively.\n\nOn first access in default mode, or successful password authentication in user mode, FLUJO atomically replaces v1 metadata with an authenticated v2 keyring containing a new 32-byte active key and the old effective key for reads. Existing secret files are not bulk rewritten. Newly entered or replaced secret values use v2; old CBC values remain readable. Saving a record with an unchanged masked credential may retain its existing ciphertext. User-mode sessions left over from an older running build must authenticate again before writing secrets.\n\nPassword changes and default-to-user transitions rewrap the complete keyring without changing its existing keys. Mixed legacy/new values remain readable after restart and with a matching backup. Restore complete workspace backups including `db/encryption_key.json`; restoring old metadata without the corresponding secret files can lose access to values written after that backup. Take a backup before upgrading. Old FLUJO builds cannot read v2 metadata or ciphertext, so downgrading requires restoring a complete pre-upgrade backup.\n\nHistorical `encrypted_failed:` values contain plaintext. They are not produced by any encryption helper. Existing values retain read compatibility until explicitly replaced; upgrading the keyring does not encrypt these existing plaintext records. Explicitly re-save an affected model to encrypt its existing credential; sign in again to replace an affected registry account; re-enter and save each affected secret environment variable. An unchanged `********` environment-variable placeholder preserves the old value, so clicking Save without entering the secret does not repair that record. Failed encryption aborts the entire save and retains the old stored record, including all prior values in a batch environment-variable update. It never persists the submitted plaintext as a fallback.\n\n## Runtime/session behavior\n\nSession and server unlock state are workspace-scoped and contain a serialized v2 keyring (or a legacy effective key during compatibility reads). Session tokens expire after two hours from creation. The separate server unlock state has no timer, allowing background execution to continue after the UI session expires. Invalidating a UI token does not lock the server. Tokens and plaintext keys are not written to logs.\n\nWorker snapshots carry the complete unlocked keyring inside their private bootstrap secret file, so old/new ciphertext remains readable in the restored workspace. Such snapshots contain credentials and must be handled as secrets.\n\nUpgrade worker hosts before transferring a migrated workspace. Older worker builds cannot interpret a v2 keyring. An existing empty or malformed metadata file is an error, not an empty workspace: restore it from a matching backup instead of deleting it or generating a replacement key.\n\n## Code and verification\n\n- `format.ts`: authenticated envelopes, password key derivation, strict format validation and v1 read compatibility.\n- `secure.ts`: workspace metadata lifecycle, atomic upgrade, password transitions and encryption/decryption API.\n- `session.ts`: workspace-scoped sessions and server unlock state.\n- `lockGate.ts`: HTTP 423 while a password-protected workspace is locked.\n- `__tests__/encryption/dekInvariant.test.ts`: real temp-directory crypto tests for legacy/new reads, upgrade interruption, backup/restore, restart, password changes, tamper rejection and concurrent initialization.\n- `__tests__/encryption/credentialFailure.test.ts`: failure-path tests ensuring model and registry saves preserve previous credentials.\n- `__tests__/encryption/envCredentialFailure.test.ts`: single and batch environment-variable writes preserve all old values when encryption or initialization fails.\n\nDecryption returns `null` for invalid ciphertext or credentials; a locked workspace throws `EncryptionLockedError`. Credential-writing helpers throw when encryption cannot complete. Callers must propagate that failure and leave their existing persisted record intact.\n"
+        }
+      ]
+    },
+    {
+      "path": "docs/npm-release.md",
+      "status": "present",
+      "gitBlobOid": "83eaf4bd756460b61da9d11b17275c7346803a24",
+      "byteLength": 3210,
+      "sha256": "40d2ea4f5ec548a403cf83fca8948ca3d0f3e579e209465f94331956532230e9",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 7,
+          "text": "# Publishing a release\n\nFrom a clean, synchronized official `main` checkout, run `npm run release -- patch` (or `minor`, `major`, an exact version). Authenticate GitHub CLI once with `gh auth login`; local npm login is unnecessary. `npm run release -- --dry-run` builds and validates without authentication or publication.\n\nThe command synchronizes package versions, commits and pushes `main` without a release tag, then dispatches `publish-npm.yml` with the exact commit and version. The workflow verifies that revision, consumer-smokes the exact tarballs it will publish, and separately requires successful main-push CI. It publishes the four standalone MCP packages before `flujo-ai`. Only after all five npm integrity values match does it create the version tag, explicitly dispatch the image and tagged installer workflows, and wait for both.\n\nIf publication or finalization fails, run `npm run release -- --resume RUN_ID`, using the run ID printed by the command. This verifies the workflow, repository, main revision, package version and local checkout, then reruns **failed jobs only**. Successful preparation retains the original tested artifact for 30 days. Published versions are skipped only when their integrity matches those exact bytes. Do not rerun the entire workflow or create a fresh version to repair a partial publication. If main moves, the artifact expires, or immutable published bytes differ, the release stops for inspection. Before a run exists, repeating the command reuses its pending version record in Git's worktree metadata."
+        },
+        {
+          "startLine": 19,
+          "endLine": 24,
+          "text": "| Allowed actions | Enable **Allow npm publish** |\n\nThese fields are case-sensitive. New connections allow staged publishing by default; direct publishing needs its own checkbox. This workflow uses neither staged approval nor separate dist-tag commands. It uses GitHub-hosted Ubuntu, pinned Node 24.17.0 and npm 11.21.0; publishing has only repository read access and `id-token: write`. The separate finalization job has GitHub write permissions. No npm write secret or credential fallback is used. All public manifests identify the canonical repository, enabling automatic npm provenance. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and [npm provenance](https://docs.npmjs.com/generating-provenance-statements/).\n\nAfter the first successful publish, package owners can disable traditional token publishing and revoke old automation tokens in npm settings. GitHub tags created with `GITHUB_TOKEN` do not start push workflows, so this release explicitly dispatches the existing installer at its version tag. See [GitHub workflow triggering](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).\n"
+        }
+      ]
+    },
+    {
+      "path": "docs/windows-installer-release-checklist.md",
+      "status": "present",
+      "gitBlobOid": "0e00d37a0fb2b756bf0aab805c0739d6b8bbe41c",
+      "byteLength": 5698,
+      "sha256": "937217b808c1d7465655ccfe5fe7ac7b48ba3919ac594bc5564dc9e23a31fe19",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 37,
+          "text": "# Windows installer release checklist\n\nUse this checklist for every release that publishes `flujo-setup.exe`. Record the\nWindows edition/build, tester, date, artifact SHA-256, and results in the release\nverification notes. Do not promote the installer until every required item passes.\n\n## Release inputs\n\n- [ ] Confirm `package.json` contains the intended npm version and the npm package\n      has been built and published through the normal release process.\n- [ ] Confirm the release tag is exactly `v<package-version>` and points to the\n      reviewed commit.\n- [ ] Confirm the version-tag CI build passes `MyBranch=v<package-version>` and\n      `MyRevision=<full commit SHA>` to Inno Setup. The bootstrapper must install\n      that exact revision and report the stable channel, tag, and SHA. Untagged\n      development builds must identify themselves as development builds.\n- [ ] Record the current code-signing decision. The installer is currently\n      unsigned; adding signing requires maintainer approval, repository-managed\n      certificate secrets, and a documented certificate-rotation procedure.\n- [ ] Keep `Uninstallable=no` unless maintainers explicitly approve a discoverable\n      Windows Apps entry. The supported uninstall path is `scripts/uninstall.ps1`.\n\n## Automated validation\n\n- [ ] The `Validate Windows installer` workflow passed its independent Pester job.\n- [ ] Decision tests loaded `scripts/installer-functions.ps1`, inspected installer\n      entry points, and exercised synthetic command outcomes. Repository tests\n      used Git only in disposable fixtures. Neither suite ran the real installer,\n      installed prerequisites, changed persistent execution policy, or touched\n      an existing installation's files or processes.\n- [ ] CI installed the pinned Inno Setup version and successfully compiled\n      `installer/flujo-setup.iss`.\n- [ ] CI retained one non-empty `flujo-setup.exe` validation artifact.\n- [ ] The version-tag run attached exactly one `flujo-setup.exe` asset to the\n      matching GitHub Release; a pull request or `main` run did not modify releases.\n- [ ] Download the release asset, verify that its SHA-256 matches the recorded\n      value, and confirm Windows can start it."
+        },
+        {
+          "startLine": 39,
+          "endLine": 72,
+          "text": "## Clean-Windows smoke-test matrix\n\nRun these scenarios against the downloaded release asset on a supported clean\nWindows VM. Restore a snapshot between scenarios when prerequisite state matters.\n\n| Scenario | Required verification | Result / evidence |\n| --- | --- | --- |\n| No Git, Node.js, Python, uv, or ripgrep | Wizard detects the missing tools, installs them through winget, builds FLUJO, and leaves a working `flujo` command and manifest. | |\n| All prerequisites preinstalled | Installer keeps them, records `preexisting: true`, and a later uninstall defaults to keeping them. | |\n| Mixed prerequisite state | Only missing prerequisites are installed; manifest ownership matches the before/after state. | |\n| Missing winget/App Installer | Wizard and PowerShell entry point stop with actionable App Installer guidance and leave no launcher, shortcut, or partial registration. | |\n| Restrictive PowerShell policy | Consent text is clear; accepting enables future npm/npx use, declining still completes the current session, and the manifest records only an actual persistent change. | |\n| Default wizard choices | Installs under `%LOCALAPPDATA%\\FLUJO`, creates the selected shortcut, and can launch at `http://localhost:4200`. | |\n| Custom path and no shortcut | Installs into the selected path, launcher uses that exact path, and no desktop shortcut is created. | |\n| Optional Ollama | Declining causes no Ollama change; accepting installs/records it and uninstall follows the same ownership default as other prerequisites. | |\n| Existing-install rerun | A clean official development checkout updates by fast-forward without duplicating PATH or shortcuts; stable-tag reruns preserve the selected revision and user data. | |\n| Dirty, diverged, unrelated, or wrong-branch target | Installer refuses before checkout, dependency installation, server stop, or registration; tracked edits, untracked files, and local commits remain intact. | |\n| Stable release provenance | Installed HEAD equals the release's recorded SHA; a moved or mismatched tag is rejected. The manifest records stable channel, ref, and revision. | |\n| Existing non-Git target | Installer rejects the target before package, clone, launcher, or manifest mutations. | |\n| `scripts/update.ps1` and in-app updater | Development checkout passes identity/clean/ancestry checks before stop, then updates/builds/restarts. Stable detached installs show guidance to use a newer versioned installer without stopping the app. | |\n| Uninstall, keep optional tools | `DELETE` confirmation is required; FLUJO files, launcher, PATH entry, shortcut, and metadata are removed while declined prerequisites remain. | |\n| Uninstall, remove FLUJO-owned tools | Only explicitly selected tools are passed to winget/npm removal; preexisting tools default to keep. | |\n| Cancel uninstall | Any response other than uppercase `DELETE` makes no changes. | |\n\n## Release notes and rollback\n\n- [ ] Add the tested Windows build, smoke-test outcomes, known warnings, artifact\n      SHA-256, signing state, and reviewer to the release verification notes.\n- [ ] Confirm the README installer, rerun/update, prerequisite, and uninstall\n      guidance matches the released behavior.\n- [ ] If validation fails after tagging, remove the bad installer asset or mark the\n      release as a prerelease, fix on `main`, create a new version tag, and repeat\n      the complete checklist. Do not silently replace an already-verified binary.\n"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claimId": "publication-local-ingress",
+      "ownerId": "security",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "README.md",
+        "docs/architecture/README.md",
+        "docs/api-reference/README.md"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Host/Origin exposure controls and arbitrary OpenAI-compatible client keys are not owner/user authentication; public/shared support needs accepted ingress and ownership boundaries.",
+      "disposition": "needs-wording-reconciliation",
+      "requiredAction": "Place the existing authenticating-proxy and single-owner limits beside the short public-deployment feature claim. Do not publish proposed owner/session/shared boundaries as already shipped.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-storage-encryption",
+      "ownerId": "security",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "README.md",
+        "CHANGELOG.md",
+        "src/utils/encryption/README.md"
+      ],
+      "gateIds": [
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Default-password storage obfuscation, v2 writes, legacy ciphertext, plaintext failure records, workspace unlock and complete-backup downgrade requirements are distinct.",
+      "disposition": "needs-wording-reconciliation",
+      "requiredAction": "Qualify the short encrypted-at-rest bullet with the published default-password limit and explicit repair/backup requirements. Do not imply that upgrading rewrites every historical credential.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-secret-redaction",
+      "ownerId": "security",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "README.md",
+        "src/utils/encryption/README.md",
+        "docs/features/hot-clone-workspace.md"
+      ],
+      "gateIds": [
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Credential handling must be stated per surface; masking in configuration UI does not prove an absolute absence from every response, log, error, export or transferred snapshot.",
+      "disposition": "needs-wording-reconciliation",
+      "requiredAction": "Replace the absolute never-sent-to-the-browser feature bullet with a scoped configuration-UI claim only after the corresponding redaction matrix passes. This audit does not assert a browser leak.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-workspace-isolation",
+      "ownerId": "production",
+      "profileId": "shared-public",
+      "documentPaths": [
+        "README.md",
+        "docs/project-status.md",
+        "docs/architecture/README.md",
+        "docs/api-reference/README.md",
+        "docs/features/workspaces.md"
+      ],
+      "gateIds": [
+        "shared-profile",
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Workspace selectors and MCP roots describe logical partitions and discovery; individual/team authentication, secret/process boundaries and revoke/edit conflicts remain separate acceptance work.",
+      "disposition": "consistent-source-scope",
+      "requiredAction": "Retain the single-user/logical-namespace limit; integrate #573/#574/#575 documentation only for a matching accepted release. Do not count several workspaces as several independently isolated users.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-mcp-confinement",
+      "ownerId": "security",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "docs/features/mcp/overview.md",
+        "docs/features/workspaces.md",
+        "docs/architecture/README.md"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Local MCP code executes with host-user permissions; approvals, roots, package inspection and the MCP Apps origin do not establish OS process/filesystem/network confinement.",
+      "disposition": "consistent-source-scope",
+      "requiredAction": "Keep the host-execution warning and any enforced capability limits visibly distinct. A scanner score cannot qualify #568 confinement.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-worker-recovery",
+      "ownerId": "production",
+      "profileId": "persistent-worker",
+      "documentPaths": [
+        "README.md",
+        "docs/project-status.md",
+        "docs/features/hot-clone-workspace.md"
+      ],
+      "gateIds": [
+        "worker-operations",
+        "cross-stream-contracts",
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Portable-worker bearer and credential transfer are separate from owner sessions; snapshots contain secrets, copied schedules remain suppressed and restart observations do not authorize blind effect replay.",
+      "disposition": "consistent-source-scope",
+      "requiredAction": "Preserve default suppression and private transfer limits. Any #553 local-schedule opt-in needs provenance/fences; #547 cold/disconnected states are not generation-bound process exit receipts.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-distribution-support",
+      "ownerId": "engineering",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "README.md",
+        "docs/project-status.md",
+        "CHANGELOG.md",
+        "docs/npm-release.md",
+        "docs/windows-installer-release-checklist.md"
+      ],
+      "gateIds": [
+        "release-acceptance",
+        "dependency-audit"
+      ],
+      "interpretation": "Source/main version, release tag, actual npm contents, installer bytes and container digest identify different artifacts; advertised installation methods are not completed OS acceptance.",
+      "disposition": "needs-release-reconciliation",
+      "requiredAction": "Bind release notes, upgrade/rollback and clean-install outcomes to one selected SHA and each actual artifact. Preserve pending Windows/Linux/macOS method rows; source build or checksum metadata alone cannot verify them.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-ci-health",
+      "ownerId": "engineering",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "docs/project-status.md",
+        "CHANGELOG.md"
+      ],
+      "gateIds": [
+        "release-acceptance",
+        "dependency-audit",
+        "persona-current-soak"
+      ],
+      "interpretation": "CI job success, assertion counts, opt-in skips and dependency scan results have exact revision/workload scope; September clean results do not make October dependencies clean.",
+      "disposition": "needs-release-reconciliation",
+      "requiredAction": "Retain failures and all skipped/manual scopes. Add current release raw results after integration rather than updating a timeless health assertion from unrelated proposal runs.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-persona-autonomy",
+      "ownerId": "maturity",
+      "profileId": "persistent-worker",
+      "documentPaths": [
+        "README.md",
+        "docs/project-status.md",
+        "CHANGELOG.md",
+        "docs/features/hot-clone-workspace.md"
+      ],
+      "gateIds": [
+        "persona-current-soak",
+        "persona-manual",
+        "persona-live",
+        "independent-reassessment",
+        "dependency-audit"
+      ],
+      "interpretation": "Personas remain experimental; historic overall failed offline endurance, later exact-older-source reports, current offline acceptance, live elapsed time and human operational usefulness are separate.",
+      "disposition": "consistent-source-scope",
+      "requiredAction": "Preserve the September failure and later evidence without retroactive substitution. Keep indefinite/public-world/multi-week autonomy qualified until its agreed real window and useful outcomes are demonstrated.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-api-contract",
+      "ownerId": "feature-surface",
+      "profileId": "local-owner",
+      "documentPaths": [
+        "README.md",
+        "docs/api-reference/README.md",
+        "docs/architecture/README.md"
+      ],
+      "gateIds": [
+        "release-acceptance",
+        "cross-stream-contracts",
+        "local-security",
+        "dependency-audit"
+      ],
+      "interpretation": "A generated route inventory is source coverage; curated external HTTP/MCP contracts, internal administration, experimental APIs and authenticated worker transport require their own compatibility boundaries.",
+      "disposition": "consistent-source-scope",
+      "requiredAction": "Retain arbitrary API-key compatibility versus authentication, workspace ownership and internal-route exposure limits. Update API examples and versioned consumer contracts when the selected candidate changes.",
+      "publicationStatus": "pending-candidate-release"
+    },
+    {
+      "claimId": "publication-threat-model",
+      "ownerId": "security",
+      "profileId": "shared-public",
+      "documentPaths": [
+        "SECURITY.md",
+        "docs/architecture/README.md",
+        "docs/features/mcp/overview.md",
+        "src/utils/encryption/README.md"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "independent-reassessment",
+        "dependency-audit"
+      ],
+      "interpretation": "There is no SECURITY.md in the captured main tree; scattered source documentation and an unintegrated security proposal are not a reviewed release threat model.",
+      "disposition": "missing-release-document",
+      "requiredAction": "Security owns the candidate threat model, migration/transfer disclosure, reporting policy and independent review. Add the selected candidate document to the next inventory; retain this dated absence witness.",
+      "publicationStatus": "pending-candidate-release"
+    }
+  ],
+  "limits": [
+    "These document statements are not independent confirmations that the implementation performs as documented.",
+    "The source pin is the planning main revision, not a merged scorecard candidate or the npm release source.",
+    "No topic-owned publication file is changed by this capture; candidate edits need a fresh report with the candidate SHA and matching acceptance evidence.",
+    "Credentials and private runtime/user contents are not captured; excerpts come from tracked source only."
+  ]
+}
