@@ -90,6 +90,55 @@ of an installed release. Retain the trusted run/commit provenance and independen
 observer record alongside the bundle. Every successful verification still reports
 the human, installed-artifact and elapsed-observation gates as pending.
 
+## Consumer-installed baseline probe
+
+This optional networked command installs a pinned published npm artifact into a
+fresh consumer directory and exercises the real loopback HTTP flow/backup/restore
+routes. It requires the clean committed source checkout and local dependencies
+above. It performs no build, publication or provider call. Coordinate its install
+and server with the epic's resource owner; Windows x64 is the exercised profile.
+Other platforms require their own retained run before claiming acceptance.
+
+Obtain version, npm SHA-512 integrity and source revision independently from the
+reviewed release metadata/provenance. The command verifies the tarball bytes and
+installed manifest. The source revision is an operator-supplied declaration;
+provenance signature verification remains with Engineering's release gate.
+
+For the published 3.46.2 baseline (source `320347356891aa1c24e0f2f9ce12719317e58bde`):
+
+```sh
+node --test scripts/maintainer-installed-baseline.test.mjs
+node scripts/maintainer-installed-baseline.mjs --version=3.46.2 --integrity=sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ== --source-revision=320347356891aa1c24e0f2f9ce12719317e58bde
+```
+
+The default npm CLI is `node_modules/npm/bin/npm-cli.js` beside the Node executable.
+If your Node installation places it elsewhere, add
+`--npm-cli=ABSOLUTE_PATH_TO_NPM_CLI_JS`. Commands use Node directly without a shell.
+Consumer install scripts are disabled, npm's user/global configuration files are
+separate and empty, and the cache/home/data/temp/tool roots are disposable. The
+application tarball is pinned; transitive dependencies resolve at install time.
+Retain `consumer/package-lock.json` to identify the graph actually exercised.
+
+The probe confirms the responding install/data root before any mutation. It
+creates a synthetic empty flow, checks its backup contains the expected record,
+changes the flow, rejects an archive missing required metadata without changing
+the record, restores the valid archive, and compares id/name/nodes/edges. Response
+bytes, archives, logs, lockfile and SHA-256 receipts remain in the printed
+`flujo-maintainer-installed-*` directory, including on failure. The receipt binds
+the tool's clean Git SHA separately from the declared artifact source SHA.
+
+Cleanup targets only processes launched by the probe. On Windows it forcibly
+stops the owned process tree; on other platforms it signals the owned process
+group. It records launcher exit and checks that the selected loopback port closed.
+These observations do not prove graceful cleanup or every descendant's generation;
+Production #547 supplies that contract. Preserve failed cleanup as failed evidence.
+
+`passed-baseline-probe` proves this synthetic installed baseline scope. It does
+not complete the candidate upgrade, fresh-root recovery, security/access tabletop,
+independent human operation or elapsed continuity requirements below. Every receipt
+keeps those gates pending; the source-bundle verifier above does not validate this
+different receipt kind. Checksums establish consistency, not trusted signatures.
+
 ## Human operator / observer exercise
 
 A consenting independent human uses the guide on their own disposable machine
