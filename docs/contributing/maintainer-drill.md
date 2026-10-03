@@ -139,6 +139,40 @@ independent human operation or elapsed continuity requirements below. Every rece
 keeps those gates pending; the source-bundle verifier above does not validate this
 different receipt kind. Checksums establish consistency, not trusted signatures.
 
+## Fresh-root recovery and restart
+
+This command includes the baseline probe above, then starts that same installed
+artifact with another newly created data/home/temp/tool root. It takes the same
+independently obtained version/integrity/source pin arguments:
+
+```sh
+node --test scripts/maintainer-installed-recovery.test.mjs
+node scripts/maintainer-installed-recovery.mjs --version=3.46.2 --integrity=sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ== --source-revision=320347356891aa1c24e0f2f9ce12719317e58bde
+```
+
+It accepts no existing data-root argument. The new recovery directory must not
+already exist. The baseline must pass with the same clean tool revision; backup
+and original-record bytes must match its receipt before any recovery process starts.
+Readiness checks the responding install and new data root before mutation.
+
+The fresh root must return 404 for the synthetic flow. A missing-metadata archive
+must return 400 and leave it absent. The valid backup must restore the expected
+id/name/nodes/edges, and a second backup must contain those same stable fields.
+The command stops its owned launcher, records closed loopback port, restarts with
+that recovery root, and verifies the record remains readable and unchanged.
+
+`fresh-recovery/receipt.json`, raw response bytes, input/re-exported archives,
+original/restored/restarted records and both launches' logs remain beneath the
+baseline directory. The receipt links the baseline receipt and archive digests,
+records response timings and each launcher/port observation, and fails on source
+changes, recovery mismatch or cleanup failure. Preserve the complete parent bundle.
+
+`passed-fresh-recovery` establishes this automated synthetic baseline recovery
+and restart scope. The same artifact is used at both stages: **no version upgrade
+is claimed**. Qualified integrated-candidate upgrade, broader workflow/conversation/
+configuration/Persona recovery, schedules/effects, human operation, signature and
+access evidence remain separate gates. Do not substitute this result for them.
+
 ## Human operator / observer exercise
 
 A consenting independent human uses the guide on their own disposable machine
