@@ -82,6 +82,8 @@ test('serial fixed commands retain revision, raw checksums and explicit human/re
     assert.equal(command, process.execPath); assert.equal(options.cwd, root);
     assert.equal(options.shell, undefined);
     if (args[0] === '--test') return { status: 0, stdout: tap, stderr: '' };
+    assert.ok(args.includes('--testMatch=**/__tests__/**/*.test.ts'));
+    assert.ok(args.includes('--runTestsByPath'));
     const file = args.find(arg => arg.startsWith('--outputFile=')).slice('--outputFile='.length);
     writeFileSync(file, JSON.stringify(recovery(root)));
     return { status: 0, stdout: '', stderr: 'fixture diagnostics' };

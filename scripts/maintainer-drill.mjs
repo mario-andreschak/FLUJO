@@ -82,7 +82,7 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
   const receipt = {
     schemaVersion: 1, kind: 'automated-source-rehearsal', revision, version,
     startedAt: new Date().toISOString(), platform: process.platform, arch: process.arch, node: process.version,
-    sourceCleanBefore: true, sourceCleanAfter: false, result: 'failed', gates: [],
+    sourceCleanBefore: true, sourceCleanAfter: null, result: 'failed', gates: [],
     pending: ['independent-human-review', 'human-operated-drill', 'private-triage-tabletop',
       'installed-artifact-release-upgrade-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
   };
@@ -113,6 +113,10 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
     } else {
       const resultsPath = path.join(directory, 'recovery-results.json');
       gate('recovery-fixtures', ['scripts/run-local-jest.cjs', '--selectProjects', 'node', '--runInBand',
+        // Root-relative matching avoids Jest's Windows escaping of dotted absolute
+        // checkout paths (for example .codex). runTestsByPath still selects only
+        // these exact files, and evaluateRecovery independently verifies them.
+        '--testMatch=**/__tests__/**/*.test.ts',
         '--json', `--outputFile=${resultsPath}`, '--runTestsByPath', ...RECOVERY_SUITES], () => {
         const bytes = readFileSync(resultsPath);
         receipt.recoveryResults = { path: 'recovery-results.json', sha256: digest(bytes), bytes: bytes.length };
@@ -120,6 +124,7 @@ export function runDrill({ root, releaseOnly = false, run = spawnSync }) {
       });
     }
     if (git(['rev-parse', 'HEAD']) !== revision || git(['status', '--porcelain', '--untracked-files=normal'])) {
+      receipt.sourceCleanAfter = false;
       throw new Error('Source changed during the drill; do not reuse this evidence.');
     }
     receipt.sourceCleanAfter = true;

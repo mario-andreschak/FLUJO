@@ -44,6 +44,12 @@ nonzero exits or incomplete assertions fail and retain diagnostics. Each gate ha
 a five-minute timeout; it stops at the first failure. This is a small targeted
 check, not the full release verification matrix.
 
+Recovery selection uses a root-relative `testMatch` plus the four exact file
+paths. This avoids Jest's Windows glob escaping of dotted absolute checkout
+paths such as `.codex`; the receipt independently requires those same four suites.
+On a gate failure `sourceCleanAfter: null` means the final source check was not
+reached, rather than claiming the source was dirty.
+
 For dependency diagnosis only:
 
 ```sh

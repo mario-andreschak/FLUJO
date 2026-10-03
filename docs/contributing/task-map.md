@@ -21,7 +21,7 @@ Read the [architecture overview](../architecture/README.md) and decision records
 Run a listed Jest file directly, avoiding npm/PowerShell argument forwarding:
 
 ```sh
-node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/workspace/pathSafety.test.ts
+node scripts/run-local-jest.cjs --selectProjects node --runInBand '--testMatch=**/__tests__/**/*.test.ts' --runTestsByPath __tests__/workspace/pathSafety.test.ts
 ```
 
 For a React component's matching suite use `--selectProjects jsdom` instead.
@@ -31,7 +31,7 @@ promise that all tests within an entire directory are a cheap check.
 The serial recovery recipe is:
 
 ```sh
-node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/settings/backupRestoreLinkSafety.test.ts __tests__/settings/backupRestoreRoutes.test.ts __tests__/workspace/snapshotArchive.test.ts __tests__/workspace/snapshotRestore.test.ts
+node scripts/run-local-jest.cjs --selectProjects node --runInBand '--testMatch=**/__tests__/**/*.test.ts' --runTestsByPath __tests__/settings/backupRestoreLinkSafety.test.ts __tests__/settings/backupRestoreRoutes.test.ts __tests__/workspace/snapshotArchive.test.ts __tests__/workspace/snapshotRestore.test.ts
 ```
 
 These exercise real archive/restore logic with synthetic files and mocked service
