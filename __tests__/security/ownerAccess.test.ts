@@ -18,7 +18,7 @@ describe('owner credentials at real proxy and handler admission', () => {
   let token: string;
   let policy: OwnerPolicy;
   const saved = Object.fromEntries([
-    'FLUJO_OWNER_AUTH_FILE', 'FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_EXPOSURE_MODE',
+    'FLUJO_OWNER_AUTH_FILE', 'FLUJO_WORKER_MODE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_EXPOSURE_MODE', 'FLUJO_AVATAR_REMOTE_ORIGIN',
   ].map(key => [key, process.env[key]]));
 
   beforeEach(() => {
@@ -148,6 +148,33 @@ describe('owner credentials at real proxy and handler admission', () => {
     persist();
     expect(proxy(request('/api/env', owner.token, { origin: 'http://attacker.invalid' })).status).toBe(403);
     expect(proxy(request('/v1/models', token, { host: 'attacker.invalid' })).status).toBe(403);
+  });
+  it('admits only private remote voice with explicit workspace authority and approved Origin', () => {
+    const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
+    policy.credentials.push(voice.record);
+    persist();
+    process.env.FLUJO_AVATAR_REMOTE_ORIGIN = 'https://private-bff.example';
+    const approved = { origin: 'https://private-bff.example' };
+    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST')).status).toBe(200);
+    expect(proxy(request('/api/avatar/remote/availability', voice.token, approved)).status).toBe(200);
+    expect(proxy(request('/api/avatar/remote/native-turn', null, approved, 'POST')).status).toBe(401);
+    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, {}, 'POST')).status).toBe(403);
+    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://attacker.invalid' }, 'POST')).status).toBe(403);
+    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { ...approved, host: 'attacker.invalid' }, 'POST')).status).toBe(403);
+    expect(proxy(request('/api/env', voice.token, approved)).status).toBe(403);
+    expect(proxy(request('/api/avatar/remote/native-turn-evil', voice.token, approved, 'POST')).status).toBe(403);
+    delete process.env.FLUJO_OWNER_AUTH_FILE;
+    expect(proxy(request('/api/avatar/remote/native-turn', voice.token, approved, 'POST')).status).toBe(503);
+  });
+  it('rejects absent or noncanonical BFF Origin configuration', () => {
+    const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
+    policy.credentials.push(voice.record);
+    persist();
+    for (const configured of [undefined, '', 'https://private-bff.example/path', 'https://private-bff.example/', 'file:///private', 'https://user:password@private-bff.example']) {
+      if (configured === undefined) delete process.env.FLUJO_AVATAR_REMOTE_ORIGIN;
+      else process.env.FLUJO_AVATAR_REMOTE_ORIGIN = configured;
+      expect(proxy(request('/api/avatar/remote/native-turn', voice.token, { origin: 'https://private-bff.example' }, 'POST')).status).toBe(503);
+    }
   });
   it.each(['/api/oauth/callback', '/api/registry/oauth/callback'])('keeps only existing exact callback exceptions for %s', route => {
     expect(proxy(request(route, null)).status).toBe(200);

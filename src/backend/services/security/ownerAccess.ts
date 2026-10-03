@@ -43,6 +43,25 @@ export function requiredOwnerScopes(request: Request): readonly OwnerScope[] {
   return ['control:admin', 'secrets:read'];
 }
 
+export function isRemoteAvatarVoiceRequest(request: Request): boolean {
+  const scopes = requiredOwnerScopes(request);
+  return scopes.length === 1 && scopes[0] === 'avatar:voice';
+}
+
+/** Repeat in the voice handler, including dual-capability worker deployments. */
+export function assertRemoteAvatarVoiceOrigin(request: Request): Response | null {
+  const configured = process.env.FLUJO_AVATAR_REMOTE_ORIGIN;
+  try {
+    if (!configured || new URL(configured).origin !== configured
+        || !['https:', 'http:'].includes(new URL(configured).protocol)) throw new Error('Invalid origin');
+  } catch {
+    return Response.json({ error: 'Remote voice origin is unavailable.', code: 'REMOTE_VOICE_ORIGIN_UNAVAILABLE' }, {
+      status: 503, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  return request.headers.get('origin') === configured ? null : forbidden();
+}
+
 function readOwnerPolicy(filename: string): OwnerPolicy {
   if (!path.isAbsolute(filename)) throw new Error('Invalid owner policy path');
   const fd = openSync(filename, 'r');

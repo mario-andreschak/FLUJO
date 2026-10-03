@@ -4,7 +4,9 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport } from '@/backend/execution/extensions';
-import { assertOwnerRequest } from '@/backend/services/security/ownerAccess';
+import {
+  assertOwnerRequest, resolveOwnerRequest, isRemoteAvatarVoiceRequest, assertRemoteAvatarVoiceOrigin,
+} from '@/backend/services/security/ownerAccess';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -81,6 +83,14 @@ export function proxy(request: NextRequest): NextResponse {
   if (ownerDenied) return new NextResponse(ownerDenied.body, {
     status: ownerDenied.status, headers: ownerDenied.headers,
   });
+
+  // The private BFF may differ from this host. Only exact voice routes with a
+  // strict workspace-bound voice principal and explicitly approved Origin pass.
+  if (isRemoteAvatarVoiceRequest(request)) {
+    const admitted = resolveOwnerRequest(request, ['avatar:voice']);
+    const denied = admitted.ok ? assertRemoteAvatarVoiceOrigin(request) : admitted.response;
+    return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
+  }
 
   // MCP routes retain their existing inline Origin guards outside worker mode.
   if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
