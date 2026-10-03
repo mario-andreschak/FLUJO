@@ -113,4 +113,83 @@ describe('avatar work uses the existing runtime', () => {
     expect(changed).toBe(false);
     expect(result.current.target).toMatchObject({ kind: 'persona', id: 'resident' });
   });
+  it.each([200, 409, 503])('handles steering during the pending completion without duplicate work (HTTP %s)', async status => {
+    let finish!: (value: unknown) => void;
+    const pendingResponse = new Promise(resolve => { finish = resolve; });
+    fetchMock.mockImplementation(async url => url.endsWith('/inject') ? { ok: status === 200, status } : pendingResponse);
+    jest.mocked(chatService.getConversation).mockResolvedValue(canonical('running'));
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    let original!: Promise<boolean>;
+    act(() => { original = result.current.send('Work'); });
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/v1/chat/completions')).toHaveLength(1));
+    let accepted = false;
+    await act(async () => { accepted = await result.current.send('Use the revised request'); });
+    expect(accepted).toBe(status === 200);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/inject'))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/v1/chat/completions')).toHaveLength(1);
+    jest.mocked(chatService.getConversation).mockResolvedValue(canonical());
+    finish({ ok: true, status: 200, json: async () => ({}) });
+    await act(async () => { await original; });
+  });
+  it('distinguishes accepted work failure from an undelivered request', async () => {
+    fetchMock.mockImplementation(async (_url, options) => {
+      const request = JSON.parse(options.body).messages[0];
+      jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical('error'), messages: [{ id: request.id, role: 'user', content: request.content, timestamp: 1 }] });
+      return { ok: false, status: 503, json: async () => ({ error: { message: 'Work failed after acceptance' } }) };
+    });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    let delivered = false;
+    await act(async () => { delivered = await result.current.send('Run once'); });
+    expect(delivered).toBe(true);
+    expect(result.current.phase).toBe('error');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('honors the durable tool-approval preference from the real conversation panel', async () => {
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical(), requireApproval: true });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await act(() => result.current.send('Use the tool'));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).metadata.requireApproval).toBe('true');
+  });
+  it('keeps a rejected steering draft after reload when the canonical run is still parked', async () => {
+    const { workspaceLocalStorageKey } = await import('@/frontend/utils/workspaceSelection');
+    window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:conversation'), 'parked');
+    jest.mocked(chatService.getConversation).mockResolvedValue({ ...canonical('awaiting_tool_approval'), id: 'parked' });
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await waitFor(() => expect(result.current.phase).toBe('waiting'));
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 409 });
+    let delivered = true;
+    await act(async () => { delivered = await result.current.send('Revised instruction'); });
+    expect(delivered).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/v1/chat/completions')).toHaveLength(0);
+    expect(result.current.phase).toBe('waiting');
+  });
+  it('clears the steering delivery notice when canonical work finishes', async () => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise(resolve => { finish = resolve; });
+    fetchMock.mockImplementation(async url => url.endsWith('/inject') ? { ok: true, status: 200 } : pending);
+    jest.mocked(chatService.getConversation).mockResolvedValue(canonical('running'));
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    let original!: Promise<boolean>;
+    act(() => { original = result.current.send('Work'); });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(() => result.current.send('Finish briefly'));
+    expect(result.current.activity).toContain('indicación');
+    jest.mocked(chatService.getConversation).mockResolvedValue(canonical());
+    finish({ ok: true, status: 200, json: async () => ({}) });
+    await act(async () => { await original; });
+    expect(result.current.activity).toBeNull();
+    expect(result.current.busy).toBe(false);
+  });
+  it('preserves a subscription approval pause across a running transcript refresh', async () => {
+    const { result } = renderHook(() => useAvatarWork({ modelId: 'chosen-brain', locale: 'es', context }));
+    await act(() => result.current.send('Work'));
+    const id = jest.mocked(chatService.createConversation).mock.calls[0][0].id;
+    jest.mocked(chatService.getConversation).mockResolvedValue(canonical('running'));
+    act(() => handlers.onEvent({ type: 'run:awaiting_approval', seq: 1, timestamp: 1, conversationId: id, pendingToolCalls: [] }));
+    await act(async () => { handlers.onEvent({ type: 'message', seq: 2, timestamp: 2, conversationId: id, message: { id: 'tool', timestamp: 1, role: 'assistant', content: '' } }); });
+    expect(result.current.phase).toBe('waiting');
+    expect(result.current.busy).toBe(true);
+    act(() => handlers.onEvent({ type: 'model:start', seq: 3, timestamp: 3, conversationId: id, modelId: 'brain' }));
+    expect(result.current.phase).toBe('thinking');
+  });
 });

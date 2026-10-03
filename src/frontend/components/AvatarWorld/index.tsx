@@ -102,7 +102,8 @@ export default function AvatarWorld() {
       else setSetup(true);
       return;
     }
-    setDraft(''); await work.send(text);
+    setDraft('');
+    if (!await work.send(text)) setDraft(current => current || text);
   };
   const objects = snapshot?.objects.filter(object => object.kind === (place ? PLACE_KINDS[place] : null)) ?? [];
   const labels: Record<WorldPlace, string> = { models: c.springs, apps: c.harbor, flows: c.workshop, personas: c.residents, automations: c.routines, meetings: c.gathering, packages: c.market, archive: c.archive, settings: c.control };

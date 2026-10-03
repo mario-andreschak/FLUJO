@@ -33,6 +33,8 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
   const [activity, setActivity] = useState<string | null>(null);
   const idRef = useRef<string | null>(null);
   const sending = useRef(false);
+  const injecting = useRef(false);
+  const awaitingControl = useRef(false);
   const seq = useRef(0);
   const stream = useRef<EventSource | null>(null);
   const contextRef = useRef(context); contextRef.current = context;
@@ -57,8 +59,10 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
     }));
     const pending = ['running', 'awaiting_tool_approval', 'paused_debug'].includes(canonical.status ?? '');
     setBusy(pending);
-    setPhase(canonical.status === 'running' ? 'thinking' : canonical.status === 'awaiting_tool_approval' || canonical.status === 'paused_debug' ? 'waiting' : canonical.status === 'error' ? 'error' : 'idle');
+    if (!pending) { setActivity(null); awaitingControl.current = false; }
+    setPhase(canonical.status === 'running' ? awaitingControl.current ? 'waiting' : 'thinking' : canonical.status === 'awaiting_tool_approval' || canonical.status === 'paused_debug' ? 'waiting' : canonical.status === 'error' ? 'error' : 'idle');
     if (canonical.lastError) setError(canonical.lastError.message);
+    return canonical;
   }, []);
   const attach = useCallback((id: string) => {
     stream.current?.close(); seq.current = 0;
@@ -68,11 +72,15 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
       if (event.seq <= seq.current) return;
       seq.current = event.seq;
       if (event.depth && event.depth > 0) return;
-      if (event.type === 'run:start' || event.type === 'model:start') { setBusy(true); setPhase('thinking'); }
+      if (event.type === 'run:start' || event.type === 'model:start') { awaitingControl.current = false; setBusy(true); setPhase('thinking'); }
       if (event.type === 'tool:call') { setPhase('usingApp'); setActivity(event.name); }
-      if (event.type === 'tool:result') { setPhase(event.isError ? 'error' : 'thinking'); setActivity(null); }
-      if (['run:awaiting_approval', 'run:awaiting_elicitation', 'run:awaiting_question', 'run:paused'].includes(event.type)) setPhase('waiting');
+      if (event.type === 'tool:result') { awaitingControl.current = false; setPhase(event.isError ? 'error' : 'thinking'); setActivity(null); }
+      // Subscription adapters keep the HTTP run open while awaiting approval.
+      // Their canonical status stays running; a later transcript refresh must
+      // preserve the live control event until work actually resumes or ends.
+      if (['run:awaiting_approval', 'run:awaiting_elicitation', 'run:awaiting_question', 'run:paused'].includes(event.type)) { awaitingControl.current = true; setActivity(null); setPhase('waiting'); }
       if (event.type === 'error') { setPhase('error'); }
+      if (event.type === 'run:done') awaitingControl.current = false;
       if (event.type === 'run:done' || event.type === 'message') void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
     }, onError() { void refresh(id).catch(() => setError(worldCopy(locale).unavailable)); } }, 0, { activityOnly: true });
   }, [refresh, locale]);
@@ -110,8 +118,22 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
     return id;
   };
   const send = async (request: string) => {
-    if (!request.trim() || sending.current) return;
-    if (!idRef.current && targetRef.current.kind === 'guide' && !modelId) { setError(worldCopy(locale).noWork); return; }
+    if (!request.trim()) return false;
+    if (injecting.current) { setError(worldCopy(locale).steerNotReady); return false; }
+    // A non-streaming completion stays pending while work runs. Steering has
+    // its own delivery lock and never starts a second completion on rejection.
+    if (sending.current) {
+      const id = idRef.current;
+      if (!id) { setError(worldCopy(locale).steerNotReady); return false; }
+      injecting.current = true; setError(null);
+      try {
+        const response = await fetch(`/v1/chat/conversations/${encodeURIComponent(id)}/inject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: request, id: crypto.randomUUID() }) });
+        if (!response.ok) throw new Error(worldCopy(locale)[response.status === 409 ? 'steerNotReady' : 'uncertain']);
+        await refresh(id); setActivity(worldCopy(locale).steer); return true;
+      } catch (err) { setError(err instanceof Error ? err.message : worldCopy(locale).uncertain); return false; }
+      finally { injecting.current = false; }
+    }
+    if (!idRef.current && targetRef.current.kind === 'guide' && !modelId) { setError(worldCopy(locale).noWork); return false; }
     sending.current = true; setError(null);
     if (!idRef.current) { setBusy(true); setPhase('thinking'); }
     const userId = crypto.randomUUID();
@@ -119,18 +141,21 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
       const id = await ensureConversation();
       if (busy) {
         const injection = await fetch(`/v1/chat/conversations/${encodeURIComponent(id)}/inject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: request, id: userId }) });
-        if (injection.ok) { await refresh(id); setActivity(worldCopy(locale).steer); return; }
+        if (injection.ok) { await refresh(id); setActivity(worldCopy(locale).steer); return true; }
         if (injection.status !== 409) throw new Error(worldCopy(locale).uncertain);
-        await refresh(id);
+        const latest = await refresh(id);
+        if (!latest || ['running', 'awaiting_tool_approval', 'paused_debug'].includes(latest.status ?? '')) {
+          setError(worldCopy(locale).steerNotReady); return false;
+        }
       }
       const page = await contextRef.current();
       const ownedConversation = await chatService.getConversation(id);
-      setBusy(true); setPhase('thinking');
+      setBusy(true); setPhase('thinking'); setActivity(null);
       setMessages(current => [...current, { id: userId, role: 'user', text: request }]);
       const response = await fetch('/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: ownedConversation.personaId ? 'flow-Persona' : 'flow-Flujo world', messages: [{ id: userId, role: 'user', content: `<current-page-context encoding="json">\n${JSON.stringify(page)}\n</current-page-context>\n<user-request>\n${request}\n</user-request>` }], stream: false,
-          metadata: { flujo: 'true', conversationId: id, appendMessages: 'true', ...personaChatRoutingMetadata(ownedConversation) } }),
+          metadata: { flujo: 'true', conversationId: id, appendMessages: 'true', ...(ownedConversation.requireApproval ? { requireApproval: 'true' } : {}), ...personaChatRoutingMetadata(ownedConversation) } }),
       });
       const result = await response.json().catch(() => null);
       if (!response.ok) throw new Error(result?.error?.message || (typeof result?.error === 'string' ? result.error : `Flujo (${response.status})`));
@@ -139,11 +164,21 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
       const index = canonical.messages.findIndex(m => m.id === userId);
       const actions = extractAskFlujoToolActions(canonical.messages.slice(Math.max(0, index))).concat(parseAskFlujoResponse(messageText(canonical.messages.at(-1)?.content)).actions);
       if (actions.length) setMessages(current => current.map((m, i) => i === current.length - 1 && m.role === 'assistant' ? { ...m, scopeId: page.scopeId, actions } : m));
-    } catch (err) { setError(err instanceof Error ? err.message : worldCopy(locale).unavailable); if (idRef.current) await refresh(idRef.current).catch(() => {}); else { setBusy(false); setPhase('error'); } }
+      return true;
+    } catch (err) {
+      setError(err instanceof TypeError ? worldCopy(locale).uncertain : err instanceof Error ? err.message : worldCopy(locale).unavailable);
+      if (idRef.current) {
+        const canonical = await refresh(idRef.current).catch(() => undefined);
+        // An accepted request can fail during work. Retain its canonical
+        // conversation; don't present it as an unsent draft to run again.
+        return canonical?.messages.some(message => message.id === userId) ?? false;
+      }
+      setBusy(false); setPhase('error'); return false;
+    }
     finally { sending.current = false; }
   };
   return { conversation, target, messages, phase, busy, error, activity, send,
     stop: async () => { if (idRef.current) { await chatService.cancel(idRef.current); await refresh(idRef.current); } },
-    newChat: (next: AvatarWorkTarget = targetRef.current) => { if (busy || sending.current) return false; stream.current?.close(); idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation')); targetRef.current = next; setTarget(next); setConversation(null); setMessages([]); setPhase('idle'); setError(null); setActivity(null); return true; },
+    newChat: (next: AvatarWorkTarget = targetRef.current) => { if (busy || sending.current || injecting.current) return false; stream.current?.close(); idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation')); targetRef.current = next; setTarget(next); setConversation(null); setMessages([]); setPhase('idle'); setError(null); setActivity(null); return true; },
   };
 }
