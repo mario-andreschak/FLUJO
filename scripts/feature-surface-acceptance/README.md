@@ -56,6 +56,61 @@ in-memory SDK test, an installer that fetches unpatched `main`, or a successful
 build is not an installed-candidate UI pass. Use the agreed #564 ledger format;
 this checklist does not replace that evidence profile.
 
+## Automated browser runner
+
+`playwright.features.config.mjs` runs two Chromium cases at each of 1280×720
+and 360×800. The cases exercise keyboard access to all 128 tools, explicit
+argument dispatch, invalid JSON, delayed/failed/cyclic refresh, retained DOM
+nodes and a real MCP App iframe, authoritative empty discovery, switching to
+a second SSE entry, and the seven rendered guide/selector languages. The
+fixture advertises its MCP Apps extension during initialization. This runner
+does not build the candidate or supply a model; it cannot complete a real
+provider agent journey.
+
+The coordinator must first select a compiled **native Node production**
+candidate containing #585, #589, #594 and #605 and their integration
+dependencies. Use a candidate without `.env`, `.env.local`, `.env.production`
+or `.env.production.local`. The runner refuses those files before starting a
+process. It starts its own loopback Next process and synthetic fixture with a
+new temporary `FLUJO_DATA_DIR`, strips inherited provider/owner/worker settings,
+and seeds only the two fixture server entries. Existing listeners and profiles
+are never attached. Its private IPC handshake must establish child ownership
+before any candidate API request. Apps are explicitly enabled on the seeded
+servers; the profile uses the default visible launch behavior.
+
+```powershell
+node --test --test-concurrency=1 scripts/feature-surface-acceptance/fixture-server.test.mjs scripts/feature-surface-acceptance/browser-environment.test.mjs
+node node_modules/@playwright/test/cli.js test --config=playwright.features.config.mjs --list
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/coordinator-selected/compiled-candidate'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'exact-source-sha-recorded-by-the-coordinator'
+node node_modules/@playwright/test/cli.js test --config=playwright.features.config.mjs
+```
+
+The first command checks protocols, metadata/environment guards and owned
+synthetic-process cleanup. The second only enumerates four planned browser
+cases. Neither command is a browser pass. Run the last command only when the
+coordinator's resource slot permits the Next and Chromium processes, using
+the installed Playwright Chromium version. The source SHA environment variable
+is a declaration, not a source/artifact correspondence proof.
+
+Retain `feature-browser-artifacts/report.json`, `test-results/features/` and
+the temporary data directory printed in each environment attachment. That
+directory preserves the application log, fixture receipts and initial/final
+process records. Cleanup targets only the owned child and fixture; a forced
+stop is recorded as a failure even if its exit is observed. Profiles are
+retained for review. JSON reports attach completed steps, actual call counters,
+argument digests, App mount identity and language observations; failure traces
+and screenshots remain available. Metadata inspection deliberately labels
+source correspondence **not verified** and installed acceptance **not evaluated**.
+
+Docker/installer execution, artifact provenance, install/upgrade/restart,
+stdio through the candidate, private/shared and consent-policy variants, real
+providers, 200% browser zoom, screen-reader and human reviews, the remaining
+feature matrix and independent reassessment still require their own evidence.
+Rendered translations are an automated availability check, not linguistic
+review. A passing browser report supports only its stated anonymous loopback
+profile and observed cases.
+
 For each step retain observed result, relevant logs/receipt and screenshot or
 recording. Record failures and blocked cases explicitly. Browser checks,
 assistive-technology checks and human trials remain separate from these Node
