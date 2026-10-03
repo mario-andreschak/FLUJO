@@ -1,3 +1,5 @@
 # Shell scripts must keep LF endings even on Windows checkouts (autocrlf=true),
 # or bash rejects them with "\r: command not found".
 *.sh text eol=lf
+src/vendor/avatar/** text eol=lf
+public/avatar-audio-capture.js text eol=lf

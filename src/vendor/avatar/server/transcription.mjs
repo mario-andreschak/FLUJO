@@ -56,4 +56,3 @@ export async function transcribe(payload, config, fetchImpl, signal) {
   if (typeof result.text !== 'string' || result.text.length > 8000) throw new PublicError(502, 'invalid_upstream_response', 'The transcription service returned an invalid response.');
   return { text: result.text.trim() };
 }
-
