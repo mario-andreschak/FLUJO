@@ -24,7 +24,7 @@ The cohort freezes at the declared `startedAt`. Late joiners, maintainers, autom
 
 Record each user's OS, install method, provider/transport prerequisites and accepted spend/effect limits in a **private operator packet**, separate from contact details and this schema. Obtain permission before provider charges or external effects. Start with a local single-owner installation; shared/public profiles and unattended Persona claims require their own gates. Do not turn the pilot into an unapproved deployment or endurance run.
 
-The rubric agreement receipt must retain the exact targets, timing definition, independence criteria, cohort selection, start time, three workflow definitions, severe-failure definition, publication threshold, retention/deletion policy and accountable human owner. Store its SHA-256 in `rubric.agreementSha256`. The hash is a reference to evidence, not a signature or agreement by itself.
+The rubric agreement receipt must retain the exact targets, timing definition, independence criteria, cohort selection, start time, three workflow definitions, severe-failure definition, publication threshold, retention/deletion policy and accountable human owner. Store its SHA-256 in `rubric.agreementSha256` and its actual UTC agreement time in `rubric.agreedAt`. The validator rejects agreement after enrollment or the observation window starts. The hash and timestamp are references to evidence, not a signature or agreement by themselves.
 
 ## Collect and report offline
 

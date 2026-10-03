@@ -22,6 +22,7 @@ function fixture() {
   data.evidenceMode = 'synthetic-fixture';
   data.rubric.status = 'agreed';
   data.rubric.agreementSha256 = hash(100);
+  data.rubric.agreedAt = time(-DAY);
   data.startedAt = time(0);
   data.artifacts = [{ id: 'a001', kind: 'npm', version: '3.46.2', sourceCommit: 'a'.repeat(40), sha256: hash(101) }];
   data.workflows = [1, 2, 3].map(i => ({ id: `w00${i}`, purpose: 'normal-workflow', protocolSha256: hash(i) }));
@@ -277,6 +278,24 @@ test('an agreed but unobserved cohort cannot clear the failure-confirmation gate
   assert.equal(report(data).gates.severeFailuresConfirmed, 'pending-evidence');
 });
 
+test('agreement must precede enrollment and measurement rather than being added after a successful study', () => {
+  const data = fixture();
+  data.evidenceMode = 'human-observations';
+  data.rubric.agreedAt = time(1000);
+  assert.throws(() => report(data), /agreement must precede the pilot observation window/);
+  data.rubric.agreedAt = time(0);
+  data.participants[0].enrolledAt = time(-1000);
+  data.participants[0].consent.collectedAt = time(-1000);
+  assert.throws(() => report(data), /agreement must precede enrollment/);
+  data.rubric.agreedAt = time(-DAY);
+  const result = report(data);
+  assert.equal(result.agreedAt, time(-DAY));
+  assert.equal(result.agreementSha256, hash(100));
+  assert.ok(!JSON.stringify(publicSummary(data, result)).includes(hash(100)));
+  data.rubric.agreedAt = null;
+  assert.throws(() => report(data), /actual agreement timestamp/);
+});
+
 test('unknown fields are rejected without printing their names or contents', () => {
   const data = fixture();
   data.participants[0]['secret-key-name'] = 'secret-value';
@@ -293,7 +312,7 @@ test('references, uniqueness, consent, dates and pre-enrollment agreement are en
     [d => { d.participants[0].consent.collection = false; }, /affirmative protocol consent/],
     [d => { d.journeys[0].startedAt = '2026-02-30T00:00:00.000Z'; }, /real UTC/],
     [d => { d.weeks[0].reportedAt = time(DAY); }, /completed week/],
-    [d => { d.evidenceMode = 'human-observations'; d.rubric.status = 'proposed'; }, /agree the rubric/],
+    [d => { d.evidenceMode = 'human-observations'; d.rubric.status = 'proposed'; d.rubric.agreedAt = null; }, /agree the rubric/],
     [d => { d.journeys[0].provisioningSeconds = 901; }, /integer/],
   ];
   for (const [mutate, message] of mutations) {

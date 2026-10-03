@@ -17,7 +17,7 @@ export function emptyPilot() {
     schemaVersion: 1,
     protocolVersion: 'pilot-v1',
     evidenceMode: 'human-observations',
-    rubric: { status: 'proposed', agreementSha256: null, targets: {
+    rubric: { status: 'proposed', agreementSha256: null, agreedAt: null, targets: {
       users: 10, weeks: 8, workflows: 3, novices: 10, noviceSuccessRate: 0.8, firstRunSeconds: 900,
     } },
     startedAt: null,
@@ -84,9 +84,13 @@ export function validatePilot(data, asOf, now = Date.now()) {
     'artifacts', 'workflows', 'participants', 'journeys', 'controls', 'weeks', 'feedback'], 'pilot');
   requireValue(data.schemaVersion === 1 && data.protocolVersion === 'pilot-v1', 'pilot', 'unsupported protocol');
   choice(data.evidenceMode, ['human-observations', 'synthetic-fixture'], 'pilot.evidenceMode');
-  object(data.rubric, ['status', 'agreementSha256', 'targets'], 'rubric');
+  object(data.rubric, ['status', 'agreementSha256', 'agreedAt', 'targets'], 'rubric');
   choice(data.rubric.status, ['proposed', 'agreed'], 'rubric.status');
   digest(data.rubric.agreementSha256, SHA, 'rubric.agreementSha256', data.rubric.status === 'proposed');
+  const agreed = timestamp(data.rubric.agreedAt, 'rubric.agreedAt', true);
+  requireValue((data.rubric.status === 'agreed') === (agreed !== null),
+    'rubric.agreedAt', 'agreement status requires its actual agreement timestamp');
+  requireValue(agreed === null || agreed <= cutoff, 'rubric.agreedAt', 'agreement is after the report cutoff');
   object(data.rubric.targets, ['users', 'weeks', 'workflows', 'novices', 'noviceSuccessRate', 'firstRunSeconds'], 'targets');
   const targets = data.rubric.targets;
   for (const field of ['users', 'novices']) integer(targets[field], 1, 100, `targets.${field}`);
@@ -97,6 +101,8 @@ export function validatePilot(data, asOf, now = Date.now()) {
     targets.noviceSuccessRate <= 1, 'targets.noviceSuccessRate', 'expected a rate greater than zero and at most one');
   const start = timestamp(data.startedAt, 'startedAt', true);
   requireValue(start === null || start <= cutoff, 'startedAt', 'pilot start is after the report cutoff');
+  requireValue(start === null || agreed === null || agreed <= start,
+    'rubric.agreedAt', 'agreement must precede the pilot observation window');
   for (const [field, max] of Object.entries({ artifacts: 100, workflows: 20, participants: 100,
     journeys: 100, controls: 1000, weeks: 5200, feedback: 1000 })) array(data[field], max, field);
   requireValue(start !== null || data.participants.length + data.journeys.length + data.controls.length +
@@ -131,6 +137,7 @@ export function validatePilot(data, asOf, now = Date.now()) {
     boolean(participant.novice, `${path}.novice`);
     const enrolled = timestamp(participant.enrolledAt, `${path}.enrolledAt`);
     requireValue(enrolled <= cutoff, path, 'enrollment is after the cutoff');
+    requireValue(agreed === null || agreed <= enrolled, path, 'agreement must precede enrollment');
     object(participant.consent, ['version', 'collectedAt', 'collection', 'publication', 'withdrawnAt'], `${path}.consent`);
     requireValue(participant.consent.version === 'pilot-v1' && participant.consent.collection === true,
       `${path}.consent`, 'affirmative protocol consent is required');
@@ -341,7 +348,8 @@ export function summarizePilot(data, asOf, now = Date.now()) {
     data.rubric.status !== 'agreed' ? 'pending-agreement' : condition ? 'recorded-target-met' : 'pending-evidence';
   return {
     schemaVersion: 1, protocolVersion: data.protocolVersion, evidenceMode: data.evidenceMode, asOf,
-    rubricStatus: data.rubric.status, targets, completeWeeks, artifacts: data.artifacts,
+    rubricStatus: data.rubric.status, agreedAt: data.rubric.agreedAt,
+    agreementSha256: data.rubric.agreementSha256, targets, completeWeeks, artifacts: data.artifacts,
     cohort: { enrolled: cohort.length, excluded: data.participants.length - cohort.length,
       withdrawn: cohort.filter(p => p.consent.withdrawnAt !== null).length, retainedThroughCompleteWeeks: retained },
     weekly,

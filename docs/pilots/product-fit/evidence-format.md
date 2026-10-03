@@ -21,7 +21,7 @@ Create the empty root with `cli.mjs init`. Keep populated input, raw receipts, c
 | `weeks` | At most 5,200 participant-week records; one per participant/week |
 | `feedback` | At most 1,000 feedback records |
 
-`rubric` has `status` (`proposed` or `agreed`), `agreementSha256` (64 lowercase hexadecimal characters, nullable only while proposed) and `targets`. Real enrollment requires an agreed rubric and a declared start. Use a private receipt for the maintainer/reviewer agreement; do not mark an agreement from a hash of an unsigned draft.
+`rubric` has `status` (`proposed` or `agreed`), `agreementSha256` (64 lowercase hexadecimal characters, nullable only while proposed), `agreedAt` (actual UTC agreement timestamp when agreed, otherwise null) and `targets`. Real enrollment requires an agreed rubric and a declared start. Agreement must occur on or before every enrollment and the declared observation window, not be added after measurement. Use a private receipt for the maintainer/reviewer agreement; do not mark an agreement from a hash of an unsigned draft. The private report retains both the timestamp and receipt digest; neither is disclosed in the public export.
 
 `targets` has `users` (1–100, proposed 10), `weeks` (2–52, proposed 8), `workflows` (1–20, proposed 3), `novices` (1–100, proposed 10), `noviceSuccessRate` (greater than 0 and at most 1, proposed 0.8) and `firstRunSeconds` (1–86,400, proposed 900). Preserve every earlier report if targets change; a changed contract needs new agreement and cannot silently reclassify a failed pilot.
 
