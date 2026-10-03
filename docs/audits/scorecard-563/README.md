@@ -23,6 +23,10 @@ experimental only with explicit independent acceptance and visible limits.
 - [source observation](evidence/source-observation-2026-10-03.json) retains exact
   main-source blob hashes and excerpts for the existing #520 fixes and the
   still-unintegrated #517 tool-refresh/prefill behavior.
+- [draft proposal snapshot](evidence/proposals-2026-10-03.json) retains exact
+  PR #579–#587 head/base SHAs and public descriptions at its capture time.
+- [fresh dependency audit](evidence/npm-audit-2026-10-03.json) retains the
+  failed current lockfile observation, separately from September's clean audit.
 - [historical failed soak](evidence/2026-09-16-persona-soak.json) is a byte-preserved
   copy of the existing public audit payload. Evidence-directory attributes disable
   Git line-ending conversion so hashes identify the same bytes on Windows and Unix.
@@ -63,6 +67,22 @@ npm reports the 3.46.2 package's SHA-512 integrity and provenance URL, with no
 `gitHead` in the captured response. GitHub reports the Windows installer's SHA-256.
 Package and installer contents were not installed or checked against compiled source.
 No immutable container image digest was captured. These remain distinct ledger entries.
+
+At the later 22:06 UTC capture on October 3, PR #579–#587 were unmerged drafts.
+Their exact head pins are source proposals, not shipped behavior or independently
+verified test results. #517/#526 have the #585 proposal, and #547 has #580;
+their issue-reconciliation entries retain the previous baseline and remaining
+installed acceptance. Captures are immutable historical observations: a later
+push or integration needs another evidence entry rather than relabeling these pins.
+
+The new lockfile audit returned exit 1 with 10 affected packages: 8 high,
+1 critical and 1 moderate. It ran at Docs PR revision
+`21e946e1e6b1114816d5c232ca3768bd06bcca31`; the lockfile Git blob SHA-256
+`9201a840c73f7dfcf2e55d9e31fa1107857084e4783ce9fa5dd829c66bb40d58`
+is identical to planning main `3511ba4`. Affected-package counts are not
+unique advisory counts or an independent threat-model severity assessment.
+The failed dependency gate stays visible while the coordinator owns a separate
+remediation PR. Historical clean results cannot qualify current dependencies.
 
 The September 16 offline failure stays checksummed and attributed to its synthetic
 source snapshot: 560 completed Activities, 12/13 criteria passing, one append p95
@@ -116,9 +136,14 @@ is supplied; a dollar CLI argument is not monetary enforcement.
 ## Numeric contracts before measurement
 
 Every budget has an owner, status, metric/operator/limit/unit, denominator, observation
-window, declaration time and basis. Agreement evidence is required before changing
+window, declaration time and basis. Its structured observation contract specifies
+the real/virtual clock, minimum elapsed/simulated duration and minimum denominator.
+Agreement evidence is required before changing
 a proposal to agreed. Historical evidence remains under its original contract;
 capturing a contract today does not retroactively predeclare it for an older run.
+Passing acceptance must reconcile these bounds and retained agreement must predate
+measurement. Success-rate metrics retain an integer numerator and denominator;
+timeless labels or rounded percentages cannot stand in for counts.
 
 | Contract | Preserved or proposed target | Denominator/window |
 | --- | --- | --- |
@@ -145,6 +170,7 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    result, raw payload location/SHA-256, limits, metrics/positive denominators and real
    versus simulated windows. Local payloads must remain inside the repository, including
    resolved symlink targets. Use metadata-only external pointers for payloads not reverified.
+   Metrics require a nullable numerator; ratio evidence supplies actual integer counts.
 3. Record each npm/image/installer identity separately. Set verified-content only after
    retaining matching content hash, exact source correspondence and installed acceptance.
    Tags, API checksums or successful source builds alone leave content acceptance pending.

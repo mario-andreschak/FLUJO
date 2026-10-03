@@ -93,12 +93,12 @@ test('measured results reject false pass, zero denominator and postdeclared budg
   rejects(l => {
     const e = l.evidence[0];
     e.budgetIds = ['novice-success'];
-    e.metrics = [{ budgetId: 'novice-success', value: 8, denominator: 10 }];
+    e.metrics = [{ budgetId: 'novice-success', value: 8, denominator: 10, numerator: null }];
   }, /proposed budget cannot establish acceptance/);
   rejects(l => {
     const e = l.evidence[0];
     e.budgetIds = ['persona-peak-rss'];
-    e.metrics = [{ budgetId: 'persona-peak-rss', value: 1, denominator: 28 }];
+    e.metrics = [{ budgetId: 'persona-peak-rss', value: 1, denominator: 28, numerator: null }];
     e.window = { kind: 'elapsed', start: '2026-10-02T00:00:00Z', end: '2026-10-02T01:00:00Z', simulatedDays: null };
   }, /budget declared after measurement/);
 });
@@ -134,6 +134,42 @@ test('accepted claims require measured budgets and explicit profile coverage', (
     l.evidence[0].profileIds = ['persistent-worker'];
   }, /does not cover claimed profile/);
   rejects(l => { l.gates = l.gates.filter(g => g.id !== 'shared-profile'); }, /Required gate omitted/);
+});
+// Synthetic in-memory records test the contract; they are never published as human evidence.
+function observedBudget(ledger, budgetId, value, denominator) {
+  const agreement = structuredClone(ledger.evidence[0]);
+  Object.assign(agreement, { id: 'synthetic-agreement', kind: 'external-agreement', artifactId: null, observedAt: '2026-10-04T00:00:00Z', scope: 'Synthetic validator fixture only.' });
+  ledger.evidence.push(agreement);
+  const budget = ledger.budgets.find(b => b.id === budgetId);
+  budget.status = 'agreed';
+  budget.agreementEvidenceIds = [agreement.id];
+  const study = structuredClone(ledger.evidence[0]);
+  Object.assign(study, { id: 'synthetic-study', kind: budgetId.startsWith('live-') ? 'live-provider' : 'human-study', artifactId: null, observedAt: '2026-12-01T00:00:00Z', scope: 'Synthetic validator fixture only.', budgetIds: [budgetId], metrics: [{ budgetId, value, denominator, numerator: null }], window: { kind: 'elapsed', start: '2026-10-05T00:00:00Z', end: '2026-11-30T00:00:00Z', simulatedDays: null } });
+  ledger.evidence.push(study);
+  return { budget, agreement, study };
+}
+test('a complete predeclared eight-week observation validates without satisfying closure', () => {
+  const result = validate(l => { observedBudget(l, 'pilot-users', 10, 10); });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+});
+test('elapsed windows and cohort denominators cannot be silently reduced', () => {
+  rejects(l => { observedBudget(l, 'pilot-users', 10, 10).study.window.end = '2026-10-05T01:00:00Z'; }, /window too short/);
+  rejects(l => { observedBudget(l, 'novice-success', 8, 8); }, /denominator below declared minimum/);
+  rejects(l => { observedBudget(l, 'human-contributors', 3, 3); }, /window too short/);
+  rejects(l => { l.budgets.find(b => b.id === 'pilot-users').observation.minimumSeconds = 3600; }, /published human observation contract weakened/);
+  rejects(l => { l.budgets.find(b => b.id === 'persona-peak-rss').observation.minimumSimulatedDays = 27; }, /full 28-day workload changed/);
+});
+test('agreement must precede measurement, not just a claimed declaration timestamp', () => {
+  rejects(l => { observedBudget(l, 'pilot-users', 10, 10).agreement.observedAt = '2026-10-05T00:00:01Z'; }, /agreement occurred after measurement/);
+});
+test('live duration and success ratios reconcile with actual windows and integer counts', () => {
+  rejects(l => { observedBudget(l, 'live-seven-days', 604800, 100).study.window.end = '2026-10-05T01:00:00Z'; }, /duration metric exceeds actual elapsed|window too short/);
+  rejects(l => { observedBudget(l, 'live-success-rate', 0.99, 100); }, /ratio does not reconcile/);
+  rejects(l => { observedBudget(l, 'live-success-rate', 0.99, 100).study.metrics[0].numerator = 98; }, /ratio does not reconcile/);
+  const result = validate(l => { observedBudget(l, 'live-success-rate', 0.99, 100).study.metrics[0].numerator = 99; });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
 });
 test('CLI distinguishes valid incomplete ledger from closure readiness and malformed input', () => {
   const run = args => spawnSync(process.execPath, ['scripts/validate-scorecard.mjs', ...args], { cwd: root, encoding: 'utf8' });

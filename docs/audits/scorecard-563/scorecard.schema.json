@@ -490,7 +490,8 @@
         "window",
         "basis",
         "declaredAt",
-        "agreementEvidenceIds"
+        "agreementEvidenceIds",
+        "observation"
       ],
       "properties": {
         "id": {
@@ -554,6 +555,38 @@
             "minLength": 1
           },
           "minItems": 0
+        },
+        "observation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clock",
+            "minimumSeconds",
+            "minimumSimulatedDays",
+            "minimumDenominator"
+          ],
+          "properties": {
+            "clock": {
+              "type": "string",
+              "enum": [
+                "elapsed",
+                "simulated",
+                "any"
+              ]
+            },
+            "minimumSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minimumSimulatedDays": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minimumDenominator": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         }
       }
     },
@@ -848,7 +881,8 @@
             "required": [
               "budgetId",
               "value",
-              "denominator"
+              "denominator",
+              "numerator"
             ],
             "properties": {
               "budgetId": {
@@ -861,6 +895,17 @@
               "denominator": {
                 "type": "number",
                 "minimum": 1
+              },
+              "numerator": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           },
@@ -1119,7 +1164,8 @@
             "local-unintegrated",
             "design-open",
             "reported-automated-pass",
-            "manual-open"
+            "manual-open",
+            "source-proposal"
           ]
         },
         "releaseStatus": {

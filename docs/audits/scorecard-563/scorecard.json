@@ -429,7 +429,13 @@
       "window": "28 simulated days; no elapsed-time inference",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 28
+      }
     },
     {
       "id": "persona-peak-rss",
@@ -443,7 +449,13 @@
       "window": "Entire 28 x 20 simulated workload",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-rss-growth",
@@ -457,7 +469,13 @@
       "window": "28 simulated days",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-append-flatness",
@@ -471,7 +489,13 @@
       "window": "First seven versus last seven simulated days",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-total-collection",
@@ -485,7 +509,13 @@
       "window": "Every daily checkpoint",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-mailbox",
@@ -499,7 +529,13 @@
       "window": "Every daily checkpoint",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-activities",
@@ -513,7 +549,13 @@
       "window": "Every daily checkpoint",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-dispatches",
@@ -527,7 +569,13 @@
       "window": "Every daily checkpoint",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-pins",
@@ -541,7 +589,13 @@
       "window": "Every daily checkpoint",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-leases",
@@ -555,7 +609,13 @@
       "window": "After every guarded sweep",
       "basis": "docs/performance/persona-runtime-soak-acceptance.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "simulated",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 28,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "persona-recall-p95",
@@ -569,7 +629,13 @@
       "window": "One exact-revision controlled run",
       "basis": "docs/performance/persona-memory-recall-benchmark.md",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 20
+      }
     },
     {
       "id": "pilot-users",
@@ -583,7 +649,13 @@
       "window": "Eight consecutive elapsed weeks",
       "basis": "#563 published plan; #577 agreement pending",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 4838400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      }
     },
     {
       "id": "novice-success",
@@ -597,7 +669,13 @@
       "window": "One attempt per novice, within 15 minutes",
       "basis": "#563 published plan; #572/#577 agreement pending",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      }
     },
     {
       "id": "novice-time",
@@ -611,7 +689,13 @@
       "window": "Single 15-minute attempt",
       "basis": "#563 published plan; #572/#577 agreement pending",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      }
     },
     {
       "id": "backup-maintainers",
@@ -625,7 +709,13 @@
       "window": "After training; observed drills before acceptance",
       "basis": "#563 published plan; #576 agreement pending",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 2
+      }
     },
     {
       "id": "human-contributors",
@@ -639,7 +729,13 @@
       "window": "90 elapsed days",
       "basis": "#563 published plan; #576 agreement pending",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 7776000,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 3
+      }
     },
     {
       "id": "runtime-peak-rss",
@@ -653,7 +749,13 @@
       "window": "24 elapsed hours; measured admission/refusal plus original #520 reproduction",
       "basis": "#569 resource owner must ratify workload and admission budgets before measurement; not a current guarantee",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 24
+      }
     },
     {
       "id": "runtime-rss-growth",
@@ -667,7 +769,13 @@
       "window": "Hours 2 through 24",
       "basis": "#569 proposal; must distinguish GC/allocator high water and retained growth",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 24
+      }
     },
     {
       "id": "runtime-concurrency",
@@ -681,7 +789,13 @@
       "window": "24 elapsed hours",
       "basis": "#569 proposal; does not authorize silently reducing configured parallelism",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 86400,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 8
+      }
     },
     {
       "id": "recovery-rto",
@@ -695,7 +809,13 @@
       "window": "Twenty fault trials per profile",
       "basis": "#570/#553 owners must ratify; interrupted effects never blindly replay",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 20
+      }
     },
     {
       "id": "backup-rpo",
@@ -709,7 +829,13 @@
       "window": "Ten trials per OS/install profile",
       "basis": "#570/#567 proposal; coherent writer freeze required before capture",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 10
+      }
     },
     {
       "id": "duplicate-effects",
@@ -723,7 +849,13 @@
       "window": "All recovery trials and authorized live runs",
       "basis": "#570/#553/#578 proposal",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "unauthorized-access",
@@ -737,7 +869,13 @@
       "window": "One complete release matrix per profile",
       "basis": "#566-#568/#574-#575; security owner must sign coverage",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "high-findings",
@@ -751,7 +889,13 @@
       "window": "At final independent reassessment",
       "basis": "#563/#578",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "any",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-smoke",
@@ -765,7 +909,13 @@
       "window": "One elapsed hour, before longer live stages",
       "basis": "#578 proposal; no accounts or paid-run permission supplied",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 3600,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-seven-days",
@@ -779,7 +929,13 @@
       "window": "Seven consecutive elapsed days",
       "basis": "#578 proposal; enforceable account/model spend cap and owner authorization required",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 604800,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-28-days",
@@ -793,7 +949,13 @@
       "window": "28 consecutive elapsed days, if multi-week autonomy claimed",
       "basis": "#578; claim stays experimental until demonstrated",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 2419200,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-success-rate",
@@ -807,7 +969,13 @@
       "window": "Each authorized seven/28-day run",
       "basis": "#505/#578 proposal; requires useful output-quality assessment, not repeated no-op checks",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-interventions",
@@ -821,7 +989,13 @@
       "window": "Each claimed unattended live window",
       "basis": "#505/#578 proposal; human absence cannot be inferred from fixture automation",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     },
     {
       "id": "live-spend",
@@ -835,7 +1009,13 @@
       "window": "Per future authorized run",
       "basis": "#578; zero here records no paid-run authority, not a performance target",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
-      "agreementEvidenceIds": []
+      "agreementEvidenceIds": [],
+      "observation": {
+        "clock": "elapsed",
+        "minimumSeconds": 0,
+        "minimumSimulatedDays": 0,
+        "minimumDenominator": 1
+      }
     }
   ],
   "agreements": {
@@ -897,6 +1077,105 @@
       "provenance": "not-observed",
       "payloadSha256": null,
       "metadataEvidenceIds": []
+    },
+    {
+      "id": "source-docs-21e946e1",
+      "kind": "source",
+      "identity": "git:21e946e1e6b1114816d5c232ca3768bd06bcca31; PR #583 source proposal, unintegrated",
+      "sourceSha": "21e946e1e6b1114816d5c232ca3768bd06bcca31",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-579",
+      "kind": "source",
+      "identity": "PR #579; git:0468cbd2668256c39d8a43b88cd4b3ecdfac9fe9; codex/community-maintainer-drill; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "0468cbd2668256c39d8a43b88cd4b3ecdfac9fe9",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-580",
+      "kind": "source",
+      "identity": "PR #580; git:7e79d93ccadaf44ad1cb28376941e22357b4906a; codex/production-shutdown-receipts; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "7e79d93ccadaf44ad1cb28376941e22357b4906a",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-581",
+      "kind": "source",
+      "identity": "PR #581; git:a3acaea54e50054bc98dc33e421181b1af40a10a; codex/scorecard-code-health; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "a3acaea54e50054bc98dc33e421181b1af40a10a",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-582",
+      "kind": "source",
+      "identity": "PR #582; git:2c02fd0d3e4c36e702537a2e67bdd3d240101533; codex/scorecard-security-auth; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "2c02fd0d3e4c36e702537a2e67bdd3d240101533",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-584",
+      "kind": "source",
+      "identity": "PR #584; git:cce74f0fb6c6ecf9fdb6240304fb49b50eff8f0a; codex/idea-product-fit-pilot; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "cce74f0fb6c6ecf9fdb6240304fb49b50eff8f0a",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-585",
+      "kind": "source",
+      "identity": "PR #585; git:dfea3ae3a0491f0eb592ddef26e5eed500093ade; codex/feature-surface; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "dfea3ae3a0491f0eb592ddef26e5eed500093ade",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-586",
+      "kind": "source",
+      "identity": "PR #586; git:157956beb30d1408818e9487fad0aa0920235b95; codex/engineering-verification-contract; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "157956beb30d1408818e9487fad0aa0920235b95",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
+    },
+    {
+      "id": "proposal-pr-587",
+      "kind": "source",
+      "identity": "PR #587; git:1a4d907baeac674a60eed0cea7ebe73b8df5b86e; codex/maturity-archive-outcomes; state open draft; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "1a4d907baeac674a60eed0cea7ebe73b8df5b86e",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "proposals-2026-10-03"
+      ]
     }
   ],
   "evidence": [
@@ -1074,7 +1353,8 @@
         {
           "budgetId": "persona-append-p95",
           "value": 169.6893,
-          "denominator": 28
+          "denominator": 28,
+          "numerator": null
         }
       ],
       "window": {
@@ -1136,6 +1416,110 @@
       "id": "baseline-source-observation",
       "kind": "source-check",
       "result": "passed",
+      "integrity": "checksummed",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ]
+    },
+    {
+      "sourceSha": "21e946e1e6b1114816d5c232ca3768bd06bcca31",
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-03T22:06:20.922Z",
+      "environment": {
+        "platform": "Windows x64 metadata capture",
+        "node": "v22.13.1",
+        "provider": "none; read-only public GitHub/npm",
+        "tools": "git, gh, npm; no app runtime or account credentials copied"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/pulls/<number> for each retained number"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/proposals-2026-10-03.json",
+          "sha256": "a4fb12ad08b76f5aa6252e70c87ebf938038bfb4ac5c1a7b89fa14dbe9819878",
+          "verification": "local"
+        }
+      ],
+      "scope": "Public PR metadata only. Head pins are reviewable unintegrated source proposals; bodies and check reports are author claims, not artifact acceptance. No merge, release or runtime authority.",
+      "limits": [
+        "Unmerged source proposals are separate from current main and installed releases.",
+        "Raw CI/test artifacts and independent review of these changes are not included in this capture."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/579",
+        "https://github.com/mario-andreschak/FLUJO/pull/580",
+        "https://github.com/mario-andreschak/FLUJO/pull/581",
+        "https://github.com/mario-andreschak/FLUJO/pull/582",
+        "https://github.com/mario-andreschak/FLUJO/pull/583",
+        "https://github.com/mario-andreschak/FLUJO/pull/584",
+        "https://github.com/mario-andreschak/FLUJO/pull/585",
+        "https://github.com/mario-andreschak/FLUJO/pull/586",
+        "https://github.com/mario-andreschak/FLUJO/pull/587"
+      ],
+      "id": "proposals-2026-10-03",
+      "kind": "baseline-observation",
+      "result": "passed",
+      "integrity": "checksummed",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ]
+    },
+    {
+      "sourceSha": "21e946e1e6b1114816d5c232ca3768bd06bcca31",
+      "artifactId": "source-docs-21e946e1",
+      "ownerId": "engineering",
+      "observedAt": "2026-10-03T22:06:20.922Z",
+      "environment": {
+        "platform": "Windows x64 metadata capture",
+        "node": "v22.13.1",
+        "provider": "none; read-only public GitHub/npm",
+        "tools": "git, gh, npm; no app runtime or account credentials copied"
+      },
+      "commands": [
+        "npm audit --json --package-lock-only --ignore-scripts --audit-level=high"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-2026-10-03.json",
+          "sha256": "97696c4f2f94e5f2d397d8e8cd3b8b06b45ad2cfde408af48d4b7645dbc092c1",
+          "verification": "local"
+        }
+      ],
+      "scope": "Lockfile audit exit 1 at Docs PR source revision. package-lock.json Git blob SHA-256 9201a840c73f7dfcf2e55d9e31fa1107857084e4783ce9fa5dd829c66bb40d58 is identical to baseline main 3511ba49514fe8cf525f5a22c16c3806bf3886ba. 10 affected packages: 8 high, 1 critical, 1 moderate.",
+      "limits": [
+        "Affected-package counts are not unique advisory counts or independent threat-model findings.",
+        "This is a current lockfile audit, not proof of exploitability or installed-artifact acceptance.",
+        "September clean audit is historical; coordinator owns the separate dependency remediation. No dependency versions changed here."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/advisories/GHSA-vcvr-r3jv-pc5j",
+        "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+      ],
+      "id": "dependency-audit-2026-10-03",
+      "kind": "source-check",
+      "result": "failed",
       "integrity": "checksummed",
       "profileIds": [
         "local-owner",
@@ -1278,6 +1662,21 @@
       "status": "pending",
       "description": "Independent reviewer assesses all nine dimensions against identical release artifacts, threat model and sustained human evidence.",
       "evidenceIds": []
+    },
+    {
+      "id": "dependency-audit",
+      "ownerId": "engineering",
+      "kind": "source",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "status": "failed",
+      "description": "Current high/critical dependency audit must be remediated and repeated on the assessed release. Historical clean audit and stale CodeQL results cannot qualify current security.",
+      "evidenceIds": [
+        "dependency-audit-2026-10-03"
+      ]
     }
   ],
   "claims": [
@@ -1337,7 +1736,8 @@
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
-        "release-acceptance"
+        "release-acceptance",
+        "dependency-audit"
       ]
     },
     {
@@ -1376,7 +1776,8 @@
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
-        "release-acceptance"
+        "release-acceptance",
+        "dependency-audit"
       ]
     },
     {
@@ -1416,7 +1817,8 @@
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
-        "persona-current-soak"
+        "persona-current-soak",
+        "dependency-audit"
       ]
     },
     {
@@ -1456,7 +1858,8 @@
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
-        "release-acceptance"
+        "release-acceptance",
+        "dependency-audit"
       ]
     },
     {
@@ -1481,7 +1884,8 @@
         "independent-reassessment",
         "worker-operations",
         "shared-profile",
-        "cross-stream-contracts"
+        "cross-stream-contracts",
+        "dependency-audit"
       ]
     },
     {
@@ -1513,7 +1917,8 @@
       "gateIds": [
         "persona-current-soak",
         "persona-manual",
-        "persona-live"
+        "persona-live",
+        "dependency-audit"
       ]
     }
   ],
@@ -1535,25 +1940,27 @@
       "issue": 517,
       "state": "OPEN",
       "asOf": "2026-10-03",
-      "sourceStatus": "local-unintegrated",
+      "sourceStatus": "source-proposal",
       "releaseStatus": "reported-specific-release",
-      "interpretation": "Local ToolTester discovery/prefill patch reported successful; separate published 3.46.0 Playwright/Stripe observations and keyless Firecrawl failure recorded.",
+      "interpretation": "Local ToolTester discovery/prefill patch reported successful; separate published 3.46.0 Playwright/Stripe observations and keyless Firecrawl failure recorded. Dated reviewable source proposal: PR #585 at dfea3ae3a0491f0eb592ddef26e5eed500093ade; not merged into baseline main or accepted as shipped behavior.",
       "remaining": "Integrate owned patch and accept exact shipped release for complex forms and manual refresh; patched-source cloud journey was incomplete.",
       "evidenceIds": [
         "baseline-2026-10-03",
-        "baseline-source-observation"
+        "baseline-source-observation",
+        "proposals-2026-10-03"
       ]
     },
     {
       "issue": 526,
       "state": "OPEN",
       "asOf": "2026-10-03",
-      "sourceStatus": "design-open",
+      "sourceStatus": "source-proposal",
       "releaseStatus": "unverified",
-      "interpretation": "Open report says the 128-tool server is not fully listed; no passing comment at capture.",
+      "interpretation": "Open report says the 128-tool server is not fully listed; no passing comment at capture. Dated reviewable source proposal: PR #585 at dfea3ae3a0491f0eb592ddef26e5eed500093ade; not merged into baseline main or accepted as shipped behavior.",
       "remaining": "Full 128-tool discovery/reachability on shipped release.",
       "evidenceIds": [
-        "baseline-2026-10-03"
+        "baseline-2026-10-03",
+        "proposals-2026-10-03"
       ]
     },
     {
@@ -1572,12 +1979,13 @@
       "issue": 547,
       "state": "OPEN",
       "asOf": "2026-10-03",
-      "sourceStatus": "design-open",
+      "sourceStatus": "source-proposal",
       "releaseStatus": "unverified",
-      "interpretation": "Source computes exit info but disconnect/cold/config state cannot prove owned OS-process exit.",
+      "interpretation": "Source computes exit info but disconnect/cold/config state cannot prove owned OS-process exit. Dated reviewable source proposal: PR #580 at 7e79d93ccadaf44ad1cb28376941e22357b4906a; not merged into baseline main or accepted as shipped behavior.",
       "remaining": "Generation-bound redacted receipt with unknown/non-owned states; installed fixture acceptance.",
       "evidenceIds": [
-        "baseline-2026-10-03"
+        "baseline-2026-10-03",
+        "proposals-2026-10-03"
       ]
     },
     {

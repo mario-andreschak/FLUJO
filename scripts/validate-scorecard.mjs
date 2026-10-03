@@ -136,6 +136,11 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   for (const [id, [operator, limit]] of protectedBudgets) {
     const actual = indexed.budgets.get(id);
     if (!actual || actual.operator !== operator || actual.limit !== limit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
+    if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
+  }
+  for (const [id, seconds, denominator] of [['pilot-users', 4838400, 10], ['human-contributors', 7776000, 3], ['novice-success', 0, 10], ['novice-time', 0, 10]]) {
+    const budget = indexed.budgets.get(id);
+    if (!budget || budget.observation.clock !== 'elapsed' || budget.observation.minimumSeconds < seconds || budget.observation.minimumDenominator < denominator) fail(id + ': published human observation contract weakened or omitted');
   }
   for (const [role, agreement] of Object.entries(ledger.agreements)) {
     if (role === 'disagreements') continue;
@@ -193,6 +198,21 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
         if (budget.status === 'proposed') fail(evidence.id + ': proposed budget cannot establish acceptance');
         if (window.start && timestamp(budget.declaredAt) > timestamp(window.start)) fail(evidence.id + ': budget declared after measurement began');
         if (evidence.kind === 'live-provider' && budget.unit === 'seconds' && metric.value > (timestamp(window.end) - timestamp(window.start)) / 1000) fail(evidence.id + ': duration metric exceeds actual elapsed time');
+        const observation = budget.observation;
+        if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
+        if (observation.minimumSeconds > 0 && (window.kind !== 'elapsed' || (timestamp(window.end) - timestamp(window.start)) / 1000 < observation.minimumSeconds)) fail(evidence.id + ': observation window too short for ' + metric.budgetId);
+        if (observation.minimumSimulatedDays > 0 && (window.kind !== 'simulated' || window.simulatedDays < observation.minimumSimulatedDays)) fail(evidence.id + ': simulated workload too short for ' + metric.budgetId);
+        if (metric.denominator < observation.minimumDenominator) fail(evidence.id + ': denominator below declared minimum for ' + metric.budgetId);
+        if (budget.status === 'agreed') {
+          if (!Number.isFinite(timestamp(window.start))) fail(evidence.id + ': acceptance under agreed budget needs actual measurement start');
+          for (const id of budget.agreementEvidenceIds) {
+            const agreement = indexed.evidence.get(id);
+            if (agreement && timestamp(agreement.observedAt) > timestamp(window.start)) fail(evidence.id + ': budget agreement occurred after measurement began');
+          }
+        }
+        if (budget.unit === 'ratio' && !metric.budgetId.endsWith('-flatness')) {
+          if (!Number.isSafeInteger(metric.denominator) || metric.numerator === null || metric.numerator > metric.denominator || Math.abs(metric.value - metric.numerator / metric.denominator) > 1e-9) fail(evidence.id + ': ratio does not reconcile with integer numerator/denominator');
+        }
       }
     }
   }
