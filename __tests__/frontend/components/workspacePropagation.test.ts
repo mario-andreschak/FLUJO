@@ -23,13 +23,14 @@ import {
 } from '@/frontend/utils/workspaceContentKeys';
 import { TICKET_DRAFT_STORAGE_KEY } from '@/shared/types/ticket';
 
-class FakeEventSource {
+class FakeEventSource extends EventTarget {
   static urls: string[] = [];
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
 
   constructor(url: string | URL) {
+    super();
     FakeEventSource.urls.push(String(url));
   }
 

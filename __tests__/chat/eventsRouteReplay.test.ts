@@ -36,6 +36,9 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import {
   _setConversationLogDirForTests,
   flushConversationLog,
+  readConversationLog,
+  readConversationLogForReplay,
+  SSE_LOG_REPLAY_LIMITS,
 } from '@/backend/execution/flow/conversationLog';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { promises as fs } from 'fs';
@@ -351,6 +354,60 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
     } finally {
       abort.abort();
     }
+  });
+
+  it('preserves oversized canonical media and resets the live projection', async () => {
+    const conv = 'conv-events-media-reset';
+    registerPersistable(conv);
+    const media = 'data:image/png;base64,' + 'x'.repeat(300000);
+    const { reader, abort } = await openStream(conv);
+    try {
+      emit(conv, { type: 'message', message: { id: 'large-media', role: 'assistant', content: [{ type: 'image_url', image_url: { url: media } }] } });
+      const result = await readEvents(reader, 1);
+      expect(result.events[0]).toMatchObject({ version: 1, reason: 'event-too-large', recovery: 'reload-snapshot' });
+      expect(await readUntilClosed(reader)).toBe(true);
+      await flushConversationLog(conv);
+      const canonical = await readConversationLog(conv);
+      expect(JSON.stringify(canonical)).toContain(media);
+    } finally { abort.abort(); }
+  });
+
+  it('bounds durable SSE replay reads while keeping full history available', async () => {
+    const conv = 'conv-events-bounded-jsonl';
+    const line = JSON.stringify({ conversationId: conv, seq: 0, timestamp: 1, type: 'message', message: { id: 'm', role: 'assistant', content: 'x'.repeat(SSE_LOG_REPLAY_LIMITS.maxBytes) } });
+    await fs.writeFile(path.join(tmpDir, `${conv}.jsonl`), line + '\n');
+    expect(await readConversationLogForReplay(conv, 0)).toEqual({ limited: true });
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      expect((await readEvents(reader, 1)).events[0]).toMatchObject({ reason: 'replay-gap', recovery: 'reload-snapshot' });
+      expect(await readUntilClosed(reader)).toBe(true);
+      expect((await readConversationLog(conv))?.[0]).toMatchObject({ type: 'message' });
+    } finally { abort.abort(); }
+  });
+
+  it('bounds the selected durable replay event count independently of file bytes', async () => {
+    const conv = 'conv-events-bounded-count';
+    const content = Array.from({ length: SSE_LOG_REPLAY_LIMITS.maxEvents + 1 }, (_, seq) => JSON.stringify({ conversationId: conv, seq, timestamp: 1, type: 'usage', totalTokens: seq })).join('\n');
+    expect(Buffer.byteLength(content)).toBeLessThan(SSE_LOG_REPLAY_LIMITS.maxBytes);
+    await fs.writeFile(path.join(tmpDir, `${conv}.jsonl`), content + '\n');
+    expect(await readConversationLogForReplay(conv, 0)).toEqual({ limited: true });
+    expect((await readConversationLogForReplay(conv, 1000)).events?.map(event => event.seq)).toEqual([1000]);
+  });
+
+  it('fills an omitted interior durable event and sends explicit oversized recovery', async () => {
+    const conv = 'conv-events-interior-gap';
+    registerPersistable(conv);
+    emit(conv, { type: 'run:start', flowId: 'f' });
+    emit(conv, { type: 'message', message: { id: 'omitted', role: 'assistant', content: 'x'.repeat(300000) } });
+    emit(conv, { type: 'usage', totalTokens: 1 });
+    await flushConversationLog(conv);
+    const { reader, abort } = await openStream(conv, 0);
+    try {
+      const result = await readEvents(reader, 2);
+      expect(result.events[0]).toMatchObject({ type: 'run:start', seq: 0 });
+      expect(result.events[1]).toMatchObject({ reason: 'event-too-large' });
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally { abort.abort(); }
   });
 
   it('resumes from a mid-run cursor via JSONL, skipping already-seen events', async () => {

@@ -456,6 +456,44 @@ export async function readConversationLog(conversationId: string): Promise<Execu
   return events;
 }
 
+export const SSE_LOG_REPLAY_LIMITS = Object.freeze({ maxBytes: 1024 * 1024, maxEvents: 1000 });
+/** Bounded SSE recovery only. Full history readers keep their canonical API. */
+export async function readConversationLogForReplay(conversationId: string, fromSeq: number): Promise<{ events?: ExecutionEvent[]; limited: boolean }> {
+  if (!SAFE_ID.test(conversationId)) return { limited: false };
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(logFilePath(conversationId), 'r');
+    const stat = await handle.stat();
+    if (stat.size > SSE_LOG_REPLAY_LIMITS.maxBytes) return { limited: true };
+    // Read a bounded snapshot even when the file grows between stat and read.
+    const buffer = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < buffer.length) {
+      const result = await handle.read(buffer, read, buffer.length - read, read);
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    const content = buffer.toString('utf8', 0, read);
+    const events: ExecutionEvent[] = [];
+    let start = 0;
+    while (start < content.length) {
+      const end = content.indexOf('\n', start);
+      const line = content.slice(start, end < 0 ? undefined : end);
+      start = end < 0 ? content.length : end + 1;
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as ExecutionEvent;
+        if (Number.isSafeInteger(event.seq) && event.seq >= fromSeq) events.push(event);
+      } catch { /* preserve the existing truncated-tail recovery semantics */ }
+      if (events.length > SSE_LOG_REPLAY_LIMITS.maxEvents) return { limited: true };
+    }
+    return { events, limited: false };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('Unable to read bounded SSE replay', { conversationId });
+    return { limited: false };
+  } finally { await handle?.close(); }
+}
+
 /** Remove a conversation's log file (conversation deletion). Idempotent. */
 export async function deleteConversationLog(conversationId: string): Promise<void> {
   if (!SAFE_ID.test(conversationId)) return;

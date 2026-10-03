@@ -15,6 +15,6 @@ export function parseExecutionStreamControl(value: unknown): ExecutionStreamCont
   if (control.version !== 1 || control.recovery !== 'reload-snapshot' ||
       !['replay-gap', 'cursor-reset', 'slow-consumer', 'event-too-large'].includes(control.reason ?? '') ||
       !Number.isSafeInteger(control.nextSeq) || control.nextSeq! < 0 ||
-      (control.epoch !== undefined && !/^[a-zA-Z0-9-]{1,64}$/.test(control.epoch))) return undefined;
+      (control.epoch !== undefined && (typeof control.epoch !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(control.epoch)))) return undefined;
   return control as ExecutionStreamControl;
 }

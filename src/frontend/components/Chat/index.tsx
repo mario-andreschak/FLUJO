@@ -1189,6 +1189,14 @@ const Chat: React.FC = () => {
       if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
       sidebarEvents = chatService.subscribeToSidebarEvents({
         onEvent: refreshFromEvent,
+        onReset: () => {
+          disconnect();
+          lastRefreshStartedAt = Date.now();
+          void fetchConversations(undefined, { silent: true }).finally(() => {
+            if (disposed) return;
+            eventTimer = setTimeout(() => { eventTimer = null; connect(); scheduleFallback(); }, 3000);
+          });
+        },
       });
     };
     const disconnect = () => {
@@ -2521,7 +2529,7 @@ const Chat: React.FC = () => {
   // so the subscription exists before the server emits any events — otherwise a
   // fast run can finish before the stream attaches and the live view sees
   // nothing. The browser auto-reconnects using Last-Event-ID to replay misses.
-  const openEventStream = useCallback((
+  const openEventStream: (conversationId: string, fromSeq?: number, replayOptions?: { activityOnly?: boolean }) => Promise<void> = useCallback((
     conversationId: string,
     fromSeq?: number,
     replayOptions?: { activityOnly?: boolean },
@@ -2549,6 +2557,18 @@ const Chat: React.FC = () => {
               if (eventStreamGenerationRef.current === streamGeneration) applyExecutionEvent(event);
             },
             onOpen: settle,
+            onReset: (control) => {
+              settle();
+              if (eventStreamGenerationRef.current !== streamGeneration) return;
+              closeEventStream();
+              const recoveryGeneration = eventStreamGenerationRef.current;
+              void fetchDetailedConversation(conversationId).then(() => {
+                setTimeout(() => {
+                  if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
+                  void openEventStream(conversationId, control.nextSeq, { activityOnly: true });
+                }, 3000);
+              });
+            },
           },
           fromSeq,
           replayOptions,
@@ -2560,7 +2580,7 @@ const Chat: React.FC = () => {
         settle();
       }
     });
-  }, [applyExecutionEvent, closeEventStream]);
+  }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation]);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)

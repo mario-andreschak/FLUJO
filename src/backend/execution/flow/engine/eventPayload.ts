@@ -1,12 +1,11 @@
 /** A bounded JSON wire snapshot, shared by replay and live SSE serialization. */
 export interface EventPayload {
-  json: string;
-  wireBytes: number;
-  retainedBytes: number;
+  readonly json: string;
+  readonly wireBytes: number;
+  readonly retainedBytes: number;
 }
 
-// Cache by ephemeral event identity, never by conversation or payload contents.
-const snapshots = new WeakMap<object, EventPayload>();
+export const MAX_EXECUTION_EVENT_WIRE_BYTES = 256 * 1024;
 const MAX_VALUES = 100_000;
 const MAX_DEPTH = 64;
 
@@ -17,6 +16,7 @@ export function eventJsonFits(value: unknown, limit: number): boolean {
   const ancestors = new WeakSet<object>();
   const add = (size: number) => (bytes += size) <= limit;
   const string = (text: string): boolean => {
+    if (text.length + bytes + 2 > limit) return false;
     if (!add(2 + Buffer.byteLength(text, 'utf8'))) return false;
     const escapes = /["\\\u0000-\u001f\ud800-\udfff]/g;
     let match: RegExpExecArray | null;
@@ -40,7 +40,10 @@ export function eventJsonFits(value: unknown, limit: number): boolean {
     if (typeof item !== 'object' || ancestors.has(item)) return false;
     const array = Array.isArray(item);
     const prototype = Object.getPrototypeOf(item);
-    if (!array && prototype !== Object.prototype && prototype !== null) return false;
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    // JSON.stringify calls even a non-enumerable own toJSON before traversing.
+    const toJSON = Object.getOwnPropertyDescriptor(item, 'toJSON');
+    if (toJSON && (!('value' in toJSON) || typeof toJSON.value === 'function')) return false;
     ancestors.add(item);
     try {
       if (!add(2)) return false;
@@ -68,16 +71,12 @@ export function eventJsonFits(value: unknown, limit: number): boolean {
 }
 
 export function snapshotEventPayload(event: object, maxWireBytes: number): EventPayload | undefined {
-  const cached = snapshots.get(event);
-  if (cached) return cached.wireBytes <= maxWireBytes ? cached : undefined;
-  if (!eventJsonFits(event, maxWireBytes)) return undefined;
   try {
+    if (!eventJsonFits(event, maxWireBytes)) return undefined;
     const json = JSON.stringify(event);
     const wireBytes = Buffer.byteLength(json, 'utf8');
     if (wireBytes > maxWireBytes) return undefined;
-    const payload = { json, wireBytes, retainedBytes: 128 + json.length * 2 };
-    snapshots.set(event, payload);
-    return payload;
+    return Object.freeze({ json, wireBytes, retainedBytes: 128 + json.length * 2 });
   } catch {
     return undefined;
   }

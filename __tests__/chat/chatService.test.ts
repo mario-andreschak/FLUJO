@@ -192,6 +192,7 @@ describe('chatService REST methods', () => {
       onmessage: null as ((event: MessageEvent) => void) | null,
       onerror: null as ((event: Event) => void) | null,
       close: jest.fn(),
+      addEventListener: jest.fn(),
     };
     const eventSourceMock = jest.fn(() => source);
     (global as any).EventSource = eventSourceMock;

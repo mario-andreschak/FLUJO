@@ -1,238 +1,203 @@
 import { EventEmitter } from 'events';
+import { randomUUID } from 'node:crypto';
 import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execution/events';
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { MAX_EXECUTION_EVENT_WIRE_BYTES, snapshotEventPayload, type EventPayload } from './eventPayload';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
+export const EVENT_REPLAY_LIMITS = Object.freeze({
+  maxEventWireBytes: MAX_EXECUTION_EVENT_WIRE_BYTES,
+  maxConversationEvents: 1000, maxWorkspaceEvents: 5000,
+  maxConversationBytes: 4 * 1024 * 1024, maxWorkspaceBytes: 8 * 1024 * 1024,
+  maxTotalBytes: 16 * 1024 * 1024, maxChannels: 1024, maxWorkspaces: 64,
+  channelTtlMs: 5 * 60 * 1000,
+});
+type ReplayLimits = { [K in keyof typeof EVENT_REPLAY_LIMITS]: number };
+interface ReplayEntry { seq: number; payload: EventPayload }
+interface ReplayChannel { emitter: EventEmitter; seq: number; buffer: ReplayEntry[]; bytes: number; unavailableThrough: number }
+interface ConversationChannel extends ReplayChannel { terminalSeq?: number }
+interface WorkspaceFirehose extends ReplayChannel { epoch: string }
+/** Live delivery retains the original event only during synchronous publication. */
+export interface GlobalEvent { globalSeq: number; event: ExecutionEvent; payload?: EventPayload }
+export interface ReplayWindow { firstSeq: number; nextSeq: number; epoch?: string }
 
-// How many recent events to retain per conversation for replay on (re)connect.
-const RING_BUFFER_SIZE = 1000;
-
-// How many recent events to retain on the GLOBAL firehose for replay on
-// (re)connect. Larger than the per-conversation buffer because it spans every
-// conversation at once — sized for a few seconds of heavy subflow fan-out.
-const GLOBAL_RING_BUFFER_SIZE = 5000;
-
-// How long a channel (and its buffered events) survives after a run:done with
-// no listeners. Long enough for the frontend's terminal refetch and any late
-// replays; without this the channels Map grew for the process lifetime — one
-// buffer of up to RING_BUFFER_SIZE message payloads per conversation ever run.
-const CHANNEL_TTL_AFTER_DONE_MS = 5 * 60 * 1000;
-
-interface ConversationChannel {
-  emitter: EventEmitter;
-  seq: number;
-  buffer: ExecutionEvent[];
-}
-
-/**
- * A firehose entry: an already-stamped event plus its own global sequence
- * number (independent of any per-conversation seq) so a single
- * all-conversations subscriber can resume via ?fromSeq without tracking N
- * per-conversation seqs.
- */
-export interface GlobalEvent {
-  globalSeq: number;
-  event: ExecutionEvent;
-}
-
-interface WorkspaceFirehose {
-  emitter: EventEmitter;
-  seq: number;
-  buffer: GlobalEvent[];
-}
-
-/**
- * In-memory pub/sub for execution events, keyed by conversationId.
- *
- * Mirrors the existing in-memory model of FlowExecutor.conversationStates: a
- * single Node process holds the live channels. Each event's `seq` is allocated
- * by the conversation log (allocateSeq) — an authoritative, durable, never-reset
- * per-conversation monotonic counter (issue #261) — so SSE subscribers can
- * replay from a known position (?fromSeq=) after a reconnect, across runs,
- * channel garbage-collection, and process restarts, without missing or
- * duplicating events. `channel.seq` is kept only as an in-memory high-water
- * mirror for currentSeq()/cleanup.
- */
-class ExecutionEventBus {
+/** Bounded disposable projections. Canonical log/state and execution ownership are untouched. */
+export class ExecutionEventBus {
   private channels = new Map<string, ConversationChannel>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  // --- Global firehose (additive) ------------------------------------------
-  // A single process-wide channel mirroring EVERY per-conversation event, so a
-  // client (e.g. the brain viz) can watch all activity over ONE connection
-  // instead of one EventSource per conversation — which hits the browser's
-  // ~6-per-origin connection cap under heavy subflow fan-out. Purely additive:
-  // the per-conversation channels are untouched, so chat streaming is
-  // unaffected. Never garbage-collected: it spans the process lifetime.
   private firehoses = new Map<string, WorkspaceFirehose>();
+  // Conservative: count both channel/firehose references even when their JSON is shared.
+  private retained = new Map<ReplayEntry, ReplayChannel>();
+  private retainedBytes = 0;
+  private droppedOversized = 0;
+  private evictedEntries = 0;
+  private omittedChannels = 0;
+  private limits: ReplayLimits;
 
-  private getFirehose(): WorkspaceFirehose {
-    const workspace = getCurrentWorkspace();
-    let firehose = this.firehoses.get(workspace);
-    if (!firehose) {
-      const emitter = new EventEmitter();
-      emitter.setMaxListeners(0);
-      firehose = { emitter, seq: 0, buffer: [] };
-      this.firehoses.set(workspace, firehose);
+  constructor(limits: Partial<ReplayLimits> = {}) {
+    this.limits = { ...EVENT_REPLAY_LIMITS, ...limits };
+    for (const value of Object.values(this.limits)) {
+      if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid event replay limit');
     }
-    return firehose;
   }
 
-  private getChannel(conversationId: string): ConversationChannel {
+  private removeEntry(entry: ReplayEntry, owner: ReplayChannel): void {
+    if (!this.retained.delete(entry)) return;
+    owner.bytes -= entry.payload.retainedBytes;
+    this.retainedBytes -= entry.payload.retainedBytes;
+    const index = owner.buffer.indexOf(entry);
+    if (index !== -1) owner.buffer.splice(index, 1);
+    this.evictedEntries++;
+  }
+
+  private clearBuffer(owner: ReplayChannel): void {
+    for (const entry of [...owner.buffer]) this.removeEntry(entry, owner);
+  }
+
+  private retain(owner: ReplayChannel, seq: number, payload: EventPayload, maxBytes: number, maxEvents: number): void {
+    if (payload.retainedBytes > maxBytes || payload.retainedBytes > this.limits.maxTotalBytes) { owner.unavailableThrough = seq + 1; return; }
+    const entry = { seq, payload };
+    owner.buffer.push(entry);
+    owner.bytes += payload.retainedBytes;
+    this.retainedBytes += payload.retainedBytes;
+    this.retained.set(entry, owner);
+    while (owner.bytes > maxBytes || owner.buffer.length > maxEvents) this.removeEntry(owner.buffer[0], owner);
+    while (this.retainedBytes > this.limits.maxTotalBytes) {
+      const oldest = this.retained.entries().next().value;
+      if (!oldest) break;
+      this.removeEntry(...oldest);
+    }
+  }
+
+  private emitter(): EventEmitter { const emitter = new EventEmitter(); emitter.setMaxListeners(0); return emitter; }
+
+  private cancelCleanup(key: string): void {
+    const timer = this.cleanupTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.cleanupTimers.delete(key);
+  }
+
+  private removeChannel(key: string, channel: ConversationChannel): void {
+    this.cancelCleanup(key);
+    this.clearBuffer(channel);
+    this.channels.delete(key);
+  }
+
+  private getChannel(conversationId: string): ConversationChannel | undefined {
     const key = workspaceCacheKey(conversationId);
     let channel = this.channels.get(key);
     if (!channel) {
-      const emitter = new EventEmitter();
-      emitter.setMaxListeners(0); // allow arbitrarily many SSE subscribers
-      // seq:0 is a placeholder; the first emit overwrites it with the durable
-      // high-water mark (allocateSeq()+1), so a recreated channel never resets
-      // the sequence a subscriber sees.
-      channel = { emitter, seq: 0, buffer: [] };
-      this.channels.set(key, channel);
+      if (this.channels.size >= this.limits.maxChannels) {
+        const unused = [...this.channels].find(([, value]) => value.emitter.listenerCount('event') === 0);
+        if (unused) this.removeChannel(...unused);
+        else { this.omittedChannels++; return undefined; }
+      }
+      channel = { emitter: this.emitter(), seq: 0, buffer: [], bytes: 0, unavailableThrough: 0 };
     }
+    this.channels.delete(key);
+    this.channels.set(key, channel);
     return channel;
   }
 
-  private cancelCleanup(conversationId: string): void {
-    const key = workspaceCacheKey(conversationId);
-    const timer = this.cleanupTimers.get(key);
-    if (timer) {
-      clearTimeout(timer);
-      this.cleanupTimers.delete(key);
+  private getFirehose(): WorkspaceFirehose | undefined {
+    const workspace = getCurrentWorkspace();
+    let firehose = this.firehoses.get(workspace);
+    if (!firehose) {
+      if (this.firehoses.size >= this.limits.maxWorkspaces) {
+        const unused = [...this.firehoses].find(([, value]) => value.emitter.listenerCount('event') === 0);
+        if (unused) { this.clearBuffer(unused[1]); this.firehoses.delete(unused[0]); }
+        else { this.omittedChannels++; return undefined; }
+      }
+      firehose = { emitter: this.emitter(), seq: 0, buffer: [], bytes: 0, unavailableThrough: 0, epoch: randomUUID() };
     }
+    this.firehoses.delete(workspace);
+    this.firehoses.set(workspace, firehose);
+    return firehose;
   }
 
-  /** Drop the channel after the TTL unless the run resumed or someone is still
-   *  listening. Safe even though the in-memory channel (and its ring buffer) is
-   *  gone: seq is now allocated by the durable log counter (issue #261), so a
-   *  recreated channel continues the monotonic sequence rather than resetting to
-   *  0, and a reconnect past the evicted buffer replays from the JSONL log. */
-  private scheduleCleanup(conversationId: string, seqAtDone: number): void {
-    this.cancelCleanup(conversationId);
+  private scheduleCleanup(conversationId: string, channel: ConversationChannel): void {
     const key = workspaceCacheKey(conversationId);
+    this.cancelCleanup(key);
+    const seqAtDone = channel.terminalSeq;
     const timer = setTimeout(() => {
       this.cleanupTimers.delete(key);
-      const channel = this.channels.get(key);
-      if (!channel) return;
-      if (channel.seq !== seqAtDone) return; // a new run emitted since; keep
-      if (channel.emitter.listenerCount('event') > 0) return; // active SSE subscriber
-      this.channels.delete(key);
-    }, CHANNEL_TTL_AFTER_DONE_MS);
-    // Never keep the process alive just for channel GC.
-    if (typeof timer.unref === 'function') timer.unref();
+      if (this.channels.get(key) !== channel || channel.seq !== seqAtDone || channel.emitter.listenerCount('event')) return;
+      this.removeChannel(key, channel);
+    }, this.limits.channelTtlMs);
+    timer.unref?.();
     this.cleanupTimers.set(key, timer);
   }
 
-  /** Publish an event; the bus stamps conversationId, seq and timestamp. */
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
-    const channel = this.getChannel(conversationId);
-    // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
-    channel.seq = seq + 1; // in-memory high-water mirror for currentSeq()/cleanup
-    const event = {
-      ...raw,
-      conversationId,
-      seq,
-      timestamp: Date.now(),
-    } as ExecutionEvent;
-
-    channel.buffer.push(event);
-    if (channel.buffer.length > RING_BUFFER_SIZE) {
-      channel.buffer.shift();
-    }
-    channel.emitter.emit('event', event);
-
-    // The live stream IS the conversation log being appended (execution-core
-    // v2 §3.1): every emit — regardless of which emitter produced it (runFlow's
-    // loop, ModelHandler's mid-run transcript sink, control routes) — is tapped
-    // into the append-only per-conversation log. The tap filters transient
-    // event types and enforces the ephemeral policy itself, and is
-    // fire-and-forget so persistence can never break live consumers.
+    const event = { ...raw, conversationId, seq, timestamp: Date.now() } as ExecutionEvent;
+    const payload = snapshotEventPayload(event, this.limits.maxEventWireBytes);
+    if (!payload) this.droppedOversized++;
+    // Always preserve durable event semantics, including every dispatch marker.
     appendFromBus(event);
-
-    // Fan the same event onto the global firehose. The per-conversation channel
-    // above already delivered it (chat is unaffected); this is an extra tap for
-    // all-conversations subscribers.
-    this.publishGlobal(event);
-
-    // Terminal event → the channel becomes garbage once nobody replays it.
-    // Any other event (e.g. run:start of a resumed conversation) revives it.
-    if (event.type === 'run:done') {
-      this.scheduleCleanup(conversationId, channel.seq);
-    } else {
-      this.cancelCleanup(conversationId);
+    const channel = this.getChannel(conversationId);
+    if (channel) {
+      channel.seq = seq + 1;
+      if (payload) this.retain(channel, seq, payload, this.limits.maxConversationBytes, this.limits.maxConversationEvents);
+      else channel.unavailableThrough = seq + 1;
+      if (event.type === 'run:done') { channel.terminalSeq = channel.seq; this.scheduleCleanup(conversationId, channel); }
+      else { channel.terminalSeq = undefined; this.cancelCleanup(workspaceCacheKey(conversationId)); }
+      channel.emitter.emit('event', event, payload);
+    }
+    const firehose = this.getFirehose();
+    if (firehose) {
+      const globalSeq = firehose.seq++;
+      if (payload) this.retain(firehose, globalSeq, payload, this.limits.maxWorkspaceBytes, this.limits.maxWorkspaceEvents);
+      else firehose.unavailableThrough = globalSeq + 1;
+      firehose.emitter.emit('event', { globalSeq, event, payload } satisfies GlobalEvent);
     }
     return event;
   }
 
-  /** An emit function bound to a conversation, suitable to hand to the engine. */
   emitterFor(conversationId: string): EmitFn {
-    return bindToCurrentWorkspace((raw: RawExecutionEvent) => {
-      try {
-        this.emit(conversationId, raw);
-      } catch (err) {
-        log.warn(`Failed to emit execution event for ${conversationId}`, { err });
-      }
-    });
+    return bindToCurrentWorkspace(raw => { try { this.emit(conversationId, raw); } catch (err) { log.warn(`Failed to emit execution event for ${conversationId}`, { err }); } });
   }
 
-  /** Buffered events with seq >= fromSeq, for replay on (re)connect. */
   getBufferedSince(conversationId: string, fromSeq: number): ExecutionEvent[] {
+    return this.channels.get(workspaceCacheKey(conversationId))?.buffer.filter(entry => entry.seq >= fromSeq).map(entry => JSON.parse(entry.payload.json) as ExecutionEvent) ?? [];
+  }
+  currentSeq(conversationId: string): number { return this.channels.get(workspaceCacheKey(conversationId))?.seq ?? 0; }
+  replayWindow(conversationId: string): ReplayWindow {
     const channel = this.channels.get(workspaceCacheKey(conversationId));
-    if (!channel) return [];
-    return channel.buffer.filter((e) => e.seq >= fromSeq);
+    return { firstSeq: Math.max(channel?.buffer[0]?.seq ?? channel?.seq ?? 0, channel?.unavailableThrough ?? 0), nextSeq: channel?.seq ?? 0 };
   }
-
-  /** The next seq the channel will assign (i.e. current high-water mark). */
-  currentSeq(conversationId: string): number {
-    return this.channels.get(workspaceCacheKey(conversationId))?.seq ?? 0;
-  }
-
-  /** Subscribe to live events. Returns an unsubscribe function. */
-  subscribe(conversationId: string, listener: (event: ExecutionEvent) => void): () => void {
+  subscribe(conversationId: string, listener: (event: ExecutionEvent, payload?: EventPayload) => void): () => void {
     const channel = this.getChannel(conversationId);
+    if (!channel) throw new Error('Execution event channel capacity exhausted');
     channel.emitter.on('event', listener);
+    let unsubscribed = false;
     return () => {
+      if (unsubscribed) return;
+      unsubscribed = true;
       channel.emitter.off('event', listener);
+      if (!channel.emitter.listenerCount('event') && channel.terminalSeq !== undefined) this.scheduleCleanup(conversationId, channel);
     };
   }
-
-  // --- Global firehose API -------------------------------------------------
-
-  /** Publish an event onto the global channel, assigning a monotonic globalSeq
-   *  and retaining it in the global ring buffer for replay. */
-  private publishGlobal(event: ExecutionEvent): void {
+  subscribeGlobal(listener: (event: GlobalEvent) => void): () => void {
     const firehose = this.getFirehose();
-    const wrapped: GlobalEvent = { globalSeq: firehose.seq++, event };
-    firehose.buffer.push(wrapped);
-    if (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE) firehose.buffer.shift();
-    firehose.emitter.emit('event', wrapped);
-  }
-
-  /** Subscribe to the firehose (all conversations). Returns an unsubscribe fn. */
-  subscribeGlobal(listener: (e: GlobalEvent) => void): () => void {
-    const firehose = this.getFirehose();
+    if (!firehose) throw new Error('Execution firehose capacity exhausted');
     firehose.emitter.on('event', listener);
-    return () => {
-      firehose.emitter.off('event', listener);
-    };
+    return () => firehose.emitter.off('event', listener);
   }
-
-  /** Buffered firehose entries with globalSeq >= fromSeq, for replay on
-   *  (re)connect. */
   getGlobalBufferedSince(fromSeq: number): GlobalEvent[] {
-    return this.getFirehose().buffer.filter((e) => e.globalSeq >= fromSeq);
+    return this.getFirehose()?.buffer.filter(entry => entry.seq >= fromSeq).map(entry => ({ globalSeq: entry.seq, event: JSON.parse(entry.payload.json) as ExecutionEvent, payload: entry.payload })) ?? [];
   }
-
-  /** The next globalSeq the firehose will assign (current high-water mark). */
-  currentGlobalSeq(): number {
-    return this.getFirehose().seq;
+  currentGlobalSeq(): number { return this.getFirehose()?.seq ?? 0; }
+  globalReplayWindow(): ReplayWindow {
+    const firehose = this.getFirehose();
+    return { firstSeq: Math.max(firehose?.buffer[0]?.seq ?? firehose?.seq ?? 0, firehose?.unavailableThrough ?? 0), nextSeq: firehose?.seq ?? 0, epoch: firehose?.epoch };
+  }
+  diagnostics() {
+    return { retainedBytes: this.retainedBytes, retainedEntries: this.retained.size, channels: this.channels.size, workspaces: this.firehoses.size, droppedOversized: this.droppedOversized, evictedEntries: this.evictedEntries, omittedChannels: this.omittedChannels, limits: { ...this.limits } };
   }
 }
 
-// Singleton across the process (and across Next.js hot-reloads in dev).
 const globalForBus = globalThis as unknown as { __flujoExecutionEventBus?: ExecutionEventBus };
-export const executionEventBus =
-  globalForBus.__flujoExecutionEventBus ?? (globalForBus.__flujoExecutionEventBus = new ExecutionEventBus());
+export const executionEventBus = globalForBus.__flujoExecutionEventBus ?? (globalForBus.__flujoExecutionEventBus = new ExecutionEventBus());
