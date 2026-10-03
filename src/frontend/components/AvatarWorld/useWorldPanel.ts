@@ -4,8 +4,9 @@ import type { AskFlujoPageContext, AskFlujoUiAction, AskFlujoActionResult } from
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import { AVATAR_PANEL_PROTOCOL, panelRoute } from './AvatarPanelBridge';
 import type { WorldLocale } from './copy';
+import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
 
-export function useWorldPanel(onAsk: () => void, locale: WorldLocale = 'es') {
+export function useWorldPanel(onAsk: () => void, locale: WorldLocale = DEFAULT_LOCALE) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [open, setOpen] = useState(false);

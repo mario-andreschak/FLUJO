@@ -114,7 +114,7 @@ export async function handleAvatarVoice(request: Request, action: string): Promi
       const value = result ? { message: 'Present this recorded Flujo result briefly. Do not claim more than it states.', avatar: body.avatar, locale: body.locale } : validateNativeTurn(body);
       const models = await modelService.loadModels(), selected = await readAvatarWorkModel(models);
       const discovery = await discoverAvatarConnections(models);
-      const setupFacts = JSON.stringify({ findAIButton: body.locale === 'pt' ? 'Encontrar minha IA' : body.locale === 'en' ? 'Find my AI' : 'Encontrar mi IA', workAI: selected?.ready ? { label: selected.label, verified: true } : null,
+      const setupFacts = JSON.stringify({ findAIButton: value.locale === 'pt' ? 'Encontrar minha IA' : value.locale === 'es' ? 'Encontrar mi IA' : 'Find my AI', workAI: selected?.ready ? { label: selected.label, verified: true } : null,
         options: discovery.candidates.slice(0, 12).map(candidate => ({ label: candidate.label, runtime: candidate.runtime, login: candidate.authentication, nextAction: candidate.nextAction })),
         instruction: selected?.ready ? 'Work requests are handled by the selected Flujo AI; acknowledge briefly while it works.' : 'Offer the visible Find my AI button. No work AI is connected yet.' });
       const started = session.ledger.begin(value, owner, owned);

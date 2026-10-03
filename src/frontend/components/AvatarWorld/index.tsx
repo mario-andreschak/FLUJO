@@ -14,13 +14,14 @@ import ConnectionSetup from './ConnectionSetup';
 import { useAvatarWork } from './useAvatarWork';
 import { useWorldPanel } from './useWorldPanel';
 import { useNativeRouterVoice, voiceHeaders } from '@/vendor/avatar/client/useNativeRouterVoice';
+import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
 import ResourcePreview from './ResourcePreview';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import WorldLink from './WorldLink';
 import styles from './world.module.css';
 
 export default function AvatarWorld() {
-  const [locale, setLocale] = useState<WorldLocale>('es');
+  const [locale, setLocale] = useState<WorldLocale>(DEFAULT_LOCALE);
   const [avatar, setAvatar] = useState<AvatarStyle>('moss');
   const [snapshot, setSnapshot] = useState<AvatarWorldSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,7 +118,7 @@ export default function AvatarWorld() {
       <div className={styles.topActions}>
         {work.target.kind !== 'guide' && <button className={styles.identity} title={c.guideIdentity} disabled={work.busy} onClick={() => { if (work.newChat({ kind: 'guide' })) { voice.disconnect(); setVoiceMessages([]); offered.current.clear(); } }}>{actor} · ↩ {c.guideIdentity}</button>}
         {work.target.kind === 'guide' && snapshot?.workModel && <button className={styles.brain} onClick={() => setSetup(true)} disabled={work.busy}><span>◈</span>{snapshot.workModel.label}<span>↗</span></button>}
-        <select aria-label="Language / Idioma" value={locale} onChange={event => { const value = event.target.value as WorldLocale; setLocale(value); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:locale'), value); }}><option value="es">ES</option><option value="pt">PT</option><option value="en">EN</option></select>
+        <select aria-label="Language / Idioma" value={locale} onChange={event => { const value = event.target.value as WorldLocale; setLocale(value); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:locale'), value); }}><option value="en">EN</option><option value="es">ES</option><option value="pt">PT</option></select>
         <button onClick={() => setExploring(value => !value)} className={styles.mapToggle} aria-pressed={exploring} aria-label={c.world}>⌘</button>
       </div>
     </header>

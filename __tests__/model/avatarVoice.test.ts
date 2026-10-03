@@ -49,7 +49,7 @@ describe('avatar native voice uses canonical Flujo results', () => {
     jest.mocked(getCurrentWorkspace).mockReturnValue('other-workspace');
     expect((await handleAvatarVoice(request({ taskId: receipt.taskId, avatar: 'moss', locale: 'es' }, client), 'native-result')).status).toBe(409);
   });
-  it('boots voice on an empty model list using passive setup facts and Web Stream backpressure', async () => {
+  it.each([undefined, 'en', 'es', 'pt'])('boots voice on an empty model list with the chosen/default locale %s', async locale => {
     const original = global.fetch;
     const wire = [
       { choices: [{ index: 0, delta: { audio: { id: 'audio', transcript: 'Vamos a conectar tu IA.', data: 'AQACAA==' } } }] },
@@ -59,11 +59,14 @@ describe('avatar native voice uses canonical Flujo results', () => {
     global.fetch = jest.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       expect(body.messages.some((message: { content: string }) => message.content.includes('login-detected'))).toBe(true);
+      const label = locale === 'es' ? 'Encontrar mi IA' : locale === 'pt' ? 'Encontrar minha IA' : 'Find my AI';
+      expect(body.messages.some((message: { content: string }) => message.content.includes(`"findAIButton":"${label}"`))).toBe(true);
+      expect(body.messages[0].content).toContain(locale === 'es' ? 'español' : locale === 'pt' ? 'português do Brasil' : 'Speak natural, clear English');
       expect(body.tools).toBeUndefined();
       return new Response(wire.map(frame => `data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } });
     });
     try {
-      const response = await handleAvatarVoice(request({ message: 'Hola', avatar: 'moss', locale: 'es' }), 'native-turn');
+      const response = await handleAvatarVoice(request({ message: 'Help me connect my AI.', avatar: 'moss', locale }), 'native-turn');
       expect(response.status).toBe(200);
       const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
       expect(events[0].type).toBe('start'); expect(events.at(-1).type).toBe('complete');

@@ -1,2 +1,3 @@
 export type Locale = 'es' | 'pt' | 'en';
-export function normalizeLocale(value: unknown): Locale { return value === 'pt' || value === 'en' ? value : 'es'; }
+export const DEFAULT_LOCALE: Locale = 'en';
+export function normalizeLocale(value: unknown): Locale { return value === 'es' || value === 'pt' ? value : DEFAULT_LOCALE; }

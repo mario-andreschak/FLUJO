@@ -16,14 +16,14 @@ const own = (value, key) => Object.hasOwn(value, key);
 const identity = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
 const plain = (value, maximum) => typeof value === 'string' && value.trim().length > 0 && value.length <= maximum &&
   !/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value);
-const invalid = () => new PublicError(400, 'invalid_voice_request', 'Envía una grabación WAV o un mensaje válido.');
-const streamError = (code = 'invalid_native_audio_stream') => new PublicError(502, code, 'La respuesta de voz no se pudo completar.');
+const invalid = () => new PublicError(400, 'invalid_voice_request', 'Send a WAV recording or a valid message.');
+const streamError = (code = 'invalid_native_audio_stream') => new PublicError(502, code, 'The voice response could not be completed.');
 
 /** Browser input cannot supply history, trusted results, tools, provider options or identity. */
 export function validateNativeTurn(payload) {
   if (!object(payload) || !AVATARS.includes(payload.avatar) ||
       payload.locale !== undefined && !isLocale(payload.locale)) throw invalid();
-  const locale = payload.locale ?? 'es';
+  const locale = payload.locale ?? 'en';
   if (own(payload, 'audio')) {
     if (!only(payload, ['audio', 'format', 'avatar', 'locale'])) throw invalid();
     const recording = validateTranscription({ audio: payload.audio, format: payload.format });
@@ -179,11 +179,11 @@ class NativeAudioStream {
 function abortable(promise, signal) {
   if (signal.aborted) {
     void Promise.resolve(promise).catch(() => {});
-    return Promise.reject(new PublicError(499, 'voice_interrupted', 'La voz se detuvo.'));
+    return Promise.reject(new PublicError(499, 'voice_interrupted', 'Voice stopped.'));
   }
   return new Promise((resolve, reject) => {
     const cleanup = () => signal.removeEventListener('abort', abort);
-    const abort = () => { cleanup(); reject(new PublicError(499, 'voice_interrupted', 'La voz se detuvo.')); };
+    const abort = () => { cleanup(); reject(new PublicError(499, 'voice_interrupted', 'Voice stopped.')); };
     signal.addEventListener('abort', abort, { once: true });
     Promise.resolve(promise).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
   });
@@ -204,21 +204,23 @@ async function write(emit, event, signal, budget) {
   await abortable(Promise.resolve(emit(event)), signal);
 }
 function providerFailure(status) {
-  if (status === 401 || status === 403) return new PublicError(503, 'voice_configuration_error', 'La configuración de voz necesita atención.');
-  if (status === 402) return new PublicError(503, 'voice_quota_exhausted', 'El saldo de voz no está disponible.');
-  if (status === 429) return new PublicError(429, 'rate_limited', 'El servicio de voz está ocupado. Intenta en un momento.');
+  if (status === 401 || status === 403) return new PublicError(503, 'voice_configuration_error', 'Voice configuration needs attention.');
+  if (status === 402) return new PublicError(503, 'voice_quota_exhausted', 'Voice allowance is unavailable.');
+  if (status === 429) return new PublicError(429, 'rate_limited', 'The voice service is busy. Try again shortly.');
   return streamError('voice_unavailable');
 }
 const publicMessage = (locale, code) => locale === 'pt'
   ? code === 'voice_timeout' ? 'A resposta de voz demorou demais. Você pode tentar novamente.' : 'A resposta de voz não pôde ser concluída. Você pode continuar falando.'
-  : code === 'voice_timeout' ? 'La respuesta de voz tardó demasiado. Puedes intentarlo de nuevo.' : 'La respuesta de voz no se pudo completar. Puedes seguir hablando.';
+  : locale === 'es'
+    ? code === 'voice_timeout' ? 'La respuesta de voz tardó demasiado. Puedes intentarlo de nuevo.' : 'La respuesta de voz no se pudo completar. Puedes seguir hablando.'
+    : code === 'voice_timeout' ? 'The voice response took too long. You can try again.' : 'The voice response could not be completed. You can continue speaking.';
 
 /** Returns completed text only after terminal + DONE + EOF. A failed stream never qualifies history. */
 export async function streamNativeTurn(payload, config, fetchImpl, signal, emit, { turnId, history = /** @type {Array<{role: string, content: string}>} */ ([]), backendResult, setupFacts, onQualifiedResult } = {}) {
   const value = validateNativeTurn(payload), context = trustedContext(history, backendResult, setupFacts);
   if (typeof turnId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(turnId)) throw invalid();
   if (onQualifiedResult !== undefined && typeof onQualifiedResult !== 'function') throw invalid();
-  if (!config?.openrouterKey) throw new PublicError(503, 'voice_unconfigured', 'La voz no está configurada.');
+  if (!config?.openrouterKey) throw new PublicError(503, 'voice_unconfigured', 'Voice is not configured.');
   if (!signal || typeof fetchImpl !== 'function') throw invalid();
   const controller = new AbortController();
   let timedOut = false, response, reader, started = false;
@@ -229,7 +231,7 @@ export async function streamNativeTurn(payload, config, fetchImpl, signal, emit,
   const timer = setTimeout(() => { timedOut = true; stop(); }, NATIVE_AUDIO.timeoutMs);
   timer.unref?.();
   try {
-    if (controller.signal.aborted) throw new PublicError(499, 'voice_interrupted', 'La voz se detuvo.');
+    if (controller.signal.aborted) throw new PublicError(499, 'voice_interrupted', 'Voice stopped.');
     const pendingFetch = Promise.resolve(fetchImpl(NATIVE_AUDIO.endpoint, { method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { Authorization: `Bearer ${config.openrouterKey}`, 'Content-Type': 'application/json', 'X-OpenRouter-Title': 'Flujo Avatar',
         ...(config.publicOrigin ? { 'HTTP-Referer': config.publicOrigin } : {}) }, body: JSON.stringify(requestBody(value, context)) }));
