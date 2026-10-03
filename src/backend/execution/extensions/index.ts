@@ -2,11 +2,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
+import type { Model } from '@/shared/types/model';
 import { configuredExecutionAdapter } from '@/backend/execution/extensions/configuredAdapter';
 
 declare const contextBrand: unique symbol;
 /** Opaque capability minted by trusted server code, never by request metadata. */
 export interface ExecutionExtensionContext { readonly [contextBrand]: true }
+/** Retry restriction only; never a grant of inference, spend or replay authority. */
+export interface ExecutionModelAttemptPolicy { version: 1; maxPhysicalAttempts: 1 }
+export type ExecutionModelIdentity = Pick<Model, 'id' | 'name' | 'adapter' | 'provider' | 'baseUrl'>;
 const errorRoot = globalThis as typeof globalThis & { __flujoExecutionExtensionErrors?: WeakSet<object> };
 const trustedErrors = errorRoot.__flujoExecutionExtensionErrors ??= new WeakSet<object>();
 export class ExecutionExtensionError extends Error {
@@ -44,6 +48,11 @@ export interface ExecutionExtensionAdapter {
   validateResult(context: object, tool: string, result: unknown): unknown;
   /** Trusted attestation for an independently verified native CLI restriction profile. */
   codexProfile?(context: object): RestrictedCodexProfile | undefined | Promise<RestrictedCodexProfile | undefined>;
+  /** Read-only attestation, potentially queried more than once per logical call.
+   * Authenticated original owner may forbid automatic physical inference replay.
+   * Verify model/endpoint, request, lease, OFF and budget in the owning adapter;
+   * public Model records and caller options cannot supply this attestation. */
+  modelAttemptPolicy?(context: object, model: ExecutionModelIdentity): ExecutionModelAttemptPolicy | undefined | Promise<ExecutionModelAttemptPolicy | undefined>;
 }
 type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
@@ -157,4 +166,26 @@ export async function executionExtensionCodexProfile(context: ExecutionExtension
   const item = record(context);
   await item.adapter.assertRun(item.value);
   return item.adapter.codexProfile?.(item.value);
+}
+
+/** Resolve a restriction exclusively through the current branded server capability. */
+export async function executionExtensionSinglePhysicalAttempt(
+  context: ExecutionExtensionContext | undefined, model: Model,
+): Promise<boolean> {
+  if (!context) return false;
+  const item = record(context);
+  await item.adapter.assertRun(item.value);
+  const policy = await item.adapter.modelAttemptPolicy?.(item.value, {
+    id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl,
+  });
+  await assertExecutionExtensionCurrent(context);
+  if (policy === undefined) return false;
+  if (!policy || Object.keys(policy).length !== 2 || policy.version !== 1 || policy.maxPhysicalAttempts !== 1) {
+    throw new ExecutionExtensionError('execution_model_attempt_policy_invalid');
+  }
+  // Only this adapter's physical request boundary is qualified by this contract.
+  if (model.fallbackPolicy || (model.adapter && model.adapter !== 'openai')) {
+    throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
+  }
+  return true;
 }

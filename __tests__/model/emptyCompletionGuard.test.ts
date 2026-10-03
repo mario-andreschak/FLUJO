@@ -25,6 +25,8 @@ jest.mock('@/backend/services/model/adapters', () => ({
 
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { registerExecutionExtension, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { fixtureAdapter, fixtureRun, mintFixture } from '../executionExtensions/fixtureAdapter';
 
 const conversationStates = FlowExecutor.conversationStates as Map<string, SharedState>;
 
@@ -66,7 +68,7 @@ const seedState = (conversationId: string) => {
   } as unknown as SharedState);
 };
 
-const callModel = (conversationId: string) =>
+const callModel = (conversationId: string, executionExtensionContext?: ExecutionExtensionContext) =>
   ModelHandler.callModel({
     modelId: 'model-1',
     prompt: 'Respond.',
@@ -76,6 +78,7 @@ const callModel = (conversationId: string) =>
     nodeName: 'Node',
     nodeId: 'node-1',
     conversationId,
+    executionExtensionContext,
   } as Parameters<typeof ModelHandler.callModel>[0]);
 
 beforeEach(() => {
@@ -87,6 +90,25 @@ beforeEach(() => {
     provider: 'openai',
   });
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
+});
+
+it.each(['empty', 'rate-limit'] as const)('does not restart an authenticated single-attempt call after %s', async mode => {
+  const run = fixtureRun();
+  const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
+  const restore = registerExecutionExtension(adapter);
+  try {
+    if (mode === 'empty') createCompletionMock.mockResolvedValue(completion(''));
+    else createCompletionMock.mockRejectedValue(Object.assign(new Error('Rate limit reached'), {
+      status: 429, code: 'rate_limit_exceeded', headers: { 'retry-after': '0.01' },
+    }));
+    seedState(run.conversation);
+    const result = await callModel(run.conversation, mintFixture(adapter, run));
+    expect(result.success).toBe(false);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(createCompletionMock.mock.calls[0][0].messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining('previous response was empty') }),
+    ]));
+  } finally { restore(); }
 });
 
 it('does not restart a policy through the outer session-limit retry loop', async () => {
