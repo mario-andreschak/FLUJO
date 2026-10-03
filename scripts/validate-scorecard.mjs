@@ -18,6 +18,11 @@ const dimensions = new Map([
   ['production', ['Production-readiness', 'C-']],
 ]);
 const profiles = ['local-owner', 'persistent-worker', 'shared-public'];
+const sourceGateEvidenceKinds = new Map([
+  ['dependency-audit', ['source-check']],
+  ['build-verification', ['source-check']],
+  ['persona-current-soak', ['offline-simulation']],
+]);
 const installArtifactKinds = new Map([
   ['versioned installer', ['windows-installer']], ['npm package', ['npm']],
   ['pinned source', ['source-build']], ['container', ['container']],
@@ -102,6 +107,7 @@ function timestamp(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19) ? parsed : NaN;
 }
 function satisfies(value, budget) {
+  if (!Number.isFinite(budget.limit)) return false;
   return ({ '<': value < budget.limit, '<=': value <= budget.limit, '>=': value >= budget.limit, '>': value > budget.limit, '=': value === budget.limit })[budget.operator];
 }
 
@@ -127,7 +133,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   }
   exact(ledger.rubric.map(row => row.id), [...dimensions.keys()], 'rubric');
   exact(ledger.profiles.map(profile => profile.id), profiles, 'profiles');
-  for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment']) {
+  for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment', 'dependency-audit', 'build-verification']) {
     if (!indexed.gates.has(id)) fail('Required gate omitted: ' + id);
   }
   exact(ledger.issueReconciliation.map(issue => issue.issue), [520, 517, 526, 553, 547, 101, 527, 505, 435, 418, 212], 'issue reconciliation');
@@ -149,6 +155,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     refs([budget.ownerId], 'owners', budget.id);
     refs(budget.agreementEvidenceIds, 'evidence', budget.id);
     if (!Number.isFinite(timestamp(budget.declaredAt))) fail(budget.id + ': invalid declaredAt');
+    if (budget.limit === null && budget.status !== 'proposed') fail(budget.id + ': unset envelope cannot be an agreed or existing numeric contract');
     if (budget.status === 'agreed' && budget.agreementEvidenceIds.length === 0) fail(budget.id + ': agreed budget needs retained agreement evidence');
     if (budget.status === 'agreed') {
       const records = acceptedEvidence(budget.agreementEvidenceIds, budget.id);
@@ -253,6 +260,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     for (const metric of evidence.metrics) {
       refs([metric.budgetId], 'budgets', evidence.id + ' metric');
       const budget = indexed.budgets.get(metric.budgetId);
+      if (budget?.limit === null) fail(evidence.id + ': envelope not declared for ' + metric.budgetId);
       if (metric.value < 0 && !metric.budgetId.endsWith('-growth')) fail(evidence.id + ': only measured growth may be negative');
       if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
@@ -305,9 +313,10 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     refs([gate.ownerId], 'owners', gate.id);
     refs(gate.profileIds, 'profiles', gate.id);
     refs(gate.evidenceIds, 'evidence', gate.id);
+    if (sourceGateEvidenceKinds.has(gate.id) && gate.kind !== 'source') fail(gate.id + ': required source gate kind changed');
     if (gate.status === 'passed') {
       const records = acceptedEvidence(gate.evidenceIds, gate.id);
-      const expected = { source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'], human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'], external: ['external-agreement'] }[gate.kind];
+      const expected = sourceGateEvidenceKinds.get(gate.id) ?? { source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'], human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'], external: ['external-agreement'] }[gate.kind];
       if (!records.some(e => expected.includes(e.kind))) fail(gate.id + ': wrong evidence kind for gate');
       for (const profileId of gate.profileIds) {
         if (!records.some(e => expected.includes(e.kind) && e.profileIds.includes(profileId))) fail(gate.id + ': missing acceptance evidence for profile ' + profileId);
@@ -339,6 +348,12 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   for (const issue of ledger.issueReconciliation) refs(issue.evidenceIds, 'evidence', '#' + issue.issue);
   for (const id of dimensions.keys()) {
     if (!ledger.claims.some(claim => claim.dimensionId === id)) fail('Missing claim for dimension ' + id);
+  }
+  for (const profileId of profiles) {
+    if (!ledger.claims.some(claim => claim.dimensionId === 'production' && claim.profileId === profileId)) fail('Missing production claim for profile ' + profileId);
+  }
+  for (const dimensionId of ['engineering', 'docs', 'maturity']) {
+    if (!ledger.claims.some(claim => claim.dimensionId === dimensionId && claim.gateIds.includes('build-verification'))) fail(dimensionId + ': missing build-verification claim gate');
   }
   const assessment = ledger.assessment;
   refs(assessment.artifactIds, 'artifacts', 'assessment');

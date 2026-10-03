@@ -1,0 +1,238 @@
+{
+  "reviewer": {
+    "identity": "Automated reviewer executed through maintainer-supplied local FLUJO flow 'Claude_Opus_Agent' (flowId 6b0b98fd-aa5a-4d8a-bdf5-510bb70a7e03, snapshot sha256 cfd1e910f587d06f96a421698feca21766ab0e465bbce0a6f8c4d345889f08bd)",
+    "model": "Claude Opus (opus), provider claude-subscription, adapter claude-cli",
+    "independence": "Not an installed-release inspection, not a human observation, not an independent reproduction. No tools were used; assessment is confined to the supplied immutable packet.",
+    "cautions": [
+      "This output is NOT the 'independent-assessment' evidence kind contemplated by gate independent-reassessment: no identity is recorded in agreements.independentReviewer, no release SHA is selected, no verified-content artifact exists, and the reviewer is a model invoked by the maintainer's own instance.",
+      "Treating this response as satisfying scorecard.json agreements.independentReviewer would itself be an overclaim."
+    ]
+  },
+  "reviewedSource": {
+    "sourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+    "sourceTreeSha": "831df1e22e445e6b0b970196db2775c2588f7081",
+    "integrationBase": "50113b6e9d7bf5f50291f55470af35ad6bb8189a",
+    "ciTestedSyntheticMerge": "4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e",
+    "laterCoordinatorSource": "1ff266cbb5cc15bd7cc28dc634ed7eb1146a844b",
+    "publicationDiffSha256": "95d9e311366b46eacc2d57ac5d72e21df913a73fd04a9047a926896bf66e6481",
+    "filesReviewed": 8
+  },
+  "packetLimits": [
+    "Only 8 source files plus a 4-file publication diff were supplied. The scorecard README references evidence payloads (baseline-2026-10-03.json, source-observation-2026-10-03.json, proposals-2026-10-03.json, npm-audit-2026-10-03.json, npm-content-inspection-3.46.2.json, publication-reconciliation-2026-10-03.json, 2026-09-16-persona-soak.json) that were NOT supplied; their declared SHA-256 values could not be recomputed, so every 'checksummed' evidence row is unverified by me.",
+    "docs/security/mcp-isolation-v1-evidence.md is cited by the architecture/project-status diff but was not supplied.",
+    "SECURITY.md is newly linked from README in the diff but no SECURITY.md content was supplied, and the ledger claim publication-threat-model asserts no SECURITY.md exists at 3511ba4.",
+    "The validator and its tests were not executed; CI logs (3 retained, by sha) were summarized rather than supplied in full.",
+    "docs/project-status.md, README.md, docs/api-reference/README.md, docs/architecture/README.md were supplied only as a diff hunk set, not full files, so whole-file consistency could not be checked.",
+    "No npm tarball, installer, or container bytes; no installed runtime; no human observation."
+  ],
+  "docs_correctness": {
+    "verdict": "strong-but-not-A-minus-under-this-contract",
+    "grade": "lower",
+    "proposedGrade": "B+",
+    "rationale": "As a documentation-correctness artifact the packet is unusually disciplined: all nine original dimensions and original grades are preserved verbatim and pinned in validator code (validate-scorecard.mjs dimensions map), all three profiles are retained with scope.profileReduction fixed to the const 'none', every claim is status 'pending' or 'experimental' with zero promoted claims, the September 16 failure is retained with its exceeding 169.6893 ms value and 'overall failed' verdict and is structurally un-deletable (validator 'Historical September 16 failed simulation must remain attributed and retained'), and artifact identity is split correctly across source/npm/installer/container with container explicitly 'not-observed'. However the documentation is not internally consistent with its own supplied evidence at this revision: (a) the packet's own final CI state is a workflow failure (typecheck, both production builds, release safety, ordinary test, verification) with 3 failing tests and 5 failing suites, and the merge-identity receipt proves the three failing source blobs are byte-identical in the later coordinator source 1ff266cb — yet the ledger records no evidence entry, no gate, and no claim for this failing build, while it does record the analogous failing npm audit as gate dependency-audit status 'failed'. The asymmetry is a real honesty gap, not a cosmetic one. (b) The publication diff adds a README link to SECURITY.md while the ledger's own claim publication-threat-model states no SECURITY.md exists in the captured tree; either the link is dangling or the ledger inventory is stale, and neither state is reconciled in the supplied text. (c) Several unsupplied-but-cited documents (mcp-isolation-v1-evidence.md) are referenced as source-of-truth by the architecture diff without a ledger evidence entry. Docs honesty A- requires 'every support/maturity/security/migration/runtime claim maps to an exact-source/artifact evidence entry' (scorecard.json docs criteria[0]); a visible, reproducible, byte-persistent build failure at the very revision being published is such a claim-relevant fact and is unmapped. On correctness of what IS stated I would rate the material highly; on completeness against its own declared standard it falls short of A-.",
+    "notableStrengths": [
+      "Fail-closed schema vocabulary: validateShape throws on any unsupported keyword, so a future 'format'/'if-then' addition cannot silently pass.",
+      "Validator refuses to let reported-only metadata promote anything (acceptedEvidence requires result==='passed' && integrity==='checksummed'), which correctly neutralizes verify-main-reported and persona-later-reported.",
+      "Protected Persona budgets are pinned by operator+limit+status and by simulated-28-day observation, so threshold softening is a validation error rather than an edit.",
+      "Per-method install acceptance (every declared method per platform) prevents one npm/Windows pass certifying the installer, source, Linux or macOS.",
+      "artifact-acceptance.md correctly separates report checksum from artifact digest, and forbids decode-only attestation from counting as provenance.",
+      "Explicit statement that a successful validator, exit 0, or test counts are not grade acceptance appears in README, validator stdout, and artifact-acceptance.md."
+    ]
+  },
+  "docs_release_acceptance": {
+    "verdict": "ungradable",
+    "grade": "ungradable",
+    "rationale": "No release-acceptance grade can be issued, for Docs or any other dimension. The required inputs are absent, not merely weak: agreements.maintainer and agreements.independentReviewer are both 'pending' with null identity; all nine owners have humanName null and acceptance 'unassigned'; assessment.status is 'pending' with sourceSha null and zero grades; every one of the 11 required gates is 'pending' except dependency-audit which is 'failed'; no artifact has provenance 'verified-content' and no osInstallMatrix row is 'verified'; no installed-artifact, human-study, live-provider, security-review, or independent-assessment evidence row exists anywhere in the ledger. The published plan requires that completing implementation 'supplies evidence; it does not automatically award a grade', and the Docs row itself requires evidenceRequired ['baseline-observation','independent-assessment'] — the independent-assessment half does not exist. Additionally the candidate revision's own CI is failing, so even the engineering-discipline precondition ('meaningful root/MCP typecheck, lint, ordinary/isolated tests, API inventory, Windows/Linux builds and packed process smoke on the selected release SHA') is observably unmet at 46af3225 and, by byte-identity, at 1ff266cb. Elapsed-time gates (8 weeks adoption, 90 days contributors, 7/28 elapsed days live, 24-hour runtime) cannot have elapsed given declaredAt 2026-10-03T21:32:32Z. I will not invent installation, runtime, owner agreement or human observations."
+  },
+  "canEvidenceJustifyDocsAMinusOrWiderAcceptance": {
+    "docsAMinus": "No. The ledger's own machinery blocks it: closure blockers include 'Rubric agreement/disagreements unresolved', 'Accountable human owner assignments pending', 'Proposed numeric contracts require prior agreement', 'Declared profiles/OS/install acceptance incomplete', all 11 gates pending/failed, 'Release-bound claims are incomplete', and 'All nine independent A- or better reassessments pending'. The docs-a-minus claim lists gateIds including release-acceptance and dependency-audit; dependency-audit is 'failed'.",
+    "allNineAcceptance": "No, and it is further from satisfaction than Docs alone. Security, production, community, product-fit and feature-surface have zero evidence rows of their required kinds. The shared-public profile — which production-a-minus is bound to — has no architecture decision (#573), no isolation (#574), no sharing acceptance (#575), and only a single 'pending' Linux matrix row.",
+    "validatorTestCountCaveat": "Explicitly affirmed: a passing validator run and the 7861 passing tests are not release observations. In this packet the test suite is in fact failing, so even the weaker 'CI green' inference is unavailable."
+  },
+  "findings": [
+    {
+      "priority": "P0",
+      "file": "docs/audits/scorecard-563/scorecard.json",
+      "line": "gates array (dependency-audit entry, last gate) and evidence array (9 entries, ends at publication-reconciliation-2026-10-03)",
+      "title": "Failing CI at the published revision is not retained as evidence or as a gate, while the analogous failing npm audit is",
+      "evidence": "FINAL CI STATE: run 37160686065 conclusion 'failure'; typecheck, Production build (windows-latest), Production build (ubuntu-latest), Release safety (ubuntu-latest), test, verification all 'failure'; Release safety (windows-latest) 'cancelled'. ORDINARY TEST FINAL CI COUNTS: '5 failed, 5 skipped, 856 passed suites; 3 failed, 11 skipped, 7861 passed tests'. ci-merge-identity-46af3225.json unchangedFailingSourceBlobs shows scripts/run-local-jest.test.mjs, __tests__/mcp/oauthCredentialBoundary.test.ts and src/backend/services/security/isolatedMcp.ts are bytesIdentical:true between this head and latestCoordinatorSourceSha 1ff266cb. The ledger contains no evidence row with result 'failed' for these runs and no gate analogous to dependency-audit. README.md 'Verified dated baseline' instead advertises only the passing verify run 37129765836 at the older planning main.",
+      "remediation": "Add a checksummed source-check evidence entry (result 'failed', integrity 'checksummed', sourceSha 46af3225..., artifactId null or a new source artifact, raw pointing at the retained ci-failures-46af3225.json and ci-merge-identity-46af3225.json with their stated SHA-256) and a new gate e.g. 'build-verification' (kind source, status 'failed', all three profiles, owner engineering) wired into engineering-a-minus, docs-a-minus and maturity-a-minus gateIds. Also extend the required-gate list in validate-scorecard.mjs so the gate cannot be dropped. Record that the failing blobs persist into 1ff266cb."
+    },
+    {
+      "priority": "P0",
+      "file": "README.md (publication diff hunk @@ -272,10 +272,11 @@)",
+      "line": "+ 'review of the [security policy](SECURITY.md)'",
+      "title": "README is published with a link to SECURITY.md that the ledger itself says does not exist",
+      "evidence": "The diff adds 'review of the [security policy](SECURITY.md)'. scorecard.json claim publication-threat-model states: 'There is no SECURITY.md in the captured main tree; scattered source documentation and an unintegrated security proposal are not a reviewed release threat model.' publication-reconciliation.md: 'The absent `SECURITY.md` has a dated Git-tree witness.' No SECURITY.md was supplied in the packet.",
+      "remediation": "Either (a) include SECURITY.md in the same change and refresh the publication inventory and the publication-threat-model claim with the new blob identity, or (b) remove/neutralize the link in this slice. Do not publish a user-facing security-policy pointer whose target the ledger records as absent. Add a link-existence check to the publication reconciliation procedure (step 1 of 'Repeat for the actual release')."
+    },
+    {
+      "priority": "P1",
+      "file": "scripts/validate-scorecard.mjs",
+      "line": "validateShape — anyOf branch, and the gates loop 'expected' map",
+      "title": "Two concrete validator logic defects: anyOf result discarded on the error path, and gate kinds 'source'/'installed' accept over-broad evidence kinds",
+      "evidence": "(1) In validateShape the anyOf check calls validateShape(value, option, root, path) purely for its length and discards branch errors; when no branch matches, the single message 'does not match any allowed shape' is emitted with no indication of which branch was closest. Worse, anyOf is evaluated before the schema.type early-return, so for an anyOf-only subschema the keyword list check of the *branch* runs but no 'additionalProperties:false' containment of the parent is applied — acceptable here because every anyOf site is a leaf (string|null), but it is a latent hazard if anyOf is ever used over objects. (2) The gates loop uses expected = { source: ['source-check','offline-simulation'], ... }. The gate persona-current-soak is kind 'source' and its description demands 'Full unchanged offline soak and validator pass'; a bare 'source-check' row would satisfy it. Conversely gate dependency-audit is also kind 'source', so an offline-simulation row could pass it. (3) acceptedEvidence is referenced inside the budgets loop and the agreements loop before its function declaration appears later in validateScorecard — this works only because of function hoisting; a future refactor to const/arrow silently breaks it.",
+      "remediation": "(1) Collect and surface anyOf branch errors (e.g. push the branch with the fewest errors) and add a guard rejecting anyOf over 'object' types unless each branch is self-contained. (2) Narrow gate kinds: add a per-gate-id required evidence-kind table (persona-current-soak => ['offline-simulation'], dependency-audit => ['source-check']) rather than a kind-class table. (3) Hoist acceptedEvidence above its first use or convert to a module-level helper taking (indexed, fail)."
+    },
+    {
+      "priority": "P1",
+      "file": "scripts/validate-scorecard.mjs",
+      "line": "evidence loop — 'installed' completeness expression inside the artifactProof block",
+      "title": "Source-kind artifacts bypass the installed-runtime requirement in a way that lets a 'source-build' installed claim escape",
+      "evidence": "const installed = artifact?.kind === 'source' || evidence.profileIds.every(...installed-runtime passed...). artifact-acceptance.md states a source-archive report 'cannot qualify installed-artifact evidence', yet the only structural bar is the earlier check 'evidence.kind === installed-artifact && (!artifact || artifact.kind === \"source\" ...)' which rejects kind 'source' but NOT kind 'source-build'. For a 'source-build' artifact the disjunct is false so runtime rows are required — that is correct — but the short-circuit means any future artifact kind added to the enum and treated as source-like would silently skip runtime coverage. Separately, contentAccepted is populated only when evidence.result==='passed'; a 'failed' installed report correctly cannot promote, which matches artifact-acceptance.md item 5.",
+      "remediation": "Replace artifact?.kind === 'source' with an explicit allowlist constant (e.g. SOURCE_ONLY_ARTIFACT_KINDS = new Set(['source'])) and assert that any artifact kind not in that set requires installed-runtime rows. Add a boundary test asserting a 'source-build' artifact with no installed-runtime row fails."
+    },
+    {
+      "priority": "P1",
+      "file": "docs/audits/scorecard-563/scorecard.json",
+      "line": "claims entry 'production-a-minus' (profileId 'shared-public')",
+      "title": "Production A- is bound solely to the shared-public profile, leaving local and worker production-readiness without a claim row",
+      "evidence": "production-a-minus has profileId 'shared-public'. Every other dimension claim uses 'local-owner' except persona-unattended/publication-worker-recovery ('persistent-worker'). The validator requires only one claim per dimension ('Missing claim for dimension'), so local-owner and persistent-worker production-readiness — install/upgrade/backup/restore, RTO, RPO on the current default envelope — have no claim to promote or block. The rubric row's own criteria[0] says 'each claimed platform/install profile'.",
+      "remediation": "Split into production-local-a-minus (local-owner), production-worker-a-minus (persistent-worker) and production-shared-a-minus (shared-public), each with its profile-appropriate gateIds, and strengthen the validator to require at least one claim per (dimension, declared profile) pair where the rubric criteria name that profile."
+    },
+    {
+      "priority": "P1",
+      "file": "docs/audits/scorecard-563/README.md",
+      "line": "'Verified dated baseline' section, paragraph beginning 'The public API reports verify run 37129765836 attempt 1 passed at that source SHA.'",
+      "title": "Residual overclaim by omission: the document advertises a passing verify run but never discloses that the publishing revision's own verification fails",
+      "evidence": "README.md retains the September 16 failure and the failing October npm audit explicitly ('The failed dependency gate stays visible'), establishing the document's own standard for surfacing negatives. The failing CI at 46af3225 is of the same character and is absent. The retained CI observation's own scope note says 'this is not a full workflow success', and FINAL CI STATE confirms conclusion 'failure'.",
+      "remediation": "Add a dated paragraph in 'Verified dated baseline' disclosing run 37160686065 conclusion failure, the five failing jobs, the 3 failed tests / 5 failed suites, the synthetic-merge identity 4d8fe9f (tree equal to head 831df1e2), and the byte-identity of the failing blobs with 1ff266cb. State that the older passing run 37129765836 belongs to a different tree."
+    },
+    {
+      "priority": "P2",
+      "file": "docs/project-status.md (publication diff hunk @@ -12,6 +12,8 @@) and docs/architecture/README.md (hunk @@ -18,6 +18,12 @@)",
+      "line": "'+The development source also contains an opt-in [owner API bearer policy]...' and '+The [MCP isolation source primitive](../security/mcp-isolation-v1-evidence.md)'",
+      "title": "Published docs cite two source contracts that have no ledger evidence entry, and one cited file was not supplied",
+      "evidence": "docs/security/owner-access-v1.md is supplied and is correctly self-labelled 'Status: proposed implementation contract for #566–#568' with 'This document awards no grade'. docs/security/mcp-isolation-v1-evidence.md is cited but absent from the packet. Neither appears in scorecard.json evidence[], artifacts[], or claims[].evidenceIds. The ledger's rule 2 ('Record exact SHA, owner, profile IDs ... raw payload location/SHA-256') is therefore not applied to the very documents the publication diff newly advertises to users.",
+      "remediation": "Add a checksummed source-check evidence row covering both security contract documents at 46af3225 (with blob SHA-256), reference it from publication-local-ingress and publication-mcp-confinement, and ensure the isolation document exists at the published SHA before the architecture link is merged. The isolatedMcp.ts typecheck failures (TS2769 at lines 127 and 169) are directly relevant context for that claim and should be cited in its limits."
+    },
+    {
+      "priority": "P2",
+      "file": "docs/audits/scorecard-563/scorecard.json",
+      "line": "budgets entry 'live-spend' (limit 0, unit 'USD')",
+      "title": "Encoding an unset envelope as a zero numeric limit is a schema-logic hazard rather than a missing-value representation",
+      "evidence": "live-spend has operator '<=', limit 0, and a denominator/basis paragraph explaining that zero 'records the currently unset numeric run envelope, not a denial'. satisfies() will treat any measured spend > 0 as a contract breach, and the ledger's own prose says a dollar CLI argument is not monetary enforcement. A future authorized paid run would have to edit the limit, which looks indistinguishable from weakening a budget.",
+      "remediation": "Allow limit null for an undeclared envelope (schema anyOf number|null) and make the validator treat a null-limit budget as unmeasurable — any metric referencing it fails with 'envelope not declared'. That preserves the honest 'unset' meaning without creating a false zero threshold."
+    },
+    {
+      "priority": "P2",
+      "file": "scripts/validate-scorecard.mjs",
+      "line": "closure blockers block, 'acceptedExperimentalLive' expression",
+      "title": "The persona-live gate can be bypassed by a reviewer-accepted experimental claim, which is defensible but under-constrained",
+      "evidence": "acceptedExperimentalLive exempts gate persona-live from blocking whenever assessment.status==='completed' and acceptedExperimentalClaimIds includes 'persona-unattended'. No other gate has such an exemption, and the exemption does not require that the Maturity row's non-live criteria passed, nor that README/project-status actually label Personas experimental at the assessed SHA. README.md says exclusions 'may remain experimental only with explicit independent acceptance and visible limits' — 'visible limits' is unenforced.",
+      "remediation": "Additionally require, for the exemption, that gate persona-current-soak is 'passed' and that an evidence row of kind 'independent-assessment' at the assessed SHA names the accepted exclusion. Add a boundary test that the exemption alone does not clear closure when persona-current-soak is pending."
+    },
+    {
+      "priority": "P3",
+      "file": "scripts/validate-scorecard.test.mjs",
+      "line": "test('dated baseline is structurally valid...') and the artifactReportFixture helper",
+      "title": "Boundary tests depend on positional evidence/gate indices and on repository files, reducing their durability as a contract",
+      "evidence": "Tests mutate l.evidence[0], l.evidence[2], l.evidence[3], l.gates[0], l.gates[1], l.claims[0], l.profiles[0] by index. Adding or reordering a ledger entry silently changes what each negative test exercises (e.g. 'rejects(l => { l.evidence[2].kind = \"live-provider\" })' assumes index 2 is persona-later-reported). artifactReportFixture copies real evidence payloads from the repo, so the suite cannot run against the packet alone.",
+      "remediation": "Select entries by id (find(e => e.id === '...')) in every negative test, and add an assertion that the baseline ledger's evidence ids match an expected set so reordering is caught explicitly."
+    },
+    {
+      "priority": "P3",
+      "file": "docs/audits/scorecard-563/README.md",
+      "line": "'Files and reproducible checks' bullet list — 'publication reconciliation ... maps eleven concrete publication claims'",
+      "title": "Count statements are duplicated in prose in three places and are not machine-checked",
+      "evidence": "README.md says 'eleven concrete publication claims' and 'a checksummed twelve-document source inventory'; publication-reconciliation.md repeats 'twelve named documentation files' and 'Eleven concrete publication claims'. scorecard.json contains exactly 11 publication-* claims, but nothing enforces the correspondence, and the twelve-document count lives only in the unsupplied payload.",
+      "remediation": "Have the validator assert that the count of claims whose id starts with 'publication-' matches a declared number, and that each references publication-reconciliation-2026-10-03."
+    }
+  ],
+  "nineDimensionReadiness": [
+    {
+      "dimension": "Idea / product fit",
+      "original": "A-",
+      "evidenceInLedger": "none of required kind (human-study)",
+      "readiness": "not-started",
+      "blocking": "pilot-users budget 'proposed'; 8 elapsed weeks (4838400 s) cannot have elapsed since declaredAt 2026-10-03; gates rubric-agreement, human-evidence, independent-reassessment pending"
+    },
+    {
+      "dimension": "Feature surface",
+      "original": "A-",
+      "evidenceInLedger": "none of required kinds (installed-artifact, human-study)",
+      "readiness": "not-started",
+      "blocking": "#526 128-tool reachability unverified; #517 only a PR #585 draft at dfea3ae3; novice-success/novice-time budgets 'proposed'"
+    },
+    {
+      "dimension": "Engineering discipline",
+      "original": "B+",
+      "evidenceInLedger": "verify-main-reported (integrity 'reported-only', cannot promote); baseline-source-observation; dependency-audit-2026-10-03 (FAILED)",
+      "readiness": "regressed-at-this-revision",
+      "blocking": "gate dependency-audit 'failed'; unrecorded CI failure at 46af3225 persisting into 1ff266cb; no verified-content artifact; no release drill"
+    },
+    {
+      "dimension": "Code health",
+      "original": "B-",
+      "evidenceInLedger": "none of required kinds",
+      "readiness": "not-started",
+      "blocking": "second-human maintenance demonstration absent; #571 unstarted; typecheck errors in src/backend/services/security/isolatedMcp.ts indicate boundary work is incomplete"
+    },
+    {
+      "dimension": "Security",
+      "original": "C+",
+      "evidenceInLedger": "none of required kinds (security-review, installed-artifact); six publication-* claims all 'pending'",
+      "readiness": "not-started-with-open-failure",
+      "blocking": "10 affected packages (8 high, 1 critical, 1 moderate) unremediated; no SECURITY.md at captured tree while README now links it; owner-access-v1.md is 'proposed'; MCP isolation primitive not wired to transport and fails typecheck"
+    },
+    {
+      "dimension": "Maturity / stability",
+      "original": "C",
+      "evidenceInLedger": "persona-september16-failure (FAILED, checksummed); persona-later-reported (reported-only)",
+      "readiness": "evidence-retained-but-negative",
+      "blocking": "gate persona-current-soak pending; 20 budgets on maturity-a-minus of which runtime/live are all 'proposed'; 7/28 elapsed-day live stages not run; original #520 OOM workload unconfirmed"
+    },
+    {
+      "dimension": "Community / bus factor",
+      "original": "D",
+      "evidenceInLedger": "none",
+      "readiness": "not-started",
+      "blocking": "backup-maintainers and human-contributors 'proposed'; 90 elapsed days (7776000 s) unelapsed; all owners humanName null"
+    },
+    {
+      "dimension": "Docs honesty",
+      "original": "A",
+      "evidenceInLedger": "baseline-2026-10-03 and publication-reconciliation-2026-10-03 (both passed/checksummed per declaration, unverified by me)",
+      "readiness": "most-advanced-but-incomplete",
+      "blocking": "required kind 'independent-assessment' absent; failing-CI disclosure gap; SECURITY.md link/inventory contradiction; gates release-acceptance and dependency-audit not passed"
+    },
+    {
+      "dimension": "Production-readiness",
+      "original": "C-",
+      "evidenceInLedger": "none of required kinds",
+      "readiness": "not-started",
+      "blocking": "all osInstallMatrix rows documented-unverified or pending; #573/#574/#575 undecided; recovery-rto, backup-rpo, duplicate-effects 'proposed'; claim bound only to shared-public"
+    }
+  ],
+  "unresolvedAcceptanceGates": [
+    "rubric-agreement — pending; agreements.maintainer and agreements.independentReviewer both status 'pending', identity null; 3 retained disagreements",
+    "release-acceptance — pending; no artifact has provenance 'verified-content'; container-unverified is 'not-observed'",
+    "local-security — pending",
+    "worker-operations — pending",
+    "shared-profile — pending",
+    "human-evidence — pending; requires elapsed windows that have not elapsed",
+    "persona-current-soak — pending",
+    "persona-manual — pending (screen reader, 200% zoom, locale, recovery ZIP)",
+    "persona-live — pending (1 h smoke, 7 and 28 elapsed days)",
+    "cross-stream-contracts — pending; FACTORY/O/brain-online/UI pins owner-held",
+    "independent-reassessment — pending; this automated review does not satisfy it",
+    "dependency-audit — FAILED; 8 high + 1 critical + 1 moderate at a lockfile blob identical to planning main",
+    "NOT YET A GATE: build/verification failure at 46af3225 (and byte-identical blobs at 1ff266cb) — must be created and recorded",
+    "Owner assignments — all nine owners humanName null, acceptance 'unassigned'",
+    "Budgets — every non-Persona budget is status 'proposed' with empty agreementEvidenceIds, so none can establish acceptance"
+  ],
+  "recommendedNextActions": [
+    "P0: Record the failing CI at 46af3225 as a checksummed failed source-check evidence row plus a new 'build-verification' gate (status failed), wire it into engineering/docs/maturity claims, and add it to the validator's required-gate list. Note explicitly that the three failing blobs are byte-identical at coordinator source 1ff266cb, so the failure is not an artifact of the synthetic merge 4d8fe9f.",
+    "P0: Resolve the SECURITY.md contradiction before publication — either ship SECURITY.md with a refreshed inventory and updated publication-threat-model claim, or drop the README link in this slice.",
+    "P0: Disclose the failing verification in docs/audits/scorecard-563/README.md 'Verified dated baseline' with the same visibility already given to the failing npm audit and the September 16 failure.",
+    "P1: Fix the validator defects — surface anyOf branch errors; replace the kind-class gate/evidence table with a per-gate-id required-kind table (persona-current-soak => offline-simulation, dependency-audit => source-check); replace artifact?.kind === 'source' with an explicit allowlist; hoist acceptedEvidence above first use.",
+    "P1: Split production-a-minus into per-profile claims and require at least one claim per (dimension, profile) named in rubric criteria.",
+    "P1: Add ledger evidence rows for docs/security/owner-access-v1.md and docs/security/mcp-isolation-v1-evidence.md with blob SHA-256, and cite the isolatedMcp.ts TS2769 failures in the MCP-confinement claim's limits.",
+    "P2: Change live-spend limit to nullable and make null-limit budgets unmeasurable rather than zero-thresholded.",
+    "P2: Constrain the persona-live experimental exemption to additionally require persona-current-soak passed and a named independent-assessment row.",
+    "P2: Re-key the boundary tests by evidence/gate id instead of array index, and add an expected-id-set assertion.",
+    "P2 (contract change, recommended not enacted): consider adding a mandatory 'current-revision verification' gate class to the #564 contract so that no publication slice can be merged while its own typecheck/build/test are failing. This review does not enact any change.",
+    "P3: Machine-check the eleven-claim / twelve-document counts repeated in prose.",
+    "Procedural: before any A- can be considered for Docs, supply (a) the seven unsupplied evidence payloads so declared SHA-256 values can be recomputed, (b) a named maintainer and a named independent reviewer who are not the same identity, (c) a green verification run at the selected release SHA, and (d) an independent-assessment evidence row produced by a human or externally attributable reviewer at that SHA."
+  ]
+}

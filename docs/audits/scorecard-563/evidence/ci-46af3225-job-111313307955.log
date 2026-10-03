@@ -1,0 +1,1521 @@
+﻿2026-10-03T23:09:50.5376040Z Current runner version: '2.337.0'
+2026-10-03T23:09:50.5390462Z ##[group]Runner Image Provisioner
+2026-10-03T23:09:50.5391074Z Hosted Compute Agent
+2026-10-03T23:09:50.5391466Z Version: 20260901.588
+2026-10-03T23:09:50.5391905Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-03T23:09:50.5392345Z Build Date: 2026-09-01T19:56:44Z
+2026-10-03T23:09:50.5392772Z Worker ID: {70d06733-9494-409e-a7ab-49e3dfbb9b3c}
+2026-10-03T23:09:50.5393172Z Azure Region: centralus
+2026-10-03T23:09:50.5393558Z ##[endgroup]
+2026-10-03T23:09:50.5394538Z ##[group]Operating System
+2026-10-03T23:09:50.5394880Z Ubuntu
+2026-10-03T23:09:50.5395220Z 24.04.5
+2026-10-03T23:09:50.5395518Z LTS
+2026-10-03T23:09:50.5395804Z ##[endgroup]
+2026-10-03T23:09:50.5396187Z ##[group]Runner Image
+2026-10-03T23:09:50.5396520Z Image: ubuntu-24.04
+2026-10-03T23:09:50.5396867Z Version: 20260927.320.1
+2026-10-03T23:09:50.5397577Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-03T23:09:50.5398620Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-03T23:09:50.5399154Z ##[endgroup]
+2026-10-03T23:09:50.5399814Z ##[group]GITHUB_TOKEN Permissions
+2026-10-03T23:09:50.5401070Z Contents: read
+2026-10-03T23:09:50.5401500Z Metadata: read
+2026-10-03T23:09:50.5401818Z ##[endgroup]
+2026-10-03T23:09:50.5402979Z Secret source: Actions
+2026-10-03T23:09:50.5403547Z Cache mode: write
+2026-10-03T23:09:50.5404067Z Prepare workflow directory
+2026-10-03T23:09:50.5621053Z Prepare all required actions
+2026-10-03T23:09:50.5650205Z Getting action download info
+2026-10-03T23:09:50.7813765Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-03T23:09:50.8570896Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-03T23:09:51.0327619Z Complete job name: Release safety (ubuntu-latest)
+2026-10-03T23:09:51.0787144Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-10-03T23:09:51.0787612Z with:
+2026-10-03T23:09:51.0787845Z   persist-credentials: false
+2026-10-03T23:09:51.0788272Z   repository: mario-andreschak/FLUJO
+2026-10-03T23:09:51.0790180Z   token: ***
+2026-10-03T23:09:51.0790402Z   ssh-strict: true
+2026-10-03T23:09:51.0790630Z   ssh-user: git
+2026-10-03T23:09:51.0790850Z   clean: true
+2026-10-03T23:09:51.0791082Z   sparse-checkout-cone-mode: true
+2026-10-03T23:09:51.0791354Z   fetch-depth: 1
+2026-10-03T23:09:51.0791582Z   fetch-tags: false
+2026-10-03T23:09:51.0791816Z   show-progress: true
+2026-10-03T23:09:51.0792050Z   lfs: false
+2026-10-03T23:09:51.0792267Z   submodules: false
+2026-10-03T23:09:51.0792508Z   set-safe-directory: true
+2026-10-03T23:09:51.0792779Z   allow-unsafe-pr-checkout: false
+2026-10-03T23:09:51.0793116Z ##[endgroup]
+2026-10-03T23:09:51.1425677Z Syncing repository: mario-andreschak/FLUJO
+2026-10-03T23:09:51.1426832Z ##[group]Getting Git version info
+2026-10-03T23:09:51.1427268Z Working directory is '/home/runner/work/FLUJO/FLUJO'
+2026-10-03T23:09:51.1427844Z [command]/usr/bin/git version
+2026-10-03T23:09:51.1503925Z git version 2.55.0
+2026-10-03T23:09:51.1517058Z ##[endgroup]
+2026-10-03T23:09:51.1528088Z Temporarily overriding HOME='/home/runner/work/_temp/f81d6167-11bf-449e-93dc-c4c3c3862364' before making global git config changes
+2026-10-03T23:09:51.1529260Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:09:51.1531609Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:09:51.1574999Z Deleting the contents of '/home/runner/work/FLUJO/FLUJO'
+2026-10-03T23:09:51.1578715Z ##[group]Initializing the repository
+2026-10-03T23:09:51.1582075Z [command]/usr/bin/git init /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:09:51.1709088Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-03T23:09:51.1710026Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-03T23:09:51.1711090Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-03T23:09:51.1712055Z hint: call:
+2026-10-03T23:09:51.1712381Z hint:
+2026-10-03T23:09:51.1712815Z hint: 	git config --global init.defaultBranch <name>
+2026-10-03T23:09:51.1713311Z hint:
+2026-10-03T23:09:51.1713776Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-03T23:09:51.1714534Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-03T23:09:51.1715157Z hint:
+2026-10-03T23:09:51.1715485Z hint: 	git branch -m <name>
+2026-10-03T23:09:51.1715856Z hint:
+2026-10-03T23:09:51.1716357Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-03T23:09:51.1717134Z Initialized empty Git repository in /home/runner/work/FLUJO/FLUJO/.git/
+2026-10-03T23:09:51.1718676Z [command]/usr/bin/git remote add origin https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:09:51.1757819Z ##[endgroup]
+2026-10-03T23:09:51.1761562Z ##[group]Disabling automatic garbage collection
+2026-10-03T23:09:51.1762161Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-03T23:09:51.1789222Z ##[endgroup]
+2026-10-03T23:09:51.1789808Z ##[group]Setting up auth
+2026-10-03T23:09:51.1793761Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:09:51.1819761Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:09:51.2099751Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:09:51.2125321Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:09:51.2288519Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:09:51.2314244Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:09:51.2479476Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-03T23:09:51.2509896Z ##[endgroup]
+2026-10-03T23:09:51.2510498Z ##[group]Fetching the repository
+2026-10-03T23:09:51.2516318Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e:refs/remotes/pull/607/merge
+2026-10-03T23:09:53.9724625Z From https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:09:53.9726100Z  * [new ref]         4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e -> pull/607/merge
+2026-10-03T23:09:53.9729816Z ##[endgroup]
+2026-10-03T23:09:53.9731020Z ##[group]Determining the checkout info
+2026-10-03T23:09:53.9732235Z ##[endgroup]
+2026-10-03T23:09:53.9733074Z [command]/usr/bin/git sparse-checkout disable
+2026-10-03T23:09:53.9970455Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-03T23:09:54.0158816Z ##[group]Checking out the ref
+2026-10-03T23:09:54.0160509Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/607/merge
+2026-10-03T23:09:54.2746333Z Note: switching to 'refs/remotes/pull/607/merge'.
+2026-10-03T23:09:54.2746643Z 
+2026-10-03T23:09:54.2746793Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-03T23:09:54.2747121Z changes and commit them, and you can discard any commits you make in this
+2026-10-03T23:09:54.2747426Z state without impacting any branches by switching back to a branch.
+2026-10-03T23:09:54.2747620Z 
+2026-10-03T23:09:54.2747760Z If you want to create a new branch to retain commits you create, you may
+2026-10-03T23:09:54.2748235Z do so (now or later) by using -c with the switch command. Example:
+2026-10-03T23:09:54.2748464Z 
+2026-10-03T23:09:54.2748895Z   git switch -c <new-branch-name>
+2026-10-03T23:09:54.2749008Z 
+2026-10-03T23:09:54.2749094Z Or undo this operation with:
+2026-10-03T23:09:54.2749202Z 
+2026-10-03T23:09:54.2749272Z   git switch -
+2026-10-03T23:09:54.2749365Z 
+2026-10-03T23:09:54.2749521Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-03T23:09:54.2749704Z 
+2026-10-03T23:09:54.2749916Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a
+2026-10-03T23:09:54.2765759Z ##[endgroup]
+2026-10-03T23:09:54.3161510Z [command]/usr/bin/git log -1 --format=%H
+2026-10-03T23:09:54.3182269Z 4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e
+2026-10-03T23:09:54.3189170Z ##[group]Removing auth
+2026-10-03T23:09:54.3191440Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:09:54.3216363Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:09:54.3389052Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:09:54.3410679Z http.https://github.com/.extraheader
+2026-10-03T23:09:54.3415756Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-03T23:09:54.3469870Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:09:54.3638883Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:09:54.3656406Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:09:54.3818644Z ##[endgroup]
+2026-10-03T23:09:54.4056037Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-03T23:09:54.4056293Z with:
+2026-10-03T23:09:54.4056431Z   node-version: 22
+2026-10-03T23:09:54.4056570Z   always-auth: false
+2026-10-03T23:09:54.4056753Z   check-latest: false
+2026-10-03T23:09:54.4058830Z   token: ***
+2026-10-03T23:09:54.4059036Z ##[endgroup]
+2026-10-03T23:09:54.5514624Z Found in cache @ /opt/hostedtoolcache/node/22.23.3/x64
+2026-10-03T23:09:54.5518178Z (node:2166) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-03T23:09:54.5518848Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-03T23:09:54.5520016Z ##[group]Environment details
+2026-10-03T23:09:54.8380330Z node: v22.23.3
+2026-10-03T23:09:54.8380719Z npm: 10.9.9
+2026-10-03T23:09:54.8380912Z yarn: 1.22.22
+2026-10-03T23:09:54.8382855Z ##[endgroup]
+2026-10-03T23:09:54.8480553Z ##[group]Run npm ci --include=dev
+2026-10-03T23:09:54.8480773Z [36;1mnpm ci --include=dev[0m
+2026-10-03T23:09:55.0137403Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:09:55.0137580Z ##[endgroup]
+2026-10-03T23:09:56.6719413Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-03T23:09:58.2652186Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-03T23:09:58.3143479Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-03T23:10:00.6591776Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:10:00.7846643Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:10:19.0417692Z 
+2026-10-03T23:10:19.0418602Z added 1341 packages, and audited 1348 packages in 24s
+2026-10-03T23:10:19.0419120Z 
+2026-10-03T23:10:19.0419322Z 447 packages are looking for funding
+2026-10-03T23:10:19.0419606Z   run `npm fund` for details
+2026-10-03T23:10:19.0426932Z 
+2026-10-03T23:10:19.0427310Z found 0 vulnerabilities
+2026-10-03T23:10:19.1201919Z ##[group]Run node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
+2026-10-03T23:10:19.1203123Z [36;1mnode --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs[0m
+2026-10-03T23:10:19.1256452Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:10:19.1256601Z ##[endgroup]
+2026-10-03T23:10:19.1779350Z TAP version 13
+2026-10-03T23:10:20.2578607Z # Subtest: the release includes all four standalone MCP packages followed by the app
+2026-10-03T23:10:20.2582515Z ok 1 - the release includes all four standalone MCP packages followed by the app
+2026-10-03T23:10:20.2583058Z   ---
+2026-10-03T23:10:20.2583404Z   duration_ms: 1.993497
+2026-10-03T23:10:20.2583664Z   type: 'test'
+2026-10-03T23:10:20.2583872Z   ...
+2026-10-03T23:10:20.2584267Z # Subtest: only an exact main checkout in the official Actions repository can publish
+2026-10-03T23:10:20.2590298Z ok 2 - only an exact main checkout in the official Actions repository can publish
+2026-10-03T23:10:20.2590987Z   ---
+2026-10-03T23:10:20.2591212Z   duration_ms: 0.36433
+2026-10-03T23:10:20.2591441Z   type: 'test'
+2026-10-03T23:10:20.2591615Z   ...
+2026-10-03T23:10:20.2591965Z # Subtest: publication rejects mismatched GITHUB_REPOSITORY (fork/FLUJO)
+2026-10-03T23:10:20.2593411Z ok 3 - publication rejects mismatched GITHUB_REPOSITORY (fork/FLUJO)
+2026-10-03T23:10:20.2593899Z   ---
+2026-10-03T23:10:20.2594069Z   duration_ms: 0.193042
+2026-10-03T23:10:20.2594294Z   type: 'test'
+2026-10-03T23:10:20.2594552Z   ...
+2026-10-03T23:10:20.2594985Z # Subtest: publication rejects mismatched GITHUB_EVENT_NAME (pull_request)
+2026-10-03T23:10:20.2595770Z ok 4 - publication rejects mismatched GITHUB_EVENT_NAME (pull_request)
+2026-10-03T23:10:20.2596127Z   ---
+2026-10-03T23:10:20.2596292Z   duration_ms: 0.069795
+2026-10-03T23:10:20.2596534Z   type: 'test'
+2026-10-03T23:10:20.2596742Z   ...
+2026-10-03T23:10:20.2597470Z # Subtest: publication rejects mismatched GITHUB_EVENT_NAME (push)
+2026-10-03T23:10:20.2598242Z ok 5 - publication rejects mismatched GITHUB_EVENT_NAME (push)
+2026-10-03T23:10:20.2614305Z   ---
+2026-10-03T23:10:20.2616710Z   duration_ms: 0.066851
+2026-10-03T23:10:20.2616926Z   type: 'test'
+2026-10-03T23:10:20.2617110Z   ...
+2026-10-03T23:10:20.2617481Z # Subtest: publication rejects mismatched GITHUB_REF (refs/pull/1/merge)
+2026-10-03T23:10:20.2618091Z ok 6 - publication rejects mismatched GITHUB_REF (refs/pull/1/merge)
+2026-10-03T23:10:20.2618410Z   ---
+2026-10-03T23:10:20.2618590Z   duration_ms: 0.064217
+2026-10-03T23:10:20.2618795Z   type: 'test'
+2026-10-03T23:10:20.2618973Z   ...
+2026-10-03T23:10:20.2641131Z # Subtest: publication rejects mismatched GITHUB_REF (refs/heads/hackathon)
+2026-10-03T23:10:20.2641707Z ok 7 - publication rejects mismatched GITHUB_REF (refs/heads/hackathon)
+2026-10-03T23:10:20.2642022Z   ---
+2026-10-03T23:10:20.2642208Z   duration_ms: 0.054972
+2026-10-03T23:10:20.2642407Z   type: 'test'
+2026-10-03T23:10:20.2642581Z   ...
+2026-10-03T23:10:20.2643019Z # Subtest: publication rejects mismatched GITHUB_SHA (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
+2026-10-03T23:10:20.2643985Z ok 8 - publication rejects mismatched GITHUB_SHA (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
+2026-10-03T23:10:20.2644363Z   ---
+2026-10-03T23:10:20.2644537Z   duration_ms: 0.083766
+2026-10-03T23:10:20.2644735Z   type: 'test'
+2026-10-03T23:10:20.2644903Z   ...
+2026-10-03T23:10:20.2645329Z # Subtest: publication rejects mismatched RELEASE_SHA (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
+2026-10-03T23:10:20.2646167Z ok 9 - publication rejects mismatched RELEASE_SHA (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
+2026-10-03T23:10:20.2646550Z   ---
+2026-10-03T23:10:20.2646719Z   duration_ms: 0.220332
+2026-10-03T23:10:20.2646912Z   type: 'test'
+2026-10-03T23:10:20.2647084Z   ...
+2026-10-03T23:10:20.2647398Z # Subtest: publication rejects mismatched RELEASE_SHA (not-a-commit)
+2026-10-03T23:10:20.2647870Z ok 10 - publication rejects mismatched RELEASE_SHA (not-a-commit)
+2026-10-03T23:10:20.2648338Z   ---
+2026-10-03T23:10:20.2648510Z   duration_ms: 0.27875
+2026-10-03T23:10:20.2648704Z   type: 'test'
+2026-10-03T23:10:20.2648892Z   ...
+2026-10-03T23:10:20.2649220Z # Subtest: publication rejects mismatched RELEASE_VERSION (3.40.2)
+2026-10-03T23:10:20.2649656Z ok 11 - publication rejects mismatched RELEASE_VERSION (3.40.2)
+2026-10-03T23:10:20.2649948Z   ---
+2026-10-03T23:10:20.2650121Z   duration_ms: 0.189265
+2026-10-03T23:10:20.2650320Z   type: 'test'
+2026-10-03T23:10:20.2650510Z   ...
+2026-10-03T23:10:20.2650978Z # Subtest: publication rejects mismatched RELEASE_VERSION (3.40.1-rc.1)
+2026-10-03T23:10:20.2651480Z ok 12 - publication rejects mismatched RELEASE_VERSION (3.40.1-rc.1)
+2026-10-03T23:10:20.2651788Z   ---
+2026-10-03T23:10:20.2651962Z   duration_ms: 0.072029
+2026-10-03T23:10:20.2652162Z   type: 'test'
+2026-10-03T23:10:20.2652341Z   ...
+2026-10-03T23:10:20.2652708Z # Subtest: publication rejects a checkout different from the workflow revision
+2026-10-03T23:10:20.2653231Z ok 13 - publication rejects a checkout different from the workflow revision
+2026-10-03T23:10:20.2653568Z   ---
+2026-10-03T23:10:20.2653748Z   duration_ms: 0.111398
+2026-10-03T23:10:20.2653951Z   type: 'test'
+2026-10-03T23:10:20.2654132Z   ...
+2026-10-03T23:10:20.2654473Z # Subtest: publishing requires the dedicated GitHub-hosted OIDC workflow
+2026-10-03T23:10:20.2654962Z ok 14 - publishing requires the dedicated GitHub-hosted OIDC workflow
+2026-10-03T23:10:20.2655286Z   ---
+2026-10-03T23:10:20.2655462Z   duration_ms: 0.208104
+2026-10-03T23:10:20.2655661Z   type: 'test'
+2026-10-03T23:10:20.2655839Z   ...
+2026-10-03T23:10:20.2656327Z # Subtest: OIDC diagnostics exchange fresh package-specific identities without publishing or exposing tokens
+2026-10-03T23:10:20.2657087Z ok 15 - OIDC diagnostics exchange fresh package-specific identities without publishing or exposing tokens
+2026-10-03T23:10:20.2657519Z   ---
+2026-10-03T23:10:20.2657692Z   duration_ms: 1.462386
+2026-10-03T23:10:20.2657889Z   type: 'test'
+2026-10-03T23:10:20.2658168Z   ...
+2026-10-03T23:10:20.2658693Z # Subtest: OIDC diagnostics expose rejected exchanges safely and do not treat a response without token as authentication
+2026-10-03T23:10:20.2659502Z ok 16 - OIDC diagnostics expose rejected exchanges safely and do not treat a response without token as authentication
+2026-10-03T23:10:20.2659938Z   ---
+2026-10-03T23:10:20.2660110Z   duration_ms: 0.628908
+2026-10-03T23:10:20.2660311Z   type: 'test'
+2026-10-03T23:10:20.2660484Z   ...
+2026-10-03T23:10:20.2660795Z # Subtest: OIDC identity rejection never reaches the npm exchange
+2026-10-03T23:10:20.2661236Z ok 17 - OIDC identity rejection never reaches the npm exchange
+2026-10-03T23:10:20.2661523Z   ---
+2026-10-03T23:10:20.2661698Z   duration_ms: 0.241304
+2026-10-03T23:10:20.2661895Z   type: 'test'
+2026-10-03T23:10:20.2662071Z   ...
+2026-10-03T23:10:20.2662468Z # Subtest: OIDC diagnostics redact opaque credentials reflected by the issuer and exchange
+2026-10-03T23:10:20.2663062Z ok 18 - OIDC diagnostics redact opaque credentials reflected by the issuer and exchange
+2026-10-03T23:10:20.2663425Z   ---
+2026-10-03T23:10:20.2663780Z   duration_ms: 0.308946
+2026-10-03T23:10:20.2663973Z   type: 'test'
+2026-10-03T23:10:20.2664148Z   ...
+2026-10-03T23:10:20.2664657Z # Subtest: OIDC diagnostics retain successful results and continue after transport, JSON and identity failures
+2026-10-03T23:10:20.2665363Z ok 19 - OIDC diagnostics retain successful results and continue after transport, JSON and identity failures
+2026-10-03T23:10:20.2665767Z   ---
+2026-10-03T23:10:20.2665937Z   duration_ms: 0.476749
+2026-10-03T23:10:20.2666133Z   type: 'test'
+2026-10-03T23:10:20.2666423Z   ...
+2026-10-03T23:10:20.2666841Z # Subtest: current-main verification queries the official repository and stops when main advances
+2026-10-03T23:10:20.2667243Z ok 20 - current-main verification queries the official repository and stops when main advances
+2026-10-03T23:10:20.2667484Z   ---
+2026-10-03T23:10:20.2667596Z   duration_ms: 0.112149
+2026-10-03T23:10:20.2667722Z   type: 'test'
+2026-10-03T23:10:20.2667832Z   ...
+2026-10-03T23:10:20.2668430Z # Subtest: only an explicit npm E404 means an unpublished immutable version
+2026-10-03T23:10:20.2668916Z ok 21 - only an explicit npm E404 means an unpublished immutable version
+2026-10-03T23:10:20.2669217Z   ---
+2026-10-03T23:10:20.2669387Z   duration_ms: 0.390839
+2026-10-03T23:10:20.2669583Z   type: 'test'
+2026-10-03T23:10:20.2669752Z   ...
+2026-10-03T23:10:20.2670195Z # Subtest: a successful npm response without an integrity value is not evidence of an unpublished version
+2026-10-03T23:10:20.2670864Z ok 22 - a successful npm response without an integrity value is not evidence of an unpublished version
+2026-10-03T23:10:20.2671253Z   ---
+2026-10-03T23:10:20.2671429Z   duration_ms: 0.143807
+2026-10-03T23:10:20.2671790Z   type: 'test'
+2026-10-03T23:10:20.2671961Z   ...
+2026-10-03T23:10:20.2672347Z # Subtest: registry integrity reads force online revalidation and bound a failed request
+2026-10-03T23:10:20.2672946Z ok 23 - registry integrity reads force online revalidation and bound a failed request
+2026-10-03T23:10:20.2694354Z   ---
+2026-10-03T23:10:20.2701758Z   duration_ms: 0.358992
+2026-10-03T23:10:20.2703571Z   type: 'test'
+2026-10-03T23:10:20.2703766Z   ...
+2026-10-03T23:10:20.2704185Z # Subtest: candidate identity and every artifact checksum are verified before publication
+2026-10-03T23:10:20.2704784Z ok 24 - candidate identity and every artifact checksum are verified before publication
+2026-10-03T23:10:20.2705158Z   ---
+2026-10-03T23:10:20.2705343Z   duration_ms: 73.36589
+2026-10-03T23:10:20.2705551Z   type: 'test'
+2026-10-03T23:10:20.2705746Z   ...
+2026-10-03T23:10:20.2706206Z # Subtest: packing checks every npm package name and version before producing a resumable candidate
+2026-10-03T23:10:20.2706871Z ok 25 - packing checks every npm package name and version before producing a resumable candidate
+2026-10-03T23:10:20.2707264Z   ---
+2026-10-03T23:10:20.2707443Z   duration_ms: 88.3731
+2026-10-03T23:10:20.2707647Z   type: 'test'
+2026-10-03T23:10:20.2707825Z   ...
+2026-10-03T23:10:20.2708310Z # Subtest: packing refuses an artifact with an unexpected name
+2026-10-03T23:10:20.2708764Z ok 26 - packing refuses an artifact with an unexpected name
+2026-10-03T23:10:20.2709068Z   ---
+2026-10-03T23:10:20.2709250Z   duration_ms: 0.514877
+2026-10-03T23:10:20.2709461Z   type: 'test'
+2026-10-03T23:10:20.2709642Z   ...
+2026-10-03T23:10:20.2709966Z # Subtest: packing refuses an artifact with an unexpected version
+2026-10-03T23:10:20.2710412Z ok 27 - packing refuses an artifact with an unexpected version
+2026-10-03T23:10:20.2710711Z   ---
+2026-10-03T23:10:20.2710893Z   duration_ms: 0.396659
+2026-10-03T23:10:20.2711096Z   type: 'test'
+2026-10-03T23:10:20.2711277Z   ...
+2026-10-03T23:10:20.2711531Z # Subtest: candidate rejects revision tampering
+2026-10-03T23:10:20.2711877Z ok 28 - candidate rejects revision tampering
+2026-10-03T23:10:20.2712144Z   ---
+2026-10-03T23:10:20.2712325Z   duration_ms: 129.512747
+2026-10-03T23:10:20.2712541Z   type: 'test'
+2026-10-03T23:10:20.2712722Z   ...
+2026-10-03T23:10:20.2712974Z # Subtest: candidate rejects version tampering
+2026-10-03T23:10:20.2713533Z ok 29 - candidate rejects version tampering
+2026-10-03T23:10:20.2713784Z   ---
+2026-10-03T23:10:20.2713968Z   duration_ms: 58.673881
+2026-10-03T23:10:20.2714181Z   type: 'test'
+2026-10-03T23:10:20.2714358Z   ...
+2026-10-03T23:10:20.2714604Z # Subtest: candidate rejects schema tampering
+2026-10-03T23:10:20.2714930Z ok 30 - candidate rejects schema tampering
+2026-10-03T23:10:20.2715175Z   ---
+2026-10-03T23:10:20.2715359Z   duration_ms: 58.910316
+2026-10-03T23:10:20.2715564Z   type: 'test'
+2026-10-03T23:10:20.2715896Z   ...
+2026-10-03T23:10:20.2716175Z # Subtest: candidate rejects missing package tampering
+2026-10-03T23:10:20.2716555Z ok 31 - candidate rejects missing package tampering
+2026-10-03T23:10:20.2716826Z   ---
+2026-10-03T23:10:20.2717012Z   duration_ms: 61.346197
+2026-10-03T23:10:20.2717219Z   type: 'test'
+2026-10-03T23:10:20.2717397Z   ...
+2026-10-03T23:10:20.2717670Z # Subtest: candidate rejects duplicate package tampering
+2026-10-03T23:10:20.2718211Z ok 32 - candidate rejects duplicate package tampering
+2026-10-03T23:10:20.2718496Z   ---
+2026-10-03T23:10:20.2718679Z   duration_ms: 129.439194
+2026-10-03T23:10:20.2718894Z   type: 'test'
+2026-10-03T23:10:20.2719072Z   ...
+2026-10-03T23:10:20.2719361Z # Subtest: candidate rejects unexpected package tampering
+2026-10-03T23:10:20.2719773Z ok 33 - candidate rejects unexpected package tampering
+2026-10-03T23:10:20.2720051Z   ---
+2026-10-03T23:10:20.2720229Z   duration_ms: 48.119896
+2026-10-03T23:10:20.2720438Z   type: 'test'
+2026-10-03T23:10:20.2720624Z   ...
+2026-10-03T23:10:20.2720874Z # Subtest: candidate rejects package order tampering
+2026-10-03T23:10:20.2721214Z ok 34 - candidate rejects package order tampering
+2026-10-03T23:10:20.2721477Z   ---
+2026-10-03T23:10:20.2721639Z   duration_ms: 71.879174
+2026-10-03T23:10:20.2721829Z   type: 'test'
+2026-10-03T23:10:20.2721996Z   ...
+2026-10-03T23:10:20.2722243Z # Subtest: candidate rejects path traversal tampering
+2026-10-03T23:10:20.2722585Z ok 35 - candidate rejects path traversal tampering
+2026-10-03T23:10:20.2722846Z   ---
+2026-10-03T23:10:20.2723012Z   duration_ms: 47.948727
+2026-10-03T23:10:20.2723255Z   type: 'test'
+2026-10-03T23:10:20.2723425Z   ...
+2026-10-03T23:10:20.2723734Z # Subtest: candidate rejects Windows path traversal tampering
+2026-10-03T23:10:20.2724151Z ok 36 - candidate rejects Windows path traversal tampering
+2026-10-03T23:10:20.2724447Z   ---
+2026-10-03T23:10:20.2724642Z   duration_ms: 59.557528
+2026-10-03T23:10:20.2724867Z   type: 'test'
+2026-10-03T23:10:20.2725059Z   ...
+2026-10-03T23:10:20.2725316Z # Subtest: candidate rejects absolute path tampering
+2026-10-03T23:10:20.2725698Z ok 37 - candidate rejects absolute path tampering
+2026-10-03T23:10:20.2725961Z   ---
+2026-10-03T23:10:20.2726160Z   duration_ms: 60.546077
+2026-10-03T23:10:20.2726353Z   type: 'test'
+2026-10-03T23:10:20.2726544Z   ...
+2026-10-03T23:10:20.2727014Z # Subtest: fresh publication uses each original artifact and publishes the app after all MCP packages
+2026-10-03T23:10:20.2727745Z ok 38 - fresh publication uses each original artifact and publishes the app after all MCP packages
+2026-10-03T23:10:20.2729001Z   ---
+2026-10-03T23:10:20.2729208Z   duration_ms: 2.133054
+2026-10-03T23:10:20.2729405Z   type: 'test'
+2026-10-03T23:10:20.2729617Z   ...
+2026-10-03T23:10:20.2730068Z # Subtest: a partial release resumes only missing packages and skips identical published bytes
+2026-10-03T23:10:20.2730728Z ok 39 - a partial release resumes only missing packages and skips identical published bytes
+2026-10-03T23:10:20.2731136Z   ---
+2026-10-03T23:10:20.2731323Z   duration_ms: 0.948708
+2026-10-03T23:10:20.2746686Z   type: 'test'
+2026-10-03T23:10:20.2758630Z   ...
+2026-10-03T23:10:20.2782087Z # Subtest: retry after a mid-release failure reuses the artifact set and does not republish earlier packages
+2026-10-03T23:10:20.2783075Z ok 40 - retry after a mid-release failure reuses the artifact set and does not republish earlier packages
+2026-10-03T23:10:20.2783560Z   ---
+2026-10-03T23:10:20.2783746Z   duration_ms: 1.298075
+2026-10-03T23:10:20.2784143Z   type: 'test'
+2026-10-03T23:10:20.2784318Z   ...
+2026-10-03T23:10:20.2784716Z # Subtest: a published version with different bytes aborts before any further publication
+2026-10-03T23:10:20.2785286Z ok 41 - a published version with different bytes aborts before any further publication
+2026-10-03T23:10:20.2785635Z   ---
+2026-10-03T23:10:20.2785804Z   duration_ms: 0.797871
+2026-10-03T23:10:20.2786000Z   type: 'test'
+2026-10-03T23:10:20.2786170Z   ...
+2026-10-03T23:10:20.2786713Z # Subtest: a successful publish command cannot advance the release without matching registry readback
+2026-10-03T23:10:20.2787383Z ok 42 - a successful publish command cannot advance the release without matching registry readback
+2026-10-03T23:10:20.2787780Z   ---
+2026-10-03T23:10:20.2788067Z   duration_ms: 0.836742
+2026-10-03T23:10:20.2788255Z   type: 'test'
+2026-10-03T23:10:20.2788427Z   ...
+2026-10-03T23:10:20.2788848Z # Subtest: a missing post-publish version becomes visible before any following package is published
+2026-10-03T23:10:20.2789279Z ok 43 - a missing post-publish version becomes visible before any following package is published
+2026-10-03T23:10:20.2789526Z   ---
+2026-10-03T23:10:20.2789657Z   duration_ms: 1.531981
+2026-10-03T23:10:20.2789785Z   type: 'test'
+2026-10-03T23:10:20.2789898Z   ...
+2026-10-03T23:10:20.2790230Z # Subtest: persistent missing readback stops after fifteen minutes and resumes the original artifacts without republishing
+2026-10-03T23:10:20.2790733Z ok 44 - persistent missing readback stops after fifteen minutes and resumes the original artifacts without republishing
+2026-10-03T23:10:20.2791018Z   ---
+2026-10-03T23:10:20.2791129Z   duration_ms: 2.417279
+2026-10-03T23:10:20.2791254Z   type: 'test'
+2026-10-03T23:10:20.2791365Z   ...
+2026-10-03T23:10:20.2791619Z # Subtest: slow missing responses consume the readback deadline instead of extending every delay
+2026-10-03T23:10:20.2791997Z ok 45 - slow missing responses consume the readback deadline instead of extending every delay
+2026-10-03T23:10:20.2792232Z   ---
+2026-10-03T23:10:20.2792343Z   duration_ms: 0.832164
+2026-10-03T23:10:20.2792467Z   type: 'test'
+2026-10-03T23:10:20.2792579Z   ...
+2026-10-03T23:10:20.2792837Z # Subtest: post-publish authentication errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2793224Z ok 46 - post-publish authentication errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2793456Z   ---
+2026-10-03T23:10:20.2793565Z   duration_ms: 0.928376
+2026-10-03T23:10:20.2793694Z   type: 'test'
+2026-10-03T23:10:20.2793805Z   ...
+2026-10-03T23:10:20.2794063Z # Subtest: post-publish registry service errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2794459Z ok 47 - post-publish registry service errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2794693Z   ---
+2026-10-03T23:10:20.2794800Z   duration_ms: 0.910498
+2026-10-03T23:10:20.2794925Z   type: 'test'
+2026-10-03T23:10:20.2795034Z   ...
+2026-10-03T23:10:20.2795280Z # Subtest: post-publish transport errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2795646Z ok 48 - post-publish transport errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2795871Z   ---
+2026-10-03T23:10:20.2795980Z   duration_ms: 0.811562
+2026-10-03T23:10:20.2796103Z   type: 'test'
+2026-10-03T23:10:20.2796213Z   ...
+2026-10-03T23:10:20.2796463Z # Subtest: post-publish malformed JSON errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2796847Z ok 49 - post-publish malformed JSON errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2797077Z   ---
+2026-10-03T23:10:20.2797185Z   duration_ms: 0.747521
+2026-10-03T23:10:20.2797307Z   type: 'test'
+2026-10-03T23:10:20.2797417Z   ...
+2026-10-03T23:10:20.2797695Z # Subtest: post-publish missing integrity metadata errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2798300Z ok 50 - post-publish missing integrity metadata errors fail immediately without retries or further writes
+2026-10-03T23:10:20.2798667Z   ---
+2026-10-03T23:10:20.2798776Z   duration_ms: 0.643529
+2026-10-03T23:10:20.2798900Z   type: 'test'
+2026-10-03T23:10:20.2799010Z   ...
+2026-10-03T23:10:20.2799237Z # Subtest: main moving during a readback delay prevents every remaining package write
+2026-10-03T23:10:20.2799577Z ok 51 - main moving during a readback delay prevents every remaining package write
+2026-10-03T23:10:20.2799785Z   ---
+2026-10-03T23:10:20.2799975Z   duration_ms: 0.869743
+2026-10-03T23:10:20.2800100Z   type: 'test'
+2026-10-03T23:10:20.2800209Z   ...
+2026-10-03T23:10:20.2800448Z # Subtest: a main advance after the first package prevents publishing the remaining release
+2026-10-03T23:10:20.2800804Z ok 52 - a main advance after the first package prevents publishing the remaining release
+2026-10-03T23:10:20.2801024Z   ---
+2026-10-03T23:10:20.2801134Z   duration_ms: 0.754303
+2026-10-03T23:10:20.2801258Z   type: 'test'
+2026-10-03T23:10:20.2801367Z   ...
+2026-10-03T23:10:20.2801567Z # Subtest: candidate checksum failure never reaches a registry write
+2026-10-03T23:10:20.2801847Z ok 53 - candidate checksum failure never reaches a registry write
+2026-10-03T23:10:20.2802031Z   ---
+2026-10-03T23:10:20.2802143Z   duration_ms: 102.219797
+2026-10-03T23:10:20.2802272Z   type: 'test'
+2026-10-03T23:10:20.2802381Z   ...
+2026-10-03T23:10:20.2802626Z # Subtest: GitHub tags, installer and image runs begin only after all registry artifacts match
+2026-10-03T23:10:20.2802994Z ok 54 - GitHub tags, installer and image runs begin only after all registry artifacts match
+2026-10-03T23:10:20.2803217Z   ---
+2026-10-03T23:10:20.2803326Z   duration_ms: 1.223559
+2026-10-03T23:10:20.2803449Z   type: 'test'
+2026-10-03T23:10:20.2822702Z   ...
+2026-10-03T23:10:20.2823189Z # Subtest: a missing npm package stops finalization before any GitHub mutation
+2026-10-03T23:10:20.2823733Z ok 55 - a missing npm package stops finalization before any GitHub mutation
+2026-10-03T23:10:20.2824075Z   ---
+2026-10-03T23:10:20.2824268Z   duration_ms: 0.675789
+2026-10-03T23:10:20.2824472Z   type: 'test'
+2026-10-03T23:10:20.2824648Z   ...
+2026-10-03T23:10:20.2825073Z # Subtest: the app package must also be confirmed before tagging an otherwise published MCP release
+2026-10-03T23:10:20.2825702Z ok 56 - the app package must also be confirmed before tagging an otherwise published MCP release
+2026-10-03T23:10:20.2826075Z   ---
+2026-10-03T23:10:20.2826252Z   duration_ms: 0.695029
+2026-10-03T23:10:20.2826451Z   type: 'test'
+2026-10-03T23:10:20.2826630Z   ...
+2026-10-03T23:10:20.2827035Z # Subtest: an existing tag for another commit cannot be overwritten or trigger release artifacts
+2026-10-03T23:10:20.2827634Z ok 57 - an existing tag for another commit cannot be overwritten or trigger release artifacts
+2026-10-03T23:10:20.2828167Z   ---
+2026-10-03T23:10:20.2828339Z   duration_ms: 0.687448
+2026-10-03T23:10:20.2828534Z   type: 'test'
+2026-10-03T23:10:20.2828704Z   ...
+2026-10-03T23:10:20.2829100Z # Subtest: finalization retry reuses the existing exact tag and still waits for both artifacts
+2026-10-03T23:10:20.2829700Z ok 58 - finalization retry reuses the existing exact tag and still waits for both artifacts
+2026-10-03T23:10:20.2830063Z   ---
+2026-10-03T23:10:20.2830232Z   duration_ms: 0.706959
+2026-10-03T23:10:20.2830424Z   type: 'test'
+2026-10-03T23:10:20.2830597Z   ...
+2026-10-03T23:10:20.2831066Z # Subtest: the Actions graph isolates npm identity and publishes only the tested artifacts from the original run
+2026-10-03T23:10:20.2831782Z ok 59 - the Actions graph isolates npm identity and publishes only the tested artifacts from the original run
+2026-10-03T23:10:20.2832194Z   ---
+2026-10-03T23:10:20.2832364Z   duration_ms: 7.92248
+2026-10-03T23:10:20.2832557Z   type: 'test'
+2026-10-03T23:10:20.2832728Z   ...
+2026-10-03T23:10:20.2833167Z # Subtest: both release-safety runners install pinned dependencies before the workflow structure checks
+2026-10-03T23:10:20.2833842Z ok 60 - both release-safety runners install pinned dependencies before the workflow structure checks
+2026-10-03T23:10:20.2834418Z   ---
+2026-10-03T23:10:20.2834590Z   duration_ms: 6.246993
+2026-10-03T23:10:20.2834783Z   type: 'test'
+2026-10-03T23:10:20.2834955Z   ...
+2026-10-03T23:10:20.2835360Z # Subtest: npm environment dry-run true cannot version, push, or publish
+2026-10-03T23:10:20.2835824Z ok 61 - npm environment dry-run true cannot version, push, or publish
+2026-10-03T23:10:20.2836122Z   ---
+2026-10-03T23:10:20.2836298Z   duration_ms: 30.479512
+2026-10-03T23:10:20.2836601Z   type: 'test'
+2026-10-03T23:10:20.2836774Z   ...
+2026-10-03T23:10:20.2837093Z # Subtest: npm environment dry-run TRUE cannot version, push, or publish
+2026-10-03T23:10:20.2837552Z ok 62 - npm environment dry-run TRUE cannot version, push, or publish
+2026-10-03T23:10:20.2837850Z   ---
+2026-10-03T23:10:20.2838295Z   duration_ms: 23.734716
+2026-10-03T23:10:20.2838499Z   type: 'test'
+2026-10-03T23:10:20.2838669Z   ...
+2026-10-03T23:10:20.2838984Z # Subtest: npm environment dry-run 1 cannot version, push, or publish
+2026-10-03T23:10:20.2839426Z ok 63 - npm environment dry-run 1 cannot version, push, or publish
+2026-10-03T23:10:20.2839714Z   ---
+2026-10-03T23:10:20.2839883Z   duration_ms: 26.567099
+2026-10-03T23:10:20.2840083Z   type: 'test'
+2026-10-03T23:10:20.2840255Z   ...
+2026-10-03T23:10:20.2840571Z # Subtest: explicit dry-run remains safe when npm environment is false
+2026-10-03T23:10:20.2841019Z ok 64 - explicit dry-run remains safe when npm environment is false
+2026-10-03T23:10:20.2841311Z   ---
+2026-10-03T23:10:20.2841484Z   duration_ms: 25.012654
+2026-10-03T23:10:20.2841680Z   type: 'test'
+2026-10-03T23:10:20.2841854Z   ...
+2026-10-03T23:10:20.2842208Z # Subtest: dry-run stops on an app build failure without validating stale artifacts
+2026-10-03T23:10:20.2842724Z ok 65 - dry-run stops on an app build failure without validating stale artifacts
+2026-10-03T23:10:20.2843045Z   ---
+2026-10-03T23:10:20.2843213Z   duration_ms: 23.788338
+2026-10-03T23:10:20.2843410Z   type: 'test'
+2026-10-03T23:10:20.2843585Z   ...
+2026-10-03T23:10:20.2843851Z # Subtest: invalid arguments --dryrun invoke no commands
+2026-10-03T23:10:20.2844219Z ok 66 - invalid arguments --dryrun invoke no commands
+2026-10-03T23:10:20.2844476Z   ---
+2026-10-03T23:10:20.2844646Z   duration_ms: 22.834428
+2026-10-03T23:10:20.2844842Z   type: 'test'
+2026-10-03T23:10:20.2845015Z   ...
+2026-10-03T23:10:20.2845284Z # Subtest: invalid arguments --unknown invoke no commands
+2026-10-03T23:10:20.2845655Z ok 67 - invalid arguments --unknown invoke no commands
+2026-10-03T23:10:20.2845918Z   ---
+2026-10-03T23:10:20.2846086Z   duration_ms: 23.64443
+2026-10-03T23:10:20.2846280Z   type: 'test'
+2026-10-03T23:10:20.2846454Z   ...
+2026-10-03T23:10:20.2846741Z # Subtest: invalid arguments --dry-run=true invoke no commands
+2026-10-03T23:10:20.2847139Z ok 68 - invalid arguments --dry-run=true invoke no commands
+2026-10-03T23:10:20.2847410Z   ---
+2026-10-03T23:10:20.2847578Z   duration_ms: 23.685092
+2026-10-03T23:10:20.2847774Z   type: 'test'
+2026-10-03T23:10:20.2848592Z   ...
+2026-10-03T23:10:20.2848873Z # Subtest: invalid arguments patch minor invoke no commands
+2026-10-03T23:10:20.2849262Z ok 69 - invalid arguments patch minor invoke no commands
+2026-10-03T23:10:20.2849532Z   ---
+2026-10-03T23:10:20.2849701Z   duration_ms: 24.968658
+2026-10-03T23:10:20.2849899Z   type: 'test'
+2026-10-03T23:10:20.2850069Z   ...
+2026-10-03T23:10:20.2850348Z # Subtest: invalid arguments patch 1.2.3 invoke no commands
+2026-10-03T23:10:20.2850727Z ok 70 - invalid arguments patch 1.2.3 invoke no commands
+2026-10-03T23:10:20.2850987Z   ---
+2026-10-03T23:10:20.2851158Z   duration_ms: 44.101321
+2026-10-03T23:10:20.2851357Z   type: 'test'
+2026-10-03T23:10:20.2851528Z   ...
+2026-10-03T23:10:20.2851785Z # Subtest: invalid arguments nope invoke no commands
+2026-10-03T23:10:20.2852127Z ok 71 - invalid arguments nope invoke no commands
+2026-10-03T23:10:20.2852377Z   ---
+2026-10-03T23:10:20.2852548Z   duration_ms: 25.40101
+2026-10-03T23:10:20.2852743Z   type: 'test'
+2026-10-03T23:10:20.2853047Z   ...
+2026-10-03T23:10:20.2853266Z # Subtest: --help invokes no commands
+2026-10-03T23:10:20.2853540Z ok 72 - --help invokes no commands
+2026-10-03T23:10:20.2853755Z   ---
+2026-10-03T23:10:20.2853925Z   duration_ms: 32.186342
+2026-10-03T23:10:20.2854120Z   type: 'test'
+2026-10-03T23:10:20.2854288Z   ...
+2026-10-03T23:10:20.2854497Z # Subtest: -h invokes no commands
+2026-10-03T23:10:20.2854763Z ok 73 - -h invokes no commands
+2026-10-03T23:10:20.2854970Z   ---
+2026-10-03T23:10:20.2855137Z   duration_ms: 32.976158
+2026-10-03T23:10:20.2855500Z   type: 'test'
+2026-10-03T23:10:20.2855671Z   ...
+2026-10-03T23:10:20.2855959Z # Subtest: invalid npm dry-run setting fails before any command
+2026-10-03T23:10:20.2856366Z ok 74 - invalid npm dry-run setting fails before any command
+2026-10-03T23:10:20.2856640Z   ---
+2026-10-03T23:10:20.2856809Z   duration_ms: 40.765703
+2026-10-03T23:10:20.2857005Z   type: 'test'
+2026-10-03T23:10:20.2857178Z   ...
+2026-10-03T23:10:20.2857570Z # Subtest: an intentional release reaches the intercepted version boundary without running it
+2026-10-03T23:10:20.2858266Z ok 75 - an intentional release reaches the intercepted version boundary without running it
+2026-10-03T23:10:20.2858622Z   ---
+2026-10-03T23:10:20.2858786Z   duration_ms: 35.003086
+2026-10-03T23:10:20.2858977Z   type: 'test'
+2026-10-03T23:10:20.2859159Z   ...
+2026-10-03T23:10:20.2859628Z # Subtest: unofficial RELEASE_TEST_FETCH_ORIGIN stops release before authentication, fetch, build or publication
+2026-10-03T23:10:20.2860357Z ok 76 - unofficial RELEASE_TEST_FETCH_ORIGIN stops release before authentication, fetch, build or publication
+2026-10-03T23:10:20.2860768Z   ---
+2026-10-03T23:10:20.2860939Z   duration_ms: 24.155326
+2026-10-03T23:10:20.2861133Z   type: 'test'
+2026-10-03T23:10:20.2861296Z   ...
+2026-10-03T23:10:20.2861755Z # Subtest: unofficial RELEASE_TEST_PUSH_ORIGIN stops release before authentication, fetch, build or publication
+2026-10-03T23:10:20.2862463Z ok 77 - unofficial RELEASE_TEST_PUSH_ORIGIN stops release before authentication, fetch, build or publication
+2026-10-03T23:10:20.2862869Z   ---
+2026-10-03T23:10:20.2863039Z   duration_ms: 23.233224
+2026-10-03T23:10:20.2863233Z   type: 'test'
+2026-10-03T23:10:20.2863395Z   ...
+2026-10-03T23:10:20.2863691Z # Subtest: default and explicit releases retain version selection
+2026-10-03T23:10:20.2864103Z ok 78 - default and explicit releases retain version selection
+2026-10-03T23:10:20.2864379Z   ---
+2026-10-03T23:10:20.2864548Z   duration_ms: 0.352531
+2026-10-03T23:10:20.2864739Z   type: 'test'
+2026-10-03T23:10:20.2864912Z   ...
+2026-10-03T23:10:20.2865269Z # Subtest: resume selects the original workflow run without selecting a new version
+2026-10-03T23:10:20.2865788Z ok 79 - resume selects the original workflow run without selecting a new version
+2026-10-03T23:10:20.2866111Z   ---
+2026-10-03T23:10:20.2866282Z   duration_ms: 0.091538
+2026-10-03T23:10:20.2866474Z   type: 'test'
+2026-10-03T23:10:20.2866642Z   ...
+2026-10-03T23:10:20.2866929Z # Subtest: invalid resume arguments --resume invoke no commands
+2026-10-03T23:10:20.2867335Z ok 80 - invalid resume arguments --resume invoke no commands
+2026-10-03T23:10:20.2867602Z   ---
+2026-10-03T23:10:20.2867771Z   duration_ms: 23.720939
+2026-10-03T23:10:20.2868056Z   type: 'test'
+2026-10-03T23:10:20.2868221Z   ...
+2026-10-03T23:10:20.2868514Z # Subtest: invalid resume arguments --resume 0 invoke no commands
+2026-10-03T23:10:20.2868919Z ok 81 - invalid resume arguments --resume 0 invoke no commands
+2026-10-03T23:10:20.2869192Z   ---
+2026-10-03T23:10:20.2869365Z   duration_ms: 23.396933
+2026-10-03T23:10:20.2869556Z   type: 'test'
+2026-10-03T23:10:20.2869724Z   ...
+2026-10-03T23:10:20.2870020Z # Subtest: invalid resume arguments --resume -1 invoke no commands
+2026-10-03T23:10:20.2870434Z ok 82 - invalid resume arguments --resume -1 invoke no commands
+2026-10-03T23:10:20.2870710Z   ---
+2026-10-03T23:10:20.2870876Z   duration_ms: 23.946551
+2026-10-03T23:10:20.2871074Z   type: 'test'
+2026-10-03T23:10:20.2871243Z   ...
+2026-10-03T23:10:20.2871540Z # Subtest: invalid resume arguments --resume NaN invoke no commands
+2026-10-03T23:10:20.2872086Z ok 83 - invalid resume arguments --resume NaN invoke no commands
+2026-10-03T23:10:20.2872365Z   ---
+2026-10-03T23:10:20.2872535Z   duration_ms: 24.202581
+2026-10-03T23:10:20.2872730Z   type: 'test'
+2026-10-03T23:10:20.2872898Z   ...
+2026-10-03T23:10:20.2873199Z # Subtest: invalid resume arguments --resume 1.5 invoke no commands
+2026-10-03T23:10:20.2873616Z ok 84 - invalid resume arguments --resume 1.5 invoke no commands
+2026-10-03T23:10:20.2873991Z   ---
+2026-10-03T23:10:20.2874160Z   duration_ms: 23.546283
+2026-10-03T23:10:20.2874355Z   type: 'test'
+2026-10-03T23:10:20.2874523Z   ...
+2026-10-03T23:10:20.2874868Z # Subtest: invalid resume arguments --resume 123 --resume 456 invoke no commands
+2026-10-03T23:10:20.2875366Z ok 85 - invalid resume arguments --resume 123 --resume 456 invoke no commands
+2026-10-03T23:10:20.2875682Z   ---
+2026-10-03T23:10:20.2875849Z   duration_ms: 23.268298
+2026-10-03T23:10:20.2876046Z   type: 'test'
+2026-10-03T23:10:20.2876219Z   ...
+2026-10-03T23:10:20.2876541Z # Subtest: invalid resume arguments patch --resume 123 invoke no commands
+2026-10-03T23:10:20.2877001Z ok 86 - invalid resume arguments patch --resume 123 invoke no commands
+2026-10-03T23:10:20.2877300Z   ---
+2026-10-03T23:10:20.2877466Z   duration_ms: 24.076714
+2026-10-03T23:10:20.2877662Z   type: 'test'
+2026-10-03T23:10:20.2877833Z   ...
+2026-10-03T23:10:20.2878290Z # Subtest: invalid resume arguments --resume 123 3.40.1 invoke no commands
+2026-10-03T23:10:20.2878755Z ok 87 - invalid resume arguments --resume 123 3.40.1 invoke no commands
+2026-10-03T23:10:20.2879051Z   ---
+2026-10-03T23:10:20.2879219Z   duration_ms: 24.509318
+2026-10-03T23:10:20.2879414Z   type: 'test'
+2026-10-03T23:10:20.2879580Z   ...
+2026-10-03T23:10:20.2879909Z # Subtest: invalid resume arguments --resume 123 --dry-run invoke no commands
+2026-10-03T23:10:20.2880386Z ok 88 - invalid resume arguments --resume 123 --dry-run invoke no commands
+2026-10-03T23:10:20.2880697Z   ---
+2026-10-03T23:10:20.2880864Z   duration_ms: 23.648548
+2026-10-03T23:10:20.2881061Z   type: 'test'
+2026-10-03T23:10:20.2881226Z   ...
+2026-10-03T23:10:20.2881552Z # Subtest: npm environment dry-run cannot be combined with a resume request
+2026-10-03T23:10:20.2882025Z ok 89 - npm environment dry-run cannot be combined with a resume request
+2026-10-03T23:10:20.2882328Z   ---
+2026-10-03T23:10:20.2882493Z   duration_ms: 0.097552
+2026-10-03T23:10:20.2882685Z   type: 'test'
+2026-10-03T23:10:20.2882853Z   ...
+2026-10-03T23:10:20.2883230Z # Subtest: resume with local revision differs cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2883788Z ok 90 - resume with local revision differs cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2884131Z   ---
+2026-10-03T23:10:20.2884296Z   duration_ms: 24.738292
+2026-10-03T23:10:20.2884492Z   type: 'test'
+2026-10-03T23:10:20.2884660Z   ...
+2026-10-03T23:10:20.2885030Z # Subtest: resume with local version differs cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2885579Z ok 91 - resume with local version differs cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2885912Z   ---
+2026-10-03T23:10:20.2886078Z   duration_ms: 24.515578
+2026-10-03T23:10:20.2886276Z   type: 'test'
+2026-10-03T23:10:20.2886441Z   ...
+2026-10-03T23:10:20.2886814Z # Subtest: resume with official main advanced cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2887366Z ok 92 - resume with official main advanced cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2887704Z   ---
+2026-10-03T23:10:20.2887868Z   duration_ms: 24.484558
+2026-10-03T23:10:20.2888158Z   type: 'test'
+2026-10-03T23:10:20.2888325Z   ...
+2026-10-03T23:10:20.2888685Z # Subtest: resume with run belongs to a fork cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2889218Z ok 93 - resume with run belongs to a fork cannot rerun jobs, version, push or publish
+2026-10-03T23:10:20.2889548Z   ---
+2026-10-03T23:10:20.2889714Z   duration_ms: 25.501138
+2026-10-03T23:10:20.2890024Z   type: 'test'
+2026-10-03T23:10:20.2890190Z   ...
+2026-10-03T23:10:20.2890592Z # Subtest: failed release resume reruns only failed jobs of the original run without a new version
+2026-10-03T23:10:20.2891201Z ok 94 - failed release resume reruns only failed jobs of the original run without a new version
+2026-10-03T23:10:20.2891564Z   ---
+2026-10-03T23:10:20.2891734Z   duration_ms: 23.84425
+2026-10-03T23:10:20.2891925Z   type: 'test'
+2026-10-03T23:10:20.2892093Z   ...
+2026-10-03T23:10:20.2892588Z # Subtest: an already successful release can be confirmed without rerunning or changing versions
+2026-10-03T23:10:20.2893188Z ok 95 - an already successful release can be confirmed without rerunning or changing versions
+2026-10-03T23:10:20.2893551Z   ---
+2026-10-03T23:10:20.2893717Z   duration_ms: 23.886426
+2026-10-03T23:10:20.2893915Z   type: 'test'
+2026-10-03T23:10:20.2894081Z   ...
+2026-10-03T23:10:20.2894473Z # Subtest: a release retry is bound to its original official workflow, main revision and version
+2026-10-03T23:10:20.2895060Z ok 96 - a release retry is bound to its original official workflow, main revision and version
+2026-10-03T23:10:20.2895410Z   ---
+2026-10-03T23:10:20.2895578Z   duration_ms: 0.724803
+2026-10-03T23:10:20.2895773Z   type: 'test'
+2026-10-03T23:10:20.2895940Z   ...
+2026-10-03T23:10:20.2896271Z # Subtest: resume rejects fork repository before replaying any release jobs
+2026-10-03T23:10:20.2896745Z ok 97 - resume rejects fork repository before replaying any release jobs
+2026-10-03T23:10:20.2897057Z   ---
+2026-10-03T23:10:20.2897228Z   duration_ms: 0.237608
+2026-10-03T23:10:20.2897421Z   type: 'test'
+2026-10-03T23:10:20.2897590Z   ...
+2026-10-03T23:10:20.2898122Z # Subtest: resume rejects missing repository identity before replaying any release jobs
+2026-10-03T23:10:20.2898674Z ok 98 - resume rejects missing repository identity before replaying any release jobs
+2026-10-03T23:10:20.2899018Z   ---
+2026-10-03T23:10:20.2899185Z   duration_ms: 0.069344
+2026-10-03T23:10:20.2899383Z   type: 'test'
+2026-10-03T23:10:20.2899553Z   ...
+2026-10-03T23:10:20.2899901Z # Subtest: resume rejects different workflow ID before replaying any release jobs
+2026-10-03T23:10:20.2900419Z ok 99 - resume rejects different workflow ID before replaying any release jobs
+2026-10-03T23:10:20.2900745Z   ---
+2026-10-03T23:10:20.2900913Z   duration_ms: 0.057307
+2026-10-03T23:10:20.2901105Z   type: 'test'
+2026-10-03T23:10:20.2901274Z   ...
+2026-10-03T23:10:20.2901637Z # Subtest: resume rejects different workflow path before replaying any release jobs
+2026-10-03T23:10:20.2902171Z ok 100 - resume rejects different workflow path before replaying any release jobs
+2026-10-03T23:10:20.2902502Z   ---
+2026-10-03T23:10:20.2902668Z   duration_ms: 0.056525
+2026-10-03T23:10:20.2902863Z   type: 'test'
+2026-10-03T23:10:20.2903030Z   ...
+2026-10-03T23:10:20.2903455Z # Subtest: resume rejects another branch before replaying any release jobs
+2026-10-03T23:10:20.2903931Z ok 101 - resume rejects another branch before replaying any release jobs
+2026-10-03T23:10:20.2904242Z   ---
+2026-10-03T23:10:20.2904410Z   duration_ms: 0.068784
+2026-10-03T23:10:20.2904603Z   type: 'test'
+2026-10-03T23:10:20.2904774Z   ...
+2026-10-03T23:10:20.2905107Z # Subtest: resume rejects pull request event before replaying any release jobs
+2026-10-03T23:10:20.2905601Z ok 102 - resume rejects pull request event before replaying any release jobs
+2026-10-03T23:10:20.2905915Z   ---
+2026-10-03T23:10:20.2906079Z   duration_ms: 0.049735
+2026-10-03T23:10:20.2906269Z   type: 'test'
+2026-10-03T23:10:20.2906439Z   ...
+2026-10-03T23:10:20.2906747Z # Subtest: resume rejects push event before replaying any release jobs
+2026-10-03T23:10:20.2907193Z ok 103 - resume rejects push event before replaying any release jobs
+2026-10-03T23:10:20.2907486Z   ---
+2026-10-03T23:10:20.2907653Z   duration_ms: 0.057176
+2026-10-03T23:10:20.2907843Z   type: 'test'
+2026-10-03T23:10:20.2908167Z   ...
+2026-10-03T23:10:20.2908491Z # Subtest: resume rejects malformed SHA before replaying any release jobs
+2026-10-03T23:10:20.2909070Z ok 104 - resume rejects malformed SHA before replaying any release jobs
+2026-10-03T23:10:20.2909372Z   ---
+2026-10-03T23:10:20.2909538Z   duration_ms: 0.224709
+2026-10-03T23:10:20.2909729Z   type: 'test'
+2026-10-03T23:10:20.2909897Z   ...
+2026-10-03T23:10:20.2910261Z # Subtest: resume rejects title from another revision before replaying any release jobs
+2026-10-03T23:10:20.2910811Z ok 105 - resume rejects title from another revision before replaying any release jobs
+2026-10-03T23:10:20.2911284Z   ---
+2026-10-03T23:10:20.2911466Z   duration_ms: 0.237749
+2026-10-03T23:10:20.2911670Z   type: 'test'
+2026-10-03T23:10:20.2911845Z   ...
+2026-10-03T23:10:20.2912210Z # Subtest: resume rejects missing release title before replaying any release jobs
+2026-10-03T23:10:20.2912754Z ok 106 - resume rejects missing release title before replaying any release jobs
+2026-10-03T23:10:20.2913099Z   ---
+2026-10-03T23:10:20.2913272Z   duration_ms: 0.100712
+2026-10-03T23:10:20.2913471Z   type: 'test'
+2026-10-03T23:10:20.2913654Z   ...
+2026-10-03T23:10:20.2914040Z # Subtest: resume rejects unrelated workflow title before replaying any release jobs
+2026-10-03T23:10:20.2914607Z ok 107 - resume rejects unrelated workflow title before replaying any release jobs
+2026-10-03T23:10:20.2914968Z   ---
+2026-10-03T23:10:20.2915144Z   duration_ms: 0.06601
+2026-10-03T23:10:20.2915343Z   type: 'test'
+2026-10-03T23:10:20.2915518Z   ...
+2026-10-03T23:10:20.2915902Z # Subtest: resume rejects prerelease version title before replaying any release jobs
+2026-10-03T23:10:20.2916474Z ok 108 - resume rejects prerelease version title before replaying any release jobs
+2026-10-03T23:10:20.2916833Z   ---
+2026-10-03T23:10:20.2917008Z   duration_ms: 0.047412
+2026-10-03T23:10:20.2917210Z   type: 'test'
+2026-10-03T23:10:20.2917386Z   ...
+2026-10-03T23:10:20.2917777Z # Subtest: resume rejects leading-zero version title before replaying any release jobs
+2026-10-03T23:10:20.2918565Z ok 109 - resume rejects leading-zero version title before replaying any release jobs
+2026-10-03T23:10:20.2918924Z   ---
+2026-10-03T23:10:20.2919099Z   duration_ms: 0.039259
+2026-10-03T23:10:20.2919297Z   type: 'test'
+2026-10-03T23:10:20.2919470Z   ...
+2026-10-03T23:10:20.2919968Z # Subtest: a duplicate release dispatch directs the caller to the original run without creating another artifact set
+2026-10-03T23:10:20.2920741Z ok 110 - a duplicate release dispatch directs the caller to the original run without creating another artifact set
+2026-10-03T23:10:20.2921182Z   ---
+2026-10-03T23:10:20.2921357Z   duration_ms: 0.519794
+2026-10-03T23:10:20.2921555Z   type: 'test'
+2026-10-03T23:10:20.2921729Z   ...
+2026-10-03T23:10:20.2922145Z # Subtest: a new dispatch returns only an authoritative run for the selected release identity
+2026-10-03T23:10:20.2922771Z ok 111 - a new dispatch returns only an authoritative run for the selected release identity
+2026-10-03T23:10:20.2923147Z   ---
+2026-10-03T23:10:20.2923319Z   duration_ms: 0.496539
+2026-10-03T23:10:20.2923517Z   type: 'test'
+2026-10-03T23:10:20.2923696Z   ...
+2026-10-03T23:10:20.2924061Z # Subtest: a dispatch timeout does not automatically create a second release run
+2026-10-03T23:10:20.2924598Z ok 112 - a dispatch timeout does not automatically create a second release run
+2026-10-03T23:10:20.2924940Z   ---
+2026-10-03T23:10:20.2925116Z   duration_ms: 0.927599
+2026-10-03T23:10:20.2925319Z   type: 'test'
+2026-10-03T23:10:20.2925494Z   ...
+2026-10-03T23:10:20.2925846Z # Subtest: an inactive release workflow cannot dispatch or resume a release
+2026-10-03T23:10:20.2926351Z ok 113 - an inactive release workflow cannot dispatch or resume a release
+2026-10-03T23:10:20.2926679Z   ---
+2026-10-03T23:10:20.2926854Z   duration_ms: 0.187804
+2026-10-03T23:10:20.2927115Z   type: 'test'
+2026-10-03T23:10:20.2927290Z   ...
+2026-10-03T23:10:20.2927608Z # Subtest: resume does not rerun an original release that is queued
+2026-10-03T23:10:20.2928185Z ok 114 - resume does not rerun an original release that is queued
+2026-10-03T23:10:20.2928487Z   ---
+2026-10-03T23:10:20.2928837Z   duration_ms: 0.081462
+2026-10-03T23:10:20.2929036Z   type: 'test'
+2026-10-03T23:10:20.2929212Z   ...
+2026-10-03T23:10:20.2929551Z # Subtest: resume does not rerun an original release that is in_progress
+2026-10-03T23:10:20.2930032Z ok 115 - resume does not rerun an original release that is in_progress
+2026-10-03T23:10:20.2930345Z   ---
+2026-10-03T23:10:20.2930521Z   duration_ms: 0.033711
+2026-10-03T23:10:20.2930721Z   type: 'test'
+2026-10-03T23:10:20.2930894Z   ...
+2026-10-03T23:10:20.2931336Z # Subtest: resume does not rerun an original release that is success
+2026-10-03T23:10:20.2931789Z ok 116 - resume does not rerun an original release that is success
+2026-10-03T23:10:20.2932093Z   ---
+2026-10-03T23:10:20.2932273Z   duration_ms: 0.028102
+2026-10-03T23:10:20.2932470Z   type: 'test'
+2026-10-03T23:10:20.2932645Z   ...
+2026-10-03T23:10:20.2933102Z # Subtest: a successful watch command still requires exact revision and successful GitHub run metadata
+2026-10-03T23:10:20.2933802Z ok 117 - a successful watch command still requires exact revision and successful GitHub run metadata
+2026-10-03T23:10:20.2934212Z   ---
+2026-10-03T23:10:20.2934386Z   duration_ms: 0.108174
+2026-10-03T23:10:20.2934586Z   type: 'test'
+2026-10-03T23:10:20.2934757Z   ...
+2026-10-03T23:10:20.2935248Z # Subtest: verifies exact version revision and fresh main/isolated evidence before returning publish authority
+2026-10-03T23:10:20.2936032Z ok 118 - verifies exact version revision and fresh main/isolated evidence before returning publish authority
+2026-10-03T23:10:20.2936469Z   ---
+2026-10-03T23:10:20.2936645Z   duration_ms: 0.949492
+2026-10-03T23:10:20.2936844Z   type: 'test'
+2026-10-03T23:10:20.2937024Z   ...
+2026-10-03T23:10:20.2937352Z # Subtest: does not authorize publishing when npm run typecheck fails
+2026-10-03T23:10:20.2937815Z ok 119 - does not authorize publishing when npm run typecheck fails
+2026-10-03T23:10:20.2938263Z   ---
+2026-10-03T23:10:20.2938440Z   duration_ms: 0.35176
+2026-10-03T23:10:20.2938646Z   type: 'test'
+2026-10-03T23:10:20.2938822Z   ...
+2026-10-03T23:10:20.2939168Z # Subtest: does not authorize publishing when npm run typecheck:mcp fails
+2026-10-03T23:10:20.2939664Z ok 120 - does not authorize publishing when npm run typecheck:mcp fails
+2026-10-03T23:10:20.2939980Z   ---
+2026-10-03T23:10:20.2940160Z   duration_ms: 0.068243
+2026-10-03T23:10:20.2940360Z   type: 'test'
+2026-10-03T23:10:20.2940534Z   ...
+2026-10-03T23:10:20.2940984Z # Subtest: does not authorize publishing when node scripts/generate-api-inventory.mjs --check fails
+2026-10-03T23:10:20.2941665Z ok 121 - does not authorize publishing when node scripts/generate-api-inventory.mjs --check fails
+2026-10-03T23:10:20.2942064Z   ---
+2026-10-03T23:10:20.2942239Z   duration_ms: 0.122846
+2026-10-03T23:10:20.2942440Z   type: 'test'
+2026-10-03T23:10:20.2942615Z   ...
+2026-10-03T23:10:20.2943050Z # Subtest: does not authorize publishing when node --test tests/installer-repository.test.mjs fails
+2026-10-03T23:10:20.2943720Z ok 122 - does not authorize publishing when node --test tests/installer-repository.test.mjs fails
+2026-10-03T23:10:20.2943968Z   ---
+2026-10-03T23:10:20.2944078Z   duration_ms: 0.057637
+2026-10-03T23:10:20.2944203Z   type: 'test'
+2026-10-03T23:10:20.2944313Z   ...
+2026-10-03T23:10:20.2944566Z # Subtest: does not authorize publishing when node --test scripts/run-local-jest.test.mjs fails
+2026-10-03T23:10:20.2944948Z ok 123 - does not authorize publishing when node --test scripts/run-local-jest.test.mjs fails
+2026-10-03T23:10:20.2945189Z   ---
+2026-10-03T23:10:20.2945297Z   duration_ms: 0.048603
+2026-10-03T23:10:20.2945422Z   type: 'test'
+2026-10-03T23:10:20.2945532Z   ...
+2026-10-03T23:10:20.2945785Z # Subtest: does not authorize publishing when node --test scripts/release-evidence.test.mjs fails
+2026-10-03T23:10:20.2946172Z ok 124 - does not authorize publishing when node --test scripts/release-evidence.test.mjs fails
+2026-10-03T23:10:20.2946410Z   ---
+2026-10-03T23:10:20.2946519Z   duration_ms: 0.085349
+2026-10-03T23:10:20.2946799Z   type: 'test'
+2026-10-03T23:10:20.2946910Z   ...
+2026-10-03T23:10:20.2947156Z # Subtest: does not authorize publishing when node --test scripts/local-instance.test.mjs fails
+2026-10-03T23:10:20.2947532Z ok 125 - does not authorize publishing when node --test scripts/local-instance.test.mjs fails
+2026-10-03T23:10:20.2947765Z   ---
+2026-10-03T23:10:20.2947873Z   duration_ms: 0.045339
+2026-10-03T23:10:20.2948163Z   type: 'test'
+2026-10-03T23:10:20.2948286Z   ...
+2026-10-03T23:10:20.2948595Z # Subtest: does not authorize publishing when npm run test:dependency-glob fails
+2026-10-03T23:10:20.2948917Z ok 126 - does not authorize publishing when npm run test:dependency-glob fails
+2026-10-03T23:10:20.2949125Z   ---
+2026-10-03T23:10:20.2949235Z   duration_ms: 0.184318
+2026-10-03T23:10:20.2949362Z   type: 'test'
+2026-10-03T23:10:20.2949475Z   ...
+2026-10-03T23:10:20.2949667Z # Subtest: does not authorize publishing when npm run lint:all fails
+2026-10-03T23:10:20.2950088Z ok 127 - does not authorize publishing when npm run lint:all fails
+2026-10-03T23:10:20.2950316Z   ---
+2026-10-03T23:10:20.2950426Z   duration_ms: 0.212781
+2026-10-03T23:10:20.2950553Z   type: 'test'
+2026-10-03T23:10:20.2950663Z   ...
+2026-10-03T23:10:20.2950851Z # Subtest: does not authorize publishing when npm run build fails
+2026-10-03T23:10:20.2951116Z ok 128 - does not authorize publishing when npm run build fails
+2026-10-03T23:10:20.2951296Z   ---
+2026-10-03T23:10:20.2951407Z   duration_ms: 0.088363
+2026-10-03T23:10:20.2951529Z   type: 'test'
+2026-10-03T23:10:20.2951668Z   ...
+2026-10-03T23:10:20.2952003Z # Subtest: does not authorize publishing when npm run verify:test-baseline -- --stage=ci --results=jest-results.json fails
+2026-10-03T23:10:20.2952499Z ok 129 - does not authorize publishing when npm run verify:test-baseline -- --stage=ci --results=jest-results.json fails
+2026-10-03T23:10:20.2952780Z   ---
+2026-10-03T23:10:20.2952888Z   duration_ms: 0.069665
+2026-10-03T23:10:20.2953011Z   type: 'test'
+2026-10-03T23:10:20.2953120Z   ...
+2026-10-03T23:10:20.2953463Z # Subtest: does not authorize publishing when npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json fails
+2026-10-03T23:10:20.2954037Z ok 130 - does not authorize publishing when npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json fails
+2026-10-03T23:10:20.2954360Z   ---
+2026-10-03T23:10:20.2954485Z   duration_ms: 0.040231
+2026-10-03T23:10:20.2954628Z   type: 'test'
+2026-10-03T23:10:20.2954741Z   ...
+2026-10-03T23:10:20.2954996Z # Subtest: does not authorize publishing when npm run validate:mcp-release fails
+2026-10-03T23:10:20.2955334Z ok 131 - does not authorize publishing when npm run validate:mcp-release fails
+2026-10-03T23:10:20.2955560Z   ---
+2026-10-03T23:10:20.2955684Z   duration_ms: 0.032619
+2026-10-03T23:10:20.2955808Z   type: 'test'
+2026-10-03T23:10:20.2955936Z   ...
+2026-10-03T23:10:20.2956167Z # Subtest: does not authorize publishing when npm run smoke:mcp-artifacts fails
+2026-10-03T23:10:20.2956500Z ok 132 - does not authorize publishing when npm run smoke:mcp-artifacts fails
+2026-10-03T23:10:20.2956733Z   ---
+2026-10-03T23:10:20.2956858Z   duration_ms: 0.031788
+2026-10-03T23:10:20.2956982Z   type: 'test'
+2026-10-03T23:10:20.2957112Z   ...
+2026-10-03T23:10:20.2957333Z # Subtest: a quarantined Jest exit still requires its fresh baseline gate
+2026-10-03T23:10:20.2957663Z ok 133 - a quarantined Jest exit still requires its fresh baseline gate
+2026-10-03T23:10:20.2957876Z   ---
+2026-10-03T23:10:20.2958146Z   duration_ms: 0.593615
+2026-10-03T23:10:20.2958311Z   type: 'test'
+2026-10-03T23:10:20.2958443Z   ...
+2026-10-03T23:10:20.2958661Z # Subtest: refuses publishing when dirtyAfter changes after verification
+2026-10-03T23:10:20.2958987Z ok 134 - refuses publishing when dirtyAfter changes after verification
+2026-10-03T23:10:20.2959204Z   ---
+2026-10-03T23:10:20.2959316Z   duration_ms: 0.107603
+2026-10-03T23:10:20.2959458Z   type: 'test'
+2026-10-03T23:10:20.2959582Z   ...
+2026-10-03T23:10:20.2959797Z # Subtest: refuses publishing when moveAfter changes after verification
+2026-10-03T23:10:20.2960215Z ok 135 - refuses publishing when moveAfter changes after verification
+2026-10-03T23:10:20.2960423Z   ---
+2026-10-03T23:10:20.2960548Z   duration_ms: 0.103537
+2026-10-03T23:10:20.2960687Z   type: 'test'
+2026-10-03T23:10:20.2960800Z   ...
+2026-10-03T23:10:20.2960996Z # Subtest: dirty or different commit cannot reuse verification
+2026-10-03T23:10:20.2961266Z ok 136 - dirty or different commit cannot reuse verification
+2026-10-03T23:10:20.2961542Z   ---
+2026-10-03T23:10:20.2961671Z   duration_ms: 0.065398
+2026-10-03T23:10:20.2961797Z   type: 'test'
+2026-10-03T23:10:20.2961926Z   ...
+2026-10-03T23:10:20.2962188Z # Subtest: release origin permits official HTTPS and SSH URLs only, including every push URL
+2026-10-03T23:10:20.2962592Z ok 137 - release origin permits official HTTPS and SSH URLs only, including every push URL
+2026-10-03T23:10:20.2962842Z   ---
+2026-10-03T23:10:20.2962949Z   duration_ms: 0.194663
+2026-10-03T23:10:20.2963094Z   type: 'test'
+2026-10-03T23:10:20.2963206Z   ...
+2026-10-03T23:10:20.2963480Z # Subtest: changing only the Git push configuration invalidates prior release verification
+2026-10-03T23:10:20.2963857Z ok 138 - changing only the Git push configuration invalidates prior release verification
+2026-10-03T23:10:20.2964081Z   ---
+2026-10-03T23:10:20.2964189Z   duration_ms: 0.053461
+2026-10-03T23:10:20.2964314Z   type: 'test'
+2026-10-03T23:10:20.2964440Z   ...
+2026-10-03T23:10:20.2964733Z # Subtest: an injected candidate consumer smoke replaces repacking and runs after artifact validation
+2026-10-03T23:10:20.2965134Z ok 139 - an injected candidate consumer smoke replaces repacking and runs after artifact validation
+2026-10-03T23:10:20.2965377Z   ---
+2026-10-03T23:10:20.2965502Z   duration_ms: 0.085529
+2026-10-03T23:10:20.2965627Z   type: 'test'
+2026-10-03T23:10:20.2965737Z   ...
+2026-10-03T23:10:20.2965954Z # Subtest: a failed candidate consumer smoke cannot return publication authority
+2026-10-03T23:10:20.2966423Z ok 140 - a failed candidate consumer smoke cannot return publication authority
+2026-10-03T23:10:20.2966782Z   ---
+2026-10-03T23:10:20.2966951Z   duration_ms: 0.05321
+2026-10-03T23:10:20.2967143Z   type: 'test'
+2026-10-03T23:10:20.2967335Z   ...
+2026-10-03T23:10:20.2967626Z # Subtest: candidate consumer smoke cannot authorize a release after dirtyAfter
+2026-10-03T23:10:20.2968081Z ok 141 - candidate consumer smoke cannot authorize a release after dirtyAfter
+2026-10-03T23:10:20.2968320Z   ---
+2026-10-03T23:10:20.2968435Z   duration_ms: 0.051087
+2026-10-03T23:10:20.2968605Z   type: 'test'
+2026-10-03T23:10:20.2968761Z   ...
+2026-10-03T23:10:20.2968971Z # Subtest: candidate consumer smoke cannot authorize a release after moveAfter
+2026-10-03T23:10:20.2969279Z ok 142 - candidate consumer smoke cannot authorize a release after moveAfter
+2026-10-03T23:10:20.2969482Z   ---
+2026-10-03T23:10:20.2969589Z   duration_ms: 0.029043
+2026-10-03T23:10:20.2969711Z   type: 'test'
+2026-10-03T23:10:20.2969820Z   ...
+2026-10-03T23:10:20.2970058Z # Subtest: only official exact-SHA main images or matching version installers can publish
+2026-10-03T23:10:20.2970409Z ok 143 - only official exact-SHA main images or matching version installers can publish
+2026-10-03T23:10:20.2970630Z   ---
+2026-10-03T23:10:20.2970738Z   duration_ms: 0.772275
+2026-10-03T23:10:20.2970860Z   type: 'test'
+2026-10-03T23:10:20.2970970Z   ...
+2026-10-03T23:10:20.2971211Z # Subtest: a release-dispatched image must match both the npm revision and package version
+2026-10-03T23:10:20.2971572Z ok 144 - a release-dispatched image must match both the npm revision and package version
+2026-10-03T23:10:20.2971800Z   ---
+2026-10-03T23:10:20.2971910Z   duration_ms: 0.29204
+2026-10-03T23:10:20.2972040Z   type: 'test'
+2026-10-03T23:10:20.2972151Z   ...
+2026-10-03T23:10:20.2972334Z # Subtest: npm verification refuses tags and non-main branches
+2026-10-03T23:10:20.2972587Z ok 145 - npm verification refuses tags and non-main branches
+2026-10-03T23:10:20.2972762Z   ---
+2026-10-03T23:10:20.2972984Z   duration_ms: 0.123847
+2026-10-03T23:10:20.2973109Z   type: 'test'
+2026-10-03T23:10:20.2973219Z   ...
+2026-10-03T23:10:20.2973426Z # Subtest: ignores workflow name collisions, other SHAs, PRs and branches
+2026-10-03T23:10:20.2973719Z ok 146 - ignores workflow name collisions, other SHAs, PRs and branches
+2026-10-03T23:10:20.2973911Z   ---
+2026-10-03T23:10:20.2974021Z   duration_ms: 0.135845
+2026-10-03T23:10:20.2974145Z   type: 'test'
+2026-10-03T23:10:20.2974255Z   ...
+2026-10-03T23:10:20.2974545Z # Subtest: a newer failed verification cannot fall back to an older green run
+2026-10-03T23:10:20.2974849Z ok 147 - a newer failed verification cannot fall back to an older green run
+2026-10-03T23:10:20.2975049Z   ---
+2026-10-03T23:10:20.2975158Z   duration_ms: 0.228235
+2026-10-03T23:10:20.2975283Z   type: 'test'
+2026-10-03T23:10:20.2975392Z   ...
+2026-10-03T23:10:20.2975603Z # Subtest: waits for the exact workflow then independently rechecks its result
+2026-10-03T23:10:20.2975908Z ok 148 - waits for the exact workflow then independently rechecks its result
+2026-10-03T23:10:20.2976112Z   ---
+2026-10-03T23:10:20.2976222Z   duration_ms: 0.228044
+2026-10-03T23:10:20.2976346Z   type: 'test'
+2026-10-03T23:10:20.2976456Z   ...
+2026-10-03T23:10:20.2976696Z # Subtest: missing verification fails after bounded discovery without dispatching anything
+2026-10-03T23:10:20.2977052Z ok 149 - missing verification fails after bounded discovery without dispatching anything
+2026-10-03T23:10:20.2977275Z   ---
+2026-10-03T23:10:20.2977390Z   duration_ms: 0.190137
+2026-10-03T23:10:20.2977517Z   type: 'test'
+2026-10-03T23:10:20.2977628Z   ...
+2026-10-03T23:10:20.2977833Z # Subtest: a successful watch cannot authorize stale or failed API evidence
+2026-10-03T23:10:20.2978252Z ok 150 - a successful watch cannot authorize stale or failed API evidence
+2026-10-03T23:10:20.2978451Z   ---
+2026-10-03T23:10:20.2978564Z   duration_ms: 0.11964
+2026-10-03T23:10:20.2978689Z   type: 'test'
+2026-10-03T23:10:20.2978800Z   ...
+2026-10-03T23:10:20.2979004Z # Subtest: green aggregate status cannot authorize missing job evidence
+2026-10-03T23:10:20.2979286Z ok 151 - green aggregate status cannot authorize missing job evidence
+2026-10-03T23:10:20.2979474Z   ---
+2026-10-03T23:10:20.2979585Z   duration_ms: 0.3518
+2026-10-03T23:10:20.2979709Z   type: 'test'
+2026-10-03T23:10:20.2979821Z   ...
+2026-10-03T23:10:20.2980057Z # Subtest: a newer failed run appearing during evidence retrieval invalidates a green run
+2026-10-03T23:10:20.2980413Z ok 152 - a newer failed run appearing during evidence retrieval invalidates a green run
+2026-10-03T23:10:20.2980634Z   ---
+2026-10-03T23:10:20.2980746Z   duration_ms: 0.342917
+2026-10-03T23:10:20.2980870Z   type: 'test'
+2026-10-03T23:10:20.2980979Z   ...
+2026-10-03T23:10:20.2981199Z # Subtest: a successful run needs current-attempt evidence from the exact revision
+2026-10-03T23:10:20.2981529Z ok 153 - a successful run needs current-attempt evidence from the exact revision
+2026-10-03T23:10:20.2981734Z   ---
+2026-10-03T23:10:20.2981846Z   duration_ms: 0.176677
+2026-10-03T23:10:20.2981971Z   type: 'test'
+2026-10-03T23:10:20.2982082Z   ...
+2026-10-03T23:10:20.2982296Z # Subtest: the final gate requires every dependency, including both matrix jobs
+2026-10-03T23:10:20.2982606Z ok 154 - the final gate requires every dependency, including both matrix jobs
+2026-10-03T23:10:20.2982807Z   ---
+2026-10-03T23:10:20.2982918Z   duration_ms: 1.51835
+2026-10-03T23:10:20.2983042Z   type: 'test'
+2026-10-03T23:10:20.2983152Z   ...
+2026-10-03T23:10:20.2983356Z # Subtest: publication requires every platform and successful final gate
+2026-10-03T23:10:20.2983650Z ok 155 - publication requires every platform and successful final gate
+2026-10-03T23:10:20.2983843Z   ---
+2026-10-03T23:10:20.2983955Z   duration_ms: 2.06535
+2026-10-03T23:10:20.2984077Z   type: 'test'
+2026-10-03T23:10:20.2984190Z   ...
+2026-10-03T23:10:20.2984404Z # Subtest: job evidence must belong to the authoritative source, run and attempt
+2026-10-03T23:10:20.2984716Z ok 156 - job evidence must belong to the authoritative source, run and attempt
+2026-10-03T23:10:20.2985020Z   ---
+2026-10-03T23:10:20.2985132Z   duration_ms: 0.236176
+2026-10-03T23:10:20.2985257Z   type: 'test'
+2026-10-03T23:10:20.2985369Z   ...
+2026-10-03T23:10:20.2985583Z # Subtest: administrator template matches the read-only effective-rule auditor
+2026-10-03T23:10:20.2985899Z ok 157 - administrator template matches the read-only effective-rule auditor
+2026-10-03T23:10:20.2986102Z   ---
+2026-10-03T23:10:20.2986213Z   duration_ms: 0.812816
+2026-10-03T23:10:20.2986484Z   type: 'test'
+2026-10-03T23:10:20.2986597Z   ...
+2026-10-03T23:10:20.2986741Z # Subtest: auditor refuses disabled ruleset
+2026-10-03T23:10:20.2986932Z ok 158 - auditor refuses disabled ruleset
+2026-10-03T23:10:20.2987078Z   ---
+2026-10-03T23:10:20.2987186Z   duration_ms: 0.278911
+2026-10-03T23:10:20.2987312Z   type: 'test'
+2026-10-03T23:10:20.2987420Z   ...
+2026-10-03T23:10:20.2987555Z # Subtest: auditor refuses bot bypass
+2026-10-03T23:10:20.2987917Z ok 159 - auditor refuses bot bypass
+2026-10-03T23:10:20.2988262Z   ---
+2026-10-03T23:10:20.2988437Z   duration_ms: 0.11295
+2026-10-03T23:10:20.2988692Z   type: 'test'
+2026-10-03T23:10:20.2988879Z   ...
+2026-10-03T23:10:20.2989160Z # Subtest: auditor refuses hidden bypass list
+2026-10-03T23:10:20.2989472Z ok 160 - auditor refuses hidden bypass list
+2026-10-03T23:10:20.2989690Z   ---
+2026-10-03T23:10:20.2989917Z   duration_ms: 0.0863
+2026-10-03T23:10:20.2990179Z   type: 'test'
+2026-10-03T23:10:20.2990394Z   ...
+2026-10-03T23:10:20.2990645Z # Subtest: auditor refuses empty effective rules
+2026-10-03T23:10:20.2998962Z ok 161 - auditor refuses empty effective rules
+2026-10-03T23:10:20.2999260Z   ---
+2026-10-03T23:10:20.2999431Z   duration_ms: 0.088644
+2026-10-03T23:10:20.2999631Z   type: 'test'
+2026-10-03T23:10:20.2999799Z   ...
+2026-10-03T23:10:20.3000045Z # Subtest: auditor refuses no code-owner review
+2026-10-03T23:10:20.3000352Z ok 162 - auditor refuses no code-owner review
+2026-10-03T23:10:20.3000512Z   ---
+2026-10-03T23:10:20.3000634Z   duration_ms: 0.090696
+2026-10-03T23:10:20.3000764Z   type: 'test'
+2026-10-03T23:10:20.3000873Z   ...
+2026-10-03T23:10:20.3001030Z # Subtest: auditor refuses stale checks permitted
+2026-10-03T23:10:20.3001242Z ok 163 - auditor refuses stale checks permitted
+2026-10-03T23:10:20.3001402Z   ---
+2026-10-03T23:10:20.3001511Z   duration_ms: 0.122615
+2026-10-03T23:10:20.3001638Z   type: 'test'
+2026-10-03T23:10:20.3001750Z   ...
+2026-10-03T23:10:20.3001905Z # Subtest: auditor refuses missing required check
+2026-10-03T23:10:20.3002113Z ok 164 - auditor refuses missing required check
+2026-10-03T23:10:20.3002274Z   ---
+2026-10-03T23:10:20.3002385Z   duration_ms: 0.0861
+2026-10-03T23:10:20.3002509Z   type: 'test'
+2026-10-03T23:10:20.3002622Z   ...
+2026-10-03T23:10:20.3002776Z # Subtest: auditor refuses spoofable check source
+2026-10-03T23:10:20.3002979Z ok 165 - auditor refuses spoofable check source
+2026-10-03T23:10:20.3003140Z   ---
+2026-10-03T23:10:20.3003249Z   duration_ms: 0.220663
+2026-10-03T23:10:20.3003376Z   type: 'test'
+2026-10-03T23:10:20.3003484Z   ...
+2026-10-03T23:10:20.3003641Z # Subtest: auditor refuses critical-only alert rule
+2026-10-03T23:10:20.3003857Z ok 166 - auditor refuses critical-only alert rule
+2026-10-03T23:10:20.3004020Z   ---
+2026-10-03T23:10:20.3004132Z   duration_ms: 0.335646
+2026-10-03T23:10:20.3004253Z   type: 'test'
+2026-10-03T23:10:20.3004367Z   ...
+2026-10-03T23:10:20.3004613Z # Subtest: auditor reads effective branch rules and contributing rulesets without mutation
+2026-10-03T23:10:20.3004976Z ok 167 - auditor reads effective branch rules and contributing rulesets without mutation
+2026-10-03T23:10:20.3005205Z   ---
+2026-10-03T23:10:20.3005315Z   duration_ms: 0.759897
+2026-10-03T23:10:20.3005439Z   type: 'test'
+2026-10-03T23:10:20.3005550Z   ...
+2026-10-03T23:10:20.3005820Z # Subtest: repository workflows retain mandatory verification and immutable direct action dependencies
+2026-10-03T23:10:20.3006237Z ok 168 - repository workflows retain mandatory verification and immutable direct action dependencies
+2026-10-03T23:10:20.3006610Z   ---
+2026-10-03T23:10:20.3006721Z   duration_ms: 27.56503
+2026-10-03T23:10:20.3006846Z   type: 'test'
+2026-10-03T23:10:20.3006955Z   ...
+2026-10-03T23:10:20.3007116Z # Subtest: workflow validation refuses mutable action
+2026-10-03T23:10:20.3007336Z ok 169 - workflow validation refuses mutable action
+2026-10-03T23:10:20.3007497Z   ---
+2026-10-03T23:10:20.3007612Z   duration_ms: 27.964988
+2026-10-03T23:10:20.3007740Z   type: 'test'
+2026-10-03T23:10:20.3008129Z   ...
+2026-10-03T23:10:20.3008459Z # Subtest: workflow validation refuses persisted checkout credentials
+2026-10-03T23:10:20.3008872Z ok 170 - workflow validation refuses persisted checkout credentials
+2026-10-03T23:10:20.3009141Z   ---
+2026-10-03T23:10:20.3009302Z   duration_ms: 9.881352
+2026-10-03T23:10:20.3009500Z   type: 'test'
+2026-10-03T23:10:20.3009657Z   ...
+2026-10-03T23:10:20.3009908Z # Subtest: workflow validation refuses broad default token
+2026-10-03T23:10:20.3010248Z ok 171 - workflow validation refuses broad default token
+2026-10-03T23:10:20.3010492Z   ---
+2026-10-03T23:10:20.3010654Z   duration_ms: 10.249873
+2026-10-03T23:10:20.3010834Z   type: 'test'
+2026-10-03T23:10:20.3010995Z   ...
+2026-10-03T23:10:20.3011434Z # Subtest: workflow validation refuses missing permission default
+2026-10-03T23:10:20.3011949Z ok 172 - workflow validation refuses missing permission default
+2026-10-03T23:10:20.3012249Z   ---
+2026-10-03T23:10:20.3012471Z   duration_ms: 10.647623
+2026-10-03T23:10:20.3012739Z   type: 'test'
+2026-10-03T23:10:20.3012914Z   ...
+2026-10-03T23:10:20.3013193Z # Subtest: workflow validation refuses path-filtered PR
+2026-10-03T23:10:20.3013572Z ok 173 - workflow validation refuses path-filtered PR
+2026-10-03T23:10:20.3013830Z   ---
+2026-10-03T23:10:20.3014009Z   duration_ms: 5.279765
+2026-10-03T23:10:20.3014202Z   type: 'test'
+2026-10-03T23:10:20.3014383Z   ...
+2026-10-03T23:10:20.3014642Z # Subtest: workflow validation refuses missing Windows
+2026-10-03T23:10:20.3015024Z ok 174 - workflow validation refuses missing Windows
+2026-10-03T23:10:20.3015294Z   ---
+2026-10-03T23:10:20.3015463Z   duration_ms: 13.116178
+2026-10-03T23:10:20.3015654Z   type: 'test'
+2026-10-03T23:10:20.3015821Z   ...
+2026-10-03T23:10:20.3016068Z # Subtest: workflow validation refuses optional matrix
+2026-10-03T23:10:20.3016295Z ok 175 - workflow validation refuses optional matrix
+2026-10-03T23:10:20.3016463Z   ---
+2026-10-03T23:10:20.3016574Z   duration_ms: 13.704284
+2026-10-03T23:10:20.3016701Z   type: 'test'
+2026-10-03T23:10:20.3016816Z   ...
+2026-10-03T23:10:20.3016984Z # Subtest: workflow validation refuses conditional tests
+2026-10-03T23:10:20.3017211Z ok 176 - workflow validation refuses conditional tests
+2026-10-03T23:10:20.3017375Z   ---
+2026-10-03T23:10:20.3017485Z   duration_ms: 9.531559
+2026-10-03T23:10:20.3017614Z   type: 'test'
+2026-10-03T23:10:20.3017726Z   ...
+2026-10-03T23:10:20.3017902Z # Subtest: workflow validation refuses omitted packed smoke
+2026-10-03T23:10:20.3018280Z ok 177 - workflow validation refuses omitted packed smoke
+2026-10-03T23:10:20.3018463Z   ---
+2026-10-03T23:10:20.3018572Z   duration_ms: 8.9688
+2026-10-03T23:10:20.3018696Z   type: 'test'
+2026-10-03T23:10:20.3018806Z   ...
+2026-10-03T23:10:20.3018980Z # Subtest: workflow validation refuses skipped packed smoke
+2026-10-03T23:10:20.3019222Z ok 178 - workflow validation refuses skipped packed smoke
+2026-10-03T23:10:20.3019390Z   ---
+2026-10-03T23:10:20.3019504Z   duration_ms: 18.779882
+2026-10-03T23:10:20.3019630Z   type: 'test'
+2026-10-03T23:10:20.3019742Z   ...
+2026-10-03T23:10:20.3019931Z # Subtest: workflow validation refuses optional assertion baseline
+2026-10-03T23:10:20.3020196Z ok 179 - workflow validation refuses optional assertion baseline
+2026-10-03T23:10:20.3020382Z   ---
+2026-10-03T23:10:20.3020710Z   duration_ms: 12.114385
+2026-10-03T23:10:20.3020899Z   type: 'test'
+2026-10-03T23:10:20.3021059Z   ...
+2026-10-03T23:10:20.3021337Z # Subtest: workflow validation refuses omitted final dependency
+2026-10-03T23:10:20.3021674Z ok 180 - workflow validation refuses omitted final dependency
+2026-10-03T23:10:20.3021961Z   ---
+2026-10-03T23:10:20.3022075Z   duration_ms: 5.50825
+2026-10-03T23:10:20.3022198Z   type: 'test'
+2026-10-03T23:10:20.3022307Z   ...
+2026-10-03T23:10:20.3022505Z # Subtest: workflow validation refuses conditionally skipped final gate
+2026-10-03T23:10:20.3022791Z ok 181 - workflow validation refuses conditionally skipped final gate
+2026-10-03T23:10:20.3022984Z   ---
+2026-10-03T23:10:20.3023095Z   duration_ms: 6.558154
+2026-10-03T23:10:20.3023300Z   type: 'test'
+2026-10-03T23:10:20.3023408Z   ...
+2026-10-03T23:10:20.3023509Z 1..181
+2026-10-03T23:10:20.3023619Z # tests 181
+2026-10-03T23:10:20.3023726Z # suites 0
+2026-10-03T23:10:20.3023834Z # pass 181
+2026-10-03T23:10:20.3023944Z # fail 0
+2026-10-03T23:10:20.3024050Z # cancelled 0
+2026-10-03T23:10:20.3024164Z # skipped 0
+2026-10-03T23:10:20.3024270Z # todo 0
+2026-10-03T23:10:20.3024389Z # duration_ms 1115.373092
+2026-10-03T23:10:20.3047578Z ##[group]Run node --test tests/installer-repository.test.mjs
+2026-10-03T23:10:20.3047849Z [36;1mnode --test tests/installer-repository.test.mjs[0m
+2026-10-03T23:10:20.3100998Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:10:20.3101142Z ##[endgroup]
+2026-10-03T23:10:20.3595162Z TAP version 13
+2026-10-03T23:10:22.7342859Z # Subtest: bash: clean checkout updates by fast-forward and preserves ignored user data
+2026-10-03T23:10:22.7348900Z ok 1 - bash: clean checkout updates by fast-forward and preserves ignored user data
+2026-10-03T23:10:22.7349304Z   ---
+2026-10-03T23:10:22.7349730Z   duration_ms: 742.62572
+2026-10-03T23:10:22.7350078Z   type: 'test'
+2026-10-03T23:10:22.7350264Z   ...
+2026-10-03T23:10:22.7350595Z # Subtest: bash: refuses dirty checkout without changing its work or HEAD
+2026-10-03T23:10:22.7351071Z ok 2 - bash: refuses dirty checkout without changing its work or HEAD
+2026-10-03T23:10:22.7351387Z   ---
+2026-10-03T23:10:22.7351561Z   duration_ms: 1165.821249
+2026-10-03T23:10:22.7351837Z   type: 'test'
+2026-10-03T23:10:22.7352016Z   ...
+2026-10-03T23:10:22.7352355Z # Subtest: bash: refuses untracked checkout without changing its work or HEAD
+2026-10-03T23:10:22.7356984Z ok 3 - bash: refuses untracked checkout without changing its work or HEAD
+2026-10-03T23:10:22.7357486Z   ---
+2026-10-03T23:10:22.7357869Z   duration_ms: 137.733977
+2026-10-03T23:10:22.7358344Z   type: 'test'
+2026-10-03T23:10:22.7358643Z   ...
+2026-10-03T23:10:22.7359130Z # Subtest: bash: refuses unrelated checkout without changing its work or HEAD
+2026-10-03T23:10:22.7359754Z ok 4 - bash: refuses unrelated checkout without changing its work or HEAD
+2026-10-03T23:10:22.7360205Z   ---
+2026-10-03T23:10:22.7360503Z   duration_ms: 55.451109
+2026-10-03T23:10:22.7360828Z   type: 'test'
+2026-10-03T23:10:22.7361118Z   ...
+2026-10-03T23:10:22.7361563Z # Subtest: bash: refuses ahead checkout without changing its work or HEAD
+2026-10-03T23:10:22.7362177Z ok 5 - bash: refuses ahead checkout without changing its work or HEAD
+2026-10-03T23:10:22.7362599Z   ---
+2026-10-03T23:10:22.7362904Z   duration_ms: 74.354972
+2026-10-03T23:10:22.7363218Z   type: 'test'
+2026-10-03T23:10:22.7363645Z   ...
+2026-10-03T23:10:22.7364146Z # Subtest: bash: refuses different-branch checkout without changing its work or HEAD
+2026-10-03T23:10:22.7364837Z ok 6 - bash: refuses different-branch checkout without changing its work or HEAD
+2026-10-03T23:10:22.7365309Z   ---
+2026-10-03T23:10:22.7365598Z   duration_ms: 76.513149
+2026-10-03T23:10:22.7365915Z   type: 'test'
+2026-10-03T23:10:22.7366206Z   ...
+2026-10-03T23:10:22.7373009Z # Subtest: bash: release update pins the requested tag and repeat install is safe
+2026-10-03T23:10:22.7373686Z ok 7 - bash: release update pins the requested tag and repeat install is safe
+2026-10-03T23:10:22.7374247Z   ---
+2026-10-03T23:10:22.7374600Z   duration_ms: 97.332433
+2026-10-03T23:10:22.7374938Z   type: 'test'
+2026-10-03T23:10:22.7375250Z   ...
+2026-10-03T23:10:22.7375721Z # Subtest: Windows release refuses a moved tag before changing checkout
+2026-10-03T23:10:22.7376385Z ok 8 - Windows release refuses a moved tag before changing checkout # SKIP
+2026-10-03T23:10:22.7377314Z   ---
+2026-10-03T23:10:22.7377631Z   duration_ms: 0.061663
+2026-10-03T23:10:22.7378182Z   type: 'test'
+2026-10-03T23:10:22.7378509Z   ...
+2026-10-03T23:10:22.7379062Z # Subtest: Windows self-updater preflight clean preserves checkout before any server stop
+2026-10-03T23:10:22.7379805Z ok 9 - Windows self-updater preflight clean preserves checkout before any server stop # SKIP
+2026-10-03T23:10:22.7380308Z   ---
+2026-10-03T23:10:22.7380601Z   duration_ms: 0.088574
+2026-10-03T23:10:22.7380924Z   type: 'test'
+2026-10-03T23:10:22.7381271Z   ...
+2026-10-03T23:10:22.7381776Z # Subtest: Windows self-updater preflight dirty preserves checkout before any server stop
+2026-10-03T23:10:22.7382505Z ok 10 - Windows self-updater preflight dirty preserves checkout before any server stop # SKIP
+2026-10-03T23:10:22.7382983Z   ---
+2026-10-03T23:10:22.7383523Z   duration_ms: 0.118048
+2026-10-03T23:10:22.7383855Z   type: 'test'
+2026-10-03T23:10:22.7384153Z   ...
+2026-10-03T23:10:22.7387774Z # Subtest: Windows self-updater preflight detached preserves checkout before any server stop
+2026-10-03T23:10:22.7388343Z ok 11 - Windows self-updater preflight detached preserves checkout before any server stop # SKIP
+2026-10-03T23:10:22.7388792Z   ---
+2026-10-03T23:10:22.7388959Z   duration_ms: 0.028092
+2026-10-03T23:10:22.7389162Z   type: 'test'
+2026-10-03T23:10:22.7389323Z   ...
+2026-10-03T23:10:22.7389683Z # Subtest: Windows self-updater preflight ahead preserves checkout before any server stop
+2026-10-03T23:10:22.7390192Z ok 12 - Windows self-updater preflight ahead preserves checkout before any server stop # SKIP
+2026-10-03T23:10:22.7390481Z   ---
+2026-10-03T23:10:22.7390642Z   duration_ms: 0.022123
+2026-10-03T23:10:22.7390862Z   type: 'test'
+2026-10-03T23:10:22.7391023Z   ...
+2026-10-03T23:10:22.7391382Z # Subtest: Windows self-updater preflight unrelated preserves checkout before any server stop
+2026-10-03T23:10:22.7391898Z ok 13 - Windows self-updater preflight unrelated preserves checkout before any server stop # SKIP
+2026-10-03T23:10:22.7392192Z   ---
+2026-10-03T23:10:22.7392352Z   duration_ms: 0.018959
+2026-10-03T23:10:22.7392525Z   type: 'test'
+2026-10-03T23:10:22.7392630Z   ...
+2026-10-03T23:10:22.7393009Z # Subtest: self-updater completes safety preflight before stopping a server and never resets
+2026-10-03T23:10:22.7393504Z ok 14 - self-updater completes safety preflight before stopping a server and never resets
+2026-10-03T23:10:22.7393781Z   ---
+2026-10-03T23:10:22.7393941Z   duration_ms: 0.128534
+2026-10-03T23:10:22.7394148Z   type: 'test'
+2026-10-03T23:10:22.7394311Z   ...
+2026-10-03T23:10:22.7394543Z # Subtest: Windows installer honors wizard choices
+2026-10-03T23:10:22.7394888Z ok 15 - Windows installer honors wizard choices # SKIP
+2026-10-03T23:10:22.7395156Z   ---
+2026-10-03T23:10:22.7395317Z   duration_ms: 0.023325
+2026-10-03T23:10:22.7395522Z   type: 'test'
+2026-10-03T23:10:22.7395684Z   ...
+2026-10-03T23:10:22.7395906Z # Subtest: Windows installer honors disabled 0
+2026-10-03T23:10:22.7396244Z ok 16 - Windows installer honors disabled 0 # SKIP
+2026-10-03T23:10:22.7396507Z   ---
+2026-10-03T23:10:22.7396670Z   duration_ms: 0.018949
+2026-10-03T23:10:22.7396892Z   type: 'test'
+2026-10-03T23:10:22.7397052Z   ...
+2026-10-03T23:10:22.7397283Z # Subtest: Windows installer honors disabled false
+2026-10-03T23:10:22.7397623Z ok 17 - Windows installer honors disabled false # SKIP
+2026-10-03T23:10:22.7397891Z   ---
+2026-10-03T23:10:22.7398136Z   duration_ms: 0.019569
+2026-10-03T23:10:22.7398350Z   type: 'test'
+2026-10-03T23:10:22.7398508Z   ...
+2026-10-03T23:10:22.7398730Z # Subtest: Windows installer honors disabled no
+2026-10-03T23:10:22.7399065Z ok 18 - Windows installer honors disabled no # SKIP
+2026-10-03T23:10:22.7399329Z   ---
+2026-10-03T23:10:22.7399487Z   duration_ms: 0.019109
+2026-10-03T23:10:22.7399706Z   type: 'test'
+2026-10-03T23:10:22.7399865Z   ...
+2026-10-03T23:10:22.7400088Z # Subtest: Windows installer honors enabled 1
+2026-10-03T23:10:22.7400541Z ok 19 - Windows installer honors enabled 1 # SKIP
+2026-10-03T23:10:22.7400804Z   ---
+2026-10-03T23:10:22.7400962Z   duration_ms: 0.030275
+2026-10-03T23:10:22.7401230Z   type: 'test'
+2026-10-03T23:10:22.7401393Z   ...
+2026-10-03T23:10:22.7401615Z # Subtest: Windows installer honors enabled true
+2026-10-03T23:10:22.7401954Z ok 20 - Windows installer honors enabled true # SKIP
+2026-10-03T23:10:22.7402210Z   ---
+2026-10-03T23:10:22.7402370Z   duration_ms: 0.020991
+2026-10-03T23:10:22.7402590Z   type: 'test'
+2026-10-03T23:10:22.7402751Z   ...
+2026-10-03T23:10:22.7402972Z # Subtest: Windows installer honors enabled yes
+2026-10-03T23:10:22.7403310Z ok 21 - Windows installer honors enabled yes # SKIP
+2026-10-03T23:10:22.7403580Z   ---
+2026-10-03T23:10:22.7403742Z   duration_ms: 0.018678
+2026-10-03T23:10:22.7403934Z   type: 'test'
+2026-10-03T23:10:22.7404094Z   ...
+2026-10-03T23:10:22.7404475Z # Subtest: Windows installer honors unset choices still prompt
+2026-10-03T23:10:22.7404726Z ok 22 - Windows installer honors unset choices still prompt # SKIP
+2026-10-03T23:10:22.7404970Z   ---
+2026-10-03T23:10:22.7405127Z   duration_ms: 0.01949
+2026-10-03T23:10:22.7405345Z   type: 'test'
+2026-10-03T23:10:22.7405505Z   ...
+2026-10-03T23:10:22.7405810Z # Subtest: Windows installer honors explicit Start switch retains priority
+2026-10-03T23:10:22.7406248Z ok 23 - Windows installer honors explicit Start switch retains priority # SKIP
+2026-10-03T23:10:22.7406518Z   ---
+2026-10-03T23:10:22.7406677Z   duration_ms: 0.019279
+2026-10-03T23:10:22.7406908Z   type: 'test'
+2026-10-03T23:10:22.7407063Z   ...
+2026-10-03T23:10:22.7407284Z # Subtest: Windows updater stops after failed npm ci --include=dev
+2026-10-03T23:10:22.7407671Z ok 24 - Windows updater stops after failed npm ci --include=dev # SKIP
+2026-10-03T23:10:22.7408047Z   ---
+2026-10-03T23:10:22.7408206Z   duration_ms: 0.01951
+2026-10-03T23:10:22.7408440Z   type: 'test'
+2026-10-03T23:10:22.7408777Z   ...
+2026-10-03T23:10:22.7409164Z # Subtest: Windows updater stops after failed npm run build
+2026-10-03T23:10:22.7409547Z ok 25 - Windows updater stops after failed npm run build # SKIP
+2026-10-03T23:10:22.7409810Z   ---
+2026-10-03T23:10:22.7409963Z   duration_ms: 0.018157
+2026-10-03T23:10:22.7410140Z   type: 'test'
+2026-10-03T23:10:22.7410296Z   ...
+2026-10-03T23:10:22.7410602Z # Subtest: Windows updater stops after failed npm run validate:mcp-release
+2026-10-03T23:10:22.7411065Z ok 26 - Windows updater stops after failed npm run validate:mcp-release # SKIP
+2026-10-03T23:10:22.7413722Z   ---
+2026-10-03T23:10:22.7414058Z   duration_ms: 0.018258
+2026-10-03T23:10:22.7414302Z   type: 'test'
+2026-10-03T23:10:22.7414464Z   ...
+2026-10-03T23:10:22.7414755Z # Subtest: Windows updater starts only after every build stage passes
+2026-10-03T23:10:22.7417693Z ok 27 - Windows updater starts only after every build stage passes # SKIP
+2026-10-03T23:10:22.7418106Z   ---
+2026-10-03T23:10:22.7418261Z   duration_ms: 0.018138
+2026-10-03T23:10:22.7418430Z   type: 'test'
+2026-10-03T23:10:22.7418537Z   ...
+2026-10-03T23:10:22.7497186Z 1..27
+2026-10-03T23:10:22.7497387Z # tests 27
+2026-10-03T23:10:22.7499284Z # suites 0
+2026-10-03T23:10:22.7499704Z # pass 8
+2026-10-03T23:10:22.7499858Z # fail 0
+2026-10-03T23:10:22.7500017Z # cancelled 0
+2026-10-03T23:10:22.7500185Z # skipped 19
+2026-10-03T23:10:22.7500340Z # todo 0
+2026-10-03T23:10:22.7500481Z # duration_ms 2396.966939
+2026-10-03T23:10:22.7561220Z ##[group]Run node --test scripts/run-local-jest.test.mjs
+2026-10-03T23:10:22.7561450Z [36;1mnode --test scripts/run-local-jest.test.mjs[0m
+2026-10-03T23:10:22.7612470Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:10:22.7612610Z ##[endgroup]
+2026-10-03T23:10:22.7931099Z TAP version 13
+2026-10-03T23:10:24.2596608Z # Subtest: rooted globs preserve dotted and space-containing Windows/Linux roots
+2026-10-03T23:10:24.2608907Z not ok 1 - rooted globs preserve dotted and space-containing Windows/Linux roots
+2026-10-03T23:10:24.2609328Z   ---
+2026-10-03T23:10:24.2609525Z   duration_ms: 5.273981
+2026-10-03T23:10:24.2610091Z   type: 'test'
+2026-10-03T23:10:24.2610464Z   location: '/home/runner/work/FLUJO/FLUJO/scripts/run-local-jest.test.mjs:17:1'
+2026-10-03T23:10:24.2610882Z   failureType: 'testCodeFailure'
+2026-10-03T23:10:24.2611139Z   error: |-
+2026-10-03T23:10:24.2611360Z     Expected values to be strictly equal:
+2026-10-03T23:10:24.2611602Z     
+2026-10-03T23:10:24.2611841Z     false !== true
+2026-10-03T23:10:24.2612022Z     
+2026-10-03T23:10:24.2612194Z   code: 'ERR_ASSERTION'
+2026-10-03T23:10:24.2612404Z   name: 'AssertionError'
+2026-10-03T23:10:24.2612613Z   expected: true
+2026-10-03T23:10:24.2612796Z   actual: false
+2026-10-03T23:10:24.2612994Z   operator: 'strictEqual'
+2026-10-03T23:10:24.2613202Z   stack: |-
+2026-10-03T23:10:24.2613657Z     TestContext.<anonymous> (file:///home/runner/work/FLUJO/FLUJO/scripts/run-local-jest.test.mjs:22:12)
+2026-10-03T23:10:24.2614177Z     Test.runInAsyncScope (node:async_hooks:214:14)
+2026-10-03T23:10:24.2614513Z     Test.run (node:internal/test_runner/test:1047:25)
+2026-10-03T23:10:24.2614844Z     Test.start (node:internal/test_runner/test:944:17)
+2026-10-03T23:10:24.2615251Z     startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+2026-10-03T23:10:24.2615598Z   ...
+2026-10-03T23:10:24.2633049Z # Subtest: runner retains selected files, normal/isolated options and explicitly fails zero-test bypasses
+2026-10-03T23:10:24.2639741Z ok 2 - runner retains selected files, normal/isolated options and explicitly fails zero-test bypasses
+2026-10-03T23:10:24.2640754Z   ---
+2026-10-03T23:10:24.2641167Z   duration_ms: 0.712245
+2026-10-03T23:10:24.2641694Z   type: 'test'
+2026-10-03T23:10:24.2642261Z   ...
+2026-10-03T23:10:24.2643145Z # Subtest: execution accounting rejects missing/duplicate/fully skipped selected suites
+2026-10-03T23:10:24.2644143Z ok 3 - execution accounting rejects missing/duplicate/fully skipped selected suites
+2026-10-03T23:10:24.2644863Z   ---
+2026-10-03T23:10:24.2645234Z   duration_ms: 0.208876
+2026-10-03T23:10:24.2645842Z   type: 'test'
+2026-10-03T23:10:24.2646303Z   ...
+2026-10-03T23:10:24.2647336Z # Subtest: actual Jest discovers every ordinary and isolated fixture exactly once under a managed-path shape
+2026-10-03T23:10:24.2648339Z ok 4 - actual Jest discovers every ordinary and isolated fixture exactly once under a managed-path shape
+2026-10-03T23:10:24.2649117Z   ---
+2026-10-03T23:10:24.2649563Z   duration_ms: 399.06547
+2026-10-03T23:10:24.2649879Z   type: 'test'
+2026-10-03T23:10:24.2650350Z   ...
+2026-10-03T23:10:24.2650804Z # Subtest: ordinary CI exclusions preserve node/jsdom ownership and the isolated stage selects both requested files
+2026-10-03T23:10:24.2651563Z ok 5 - ordinary CI exclusions preserve node/jsdom ownership and the isolated stage selects both requested files
+2026-10-03T23:10:24.2652092Z   ---
+2026-10-03T23:10:24.2652354Z   duration_ms: 740.252453
+2026-10-03T23:10:24.2652634Z   type: 'test'
+2026-10-03T23:10:24.2652891Z   ...
+2026-10-03T23:10:24.2653288Z # Subtest: actual Jest cannot silently succeed after omitting one explicitly selected suite
+2026-10-03T23:10:24.2653899Z ok 6 - actual Jest cannot silently succeed after omitting one explicitly selected suite
+2026-10-03T23:10:24.2654275Z   ---
+2026-10-03T23:10:24.2654589Z   duration_ms: 292.533885
+2026-10-03T23:10:24.2654865Z   type: 'test'
+2026-10-03T23:10:24.2655134Z   ...
+2026-10-03T23:10:24.2706107Z 1..6
+2026-10-03T23:10:24.2706457Z # tests 6
+2026-10-03T23:10:24.2707622Z # suites 0
+2026-10-03T23:10:24.2707911Z # pass 5
+2026-10-03T23:10:24.2708258Z # fail 1
+2026-10-03T23:10:24.2708540Z # cancelled 0
+2026-10-03T23:10:24.2708863Z # skipped 0
+2026-10-03T23:10:24.2709295Z # todo 0
+2026-10-03T23:10:24.2709480Z # duration_ms 1484.027
+2026-10-03T23:10:24.2763652Z ##[error]Process completed with exit code 1.
+2026-10-03T23:10:24.2872232Z Post job cleanup.
+2026-10-03T23:10:24.3426610Z [command]/usr/bin/git version
+2026-10-03T23:10:24.3457871Z git version 2.55.0
+2026-10-03T23:10:24.3481324Z Temporarily overriding HOME='/home/runner/work/_temp/8230dc79-a850-45a5-9f3d-69efcf925982' before making global git config changes
+2026-10-03T23:10:24.3482498Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:10:24.3484558Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:10:24.3513867Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:10:24.3540308Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:10:24.3739738Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:10:24.3782895Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:10:24.3979629Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:10:24.4012384Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:10:24.4304889Z Cleaning up orphan processes
+2026-10-03T23:10:24.4520798Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,205 @@
+﻿2026-10-03T23:09:05.3696338Z Current runner version: '2.337.0'
+2026-10-03T23:09:05.3731695Z ##[group]Runner Image Provisioner
+2026-10-03T23:09:05.3733136Z Hosted Compute Agent
+2026-10-03T23:09:05.3734186Z Version: 20260901.588
+2026-10-03T23:09:05.3735266Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-03T23:09:05.3736640Z Build Date: 2026-09-01T19:56:44Z
+2026-10-03T23:09:05.3737851Z Worker ID: {334fa75f-3f2d-4b1e-bd31-0bf574f02b4e}
+2026-10-03T23:09:05.3739472Z Azure Region: eastus
+2026-10-03T23:09:05.3740462Z ##[endgroup]
+2026-10-03T23:09:05.3743094Z ##[group]Operating System
+2026-10-03T23:09:05.3744295Z Ubuntu
+2026-10-03T23:09:05.3745193Z 24.04.5
+2026-10-03T23:09:05.3746161Z LTS
+2026-10-03T23:09:05.3747046Z ##[endgroup]
+2026-10-03T23:09:05.3747993Z ##[group]Runner Image
+2026-10-03T23:09:05.3749394Z Image: ubuntu-24.04
+2026-10-03T23:09:05.3750348Z Version: 20260927.320.1
+2026-10-03T23:09:05.3752545Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-03T23:09:05.3755271Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-03T23:09:05.3757002Z ##[endgroup]
+2026-10-03T23:09:05.3759291Z ##[group]GITHUB_TOKEN Permissions
+2026-10-03T23:09:05.3762217Z Contents: read
+2026-10-03T23:09:05.3763170Z Metadata: read
+2026-10-03T23:09:05.3764211Z ##[endgroup]
+2026-10-03T23:09:05.3767147Z Secret source: Actions
+2026-10-03T23:09:05.3769187Z Cache mode: write
+2026-10-03T23:09:05.3770768Z Prepare workflow directory
+2026-10-03T23:09:05.4252637Z Prepare all required actions
+2026-10-03T23:09:05.4323530Z Getting action download info
+2026-10-03T23:09:05.6240226Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-03T23:09:05.7417258Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-03T23:09:05.9321171Z Complete job name: typecheck
+2026-10-03T23:09:06.0103140Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-10-03T23:09:06.0104207Z with:
+2026-10-03T23:09:06.0104654Z   persist-credentials: false
+2026-10-03T23:09:06.0105196Z   repository: mario-andreschak/FLUJO
+2026-10-03T23:09:06.0109329Z   token: ***
+2026-10-03T23:09:06.0109779Z   ssh-strict: true
+2026-10-03T23:09:06.0110219Z   ssh-user: git
+2026-10-03T23:09:06.0110641Z   clean: true
+2026-10-03T23:09:06.0111086Z   sparse-checkout-cone-mode: true
+2026-10-03T23:09:06.0111604Z   fetch-depth: 1
+2026-10-03T23:09:06.0112028Z   fetch-tags: false
+2026-10-03T23:09:06.0112479Z   show-progress: true
+2026-10-03T23:09:06.0112931Z   lfs: false
+2026-10-03T23:09:06.0113347Z   submodules: false
+2026-10-03T23:09:06.0113797Z   set-safe-directory: true
+2026-10-03T23:09:06.0114304Z   allow-unsafe-pr-checkout: false
+2026-10-03T23:09:06.0115071Z ##[endgroup]
+2026-10-03T23:09:06.1182376Z Syncing repository: mario-andreschak/FLUJO
+2026-10-03T23:09:06.1185034Z ##[group]Getting Git version info
+2026-10-03T23:09:06.1186142Z Working directory is '/home/runner/work/FLUJO/FLUJO'
+2026-10-03T23:09:06.1187801Z [command]/usr/bin/git version
+2026-10-03T23:09:06.1250152Z git version 2.55.0
+2026-10-03T23:09:06.1272555Z ##[endgroup]
+2026-10-03T23:09:06.1294493Z Temporarily overriding HOME='/home/runner/work/_temp/2c06c70a-14d1-4f04-ae86-9f7dffa65eb9' before making global git config changes
+2026-10-03T23:09:06.1297123Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:09:06.1299332Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:09:06.1354402Z Deleting the contents of '/home/runner/work/FLUJO/FLUJO'
+2026-10-03T23:09:06.1358208Z ##[group]Initializing the repository
+2026-10-03T23:09:06.1362739Z [command]/usr/bin/git init /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:09:06.1479863Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-03T23:09:06.1481022Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-03T23:09:06.1482309Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-03T23:09:06.1483068Z hint: call:
+2026-10-03T23:09:06.1483479Z hint:
+2026-10-03T23:09:06.1484024Z hint: 	git config --global init.defaultBranch <name>
+2026-10-03T23:09:06.1484637Z hint:
+2026-10-03T23:09:06.1485212Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-03T23:09:06.1486131Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-03T23:09:06.1486860Z hint:
+2026-10-03T23:09:06.1487278Z hint: 	git branch -m <name>
+2026-10-03T23:09:06.1487751Z hint:
+2026-10-03T23:09:06.1488782Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-03T23:09:06.1494695Z Initialized empty Git repository in /home/runner/work/FLUJO/FLUJO/.git/
+2026-10-03T23:09:06.1507023Z [command]/usr/bin/git remote add origin https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:09:06.1557025Z ##[endgroup]
+2026-10-03T23:09:06.1558615Z ##[group]Disabling automatic garbage collection
+2026-10-03T23:09:06.1561717Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-03T23:09:06.1595612Z ##[endgroup]
+2026-10-03T23:09:06.1596975Z ##[group]Setting up auth
+2026-10-03T23:09:06.1603105Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:09:06.1650018Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:09:06.2030117Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:09:06.2064633Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:09:06.2312373Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:09:06.2349555Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:09:06.2580574Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-03T23:09:06.2623713Z ##[endgroup]
+2026-10-03T23:09:06.2633387Z ##[group]Fetching the repository
+2026-10-03T23:09:06.2635490Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e:refs/remotes/pull/607/merge
+2026-10-03T23:09:07.8838434Z From https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:09:07.8841178Z  * [new ref]         4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e -> pull/607/merge
+2026-10-03T23:09:07.8849116Z ##[endgroup]
+2026-10-03T23:09:07.8851427Z ##[group]Determining the checkout info
+2026-10-03T23:09:07.8854247Z ##[endgroup]
+2026-10-03T23:09:07.8856242Z [command]/usr/bin/git sparse-checkout disable
+2026-10-03T23:09:07.8908606Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-03T23:09:07.8949782Z ##[group]Checking out the ref
+2026-10-03T23:09:07.8953147Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/607/merge
+2026-10-03T23:09:08.2500931Z Note: switching to 'refs/remotes/pull/607/merge'.
+2026-10-03T23:09:08.2514491Z 
+2026-10-03T23:09:08.2514984Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-03T23:09:08.2515752Z changes and commit them, and you can discard any commits you make in this
+2026-10-03T23:09:08.2516385Z state without impacting any branches by switching back to a branch.
+2026-10-03T23:09:08.2516774Z 
+2026-10-03T23:09:08.2517041Z If you want to create a new branch to retain commits you create, you may
+2026-10-03T23:09:08.2517866Z do so (now or later) by using -c with the switch command. Example:
+2026-10-03T23:09:08.2518471Z 
+2026-10-03T23:09:08.2518789Z   git switch -c <new-branch-name>
+2026-10-03T23:09:08.2519506Z 
+2026-10-03T23:09:08.2519717Z Or undo this operation with:
+2026-10-03T23:09:08.2519961Z 
+2026-10-03T23:09:08.2520089Z   git switch -
+2026-10-03T23:09:08.2520332Z 
+2026-10-03T23:09:08.2520658Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-03T23:09:08.2521111Z 
+2026-10-03T23:09:08.2521544Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a
+2026-10-03T23:09:08.2523229Z ##[endgroup]
+2026-10-03T23:09:08.2568542Z [command]/usr/bin/git log -1 --format=%H
+2026-10-03T23:09:08.2595841Z 4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e
+2026-10-03T23:09:08.2605088Z ##[group]Removing auth
+2026-10-03T23:09:08.2608870Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:09:08.2641754Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:09:08.2871101Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:09:08.2900428Z http.https://github.com/.extraheader
+2026-10-03T23:09:08.2907372Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-03T23:09:08.2943448Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:09:08.3170828Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:09:08.3203995Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:09:08.3430268Z ##[endgroup]
+2026-10-03T23:09:08.3758164Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-03T23:09:08.3758860Z with:
+2026-10-03T23:09:08.3759104Z   node-version: 22
+2026-10-03T23:09:08.3759360Z   cache: npm
+2026-10-03T23:09:08.3759600Z   always-auth: false
+2026-10-03T23:09:08.3759877Z   check-latest: false
+2026-10-03T23:09:08.3762534Z   token: ***
+2026-10-03T23:09:08.3762791Z ##[endgroup]
+2026-10-03T23:09:08.5202505Z Found in cache @ /opt/hostedtoolcache/node/22.23.3/x64
+2026-10-03T23:09:08.5206267Z (node:2419) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-03T23:09:08.5207690Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-03T23:09:08.5209915Z ##[group]Environment details
+2026-10-03T23:09:11.2655170Z node: v22.23.3
+2026-10-03T23:09:11.2655702Z npm: 10.9.9
+2026-10-03T23:09:11.2656137Z yarn: 1.22.22
+2026-10-03T23:09:11.2657422Z ##[endgroup]
+2026-10-03T23:09:11.2679421Z [command]/opt/hostedtoolcache/node/22.23.3/x64/bin/npm config get cache
+2026-10-03T23:09:11.5506869Z /home/runner/.npm
+2026-10-03T23:09:11.6295198Z Cache hit for: node-cache-Linux-x64-npm-19d39c861773c51c14e34d3976ea0e17bdb3832c4568dbd842e6a99c0c5ec9f1
+2026-10-03T23:09:11.6403366Z (node:2419) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-03T23:09:11.6754006Z Received 692 of 692 (100.0%), 0.1 MBs/sec
+2026-10-03T23:09:11.6754806Z Cache Size: ~0 MB (692 B)
+2026-10-03T23:09:11.6782237Z [command]/usr/bin/tar -xf /home/runner/work/_temp/512fca98-9f40-4f59-b233-af9f34ecdfe7/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-03T23:09:11.6847714Z Cache restored successfully
+2026-10-03T23:09:11.6851603Z Cache restored from key: node-cache-Linux-x64-npm-19d39c861773c51c14e34d3976ea0e17bdb3832c4568dbd842e6a99c0c5ec9f1
+2026-10-03T23:09:11.6992389Z ##[group]Run npm ci --include=dev
+2026-10-03T23:09:11.6992781Z [36;1mnpm ci --include=dev[0m
+2026-10-03T23:09:11.7302515Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:09:11.7303000Z ##[endgroup]
+2026-10-03T23:09:15.5424039Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-03T23:09:17.4184713Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-03T23:09:18.9763066Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-03T23:09:20.3130529Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:09:23.1034304Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:09:53.3737349Z 
+2026-10-03T23:09:53.3738054Z added 1341 packages, and audited 1348 packages in 42s
+2026-10-03T23:09:53.3738776Z 
+2026-10-03T23:09:53.3739156Z 447 packages are looking for funding
+2026-10-03T23:09:53.3739738Z   run `npm fund` for details
+2026-10-03T23:09:53.3754380Z 
+2026-10-03T23:09:53.3754837Z found 0 vulnerabilities
+2026-10-03T23:09:53.4506863Z ##[group]Run npm run typecheck
+2026-10-03T23:09:53.4507229Z [36;1mnpm run typecheck[0m
+2026-10-03T23:09:53.4577960Z shell: /usr/bin/bash -e {0}
+2026-10-03T23:09:53.4578522Z ##[endgroup]
+2026-10-03T23:09:53.5658165Z 
+2026-10-03T23:09:53.5659070Z > flujo-ai@3.46.2 typecheck
+2026-10-03T23:09:53.5659950Z > next typegen && tsc --noEmit -p tsconfig.json
+2026-10-03T23:09:53.5660400Z 
+2026-10-03T23:09:53.8651167Z Generating route types...
+2026-10-03T23:09:53.9187099Z ✓ Types generated successfully
+2026-10-03T23:10:45.4677418Z ##[error]__tests__/mcp/oauthCredentialBoundary.test.ts(34,5): error TS2322: Type '{ name: string; transport: "streamable"; serverUrl: string; rootPath: string; env: {}; disabled: true; oauthTokens: { access_token: string; refresh_token: string; token_type: string; }; oauthClientInformation: { ...; }; oauthCodeVerifier: string; }' is not assignable to type 'MCPStreamableConfig'.
+2026-10-03T23:10:45.4687409Z   Type '{ name: string; transport: "streamable"; serverUrl: string; rootPath: string; env: {}; disabled: true; oauthTokens: { access_token: string; refresh_token: string; token_type: string; }; oauthClientInformation: { ...; }; oauthCodeVerifier: string; }' is missing the following properties from type 'MCPManagerConfig': _buildCommand, _installCommand
+2026-10-03T23:10:45.4690206Z ##[error]src/backend/services/security/isolatedMcp.ts(127,7): error TS2769: No overload matches this call.
+2026-10-03T23:10:45.4691765Z   Overload 3 of 8, '(file: string, args?: readonly string[] | undefined, options?: ExecFileSyncOptions | undefined): string | NonSharedBuffer', gave the following error.
+2026-10-03T23:10:45.4692757Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.
+2026-10-03T23:10:45.4693780Z ##[error]src/backend/services/security/isolatedMcp.ts(169,7): error TS2769: No overload matches this call.
+2026-10-03T23:10:45.4695217Z   Overload 3 of 8, '(file: string, args?: readonly string[] | undefined, options?: ExecFileSyncOptions | undefined): string | NonSharedBuffer', gave the following error.
+2026-10-03T23:10:45.4696167Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.
+2026-10-03T23:10:45.6635399Z ##[error]Process completed with exit code 2.
+2026-10-03T23:10:45.6791440Z Post job cleanup.
+2026-10-03T23:10:45.7649699Z [command]/usr/bin/git version
+2026-10-03T23:10:45.7697185Z git version 2.55.0
+2026-10-03T23:10:45.7743207Z Temporarily overriding HOME='/home/runner/work/_temp/2527f369-49b8-428e-b5b3-f81ca630604e' before making global git config changes
+2026-10-03T23:10:45.7745952Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:10:45.7749873Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-03T23:10:45.7794962Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:10:45.7831963Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-03T23:10:45.8103454Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:10:45.8140725Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-03T23:10:45.8401521Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:10:45.8443815Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-03T23:10:45.8873623Z Cleaning up orphan processes
+2026-10-03T23:10:45.9325127Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

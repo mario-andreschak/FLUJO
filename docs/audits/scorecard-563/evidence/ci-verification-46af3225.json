@@ -1,0 +1,283 @@
+{
+  "capturedAt": "2026-10-03T23:40:55.589Z",
+  "headSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+  "testedSourceSha": "4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e",
+  "mergeIdentity": {
+    "capturedAt": "2026-10-03T23:20:48.578Z",
+    "headRefOid": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+    "testedSourceSha": "4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e",
+    "testedTreeSha": "831df1e22e445e6b0b970196db2775c2588f7081",
+    "headTreeSha": "831df1e22e445e6b0b970196db2775c2588f7081",
+    "treesEqual": true,
+    "testedParents": [
+      "50113b6e9d7bf5f50291f55470af35ad6bb8189a",
+      "46af3225199fc7d59062f0a52fd36b5980c94c4a"
+    ],
+    "latestCoordinatorSourceSha": "1ff266cbb5cc15bd7cc28dc634ed7eb1146a844b",
+    "unchangedFailingSourceBlobs": [
+      {
+        "path": "scripts/run-local-jest.test.mjs",
+        "publishedDocumentationHeadSha256": "af1152d753584e095843a5b06e141f7982a845a38ac0c93469c109a6b3f388fa",
+        "latestCoordinatorSourceSha256": "af1152d753584e095843a5b06e141f7982a845a38ac0c93469c109a6b3f388fa",
+        "bytesIdentical": true
+      },
+      {
+        "path": "__tests__/mcp/oauthCredentialBoundary.test.ts",
+        "publishedDocumentationHeadSha256": "f6bff361c4b0ed137bdde0429ee53f8952463a73d0ab0407223c17c988d9e4b4",
+        "latestCoordinatorSourceSha256": "f6bff361c4b0ed137bdde0429ee53f8952463a73d0ab0407223c17c988d9e4b4",
+        "bytesIdentical": true
+      },
+      {
+        "path": "src/backend/services/security/isolatedMcp.ts",
+        "publishedDocumentationHeadSha256": "da41fb7ebd641c9fb97efa004878cbcbcd4effaa8b89a6d5a533071fde977989",
+        "latestCoordinatorSourceSha256": "da41fb7ebd641c9fb97efa004878cbcbcd4effaa8b89a6d5a533071fde977989",
+        "bytesIdentical": true
+      }
+    ],
+    "interpretation": "CI checked the GitHub synthetic PR merge commit. Its tree is compared explicitly with the PR head; this is not the latest coordinator integration commit or an installed release. Equal file bytes keep the observed source failures relevant to the later candidate until a fix is committed and checked."
+  },
+  "workflows": [
+    {
+      "id": 37160686065,
+      "status": "completed",
+      "conclusion": "failure",
+      "headSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+      "jobs": [
+        {
+          "jobId": 111313307732,
+          "name": "workflow-contract",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307732"
+        },
+        {
+          "jobId": 111313307795,
+          "name": "test-isolated",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307795"
+        },
+        {
+          "jobId": 111313307860,
+          "name": "CodeQL (javascript-typescript)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307860"
+        },
+        {
+          "jobId": 111313307862,
+          "name": "dependency-security",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307862"
+        },
+        {
+          "jobId": 111313307872,
+          "name": "typecheck",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307872"
+        },
+        {
+          "jobId": 111313307882,
+          "name": "CodeQL (actions)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307882"
+        },
+        {
+          "jobId": 111313307935,
+          "name": "lint",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307935"
+        },
+        {
+          "jobId": 111313307945,
+          "name": "Production build (windows-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307945"
+        },
+        {
+          "jobId": 111313307955,
+          "name": "Release safety (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307955"
+        },
+        {
+          "jobId": 111313307956,
+          "name": "Production build (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307956"
+        },
+        {
+          "jobId": 111313307967,
+          "name": "Release safety (windows-latest)",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307967"
+        },
+        {
+          "jobId": 111313308018,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313308018"
+        },
+        {
+          "jobId": 111313308676,
+          "name": "diagnostic Persona memory profile (not release acceptance)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313308676"
+        },
+        {
+          "jobId": 111316229735,
+          "name": "verification",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111316229735"
+        }
+      ]
+    },
+    {
+      "id": 37160686057,
+      "status": "completed",
+      "conclusion": "failure",
+      "scope": "Installer build validation failed; the retained job log binds its checkout"
+    }
+  ],
+  "rawLogs": [
+    {
+      "jobId": 111313307955,
+      "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307955.log",
+      "sha256": "85ff9bd4012a75b18081e045e27adb3e3269ea0b432670d9c2effd884097b000",
+      "verification": "local",
+      "byteLength": 100009,
+      "publicUrl": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307955"
+    },
+    {
+      "jobId": 111313307872,
+      "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307872.log",
+      "sha256": "944672d5d62dc214cc29730cb2d4e3092d21879d5b68b1cebce30d6ddb9774b1",
+      "verification": "local",
+      "byteLength": 18217,
+      "publicUrl": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313307872"
+    },
+    {
+      "jobId": 111313307619,
+      "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307619.log",
+      "sha256": "6dabd27927ed20d72d38727a4b284664a748d9783a91989ca94f020b7d02bf28",
+      "verification": "local",
+      "byteLength": 19845,
+      "publicUrl": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686057/job/111313307619"
+    },
+    {
+      "jobId": 111313308018,
+      "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313308018.log",
+      "sha256": "dd49763a6aa85c030912269ee16d46607f3e3e53312f9c5f0a5bf2b343868e4b",
+      "verification": "local",
+      "byteLength": 1093518,
+      "publicUrl": "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065/job/111313308018"
+    }
+  ],
+  "retainedEarlierFailureDetails": {
+    "capturedAt": "2026-10-03T23:16:33.691Z",
+    "headRefOid": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+    "integrationBase": "50113b6e9d7bf5f50291f55470af35ad6bb8189a",
+    "workflowRunIds": [
+      37160686065,
+      37160686057
+    ],
+    "logs": [
+      {
+        "jobId": 111313307955,
+        "path": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307955.log",
+        "sha256": "85ff9bd4012a75b18081e045e27adb3e3269ea0b432670d9c2effd884097b000",
+        "byteLength": 100009,
+        "checkoutWitness": [
+          "2026-10-03T23:09:54.0158816Z ##[group]Checking out the ref",
+          "2026-10-03T23:09:54.0160509Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/607/merge",
+          "2026-10-03T23:09:54.2749916Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a"
+        ],
+        "failures": [
+          "2026-10-03T23:10:24.2608907Z not ok 1 - rooted globs preserve dotted and space-containing Windows/Linux roots",
+          "2026-10-03T23:10:24.2763652Z ##[error]Process completed with exit code 1."
+        ]
+      },
+      {
+        "jobId": 111313307872,
+        "path": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307872.log",
+        "sha256": "944672d5d62dc214cc29730cb2d4e3092d21879d5b68b1cebce30d6ddb9774b1",
+        "byteLength": 18217,
+        "checkoutWitness": [
+          "2026-10-03T23:09:07.8949782Z ##[group]Checking out the ref",
+          "2026-10-03T23:09:07.8953147Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/607/merge",
+          "2026-10-03T23:09:08.2521544Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a"
+        ],
+        "failures": [
+          "2026-10-03T23:10:45.4677418Z ##[error]__tests__/mcp/oauthCredentialBoundary.test.ts(34,5): error TS2322: Type '{ name: string; transport: \"streamable\"; serverUrl: string; rootPath: string; env: {}; disabled: true; oauthTokens: { access_token: string; refresh_token: string; token_type: string; }; oauthClientInformation: { ...; }; oauthCodeVerifier: string; }' is not assignable to type 'MCPStreamableConfig'.",
+          "2026-10-03T23:10:45.4687409Z   Type '{ name: string; transport: \"streamable\"; serverUrl: string; rootPath: string; env: {}; disabled: true; oauthTokens: { access_token: string; refresh_token: string; token_type: string; }; oauthClientInformation: { ...; }; oauthCodeVerifier: string; }' is missing the following properties from type 'MCPManagerConfig': _buildCommand, _installCommand",
+          "2026-10-03T23:10:45.4690206Z ##[error]src/backend/services/security/isolatedMcp.ts(127,7): error TS2769: No overload matches this call.",
+          "2026-10-03T23:10:45.4692757Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.",
+          "2026-10-03T23:10:45.4693780Z ##[error]src/backend/services/security/isolatedMcp.ts(169,7): error TS2769: No overload matches this call.",
+          "2026-10-03T23:10:45.4696167Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.",
+          "2026-10-03T23:10:45.6635399Z ##[error]Process completed with exit code 2."
+        ]
+      },
+      {
+        "jobId": 111313307619,
+        "path": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307619.log",
+        "sha256": "6dabd27927ed20d72d38727a4b284664a748d9783a91989ca94f020b7d02bf28",
+        "byteLength": 19845,
+        "checkoutWitness": [
+          "2026-10-03T23:08:06.0913519Z ##[group]Checking out the ref",
+          "2026-10-03T23:08:06.0922319Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" checkout --progress --force refs/remotes/pull/607/merge",
+          "2026-10-03T23:08:07.1951037Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a"
+        ],
+        "failures": [
+          "2026-10-03T23:12:05.5693835Z ##[error]src/backend/services/security/isolatedMcp.ts(127,7): error TS2769: No overload matches this call.",
+          "2026-10-03T23:12:05.5705105Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.",
+          "2026-10-03T23:12:05.5706554Z ##[error]src/backend/services/security/isolatedMcp.ts(169,7): error TS2769: No overload matches this call.",
+          "2026-10-03T23:12:05.5709104Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.",
+          "2026-10-03T23:12:05.7449671Z ##[error]Process completed with exit code 1."
+        ]
+      }
+    ],
+    "scope": "Public terminal job logs for the publication PR plus its integration source. Other jobs are still live; this is not a full workflow success or the coordinator latest integration candidate.",
+    "limits": [
+      "No failed assertion is reclassified as passing; no job is restarted/cancelled here.",
+      "The log checkout witnesses distinguish the actual test checkout from PR head metadata.",
+      "Root owns integration/CI fixes; frozen existing topic heads are preserved."
+    ]
+  },
+  "ordinaryTestSummary": {
+    "suites": {
+      "failed": 5,
+      "skipped": 5,
+      "passed": 856,
+      "total": 866
+    },
+    "tests": {
+      "failed": 3,
+      "skipped": 11,
+      "passed": 7861,
+      "total": 7875
+    },
+    "failedSuites": [
+      "personaRecoveryRoute",
+      "parseAllTestFiles",
+      "isolatedTestStage",
+      "testMatchCoverage",
+      "workspace/routeCoverage"
+    ]
+  },
+  "limits": [
+    "Actual checkout was the synthetic merge; its tree equals the PR head tree. This is not a final coordinator integration or installed-release rerun.",
+    "The three recorded failing source blobs match the later 1ff266cb candidate. This does not prove all CI results at that later candidate.",
+    "Passing jobs, cancellation and skipped diagnostics do not erase failed prerequisites. Root engineering/security/production owners handle CI source fixes."
+  ]
+}

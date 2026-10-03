@@ -1,0 +1,71 @@
+{
+  "capturedAt": "2026-10-03T23:40:55.589Z",
+  "reviewedSourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+  "assessmentSha256": "f5d5c6a7f89d46ea92a32ef1942cf351256485fd2208a7b15e1b609b5adb7aca",
+  "reviewerVerdict": {
+    "docsCorrectness": "B+",
+    "docsReleaseAcceptance": "ungradable"
+  },
+  "decisions": [
+    {
+      "finding": "Failing CI absent from ledger and scorecard README",
+      "disposition": "accepted",
+      "resolution": "Retain final CI, raw job logs, merge identity and failed build-verification gate in a new source slice. Historical baseline is retained."
+    },
+    {
+      "finding": "README links missing SECURITY.md",
+      "disposition": "rejected",
+      "resolution": "Git tree 46af3225 includes SECURITY.md blob c87fd9bdea4e1dc716caa2cb60afa58141895329. The absent-file witness refers explicitly to older baseline 3511ba4. New exact-source inventory clarifies both."
+    },
+    {
+      "finding": "Wrong source evidence can pass dependency-audit or Persona soak gates",
+      "disposition": "accepted",
+      "resolution": "Require source-check for dependency audit/build verification, offline-simulation for full Persona soak; gate kinds cannot be changed to evade this."
+    },
+    {
+      "finding": "anyOf containment/error discard and function hoisting",
+      "disposition": "rejected-as-correctness-defect",
+      "resolution": "Parent object properties run after anyOf. Supported anyOf branches are self-contained leaves. Summary errors fail validation; function declarations are hoisted in JavaScript. Richer errors would be optional usability work."
+    },
+    {
+      "finding": "source-build skips installed runtime checks",
+      "disposition": "rejected",
+      "resolution": "Only artifact.kind === 'source' takes the source-only branch. source-build requires runtime checks; installed-artifact also rejects kind source. The reviewer itself acknowledges current source-build behavior is correct."
+    },
+    {
+      "finding": "Production acceptance has only a shared-public claim",
+      "disposition": "accepted-improvement",
+      "resolution": "Add local-owner and persistent-worker production claims and require production claims for all three profiles. Existing global OS/method matrix and gates already prevented all-nine closure without those installs."
+    },
+    {
+      "finding": "New source security contracts absent from ledger",
+      "disposition": "accepted-improvement",
+      "resolution": "Retain eight source files with exact blobs/content/digests and associate the new source witness with affected publication claims, without promoting release claims."
+    },
+    {
+      "finding": "Unset live monetary envelope represented as zero",
+      "disposition": "accepted-improvement",
+      "resolution": "Proposed unset limit becomes null. Metrics cannot use null limits and no agreed/existing contract may have an unset limit. Existing Persona thresholds remain unchanged."
+    },
+    {
+      "finding": "Persona experimental exclusion bypasses current offline soak",
+      "disposition": "rejected",
+      "resolution": "Closure independently iterates every gate, including persona-current-soak. Only persona-live has an experimental exemption. Completed assessment already requires checksum-retained independent-assessment at selected source and verified artifacts."
+    },
+    {
+      "finding": "Positional boundary fixtures",
+      "disposition": "accepted-improvement",
+      "resolution": "Use stable IDs for evidence/claim/gate fixtures; keep array-position edits only where the position itself is under test."
+    },
+    {
+      "finding": "Duplicated historical claim/document counts",
+      "disposition": "deferred-nonblocking",
+      "resolution": "Counts describe an immutable dated inventory. New publication evidence is separate; fixed historical raw bytes are not rewritten."
+    }
+  ],
+  "limits": [
+    "Reviewer output is retained unchanged, including incorrect or overbroad findings. Triage does not award a replacement grade.",
+    "Reviewer nine-row readiness labels concern its supplied ledger, not a new observation of every current integration topic.",
+    "Automated review selection does not create human adoption, installation or elapsed runtime observations. Final all-nine reassessment remains pending."
+  ]
+}

@@ -1009,11 +1009,11 @@
       "status": "proposed",
       "metric": "Authorized live-provider monetary cap",
       "operator": "<=",
-      "limit": 0,
+      "limit": null,
       "unit": "USD",
-      "denominator": "No separately declared numeric paid-run envelope is recorded: proposed cap is zero. Record concrete account/model scope, enforced accounting and an agreed limit before measurement; broad development/deployment authority is not measured spend.",
+      "denominator": "Numeric run envelope is unset. Record account/model scope, enforced accounting and an agreed numeric limit before measuring spend acceptance; broad development/deployment authority is not a measured cap.",
       "window": "Per future authorized run",
-      "basis": "#578; zero records the currently unset numeric run envelope, not a denial of development/deployment authorization or a performance target",
+      "basis": "#578; null represents an unset proposed numeric envelope, not zero spend or a denial of authorized development/deployment",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
       "agreementEvidenceIds": [],
       "observation": {
@@ -1032,12 +1032,14 @@
     },
     "independentReviewer": {
       "status": "pending",
-      "identity": null,
-      "evidenceIds": []
+      "identity": "Automated source reviewer: maintainer-selected FLUJO Claude_Opus_Agent; final release rubric agreement pending",
+      "evidenceIds": [
+        "docs-automated-review-46af3225"
+      ]
     },
     "disagreements": [
       "Proposed runtime/recovery/security/live budgets need topic-owner and maintainer/reviewer agreement before measurement.",
-      "Named accountable human owners and independent assessor are not assigned.",
+      "Independent automated source reviewer is selected; accountable human role assignments and final release rubric agreement remain pending.",
       "External FACTORY/O/brain-online/UI contracts and installed-artifact identity acceptance remain owner-held."
     ]
   },
@@ -1642,6 +1644,182 @@
         "shared-public"
       ],
       "artifactProof": null
+    },
+    {
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-03T23:40:55.589Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "none unless explicitly identified in scope",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686065",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37160686057"
+      ],
+      "id": "ci-verification-46af3225",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e",
+      "commands": [
+        "gh run view 37160686065 --json status,conclusion,jobs,headSha",
+        "gh api repos/mario-andreschak/FLUJO/actions/jobs/{jobId}/logs",
+        "git source blob comparison at 46af3225 and 1ff266cb"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-verification-46af3225.json",
+          "sha256": "63ba0e4df26c6ef6360445f94fb0b37f418a946cfe2578d57272878abed31b9e",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307955.log",
+          "sha256": "85ff9bd4012a75b18081e045e27adb3e3269ea0b432670d9c2effd884097b000",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307872.log",
+          "sha256": "944672d5d62dc214cc29730cb2d4e3092d21879d5b68b1cebce30d6ddb9774b1",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307619.log",
+          "sha256": "6dabd27927ed20d72d38727a4b284664a748d9783a91989ca94f020b7d02bf28",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313308018.log",
+          "sha256": "dd49763a6aa85c030912269ee16d46607f3e3e53312f9c5f0a5bf2b343868e4b",
+          "verification": "local"
+        }
+      ],
+      "scope": "Failed combined-source verification and installer build at the recorded synthetic PR merge; passing jobs do not qualify the release.",
+      "limits": [
+        "No installed-release acceptance; actual tested SHA is distinct from the equal-tree PR head.",
+        "Later source blob correspondence is not a full rerun at the coordinator candidate."
+      ]
+    },
+    {
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-03T23:40:55.589Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "none unless explicitly identified in scope",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [],
+      "id": "publication-source-46af3225",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+      "commands": [
+        "git show 46af3225:{file}",
+        "git rev-parse 46af3225:{file}",
+        "git ls-tree 46af3225 SECURITY.md docs/security/owner-access-v1.md docs/security/mcp-isolation-v1-evidence.md"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/publication-source-46af3225.json",
+          "sha256": "030c723d5e1a52aad0fd4a5ced8420dabfd1e37432190375516a5475f1b6e1cd",
+          "verification": "local"
+        }
+      ],
+      "scope": "Exact-source inventory of eight published policy/architecture/API/status and isolation files; source capture succeeded, not release acceptance.",
+      "limits": [
+        "Historical baseline absence and current source presence are distinct observations.",
+        "No threat-model, runtime or confinement acceptance is implied."
+      ]
+    },
+    {
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-03T23:40:55.589Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "Claude Opus alias opus via claude-subscription/claude-cli; maintainer-selected FLUJO flow",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [],
+      "id": "docs-automated-review-46af3225",
+      "kind": "independent-assessment",
+      "result": "not-evaluated",
+      "integrity": "checksummed",
+      "sourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+      "commands": [
+        "POST /v1/chat/completions with flow-Claude_Opus_Agent, source-pinned review packet, metadata.requireApproval=true; no tools requested"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-automated-review-46af3225.json",
+          "sha256": "f5d5c6a7f89d46ea92a32ef1942cf351256485fd2208a7b15e1b609b5adb7aca",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-review-protocol-46af3225.json",
+          "sha256": "759ef01113c7c54b52547730591ec614f63729af88c3921e5b57ed6e5e0bd58e",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-review-triage-46af3225.json",
+          "sha256": "467692dbe25cd799d5aaa9d17dcb8e005f67df7fbff93bb0a16f9c74dd7d7ec4",
+          "verification": "local"
+        }
+      ],
+      "scope": "Bounded independent automated source review: provisional Docs correctness B+; release acceptance ungradable. Does not complete the final release-bound nine-row assessment.",
+      "limits": [
+        "Original report retained unchanged; rejected findings and missing packet material are documented in triage.",
+        "Review is not a human study, independent reproduction or installed-release observation.",
+        "No grades, release claims or acceptance gates are promoted."
+      ]
     }
   ],
   "gates": [
@@ -1793,6 +1971,21 @@
       "evidenceIds": [
         "dependency-audit-2026-10-03"
       ]
+    },
+    {
+      "id": "build-verification",
+      "ownerId": "engineering",
+      "kind": "source",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "status": "failed",
+      "description": "Selected candidate source must pass required typecheck, lint, ordinary/isolated tests, builds, release-safety and verification prerequisites; failed/cancelled/skipped required jobs remain non-acceptance.",
+      "evidenceIds": [
+        "ci-verification-46af3225"
+      ]
     }
   ],
   "claims": [
@@ -1847,13 +2040,16 @@
         "installed-artifact",
         "human-study"
       ],
-      "evidenceIds": [],
+      "evidenceIds": [
+        "ci-verification-46af3225"
+      ],
       "budgetIds": [],
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
         "release-acceptance",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -1907,7 +2103,9 @@
         "offline-simulation",
         "installed-artifact"
       ],
-      "evidenceIds": [],
+      "evidenceIds": [
+        "ci-verification-46af3225"
+      ],
       "budgetIds": [
         "persona-append-p95",
         "persona-peak-rss",
@@ -1934,7 +2132,8 @@
         "rubric-agreement",
         "independent-reassessment",
         "persona-current-soak",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -1969,14 +2168,17 @@
       ],
       "evidenceIds": [
         "baseline-2026-10-03",
-        "publication-reconciliation-2026-10-03"
+        "publication-reconciliation-2026-10-03",
+        "ci-verification-46af3225",
+        "docs-automated-review-46af3225"
       ],
       "budgetIds": [],
       "gateIds": [
         "rubric-agreement",
         "independent-reassessment",
         "release-acceptance",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -2049,7 +2251,8 @@
         "security-review"
       ],
       "evidenceIds": [
-        "publication-reconciliation-2026-10-03"
+        "publication-reconciliation-2026-10-03",
+        "publication-source-46af3225"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -2142,7 +2345,8 @@
         "security-review"
       ],
       "evidenceIds": [
-        "publication-reconciliation-2026-10-03"
+        "publication-reconciliation-2026-10-03",
+        "publication-source-46af3225"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -2277,14 +2481,15 @@
       "id": "publication-threat-model",
       "dimensionId": "security",
       "profileId": "shared-public",
-      "statement": "There is no SECURITY.md in the captured main tree; scattered source documentation and an unintegrated security proposal are not a reviewed release threat model.",
+      "statement": "SECURITY.md is absent at historical baseline 3511ba4 and present as source policy at 46af3225. Source policy and proposed implementation contracts are not an independently reviewed installed-release threat model.",
       "status": "pending",
       "requiredKinds": [
         "installed-artifact",
         "security-review"
       ],
       "evidenceIds": [
-        "publication-reconciliation-2026-10-03"
+        "publication-reconciliation-2026-10-03",
+        "publication-source-46af3225"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -2295,6 +2500,61 @@
         "shared-profile",
         "independent-reassessment",
         "dependency-audit"
+      ]
+    },
+    {
+      "id": "production-local-a-minus",
+      "dimensionId": "production",
+      "profileId": "local-owner",
+      "statement": "Proposed production acceptance for local-owner: installed operation, migration/upgrade, backup/restore and bounded recovery require profile-specific retained observations; external judgment pending.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review",
+        "human-study"
+      ],
+      "evidenceIds": [],
+      "budgetIds": [
+        "recovery-rto",
+        "backup-rpo",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "independent-reassessment",
+        "release-acceptance",
+        "local-security",
+        "worker-operations",
+        "dependency-audit",
+        "build-verification"
+      ]
+    },
+    {
+      "id": "production-worker-a-minus",
+      "dimensionId": "production",
+      "profileId": "persistent-worker",
+      "statement": "Proposed production acceptance for persistent-worker: installed operation, migration/upgrade, backup/restore and bounded recovery require profile-specific retained observations; external judgment pending.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review",
+        "human-study"
+      ],
+      "evidenceIds": [],
+      "budgetIds": [
+        "recovery-rto",
+        "backup-rpo",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "independent-reassessment",
+        "release-acceptance",
+        "local-security",
+        "worker-operations",
+        "dependency-audit",
+        "build-verification",
+        "cross-stream-contracts"
       ]
     }
   ],
