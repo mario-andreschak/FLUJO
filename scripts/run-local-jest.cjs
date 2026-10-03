@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { realpathSync } = require('node:fs');
 const { spawn } = require('node:child_process');
 const { assertLocalTestDependencies } = require('./local-test-dependencies.cjs');
 const EXPECTED_TEST_FILES_ENV = 'FLUJO_JEST_EXPECTED_TEST_FILES';
@@ -56,25 +57,42 @@ function withoutForeignNodeModuleBins(value, localBin) {
   ].join(path.delimiter);
 }
 
+function canonicalTestPath(file) {
+  const absolute = path.resolve(file);
+  try { return realpathSync.native(absolute); } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    // A missing selected file still belongs in the execution contract. Resolve
+    // its nearest existing parent so aliases cannot hide an omitted suite.
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(canonicalTestPath(parent), path.basename(absolute));
+  }
+}
+
 function selectionContract(argv, rootDir) {
   if (argv.some((arg) => /^--pass(?:WithNoTests|-with-no-tests)(?:=|$)/.test(arg))) {
     throw new Error('The local runner refuses --passWithNoTests; zero execution must fail.');
   }
-  const expectedFiles = argv.filter((arg) => !arg.startsWith('-')
-    && /\.test\.(?:[cm]?[jt]s|[jt]sx)$/.test(arg) && !/[*?{}()|^$]/.test(arg))
-    .map((file) => path.resolve(rootDir, file));
   const diagnostic = argv.some((arg) => ['--listTests', '--showConfig', '--help', '-h', '--version', '-v'].includes(arg));
   if (diagnostic) return { args: argv, expectedFiles: [] };
+  const expectedFiles = [];
+  const args = argv.map((arg) => {
+    if (arg.startsWith('-') || !/\.test\.(?:[cm]?[jt]s|[jt]sx)$/.test(arg) || /[*?{}()|^$]/.test(arg)) return arg;
+    const file = canonicalTestPath(path.resolve(rootDir, arg));
+    expectedFiles.push(file);
+    // Jest also treats positional paths as patterns. POSIX separators retain
+    // the separator before dotted directories on Windows.
+    return file.replaceAll('\\', '/');
+  });
   const reporter = __filename;
   const hasReporter = argv.some((arg) => arg === '--reporters' || arg.startsWith('--reporters='));
   return {
-    args: [...argv, ...(hasReporter ? [] : ['--reporters=default']), `--reporters=${reporter}`],
+    args: [...args, ...(hasReporter ? [] : ['--reporters=default']), `--reporters=${reporter}`],
     expectedFiles: [...new Set(expectedFiles)],
   };
 }
 
 const testIdentity = (file) => {
-  const absolute = path.resolve(file);
+  const absolute = canonicalTestPath(file);
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
 };
 
@@ -173,6 +191,7 @@ Object.assign(module.exports, {
   main,
   partitionRunnerFlags,
   selectionContract,
+  canonicalTestPath,
   withoutForeignNodeModuleBins,
   assertTestExecution,
 });

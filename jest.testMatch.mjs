@@ -5,6 +5,7 @@
 // the matcher and the "nothing is silently skipped" check can never drift
 // apart. See issue #176: a `.test.tsx` under `__tests__/` used to be dropped
 // because the matcher only listed `.test.ts`.
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // Glob patterns relative to the repo root, posix separators.
@@ -30,7 +31,15 @@ const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // a native <rootDir> containing `\.codex` therefore loses that separator.
 // Supply POSIX roots before normalization, and escape regex roots separately.
 export function testPatternsForRoot(root) {
-  const normalized = root.replaceAll('\\', '/').replace(/\/$/, '');
+  // Jest canonicalizes rootDir before collecting files. Windows TEMP can use
+  // an 8.3 alias (RUNNER~1), and managed checkouts can use directory junctions.
+  // Match the physical root rather than embedding the caller's alias in globs.
+  let physicalRoot = root;
+  try { physicalRoot = realpathSync.native(root); } catch (error) {
+    // Keep synthetic/nonexistent roots useful to the portable matcher guards.
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+  }
+  const normalized = physicalRoot.replaceAll('\\', '/').replace(/\/$/, '');
   const globRoot = normalized;
   const regexRoot = escapeForRegExp(normalized);
   return {
