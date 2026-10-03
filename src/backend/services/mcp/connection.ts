@@ -26,6 +26,7 @@ import {
   MCPStreamableConfig,
   MCP_SKILLS_EXTENSION_ID,
   SERVER_DIR_PREFIX,
+  type MCPShutdownObservation,
 } from "@/shared/types/mcp";
 import { ChildProcess } from "child_process";
 import { createOAuthClientProvider } from "./oauth";
@@ -1293,8 +1294,8 @@ export interface SafeCloseOptions {
 }
 
 /** What actually happened during a close — reported so teardown is verifiable (#413). */
-export interface SafeCloseResult {
-  /** The child process (and its group/tree) is gone, or there was no child. */
+export interface SafeCloseResult extends MCPShutdownObservation {
+  /** Observed owned child exit; does not certify descendant/external cleanup. */
   exited: boolean;
   /** Termination needed signals/taskkill rather than a voluntary exit. */
   forced: boolean;
@@ -1324,17 +1325,22 @@ export async function safelyCloseClient(
   const startedAt = Date.now();
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
-  let exited = true;
+  let exited = false;
   let forced = false;
   const rawTransport = getUnderlyingTransport(client.transport);
+  const child: ChildProcess | undefined = (
+    rawTransport as { _process?: ChildProcess } | undefined
+  )?._process;
+  const processOwnership: MCPShutdownObservation['processOwnership'] =
+    child && typeof child.kill === "function" ? 'owned'
+      : config && config.transport !== 'stdio' ? 'external' : 'unknown';
+  let errorClassification: MCPShutdownObservation['errorClassification'] = 'none';
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
     // instanceof, so beta-built connections get the same graceful shutdown.
-    const child: ChildProcess | undefined = (
-      rawTransport as { _process?: ChildProcess } | undefined
-    )?._process;
     if (child && typeof child.kill === "function") {
+      exited = child.exitCode !== null || child.signalCode !== null;
       if (child.exitCode === null && child.signalCode === null) {
         // First close stdin to signal graceful shutdown (the MCP stdio convention)
         try {
@@ -1386,6 +1392,7 @@ export async function safelyCloseClient(
     await client.close();
     log.info(`Client closed successfully for ${serverName}`);
   } catch (error) {
+    errorClassification = 'close_failed';
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
@@ -1393,5 +1400,15 @@ export async function safelyCloseClient(
       (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
     );
   }
-  return { exited, forced, durationMs: Date.now() - startedAt };
+  // SDK close can itself observe exit after the bounded tree-kill wait ended.
+  if (processOwnership === 'owned' && child) {
+    exited ||= child.exitCode !== null || child.signalCode !== null;
+  }
+  const exitOutcome = processOwnership === 'external' ? 'not_applicable'
+    : exited ? 'observed_exit' : 'unknown';
+  if (exitOutcome === 'unknown' && errorClassification === 'none') {
+    errorClassification = 'exit_unobserved';
+  }
+  return { exited, forced, durationMs: Date.now() - startedAt,
+    processOwnership, exitOutcome, errorClassification };
 }
