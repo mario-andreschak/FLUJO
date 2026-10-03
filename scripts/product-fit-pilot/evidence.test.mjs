@@ -186,6 +186,97 @@ test('severe feedback requires a tracked fix and confirmation on a matching inst
   assert.throws(() => report(data), /fixed candidate revision/);
 });
 
+test('failed runs stay pending until triaged, and an earlier classification cannot hide recurrence', () => {
+  const data = fixture();
+  data.evidenceMode = 'human-observations';
+  const task = data.weeks[0].tasks[0];
+  Object.assign(task, { outcome: 'failed', receiptSha256: null, benefit: 'none', failureCode: 'runtime' });
+  assert.equal(report(data).feedback.unclassifiedFailures, 1);
+  assert.equal(report(data).gates.severeFailuresConfirmed, 'pending-evidence');
+  data.feedback.push({ id: 'f001', participantId: 'p001', reportedAt: time(DAY + 1000), category: 'runtime',
+    severity: 'minor', failureCode: 'runtime', issueNumber: null, fixCommit: null,
+    confirmedArtifactId: null, confirmedAt: null, confirmationSha256: null });
+  assert.equal(report(data).feedback.unclassifiedFailures, 0);
+  assert.equal(report(data).gates.severeFailuresConfirmed, 'recorded-target-met');
+  Object.assign(data.weeks[1].tasks[0], { outcome: 'failed', receiptSha256: null, benefit: 'none', failureCode: 'runtime' });
+  assert.equal(report(data).feedback.unclassifiedFailures, 1);
+  assert.equal(report(data).gates.severeFailuresConfirmed, 'pending-evidence');
+});
+
+function control(kind, ordinal = 1) {
+  const checks = {
+    approval: { blockedBeforeDecision: true, approvedAfterReview: true, rejectionPreventedCall: true },
+    debugger: { pausedAtNode: true, inspectedToolResult: true, resumedToCompletion: true },
+    'proxy-reuse': { sameConnection: true, discoveryCompleted: true, invocationCompleted: true },
+  };
+  return { participantId: 'p001', artifactId: 'a001', kind, observedAt: time(2 * DAY + ordinal * 1000),
+    outcome: 'completed', checks: checks[kind], receiptSha256: hash(10_000 + ordinal), failureCode: 'none' };
+}
+
+test('approval, debugger and actual proxy reuse have independent installed/source evidence', () => {
+  const data = fixture();
+  data.controls = [control('approval', 1), control('debugger', 2), control('proxy-reuse', 3)];
+  const result = report(data);
+  for (const kind of ['approval', 'debugger', 'proxy-reuse']) {
+    assert.deepEqual(result.controls[kind], { reportedParticipants: 1, missingParticipants: 9,
+      completedOnInstalled: 1, failedAttempts: 0, notAttempted: 0, sourceOnly: 0 });
+  }
+  const published = publicSummary(data, result);
+  assert.equal(published.controls, undefined);
+  assert.ok(!JSON.stringify(published).includes(data.controls[0].receiptSha256));
+  data.artifacts[0].kind = 'source';
+  assert.equal(report(data).controls.approval.completedOnInstalled, 0);
+  assert.equal(report(data).controls.approval.sourceOnly, 1);
+});
+
+test('control failures, explicit non-attempts and missing observations stay distinct', () => {
+  const data = fixture();
+  data.evidenceMode = 'human-observations';
+  data.controls = [control('approval')];
+  Object.assign(data.controls[0], { outcome: 'failed', failureCode: 'approval', receiptSha256: null });
+  data.controls[0].checks.rejectionPreventedCall = false;
+  assert.equal(report(data).controls.approval.failedAttempts, 1);
+  assert.equal(report(data).feedback.unclassifiedFailures, 1);
+  assert.equal(report(data).gates.severeFailuresConfirmed, 'pending-evidence');
+  data.controls[0].outcome = 'not-attempted';
+  data.controls[0].failureCode = 'none';
+  for (const key of Object.keys(data.controls[0].checks)) data.controls[0].checks[key] = false;
+  assert.equal(report(data).controls.approval.notAttempted, 1);
+  assert.equal(report(data).controls.approval.missingParticipants, 9);
+  assert.equal(report(data).controls.debugger.missingParticipants, 10);
+  assert.equal(report(data).feedback.unclassifiedFailures, 0);
+});
+
+test('completed control evidence requires every boundary, a unique receipt and a valid consented time', () => {
+  const mutations = [
+    [d => { d.controls[0].checks.blockedBeforeDecision = false; }, /every control boundary/],
+    [d => { d.controls[0].receiptSha256 = null; }, /invalid digest/],
+    [d => { d.controls[0].observedAt = time(57 * DAY); }, /observation outside/],
+    [d => { d.controls.push(structuredClone(d.controls[0])); }, /duplicate control attempt/],
+    [d => { const duplicate = structuredClone(d.controls[0]); duplicate.observedAt = time(3 * DAY); d.controls.push(duplicate); }, /receipt cannot count twice/],
+    [d => { d.controls[0].checks.privatePayload = 'do-not-print'; }, /unexpected or missing fields/],
+    [d => { d.participants[0].consent.withdrawnAt = time(55 * DAY); d.journeys = []; d.weeks = []; }, /remove withdrawn/],
+  ];
+  for (const [mutate, message] of mutations) {
+    const data = fixture();
+    data.controls = [control('approval')];
+    mutate(data);
+    assert.throws(() => report(data), message);
+  }
+});
+
+test('an agreed but unobserved cohort cannot clear the failure-confirmation gate', () => {
+  const data = fixture();
+  data.evidenceMode = 'human-observations';
+  data.journeys = [];
+  data.weeks = [];
+  data.controls = [control('approval')];
+  data.controls[0].outcome = 'not-attempted';
+  data.controls[0].receiptSha256 = null;
+  for (const key of Object.keys(data.controls[0].checks)) data.controls[0].checks[key] = false;
+  assert.equal(report(data).gates.severeFailuresConfirmed, 'pending-evidence');
+});
+
 test('unknown fields are rejected without printing their names or contents', () => {
   const data = fixture();
   data.participants[0]['secret-key-name'] = 'secret-value';

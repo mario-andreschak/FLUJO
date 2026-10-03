@@ -6,6 +6,11 @@ const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FAILURE_CODES = ['none', 'installation', 'prerequisite', 'authentication', 'quota',
   'discovery', 'tool-form', 'tool-call', 'model-binding', 'runtime', 'approval',
   'debugger', 'proxy', 'accessibility', 'unclear-next-step', 'other'];
+const CONTROL_CHECKS = {
+  approval: ['blockedBeforeDecision', 'approvedAfterReview', 'rejectionPreventedCall'],
+  debugger: ['pausedAtNode', 'inspectedToolResult', 'resumedToCompletion'],
+  'proxy-reuse': ['sameConnection', 'discoveryCompleted', 'invocationCompleted'],
+};
 
 export function emptyPilot() {
   return {
@@ -16,7 +21,7 @@ export function emptyPilot() {
       users: 10, weeks: 8, workflows: 3, novices: 10, noviceSuccessRate: 0.8, firstRunSeconds: 900,
     } },
     startedAt: null,
-    artifacts: [], workflows: [], participants: [], journeys: [], weeks: [], feedback: [],
+    artifacts: [], workflows: [], participants: [], journeys: [], controls: [], weeks: [], feedback: [],
   };
 }
 
@@ -76,7 +81,7 @@ export function validatePilot(data, asOf, now = Date.now()) {
   const cutoff = timestamp(asOf, 'asOf');
   requireValue(cutoff <= now, 'asOf', 'future observations cannot count as elapsed evidence');
   object(data, ['schemaVersion', 'protocolVersion', 'evidenceMode', 'rubric', 'startedAt',
-    'artifacts', 'workflows', 'participants', 'journeys', 'weeks', 'feedback'], 'pilot');
+    'artifacts', 'workflows', 'participants', 'journeys', 'controls', 'weeks', 'feedback'], 'pilot');
   requireValue(data.schemaVersion === 1 && data.protocolVersion === 'pilot-v1', 'pilot', 'unsupported protocol');
   choice(data.evidenceMode, ['human-observations', 'synthetic-fixture'], 'pilot.evidenceMode');
   object(data.rubric, ['status', 'agreementSha256', 'targets'], 'rubric');
@@ -93,8 +98,9 @@ export function validatePilot(data, asOf, now = Date.now()) {
   const start = timestamp(data.startedAt, 'startedAt', true);
   requireValue(start === null || start <= cutoff, 'startedAt', 'pilot start is after the report cutoff');
   for (const [field, max] of Object.entries({ artifacts: 100, workflows: 20, participants: 100,
-    journeys: 100, weeks: 5200, feedback: 1000 })) array(data[field], max, field);
-  requireValue(start !== null || data.participants.length + data.journeys.length + data.weeks.length + data.feedback.length === 0,
+    journeys: 100, controls: 1000, weeks: 5200, feedback: 1000 })) array(data[field], max, field);
+  requireValue(start !== null || data.participants.length + data.journeys.length + data.controls.length +
+    data.weeks.length + data.feedback.length === 0,
     'startedAt', 'observations require a declared pilot start');
   requireValue(data.evidenceMode !== 'human-observations' || data.participants.length === 0 || data.rubric.status === 'agreed',
     'rubric', 'agree the rubric before human enrollment');
@@ -176,6 +182,36 @@ export function validatePilot(data, asOf, now = Date.now()) {
       journey.dropOff === 'none' && journey.failureCode === 'none'), path, 'completion requires an actual model reply and MCP tool result');
     requireValue(journey.status === 'completed' || (journey.dropOff !== 'none' && journey.failureCode !== 'none'),
       path, 'record the failure or abandonment boundary');
+  });
+
+  const controlAttempts = new Set();
+  const controlReceipts = new Set();
+  data.controls.forEach((control, i) => {
+    const path = `controls[${i}]`;
+    object(control, ['participantId', 'artifactId', 'kind', 'observedAt', 'outcome', 'checks',
+      'receiptSha256', 'failureCode'], path);
+    const observed = timestamp(control.observedAt, `${path}.observedAt`);
+    participantFor(control, path, observed);
+    artifactFor(control, path);
+    choice(control.kind, Object.keys(CONTROL_CHECKS), `${path}.kind`);
+    choice(control.outcome, ['completed', 'failed', 'not-attempted'], `${path}.outcome`);
+    object(control.checks, CONTROL_CHECKS[control.kind], `${path}.checks`);
+    for (const check of CONTROL_CHECKS[control.kind]) boolean(control.checks[check], `${path}.checks.${check}`);
+    choice(control.failureCode, FAILURE_CODES, `${path}.failureCode`);
+    digest(control.receiptSha256, SHA, `${path}.receiptSha256`, control.outcome !== 'completed');
+    requireValue(control.outcome !== 'completed' || Object.values(control.checks).every(Boolean),
+      path, 'completion requires every control boundary');
+    requireValue((control.outcome === 'failed') === (control.failureCode !== 'none'), path, 'outcome and failure code disagree');
+    requireValue(control.outcome !== 'not-attempted' || (control.receiptSha256 === null &&
+      Object.values(control.checks).every(value => !value)), path, 'unattempted controls cannot claim observed checks');
+    const key = `${control.participantId}:${control.artifactId}:${control.kind}:${control.observedAt}`;
+    requireValue(!controlAttempts.has(key), path, 'duplicate control attempt');
+    controlAttempts.add(key);
+    if (control.receiptSha256 !== null) {
+      const receipt = `${control.kind}:${control.receiptSha256}`;
+      requireValue(!controlReceipts.has(receipt), path, 'a control receipt cannot count twice for the same boundary');
+      controlReceipts.add(receipt);
+    }
   });
 
   const participantWeeks = new Set();
@@ -281,11 +317,25 @@ export function summarizePilot(data, asOf, now = Date.now()) {
   const severe = data.feedback.filter(f => f.severity === 'severe');
   const unresolvedSevere = severe.filter(f => !installed.has(f.confirmedArtifactId)).length;
   const tasks = reports.flatMap(r => r.tasks);
+  const controls = data.controls.filter(c => cohortIds.has(c.participantId));
+  const failures = [
+    ...data.journeys.filter(j => j.status !== 'completed').map(j => ({ ...j, observedAt: j.endedAt })),
+    ...data.weeks.flatMap(w => w.tasks.filter(t => t.outcome === 'failed').map(t =>
+      ({ participantId: w.participantId, failureCode: t.failureCode, observedAt: t.completedAt }))),
+    ...data.controls.filter(c => c.outcome === 'failed'),
+  ];
+  // A prior triage cannot cover recurrence after that report. Keep a new failure
+  // visible until the operator records its severity, even if another run passed.
+  const unclassifiedFailures = failures.filter(failure => !data.feedback.some(f =>
+    f.participantId === failure.participantId && f.failureCode === failure.failureCode &&
+      Date.parse(f.reportedAt) >= Date.parse(failure.observedAt))).length;
+  const hasCohortObservations = reports.some(w => w.tasks.length > 0) || controls.some(c => c.outcome !== 'not-attempted') ||
+    data.journeys.some(j => cohortIds.has(j.participantId));
   const numeric = {
     weeklyAdoption: completeWeeks === targets.weeks && retained >= targets.users,
     recurringWorkflows: recurring >= targets.workflows,
     noviceFirstRun: novices.length >= targets.novices && noviceSuccesses / novices.length >= targets.noviceSuccessRate,
-    severeFailuresConfirmed: unresolvedSevere === 0,
+    severeFailuresConfirmed: hasCohortObservations && unclassifiedFailures === 0 && unresolvedSevere === 0,
   };
   const gate = condition => data.evidenceMode === 'synthetic-fixture' ? 'fixture-only' :
     data.rubric.status !== 'agreed' ? 'pending-agreement' : condition ? 'recorded-target-met' : 'pending-evidence';
@@ -296,6 +346,16 @@ export function summarizePilot(data, asOf, now = Date.now()) {
       withdrawn: cohort.filter(p => p.consent.withdrawnAt !== null).length, retainedThroughCompleteWeeks: retained },
     weekly,
     workflows: { defined: data.workflows.length, recurringWithRecordedBenefit: recurring },
+    controls: Object.fromEntries(Object.keys(CONTROL_CHECKS).map(kind => {
+      const records = controls.filter(c => c.kind === kind);
+      const reported = new Set(records.map(c => c.participantId));
+      const completed = records.filter(c => c.outcome === 'completed' && installed.has(c.artifactId));
+      return [kind, { reportedParticipants: reported.size, missingParticipants: cohort.length - reported.size,
+        completedOnInstalled: new Set(completed.map(c => c.participantId)).size,
+        failedAttempts: records.filter(c => c.outcome === 'failed').length,
+        notAttempted: records.filter(c => c.outcome === 'not-attempted').length,
+        sourceOnly: records.filter(c => !installed.has(c.artifactId)).length }];
+    })),
     novices: { enrolled: novices.length, observed: journeys.length, missing: novices.length - journeys.length,
       successfulWithinTarget: noviceSuccesses, failedOrAbandoned: journeys.filter(j => j.status !== 'completed').length,
       coached: journeys.filter(j => j.coaching).length, coded: journeys.filter(j => j.coding).length,
@@ -310,7 +370,7 @@ export function summarizePilot(data, asOf, now = Date.now()) {
       sourceOnly: tasks.filter(t => !installed.has(t.artifactId)).length,
       practice: tasks.filter(t => !normalWorkflows.has(t.workflowId)).length,
       interventions: tasks.reduce((sum, t) => sum + t.interventions, 0) },
-    feedback: { severe: severe.length, unresolvedSevere },
+    feedback: { severe: severe.length, unresolvedSevere, unclassifiedFailures },
     gates: Object.fromEntries(Object.entries(numeric).map(([name, condition]) => [name, gate(condition)])),
     externalReassessment: 'required',
     evidenceLimit: 'Operator-entered records and digest references require independent review of genuine retained evidence.',

@@ -37,11 +37,15 @@ This extension follows Card 1 and is measured separately from its 15-minute firs
 
 Retain approved redacted receipts privately for approval-before-execution, rejection, paused-node inspection and completion. Do not assume those capabilities from Card 1 or from unit tests. Record any failed boundary as feedback with an exact candidate pin. Feature surface owns their frontend implementation and browser acceptance.
 
+Enter actual Card 2 observations as `approval` and `debugger` control records using the [format reference](evidence-format.md). Record all failed attempts and any explicit decision not to attempt the task. A missing record is a missing observation; it cannot be inferred from a completed Card 1.
+
 ## Card 3: reuse a connection
 
 Choose an external MCP client already available and approved by the participant. Follow its current supported setup and the candidate's [API documentation](../../api-reference/README.md). Connect to the **same configured server** through FLUJO's MCP proxy and perform the harmless read without duplicating the underlying server's credentials or installation. Alternatively call the saved agent through its OpenAI-compatible endpoint and verify the model/tool trace.
 
 Keep the listener on localhost. Use the exact client/transport version and candidate authentication contract from the release owners. Never carry a historical “any API key” instruction into a candidate that requires scoped access. External-client installation/login time and failure are separate from Card 1. Record discovery and real invocation separately; a connected status without an actual result does not prove reuse.
+
+Record the outcome in a `proxy-reuse` control record with same-connection, discovery and actual invocation checks. A result on a source checkout remains source evidence; a successful installed-client receipt must identify the accepted artifact.
 
 ## Weekly normal-workflow cards
 

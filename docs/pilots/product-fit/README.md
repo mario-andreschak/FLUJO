@@ -39,11 +39,15 @@ In PowerShell, supply your own private paths, such as `--out 'D:\PrivatePilot\pi
 
 `report` writes a consent-aware aggregate summary to stdout. Redirect that only after reviewing it. With `--private-output`, it also writes a new local report with exact artifact identities, denominators, failure/drop-off counts, provisioning/product timings, interventions, input checksum and tool checksums. It never overwrites previous reports. Validate the public JSON before publishing; the tool does not publish it for you.
 
+Record the approval, debugger and connection-reuse extensions in `controls`, with the actual observed checks and a private receipt. The private report distinguishes installed completions, source-only checks, failed attempts, explicit non-attempts and missing participants for each boundary. Those counts stay out of the default public export. The protocol/schema remains a pre-enrollment draft: regenerate an empty proposal after a source/schema update and retain earlier source receipts with their exact tool checksums. Do not silently rewrite populated observations or an agreed contract.
+
 Public output contains no participant IDs, raw timestamps, artifact pins, prompts, tool arguments, filenames, screenshots, contact details or free text. It withholds cohort/outcome counts when a nonzero group or its complement has fewer than five people. Any `private-only` consent withholds all observation counts and target gates from that export; it does not filter people out to improve the denominator. Review multiple exports together for disclosure through differences. Small-cell suppression reduces disclosure but is not a formal anonymity guarantee.
 
 ## Review failures and close the feedback loop
 
 Review weekly failures and interventions alongside active use. A user whose workflow required recovery still completed a task; retain the intervention count. A failing tool or severe runtime problem requires a redacted issue, an exact fixed candidate revision and a confirmation receipt on the identified installed artifact. A source test cannot clear that installed confirmation. `fixCommit` is the full source revision of that fixed candidate, not necessarily the earlier individual fixing commit.
+
+Classify every failed journey/task/control attempt in feedback, using its participant/failure code and a report time at or after the failure. The report keeps failure confirmation pending while any failed observation is unclassified; an older classification cannot hide a later recurrence. An unobserved cohort cannot establish that failures were handled. Severity and confirmation still require independent review of the genuine retained receipts.
 
 Before publishing an issue, a human reviews its minimal reproduction and checks that it contains no private prompts, workspace names, URLs with credentials, logs, keys or unapproved quotation. The collection format stores an issue number and codes, not its text. Keep before/after receipts privately. If a failure recurs, record new feedback rather than deleting the earlier failure. Track any raw evidence that could not be retained as missing; never invent a digest.
 

@@ -17,6 +17,7 @@ Create the empty root with `cli.mjs init`. Keep populated input, raw receipts, c
 | `workflows` | At most 20 task-protocol records |
 | `participants` | At most 100 participant records |
 | `journeys` | At most 100 first-attempt records; one per participant |
+| `controls` | At most 1,000 approval/debugger/proxy-extension attempts |
 | `weeks` | At most 5,200 participant-week records; one per participant/week |
 | `feedback` | At most 1,000 feedback records |
 
@@ -38,7 +39,7 @@ A participant has `id`, `role` (`independent-human`, `maintainer`, `automated`, 
 
 `consent` has `version` (`pilot-v1`), `collectedAt` (on or before enrollment), `collection` (must be true), `publication` (`private-only` or `aggregate-only`) and `withdrawnAt` (timestamp or null). Consent covers the actual protocol, retention policy and reviewer access; an operator selecting true is not proof of consent.
 
-For withdrawal, delete that participant's journey/week/feedback observations; the validator rejects any remaining ones. Follow the [consent packet's handling policy](recruitment-consent.md) for contact mappings/receipts and the unlinkable denominator tombstone. Withdrawn people remain in the original frozen cohort denominator. Late enrollees and non-independent roles are reported as excluded, never replacements for drop-outs. The tool cannot establish real human independence or erase records itself.
+For withdrawal, delete that participant's journey/control/week/feedback observations; the validator rejects any remaining ones. Follow the [consent packet's handling policy](recruitment-consent.md) for contact mappings/receipts and the unlinkable denominator tombstone. Withdrawn people remain in the original frozen cohort denominator. Late enrollees and non-independent roles are reported as excluded, never replacements for drop-outs. The tool cannot establish real human independence or erase records itself.
 
 ## First-attempt journey records
 
@@ -56,6 +57,22 @@ For withdrawal, delete that participant's journey/week/feedback observations; th
 
 Completion requires both the actual MCP result and model reply, a retained receipt and no failure/drop-off code. First attempts require distinct receipt digests across participants. Non-completion requires its stopping boundary and failure code. The elapsed product time is `(endedAt - startedAt) / 1000 - provisioningSeconds`. The report separates provisioning totals, product timings, provisioning blocks, coaching/coding, drop-off/failure codes and missing observations. It does not treat a failed or unobserved novice as removed from the denominator. Store later retries/fix confirmation in feedback/private follow-up receipts, not a replacement first attempt.
 
+## Approval, debugger and connection-reuse records
+
+Each control attempt has `participantId`, `artifactId`, `kind` (`approval`, `debugger`, `proxy-reuse`), `observedAt`, `outcome` (`completed`, `failed`, `not-attempted`), `checks`, `receiptSha256` and `failureCode`. Its timestamp must be within the consented pilot window. A completed attempt needs a genuine receipt, all of its checks true and failure code `none`. A failed attempt needs its failure code; an explicit non-attempt has all checks false, null receipt and code `none`. Preserve failed attempts when a later retry completes.
+
+`checks` contains exactly these boolean fields for its kind:
+
+| Kind | Required observed boundaries |
+| --- | --- |
+| `approval` | `blockedBeforeDecision`, `approvedAfterReview`, `rejectionPreventedCall` |
+| `debugger` | `pausedAtNode`, `inspectedToolResult`, `resumedToCompletion` |
+| `proxy-reuse` | `sameConnection`, `discoveryCompleted`, `invocationCompleted` |
+
+The private receipt must support those observations on the identified artifact: approval before execution plus denial without a call; paused-node/tool-result inspection plus resume; or discovery plus real invocation using the same configured connection through the MCP proxy/OpenAI-compatible agent endpoint. A copied URL, form screenshot or green connected badge alone does not prove completion. Record exact client/transport versions and authentication prerequisites in the private operator packet.
+
+Duplicate same-participant/artifact/kind/time attempts fail. Reusing a receipt for the same boundary fails, including across participants; one genuine combined receipt may cover different control kinds. The private summary reports reported/missing participants, unique installed-artifact completions, failed attempts, explicit non-attempts and source-only records separately for each kind. These measurements do not add a self-awarded grade or change the proposed novice/retention targets. Default public output does not include control observations or their small groups.
+
 ## Weekly records and attempted tasks
 
 A week has `participantId`, `week` (1 through the target), `reportedAt` and `tasks` (at most 100). Week 1 is `[startedAt, startedAt + 7 days)`. A report must occur after that whole week ends and by the cutoff. No report means missing; `tasks: []` is an explicit report of no attempts. An unfinished calendar week never contributes retention, even if some runs passed early. Late reports may fill a previously missing week but remain visible in immutable earlier reports.
@@ -69,6 +86,8 @@ Weekly active use requires at least one completed MCP task on an installed candi
 Feedback has `id`, `participantId`, `reportedAt`, `category` (`onboarding`, `runtime`, `tools`, `approval`, `debugger`, `proxy`, `accessibility`), `severity` (`minor` or `severe`), `failureCode`, `issueNumber` (positive integer or null), `fixCommit` (full fixed-candidate source SHA or null), `confirmedArtifactId` (known artifact ID or null), `confirmedAt` (UTC timestamp or null) and `confirmationSha256` (receipt digest or null).
 
 Confirmation requires the redacted tracked issue, fixed candidate revision and all artifact/time/receipt fields. Its time must be at or after the failure report and no later than the report cutoff. The artifact's source pin must equal `fixCommit`. A source-only confirmation does not clear an installed-artifact severe failure. Severe feedback from every recorded participant is considered, including late joins or non-independent roles. Append a new feedback record when the problem recurs; retain the history. The tool does not file an issue, verify commit ancestry or judge whether a failure is severe.
+
+Each failed first attempt, weekly task or control attempt needs feedback with the same participant/failure code, reported at or after that failure, to classify its severity. A single feedback report can classify multiple related earlier failures; the reviewer checks the genuine receipt and severity rationale. A recurrence after the report requires new feedback. The private report counts `unclassifiedFailures` and keeps failure confirmation pending while any remain, even if later runs succeeded. It also remains pending for a cohort with no attempted observations. Missing and non-attempted records are not invented failures or evidence of absence of severe problems.
 
 Failure codes are `none`, `installation`, `prerequisite`, `authentication`, `quota`, `discovery`, `tool-form`, `tool-call`, `model-binding`, `runtime`, `approval`, `debugger`, `proxy`, `accessibility`, `unclear-next-step`, `other`. Successful journeys/tasks require `none`; failed journeys/tasks and feedback require an actual failure code. Keep prose and severity rationale only in consented private receipts. Do not paste raw logs, screenshots, prompts or tool parameters into this JSON.
 
