@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 207.
+Route files: 209.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -12,6 +12,8 @@ Route files: 207.
 | `/api/approvals/{id}` | POST | [source](../../src/app/api/approvals/[id]/route.ts) |
 | `/api/automation-map` | GET | [source](../../src/app/api/automation-map/route.ts) |
 | `/api/avatar/connections` | GET | [source](../../src/app/api/avatar/connections/route.ts) |
+| `/api/avatar/remote/availability` | GET | [source](../../src/app/api/avatar/remote/availability/route.ts) |
+| `/api/avatar/remote/{voiceAction}` | POST | [source](../../src/app/api/avatar/remote/[voiceAction]/route.ts) |
 | `/api/avatar/voice` | GET | [source](../../src/app/api/avatar/voice/route.ts) |
 | `/api/avatar/work-model` | POST | [source](../../src/app/api/avatar/work-model/route.ts) |
 | `/api/avatar/world` | GET | [source](../../src/app/api/avatar/world/route.ts) |
