@@ -28,6 +28,8 @@ The September 16 remediation's full offline 28-day simulation completed all 560 
 
 The [scorecard acceptance contract and evidence ledger](audits/scorecard-563/README.md) captures the October 3, 2026 source/release baseline and later reported automated Persona passes without replacing that historical failure. It separates current-source checks, unintegrated local patches, published-artifact observations, simulations, live runs and human acceptance. Its nine-row rubric and new budgets are proposals awaiting maintainer and independent-reviewer agreement; successful ledger validation does not award grades or establish release readiness.
 
+The [publication reconciliation](audits/scorecard-563/publication-reconciliation.md) records exact source-document identities and eleven publication claims, including default-password, ingress, workspace, worker and host-MCP limits. Its source inventory is separate from an integrated release review; every mapped publication claim remains pending candidate acceptance.
+
 A [fresh October 3 lockfile audit](audits/scorecard-563/evidence/npm-audit-2026-10-03.json), using the same lockfile as main `3511ba49514fe8cf525f5a22c16c3806bf3886ba`, failed with 8 high, 1 critical and 1 moderate affected packages. These package counts are separate from independent threat-model findings and installed-release acceptance. The September clean audit remains historical evidence; current dependency remediation and release revalidation are pending.
 
 Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues). Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration requirements, known regressions, and experimental limits.

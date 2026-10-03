@@ -33,6 +33,9 @@ experimental only with explicit independent acceptance and visible limits.
 - [artifact producer contract](artifact-acceptance.md) defines the separate
   witness/artifact digests, required source/runtime checks and per-platform/method
   evidence needed for installed acceptance.
+- [publication reconciliation](publication-reconciliation.md) maps eleven concrete
+  publication claims to a checksummed twelve-document source inventory, existing
+  qualifications, topic owners and pending candidate-release acceptance.
 - [historical failed soak](evidence/2026-09-16-persona-soak.json) is a byte-preserved
   copy of the existing public audit payload. Evidence-directory attributes disable
   Git line-ending conversion so hashes identify the same bytes on Windows and Unix.
@@ -144,8 +147,10 @@ spending, migration capture, account adoption, replay or cleanup.
 
 Autonomy is separately gated: an offline simulation, short genuine-model test or
 successful process restart cannot establish useful public-world work or multi-week
-unattended success. The recorded live spend cap is zero because no paid-run authority
-is supplied; a dollar CLI argument is not monetary enforcement.
+unattended success. The proposed live spend cap is zero because no numeric paid-run
+envelope or concrete model/account scope is declared here. Development/push/deployment
+authorization is separate; the coordinator owns the deployment candidate. A dollar
+CLI argument is not monetary enforcement.
 
 ## Numeric contracts before measurement
 
@@ -209,5 +214,7 @@ Before final documentation publication, use the ledger to reconcile README produ
 project-status maturity/support, CHANGELOG release/migration notes, SECURITY.md threat model,
 and the topic-owned architecture/API/operations guides. Docs owns this scorecard directory
 and validator. Security owns SECURITY.md/security behavior; Engineering owns CI/release;
-other topics own their feature/architecture/operations guides. This slice adds only a
-project-status pointer and the evidence distinction, avoiding competing topic rewrites.
+other topics own their feature/architecture/operations guides. The
+[publication reconciliation](publication-reconciliation.md) retains source-era findings
+and candidate wording for their review. This slice changes only project-status among
+those publication files; the actual release needs a fresh inventory after integration.

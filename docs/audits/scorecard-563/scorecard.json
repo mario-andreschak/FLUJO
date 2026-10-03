@@ -913,7 +913,7 @@
       "unit": "seconds",
       "denominator": "All due rounds, admitted Activities, verified effects, failures, unscheduled interventions and spend observations",
       "window": "One elapsed hour, before longer live stages",
-      "basis": "#578 proposal; no accounts or paid-run permission supplied",
+      "basis": "#578 proposal; concrete account/model scope and separately declared enforced monetary envelope remain unset",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
       "agreementEvidenceIds": [],
       "observation": {
@@ -1011,9 +1011,9 @@
       "operator": "<=",
       "limit": 0,
       "unit": "USD",
-      "denominator": "No authorization is recorded: cap is zero. Before any run record separately authorized positive limit and actual enforced accounting; model calls/dollar CLI args are not monetary enforcement",
+      "denominator": "No separately declared numeric paid-run envelope is recorded: proposed cap is zero. Record concrete account/model scope, enforced accounting and an agreed limit before measurement; broad development/deployment authority is not measured spend.",
       "window": "Per future authorized run",
-      "basis": "#578; zero here records no paid-run authority, not a performance target",
+      "basis": "#578; zero records the currently unset numeric run envelope, not a denial of development/deployment authorization or a performance target",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
       "agreementEvidenceIds": [],
       "observation": {
@@ -1590,6 +1590,58 @@
         "shared-public"
       ],
       "artifactProof": null
+    },
+    {
+      "sourceSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "artifactId": "source-main",
+      "ownerId": "docs",
+      "observedAt": "2026-10-03T22:41:47.685Z",
+      "environment": {
+        "platform": "Windows x64 tracked-source capture",
+        "node": "v22.13.1",
+        "provider": "none",
+        "tools": "git; no app runtime or private account contents"
+      },
+      "commands": [
+        "git rev-parse 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+        "git show <sourceSha>:<path> (raw Git blob bytes for SHA-256; paths below)",
+        "git ls-tree <sourceSha> -- SECURITY.md"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/publication-reconciliation-2026-10-03.json",
+          "sha256": "20f4ff0704b4867585c51b1087d41541fea8b7112b712c5d98f346ecd888f2ef",
+          "verification": "local"
+        }
+      ],
+      "scope": "Manual bounded publication reconciliation of twelve named source documents. Exact Git blobs and selected text excerpts only; no runtime, installed release, independent threat-model review, all-repository claim completeness or grade acceptance.",
+      "limits": [
+        "These document statements are not independent confirmations that the implementation performs as documented.",
+        "The source pin is the planning main revision, not a merged scorecard candidate or the npm release source.",
+        "No topic-owned publication file is changed by this capture; candidate edits need a fresh report with the candidate SHA and matching acceptance evidence.",
+        "Credentials and private runtime/user contents are not captured; excerpts come from tracked source only."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "docs/audits/scorecard-563/publication-reconciliation.md"
+      ],
+      "id": "publication-reconciliation-2026-10-03",
+      "kind": "baseline-observation",
+      "result": "passed",
+      "integrity": "checksummed",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -1916,7 +1968,8 @@
         "independent-assessment"
       ],
       "evidenceIds": [
-        "baseline-2026-10-03"
+        "baseline-2026-10-03",
+        "publication-reconciliation-2026-10-03"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -1982,6 +2035,265 @@
         "persona-current-soak",
         "persona-manual",
         "persona-live",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-local-ingress",
+      "dimensionId": "security",
+      "profileId": "local-owner",
+      "statement": "Host/Origin exposure controls and arbitrary OpenAI-compatible client keys are not owner/user authentication; public/shared support needs accepted ingress and ownership boundaries.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "unauthorized-access",
+        "high-findings"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-storage-encryption",
+      "dimensionId": "security",
+      "profileId": "local-owner",
+      "statement": "Default-password storage obfuscation, v2 writes, legacy ciphertext, plaintext failure records, workspace unlock and complete-backup downgrade requirements are distinct.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "high-findings"
+      ],
+      "gateIds": [
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-secret-redaction",
+      "dimensionId": "security",
+      "profileId": "local-owner",
+      "statement": "Credential handling must be stated per surface; masking in configuration UI does not prove an absolute absence from every response, log, error, export or transferred snapshot.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "high-findings"
+      ],
+      "gateIds": [
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-workspace-isolation",
+      "dimensionId": "production",
+      "profileId": "shared-public",
+      "statement": "Workspace selectors and MCP roots describe logical partitions and discovery; individual/team authentication, secret/process boundaries and revoke/edit conflicts remain separate acceptance work.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "human-study"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "unauthorized-access",
+        "high-findings",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "shared-profile",
+        "local-security",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-mcp-confinement",
+      "dimensionId": "security",
+      "profileId": "local-owner",
+      "statement": "Local MCP code executes with host-user permissions; approvals, roots, package inspection and the MCP Apps origin do not establish OS process/filesystem/network confinement.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "unauthorized-access",
+        "high-findings"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-worker-recovery",
+      "dimensionId": "production",
+      "profileId": "persistent-worker",
+      "statement": "Portable-worker bearer and credential transfer are separate from owner sessions; snapshots contain secrets, copied schedules remain suppressed and restart observations do not authorize blind effect replay.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "human-study"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "recovery-rto",
+        "backup-rpo",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "worker-operations",
+        "cross-stream-contracts",
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-distribution-support",
+      "dimensionId": "engineering",
+      "profileId": "local-owner",
+      "statement": "Source/main version, release tag, actual npm contents, installer bytes and container digest identify different artifacts; advertised installation methods are not completed OS acceptance.",
+      "status": "pending",
+      "requiredKinds": [
+        "source-check",
+        "installed-artifact"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [],
+      "gateIds": [
+        "release-acceptance",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-ci-health",
+      "dimensionId": "engineering",
+      "profileId": "local-owner",
+      "statement": "CI job success, assertion counts, opt-in skips and dependency scan results have exact revision/workload scope; September clean results do not make October dependencies clean.",
+      "status": "pending",
+      "requiredKinds": [
+        "source-check",
+        "installed-artifact"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [],
+      "gateIds": [
+        "release-acceptance",
+        "dependency-audit",
+        "persona-current-soak"
+      ]
+    },
+    {
+      "id": "publication-persona-autonomy",
+      "dimensionId": "maturity",
+      "profileId": "persistent-worker",
+      "statement": "Personas remain experimental; historic overall failed offline endurance, later exact-older-source reports, current offline acceptance, live elapsed time and human operational usefulness are separate.",
+      "status": "pending",
+      "requiredKinds": [
+        "offline-simulation",
+        "live-provider",
+        "human-study"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "persona-append-p95",
+        "persona-peak-rss",
+        "persona-rss-growth",
+        "live-seven-days",
+        "live-28-days",
+        "live-success-rate",
+        "live-interventions",
+        "duplicate-effects",
+        "live-spend"
+      ],
+      "gateIds": [
+        "persona-current-soak",
+        "persona-manual",
+        "persona-live",
+        "independent-reassessment",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-api-contract",
+      "dimensionId": "feature-surface",
+      "profileId": "local-owner",
+      "statement": "A generated route inventory is source coverage; curated external HTTP/MCP contracts, internal administration, experimental APIs and authenticated worker transport require their own compatibility boundaries.",
+      "status": "pending",
+      "requiredKinds": [
+        "source-check",
+        "installed-artifact"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [],
+      "gateIds": [
+        "release-acceptance",
+        "cross-stream-contracts",
+        "local-security",
+        "dependency-audit"
+      ]
+    },
+    {
+      "id": "publication-threat-model",
+      "dimensionId": "security",
+      "profileId": "shared-public",
+      "statement": "There is no SECURITY.md in the captured main tree; scattered source documentation and an unintegrated security proposal are not a reviewed release threat model.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review"
+      ],
+      "evidenceIds": [
+        "publication-reconciliation-2026-10-03"
+      ],
+      "budgetIds": [
+        "unauthorized-access",
+        "high-findings"
+      ],
+      "gateIds": [
+        "local-security",
+        "shared-profile",
+        "independent-reassessment",
         "dependency-audit"
       ]
     }
