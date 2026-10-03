@@ -297,6 +297,9 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
  */
 export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
   return bindToCurrentWorkspace(async () => {
+    // Container paths are granted by the private OS policy. Do not advertise
+    // installation roots or interpolate host secrets into an isolated server.
+    if (config.isolation !== undefined) return { roots: [] };
     const [restricted, workspaceRoots] = await Promise.all([
       loadMcpRootsRestriction(),
       loadWorkspaceRoots(),

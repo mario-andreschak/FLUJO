@@ -275,6 +275,11 @@ export function beginTeardown(
       processOwnership: observation.processOwnership,
       exitOutcome: observation.exitOutcome, forced: observation.forced,
       errorClassification: observation.errorClassification,
+      ...(observation.isolation?.schemaVersion === 1
+        && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(observation.isolation.generation)
+        && ['removed', 'absent', 'unknown'].includes(observation.isolation.cleanupOutcome)
+        ? { isolation: Object.freeze({ schemaVersion: 1 as const,
+          generation: observation.isolation.generation, cleanupOutcome: observation.isolation.cleanupOutcome }) } : {}),
     });
     if (record.generation === generation) record.shutdownReceipt = receipt;
     return receipt;

@@ -4,6 +4,8 @@ export interface MCPShutdownObservation {
   exitOutcome: 'observed_exit' | 'unknown' | 'not_applicable';
   forced: boolean;
   errorClassification: 'none' | 'close_failed' | 'exit_unobserved';
+  /** Container cleanup is observed independently from the attach CLI process. */
+  isolation?: { schemaVersion: 1; generation: string; cleanupOutcome: 'removed' | 'absent' | 'unknown' };
 }
 
 /** One process-local observation for one workspace/server runtime generation. */
