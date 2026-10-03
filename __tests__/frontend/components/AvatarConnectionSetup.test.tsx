@@ -40,4 +40,14 @@ describe('avatar setup connects through Flujo', () => {
     expect(document.body.textContent).not.toContain('PRIVATE_OAUTH_TOKEN');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('never preselects an unverified subscription model hint', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ candidates: [{ ...saved, id: 'codex-subscription', kind: 'codex-subscription', modelId: undefined, label: 'Codex', authentication: 'login-detected', modelChoices: [{ id: 'unverified-hint', label: 'unverified-hint', source: 'host-cache', updatedAt: Date.now() }] }] }) });
+    render(<ConnectionSetup locale="en" onClose={jest.fn()} onVerified={jest.fn()} onOther={jest.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Codex/ }));
+    expect(screen.getByLabelText('Model for thinking and working')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Connect and verify' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Model for thinking and working'), { target: { value: 'my-model' } });
+    expect(screen.getByRole('button', { name: 'Connect and verify' })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

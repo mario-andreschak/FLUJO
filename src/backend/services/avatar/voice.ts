@@ -70,7 +70,7 @@ export async function canonicalVoiceResult(conversationId: string, messageId: st
 }
 
 export async function handleAvatarVoice(request: Request, action: string): Promise<Response> {
-  if (!['native-turn', 'native-observe', 'native-played', 'native-reset', 'native-result', 'native-result-receipt'].includes(action)) return Response.json({ error: 'Unknown voice action.' }, { status: 404 });
+  if (!['native-turn', 'native-input', 'native-observe', 'native-played', 'native-reset', 'native-result', 'native-result-receipt'].includes(action)) return Response.json({ error: 'Unknown voice action.' }, { status: 404 });
   try {
     const { owner, session } = sessionFor(request), body = await boundedBody(request);
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new PublicError(400, 'invalid_voice_request', 'Send a valid voice request.');
@@ -98,6 +98,19 @@ export async function handleAvatarVoice(request: Request, action: string): Promi
     let released = false;
     const release = () => { if (released) return; released = true; session.active--; request.signal.removeEventListener('abort', abort); };
     if (request.signal.aborted) owned.abort();
+    if (action === 'native-input') {
+      let started;
+      const timer = setTimeout(abort, 45_000);
+      try {
+        const value = validateNativeTurn(body);
+        if (!('audio' in value)) throw new PublicError(400, 'invalid_voice_request', 'Send a WAV recording.');
+        started = session.ledger.begin(value, owner, owned);
+        const turn = session.ledger.claimObserver({ audio: value.audio, format: 'wav', locale: value.locale, turnId: started.turn.id }, owned);
+        const result = await transcribe({ audio: value.audio, format: 'wav', language: value.locale }, config(), fetch, owned.signal);
+        if (!session.ledger.observed(turn, result.text)) throw new PublicError(409, 'native_turn_ended', 'This recording is no longer current.');
+        return Response.json(result);
+      } finally { if (started) session.ledger.finish(started.turn, null); clearTimeout(timer); release(); }
+    }
     if (action === 'native-observe') {
       let turn;
       const timer = setTimeout(abort, 45_000);
@@ -111,12 +124,13 @@ export async function handleAvatarVoice(request: Request, action: string): Promi
     }
     try {
       const result = action === 'native-result' ? session.ledger.consumeReceipt(body, owner) : undefined;
-      const value = result ? { message: 'Present this recorded Flujo result briefly. Do not claim more than it states.', avatar: body.avatar, locale: body.locale } : validateNativeTurn(body);
+      const value = result ? { message: 'Answer directly using the supplied reply. Give only the answer, without an introduction. Do not claim more than it states.', avatar: body.avatar, locale: body.locale } : validateNativeTurn(body);
       const models = await modelService.loadModels(), selected = await readAvatarWorkModel(models);
-      const discovery = await discoverAvatarConnections(models);
-      const setupFacts = JSON.stringify({ findAIButton: value.locale === 'pt' ? 'Encontrar minha IA' : value.locale === 'es' ? 'Encontrar mi IA' : 'Find my AI', workAI: selected?.ready ? { label: selected.label, verified: true } : null,
-        options: discovery.candidates.slice(0, 12).map(candidate => ({ label: candidate.label, runtime: candidate.runtime, login: candidate.authentication, nextAction: candidate.nextAction })),
-        instruction: selected?.ready ? 'Work requests are handled by the selected Flujo AI; acknowledge briefly while it works.' : 'Offer the visible Find my AI button. No work AI is connected yet.' });
+      const discovery = !result && !selected?.ready ? await discoverAvatarConnections(models) : null;
+      const setupFacts = JSON.stringify({ findAIButton: value.locale === 'pt' ? 'Encontrar minha IA' : value.locale === 'es' ? 'Encontrar mi IA' : 'Find my AI',
+        checkedAt: Date.now(), workAI: selected?.ready ? { label: selected.label, model: models.find(model => model.id === selected.modelId)?.name, verified: true } : null,
+        ...(discovery ? { options: discovery.candidates.filter(candidate => candidate.kind !== 'saved-model').map(candidate => ({ label: candidate.label, runtime: candidate.runtime, login: candidate.authentication, nextAction: candidate.nextAction })) } : {}),
+        instruction: result ? 'Give the answer alone, in the fewest natural words. Omit every introduction.' : selected?.ready ? 'Work is handled by the selected Flujo AI. Do not recommend models or repeat setup confirmation.' : 'Use the visible Find my AI button. No work AI is connected yet. Do not recommend a particular model.' });
       const started = session.ledger.begin(value, owner, owned);
       const stream = new TransformStream<Uint8Array, Uint8Array>(), writer = stream.writable.getWriter(), encoder = new TextEncoder();
       let admitted = false;
@@ -127,7 +141,7 @@ export async function handleAvatarVoice(request: Request, action: string): Promi
         try { await writer.write(encoder.encode(JSON.stringify(event) + '\n')); }
         catch (error) { owned.abort(); throw error; }
       };
-      void streamNativeTurn(value, config(), fetch, owned.signal, emit, { turnId: started.turn.id, history: started.history, backendResult: result, setupFacts,
+      void streamNativeTurn(value, config(), fetch, owned.signal, emit, { turnId: started.turn.id, history: result || selected?.ready ? [] : started.history, backendResult: result, setupFacts,
         onQualifiedResult: (qualified: unknown) => session.ledger.qualify(started.turn, qualified) }).then(async outcome => {
         session.ledger.finish(started.turn, outcome); await writer.close().catch(() => {});
       }).catch(async error => {

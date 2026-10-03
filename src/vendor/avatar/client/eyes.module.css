@@ -2,3 +2,13 @@
 
 @keyframes blink{0%,39%,43%,82%,86%,100%{scale:1 1}41%,84%{scale:1 .065}}@keyframes ponder{0%,100%{scale:1 .8}50%{scale:1 .65;translate:0 3px}}@keyframes speak{from{scale:1 .91}to{scale:1 1.05}}
 @media(prefers-reduced-motion:reduce){.eyes,.eyes *{animation:none!important;transition:none!important;transform:none!important}}
+
+.eyes{gap:21px;transform:translate(var(--gaze-x),var(--gaze-y)) rotate(var(--head-tilt,0deg));transition:none}
+.eye{width:66px;height:85px;background:linear-gradient(145deg,#fff 5%,#edf0e7 72%,#d8dfd3);box-shadow:inset -5px -7px 12px #7b897c14,0 0 28px #eef4dc20,0 0 100px #eef4dc0a;transition:height .45s,width .45s,border-radius .45s;animation:blink 7.7s infinite}
+.eye:nth-child(2){animation-delay:.045s;height:88px}
+.eye i{width:13px;height:23px;top:34%;left:41%;background:#090c0c;box-shadow:inset 1px 2px 3px #0008;transition:height .3s,width .3s;transform:translate(calc(var(--gaze-x)*.9),calc(var(--gaze-y)*.8))}
+.eyes[data-phase=listening] .eye{height:94px;width:70px}.eyes[data-phase=listening] .eye i{height:26px;width:15px}
+.eyes[data-phase=thinking] .eye,.eyes[data-phase=usingApp] .eye{height:72px;animation:blink 7.7s infinite}.eyes[data-phase=thinking] .eye:nth-child(2),.eyes[data-phase=usingApp] .eye:nth-child(2){height:84px}
+.eyes[data-phase=speaking] .eye{animation:blink 7.7s infinite;scale:1 calc(.95 + var(--voice-level)*.13)}
+.eyes[data-phase=waiting] .eye{height:80px;transform:rotate(-7deg)}.eyes[data-phase=waiting] .eye:nth-child(2){height:69px;transform:rotate(6deg)}
+@media(prefers-reduced-motion:reduce){.eyes[data-phase=speaking] .eye{scale:1!important}}

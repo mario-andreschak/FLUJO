@@ -33,7 +33,7 @@ export default function ConnectionSetup({ locale, onClose, onVerified, onOther }
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); /* User explicitly refreshes discovery after changes. */ }, []);
-  const select = (value: AvatarConnectionCandidate) => { setCandidate(value); setChoice(value.modelChoices[0]?.id ?? ''); setToken(''); setTest(null); setError(null); savedDraft.current = null; };
+  const select = (value: AvatarConnectionCandidate) => { setCandidate(value); setChoice(value.modelId ? value.modelChoices[0]?.id ?? '' : ''); setToken(''); setTest(null); setError(null); savedDraft.current = null; };
   const verify = async () => {
     if (!candidate || busy) return;
     setBusy(true); setError(null); setTest(null);
@@ -90,7 +90,7 @@ export default function ConnectionSetup({ locale, onClose, onVerified, onOther }
       <h3>{candidate.label}</h3><p>{description(candidate)}</p>
       {candidate.kind === 'codex-subscription' && candidate.authentication !== 'login-detected' && <p className={styles.help}>{c.codexHelp}</p>}
       {candidate.kind === 'claude-subscription' && <><p className={styles.help}>{c.claudeHelp}</p><label>{c.token}<input type="password" value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} disabled={busy} /></label></>}
-      {!candidate.modelId && <><label>{c.model}<input list="avatar-model-choices" value={choice} onChange={event => setChoice(event.target.value)} disabled={busy} maxLength={128} autoComplete="off" /></label><datalist id="avatar-model-choices">{candidate.modelChoices.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</datalist><small>{c.fallback}</small></>}
+      {!candidate.modelId && <><label>{c.model}<input list="avatar-model-choices" value={choice} onChange={event => setChoice(event.target.value)} disabled={busy} maxLength={128} autoComplete="off" /></label><datalist id="avatar-model-choices">{candidate.modelChoices.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</datalist><small>{c.fallback}{candidate.modelChoices[0]?.updatedAt && <> · {new Date(candidate.modelChoices[0].updatedAt).toLocaleString(locale)}</>}</small></>}
       <button className={styles.primary} onClick={() => void verify()} disabled={busy || !choice || candidate.runtime !== 'available' || candidate.kind === 'claude-subscription' && !token.trim()
         || candidate.kind === 'codex-subscription' && candidate.authentication !== 'login-detected'}>{busy ? c.verifying : c.verify}</button>
       {candidate.runtime !== 'available' && <button onClick={onOther} disabled={busy}>{c.other}</button>}

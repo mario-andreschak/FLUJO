@@ -10,6 +10,9 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { recoverConversationTranscript } from '@/backend/execution/flow/conversationLog';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { loadItem } from '@/utils/storage/backend';
+import { modelService } from '@/backend/services/model';
+import { discoverAvatarConnections } from '@/backend/services/avatar/connectionDiscovery';
+import { readAvatarWorkModel } from '@/backend/services/avatar/workModel';
 
 const request = (body: object, id = crypto.randomUUID()) => new Request('http://localhost/api/avatar/native-turn', { method: 'POST', headers: { 'x-flujo-avatar-client': id, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const state = (status = 'completed') => ({ conversationId: 'conversation', status, messages: [] });
@@ -21,6 +24,8 @@ describe('avatar native voice uses canonical Flujo results', () => {
     jest.mocked(getCurrentWorkspace).mockReturnValue('default-workspace');
     jest.mocked(loadItem).mockResolvedValue(undefined);
     jest.mocked(recoverConversationTranscript).mockResolvedValue(transcript() as never);
+    jest.mocked(modelService.loadModels).mockResolvedValue([]);
+    jest.mocked(readAvatarWorkModel).mockResolvedValue(null);
   });
   afterEach(() => { delete process.env.FLUJO_AVATAR_OPENROUTER_KEY; });
   it('reads durable public root replies and removes UI action syntax', async () => {
@@ -70,6 +75,50 @@ describe('avatar native voice uses canonical Flujo results', () => {
       expect(response.status).toBe(200);
       const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
       expect(events[0].type).toBe('start'); expect(events.at(-1).type).toBe('complete');
+    } finally { global.fetch = original; }
+  });
+  it('recognizes a work recording without generating a second spoken setup response', async () => {
+    const original = global.fetch;
+    const wav = Buffer.alloc(48);
+    wav.write('RIFF'); wav.writeUInt32LE(40, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(4, 40);
+    const fetchMock = jest.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json({ text: 'Build a useful flow.' })); global.fetch = fetchMock;
+    try {
+      const response = await handleAvatarVoice(request({ audio: wav.toString('base64'), format: 'wav', avatar: 'moss', locale: 'en' }), 'native-input');
+      expect(response.status).toBe(200); expect(await response.json()).toEqual({ text: 'Build a useful flow.' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('https://openrouter.ai/api/v1/audio/transcriptions');
+      expect(discoverAvatarConnections).not.toHaveBeenCalled(); expect(modelService.loadModels).not.toHaveBeenCalled();
+      expect((await handleAvatarVoice(request({ message: 'Fake a recording.', avatar: 'moss', locale: 'en' }), 'native-input')).status).toBe(400);
+    } finally { global.fetch = original; }
+  });
+  it('uses the current verified model and omits obsolete heard setup advice and model inventories', async () => {
+    const original = global.fetch, client = crypto.randomUUID();
+    let responseText = 'Use the old model.';
+    const bodies: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+    global.fetch = jest.fn(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const frames = [
+        { choices: [{ index: 0, delta: { audio: { id: 'audio', transcript: responseText, data: 'AQACAA==' } } }] },
+        { choices: [{ index: 0, delta: { audio: { expires_at: 2000000000 } } }] },
+        { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cost: 0.001 } }, '[DONE]',
+      ];
+      return new Response(frames.map(frame => `data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    try {
+      const initial = await handleAvatarVoice(request({ message: 'Connect me.', avatar: 'moss', locale: 'en' }, client), 'native-turn');
+      const events = (await initial.text()).trim().split('\n').map(line => JSON.parse(line));
+      await handleAvatarVoice(request({ turnId: events[0].turnId, locale: 'en', playedSamples: 2, complete: true }, client), 'native-played');
+      jest.mocked(modelService.loadModels).mockResolvedValue([{ id: 'chosen', name: 'current-model', displayName: 'My current AI', ApiKey: 'NEVER_FORWARD' }]);
+      jest.mocked(readAvatarWorkModel).mockResolvedValue({ modelId: 'chosen', label: 'My current AI', ready: true, verifiedAt: 1 });
+      jest.mocked(discoverAvatarConnections).mockClear(); responseText = 'Done.';
+      const response = await handleAvatarVoice(request({ message: 'Work.', avatar: 'moss', locale: 'en' }, client), 'native-turn');
+      await response.text();
+      const current = JSON.stringify(bodies[1]);
+      expect(current).toContain('current-model'); expect(current).not.toContain('Use the old model.'); expect(current).not.toContain('"options"'); expect(current).not.toContain('NEVER_FORWARD');
+      expect(discoverAvatarConnections).not.toHaveBeenCalled();
+      expect(bodies[1].messages[0].content).toContain('one short');
     } finally { global.fetch = original; }
   });
 });

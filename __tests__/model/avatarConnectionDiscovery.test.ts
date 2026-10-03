@@ -1,4 +1,4 @@
-import { discoverAvatarConnections } from '@/backend/services/avatar/connectionDiscovery';
+import { codexModelHints, discoverAvatarConnections } from '@/backend/services/avatar/connectionDiscovery';
 import type { Model } from '@/shared/types/model';
 
 describe('passive avatar connection discovery', () => {
@@ -38,5 +38,13 @@ describe('passive avatar connection discovery', () => {
   it('offers cached model hints without turning catalog visibility into verification', async () => {
     const result = await discoverAvatarConnections([], { ...dependencies(), codexModels: async () => [{ id: 'cached-model', label: 'cached-model', source: 'host-cache' }] });
     expect(result.candidates[0]).toMatchObject({ verification: 'untested', modelChoices: [{ id: 'cached-model', source: 'host-cache' }] });
+  });
+  it('uses only recent dated catalog hints and discards stale, undated or future catalogs', () => {
+    const now = Date.parse('2026-10-03T02:00:00Z');
+    const model = { slug: 'current-hint', visibility: 'list', private_metadata: 'EXCLUDE' };
+    expect(codexModelHints({ fetched_at: '2026-10-03T01:00:00Z', models: [model, { slug: 'hidden-hint', visibility: 'hide' }] }, now))
+      .toEqual([{ id: 'current-hint', label: 'current-hint', source: 'host-cache', updatedAt: now - 60 * 60_000 }]);
+    for (const fetched_at of [undefined, 'invalid', '2026-10-01T01:00:00Z', '2026-10-04T01:00:00Z'])
+      expect(codexModelHints({ fetched_at, models: [model] }, now)).toEqual([]);
   });
 });

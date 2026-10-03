@@ -5,7 +5,7 @@ import { selectVerifiedAvatarWorkModel } from '@/backend/services/avatar/workMod
 
 export const runtime = 'nodejs';
 
-export const POST = withWorkspaceRoute(async (request: Request) => {
+async function POST_handler(request: Request) {
   const locked = await assertUnlocked();
   if (locked) return locked;
   const body = await request.json().catch(() => null);
@@ -26,4 +26,5 @@ export const POST = withWorkspaceRoute(async (request: Request) => {
     return Response.json({ ready: true, test });
   }
   return Response.json({ ready: false, test });
-});
+}
+export const POST = withWorkspaceRoute(POST_handler);

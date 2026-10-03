@@ -13,12 +13,14 @@ interface Options {
   onTranscript: (id: string, role: 'user' | 'assistant', text: string, done: boolean) => void;
   onUserUtterance?: () => void;
   backgroundAsr?: boolean;
+  /** Work recordings go straight to recognition and the host work lane, without a second spoken acknowledgement. */
+  workInput?: boolean;
   observerPaused?: boolean;
   onObservedTranscript?: (id: string, text: string) => void;
   onObserverError?: () => void;
   onInterrupted?: () => void;
 }
-type Input = { generation: number; serial: number; avatar: AvatarId; message?: string; audio?: string; taskId?: string };
+type Input = { generation: number; serial: number; avatar: AvatarId; message?: string; audio?: string; taskId?: string; workInput?: boolean };
 interface Observation { turnId: string; audio: string; serial: number; }
 interface Turn { generation: number; abort: AbortController; turnId?: string; complete?: Extract<NativeTurnEvent, { type: 'complete' }>; }
 interface Session {
@@ -70,7 +72,7 @@ export function useNativeRouterVoice(options: Options) {
     s.observerEpoch++; s.observer?.abort(); s.observer = undefined; s.observation = undefined;
   }, []);
   const stopResponse = useCallback((s: Session, hold: boolean, dropPending = true) => {
-    s.generation++; s.manualHold = hold; if (dropPending) s.pending = undefined;
+    s.generation++; s.manualHold = hold; if (dropPending) { s.pending = undefined; s.results = []; }
     const turn = s.response; turn?.abort.abort();
     if (turn?.turnId) s.playback?.cancel(turn.turnId);
     setAudioLevel(0); if (current(s)) { opts.current.onInterrupted?.(); setPhase(s.muted ? 'idle' : 'listening'); }
@@ -145,6 +147,19 @@ export function useNativeRouterVoice(options: Options) {
     try {
       await nativeAbortable(s.ackBarrier, turn.abort.signal);
       if (!liveTurn(s, turn)) throw cancelled();
+      if (input.audio && input.workInput) {
+        const response = await request(s, 'native-input', { audio: input.audio, format: 'wav', avatar: input.avatar }, turn.abort.signal);
+        const body: unknown = await response.json();
+        if (!body || typeof body !== 'object' || !('text' in body) || typeof body.text !== 'string' || body.text.length > 4000) throw new VoiceLocaleError('speechUnrecognized');
+        if (!liveTurn(s, turn) || input.serial !== s.serial || s.muted || opts.current.observerPaused) return;
+        const text = body.text.trim();
+        if (text) {
+          const id = crypto.randomUUID();
+          if (opts.current.onObservedTranscript) opts.current.onObservedTranscript(id, text);
+          else opts.current.onTranscript(id, 'user', text, true);
+        }
+        return;
+      }
       if (input.message) opts.current.onTranscript(crypto.randomUUID(), 'user', input.message, true);
       const path = input.taskId ? 'native-result' : 'native-turn';
       const payload = input.taskId ? { taskId: input.taskId, avatar: input.avatar }
@@ -193,7 +208,7 @@ export function useNativeRouterVoice(options: Options) {
   };
   const enqueue = useCallback((s: Session, value: { audio: string } | { message: string }) => {
     stopResponse(s, false);
-    s.pending = { ...value, avatar: nextAvatar.current.id, generation: s.generation, serial: s.serial };
+    s.pending = { ...value, workInput: Boolean(opts.current.workInput), avatar: nextAvatar.current.id, generation: s.generation, serial: s.serial };
     pump.current(s);
   }, [stopResponse]);
 
@@ -210,7 +225,20 @@ export function useNativeRouterVoice(options: Options) {
       const context = new AudioContext(); s.context = context; await context.resume(); if (!current(s)) return;
       s.playback = new NativeRouterPlayback({ onPlayed: receipt => played(s, receipt), onError: () => fail.current(s) });
       if (!await s.playback.resume() || !current(s)) throw new VoiceLocaleError('playbackBlocked');
-      if (!withMicrophone) { s.ready = true; setConnected(true); setConnecting(false); setPhase('idle'); return; }
+      const meter = new Float32Array(s.playback.analyser.fftSize); let last = 0;
+      const measure = (now: number) => {
+        if (!current(s)) return;
+        if (now - last >= 50) {
+          last = now;
+          if (s.playback!.queuedSamples && !s.capturing) {
+            s.playback!.analyser.getFloatTimeDomainData(meter); let power = 0; for (const sample of meter) power += sample * sample;
+            setAudioLevel(Math.min(1, Math.sqrt(power / meter.length) * 5));
+          } else setAudioLevel(s.muted ? 0 : s.inputLevel);
+          refresh(s);
+        }
+        s.raf = requestAnimationFrame(measure);
+      };
+      if (!withMicrophone) { s.ready = true; setConnected(true); setConnecting(false); setPhase('idle'); s.raf = requestAnimationFrame(measure); return; }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (!current(s)) { stream.getTracks().forEach(track => track.stop()); return; }
       s.stream = stream;
@@ -252,25 +280,12 @@ export function useNativeRouterVoice(options: Options) {
         refresh(s);
       };
       s.ready = true; setHasMicrophone(true); setConnected(true); setConnecting(false); refresh(s);
-      const meter = new Float32Array(s.playback.analyser.fftSize); let last = 0;
-      const measure = (now: number) => {
-        if (!current(s)) return;
-        if (now - last >= 50) {
-          last = now;
-          if (s.playback!.queuedSamples && !s.capturing) {
-            s.playback!.analyser.getFloatTimeDomainData(meter); let power = 0; for (const sample of meter) power += sample * sample;
-            setAudioLevel(Math.min(1, Math.sqrt(power / meter.length) * 5));
-          } else setAudioLevel(s.muted ? 0 : s.inputLevel);
-          refresh(s);
-        }
-        s.raf = requestAnimationFrame(measure);
-      };
       s.raf = requestAnimationFrame(measure);
     } catch (e) {
       if (current(s)) { disconnect(); setError(e instanceof DOMException && e.name === 'NotAllowedError' ? voiceCopy(s.locale).microphoneDenied : voiceError(s.locale, e)); }
     }
   }, [current, disconnect, enqueue, played, refresh, stopResponse]);
-  const interrupt = useCallback(() => { const s = session.current; if (s) stopResponse(s, !s.capturing); }, [stopResponse]);
+  const interrupt = useCallback((hold = true) => { const s = session.current; if (s) stopResponse(s, hold && !s.capturing); }, [stopResponse]);
   const toggleMute = useCallback(() => {
     const s = session.current; if (!s?.ready) return;
     s.muted = !s.muted; s.stream?.getAudioTracks().forEach(track => { track.enabled = !s.muted; });

@@ -10,7 +10,7 @@ export interface AvatarConnectionCandidate {
   nextAction: 'use-and-test' | 'sign-in' | 'connect-token' | 'repair' | 'manual';
   reasonCode?: string;
   modelId?: string;
-  modelChoices: Array<{ id: string; label: string; source: 'saved' | 'host-cache' | 'fallback' }>;
+  modelChoices: Array<{ id: string; label: string; source: 'saved' | 'host-cache' | 'fallback'; updatedAt?: number }>;
 }
 
 export interface AvatarConnectionDiscovery {

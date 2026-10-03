@@ -44,6 +44,16 @@ function choices(provider: string): AvatarConnectionCandidate['modelChoices'] {
 }
 
 /** Cached public catalog hints, never personal configuration or proof of entitlement. */
+export function codexModelHints(value: unknown, now = Date.now()): AvatarConnectionCandidate['modelChoices'] {
+  if (!value || typeof value !== 'object' || !('models' in value) || !Array.isArray(value.models)
+      || !('fetched_at' in value) || typeof value.fetched_at !== 'string') return [];
+  const updatedAt = Date.parse(value.fetched_at);
+  if (!Number.isFinite(updatedAt) || updatedAt > now + 60_000 || now - updatedAt > 24 * 60 * 60_000) return [];
+  return value.models.filter(model => model && typeof model === 'object' && model.visibility === 'list'
+    && typeof model.slug === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(model.slug)).slice(0, 20)
+    .map(model => ({ id: model.slug, label: model.slug, source: 'host-cache' as const, updatedAt }));
+}
+
 export async function inspectCodexModelHints(): Promise<AvatarConnectionCandidate['modelChoices']> {
   try {
     const file = path.join(userCodexHome(), 'models_cache.json');
@@ -54,10 +64,7 @@ export async function inspectCodexModelHints(): Promise<AvatarConnectionCandidat
     try { bytes = Buffer.alloc(8 * 1024 * 1024 + 1); const read = await handle.read(bytes, 0, bytes.length, 0); if (read.bytesRead > 8 * 1024 * 1024) return []; bytes = bytes.subarray(0, read.bytesRead); }
     finally { await handle.close(); }
     const value: unknown = JSON.parse(bytes.toString('utf8'));
-    if (!value || typeof value !== 'object' || !('models' in value) || !Array.isArray(value.models)) return [];
-    return value.models.filter(model => model && typeof model === 'object' && model.visibility === 'list'
-      && typeof model.slug === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(model.slug)).slice(0, 20)
-      .map(model => ({ id: model.slug, label: model.slug, source: 'host-cache' as const }));
+    return codexModelHints(value);
   } catch { return []; }
 }
 
