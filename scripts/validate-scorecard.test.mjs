@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -170,6 +171,75 @@ test('live duration and success ratios reconcile with actual windows and integer
   const result = validate(l => { observedBudget(l, 'live-success-rate', 0.99, 100).study.metrics[0].numerator = 99; });
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
+});
+function artifactReportFixture(edit = () => {}) {
+  const fixture = mkdtempSync(join(tmpdir(), 'flujo-scorecard-'));
+  const ledger = structuredClone(baseline);
+  try {
+    for (const evidence of ledger.evidence) {
+      for (const raw of evidence.raw.filter(raw => raw.verification === 'local')) {
+        const target = join(fixture, raw.location);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, readFileSync(join(root, raw.location)));
+      }
+    }
+    const payloadSha256 = createHash('sha256').update('synthetic package bytes, not an installed app').digest('hex');
+    const artifact = { id: 'synthetic-npm', kind: 'npm', identity: 'Synthetic schema fixture only', sourceSha: ledger.scope.sourceBaselineSha, provenance: 'verified-content', payloadSha256, metadataEvidenceIds: [] };
+    ledger.artifacts.push(artifact);
+    const evidence = structuredClone(ledger.evidence[0]);
+    const location = 'artifact-proof-fixture.json';
+    Object.assign(evidence, { id: 'synthetic-installed', kind: 'installed-artifact', artifactId: artifact.id, sourceSha: artifact.sourceSha, profileIds: ['local-owner'], artifactProof: { location }, scope: 'Synthetic receipt fixture; no app installation or acceptance occurred.' });
+    const report = { schemaVersion: 1, result: 'passed', artifactId: artifact.id, sourceSha: artifact.sourceSha, payloadSha256, profileIds: ['local-owner'], producer: { name: 'synthetic-fixture', version: '1', sourceSha: artifact.sourceSha }, checks: [
+      { id: 'content-digest', profileId: null, platform: null, installMethod: null, required: true, result: 'passed', command: 'synthetic digest fixture' },
+      { id: 'source-provenance', profileId: null, platform: null, installMethod: null, required: true, result: 'passed', command: 'synthetic provenance fixture' },
+      { id: 'installed-runtime', profileId: 'local-owner', platform: 'Windows', installMethod: 'npm package', required: true, result: 'passed', command: 'synthetic runtime fixture' },
+    ] };
+    ledger.evidence.push(evidence);
+    edit({ ledger, artifact, evidence, report });
+    const bytes = JSON.stringify(report) + '\n';
+    writeFileSync(join(fixture, location), bytes);
+    evidence.raw = [{ location, sha256: createHash('sha256').update(bytes).digest('hex'), verification: 'local' }];
+    return validateScorecard(ledger, { root: fixture });
+  } finally {
+    const cleanupPath = realpathSync(fixture);
+    assert.equal(realpathSync(dirname(cleanupPath)), realpathSync(tmpdir()));
+    assert.ok(basename(cleanupPath).startsWith('flujo-scorecard-'));
+    rmSync(cleanupPath, { recursive: true, force: true });
+  }
+}
+test('a valid producer receipt uses its own checksum and leaves grade acceptance open', () => {
+  const result = artifactReportFixture();
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+});
+test('artifact receipts reject stale identity, missing runtime profiles and skipped provenance', () => {
+  for (const edit of [
+    ({ report }) => { report.sourceSha = '1'.repeat(40); },
+    ({ report }) => { report.payloadSha256 = '0'.repeat(64); },
+    ({ report }) => { report.checks[1].result = 'skipped'; },
+    ({ evidence }) => { evidence.profileIds.push('persistent-worker'); },
+    ({ report }) => { report.checks.push(structuredClone(report.checks[0])); },
+  ]) {
+    const result = artifactReportFixture(edit);
+    assert.ok(result.errors.some(e => /identity\/digest mismatch|required content|duplicate artifact/.test(e)), result.errors.join('\n'));
+  }
+});
+test('a matching npm digest and declared provenance do not qualify as installed acceptance', () => {
+  rejects(l => { l.evidence.find(e => e.id === 'npm-content-inspection-3.46.2').kind = 'installed-artifact'; }, /needs a retained producer artifact report/);
+  rejects(l => { l.artifacts.find(a => a.id === 'npm-3.46.2').provenance = 'verified-content'; }, /no matching retained content acceptance/);
+});
+test('one package/profile check cannot certify every platform or installation method', () => {
+  const result = artifactReportFixture(({ ledger, evidence }) => {
+    const row = ledger.profiles.find(p => p.id === 'local-owner').osInstallMatrix.find(m => m.platform === 'Windows');
+    row.acceptance = 'verified';
+    row.evidenceIds = [evidence.id];
+  });
+  assert.ok(result.errors.some(e => e.includes('missing installed acceptance for method versioned installer')));
+  assert.ok(result.errors.some(e => e.includes('missing installed acceptance for method pinned source')));
+  const wrong = artifactReportFixture(({ report }) => { report.checks[2].installMethod = 'versioned installer'; });
+  assert.ok(wrong.errors.some(e => e.includes('does not match declared platform/install artifact')));
+  rejects(l => { l.profiles[0].osInstallMatrix.pop(); }, /platforms: required complete set/);
+  rejects(l => { l.profiles[0].osInstallMatrix[0].methods.pop(); }, /methods: required complete set/);
 });
 test('CLI distinguishes valid incomplete ledger from closure readiness and malformed input', () => {
   const run = args => spawnSync(process.execPath, ['scripts/validate-scorecard.mjs', ...args], { cwd: root, encoding: 'utf8' });

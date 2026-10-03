@@ -348,7 +348,8 @@
             "required": [
               "platform",
               "methods",
-              "acceptance"
+              "acceptance",
+              "evidenceIds"
             ],
             "properties": {
               "platform": {
@@ -370,6 +371,14 @@
                   "pending",
                   "verified"
                 ]
+              },
+              "evidenceIds": {
+                "type": "array",
+                "minItems": 0,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             }
           },
@@ -651,7 +660,8 @@
             "source",
             "npm",
             "container",
-            "windows-installer"
+            "windows-installer",
+            "source-build"
           ]
         },
         "identity": {
@@ -719,7 +729,8 @@
         "metrics",
         "window",
         "links",
-        "profileIds"
+        "profileIds",
+        "artifactProof"
       ],
       "properties": {
         "id": {
@@ -979,6 +990,26 @@
             "minLength": 1
           },
           "minItems": 1
+        },
+        "artifactProof": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "location"
+              ],
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -1190,6 +1221,147 @@
             "minLength": 1
           },
           "minItems": 1
+        }
+      }
+    },
+    "artifactAcceptanceReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "result",
+        "artifactId",
+        "sourceSha",
+        "payloadSha256",
+        "profileIds",
+        "producer",
+        "checks"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "payloadSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "profileIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "sourceSha"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "profileId",
+              "required",
+              "result",
+              "command",
+              "platform",
+              "installMethod"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "profileId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "skipped",
+                  "not-evaluated"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "platform": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "installMethod": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
         }
       }
     }

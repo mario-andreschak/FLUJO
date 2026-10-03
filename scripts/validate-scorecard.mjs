@@ -18,6 +18,20 @@ const dimensions = new Map([
   ['production', ['Production-readiness', 'C-']],
 ]);
 const profiles = ['local-owner', 'persistent-worker', 'shared-public'];
+const installArtifactKinds = new Map([
+  ['versioned installer', ['windows-installer']], ['npm package', ['npm']],
+  ['pinned source', ['source-build']], ['container', ['container']],
+  ['pinned container/service', ['container']], ['pinned native service', ['npm', 'source-build']],
+  ['hardened pinned container/service with authenticated ingress', ['container']],
+]);
+const declaredPlatforms = {
+  'local-owner': {
+    Windows: ['versioned installer', 'npm package', 'pinned source'],
+    Linux: ['npm package', 'pinned source', 'container'], macOS: ['npm package', 'pinned source'],
+  },
+  'persistent-worker': { Linux: ['pinned container/service'], Windows: ['pinned native service'] },
+  'shared-public': { Linux: ['hardened pinned container/service with authenticated ingress'] },
+};
 const protectedBudgets = new Map([
   ['persona-append-p95', ['<', 150]], ['persona-peak-rss', ['<=', 805306368]],
   ['persona-rss-growth', ['<=', 268435456]], ['persona-append-flatness', ['<=', 2]],
@@ -122,7 +136,15 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (original && (row.dimension !== original[0] || row.originalGrade !== original[1])) fail(row.id + ': original dimension/grade changed');
     refs([row.ownerId], 'owners', row.id);
   }
-  for (const profile of ledger.profiles) refs(profile.gateIds, 'gates', profile.id);
+  for (const profile of ledger.profiles) {
+    refs(profile.gateIds, 'gates', profile.id);
+    exact(profile.osInstallMatrix.map(row => row.platform), Object.keys(declaredPlatforms[profile.id] ?? {}), profile.id + ' platforms');
+    for (const row of profile.osInstallMatrix) {
+      exact(row.methods, declaredPlatforms[profile.id]?.[row.platform] ?? [], profile.id + '/' + row.platform + ' methods');
+      refs(row.evidenceIds, 'evidence', profile.id + '/' + row.platform);
+      for (const method of row.methods) if (!installArtifactKinds.has(method)) fail(profile.id + ': unknown install contract ' + method);
+    }
+  }
   for (const budget of ledger.budgets) {
     refs([budget.ownerId], 'owners', budget.id);
     refs(budget.agreementEvidenceIds, 'evidence', budget.id);
@@ -152,6 +174,9 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     }
   }
   if (ledger.agreements.maintainer.identity && ledger.agreements.maintainer.identity === ledger.agreements.independentReviewer.identity) fail('Independent reviewer cannot be the accepting maintainer');
+  const verifiedPayloads = new Map();
+  const contentAccepted = new Set();
+  const contentReports = new Map();
   for (const evidence of ledger.evidence) {
     refs([evidence.ownerId], 'owners', evidence.id);
     refs(evidence.budgetIds, 'budgets', evidence.id);
@@ -168,7 +193,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (['live-provider', 'human-study'].includes(evidence.kind) && window.kind !== 'elapsed') fail(evidence.id + ': live/human evidence requires actual elapsed window');
     if (evidence.kind === 'offline-simulation' && window.kind !== 'simulated') fail(evidence.id + ': offline simulation must retain virtual-time distinction');
     const artifact = indexed.artifacts.get(evidence.artifactId);
-    if (evidence.kind === 'installed-artifact' && (!artifact || artifact.kind === 'source' || artifact.sourceSha !== evidence.sourceSha)) fail(evidence.id + ': installed result needs matching release artifact/source identity');
+    if (evidence.kind === 'installed-artifact' && (!artifact || artifact.kind === 'source' || (evidence.result === 'passed' && artifact.sourceSha !== evidence.sourceSha))) fail(evidence.id + ': installed result needs matching release artifact/source identity');
     if (evidence.integrity === 'checksummed' && !evidence.raw.some(raw => raw.verification === 'local' && raw.sha256)) fail(evidence.id + ': checksummed evidence needs a retained local payload');
     for (const raw of evidence.raw) {
       if (raw.verification !== 'local') continue;
@@ -185,7 +210,44 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
           const bytes = readFileSync(real);
           const actual = createHash('sha256').update(bytes).digest('hex');
           if (actual !== raw.sha256) fail(evidence.id + ': checksum mismatch for ' + raw.location);
+          else verifiedPayloads.set(raw.location + ':' + raw.sha256, bytes);
         } catch (error) { fail(evidence.id + ': cannot verify ' + raw.location + ': ' + error.message); }
+      }
+    }
+    if (evidence.kind === 'installed-artifact' && evidence.result === 'passed' && evidence.integrity === 'checksummed' && !evidence.artifactProof) fail(evidence.id + ': installed acceptance needs a retained producer artifact report');
+    if (evidence.artifactProof) {
+      const witness = evidence.raw.find(raw => raw.location === evidence.artifactProof.location && raw.verification === 'local' && raw.sha256);
+      const bytes = witness && verifiedPayloads.get(witness.location + ':' + witness.sha256);
+      if (!bytes) fail(evidence.id + ': artifact report must be a checksum-verified local raw payload');
+      else {
+        try {
+          const report = JSON.parse(bytes.toString('utf8'));
+          const shape = validateShape(report, schema.$defs.artifactAcceptanceReport, schema);
+          if (shape.length) fail(evidence.id + ': invalid artifact report: ' + shape.join('; '));
+          else {
+            refs(report.profileIds, 'profiles', evidence.id + ' report');
+            if (!artifact || report.artifactId !== artifact.id || report.sourceSha !== artifact.sourceSha || report.sourceSha !== evidence.sourceSha || report.payloadSha256 !== artifact.payloadSha256) fail(evidence.id + ': artifact report identity/digest mismatch');
+            const keys = report.checks.map(check => [check.id, check.profileId, check.platform, check.installMethod].join(':'));
+            if (new Set(keys).size !== keys.length) fail(evidence.id + ': duplicate artifact report check');
+            for (const check of report.checks) {
+              if (check.profileId) refs([check.profileId], 'profiles', evidence.id + ' report check');
+              if (check.id === 'installed-runtime') {
+                const row = indexed.profiles.get(check.profileId)?.osInstallMatrix.find(row => row.platform === check.platform);
+                if (!row?.methods.includes(check.installMethod) || !installArtifactKinds.get(check.installMethod)?.includes(artifact?.kind)) fail(evidence.id + ': runtime row does not match declared platform/install artifact');
+              }
+            }
+            const common = ['content-digest', 'source-provenance'];
+            const complete = common.every(id => report.checks.some(c => c.id === id && c.profileId === null && c.platform === null && c.installMethod === null && c.required && c.result === 'passed'));
+            const installed = artifact?.kind === 'source' || evidence.profileIds.every(id => report.profileIds.includes(id) && report.checks.some(c => c.id === 'installed-runtime' && c.profileId === id && c.required && c.result === 'passed'));
+            if (evidence.result === 'passed') {
+              if (report.result !== 'passed' || !complete || !installed || report.checks.some(c => c.required && c.result !== 'passed')) fail(evidence.id + ': artifact report has missing/failed/skipped required content, provenance or runtime checks');
+              else if (artifact && report.artifactId === artifact.id && report.sourceSha === artifact.sourceSha && report.sourceSha === evidence.sourceSha && report.payloadSha256 === artifact.payloadSha256) {
+                contentAccepted.add(evidence.id);
+                contentReports.set(evidence.id, report);
+              }
+            }
+          }
+        } catch (error) { fail(evidence.id + ': cannot parse artifact report: ' + error.message); }
       }
     }
     for (const metric of evidence.metrics) {
@@ -227,8 +289,16 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     refs(artifact.metadataEvidenceIds, 'evidence', artifact.id);
     if (artifact.provenance === 'verified-content') {
       if (!artifact.sourceSha || !artifact.payloadSha256) fail(artifact.id + ': verified content needs exact source and payload hash');
-      const content = ledger.evidence.filter(e => e.artifactId === artifact.id && e.sourceSha === artifact.sourceSha && e.kind === (artifact.kind === 'source' ? 'source-check' : 'installed-artifact') && e.result === 'passed' && e.integrity === 'checksummed' && e.raw.some(raw => raw.verification === 'local' && raw.sha256 === artifact.payloadSha256));
+      const content = ledger.evidence.filter(e => e.artifactId === artifact.id && e.sourceSha === artifact.sourceSha && e.kind === (artifact.kind === 'source' ? 'source-check' : 'installed-artifact') && e.result === 'passed' && e.integrity === 'checksummed' && contentAccepted.has(e.id));
       if (!content.length) fail(artifact.id + ': verified content has no matching retained content acceptance');
+    }
+  }
+  for (const profile of ledger.profiles) {
+    for (const row of profile.osInstallMatrix.filter(row => row.acceptance === 'verified')) {
+      const records = acceptedEvidence(row.evidenceIds, profile.id + '/' + row.platform);
+      for (const method of row.methods) {
+        if (!records.some(e => e.kind === 'installed-artifact' && contentAccepted.has(e.id) && e.profileIds.includes(profile.id) && contentReports.get(e.id)?.checks.some(c => c.id === 'installed-runtime' && c.profileId === profile.id && c.platform === row.platform && c.installMethod === method && c.required && c.result === 'passed'))) fail(profile.id + '/' + row.platform + ': missing installed acceptance for method ' + method);
+      }
     }
   }
   for (const gate of ledger.gates) {

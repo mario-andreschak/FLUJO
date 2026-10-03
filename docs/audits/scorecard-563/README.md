@@ -27,6 +27,12 @@ experimental only with explicit independent acceptance and visible limits.
   PR #579–#587 head/base SHAs and public descriptions at its capture time.
 - [fresh dependency audit](evidence/npm-audit-2026-10-03.json) retains the
   failed current lockfile observation, separately from September's clean audit.
+- [npm content inspection](evidence/npm-content-inspection-3.46.2.json) retains
+  verified tarball digests, decoded subject comparisons and shipped manifest/build
+  identity, with signature and installation checks explicitly unperformed.
+- [artifact producer contract](artifact-acceptance.md) defines the separate
+  witness/artifact digests, required source/runtime checks and per-platform/method
+  evidence needed for installed acceptance.
 - [historical failed soak](evidence/2026-09-16-persona-soak.json) is a byte-preserved
   copy of the existing public audit payload. Evidence-directory attributes disable
   Git line-ending conversion so hashes identify the same bytes on Windows and Unix.
@@ -67,6 +73,14 @@ npm reports the 3.46.2 package's SHA-512 integrity and provenance URL, with no
 `gitHead` in the captured response. GitHub reports the Windows installer's SHA-256.
 Package and installer contents were not installed or checked against compiled source.
 No immutable container image digest was captured. These remain distinct ledger entries.
+
+The subsequent npm inspection downloaded and hashed the actual 3.46.2 archive.
+SHA-512 agrees with registry integrity and both decoded attestation subjects;
+SHA-256 is `470605df68d8d2afb1db4895ec3d51e2be1a4d0ba93805becad86733ae71135c`.
+Its manifest identifies version 3.46.2 / Next 16.3.5 and build
+`EKDYzpGxkbGh7LjwGF_Ru`. Decoded provenance declares the same `3203473`
+release source. Signatures/issuer/inclusion policy were not verified, and no package
+installation or runtime was executed; the ledger retains observed-metadata status.
 
 At the later 22:06 UTC capture on October 3, PR #579–#587 were unmerged drafts.
 Their exact head pins are source proposals, not shipped behavior or independently
@@ -172,7 +186,9 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    resolved symlink targets. Use metadata-only external pointers for payloads not reverified.
    Metrics require a nullable numerator; ratio evidence supplies actual integer counts.
 3. Record each npm/image/installer identity separately. Set verified-content only after
-   retaining matching content hash, exact source correspondence and installed acceptance.
+   retaining an [artifact producer report](artifact-acceptance.md) with matching
+   content hash, exact source correspondence and installed acceptance for its actual
+   platform/method rows. The report's checksum differs from the artifact digest.
    Tags, API checksums or successful source builds alone leave content acceptance pending.
 4. Change a gate/claim only after the required passing checksummed evidence matches its
    revision, artifact, profile, evidence kinds and agreed budgets. Source-supported is

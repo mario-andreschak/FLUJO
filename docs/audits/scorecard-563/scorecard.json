@@ -82,7 +82,8 @@
             "npm package",
             "pinned source"
           ],
-          "acceptance": "documented-unverified"
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
         },
         {
           "platform": "Linux",
@@ -91,7 +92,8 @@
             "pinned source",
             "container"
           ],
-          "acceptance": "documented-unverified"
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
         },
         {
           "platform": "macOS",
@@ -99,7 +101,8 @@
             "npm package",
             "pinned source"
           ],
-          "acceptance": "documented-unverified"
+          "acceptance": "documented-unverified",
+          "evidenceIds": []
         }
       ],
       "prerequisites": [
@@ -131,14 +134,16 @@
           "methods": [
             "pinned container/service"
           ],
-          "acceptance": "pending"
+          "acceptance": "pending",
+          "evidenceIds": []
         },
         {
           "platform": "Windows",
           "methods": [
             "pinned native service"
           ],
-          "acceptance": "pending"
+          "acceptance": "pending",
+          "evidenceIds": []
         }
       ],
       "prerequisites": [
@@ -172,7 +177,8 @@
           "methods": [
             "hardened pinned container/service with authenticated ingress"
           ],
-          "acceptance": "pending"
+          "acceptance": "pending",
+          "evidenceIds": []
         }
       ],
       "prerequisites": [
@@ -1050,12 +1056,13 @@
     {
       "id": "npm-3.46.2",
       "kind": "npm",
-      "identity": "flujo-ai@3.46.2; sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ==; registry metadata only, gitHead absent",
-      "sourceSha": null,
+      "identity": "flujo-ai@3.46.2; sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ==; registry metadata only, gitHead absent; downloaded bytes match integrity; provenance declares 320347356891aa1c24e0f2f9ce12719317e58bde (signatures unverified); shipped build EKDYzpGxkbGh7LjwGF_Ru; no install/runtime acceptance",
+      "sourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
       "provenance": "observed-metadata",
-      "payloadSha256": null,
+      "payloadSha256": "470605df68d8d2afb1db4895ec3d51e2be1a4d0ba93805becad86733ae71135c",
       "metadataEvidenceIds": [
-        "baseline-2026-10-03"
+        "baseline-2026-10-03",
+        "npm-content-inspection-3.46.2"
       ]
     },
     {
@@ -1224,7 +1231,8 @@
         "local-owner",
         "persistent-worker",
         "shared-public"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
@@ -1271,7 +1279,8 @@
         "local-owner",
         "persistent-worker",
         "shared-public"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "91bc97d3114f1d6dfcae9827fac2b0079c3a8001",
@@ -1318,7 +1327,8 @@
       "profileIds": [
         "local-owner",
         "persistent-worker"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "df485400e72f5772f50b1caa9674db22bfb3bf42",
@@ -1373,7 +1383,8 @@
       "profileIds": [
         "local-owner",
         "persistent-worker"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
@@ -1421,7 +1432,8 @@
         "local-owner",
         "persistent-worker",
         "shared-public"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "21e946e1e6b1114816d5c232ca3768bd06bcca31",
@@ -1476,7 +1488,8 @@
         "local-owner",
         "persistent-worker",
         "shared-public"
-      ]
+      ],
+      "artifactProof": null
     },
     {
       "sourceSha": "21e946e1e6b1114816d5c232ca3768bd06bcca31",
@@ -1525,7 +1538,58 @@
         "local-owner",
         "persistent-worker",
         "shared-public"
-      ]
+      ],
+      "artifactProof": null
+    },
+    {
+      "sourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "artifactId": "npm-3.46.2",
+      "ownerId": "docs",
+      "observedAt": "2026-10-03T22:17:01.304Z",
+      "environment": {
+        "platform": "Windows x64 metadata capture",
+        "node": "v22.13.1",
+        "provider": "none; read-only public GitHub/npm",
+        "tools": "git, gh, npm; no app runtime or account credentials copied"
+      },
+      "commands": [
+        "Fetch public 3.46.2 tarball and provenance; SHA-256/SHA-512 and subject comparisons; tar -tf; tar -xOf package/package.json and package/.next/BUILD_ID; exact commands in retained record"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-content-inspection-3.46.2.json",
+          "sha256": "a13f7093c8787a2a7b4980cf88345c91ca4cfb37ad9fba881e4ad2ec9430e05f",
+          "verification": "local"
+        }
+      ],
+      "scope": "Tarball content inspection only. 10,286,028 bytes; registry SHA-512 and both decoded attestation subjects match; shipped manifest 3.46.2 / Next 16.3.5; build EKDYzpGxkbGh7LjwGF_Ru. Source SHA is declared by unverified provenance.",
+      "limits": [
+        "Attestation signatures, signing issuer, transparency inclusion and compiled-source correspondence were not verified.",
+        "No app/package installation, execution, browser, MCP process, provider call or paid resource occurred.",
+        "Public decoded provenance statements are retained; signedAccessSignatureUrl fields are omitted. Inspection does not qualify verified-content or installed release support."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://registry.npmjs.org/flujo-ai/-/flujo-ai-3.46.2.tgz",
+        "https://registry.npmjs.org/-/npm/v1/attestations/flujo-ai@3.46.2"
+      ],
+      "id": "npm-content-inspection-3.46.2",
+      "kind": "baseline-observation",
+      "result": "passed",
+      "integrity": "checksummed",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
