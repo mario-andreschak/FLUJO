@@ -25,9 +25,10 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error('Cannot identify the exact release commit.');
   assertVerifiedRevision(run, revision);
   show('npm run typecheck');
+  show('npm run typecheck:mcp');
   show('node scripts/generate-api-inventory.mjs --check');
   show('npm run lint:all');
-  show('node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs');
+  show('node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs');
   show('node --test tests/installer-repository.test.mjs');
   show('npm run build');
   for (const [stage, script, result] of [
