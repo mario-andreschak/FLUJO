@@ -11,9 +11,9 @@ const positions: Record<WorldPlace, [number, number]> = {
   models: [RIVER_SCENES.models.x, RIVER_SCENES.models.y], apps: [RIVER_SCENES.mcp.x, RIVER_SCENES.mcp.y],
   flows: [RIVER_SCENES.flows.x, RIVER_SCENES.flows.y], automations: [RIVER_SCENES.automations.x, RIVER_SCENES.automations.y],
   packages: [RIVER_SCENES.packages.x, RIVER_SCENES.packages.y], archive: [RIVER_SCENES.docs.x, RIVER_SCENES.docs.y],
-  settings: [RIVER_SCENES.settings.x, RIVER_SCENES.settings.y], personas: [21, 72], meetings: [82, 73],
+  settings: [RIVER_SCENES.settings.x, 85], personas: [18, 65], meetings: [82, 73],
 };
-export const PLACE_KINDS: Partial<Record<WorldPlace, AvatarWorldObject['kind']>> = { apps: 'app', flows: 'flow', personas: 'persona', automations: 'automation', meetings: 'meeting', archive: 'artifact' };
+export const PLACE_KINDS: Partial<Record<WorldPlace, AvatarWorldObject['kind']>> = { apps: 'app', flows: 'flow', personas: 'persona', automations: 'automation', meetings: 'meeting', archive: 'artifact', packages: 'package' };
 
 export default function Watershed({ snapshot, locale, selected, onSelect }: { snapshot: AvatarWorldSnapshot | null; locale: WorldLocale; selected: WorldPlace | null; onSelect: (place: WorldPlace) => void }) {
   const c = worldCopy(locale);

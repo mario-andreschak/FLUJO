@@ -23,7 +23,7 @@ export interface AvatarConnectionDiscovery {
 export interface AvatarWorldObject {
   id: string;
   name: string;
-  kind: 'flow' | 'app' | 'persona' | 'automation' | 'meeting' | 'artifact';
+  kind: 'flow' | 'app' | 'persona' | 'automation' | 'meeting' | 'artifact' | 'package';
   state: string;
   href: string;
   canTalk?: boolean;

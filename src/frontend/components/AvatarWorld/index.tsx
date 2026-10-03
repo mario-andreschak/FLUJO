@@ -15,6 +15,7 @@ import { useAvatarWork } from './useAvatarWork';
 import { useWorldPanel } from './useWorldPanel';
 import { useNativeRouterVoice, voiceHeaders } from '@/vendor/avatar/client/useNativeRouterVoice';
 import ResourcePreview from './ResourcePreview';
+import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import styles from './world.module.css';
 
 export default function AvatarWorld() {
@@ -113,7 +114,7 @@ export default function AvatarWorld() {
       <Link href="/" className={styles.wordmark} aria-label="Flujo">flujo<span>◌</span></Link>
       <div className={styles.topActions}>
         {work.target.kind !== 'guide' && <button className={styles.identity} title={c.guideIdentity} disabled={work.busy} onClick={() => { if (work.newChat({ kind: 'guide' })) { voice.disconnect(); setVoiceMessages([]); offered.current.clear(); } }}>{actor} · ↩ {c.guideIdentity}</button>}
-        {snapshot?.workModel && <button className={styles.brain} onClick={() => setSetup(true)} disabled={work.busy}><span>◈</span>{snapshot.workModel.label}<span>↗</span></button>}
+        {work.target.kind === 'guide' && snapshot?.workModel && <button className={styles.brain} onClick={() => setSetup(true)} disabled={work.busy}><span>◈</span>{snapshot.workModel.label}<span>↗</span></button>}
         <select aria-label="Language / Idioma" value={locale} onChange={event => { const value = event.target.value as WorldLocale; setLocale(value); window.localStorage.setItem(workspaceLocalStorageKey('flujo-avatar:locale'), value); }}><option value="es">ES</option><option value="pt">PT</option><option value="en">EN</option></select>
         <button onClick={() => setExploring(value => !value)} className={styles.mapToggle} aria-pressed={exploring} aria-label={c.world}>⌘</button>
       </div>
@@ -145,6 +146,7 @@ export default function AvatarWorld() {
     {place && place !== 'models' && exploring && <aside className={styles.placeSheet}><div className={styles.sheetHead}><span className={styles.eyebrow}>{labels[place]}</span><button onClick={() => setPlace(null)} aria-label={c.close}>×</button></div><h2>{labels[place]}</h2>
       {objects.length === 0 && <p>{c.empty}</p>}{objects.map(object => <div key={`${object.kind}:${object.id}`}><button className={styles.object} onClick={() => object.resource ? setResource(object) : panel.navigate(object.href)}><span>◈</span><div><strong>{object.name}</strong><small>{object.state}</small></div><span>↗</span></button>{(['flow', 'persona'].includes(object.kind) && object.canTalk) && <button className={styles.talkIdentity} disabled={work.busy} onClick={() => { if (work.newChat({ kind: object.kind as 'flow' | 'persona', id: object.id, name: object.name })) { voice.disconnect(); setVoiceMessages([]); offered.current.clear(); setPlace(null); setExploring(false); input.current?.focus(); } }}>{c.talkTo} · {object.name} ↗</button>}</div>)}
       <button className={styles.primary} onClick={() => panel.navigate(PLACE_ROUTES[place])}>{c.viewAll} ↗</button>
+      {place === 'apps' && <QuickActionsMenu pathname="/world" variant="drawer" onNavigate={panel.navigate} onAction={voice.disconnect} />}
     </aside>}
     {resource && <ResourcePreview key={resource.id} object={resource} locale={locale} onClose={() => setResource(null)} onConversation={() => { panel.navigate(resource.href); setResource(null); }} />}
     {panel.src && <section className={styles.panel} data-open={panel.open} aria-label={c.inspect} aria-hidden={!panel.open} inert={!panel.open}>

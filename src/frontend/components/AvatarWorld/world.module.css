@@ -17,3 +17,7 @@
 .world[data-conversation=true] .companion{top:12%}.world[data-conversation=true] .presence{margin-bottom:18px}.world[data-conversation=true] .stylePicker{margin-top:8px}
 .identity{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px!important}.talkIdentity{width:100%;font-size:10px!important;margin:0 0 12px;padding:7px!important}
 .world[data-exploring=true] .transcript{visibility:hidden;pointer-events:none}
+/* The persistent Apps host reserves these edges for its live dock. */
+.world{inset:var(--global-mcp-dock-top,0px) var(--global-mcp-dock-right,0px) var(--global-mcp-dock-bottom,0px) var(--global-mcp-dock-left,0px)}
+.setup{max-height:min(90vh,100%)}
+.wordmark{flex-shrink:0}.topActions,.identity{min-width:0}.topActions{max-width:calc(100% - 76px)}.topActions select,.mapToggle{flex-shrink:0}

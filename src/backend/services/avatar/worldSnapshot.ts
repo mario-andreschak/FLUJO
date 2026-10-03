@@ -6,6 +6,7 @@ import { listPersonaSummaries } from '@/backend/services/enduringAgents/personaS
 import { listMeetingSummaries } from '@/backend/services/meetings/store';
 import { readAvatarWorkModel } from './workModel';
 import { listAllRunResources } from '@/backend/services/runResources';
+import { listInstalledPackages } from '@/backend/services/packages/installPackage';
 import type { AvatarWorldObject, AvatarWorldSnapshot } from '@/shared/types/avatar';
 
 /** Bounded, passive presentation of existing entities. No credentials, prompts,
@@ -40,7 +41,8 @@ export async function getAvatarWorldSnapshot(): Promise<AvatarWorldSnapshot> {
       href: `/chat?conversation=${encodeURIComponent(resource.conversationId)}`,
       resource: { conversationId: resource.conversationId, id: resource.id, kind: resource.kind, mimeType: resource.mimeType, size: resource.size, createdAt: resource.createdAt },
     })))),
+    listInstalledPackages().then(packages => limit('packages', packages.map(pkg => ({ id: pkg.packageName, name: pkg.packageName, kind: 'package', state: `v${pkg.version}`, href: '/packages' })))),
   ]);
-  sections.forEach((section, index) => { if (section.status === 'rejected') unavailable.push(['models', 'flows', 'apps', 'personas', 'automations', 'meetings', 'artifacts'][index]); });
+  sections.forEach((section, index) => { if (section.status === 'rejected') unavailable.push(['models', 'flows', 'apps', 'personas', 'automations', 'meetings', 'artifacts', 'packages'][index]); });
   return { checkedAt: Date.now(), workModel, objects: objects.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)), unavailable, truncated };
 }
