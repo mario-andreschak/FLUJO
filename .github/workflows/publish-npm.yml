@@ -194,7 +194,7 @@ jobs:
     if: ${{ !inputs.diagnose_oidc }}
     needs: [prepare, publish]
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     permissions:
       contents: write
       actions: write

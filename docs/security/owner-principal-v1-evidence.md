@@ -68,6 +68,18 @@ must be checked by the consumer before selecting its workspace. Workspace deleti
 or rename alone is not represented by the policy revision, so consumers must also
 repeat their workspace lifetime checks.
 
+The exported `isRemoteAvatarVoiceRequest` identifies only these classified
+paths/methods. `assertRemoteAvatarVoiceOrigin` requires an exact Origin matching
+canonical HTTP(S) `FLUJO_AVATAR_REMOTE_ORIGIN` (no path, credentials, query, or
+fragment). Missing/invalid configuration is 503; mismatched/missing Origin is 403.
+Nonworker proxy ingress admits this different-origin BFF only after the selected
+Host boundary and strict workspace-bound voice authentication. The handler must
+repeat Origin and principal admission. Worker proxy ingress is unchanged and
+requires its dedicated snapshot/worker bearer; a consumer can compose a separate
+private voice capability but must authenticate both before body/storage/effects.
+Origin itself is never identity, and no browser credential/public CORS mechanism
+is added by this layer.
+
 Worker/snapshot/provider credentials remain separate. This witness does not grant
 Root, account, lease, budget, startup, capture, or COMMIT authority and does not
 establish a private keystore. Provider keys must remain in the BFF's private
@@ -79,6 +91,8 @@ On 2026-10-03, the owned Windows checkout with Node 22.13.1, Next 16.3.5,
 TypeScript 6.0.3 and Zod 4.4.3 initially passed 64 focused tests across
 `ownerPrincipal.test.ts` (28) and `ownerAccess.test.ts` (36). A subsequent exact
 availability route/method test brings the principal suite to 29 cases. The existing suite
+was extended with two private BFF proxy/Origin tests; the final combined run passed
+all 67 cases (29 principal, 38 owner/proxy).
 includes three tiny serial OS subprocess checks of valid/revoked/corrupt policy.
 New tests cover immutable trusted identity, hostile request claims, narrow scope,
 workspace requirements, exact route/method classification, revocation/rotation,

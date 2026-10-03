@@ -79,6 +79,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   log.debug('Tools array:', { count: toolsArray.length });
   const [selectedTool, setSelectedTool] = useState<string>('');
   const [params, setParams] = useState<Record<string, unknown>>({});
+  const [paramsValid, setParamsValid] = useState(true);
+  const [formRevision, setFormRevision] = useState(0);
   const [result, setResult] = useState<ToolTestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [timeoutValue, setTimeoutValue] = useState<number>(60);
@@ -99,6 +101,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     appliedPrefillRef.current = prefill;
     setSelectedTool(prefill.toolName);
     setParams({ ...prefill.arguments });
+    setParamsValid(true);
+    setFormRevision(revision => revision + 1);
     setResult(null);
     setProgress(null);
     setActiveProgressToken(null);
@@ -108,7 +112,10 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   const handleToolSelect = (toolName: string) => {
     setSelectedTool(toolName);
     setParams({});
+    setParamsValid(true);
+    setFormRevision(revision => revision + 1);
     setResult(null);
+    setErrorNotification(null);
   };
 
   const handleTimeoutChange = (value: string) => {
@@ -127,6 +134,10 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   };
 
   const handleTest = async () => {
+    if (!paramsValid) {
+      setErrorNotification(t('schema.invalidJson'));
+      return;
+    }
     log.debug(`Testing tool: ${selectedTool} with params:`, JSON.stringify(params));
     log.debug(`Timeout: ${timeoutValue} seconds`);
     
@@ -319,9 +330,11 @@ const ToolTester: React.FC<ToolTesterProps> = ({
 
           <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <SchemaParamsForm
+              key={formRevision}
               schema={selectedToolData.inputSchema}
               values={params}
               onChange={setParams}
+              onValidityChange={setParamsValid}
             />
 
             <Box>
@@ -371,7 +384,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
               variant="contained"
               color="primary"
               onClick={handleTest}
-              disabled={isLoading}
+              disabled={isLoading || !paramsValid}
               startIcon={isLoading && <Spinner size="small" color="white" />}
             >
               {isLoading ? t('mcp.tester.testing') : t('mcp.tester.test')}

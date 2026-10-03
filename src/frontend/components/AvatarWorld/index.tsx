@@ -13,7 +13,7 @@ import Watershed, { PLACE_ROUTES, PLACE_KINDS, LANDMARK_POSITIONS, type WorldPla
 import ConnectionSetup from './ConnectionSetup';
 import { useAvatarWork } from './useAvatarWork';
 import { useWorldPanel } from './useWorldPanel';
-import { useNativeRouterVoice, voiceHeaders } from '@/vendor/avatar/client/useNativeRouterVoice';
+import { useNativeRouterVoice, voiceHeaders, type NativeVoiceTransport } from '@/vendor/avatar/client/useNativeRouterVoice';
 import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
 import ResourcePreview from './ResourcePreview';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
@@ -21,7 +21,7 @@ import WorldLink from './WorldLink';
 import WorldScene from './WorldScene';
 import styles from './world.module.css';
 
-export default function AvatarWorld() {
+export default function AvatarWorld({ voiceTransport }: { voiceTransport?: NativeVoiceTransport } = {}) {
   const [locale, setLocale] = useState<WorldLocale>(DEFAULT_LOCALE);
   const [avatar, setAvatar] = useState<AvatarStyle>('moss');
   const [snapshot, setSnapshot] = useState<AvatarWorldSnapshot | null>(null);
@@ -43,6 +43,8 @@ export default function AvatarWorld() {
   const snapshotRequest = useRef(0);
   const c = worldCopy(locale);
   const { setLocale: setFlujoLocale } = useI18n();
+  const requestVoice = useCallback((endpoint: Parameters<NativeVoiceTransport['request']>[0], init: RequestInit) =>
+    voiceTransport ? voiceTransport.request(endpoint, init) : fetch(endpoint === 'voice' ? '/api/avatar/voice' : `/api/avatar/${endpoint}`, init), [voiceTransport]);
   useEffect(() => { setFlujoLocale(locale); }, [locale, setFlujoLocale]);
   const panel = useWorldPanel(() => input.current?.focus(), locale);
   const reload = useCallback(async () => {
@@ -75,7 +77,7 @@ export default function AvatarWorld() {
   const canWork = ready || work.target.kind !== 'guide' || Boolean(work.conversation);
   const selectedTarget = work.target;
   const actor = selectedTarget.kind === 'guide' ? c.guideIdentity : snapshot?.objects.find(object => object.kind === selectedTarget.kind && object.id === selectedTarget.id)?.name || selectedTarget.name;
-  const voice = useNativeRouterVoice({ avatar, locale, backgroundAsr: true, workInput: canWork, observerPaused: setup || panel.open,
+  const voice = useNativeRouterVoice({ avatar, locale, transport: voiceTransport, backgroundAsr: true, workInput: canWork, observerPaused: setup || panel.open,
     onUserUtterance: () => { voiceRequest.current++; },
     onTranscript: (id, role, text, done) => setVoiceMessages(current => {
       const item = { id, role, text, done }, index = current.findIndex(message => message.id === id);
@@ -88,23 +90,36 @@ export default function AvatarWorld() {
     onObserverError: () => setError(locale === 'pt' ? 'Não reconheci o pedido. Você pode escrever.' : locale === 'es' ? 'No reconocí la petición. Puedes escribir.' : 'The request was not recognized. You can type.'),
     onInterrupted: () => setVoiceMessages(current => current.map(message => message.done ? message : { ...message, text: '', done: true })),
   });
-  useEffect(() => { void fetch('/api/avatar/voice').then(response => response.ok ? response.json() : null).then(status => setVoiceAvailable(Boolean(status?.available))).catch(() => {}); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    setVoiceAvailable(false); offered.current.clear(); voiceRequest.current++;
+    setVoiceMessages([]);
+    void requestVoice('voice', { method: 'GET', signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(status => { if (!controller.signal.aborted) setVoiceAvailable(Boolean(status?.available)); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [requestVoice]);
   // Sensitive configuration panels never leave a microphone recording in the background.
   useEffect(() => { if (setup || panel.open) voice.disconnect(); }, [setup, panel.open, voice.disconnect]);
   const phase = voice.connected && voice.phase === 'speaking' ? voice.phase : work.busy ? work.phase : voice.connected && voice.phase === 'listening' ? voice.phase : work.phase;
+  const narrationConversationId = work.conversation?.id;
+  const narrationLast = work.messages.at(-1);
+  const narrationMessageId = narrationLast?.role === 'assistant' ? narrationLast.id : undefined;
   useEffect(() => {
-    const last = work.messages.at(-1), conversation = work.conversation;
-    if (work.busy || !conversation || last?.role !== 'assistant') return;
-    const key = `${conversation.id}:${last.id}`;
+    if (work.busy || !narrationConversationId || !narrationMessageId) return;
+    const key = `${narrationConversationId}:${narrationMessageId}`;
     // Connecting voice enables future results; it never replays an old setup recommendation.
     if (!voice.connected) { offered.current.add(key); return; }
     if (offered.current.has(key)) return;
     offered.current.add(key);
     const owner = voice.getSessionOwner();
     const requestEpoch = voiceRequest.current;
-    void fetch('/api/avatar/native-result-receipt', { method: 'POST', headers: voiceHeaders(), body: JSON.stringify({ conversationId: conversation.id, messageId: last.id, locale }) })
-      .then(response => response.ok ? response.json() : null).then(receipt => { if (receipt?.taskId && owner && voiceRequest.current === requestEpoch) voice.sendTaskResult(receipt.taskId, owner); }).catch(() => {});
-  }, [work.messages, work.busy, work.conversation, voice.connected, locale, voice.sendTaskResult, voice.getSessionOwner]);
+    const controller = new AbortController();
+    void requestVoice('native-result-receipt', { method: 'POST', headers: voiceHeaders(), signal: controller.signal, body: JSON.stringify({ conversationId: narrationConversationId, messageId: narrationMessageId, locale }) })
+      .then(response => response.ok ? response.json() : null).then(receipt => { if (!controller.signal.aborted && receipt?.taskId && owner && voiceRequest.current === requestEpoch) voice.sendTaskResult(receipt.taskId, owner); }).catch(() => {});
+    return () => controller.abort();
+  }, [narrationMessageId, work.busy, narrationConversationId, voice.connected, locale, voice.sendTaskResult, voice.getSessionOwner, requestVoice]);
   useEffect(() => { if (work.messages.length) transcript.current?.scrollTo({ top: transcript.current.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); }, [work.messages]);
   useEffect(() => { if (!work.busy) void reload(); }, [work.busy, reload]);
   useEffect(() => {

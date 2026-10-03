@@ -1185,6 +1185,17 @@
       "metadataEvidenceIds": [
         "proposals-2026-10-03"
       ]
+    },
+    {
+      "id": "proposal-pr-600",
+      "kind": "source",
+      "identity": "PR #600; git:59b65de81b52db2e29cde2d5848436661d04e631; unintegrated dependency-remediation candidate; base 3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "sourceSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "dependency-remediation-59b65de8"
+      ]
     }
   ],
   "evidence": [
@@ -1820,6 +1831,78 @@
         "Review is not a human study, independent reproduction or installed-release observation.",
         "No grades, release claims or acceptance gates are promoted."
       ]
+    },
+    {
+      "ownerId": "engineering",
+      "observedAt": "2026-10-03T22:52:35.070Z",
+      "environment": {
+        "platform": "Windows x64; source and producer receipt capture",
+        "node": "v22.13.1",
+        "provider": "public npm advisory service; no model runtime",
+        "tools": "git, gh, npm; no installed release acceptance"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "sourceSha": "59b65de81b52db2e29cde2d5848436661d04e631",
+      "artifactId": "proposal-pr-600",
+      "commands": [
+        "Coordinator reported production and development-inclusive npm audit commands; exact flags not retained in raw audit JSON",
+        "gh api repos/mario-andreschak/FLUJO/pulls/600; git show <sourceSha>:<path> (paths and blob hashes in receipt)"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-59b65de8-production.json",
+          "sha256": "1866e25b30b3c684a069e7cfac3698a9b799a04fd0d539e199d21f16c31467e2",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-59b65de8-all.json",
+          "sha256": "1866e25b30b3c684a069e7cfac3698a9b799a04fd0d539e199d21f16c31467e2",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/dependency-remediation-59b65de8.json",
+          "sha256": "85b930dfcb92c6d9962f16e4abcde68abc85f5ede8b18582f10228d0790f1a37",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-replay-unbound-2026-10-03.json",
+          "sha256": "b8af7490d4040b02a648f2eef1839ca16bf974021b57073e99564a228cdff160",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-replay-unbound-receipt-2026-10-03.json",
+          "sha256": "d8c9eb0c26b97f81fef29552111be8e3381e2e2ea973d4055f14ddbdcfb4ff17",
+          "verification": "local"
+        }
+      ],
+      "scope": "Coordinator-produced audit reports at unintegrated PR #600: reported exit 0 and zero findings for production/development modes. Docs reverified both payload hashes and exact proposal/source blobs. Execution/source binding is producer-reported, not an independently repeated audit at that SHA.",
+      "limits": [
+        "The audit execution/mode/source association is supplied by the coordinator and public PR description; this capture checks retained bytes and exact Git source blobs, not independent command execution at that pin.",
+        "A clean advisory audit is not an independent threat model, final exact-head build, installed-release acceptance or an all-nine-dimension grade.",
+        "Precursor build/typecheck and source-test counts in the PR description are author reports; final CI/image/release remain pending.",
+        "Planning main 3511ba49514fe8cf525f5a22c16c3806bf3886ba retains the failed original lockfile audit. The assessed release must integrate and repeat its audit.",
+        "The independent replay returned zero findings but failed its source binding during concurrent integration. Its standalone receipt and raw bytes are retained as a failed capture; they do not qualify the proposal source."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/600"
+      ],
+      "id": "dependency-remediation-59b65de8",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed"
     }
   ],
   "gates": [
@@ -1967,9 +2050,10 @@
         "shared-public"
       ],
       "status": "failed",
-      "description": "Current high/critical dependency audit must be remediated and repeated on the assessed release. Historical clean audit and stale CodeQL results cannot qualify current security.",
+      "description": "Planning main retains its failed audit. PR #600 at 59b65de81b52db2e29cde2d5848436661d04e631 has checksummed producer-reported clean audit payloads; integration and the assessed release audit remain pending. An unbound concurrent replay cannot qualify a source SHA.",
       "evidenceIds": [
-        "dependency-audit-2026-10-03"
+        "dependency-audit-2026-10-03",
+        "dependency-remediation-59b65de8"
       ]
     },
     {
@@ -2170,7 +2254,8 @@
         "baseline-2026-10-03",
         "publication-reconciliation-2026-10-03",
         "ci-verification-46af3225",
-        "docs-automated-review-46af3225"
+        "docs-automated-review-46af3225",
+        "dependency-remediation-59b65de8"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2414,7 +2499,8 @@
         "installed-artifact"
       ],
       "evidenceIds": [
-        "publication-reconciliation-2026-10-03"
+        "publication-reconciliation-2026-10-03",
+        "dependency-remediation-59b65de8"
       ],
       "budgetIds": [],
       "gateIds": [

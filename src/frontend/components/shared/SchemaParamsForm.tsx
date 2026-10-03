@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   FormControl,
@@ -22,6 +22,15 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     : undefined
 );
 
+const jsonDraftsValid = (properties: Record<string, unknown>, drafts: Record<string, string>): boolean => (
+  Object.entries(drafts).every(([key, text]) => {
+    const type = asRecord(properties[key])?.type;
+    if ((type !== 'object' && type !== 'array') || !text.trim()) return true;
+    try { JSON.parse(text); return true; }
+    catch { return false; }
+  })
+);
+
 /**
  * Render input fields for an MCP tool's parameters from its JSON schema
  * (`inputSchema`: { type:'object', properties, required }). Extracted from the
@@ -37,10 +46,12 @@ export interface SchemaParamsFormProps {
   schema: Record<string, unknown> | undefined;
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
+  /** Whether every visible JSON draft parses; typed values may lag unfinished drafts. */
+  onValidityChange?: (valid: boolean) => void;
   size?: 'small' | 'medium';
 }
 
-const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaParamsFormProps) => {
+const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = 'small' }: SchemaParamsFormProps) => {
   const { globalEnvVars } = useStorage();
   const { t } = useI18n();
   const globalNames = useMemo(
@@ -56,6 +67,8 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
     ? schema.required.filter((key): key is string => typeof key === 'string')
     : [];
   const keys = Object.keys(properties);
+  const validJson = jsonDraftsValid(properties, drafts);
+  useEffect(() => { onValidityChange?.(validJson); }, [onValidityChange, validJson]);
 
   if (keys.length === 0) {
     return (
@@ -186,7 +199,9 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               helperText={parseError ?? description}
               onChange={(e) => {
                 const text = e.target.value;
-                setDrafts(prev => ({ ...prev, [key]: text }));
+                const nextDrafts = { ...drafts, [key]: text };
+                setDrafts(nextDrafts);
+                onValidityChange?.(jsonDraftsValid(properties, nextDrafts));
                 if (!text.trim()) {
                   setValue(key, undefined);
                   return;

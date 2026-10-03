@@ -83,6 +83,7 @@ test('creates a stopped container with OS restrictions, then attaches by its exa
   expect(createCall[2]?.env).not.toHaveProperty('HOST_SECRET');
   expect(result.env).not.toHaveProperty('TEST_GRANTED_TOKEN');
   expect(result.env).not.toHaveProperty('HOST_SECRET');
+  expect(result.env.NODE_ENV).toBe('production');
   expect(result.args.slice(4)).toEqual(['container', 'start', '--attach', '--interactive', id]);
   expect(result.containerId).toBe(id);
   expect(Object.isFrozen(result)).toBe(true);
@@ -136,6 +137,16 @@ test.each([undefined, 'a\0b', 'a'.repeat(16 * 1024 + 1)])('rejects missing or in
   expect(() => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
     { TEST_GRANTED_TOKEN: value as string })).toThrow(McpIsolationError);
   expect(execute).not.toHaveBeenCalled();
+});
+
+test('NODE_ENV cannot override the deliberately controlled CLI production environment', () => {
+  policy.environmentNames = ['NODE_ENV'];
+  expect(() => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+    { NODE_ENV: 'development' })).toThrow(McpIsolationError);
+  expect(execute).not.toHaveBeenCalled();
+  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, { NODE_ENV: 'production' });
+  expect(result.env.NODE_ENV).toBe('production');
+  result.close();
 });
 
 test('rejects a junction or symlink in a host grant', () => {

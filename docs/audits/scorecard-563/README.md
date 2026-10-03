@@ -27,6 +27,9 @@ experimental only with explicit independent acceptance and visible limits.
   PR #579–#587 head/base SHAs and public descriptions at its capture time.
 - [fresh dependency audit](evidence/npm-audit-2026-10-03.json) retains the
   failed current lockfile observation, separately from September's clean audit.
+- [dependency remediation observation](evidence/dependency-remediation-59b65de8.json)
+  retains the coordinator's clean PR #600 audit payloads, exact source blobs and
+  a separate independent replay whose source-binding capture failed during integration.
 - [npm content inspection](evidence/npm-content-inspection-3.46.2.json) retains
   verified tarball digests, decoded subject comparisons and shipped manifest/build
   identity, with signature and installation checks explicitly unperformed.
@@ -98,8 +101,17 @@ The new lockfile audit returned exit 1 with 10 affected packages: 8 high,
 `9201a840c73f7dfcf2e55d9e31fa1107857084e4783ce9fa5dd829c66bb40d58`
 is identical to planning main `3511ba4`. Affected-package counts are not
 unique advisory counts or an independent threat-model severity assessment.
-The failed dependency gate stays visible while the coordinator owns a separate
-remediation PR. Historical clean results cannot qualify current dependencies.
+The failed dependency gate stays visible for the planning baseline. The coordinator's
+[PR #600](https://github.com/mario-andreschak/FLUJO/pull/600) at
+`59b65de81b52db2e29cde2d5848436661d04e631` reports production/development-inclusive
+audits returning zero findings. Both retained raw payloads have SHA-256
+`1866e25b30b3c684a069e7cfac3698a9b799a04fd0d539e199d21f16c31467e2`;
+Docs reverified their bytes and source blobs, with execution/source association
+producer-reported. The independent lockfile replay also returned zero findings,
+but a later identity check found concurrent integration, so that capture cannot
+qualify a source SHA. Its failed binding and raw output remain retained. Integration,
+final CI/build and the assessed release audit remain pending; neither candidate nor
+historical clean results qualify an untested release.
 
 The September 16 offline failure stays checksummed and attributed to its synthetic
 source snapshot: 560 completed Activities, 12/13 criteria passing, one append p95

@@ -6,6 +6,10 @@ import { voiceCopy, voiceError, VoiceLocaleError, voiceRequestError, voiceRespon
 import { UtteranceCollector } from './utteranceObserver';
 import { nativeAbortable, nativeAudioBytes, nativeIdentifier, NativeRouterPlayback, readNativeTurn } from './nativeRouterPlayback';
 import type { NativePlayed, NativeTurnEvent } from './nativeRouterPlayback';
+import { localNativeVoiceTransport, snapshotNativeVoiceTransport, resetNativeHistory, voiceHeaders } from './nativeVoiceTransport';
+import type { AvatarVoiceEndpoint, NativeVoiceTransport } from './nativeVoiceTransport';
+export { voiceHeaders } from './nativeVoiceTransport';
+export type { NativeVoiceTransport } from './nativeVoiceTransport';
 
 interface Options {
   avatar: AvatarId;
@@ -19,11 +23,14 @@ interface Options {
   onObservedTranscript?: (id: string, text: string) => void;
   onObserverError?: () => void;
   onInterrupted?: () => void;
+  /** An authenticated host may replace URLs/headers without changing audio or work ownership. */
+  transport?: NativeVoiceTransport;
 }
 type Input = { generation: number; serial: number; avatar: AvatarId; message?: string; audio?: string; taskId?: string; workInput?: boolean };
 interface Observation { turnId: string; audio: string; serial: number; }
 interface Turn { generation: number; abort: AbortController; turnId?: string; complete?: Extract<NativeTurnEvent, { type: 'complete' }>; }
 interface Session {
+  transport: NativeVoiceTransport;
   owner: symbol; accountEpoch: number; abort: AbortController; locale: Locale; ready: boolean; muted: boolean;
   context?: AudioContext; input?: MediaStreamAudioSourceNode; stream?: MediaStream;
   capture?: AudioWorkletNode; silent?: GainNode; playback?: NativeRouterPlayback; raf?: number;
@@ -34,19 +41,6 @@ interface Session {
   ackBarrier: Promise<void>; acknowledgements: Set<AbortController>;
 }
 
-const clientId = () => { const key = 'flujo-avatar:voice-client'; let id = sessionStorage.getItem(key); if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(key, id); } return id; };
-export const voiceHeaders = () => ({ 'Content-Type': 'application/json', 'x-flujo-avatar-client': clientId() });
-// All hook instances in this page share reset ordering. A reconnect never races an older reset.
-let resetBarrier: Promise<void> = Promise.resolve();
-function resetNativeHistory(): Promise<void> {
-  const next = resetBarrier.catch(() => {}).then(async () => {
-    const response = await fetch('/api/avatar/native-reset', { method: 'POST', headers: voiceHeaders(),
-      body: '{}', signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw await voiceResponseError(response);
-    await response.body?.cancel();
-  });
-  resetBarrier = next.catch(() => {}); return next;
-}
 const cancelled = () => new DOMException('The native voice turn was cancelled.', 'AbortError');
 
 /** Native complete-utterance audio in / PCM out. This HTTP transport is not a Live duplex socket. */
@@ -61,7 +55,8 @@ export function useNativeRouterVoice(options: Options) {
   const [audioLevel, setAudioLevel] = useState(0), [error, setError] = useState('');
   const pump = useRef<(s: Session) => void>(() => {}), observe = useRef<(s: Session, item: Observation) => void>(() => {});
   const fail = useRef<(s: Session) => void>(() => {});
-  const current = useCallback((s: Session) => session.current === s && !s.abort.signal.aborted, []);
+  const current = useCallback((s: Session) => session.current === s && !s.abort.signal.aborted
+    && s.transport.scopeKey === (opts.current.transport?.scopeKey ?? localNativeVoiceTransport.scopeKey), []);
   const liveTurn = useCallback((s: Session, t: Turn) => current(s) && s.response === t && s.generation === t.generation && !t.abort.signal.aborted, [current]);
   const refresh = useCallback((s: Session) => {
     if (!current(s) || !s.ready) return;
@@ -94,12 +89,20 @@ export function useNativeRouterVoice(options: Options) {
   }, [invalidateObserver]);
   fail.current = s => { if (current(s)) { disconnect(); setError(voiceCopy(s.locale).streamFailed); } };
 
-  const request = useCallback(async (s: Session, path: string, body: object, signal: AbortSignal, timeout = 45_000) => {
-    const response = await fetch(`/api/avatar/${path}`, { method: 'POST', headers: voiceHeaders(),
+  const request = useCallback(async (s: Session, path: AvatarVoiceEndpoint, body: object, signal: AbortSignal, timeout = 45_000) => {
+    if (!current(s)) throw cancelled();
+    const response = await s.transport.request(path, { method: 'POST', headers: voiceHeaders(),
       body: JSON.stringify({ ...body, locale: s.locale }), signal: AbortSignal.any([signal, s.abort.signal, AbortSignal.timeout(timeout)]) });
-    if (!response.ok) throw await voiceResponseError(response);
+    if (!current(s)) { await response.body?.cancel(); throw cancelled(); }
+    if (!response.ok) {
+      const error = await voiceResponseError(response);
+      if ((response.status === 401 || response.status === 403) && current(s)) {
+        disconnect(); setError(voiceError(s.locale, error));
+      }
+      throw error;
+    }
     return response;
-  }, []);
+  }, [current, disconnect]);
   const played = useCallback((s: Session, receipt: NativePlayed) => {
     if (!current(s)) return;
     const accountEpoch = s.accountEpoch;
@@ -213,14 +216,17 @@ export function useNativeRouterVoice(options: Options) {
   }, [stopResponse]);
 
   const connect = useCallback(async (withMicrophone = true) => {
-    if (session.current) { if (!withMicrophone || session.current.stream) return; disconnect(); }
+    if (session.current) { if (current(session.current) && (!withMicrophone || session.current.stream)) return; disconnect(); }
     setConnecting(true); setError('');
-    const s: Session = { owner: Symbol('native-voice-session'), accountEpoch: 0, abort: new AbortController(), locale: normalizeLocale(opts.current.locale), ready: false, muted: false,
+    let transport: NativeVoiceTransport;
+    try { transport = snapshotNativeVoiceTransport(opts.current.transport); }
+    catch { setConnecting(false); setError(voiceCopy(normalizeLocale(opts.current.locale)).streamFailed); return; }
+    const s: Session = { transport, owner: Symbol('native-voice-session'), accountEpoch: 0, abort: new AbortController(), locale: normalizeLocale(opts.current.locale), ready: false, muted: false,
       noise: .002, onset: 0, quiet: 0, capturing: false, draining: false, inputLevel: 0, generation: 0, serial: 0, pumping: false, manualHold: false,
       results: [], resultIds: new Set(), observerEpoch: 0, ackBarrier: Promise.resolve(), acknowledgements: new Set() };
     session.current = s;
     try {
-      await resetNativeHistory(); if (!current(s)) return;
+      await resetNativeHistory(s.transport, s.abort.signal); if (!current(s)) return;
       if (withMicrophone && (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode)) throw new VoiceLocaleError('browserRequired');
       const context = new AudioContext(); s.context = context; await context.resume(); if (!current(s)) return;
       s.playback = new NativeRouterPlayback({ onPlayed: receipt => played(s, receipt), onError: () => fail.current(s) });
@@ -242,7 +248,7 @@ export function useNativeRouterVoice(options: Options) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (!current(s)) { stream.getTracks().forEach(track => track.stop()); return; }
       s.stream = stream;
-      await context.audioWorklet.addModule('/avatar-audio-capture.js'); if (!current(s)) return;
+      await context.audioWorklet.addModule(s.transport.workletUrl); if (!current(s)) return;
       const capture = new AudioWorkletNode(context, 'voice-capture'); s.capture = capture;
       s.silent = context.createGain(); s.silent.gain.value = 0; s.input = context.createMediaStreamSource(stream);
       s.input.connect(capture).connect(s.silent).connect(context.destination); s.collector = new UtteranceCollector(context.sampleRate, 25);
@@ -306,23 +312,26 @@ export function useNativeRouterVoice(options: Options) {
     setError(''); refresh(s);
   }, [current, invalidateObserver, refresh, stopResponse]);
   const sendText = useCallback((text: string) => {
-    const s = session.current; if (!s?.ready || !text.trim()) return false;
+    const s = session.current; if (!s?.ready || !current(s) || !text.trim()) return false;
     if (text.length > 4000) { setError(voiceCopy(s.locale).messageTooLong); return false; }
     s.serial++; enqueue(s, { message: text.trim() }); return true;
-  }, [enqueue]);
+  }, [current, enqueue]);
   const getSessionOwner = useCallback((): symbol | null => {
-    const s = session.current; return s?.ready && !s.abort.signal.aborted ? s.owner : null;
-  }, []);
+    const s = session.current; return s?.ready && current(s) ? s.owner : null;
+  }, [current]);
   const sendTaskResult = useCallback((taskId: string, expectedOwner?: symbol) => {
     const s = session.current;
-    if (!s?.ready || s.abort.signal.aborted || expectedOwner !== undefined && expectedOwner !== s.owner ||
+    if (!s?.ready || !current(s) || expectedOwner !== undefined && expectedOwner !== s.owner ||
       !nativeIdentifier(taskId) || s.resultIds.has(taskId) || s.resultIds.size >= 64 || s.results.length >= 4) return false;
     s.resultIds.add(taskId); s.results.push(taskId); pump.current(s); return true;
-  }, []);
+  }, [current]);
   const setPersona = useCallback((avatar: AvatarId) => { if (['moss', 'orbit', 'spark'].includes(avatar)) nextAvatar.current.id = avatar; }, []);
   useEffect(() => {
     if (session.current && session.current.locale !== normalizeLocale(options.locale)) disconnect();
   }, [options.locale, disconnect]);
+  useEffect(() => {
+    if (session.current && session.current.transport.scopeKey !== (options.transport?.scopeKey ?? localNativeVoiceTransport.scopeKey)) disconnect();
+  }, [options.transport?.scopeKey, disconnect]);
   useEffect(() => {
     if (session.current && (!options.backgroundAsr || options.observerPaused)) invalidateObserver(session.current);
   }, [options.backgroundAsr, options.observerPaused, invalidateObserver]);

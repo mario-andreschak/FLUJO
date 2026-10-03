@@ -16,6 +16,7 @@ not a claim that an additional human maintainer has accepted responsibility.
 | Responsibility | Existing entry point and state owner | Contract to preserve | Integration owner |
 | --- | --- | --- | --- |
 | Run lifecycle | `src/backend/execution/flow/runFlow.ts`; `FlowExecutor.ts` holds live `conversationStates` | `runFlow` acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
+| Persona instruction/snapshot decisions | `personaRunContract.ts`, called by `runFlow.ts`; [contract](./persona-run-contract.md) | Keep the attribution triple, root/hash binding and same-Activity comparison at their existing caller sites. Schema parsing, context cloning, top-level admission, live authority and all operation ordering remain in `runFlow`. | Code health for extraction; Maturity/Security own behavioral enforcement |
 | Conversation serialization | `conversationExecutionLock.ts` | One process-global, workspace-keyed queue; async-local reentry must not deadlock. A failed predecessor does not poison later runs. | Maturity |
 | Execution authority | `executionAuthority.ts`; `src/backend/execution/extensions/` | Assert the current fence before effects; durable mutations use `commitFlowDurableMutation` and the authority's atomic commit capability. Authority failures escape best-effort catches. Loading a snapshot never reconstructs a runtime capability. | Security/Production consume original authority; Code health preserves interfaces |
 | Cancellation | `cancellationCoordinator.ts`, `cancellation.ts`, `toolCancelRegistry.ts` | Admission-barrier check and run registration are atomic in one event-loop step. Cancellation aborts active work and respects ancestry/tombstones; release each registration. | Maturity; Production owns worker recovery |
@@ -159,3 +160,25 @@ performance comparison, second-human evidence, and independent reassessment.
 Those outstanding gates keep the complete #571/#563 outcome open. Engineering
 owns adding dedicated boundary-check invocation to verification workflows;
 the regression suite already discovers the boundary test without runner edits.
+
+## Shared package API contracts
+
+`src/shared/types/package/build.ts`, `install.ts`, and `registry.ts` own the
+package selection/build results, install inspection/progress/results, and
+public registry browse results. They export types only. Their dependencies are
+the existing shared manifest and install-origin types; importing a DTO does
+not import an installer, storage, registry transport, authentication, or MCP
+process code. Build and install entity-type names retain their different
+meanings in separate modules.
+
+Backend services retain type reexports for existing consumers. The package
+wizard, read-only graph preview and frontend fetch service import the shared
+definitions directly. The extraction preserves all 25 declaration bodies and
+the emitted JavaScript of the six affected services/components. Install consent,
+secret handling, disabled planned executions, deterministic identifiers and
+partial-result ordering remain backend responsibilities and are unchanged.
+
+Use package build/install, secret-derivation, Persona protection, registry
+transport and wizard/preview regressions when changing this seam. Type checking
+and the import guard verify consumer compatibility and direct layer boundaries;
+these checks do not establish packaged-release acceptance or authorize effects.

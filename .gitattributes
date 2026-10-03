@@ -5,3 +5,5 @@
 # Historical versions contain a literal NUL in the runtime-key string. The
 # source now uses an equivalent escape; render the old/new source for review.
 src/backend/services/mcp/lifecycleCoordinator.ts text diff
+src/vendor/avatar/** text eol=lf
+public/avatar-audio-capture.js text eol=lf
