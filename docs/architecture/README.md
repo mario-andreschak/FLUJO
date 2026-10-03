@@ -20,6 +20,9 @@ Cloud model adapters send selected context to configured providers. MCP integrat
 
 ## Decision Records
 
+- [Execution and MCP ownership contracts](./execution-module-boundaries.md):
+  Existing lifecycle/authority/persistence/dispatch owners, import direction,
+  exact legacy dependencies, and behavior-preserving extraction gates (#571).
 - [Single-gate tool approval proposal](./tool-approval-single-gate-proposal.md):
   Proposed conversation-scoped approval contract, workflow evidence, state and API
   requirements, verification matrix, and required stakeholder sign-off for issue #469.

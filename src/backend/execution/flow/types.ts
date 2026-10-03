@@ -19,35 +19,17 @@ import type {
   PersonaInstructionContext,
   PersonaNativeAbilityId,
 } from '@/shared/types/enduringAgent';
+import type { FlowInvocationSource } from '@/shared/types/execution/invocation';
+
+// Retain the backend interface while shared consumers use the contract directly.
+export {
+  FLOW_INVOCATION_SOURCES,
+  isFlowInvocationSource,
+  isUnattendedFlowInvocation,
+  type FlowInvocationSource,
+} from '@/shared/types/execution/invocation';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
-
-/**
- * Explicit origin for every runFlow invocation (issue #339). Chat and direct
- * API calls have an interactive caller; scheduled/triggered, subflow, MCP,
- * meeting-participant, and internal-tool runs are headless and unattended.
- */
-export const FLOW_INVOCATION_SOURCES = [
-  'chat',
-  'api',
-  'schedule',
-  'trigger',
-  'subflow',
-  'mcp',
-  'internal',
-  'meeting',
-] as const;
-
-export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
-
-export function isFlowInvocationSource(value: unknown): value is FlowInvocationSource {
-  return typeof value === 'string' &&
-    (FLOW_INVOCATION_SOURCES as readonly string[]).includes(value);
-}
-
-export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolean {
-  return source !== 'chat' && source !== 'api';
-}
 
 // --- Debugger Types ---
 
