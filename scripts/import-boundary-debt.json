@@ -26,40 +26,10 @@
       "reason": "Replace UI use of runtime SharedState with a reviewed shared debugger DTO."
     },
     {
-      "from": "src/frontend/components/Packages/PackageFlowPreview.tsx",
-      "to": "src/backend/services/packages/installPackage.ts",
-      "declaration": "import type { PackageFlowInfo } from '@/backend/services/packages/installPackage';",
-      "reason": "Move package preview DTOs out of the backend installer with the package contract migration."
-    },
-    {
-      "from": "src/frontend/components/Packages/PackageInstallWizard.tsx",
-      "to": "src/backend/services/packages/installPackage.ts",
-      "declaration": "import type { InstallStep, InstallStepStatus, PackageDeclarationInfo, PackageServerInfo, } from '@/backend/services/packages/installPackage';",
-      "reason": "Move installer progress DTOs to shared without changing install/consent behavior."
-    },
-    {
       "from": "src/frontend/services/chat/index.ts",
       "to": "src/backend/execution/flow/types.ts",
       "declaration": "import type { WirePreviewResponse } from '@/backend/execution/flow/types';",
       "reason": "Move the wire-preview HTTP response contract with its backend/debugger consumers."
-    },
-    {
-      "from": "src/frontend/services/packages/index.ts",
-      "to": "src/backend/services/packages/buildPackage.ts",
-      "declaration": "import type { BuildManifestResult, PackageMetadataInput, PackageSelection, ResolvedSelection, } from '@/backend/services/packages/buildPackage';",
-      "reason": "Move package build API DTOs to shared with backend compatibility exports."
-    },
-    {
-      "from": "src/frontend/services/packages/index.ts",
-      "to": "src/backend/services/packages/installPackage.ts",
-      "declaration": "import type { InstallSummary } from '@/backend/services/packages/installPackage';",
-      "reason": "Move the install-result API DTO with the package contract migration."
-    },
-    {
-      "from": "src/frontend/services/packages/index.ts",
-      "to": "src/backend/utils/packageRegistryClient.ts",
-      "declaration": "import type { RegistryPackageSearchResult } from '@/backend/utils/packageRegistryClient';",
-      "reason": "Move the registry search response DTO to shared without exposing registry credentials."
     }
   ]
 }
