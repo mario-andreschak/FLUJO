@@ -157,7 +157,7 @@ export class ExecutionEventBus {
   }
 
   emitterFor(conversationId: string): EmitFn {
-    return bindToCurrentWorkspace(raw => { try { this.emit(conversationId, raw); } catch (err) { log.warn(`Failed to emit execution event for ${conversationId}`, { err }); } });
+    return bindToCurrentWorkspace((raw: RawExecutionEvent) => { try { this.emit(conversationId, raw); } catch (err) { log.warn(`Failed to emit execution event for ${conversationId}`, { err }); } });
   }
 
   getBufferedSince(conversationId: string, fromSeq: number): ExecutionEvent[] {
