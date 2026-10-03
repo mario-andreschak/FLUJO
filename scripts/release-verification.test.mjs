@@ -33,7 +33,7 @@ test('verifies exact version revision and fresh main/isolated evidence before re
   assert.equal(f.commands.at(-1), 'npm run smoke:mcp-artifacts');
 });
 
-for (const fail of ['npm run typecheck', 'node scripts/generate-api-inventory.mjs --check', 'node --test tests/installer-repository.test.mjs', 'node --test scripts/run-local-jest.test.mjs', 'npm run lint:all', 'npm run build', 'npm run verify:test-baseline -- --stage=ci --results=jest-results.json', 'npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json', 'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts']) {
+for (const fail of ['npm run typecheck', 'npm run typecheck:mcp', 'node scripts/generate-api-inventory.mjs --check', 'node --test tests/installer-repository.test.mjs', 'node --test scripts/run-local-jest.test.mjs', 'npm run lint:all', 'npm run build', 'npm run verify:test-baseline -- --stage=ci --results=jest-results.json', 'npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json', 'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts']) {
   test(`does not authorize publishing when ${fail} fails`, () => {
     assert.throws(() => verifyReleaseRevision(fixture({ fail })), /simulated failed gate/);
   });
