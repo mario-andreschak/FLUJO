@@ -12,6 +12,8 @@ This page describes capability maturity. The [dated audit](audits/2026-09-16-pro
 | Personas, Roles, persistent goals | Experimental | Short tests and controlled acceptance do not prove indefinite unattended operation |
 | Conversation-scoped MCP Skills / experimental generator | Opt-in | Feature/server configuration determines availability |
 
+The development source also contains an opt-in [owner API bearer policy](security/owner-access-v1.md). It preserves anonymous localhost behavior when unset and has no browser login/session lifecycle yet. Installed-client migration, complete handler/stream enforcement and independent security acceptance remain open. The [MCP isolation primitive](security/mcp-isolation-v1-evidence.md) is not yet called by the app's transport; it does not change the host privileges of currently connected servers. These source components do not establish an accepted public/shared release.
+
 ## Release identity
 
 The package version identifies a published release only when installed from that release. A source checkout on `main` can be ahead of the latest tag while retaining its package version. Record `git rev-parse HEAD` and `git status --short` when reporting source-build problems. Include install method, operating system, and relevant error; omit credentials and private prompts.
