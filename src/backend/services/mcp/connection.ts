@@ -1,5 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CompleteToolDiscoveryClient } from './toolDiscovery';
+import { McpIsolationError } from '../security/isolatedMcp';
+import {
+  prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
+  type ManagedMcpIsolation,
+} from './isolation';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig } from '@/backend/execution/extensions';
 import {
@@ -310,6 +315,7 @@ export function stdioConfigKey(
     cwd: String(config.cwd ?? ""),
     rootPath: config.rootPath ?? "",
     isolateRuntimeHome,
+    isolation: config.isolation,
   });
 }
 
@@ -387,7 +393,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
-  const serverHasStdioOAuth = config.transport === "stdio";
+  const serverHasStdioOAuth = config.transport === "stdio" && config.isolation === undefined;
   const client = new CompleteToolDiscoveryClient(
     {
       name: `flujo-${config.name}-client`,
@@ -456,6 +462,7 @@ export function createTransport(
   | StreamableHTTPClientTransport
   | SSEClientTransport {
   log.debug("Entering createTransport method");
+  if (config.isolation !== undefined && config.transport !== 'stdio') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
 
   if (config.transport === "streamable") {
     log.info(
@@ -628,6 +635,7 @@ export interface StdioLaunch {
   args: string[];
   env: Record<string, string>;
   cwd: string;
+  isolation?: ManagedMcpIsolation;
 }
 
 /**
@@ -782,6 +790,12 @@ export function resolveStdioLaunch(
   config: MCPStdioConfig,
   options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
 ): StdioLaunch {
+  if (config.isolation !== undefined) {
+    const isolation = prepareMcpIsolation(config, transformEnv(config.env));
+    const { launch } = isolation;
+    return { command: launch.command, args: [...launch.args], env: isolatedSdkEnvironment(launch), cwd: launch.cwd, isolation };
+  }
+  assertHostMcpLaunchAllowed(config);
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);
@@ -994,7 +1008,7 @@ export function createStdioTransport(
     throw new Error("Cannot create stdio transport for non-stdio config");
   }
 
-  const { command, args, env, cwd } = resolveStdioLaunch(config, options);
+  const { command, args, env, cwd, isolation } = resolveStdioLaunch(config, options);
   const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
     ? issueMcpAppRuntimeBrokerEnvironment(config.name)
     : undefined;
@@ -1009,14 +1023,17 @@ export function createStdioTransport(
     args: args,
     env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
     cwd: cwd,
-    stderr: "pipe",
+    stderr: isolation ? 'ignore' : 'pipe',
+    ...(isolation ? { maxBufferSize: 256 * 1024 } : {}),
   };
 
   let transport: StdioClientTransport;
   try {
     transport = new StdioClientTransport(transportoptions);
-    attachShippedWorkspaceReadiness(transport, config, cwd);
+    if (isolation) attachMcpIsolation(transport, config, isolation);
+    else attachShippedWorkspaceReadiness(transport, config, cwd);
   } catch (error) {
+    isolation?.close();
     revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
     throw error;
   }
@@ -1329,6 +1346,8 @@ export async function safelyCloseClient(
   let exited = false;
   let forced = false;
   const rawTransport = getUnderlyingTransport(client.transport);
+  const isolation = getManagedMcpIsolation(rawTransport);
+  let isolationCleanup: ReturnType<ManagedMcpIsolation['close']> | undefined;
   const child: ChildProcess | undefined = (
     rawTransport as { _process?: ChildProcess } | undefined
   )?._process;
@@ -1397,6 +1416,7 @@ export async function safelyCloseClient(
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
+    isolationCleanup = isolation?.close();
     revokeMcpAppRuntimeBrokerLease(
       (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
     );
@@ -1405,11 +1425,15 @@ export async function safelyCloseClient(
   if (processOwnership === 'owned' && child) {
     exited ||= child.exitCode !== null || child.signalCode !== null;
   }
+  if (isolationCleanup?.outcome === 'unknown') exited = false;
   const exitOutcome = processOwnership === 'external' ? 'not_applicable'
     : exited ? 'observed_exit' : 'unknown';
   if (exitOutcome === 'unknown' && errorClassification === 'none') {
     errorClassification = 'exit_unobserved';
   }
   return { exited, forced, durationMs: Date.now() - startedAt,
-    processOwnership, exitOutcome, errorClassification };
+    processOwnership, exitOutcome, errorClassification,
+    ...(isolation && isolationCleanup ? { isolation: { schemaVersion: 1 as const,
+      generation: isolation.launch.generation, cleanupOutcome: isolationCleanup.outcome } } : {}),
+  };
 }

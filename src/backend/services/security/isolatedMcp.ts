@@ -68,6 +68,7 @@ export interface IsolatedMcpLaunch {
   readonly cwd: string;
   readonly generation: string;
   readonly containerId: string;
+  readonly ownershipKey?: string;
   /** Absence is observed for the created container ID, never inferred from CLI exit. */
   close(): { outcome: 'removed' | 'absent' | 'unknown' };
 }
@@ -106,10 +107,12 @@ function safeMount(workspaceRoot: string, relative: string): string {
  * The caller must authenticate the owner and recheck this digest at dispatch.
  */
 export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
-  workspaceRoot: string, environment: Readonly<Record<string, string>> = {}): IsolatedMcpLaunch {
+  workspaceRoot: string, environment: Readonly<Record<string, string>> = {},
+  ownership?: { key: string }): IsolatedMcpLaunch {
   const policy = parsedPolicy(value);
   if (approvedDigest !== isolatedMcpPolicyDigest(policy)) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
   if (!path.isAbsolute(workspaceRoot)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+  if (ownership && !/^[a-f0-9]{64}$/.test(ownership.key)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   const env: DockerEnvironment = hostEssentials();
   for (const name of policy.environmentNames) {
     const provided = environment[name];
@@ -118,7 +121,9 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
     env[name] = provided;
   }
   const generation = randomUUID();
-  const name = `flujo-mcp-${generation}`;
+  // Docker's atomic name uniqueness also fences other processes and restarts.
+  // A predecessor cannot be bypassed by allocating a fresh random generation.
+  const name = `flujo-mcp-${ownership?.key ?? generation}`;
   const tempRoot = path.resolve(os.tmpdir());
   const control = fs.mkdtempSync(path.join(tempRoot, 'flujo-mcp-isolation-'));
   function cleanupControl() {
@@ -159,9 +164,11 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
       '--name', name, '--label', `co.flujo.mcp-generation=${generation}`,
       '--read-only', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
       '--user=65534:65534', '--no-healthcheck', '--memory', `${policy.memoryMiB}m`,
+      '--log-driver=none',
       '--memory-swap', `${policy.memoryMiB}m`, '--cpus', String(policy.cpus),
       '--pids-limit', String(policy.pidsLimit), '--shm-size=1m',
       '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777'];
+    if (ownership) args.push('--label', `co.flujo.mcp-ownership=${ownership.key}`);
     for (const mount of policy.mounts) {
       args.push('--mount', `type=bind,source=${safeMount(workspaceRoot, mount.source)},target=/grants/${mount.name},readonly`);
     }
@@ -182,6 +189,7 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
     return Object.freeze({ command: policy.dockerExecutable,
       args: Object.freeze([...globalArgs, 'container', 'start', '--attach', '--interactive', containerId]),
       env: Object.freeze(hostEssentials()), cwd: control, generation, containerId,
+      ...(ownership ? { ownershipKey: ownership.key } : {}),
       close: () => {
         if (completed) return completed;
         const result = removeOwned(containerId);

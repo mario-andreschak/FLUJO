@@ -15,6 +15,8 @@ import {
 import { runWithConcurrency } from "./utils/boundedConcurrency";
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertMcpIsolationDispatch } from './isolation';
+import { McpIsolationError } from '../security/isolatedMcp';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import { shippedDescriptorForConfig } from './shippedServers';
 
@@ -1016,6 +1018,7 @@ export class MCPService {
           transportOptions,
         );
         if (!needsNewClient) {
+          await assertMcpIsolationDispatch(client, config.name, config);
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
           // The connection is established - a pending retry (e.g. scheduled by a
@@ -1033,8 +1036,10 @@ export class MCPService {
         // as FLUJO-initiated and does not schedule a reconnect (see deregisterClient).
         this.deregisterClient(config.name);
         try {
-          await safelyCloseClient(client, config.name, config);
+          const closed = await safelyCloseClient(client, config.name, config);
+          if (closed.isolation?.cleanupOutcome === 'unknown') throw new McpIsolationError('ISOLATION_UNAVAILABLE');
         } catch (closeError) {
+          if (closeError instanceof McpIsolationError) throw closeError;
           log.debug(
             `connectServer: error closing stale client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
           );
@@ -2188,6 +2193,11 @@ export class MCPService {
             trustedContext,
           )
         : args;
+      try { await assertMcpIsolationDispatch(client, serverName, await this.getServerConfig(serverName)); }
+      catch (error) {
+        return { success: false, error: error instanceof McpIsolationError ? error.code : 'ISOLATION_UNAVAILABLE',
+          errorType: 'mcp-isolation', statusCode: error instanceof McpIsolationError && error.code !== 'ISOLATION_UNAVAILABLE' ? 403 : 503 };
+      }
       const result = await callToolFunction(
         client,
         serverName,
