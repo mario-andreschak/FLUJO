@@ -14,6 +14,7 @@ import type {
   ModelTurnSnapshot,
 } from '@/shared/types/modelTurn';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import { MODEL_TURN_OUTCOME_MAX_BYTES, parseModelTurnOutcomeRecord } from '@/shared/types/modelTurn';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
@@ -43,9 +44,40 @@ function conversationDir(conversationId: string): string {
   return path.join(archiveRoot(), conversationId);
 }
 
-function snapshotPath(conversationId: string, dispatchId: string): string {
+function snapshotPath(conversationId: string, dispatchId: string, version: 1 | 2 = 2): string {
   assertSafeId(dispatchId, 'dispatch id');
-  return path.join(conversationDir(conversationId), `${dispatchId}.json.gz`);
+  return path.join(conversationDir(conversationId), `${dispatchId}${version === 2 ? '.v2' : ''}.json.gz`);
+}
+
+function outcomePath(conversationId: string, dispatchId: string): string {
+  assertSafeId(dispatchId, 'dispatch id');
+  return path.join(conversationDir(conversationId), `${dispatchId}.outcome.json`);
+}
+
+async function readOutcome(conversationId: string, dispatchId: string) {
+  let handle;
+  try {
+    handle = await fs.open(outcomePath(conversationId, dispatchId), 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  try {
+    // Read at most the limit plus one byte, even if the file grows after open.
+    const bytes = Buffer.alloc(MODEL_TURN_OUTCOME_MAX_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < bytes.length) {
+      const chunk = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+      if (!chunk.bytesRead) break;
+      bytesRead += chunk.bytesRead;
+    }
+    if (bytesRead > MODEL_TURN_OUTCOME_MAX_BYTES) throw new Error('Model-turn outcome exceeds byte limit');
+    return parseModelTurnOutcomeRecord(
+      JSON.parse(bytes.subarray(0, bytesRead).toString('utf8')), conversationId, dispatchId,
+    );
+  } finally {
+    await handle.close();
+  }
 }
 
 function mediaPath(conversationId: string, sha256: string): string {
@@ -276,8 +308,13 @@ async function sanitizeValue(
 async function writeAtomic(file: string, data: Buffer): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await fs.writeFile(temp, data);
-  await fs.rename(temp, file);
+  try {
+    await fs.writeFile(temp, data);
+    await fs.rename(temp, file);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export interface ArchiveModelDispatchInput {
@@ -335,10 +372,10 @@ async function archiveModelDispatchWithinMutation(
     canonicalMessageCount: input.canonicalMessages.length,
     wireMessageCount: input.genericWire.length,
     mediaCount: ctx.media.length,
-    archiveVersion: 1,
+    archiveVersion: 2,
   };
   const snapshot: ModelTurnSnapshot = {
-    version: 1,
+    version: 2,
     entry,
     canonicalMessages: canonicalMessages as FlujoChatMessage[],
     genericWire: genericWire as OpenAI.ChatCompletionMessageParam[],
@@ -379,7 +416,27 @@ async function updateModelDispatchOutcomeWithinMutation(
   dispatchId: string,
   outcome: Exclude<ModelDispatchOutcome, 'running'>,
 ): Promise<void> {
-  const file = snapshotPath(conversationId, dispatchId);
+  // A v2 outcome never reads, inflates, clones or rewrites the transcript/media.
+  // Separate filenames let old v1 archives retain their original semantics.
+  let version2 = true;
+  try {
+    await fs.access(snapshotPath(conversationId, dispatchId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    version2 = false;
+  }
+  if (version2) {
+    const record = parseModelTurnOutcomeRecord({
+      version: 1, archiveVersion: 2, conversationId, dispatchId, outcome,
+    }, conversationId, dispatchId);
+    const bytes = Buffer.from(JSON.stringify(record), 'utf8');
+    if (bytes.length > MODEL_TURN_OUTCOME_MAX_BYTES) throw new Error('Model-turn outcome exceeds byte limit');
+    await writeAtomic(outcomePath(conversationId, dispatchId), bytes);
+    return;
+  }
+  // Compatibility path for archives written before v2. New dispatches always
+  // use v2; historical v1 updates retain the old allocation cost.
+  const file = snapshotPath(conversationId, dispatchId, 1);
   const compressed = await fs.readFile(file);
   const snapshot = JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
   snapshot.entry.outcome = outcome;
@@ -390,13 +447,26 @@ export async function readModelTurnSnapshot(
   conversationId: string,
   dispatchId: string,
 ): Promise<ModelTurnSnapshot | undefined> {
+  let compressed: Buffer;
   try {
-    const compressed = await fs.readFile(snapshotPath(conversationId, dispatchId));
-    return JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
+    compressed = await fs.readFile(snapshotPath(conversationId, dispatchId));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    try {
+      const legacy = await fs.readFile(snapshotPath(conversationId, dispatchId, 1));
+      return JSON.parse((await gunzipAsync(legacy)).toString('utf8')) as ModelTurnSnapshot;
+    } catch (legacyError) {
+      if ((legacyError as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw legacyError;
+    }
   }
+  const snapshot = JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
+  if (snapshot.version !== 2 || snapshot.entry.archiveVersion !== 2
+    || snapshot.entry.id !== dispatchId || snapshot.entry.conversationId !== conversationId
+    || snapshot.entry.outcome !== 'running') throw new Error('Invalid v2 model-turn snapshot');
+  const record = await readOutcome(conversationId, dispatchId);
+  if (record) snapshot.entry.outcome = record.outcome;
+  return snapshot;
 }
 
 export async function readModelTurnMedia(
