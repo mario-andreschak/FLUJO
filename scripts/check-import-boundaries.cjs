@@ -9,7 +9,11 @@ const edgeKey = ({ from, to, declaration }) => JSON.stringify([from, to, declara
 
 function layerOf(file) {
   const parts = file.split('/');
-  return parts[0] === 'src' && LAYERS.has(parts[1]) ? parts[1] : undefined;
+  // Windows resolves BACKEND and backend to the same directory. Apply the
+  // resolver's platform casing rule before classifying the resolved target.
+  const sourceRoot = ts.sys.useCaseSensitiveFileNames ? parts[0] : parts[0]?.toLowerCase();
+  const layer = ts.sys.useCaseSensitiveFileNames ? parts[1] : parts[1]?.toLowerCase();
+  return sourceRoot === 'src' && LAYERS.has(layer) ? layer : undefined;
 }
 
 function forbidden(from, to) {
@@ -103,7 +107,7 @@ function main() {
     process.stderr.write(`${edge.from}:${edge.line} must not depend on ${edge.to}: ${edge.declaration}\n`);
   }
   for (const edge of result.stale) process.stderr.write(`Remove stale import-boundary exception: ${edge.from} -> ${edge.to}\n`);
-  process.stdout.write(`Checked ${result.files} source files; ${result.crossings.length} legacy crossings; ${result.violations.length} new crossings; ${result.stale.length} stale exceptions.\n`);
+  process.stdout.write(`Checked ${result.files} source files; ${result.crossings.length} layer crossings; ${result.violations.length} new crossings; ${result.stale.length} stale exceptions.\n`);
   process.exitCode = result.violations.length || result.stale.length ? 1 : 0;
 }
 

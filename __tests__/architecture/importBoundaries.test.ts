@@ -54,6 +54,13 @@ describe('backend/frontend/shared import direction', () => {
     expect(inspectImportBoundaries(root).violations).toHaveLength(1);
   });
 
+  it('classifies resolved targets using the filesystem casing rule', () => {
+    const ts = require('typescript');
+    const target = ts.sys.useCaseSensitiveFileNames ? 'backend' : 'BACKEND';
+    write('src/frontend/crossing.ts', `export * from '../${target}/value';`);
+    expect(inspectImportBoundaries(root).violations).toHaveLength(1);
+  });
+
   it('allows same-layer and shared dependencies and ignores path mentions', () => {
     write('src/frontend/valid.ts', `
       import { value } from './value';
