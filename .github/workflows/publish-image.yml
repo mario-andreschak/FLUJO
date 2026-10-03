@@ -1,15 +1,5 @@
 name: Publish Docker Image
 
-# Builds the official FLUJO image and pushes it to GHCR as
-# ghcr.io/mario-andreschak/flujo (issue #57). Consumers like the brain stack
-# reference :latest. The workflow is dispatched explicitly by `npm run release`
-# or `npm run dockerbuild`; builds from main also get the package.json version
-# and a commit-sha tag for pinning.
-#
-# NOTE: the first published package is PRIVATE by default. Make it public once
-# under https://github.com/users/mario-andreschak/packages/container/flujo/settings
-# or anonymous `docker pull` keeps failing with "denied".
-
 on:
   workflow_dispatch:
     inputs:
@@ -23,36 +13,41 @@ on:
         required: false
 
 concurrency:
-  group: publish-image-${{ github.ref }}
-  cancel-in-progress: true
+  group: official-image-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
+env:
+  RELEASE_SHA: ${{ inputs.expected_sha }}
+  RELEASE_VERSION: ${{ inputs.expected_version }}
+  IMAGE_EVIDENCE_DIR: /tmp/flujo-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
-  publish:
+  candidate:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
       actions: read
+      attestations: read
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      digest: ${{ steps.candidate.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-
       - name: Require exact-commit main verification
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ inputs.expected_sha }}
-          RELEASE_VERSION: ${{ inputs.expected_version }}
         run: node scripts/require-release-verification.mjs image
-
       - name: Build and validate synchronized MCP release artifacts
         run: |
           npm ci --include=dev
@@ -60,29 +55,43 @@ jobs:
           npm run test:mcp-process-boundary
           npm run validate:mcp-release
           npm run smoke:mcp-artifacts
-
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Read package.json version
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reuse and retest an existing immutable revision candidate
+        id: selected
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/image-release.mjs select
+      - name: Read synchronized version
         id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - name: Build local image for process-boundary smoke
+        run: node -e 'require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `version=${require("./package.json").version}\n`)'
+      - name: Build one local image for testing and publication
+        if: steps.selected.outputs.existing != 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
+          platforms: linux/amd64
           load: true
           push: false
+          provenance: false
           tags: flujo-process-boundary-smoke:${{ github.sha }}
           build-args: |
             FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
             FLUJO_BUILD_REVISION=${{ github.sha }}
           cache-from: type=gha
-
-      - name: Exercise MCP proxy in the local image
+          cache-to: type=gha,mode=max
+      - name: Exercise the exact image configuration ID
+        id: smoke
+        env:
+          SELECTED_IMAGE_ID: ${{ steps.selected.outputs.image_id }}
         shell: bash
         run: |
           set -euo pipefail
+          image_id="${SELECTED_IMAGE_ID:-$(docker image inspect --format '{{.Id}}' "flujo-process-boundary-smoke:${GITHUB_SHA}")}"
           volume="flujo-smoke-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           container="flujo-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cleanup() {
@@ -91,37 +100,117 @@ jobs:
           }
           trap cleanup EXIT
           docker volume create "$volume" >/dev/null
-          docker run -d --name "$container" \
-            -p 127.0.0.1:4200:4200 \
-            -v "$volume:/app/data" \
-            "flujo-process-boundary-smoke:${{ github.sha }}"
+          docker run -d --name "$container" -p 127.0.0.1:4200:4200 -v "$volume:/app/data" "$image_id"
           node scripts/smoke-mcp-artifacts.mjs --proxy-only http://127.0.0.1:4200
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          mkdir -p "$IMAGE_EVIDENCE_DIR"
+      - name: Inventory OS and installed packages from the tested image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: docker:${{ steps.smoke.outputs.image_id }}
+          syft-version: v1.54.0
+          format: cyclonedx-json
+          output-file: ${{ env.IMAGE_EVIDENCE_DIR }}/image.sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+      - name: Push only the tested revision and verify registry bytes
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_IMAGE_ID: ${{ steps.smoke.outputs.image_id }}
+        run: node scripts/image-release.mjs candidate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: artifact
+        with:
+          name: image-evidence-${{ github.sha }}
+          path: ${{ env.IMAGE_EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
 
+  attest:
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
+          path: ${{ env.IMAGE_EVIDENCE_DIR }}
+          merge-multiple: true
+      - name: Recheck source verification and complete evidence before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_IMAGE_DIGEST: ${{ needs.candidate.outputs.digest }}
+        run: |
+          node scripts/require-release-verification.mjs image
+          node scripts/image-release.mjs validate
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata (tags + OCI labels)
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      - name: Attest the tested registry digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          # Registry paths must be lowercase; the repo name (FLUJO) is not.
-          images: ghcr.io/mario-andreschak/flujo
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
-            type=sha
-
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+          subject-name: ghcr.io/mario-andreschak/flujo
+          subject-digest: ${{ needs.candidate.outputs.digest }}
+          push-to-registry: true
+      - name: Attest the container OS and installed-package inventory
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
-            FLUJO_BUILD_REVISION=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          subject-name: ghcr.io/mario-andreschak/flujo
+          subject-digest: ${{ needs.candidate.outputs.digest }}
+          sbom-path: ${{ env.IMAGE_EVIDENCE_DIR }}/image.sbom.cdx.json
+          push-to-registry: true
+      - name: Attest retained image evidence and SBOM bytes
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ env.IMAGE_EVIDENCE_DIR }}/*.json
+
+  publish:
+    needs: [candidate, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
+          path: ${{ env.IMAGE_EVIDENCE_DIR }}
+          merge-multiple: true
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify signatures and promote the same digest without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_IMAGE_DIGEST: ${{ needs.candidate.outputs.digest }}
+        run: |
+          node scripts/require-release-verification.mjs image
+          node scripts/image-release.mjs promote
