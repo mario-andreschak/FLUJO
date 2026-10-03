@@ -26,6 +26,7 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   assertVerifiedRevision(run, revision);
   show('npm run typecheck');
   show('node scripts/generate-api-inventory.mjs --check');
+  show('npm run test:dependency-glob');
   show('npm run lint:all');
   show('node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs');
   show('node --test tests/installer-repository.test.mjs');
