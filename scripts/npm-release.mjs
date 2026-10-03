@@ -5,12 +5,11 @@ import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { assertVerifiedRevision, verifyReleaseRevision } from './release-verification.mjs';
+import { PUBLIC_PACKAGES } from './release-packages.mjs';
+import { prepareReleaseEvidence, validateReleaseEvidence, verifyReleaseAttestations } from './release-evidence.mjs';
 
 export const REPOSITORY = 'mario-andreschak/FLUJO';
-export const PUBLIC_PACKAGES = [
-  '@mario.andreschak/mcp-flujo', '@mario.andreschak/mcp-filesystem',
-  '@mario.andreschak/mcp-bash', '@mario.andreschak/mcp-browser', 'flujo-ai',
-];
+export { PUBLIC_PACKAGES };
 const REGISTRY = 'https://registry.npmjs.org';
 const PUBLISHED_INTEGRITY_ATTEMPTS = 91;
 const PUBLISHED_INTEGRITY_DELAY_MS = 10_000;
@@ -186,7 +185,7 @@ export async function finalizeCandidate({ run, directory, sha, version }) {
 
 async function main() {
   const phase = process.argv[2];
-  if (!['check', 'prepare', 'publish', 'finalize'].includes(phase)) throw new Error('Expected check, prepare, publish, or finalize phase.');
+  if (!['check', 'prepare', 'verify-evidence', 'publish', 'finalize'].includes(phase)) throw new Error('Expected check, prepare, verify-evidence, publish, or finalize phase.');
   const env = process.env;
   const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
   const sha = env.RELEASE_SHA;
@@ -201,13 +200,19 @@ async function main() {
       show: (command) => { console.log(`> ${command}`); execFileSync(command, { shell: true, stdio: 'inherit', timeout: 3 * 60 * 60_000 }); },
       consumerSmoke: ({ revision }) => {
         prepareCandidate({ run: exec, directory, sha: revision, version });
+        prepareReleaseEvidence({ run: exec, directory, sha: revision, version, env });
         exec('node', ['scripts/smoke-mcp-artifacts.mjs', '--candidate-dir', directory], { stdio: 'inherit', timeout: 3 * 60 * 60_000 });
+        validateReleaseEvidence({ directory, sha: revision, version, sourceLock: readFileSync('package-lock.json') });
       },
     });
     assertCurrentMain(exec, sha);
     assertVerifiedRevision((command) => execFileSync(command, { shell: true, encoding: 'utf8' }).trim(), sha);
+  } else if (phase === 'verify-evidence') {
+    validateCandidate({ directory, sha, version });
+    validateReleaseEvidence({ directory, sha, version, sourceLock: readFileSync('package-lock.json') });
   } else if (phase === 'publish') {
     assertOidcOnly(env);
+    verifyReleaseAttestations({ run: exec, directory, sha, version, sourceLock: readFileSync('package-lock.json') });
     // A fresh config and empty token environment prevent runner configuration
     // from silently substituting npm credentials if OIDC is misconfigured.
     const config = path.join(env.RUNNER_TEMP, 'flujo-npm-oidc.npmrc');
@@ -218,6 +223,7 @@ async function main() {
     env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
     await publishCandidate({ run: exec, directory, sha, version });
   } else {
+    verifyReleaseAttestations({ run: exec, directory, sha, version, sourceLock: readFileSync('package-lock.json') });
     await finalizeCandidate({ run: exec, directory, sha, version });
   }
 }

@@ -655,15 +655,23 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.equal(workflow.permissions.contents, 'read');
-  const { prepare, publish, finalize, 'verify-main': verifyMain } = workflow.jobs;
+  const { prepare, publish, finalize, attest, 'verify-main': verifyMain } = workflow.jobs;
   const diagnostic = workflow.jobs['diagnose-oidc'];
   assert.equal(workflow.on.workflow_dispatch.inputs.diagnose_oidc.default, false);
   assert.equal(diagnostic.if, 'inputs.diagnose_oidc');
   assert.equal(diagnostic.permissions['id-token'], 'write');
   assert.ok(diagnostic.steps.some(({ run }) => run === 'node scripts/npm-oidc-diagnostic.mjs'));
   assert.equal(diagnostic.steps.some(({ run }) => /npm-release\.mjs (publish|finalize)/.test(run ?? '')), false);
-  for (const job of [prepare, verifyMain, publish, finalize]) assert.equal(job.if, '${{ !inputs.diagnose_oidc }}');
-  assert.deepEqual(publish.needs, ['prepare', 'verify-main']);
+  for (const job of [prepare, verifyMain, publish, finalize, attest]) assert.equal(job.if, '${{ !inputs.diagnose_oidc }}');
+  assert.deepEqual(publish.needs, ['prepare', 'verify-main', 'attest']);
+  assert.deepEqual(attest.needs, ['prepare', 'verify-main']);
+  assert.equal(attest.permissions['id-token'], 'write');
+  assert.equal(attest.permissions.attestations, 'write');
+  assert.equal(attest.permissions['artifact-metadata'], 'write');
+  assert.ok(attest.steps.some(({ run }) => run === 'node scripts/npm-release.mjs verify-evidence'));
+  assert.equal(attest.steps.some(({ run }) => /npm (?:ci|run build)|npm-release\.mjs prepare/.test(run ?? '')), false,
+    'candidate lifecycle scripts must not run with attestation authority');
+  assert.equal(attest.steps.filter(({ uses }) => uses?.startsWith('actions/attest@')).length, 2);
   // Each package may use a fifteen-minute readback window after its
   // ten-minute publish call. Keep setup/verification time outside that sum.
   const sequentialPublicationMinutes = PUBLIC_PACKAGES.length * (15 + 10);
@@ -684,7 +692,7 @@ test('the Actions graph isolates npm identity and publishes only the tested arti
   }
   const upload = prepare.steps.find(({ uses }) => uses?.startsWith('actions/upload-artifact@'));
   assert.equal(prepare.outputs.artifact_id, `\${{ steps.${upload.id}.outputs.artifact-id }}`);
-  for (const job of [publish, finalize]) {
+  for (const job of [attest, publish, finalize]) {
     const download = job.steps.find(({ uses }) => uses?.startsWith('actions/download-artifact@'));
     assert.equal(download.with['artifact-ids'], '${{ needs.prepare.outputs.artifact_id }}');
     assert.equal(download.with['run-id'], undefined, 'a retry must use its original successful prepare job');

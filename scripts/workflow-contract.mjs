@@ -11,6 +11,9 @@ export function assertWorkflowContract(workflows) {
         if (step.uses && !/^[\w.-]+\/[\w./-]+@[a-f0-9]{40}$/.test(step.uses)) {
           throw new Error(`${file} has a mutable or unsupported action reference: ${step.uses}`);
         }
+        if (step.uses?.startsWith('actions/checkout@') && step.with?.['persist-credentials'] !== false) {
+          throw new Error(`${file} must not persist its job token in the checkout.`);
+        }
       }
     }
   }
