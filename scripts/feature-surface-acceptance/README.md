@@ -111,6 +111,35 @@ Rendered translations are an automated availability check, not linguistic
 review. A passing browser report supports only its stated anonymous loopback
 profile and observed cases.
 
+### Actual Firecrawl form observation (explicit online opt-in)
+
+Issue #517 was reproduced against the public keyless
+`https://mcp.firecrawl.dev/v2/mcp`, before any scrape invocation. The separately
+selected `playwright.features-online.config.mjs` repeats the form observation
+against that endpoint at desktop and 360 px. It seeds a fresh saved entry,
+discovers its current schemas through the candidate, opens `firecrawl_scrape`,
+edits the URL/array and an unfinished object, and checks the original DOM nodes
+for at least 45 seconds across the former 30-second periodic refresh boundary.
+It then observes an explicit refresh, retaining draft, focus and selection.
+
+```powershell
+node node_modules/@playwright/test/cli.js test --config=playwright.features-online.config.mjs --list
+node node_modules/@playwright/test/cli.js test --config=playwright.features-online.config.mjs
+```
+
+Use the same candidate/source variables and coordinator resource slot above.
+The synthetic configuration never selects these online cases. No credentials
+are supplied, MCP Apps are disabled for this entry and **Test is never pressed**.
+The browser's tool-execution POST route is intercepted and refused; any attempt
+fails the case. This guard is not an upstream/global invocation counter.
+Endpoint/schema changes or discovery failures are retained as failures rather
+than bypassed with a local schema. A seeded configuration does not count as a
+UI connection/save journey, a successful scrape, provider quality or human
+acceptance. Retain its separate `firecrawl-report.json`, observed schemas,
+45-second samples, errors, screenshots/traces and owned-process records. A
+later actual provider invocation and published-artifact qualification remain
+separate work.
+
 For each step retain observed result, relevant logs/receipt and screenshot or
 recording. Record failures and blocked cases explicitly. Browser checks,
 assistive-technology checks and human trials remain separate from these Node
