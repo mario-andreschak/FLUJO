@@ -33,6 +33,7 @@ export function requiredOwnerScopes(request: Request): readonly OwnerScope[] {
   if (pathname === '/v1/chat/completions' && ['GET', 'POST'].includes(request.method)) return ['openai:execute'];
   if (/^\/api\/avatar\/remote\/native-(?:turn|input|observe|played|reset|result|result-receipt)$/.test(pathname)
       && request.method === 'POST') return ['avatar:voice'];
+  if (pathname === '/api/avatar/remote/availability' && request.method === 'GET') return ['avatar:voice'];
   if (pathname === '/mcp-flows' || pathname.startsWith('/mcp-flows/')
       || pathname === '/mcp-proxy' || pathname.startsWith('/mcp-proxy/')) {
     return ['mcp:access', 'control:admin', 'secrets:read'];

@@ -50,7 +50,9 @@ remote actions from #560's voice handler:
 ```
 
 Unknown actions, nested/suffixed paths, other methods, and ordinary local avatar
-routes retain conservative classification. A voice request always requires an
+routes retain conservative classification. The exact
+`GET /api/avatar/remote/availability` also uses `avatar:voice`; other availability
+methods/paths retain conservative scopes. A voice request always requires an
 explicit workspace, even if a caller supplies `requireWorkspace: false`.
 Workspace IDs use the existing identifier grammar and reject Windows device names.
 Workspace-bound credentials are limited to voice-only scopes, preventing them from
@@ -74,8 +76,9 @@ registration rather than being returned to browser clients.
 ## Source evidence and remaining gates
 
 On 2026-10-03, the owned Windows checkout with Node 22.13.1, Next 16.3.5,
-TypeScript 6.0.3 and Zod 4.4.3 passed 64 focused tests across
-`ownerPrincipal.test.ts` (28) and `ownerAccess.test.ts` (36). The existing suite
+TypeScript 6.0.3 and Zod 4.4.3 initially passed 64 focused tests across
+`ownerPrincipal.test.ts` (28) and `ownerAccess.test.ts` (36). A subsequent exact
+availability route/method test brings the principal suite to 29 cases. The existing suite
 includes three tiny serial OS subprocess checks of valid/revoked/corrupt policy.
 New tests cover immutable trusted identity, hostile request claims, narrow scope,
 workspace requirements, exact route/method classification, revocation/rotation,
