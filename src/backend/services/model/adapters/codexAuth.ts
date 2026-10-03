@@ -14,6 +14,13 @@ interface AuthSource {
   sourceHash?: string;
 }
 
+export class CodexAuthInspectionError extends Error {
+  constructor(readonly reasonCode: 'credential-store-unreadable' | 'credential-store-incompatible' | 'auth-source-unreadable' | 'login-missing' | 'login-incompatible', message: string) {
+    super(message);
+    this.name = 'CodexAuthInspectionError';
+  }
+}
+
 export function userCodexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex');
 }
@@ -40,11 +47,11 @@ async function assertFileBackedHostAuth(home: string): Promise<void> {
   } catch (error) {
     if (!found && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
     // TOML errors can contain entire source lines, including unrelated secrets.
-    throw new Error('Could not verify the host Codex credential store. Repair or make its config.toml readable before using its login in FLUJO.');
+    throw new CodexAuthInspectionError('credential-store-unreadable', 'Could not verify the host Codex credential store. Repair or make its config.toml readable before using its login in FLUJO.');
   }
   const store = config.cli_auth_credentials_store;
   if (store !== undefined && store !== 'file') {
-    throw new Error('FLUJO requires file-backed Codex authentication. Configure cli_auth_credentials_store = "file" and sign in again; keyring and auto storage cannot identify the active login from auth.json.');
+    throw new CodexAuthInspectionError('credential-store-incompatible', 'FLUJO requires file-backed Codex authentication. Configure cli_auth_credentials_store = "file" and sign in again; keyring and auto storage cannot identify the active login from auth.json.');
   }
 }
 
@@ -58,7 +65,7 @@ async function authSource(home: string): Promise<AuthSource | undefined> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     // JSON parser messages may contain credential-adjacent file content.
-    throw new Error('Could not read FLUJO Codex authentication source.');
+    throw new CodexAuthInspectionError('auth-source-unreadable', 'Could not read FLUJO Codex authentication source.');
   }
 }
 
@@ -147,10 +154,29 @@ export async function readCodexAuthForTransfer(workspace?: string): Promise<Buff
     const after = await fs.lstat(source);
     if (stat.ino !== after.ino || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) throw new Error();
   } catch {
-    throw new Error('A file-backed Codex ChatGPT login is required. Sign in with Codex using file credential storage before cloning.');
+    throw new CodexAuthInspectionError('login-missing', 'A file-backed Codex ChatGPT login is required. Sign in with Codex using file credential storage before cloning.');
   }
   if (!isChatGptAuthCache(content)) {
-    throw new Error('The Codex authentication cache is not a transferable ChatGPT login.');
+    throw new CodexAuthInspectionError('login-incompatible', 'The Codex authentication cache is not a transferable ChatGPT login.');
   }
   return content;
+}
+
+/** Passive discovery uses the same authoritative source as execution/transfer.
+ * Never prepare a runtime home, copy credentials, refresh tokens, or return them. */
+export async function inspectCodexLogin(workspace?: string): Promise<{
+  authentication: 'login-detected' | 'needs-connection' | 'incompatible' | 'unknown';
+  reasonCode?: string;
+}> {
+  try {
+    await readCodexAuthForTransfer(workspace);
+    return { authentication: 'login-detected' };
+  } catch (error) {
+    if (!(error instanceof CodexAuthInspectionError)) return { authentication: 'unknown', reasonCode: 'inspection-unavailable' };
+    return {
+      authentication: error.reasonCode === 'login-missing' ? 'needs-connection'
+        : ['credential-store-incompatible', 'login-incompatible'].includes(error.reasonCode) ? 'incompatible' : 'unknown',
+      reasonCode: error.reasonCode,
+    };
+  }
 }

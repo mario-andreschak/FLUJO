@@ -3,6 +3,8 @@
  */
 export enum StorageKey {
   MODELS = 'models',
+  /** Avatar presentation preference; execution remains in the existing runtimes. */
+  AVATAR_WORLD = 'avatar_world',
   FLOWS = 'flows',
   TICKETS = 'tickets',
   CHAT_HISTORY = 'history',
