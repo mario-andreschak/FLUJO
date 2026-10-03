@@ -84,7 +84,11 @@ import {
   type PersonaAttribution,
   type PersonaInstructionContext,
 } from '@/shared/types/enduringAgent';
-import { behaviorFlowMatchesContentHash } from '@/backend/services/enduringAgents/behaviorRevisions';
+import {
+  instructionContextsEqual,
+  assertInstructionContextAttribution,
+  assertBehaviorSnapshotMatchesInstructionContext,
+} from '@/backend/execution/flow/personaRunContract';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -128,53 +132,6 @@ const persistState = persistConversationState;
 
 /** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
 const MAX_EVENT_OUTPUT_CHARS = 4096;
-
-function instructionContextsEqual(
-  left: PersonaInstructionContext,
-  right: PersonaInstructionContext,
-): boolean {
-  return left.schemaVersion === right.schemaVersion
-    && left.personaId === right.personaId
-    && left.activityId === right.activityId
-    && left.behaviorRevisionId === right.behaviorRevisionId
-    && left.behaviorContentHash === right.behaviorContentHash
-    && left.behaviorSlotKey === right.behaviorSlotKey
-    && left.rootFlowId === right.rootFlowId
-    && left.roleVersionId === right.roleVersionId
-    && left.personaName === right.personaName
-    && left.personaMission === right.personaMission
-    && left.roleName === right.roleName
-    && left.roleMission === right.roleMission
-    && left.instruction === right.instruction;
-}
-
-function assertInstructionContextAttribution(
-  context: PersonaInstructionContext,
-  attribution: PersonaAttribution | undefined,
-  label: string,
-): void {
-  if (
-    !attribution
-    || context.personaId !== attribution.personaId
-    || context.activityId !== attribution.activityId
-    || context.behaviorRevisionId !== attribution.behaviorRevisionId
-  ) {
-    throw new Error(`${label} Persona instruction context does not match its attribution triple.`);
-  }
-}
-
-function assertBehaviorSnapshotMatchesInstructionContext(
-  flow: Flow,
-  context: PersonaInstructionContext,
-  label: string,
-): void {
-  if (flow.id !== context.rootFlowId) {
-    throw new Error(`${label} Behavior snapshot does not match the Persona instruction root Flow.`);
-  }
-  if (!behaviorFlowMatchesContentHash(flow, context.behaviorContentHash)) {
-    throw new Error(`${label} Behavior snapshot does not match the attributed immutable revision.`);
-  }
-}
 
 /** Unattended mode (issue #218): how many times to re-prompt a Process node
  *  that ended on plain text but has MORE THAN ONE forward successor (so the
