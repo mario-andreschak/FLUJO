@@ -250,6 +250,66 @@ describe('useServerTools', () => {
     expect(result.current.toolsServerName).toBe('records');
   });
 
+  it('retains the selected server tools while a forced refresh is pending', async () => {
+    const refresh = deferred<ToolListResult>();
+    mockListServerTools
+      .mockResolvedValueOnce({ tools: [tool('stable')] } as ToolListResult)
+      .mockImplementationOnce(() => refresh.promise);
+
+    const { result } = renderHook(() => useServerTools('records'));
+    await waitFor(() => expect(result.current.toolsServerName).toBe('records'));
+
+    act(() => {
+      void result.current.loadTools(true);
+    });
+
+    await waitFor(() => expect(mockListServerTools).toHaveBeenCalledTimes(2));
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.tools.map(({ name }) => name)).toEqual(['stable']);
+
+    await act(async () => {
+      refresh.resolve({ tools: [tool('updated')] } as ToolListResult);
+      await refresh.promise;
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.tools.map(({ name }) => name)).toEqual(['updated']);
+  });
+
+  it('keeps the last successful tools after a same-server refresh error', async () => {
+    mockListServerTools
+      .mockResolvedValueOnce({ tools: [tool('stable')] } as ToolListResult)
+      .mockResolvedValueOnce({ tools: [], error: 'Refresh failed' });
+
+    const { result } = renderHook(() => useServerTools('records'));
+    await waitFor(() => expect(result.current.toolsServerName).toBe('records'));
+
+    await act(async () => {
+      await result.current.loadTools(true);
+    });
+
+    expect(result.current.error).toBe('Refresh failed');
+    expect(result.current.tools.map(({ name }) => name)).toEqual(['stable']);
+    expect(result.current.toolsServerName).toBe('records');
+  });
+
+  it('treats a successful empty same-server refresh as authoritative', async () => {
+    mockListServerTools
+      .mockResolvedValueOnce({ tools: [tool('removed')] } as ToolListResult)
+      .mockResolvedValueOnce({ tools: [] } as ToolListResult);
+
+    const { result } = renderHook(() => useServerTools('records'));
+    await waitFor(() => expect(result.current.toolsServerName).toBe('records'));
+
+    await act(async () => {
+      await result.current.loadTools(true);
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.tools).toEqual([]);
+    expect(result.current.toolsServerName).toBe('records');
+  });
+
   it('clears the selected server cache before a scheduled retry', async () => {
     jest.useFakeTimers();
     mockListServerTools

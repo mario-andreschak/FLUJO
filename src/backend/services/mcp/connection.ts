@@ -1,4 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { CompleteToolDiscoveryClient } from './toolDiscovery';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig } from '@/backend/execution/extensions';
 import {
@@ -361,7 +362,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (isProtectedExecutionServer(config.name)) {
     assertExecutionServerConfig(config);
     // The configured private integration accepts only synchronous tool calls.
-    const client = new Client({ name: `flujo-${config.name}-client`, version: '3.46.2' }, { capabilities: {} });
+    const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.46.2' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
     return client;
   }
@@ -386,7 +387,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
   const serverHasStdioOAuth = config.transport === "stdio";
-  const client = new Client(
+  const client = new CompleteToolDiscoveryClient(
     {
       name: `flujo-${config.name}-client`,
       version: "3.46.1",
