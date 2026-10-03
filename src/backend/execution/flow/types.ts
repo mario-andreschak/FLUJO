@@ -1,4 +1,5 @@
 import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
+import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 export type {
   WireStatus,
   ModelInputProvenanceEntry,
@@ -835,7 +836,7 @@ export interface PersonaActivityMutationContext {
 }
 
 // Shared state (minimized)
-export interface SharedState {
+export interface SharedState extends DebuggerStateView {
     executionExtensionOwned?: boolean;
     /** Run-scoped repeated tool-call/result counters. */
     toolRepeatGuard?: import('./toolRepeatGuard').ToolRepeatGuardState;

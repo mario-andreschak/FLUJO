@@ -8,8 +8,8 @@ compaction-diagnostic and OpenAI message types remain its type dependencies.
 
 The backend execution types retain compatibility type reexports. Debugger
 conversation/model-input components and the frontend chat service import the
-shared shapes directly. The main Chat component imports these DTOs from shared
-while its existing `SharedState` dependency remains named debt. Runtime state,
+shared shapes directly. The main Chat component imports these DTOs and the
+[debugger state view](./debugger-state-view.md) from shared. Runtime state,
 authority and execution capabilities remain backend contracts.
 
 `ModelInputSnapshot` retains the existing bounded message/provenance fields and
@@ -31,8 +31,8 @@ sequenced independently because this slice changes only consumer type imports.
 
 Use the debugger-input, node-context, debugger-frame, wire-compaction,
 visual-compaction and dispatch-archive regressions when changing these shapes.
-The import guard removes three old wire-DTO crossings and narrows the existing
-Chat allowance to `SharedState`; it adds no allowance. A reviewed shared view
-for the remaining Chat/DebuggerCanvas runtime-state imports is still needed.
+The wire-DTO migration removes three old crossings and narrows the existing
+Chat allowance to `SharedState`; it adds no allowance. The subsequent shared
+debugger state view removes the two Chat/DebuggerCanvas runtime-state imports.
 The source comparison supplies neither installed-release nor human-maintenance
 or agreed-performance acceptance for #571.

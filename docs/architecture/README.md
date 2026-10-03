@@ -20,6 +20,9 @@ Cloud model adapters send selected context to configured providers. MCP integrat
 
 ## Decision Records
 
+- [Shared debugger state view](./debugger-state-view.md):
+  UI data contracts, backend producer compatibility and opaque snapshot/privacy
+  ownership without frontend imports of runtime state (#571).
 - [Execution and MCP ownership contracts](./execution-module-boundaries.md):
   Existing lifecycle/authority/persistence/dispatch owners, import direction,
   exact legacy dependencies, and behavior-preserving extraction gates (#571).

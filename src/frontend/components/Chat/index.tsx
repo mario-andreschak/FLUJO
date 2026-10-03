@@ -97,14 +97,13 @@ import {
   emitBigTutorialEvent,
   isBigTutorialEvent,
 } from '@/frontend/components/Tour/bigTutorialEvents';
-// Correctly import SharedState here
 import {
   ChatCompletionMetadata,
   FlujoChatMessage,
   type McpAppModelContext,
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
-import type { SharedState } from '@/backend/execution/flow/types';
+import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 import type { ModelInputSnapshot, WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ExecutionEvent, ModelDeltaEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
@@ -233,9 +232,9 @@ export interface Conversation {
 export interface ChatApiResponse extends Partial<Conversation> {
   conversation_id?: string;
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
-  debugState?: SharedState;
+  debugState?: DebuggerStateView;
   error?: { message?: string };
-  lastResponse?: SharedState['lastResponse'];
+  lastResponse?: DebuggerStateView['lastResponse'];
 }
 
 // Represents the summary item shown in the list
@@ -261,7 +260,7 @@ export interface ConversationListItem {
   recovery?: RecoveryRecord;
   /** Durable invocation origin recorded by runFlow. New UI-created
    *  conversations are seeded as `chat`; optional for legacy records. */
-  source?: SharedState['source'] | null;
+  source?: DebuggerStateView['source'] | null;
   /** Id of the scheduler planned-execution that originated this conversation
    *  (issue #181). Persisted on SharedState (#113); exposed read-only so the
    *  sidebar can group conversations by their Wave. null/undefined for ad-hoc
@@ -560,7 +559,7 @@ const Chat: React.FC = () => {
   // and the picked process node.
   const [editingMessage, setEditingMessage] = useState<{ messageId: string; content: string; nodeId: string | null } | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
-  const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
+  const [debugState, setDebugState] = useState<DebuggerStateView | null>(null); // State to hold debug data
   // The debugger publishes its selected trace row, while the regular chat owns
   // presentation of that row's exact model-facing conversation.
   const [debuggerSelectedStepIndex, setDebuggerSelectedStepIndex] = useState<number>(-1);
@@ -4591,7 +4590,7 @@ const Chat: React.FC = () => {
       try {
         const data = await chatService.getDebugState(currentConversationId);
         if (cancelled || !data?.debugState) return;
-        setDebugState(data.debugState as SharedState);
+        setDebugState(data.debugState as DebuggerStateView);
         setDebugSessionActive(true);
         setIsDebugPaused(true);
         setDebugAttaching(false);
