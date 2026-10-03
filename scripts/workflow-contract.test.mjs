@@ -14,6 +14,7 @@ test('repository workflows retain mandatory verification and immutable direct ac
 
 for (const [label, change] of [
   ['mutable action', (files) => { files['verify.yml'].jobs.typecheck.steps[0].uses = 'actions/checkout@main'; }],
+  ['persisted checkout credentials', (files) => { files['verify.yml'].jobs.typecheck.steps[0].with['persist-credentials'] = true; }],
   ['broad default token', (files) => { files['verify.yml'].permissions.contents = 'write'; }],
   ['missing permission default', (files) => { delete files['verify.yml'].permissions; }],
   ['path-filtered PR', (files) => { files['verify.yml'].on.pull_request = { paths: ['src/**'] }; }],
