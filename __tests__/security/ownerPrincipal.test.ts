@@ -107,6 +107,15 @@ test.each(['/api/avatar/native-turn', '/api/avatar/remote/native-turn-evil', '/a
   expect(requiredOwnerScopes(request(token, route))).toEqual(['control:admin', 'secrets:read']);
 });
 
+test('classifies only the exact remote availability GET as voice authority', () => {
+  expect(requiredOwnerScopes(request(token, '/api/avatar/remote/availability', 'GET'))).toEqual(['avatar:voice']);
+  for (const req of [request(token, '/api/avatar/remote/availability'),
+    request(token, '/api/avatar/remote/availability-evil', 'GET'),
+    request(token, '/api/avatar/remote/availability/extra', 'GET')]) {
+    expect(requiredOwnerScopes(req)).toEqual(['control:admin', 'secrets:read']);
+  }
+});
+
 test.each([
   ['revocation', () => { policy.credentials[0].revokedAt = 2_001; }],
   ['workspace change', () => { policy.credentials[0].workspaceId = 'another-workspace'; }],

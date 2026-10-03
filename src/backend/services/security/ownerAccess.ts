@@ -33,6 +33,7 @@ export function requiredOwnerScopes(request: Request): readonly OwnerScope[] {
   if (pathname === '/v1/chat/completions' && ['GET', 'POST'].includes(request.method)) return ['openai:execute'];
   if (/^\/api\/avatar\/remote\/native-(?:turn|input|observe|played|reset|result|result-receipt)$/.test(pathname)
       && request.method === 'POST') return ['avatar:voice'];
+  if (pathname === '/api/avatar/remote/availability' && request.method === 'GET') return ['avatar:voice'];
   if (pathname === '/mcp-flows' || pathname.startsWith('/mcp-flows/')
       || pathname === '/mcp-proxy' || pathname.startsWith('/mcp-proxy/')) {
     return ['mcp:access', 'control:admin', 'secrets:read'];
@@ -40,6 +41,25 @@ export function requiredOwnerScopes(request: Request): readonly OwnerScope[] {
   // Config, exports, approvals, process/FS operations and unknown new endpoints
   // remain conservative until individual handler capabilities are classified.
   return ['control:admin', 'secrets:read'];
+}
+
+export function isRemoteAvatarVoiceRequest(request: Request): boolean {
+  const scopes = requiredOwnerScopes(request);
+  return scopes.length === 1 && scopes[0] === 'avatar:voice';
+}
+
+/** Repeat in the voice handler, including dual-capability worker deployments. */
+export function assertRemoteAvatarVoiceOrigin(request: Request): Response | null {
+  const configured = process.env.FLUJO_AVATAR_REMOTE_ORIGIN;
+  try {
+    if (!configured || new URL(configured).origin !== configured
+        || !['https:', 'http:'].includes(new URL(configured).protocol)) throw new Error('Invalid origin');
+  } catch {
+    return Response.json({ error: 'Remote voice origin is unavailable.', code: 'REMOTE_VOICE_ORIGIN_UNAVAILABLE' }, {
+      status: 503, headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+  return request.headers.get('origin') === configured ? null : forbidden();
 }
 
 function readOwnerPolicy(filename: string): OwnerPolicy {
