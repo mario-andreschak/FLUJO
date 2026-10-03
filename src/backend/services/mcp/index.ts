@@ -134,6 +134,7 @@ import {
   MCPServiceResponse,
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
+  type MCPShutdownReceipt,
   MCP_SKILLS_EXTENSION_ID,
   parseMcpSkillUri,
   type McpGetSkillResult,
@@ -149,6 +150,8 @@ import {
   beginConnect,
   beginTeardown,
   getLifecycleDiagnostics,
+  getShutdownReceipt,
+  peekRuntime,
   markConnectFailed,
   markConnected,
 } from "./lifecycleCoordinator";
@@ -1737,11 +1740,15 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
 
-    // Resolve via getClient: the shared map is cross-instance, and getClient also
-    // evicts a client whose connection is already closed — there is nothing left to
-    // "disconnect" for one of those, only references to purge.
+    const runtime = peekRuntime(serverName);
+    if (runtime?.teardownPromise) {
+      return { success: true, shutdownReceipt: await runtime.teardownPromise };
+    }
+    // A repeat request returns the same observation, without closing a new process.
     const client = this.getClient(serverName);
-    if (!client) {
+    if (!client && !runtime?.connectPromise) {
+      const receipt = getShutdownReceipt(serverName);
+      if (receipt) return { success: true, shutdownReceipt: receipt };
       log.warn(
         `disconnectServer: Server ${serverName} not found in clients map`,
       );
@@ -1751,26 +1758,23 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
-    // Deregister BEFORE closing: this marks the close as FLUJO-initiated, so the
-    // transport's close event is ignored by the stale guard instead of scheduling a
-    // reconnect that would immediately undo this disconnect.
-    this.deregisterClient(serverName);
-
     try {
-      // Get the server config to pass to safelyCloseClient
-      const config = await this.getServerConfig(serverName);
-
       // Issue #413: run the close through the ONE idempotent, awaitable teardown
       // so overlapping shouts of "close it" (transport error + disable + shutdown
       // arriving together) fold onto a single close instead of racing each other
       // into a double-close that orphans grandchildren.
-      await beginTeardown(serverName, "disconnect", async () => {
-        const closed = await safelyCloseClient(client, serverName, config || undefined);
-        return { forced: closed.forced };
+      const shutdownReceipt = await beginTeardown(serverName, "disconnect", async () => {
+        // Resolve after the coordinator has awaited any pending connect. Publish
+        // the shared teardown before asynchronous config reads or deregistration.
+        const closingClient = this.getClient(serverName);
+        this.deregisterClient(serverName);
+        if (!closingClient) return;
+        const config = await this.getServerConfig(serverName);
+        return safelyCloseClient(closingClient, serverName, config || undefined);
       });
 
       log.info(`disconnectServer: Disconnected server ${serverName}`);
-      return { success: true };
+      return { success: true, shutdownReceipt };
     } catch (error) {
       log.warn(
         `disconnectServer: Failed to disconnect server ${serverName}:`,
@@ -1781,6 +1785,10 @@ export class MCPService {
         error: `Failed to disconnect server: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
+  }
+
+  getServerShutdownReceipt(serverName: string) {
+    return getShutdownReceipt(serverName);
   }
 
   /**
@@ -1796,9 +1804,15 @@ export class MCPService {
    * calling this from several signal handlers at once is safe. Never rejects — a
    * shutdown path must not be derailed by one uncooperative server.
    */
-  async disconnectAll(reason: string): Promise<{ closed: string[]; failed: string[] }> {
+  async disconnectAll(reason: string): Promise<{
+    /** Legacy connection-disconnect outcomes; these names do not certify exit. */
+    closed: string[];
+    failed: string[];
+    shutdownReceipts: MCPShutdownReceipt[];
+  }> {
     const closed: string[] = [];
     const failed: string[] = [];
+    const shutdownReceipts: MCPShutdownReceipt[] = [];
     // Snapshot the names first: closing mutates the shared registry.
     const serverNames = Array.from(new Set(Array.from(this.clients.keys())));
     log.info(`disconnectAll: tearing down ${serverNames.length} MCP server(s) (${reason})`);
@@ -1810,6 +1824,7 @@ export class MCPService {
       this.connectionRetryAttempts.delete(serverName);
       try {
         const result = await this.disconnectServer(serverName);
+        if (result.shutdownReceipt) shutdownReceipts.push(result.shutdownReceipt);
         if (result.success) closed.push(serverName);
         else failed.push(serverName);
       } catch (error) {
@@ -1830,7 +1845,7 @@ export class MCPService {
     log.info(
       `disconnectAll: closed=${closed.length} failed=${failed.length} (${reason})`,
     );
-    return { closed, failed };
+    return { closed, failed, shutdownReceipts };
   }
 
   /**
