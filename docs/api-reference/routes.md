@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 206.
+Route files: 208.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -85,6 +85,7 @@ Route files: 206.
 | `/api/oauth/callback` | GET, POST | [source](../../src/app/api/oauth/callback/route.ts) |
 | `/api/oauth/initiate` | POST | [source](../../src/app/api/oauth/initiate/route.ts) |
 | `/api/oauth/reset` | POST | [source](../../src/app/api/oauth/reset/route.ts) |
+| `/api/operations/status` | GET | [source](../../src/app/api/operations/status/route.ts) |
 | `/api/packages/build` | POST | [source](../../src/app/api/packages/build/route.ts) |
 | `/api/packages/derive-secrets` | POST | [source](../../src/app/api/packages/derive-secrets/route.ts) |
 | `/api/packages/install` | POST | [source](../../src/app/api/packages/install/route.ts) |
@@ -101,6 +102,7 @@ Route files: 206.
 | `/api/planned-executions/{id}` | DELETE, GET, PATCH | [source](../../src/app/api/planned-executions/[id]/route.ts) |
 | `/api/planned-executions/{id}/run` | POST | [source](../../src/app/api/planned-executions/[id]/run/route.ts) |
 | `/api/planned-executions/{id}/runs` | GET | [source](../../src/app/api/planned-executions/[id]/runs/route.ts) |
+| `/api/planned-executions/{id}/worker-recovery` | POST | [source](../../src/app/api/planned-executions/[id]/worker-recovery/route.ts) |
 | `/api/reference-search/files` | GET | [source](../../src/app/api/reference-search/files/route.ts) |
 | `/api/registry/auth` | DELETE, GET, POST | [source](../../src/app/api/registry/auth/route.ts) |
 | `/api/registry/auth/resend` | POST | [source](../../src/app/api/registry/auth/resend/route.ts) |

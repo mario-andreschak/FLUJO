@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { SchedulerService } from '@/backend/services/scheduler';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import { workerRecoveryDefinitionSha256, claimWorkerOccurrence, inspectWorkerRecovery, recordWorkerTerminalObservation } from '@/backend/services/scheduler/workerLocalRecovery';
@@ -6,7 +8,10 @@ import * as recoveryFs from '@/backend/services/workspace/backupRestoreFs';
 import { loadRunRecords } from '@/backend/services/scheduler/runHistory';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { getCurrentWorkspace } from '@/utils/workspace';
+import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { getDataDir } from '@/utils/paths';
+import { collectOperationsSnapshot } from '@/backend/services/operations/snapshot';
+import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
 import type { PlannedExecution, RunRecord } from '@/shared/types/plannedExecution';
 
 const callbacks: Array<{ fire: (occurrence: Date) => Promise<void>; dispose: jest.Mock }> = [];
@@ -122,6 +127,31 @@ it('rejects copied terminal history and reconciles a privately observed complete
   await recordWorkerTerminalObservation(plan, completed);
   await fresh.reconcile();
   expect(fresh.getStatus(plan).armed).toBe(true);
+  expect(runFlowMock).not.toHaveBeenCalled();
+});
+
+it('observes signed terminal uncertainty without reconciling it, writing storage or arming another timer', async () => {
+  const plan = (await scheduler.create(input())).execution!;
+  await enroll(plan);
+  const occurrenceAt = nextOccurrence().toISOString();
+  expect(await claimWorkerOccurrence(plan, occurrenceAt, 'diagnostic-pending-run')).toBe('eligible');
+  await recordWorkerTerminalObservation(plan, { runId: 'diagnostic-pending-run', executionGenerationId: plan.generationId,
+    firedAt: occurrenceAt, finishedAt: occurrenceAt, status: 'completed', triggerSummary: 'Fixture' });
+  const controlFile = path.join(getDataDir(), '.worker-local-recovery', getCurrentWorkspace(),
+    `${createHash('sha256').update(`${getCurrentWorkspace()}\0${plan.id}`).digest('hex')}.json`);
+  const before = await fs.readFile(controlFile);
+  const writes = jest.mocked(recoveryFs.atomicWriteWithoutLinks).mock.calls.length;
+  const timers = callbacks.length;
+  const result = await collectOperationsSnapshot({ workspace: getCurrentWorkspace(),
+    compatibility: { applicationVersion: '3.46.2', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1 },
+    worker: { mode: 'worker', state: 'ready' }, actor: { kind: 'worker-control' },
+    read: boundedJsonReader(getWorkspaceDataDir()), scheduler: rows => scheduler.inspectOperations(rows),
+    workerRecovery: inspectWorkerRecovery, active: [], mcp: [], memory: { rss: 100, heapUsed: 50, heapTotal: 80 } });
+  expect(result.schedules.find(row => row.id === plan.id)).toMatchObject({ armed: false,
+    recovery: { reason: 'unresolved-admission', pendingRunId: 'diagnostic-pending-run' } });
+  expect(await fs.readFile(controlFile)).toEqual(before);
+  expect(jest.mocked(recoveryFs.atomicWriteWithoutLinks)).toHaveBeenCalledTimes(writes);
+  expect(callbacks).toHaveLength(timers);
   expect(runFlowMock).not.toHaveBeenCalled();
 });
 

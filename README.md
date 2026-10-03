@@ -309,6 +309,9 @@ compliance matrix.
 
 ### Run via npx (npm package)
 
+For pinned deployment, bounded diagnosis and recovery procedures, see the
+[production operations runbook](docs/operations/production-operations.md).
+
 ```bash
 npx flujo-ai
 ```

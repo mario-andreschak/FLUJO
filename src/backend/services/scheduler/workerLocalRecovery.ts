@@ -139,12 +139,20 @@ async function read(execution: PlannedExecution): Promise<LocalRecord | undefine
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = await handle.stat();
-    if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1 || opened.size > MAX_RECORD_BYTES) {
+    if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1 || opened.size > MAX_RECORD_BYTES) {
       throw new Error('Recovery control file changed');
     }
-    const bytes = await handle.readFile();
-    if (bytes.length > MAX_RECORD_BYTES) throw new Error('Recovery control file exceeds budget');
-    const result: unknown = JSON.parse(bytes.toString('utf8'));
+    // A writer can grow the opened file after stat. Bound allocation and IO,
+    // including this read-only diagnostic path, rather than checking after readFile.
+    const bytes = Buffer.alloc(MAX_RECORD_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > MAX_RECORD_BYTES) throw new Error('Recovery control file exceeds budget');
+    const result: unknown = JSON.parse(bytes.subarray(0, length).toString('utf8'));
     if (!validRecord(result)) throw new Error('Invalid recovery provenance');
     return result;
   } finally { await handle.close(); }

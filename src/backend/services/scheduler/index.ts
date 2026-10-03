@@ -830,6 +830,23 @@ export class SchedulerService {
     return file.executions.find(e => e.id === id) ?? null;
   }
 
+  /** Observation only: no storage, reconcile, admission, approval or timer mutation. */
+  inspectOperations(executions: readonly PlannedExecution[]) {
+    return {
+      started: this.started,
+      pausedAtLastReconcile: this.pausedCache,
+      armedTriggers: this.armed.size,
+      runningRuns: Array.from(this.running.values()).reduce((sum, runs) => sum + runs.size, 0),
+      overlapQueued: Array.from(this.queued.values()).reduce((sum, queue) => sum + queue.length, 0),
+      maxOverlapDepth: Array.from(this.queued.values()).reduce((depth, queue) => Math.max(depth, queue.length), 0),
+      exclusiveWaiting: this.exclusiveWaiting.length,
+      blockedByExclusive: this.blockedByExclusive.length,
+      queueCap: SchedulerService.MAX_QUEUE_DEPTH,
+      ownedWorkerRunIds: new Set(this.workerLocalClaims),
+      statuses: executions.map(execution => ({ id: execution.id, status: this.getStatus(execution) })),
+    };
+  }
+
   private async refreshWorkerRecoveryStatus(execution: PlannedExecution, paused: boolean) {
     let status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
     if (status?.pending && !this.workerLocalClaims.has(status.pending.runId)
