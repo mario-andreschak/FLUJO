@@ -17,15 +17,19 @@ const jest = path.join(repo, 'node_modules/jest/bin/jest.js');
 test('rooted globs preserve dotted and space-containing Windows/Linux roots', () => {
   for (const root of ['C:\\Users\\Moe\\.codex\\worktrees\\space checkout\\FLUJO', '/tmp/.codex/space checkout/FLUJO']) {
     const patterns = testPatternsForRoot(root);
+    // Use POSIX file witnesses when exercising a synthetic Windows root on
+    // Linux: a backslash before .codex is a glob escape there. Native checkout
+    // and alias behavior is covered separately by the real Jest fixture below.
+    const witnessRoot = root.replaceAll('\\', '/');
     const nodeMatches = globsToMatcher(patterns.nodeTestMatch.map(replacePathSepForGlob));
     const jsdomMatches = globsToMatcher(patterns.jsdomTestMatch.map(replacePathSepForGlob));
-    assert.equal(nodeMatches(`${root}/__tests__/mcp/server.test.ts`), true);
-    assert.equal(jsdomMatches(`${root}/__tests__/frontend/components/form.test.tsx`), true);
-    assert.equal(nodeMatches(`${root}/userdata/__tests__/unexpected.test.ts`), false);
+    assert.equal(nodeMatches(`${witnessRoot}/__tests__/mcp/server.test.ts`), true);
+    assert.equal(jsdomMatches(`${witnessRoot}/__tests__/frontend/components/form.test.tsx`), true);
+    assert.equal(nodeMatches(`${witnessRoot}/userdata/__tests__/unexpected.test.ts`), false);
   }
   const nativeRoot = 'C:\\Users\\Moe\\.codex\\worktrees\\space checkout\\FLUJO';
   const broken = replacePathSepForGlob(`${nativeRoot}/__tests__/**/*.test.{ts,tsx}`);
-  assert.equal(globsToMatcher([broken])(`${nativeRoot}/__tests__/mcp/server.test.ts`), false,
+  assert.equal(globsToMatcher([broken])(`${nativeRoot.replaceAll('\\', '/')}/__tests__/mcp/server.test.ts`), false,
     'negative control reproduces the native <rootDir> separator loss');
 });
 
