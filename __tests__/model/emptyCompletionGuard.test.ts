@@ -3,7 +3,7 @@
  * with finish_reason "stop" while returning no assistant content or tool calls.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
@@ -92,15 +92,25 @@ beforeEach(() => {
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
 });
 
+const rateLimited = () => new OpenAI.APIError(429, {
+  message: 'Rate limit reached', code: 'rate_limit_exceeded', type: 'rate_limit_error',
+  metadata: { retry_after_seconds: 0.01 },
+}, undefined, new Headers({ 'retry-after': '0.01' }));
+
+it('retains the ordinary eligible session-limit retry path', async () => {
+  createCompletionMock.mockRejectedValueOnce(rateLimited()).mockResolvedValueOnce(completion('Recovered'));
+  seedState('ordinary-session-limit');
+  expect((await callModel('ordinary-session-limit')).success).toBe(true);
+  expect(createCompletionMock).toHaveBeenCalledTimes(2);
+});
+
 it.each(['empty', 'rate-limit'] as const)('does not restart an authenticated single-attempt call after %s', async mode => {
   const run = fixtureRun();
   const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
   const restore = registerExecutionExtension(adapter);
   try {
     if (mode === 'empty') createCompletionMock.mockResolvedValue(completion(''));
-    else createCompletionMock.mockRejectedValue(Object.assign(new Error('Rate limit reached'), {
-      status: 429, code: 'rate_limit_exceeded', headers: { 'retry-after': '0.01' },
-    }));
+    else createCompletionMock.mockRejectedValue(rateLimited());
     seedState(run.conversation);
     const result = await callModel(run.conversation, mintFixture(adapter, run));
     expect(result.success).toBe(false);
