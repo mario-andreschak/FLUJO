@@ -30,7 +30,11 @@ C:/absolute/checkout/scripts/feature-surface-acceptance/fixture-server.mjs
 ```
 
 Do not add quotes inside individual argument-array entries. Stdio stdout is
-reserved for JSON-RPC; it does not start an HTTP listener. Stop only the fixture
+reserved for JSON-RPC. Plain stdio starts no HTTP listener. To control failed or
+delayed refreshes while FLUJO owns the stdio child, add `--control-port=9317` (or
+`--control-port=0`). This starts the same guarded loopback service sharing that
+child's state. Its startup line and ephemeral token appear on the child's stderr;
+use that service's `/control` and `/receipt` endpoints. Stop only the fixture
 process you started. The fixture scripts are source-side test equipment and
 are not added to the npm release's `files` list.
 

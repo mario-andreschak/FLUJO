@@ -111,6 +111,37 @@ test('stdio child process: protocol-only stdout, all 128 definitions and explici
   assert.deepEqual(protocolErrors, []);
 });
 
+test('stdio optional loopback controller changes the same child state without invoking tools', { timeout: 15000 }, async t => {
+  const transport = new StdioClientTransport({ command: process.execPath,
+    args: [fixturePath, '--transport=stdio', '--control-port=0'], stderr: 'pipe' });
+  let startup = '';
+  transport.stderr?.on('data', data => { startup = (startup + data.toString()).slice(-8192); });
+  const connection = client();
+  t.after(() => connection.close());
+  await connection.connect(transport);
+  const controller = JSON.parse(startup.trim());
+  assert.match(controller.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+  const initial = await receipt(connection);
+  assert.equal((await (await fetch(`${controller.url}/receipt`)).json()).runId, initial.runId);
+  const configure = async mode => {
+    const response = await fetch(`${controller.url}/control`, { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-fixture-control': controller.controlToken }, body: JSON.stringify({ mode }) });
+    assert.equal(response.status, 200);
+  };
+  await configure('fail-second-page');
+  await assert.rejects(connection.listTools({ cursor: '32' }), /Intentional fixture second-page failure/);
+  await configure('empty');
+  assert.deepEqual((await connection.listTools()).tools, []);
+  await configure('normal');
+  assert.equal((await collectPages(connection)).tools.length, 128);
+  assert.equal((await receipt(connection)).toolCalls, 0);
+  const result = await connection.callTool({ name: 'fixture_tool_128', arguments: { element: 'controlled stdio', ref: 'synthetic' } });
+  assert.equal(result.structuredContent.toolName, 'fixture_tool_128');
+  assert.equal((await (await fetch(`${controller.url}/receipt`)).json()).toolCalls, 1);
+  await connection.close();
+  await assert.rejects(fetch(`${controller.url}/receipt`, { signal: AbortSignal.timeout(1000) }));
+});
+
 test('HTTP controls exercise page failure, cycles, empty and delayed discovery without tool calls', { timeout: 15000 }, async t => {
   const fixture = await startHttpFixture();
   t.after(() => fixture.close());

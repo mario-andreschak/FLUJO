@@ -242,23 +242,45 @@ export async function startHttpFixture({ port = 0, state = createFixtureState() 
 export async function main(args = process.argv.slice(2)) {
   let transport = 'http';
   let port = 9317;
+  let controlPort;
   for (const arg of args) {
     if (arg === '--transport=stdio' || arg === '--transport=http') transport = arg.slice('--transport='.length);
     else if (/^--port=\d+$/.test(arg)) port = Number(arg.slice('--port='.length));
+    else if (/^--control-port=\d+$/.test(arg)) controlPort = Number(arg.slice('--control-port='.length));
     else throw new Error(`Unknown fixture option: ${arg}`);
   }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0..65535.');
+  if (controlPort !== undefined && (!Number.isInteger(controlPort) || controlPort < 0 || controlPort > 65535)) {
+    throw new Error('Control port must be 0..65535.');
+  }
+  if (controlPort !== undefined && transport !== 'stdio') throw new Error('--control-port is for stdio fixtures only.');
+  const printStartup = fixture => process.stderr.write(`${JSON.stringify({ fixture: 'feature-surface', url: fixture.url,
+    controlToken: fixture.controlToken, definitionSha256: DEFINITION_SHA256 })}\n`);
   if (transport === 'stdio') {
-    const server = createFixtureServer(createFixtureState());
-    await server.connect(new StdioServerTransport());
-    process.once('SIGINT', () => { void server.close(); });
-    process.once('SIGTERM', () => { void server.close(); });
+    const state = createFixtureState();
+    const controller = controlPort === undefined ? null : await startHttpFixture({ port: controlPort, state });
+    if (controller) printStartup(controller);
+    const server = createFixtureServer(state);
+    try { await server.connect(new StdioServerTransport()); }
+    catch (error) { await controller?.close(); throw error; }
+    let closing = false;
+    const close = () => {
+      if (closing) return;
+      closing = true;
+      void Promise.all([server.close(), controller?.close()]).catch(error => {
+        process.stderr.write(`Fixture cleanup failed: ${error.message}\n`);
+        process.exitCode = 1;
+      });
+    };
+    // The SDK client first ends stdin; release the optional listener at that boundary.
+    process.stdin.once('end', close);
+    process.once('SIGINT', close);
+    process.once('SIGTERM', close);
     return;
   }
   const fixture = await startHttpFixture({ port });
   // Keep stdout reserved for MCP when using stdio. Never print tool arguments.
-  process.stderr.write(`${JSON.stringify({ fixture: 'feature-surface', url: fixture.url,
-    controlToken: fixture.controlToken, definitionSha256: DEFINITION_SHA256 })}\n`);
+  printStartup(fixture);
   process.once('SIGINT', () => { void fixture.close(); });
   process.once('SIGTERM', () => { void fixture.close(); });
 }
