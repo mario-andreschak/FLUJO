@@ -77,8 +77,34 @@ symbols, retaining every existing caller's interface; the sidebar imports the
 shared type directly. The extraction changes no source values, validation,
 defaulting, drive-forward decisions, event order, state registry, or dispatch.
 Debugger snapshots and package DTOs remain named architectural debt for later
-small PRs. Removing the backend layout dependency requires moving the complete
-pure geometry dependency cluster, not hiding it behind another frontend import.
+small PRs.
+
+## Shared graph geometry
+
+`src/shared/utils/flowLayout/` owns the existing auto layout, tidy layout and
+geometry algorithms. They operate only on graph data and coordinates; no
+provider, MCP, storage, workspace or React runtime belongs in this cluster.
+React Flow's `Edge` and the canonical shared `FlowNode` are type-only imports.
+Frontend `Canvas/utils` paths retain compatibility re-exports of the same
+functions and fallback objects. Model-to-agent creation imports the shared
+algorithm directly, and `FlowConverter` consumes the existing shared graph DTO.
+The frontend presentation `Flow` interface stays a subset; its node and node-type
+definitions use the shared contract rather than duplicate structural interfaces.
+
+The extraction changes imports/ownership, not algorithm bodies or defaults.
+Before/after standalone traces compare six frozen graphs in both modes,
+including empty/single no-ops, branching attachments, measured-height cycles,
+orphans and already-separated nodes. A child process permits only the three
+compiled geometry modules; adding a runtime import is a failing negative control.
+Frontend compatibility and backend creation regressions verify the consumer
+boundaries, including idempotent retry and failed validation/persistence.
+
+The baseline tidy algorithm leaves overlaps in the coincident-satellite and
+orphan fixtures. Those observations stay explicit in the trace; this extraction
+does not fix them. Full auto layout resolves these fixtures. The historical
+blanket no-overlap smoke assertion failed before extraction and is retained
+in the source evidence. Single child-process timing/RSS samples describe only
+this fixture and are not an agreed performance budget or product resource claim.
 
 Use the existing ordinary-run, unattended drive-forward and origin-display
 regressions with the new invocation contract tests. Before extracting any of the
