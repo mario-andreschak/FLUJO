@@ -100,7 +100,7 @@ describe('owner credentials at real proxy and handler admission', () => {
         path.resolve('src/backend/services/security/ownerAccess.ts'),
         path.resolve('node_modules/typescript/lib/typescript.js'),
       ], {
-        env: { SystemRoot: process.env.SystemRoot, FLUJO_OWNER_AUTH_FILE: filename },
+        env: { NODE_ENV: 'test', SystemRoot: process.env.SystemRoot, FLUJO_OWNER_AUTH_FILE: filename },
         input: JSON.stringify({ token }), encoding: 'utf8', timeout: 5000,
       });
       expect(result.error).toBeUndefined();

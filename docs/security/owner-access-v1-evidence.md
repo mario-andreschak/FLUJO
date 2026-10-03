@@ -23,11 +23,16 @@ No private runtime data, provider calls, production listener or controller was u
 - Existing `workspace/mcpOauthCallbackIsolation`, `workspace/oauthStateIsolation`
   and `security/registryOauthAllowlist`: six tests passed, three suites.
 - Scoped TypeScript check of the two new security modules passed.
+- Coordinator-reserved root `npm run typecheck` (`next typegen && tsc --noEmit
+  -p tsconfig.json`) passed after adding the explicit synthetic `NODE_ENV` to
+  the source-process fixture. Session 10008 first exited 1 because Next's ambient
+  `ProcessEnv` requires that field; repaired session 83191 exited 0. Approximately
+  7.2 GiB free memory was observed at the repair's launch. No build was started.
 - ESLint of both new modules, proxy, workspace wrapper, new test and child
   fixture passed with `--max-warnings=0`.
 - `git diff --check` passed.
 
-Each command ran serially with exit 0. The main runner initially exited 1 with
+Passing commands ran serially with exit 0. The main runner initially exited 1 with
 **zero collected tests** due to the managed Windows `.codex` path's generated
 test glob. A temporary explicit-match config retained the normal Next/SWC setup
 and node project and restored collection. Engineering owns the shared fix.
@@ -85,7 +90,7 @@ git diff --check
 
 ## Pending acceptance
 
-Root/MCP typechecks, full lint/tests, Windows/Linux production builds and packed
+MCP typechecks, full lint/tests, Windows/Linux production builds and packed
 app process checks need coordinator-scheduled or CI evidence. Browser pairing,
 logout/CSRF, continuous established-stream revocation, per-tool/flow grants,
 remaining handler/service coverage, unauthenticated network/public startup
