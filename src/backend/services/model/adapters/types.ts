@@ -89,6 +89,12 @@ export interface ModelSteering {
 }
 
 export interface CompletionInput {
+  directCompletion?: boolean;
+  temperatureOverride?: number;
+  /** Re-check execution authority immediately before every policy member. */
+  beforeModelDispatch?: () => Promise<void>;
+  /** Metadata only, used to attribute native dispatches and usage correctly. */
+  onRoutingModel?: (model: Model) => Promise<void>;
   /** The model record (used for name, baseUrl, provider, adapter, ...). */
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
@@ -299,6 +305,7 @@ export interface CompletionInput {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
   completion: OpenAI.Chat.Completions.ChatCompletion;
   /** null means the adapter cannot report current context; usage is not a substitute. */
   contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;
