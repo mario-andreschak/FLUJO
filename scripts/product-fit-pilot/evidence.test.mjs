@@ -296,6 +296,19 @@ test('agreement must precede enrollment and measurement rather than being added 
   assert.throws(() => report(data), /actual agreement timestamp/);
 });
 
+test('v1 cannot reduce cohorts/windows/workflows or relax novice acceptance to force a passing report', () => {
+  const weaker = { users: 9, weeks: 7, workflows: 2, novices: 9, noviceSuccessRate: 0.79, firstRunSeconds: 901 };
+  for (const [field, value] of Object.entries(weaker)) {
+    const data = fixture();
+    data.rubric.targets[field] = value;
+    assert.throws(() => report(data), /cannot weaken the published/);
+  }
+  const stronger = fixture();
+  Object.assign(stronger.rubric.targets, { users: 11, weeks: 9, workflows: 4, novices: 11,
+    noviceSuccessRate: 0.9, firstRunSeconds: 600 });
+  assert.equal(report(stronger).completeWeeks, 8);
+});
+
 test('unknown fields are rejected without printing their names or contents', () => {
   const data = fixture();
   data.participants[0]['secret-key-name'] = 'secret-value';

@@ -99,6 +99,9 @@ export function validatePilot(data, asOf, now = Date.now()) {
   integer(targets.firstRunSeconds, 1, 86_400, 'targets.firstRunSeconds');
   requireValue(typeof targets.noviceSuccessRate === 'number' && targets.noviceSuccessRate > 0 &&
     targets.noviceSuccessRate <= 1, 'targets.noviceSuccessRate', 'expected a rate greater than zero and at most one');
+  requireValue(targets.users >= 10 && targets.weeks >= 8 && targets.workflows >= 3 && targets.novices >= 10 &&
+    targets.noviceSuccessRate >= 0.8 && targets.firstRunSeconds <= 900,
+  'targets', 'pilot-v1 cannot weaken the published cohort, observation window, workflow or novice contract');
   const start = timestamp(data.startedAt, 'startedAt', true);
   requireValue(start === null || start <= cutoff, 'startedAt', 'pilot start is after the report cutoff');
   requireValue(start === null || agreed === null || agreed <= start,
