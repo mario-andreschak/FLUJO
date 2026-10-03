@@ -51,8 +51,8 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
         <h3 className="text-lg font-semibold mb-4" style={{ color: getThemeValue('#111', '#f8f8f8') }}>
           {t('mcp.tools.managerServer', { server: serverName || t('mcp.tools.noServer') })}
         </h3>
-        <div className="text-red-500">
-          <p>{t('mcp.tools.errorLoading', { error })}</p>
+        <div style={{ color: getThemeValue('#b91c1c', '#fca5a5') }}>
+          <p role="alert">{t('mcp.tools.errorLoading', { error })}</p>
           <button
             onClick={() => {
               retryLoadTools();
@@ -116,15 +116,22 @@ const ToolManager: React.FC<ToolManagerProps> = ({ serverName, onClose, prefill 
         prefill={prefill}
       />
       {isLoading && (
-        <div className="mt-4 flex items-center space-x-2 text-blue-500">
+        <div
+          role="status"
+          aria-atomic="true"
+          className="mt-4 flex items-center space-x-2"
+          style={{ color: getThemeValue('#1d4ed8', '#93c5fd') }}
+        >
           <Spinner size="small" color="primary" />
           <p>{t('mcp.tools.loading')}</p>
         </div>
       )}
       {error && tools && tools.length > 0 && (
-        <div className="mt-2 text-yellow-500">
-          <p>{t('mcp.tools.warning', { error })}</p>
-          <p className="text-sm">{t('mcp.tools.cached')}</p>
+        <div className="mt-2" style={{ color: getThemeValue('#854d0e', '#fde047') }}>
+          <div role="alert">
+            <p>{t('mcp.tools.warning', { error })}</p>
+            <p className="text-sm">{t('mcp.tools.cached')}</p>
+          </div>
           <button
             onClick={() => {
               retryLoadTools();
