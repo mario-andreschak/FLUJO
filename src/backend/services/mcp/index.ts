@@ -2203,7 +2203,11 @@ export class MCPService {
             trustedContext,
           )
         : args;
-      try { await assertMcpIsolationDispatch(client, serverName, await this.getServerConfig(serverName)); }
+      try {
+        const currentConfig = await this.getServerConfig(serverName);
+        if (client) await assertMcpIsolationDispatch(client, serverName, currentConfig);
+        else if (currentConfig?.isolation !== undefined) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+      }
       catch (error) {
         return { success: false, error: error instanceof McpIsolationError ? error.code : 'ISOLATION_UNAVAILABLE',
           errorType: 'mcp-isolation', statusCode: error instanceof McpIsolationError && error.code !== 'ISOLATION_UNAVAILABLE' ? 403 : 503 };

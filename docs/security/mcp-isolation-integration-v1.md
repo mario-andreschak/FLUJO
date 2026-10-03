@@ -162,3 +162,20 @@ Packed npm/image/installer negatives, root's exact remediated dependency candida
 public/remote client journeys, browser pairing, approval/migration UX, install-time
 and live revocation behavior, human acceptance, and independent reassessment remain
 open. No release or deployment is certified by these source tests.
+
+## Config-admission follow-up
+
+GitHub Actions run `37161903266`, typecheck job `111316912168`, failed at
+`e9486c6f597be168da151c7f7bec778ce1762351`. It found a possibly absent client
+at final dispatch and array operations on the config loader's array-or-error
+response. The failure remains part of the evidence for #615.
+
+The follow-up narrows the client before admission and denies dispatch when a
+selected isolation profile has no client. A fresh config-loader error response
+throws the fixed `ISOLATION_UNAVAILABLE` code; it does not expose the loader's
+diagnostic. A managed transport is reconciled on that failure. Its regression
+case also verifies denial for an unmanaged transport with private approval
+configured. The two affected transport/lifecycle suites passed all 44 tests;
+changed-file ESLint and `git diff --check` passed. The complete application
+typecheck remains pending for the follow-up revision. No Docker behavior changed,
+so the previous container source probes are not claimed as newly rerun evidence.

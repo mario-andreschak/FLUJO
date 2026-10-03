@@ -191,13 +191,19 @@ export function attachMcpIsolation(transport: IsolationTransport, config: MCPStd
   };
 }
 
+async function currentServerConfig(serverName: string): Promise<MCPServerConfig | undefined> {
+  const loaded = await (await import('./config')).loadServerConfigs();
+  if (!Array.isArray(loaded)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+  return loaded.find(item => item.name === serverName);
+}
+
 /** Re-read policy/config at final tool dispatch; never treat stored approval as authority. */
 export async function assertMcpIsolationDispatch(client: Client, serverName: string, config?: MCPServerConfig | null): Promise<void> {
   const managed = getManagedMcpIsolation(client.transport);
   if (!managed) {
     try {
       const current = config ?? (process.env.FLUJO_MCP_ISOLATION_FILE === undefined ? undefined
-        : (await (await import('./config')).loadServerConfigs()).find(item => item.name === serverName));
+        : await currentServerConfig(serverName));
       if (current?.isolation !== undefined) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       if (current?.transport === 'stdio') assertHostMcpLaunchAllowed(current);
     } catch (error) {
@@ -207,7 +213,7 @@ export async function assertMcpIsolationDispatch(client: Client, serverName: str
     return;
   }
   try {
-    const current = config ?? (await (await import('./config')).loadServerConfigs()).find(item => item.name === serverName);
+    const current = config ?? await currentServerConfig(serverName);
     if (!current || current.disabled || current.transport !== 'stdio' || current.isolation === undefined
         || getCurrentWorkspace() !== managed.workspace || serverName !== managed.serverName
         || approvedIsolationDigest(current, managed.workspace) !== managed.policyDigest) {

@@ -148,6 +148,16 @@ test('dispatch observes grant revocation and stops the exact managed container',
   expect(close).toHaveBeenCalled();
 });
 
+test('config-loader error responses deny dispatch without exposing their private diagnostic', async () => {
+  const transport = createStdioTransport(config);
+  configs.mockResolvedValue({ success: false, error: 'synthetic private config diagnostic' });
+  await expect(assertMcpIsolationDispatch({ transport } as unknown as Client, config.name))
+    .rejects.toMatchObject({ code: 'ISOLATION_UNAVAILABLE' });
+  expect(close).toHaveBeenCalled();
+  await expect(assertMcpIsolationDispatch({ transport: {} } as unknown as Client, config.name))
+    .rejects.toMatchObject({ code: 'ISOLATION_UNAVAILABLE' });
+});
+
 test('a host connection cannot dispatch after the selected config requires isolation', async () => {
   await expect(assertMcpIsolationDispatch({ transport: {} } as Client, config.name, config)).rejects.toMatchObject({ code: 'ISOLATION_RECONSENT_REQUIRED' });
 });
