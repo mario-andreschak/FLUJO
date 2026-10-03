@@ -72,10 +72,14 @@ export interface IsolatedMcpLaunch {
   close(): { outcome: 'removed' | 'absent' | 'unknown' };
 }
 
-function hostEssentials(): Record<string, string> {
-  if (process.platform !== 'win32') return {};
+type DockerEnvironment = Record<string, string> & { NODE_ENV: 'production' };
+
+function hostEssentials(): DockerEnvironment {
+  // Next's ambient ProcessEnv requires this field. Set it deliberately for the
+  // CLI instead of inheriting the app's environment or widening the spawn type.
+  if (process.platform !== 'win32') return { NODE_ENV: 'production' };
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
-  return { SystemRoot: systemRoot, WINDIR: systemRoot };
+  return { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot };
 }
 
 function safeMount(workspaceRoot: string, relative: string): string {
@@ -106,10 +110,11 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   const policy = parsedPolicy(value);
   if (approvedDigest !== isolatedMcpPolicyDigest(policy)) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
   if (!path.isAbsolute(workspaceRoot)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-  const env: Record<string, string> = hostEssentials();
+  const env: DockerEnvironment = hostEssentials();
   for (const name of policy.environmentNames) {
     const provided = environment[name];
     if (typeof provided !== 'string' || provided.length > 16 * 1024 || provided.includes('\0')) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+    if (name === 'NODE_ENV' && provided !== 'production') throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     env[name] = provided;
   }
   const generation = randomUUID();
