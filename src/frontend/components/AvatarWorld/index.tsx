@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -147,7 +147,7 @@ export default function AvatarWorld() {
       {work.conversation && <><button onClick={() => { setControls(false); panel.navigate(`/chat?conversation=${encodeURIComponent(work.conversation!.id)}`); }}>{c.inspect} ↗</button><button onClick={() => { voice.disconnect(); offered.current.clear(); setVoiceMessages([]); work.newChat(); setControls(false); }} disabled={work.busy}>{c.newChat}</button></>}
     </aside>}
     <div className={`${styles.mapLayer} ${exploring ? styles.mapVisible : ''}`} aria-hidden={details || setup || panel.open} inert={details || setup || panel.open}><Watershed snapshot={snapshot} locale={locale} selected={place} onSelect={selected => { setExploring(true); setPlace(selected); if (selected === 'models') setSetup(true); }} /></div>
-    <section className={`${styles.companion} ${exploring ? styles.companionAside : ''}`} style={exploring && place ? { left: `${LANDMARK_POSITIONS[place][0]}%`, top: `${LANDMARK_POSITIONS[place][1] - 22}%` } : undefined}>
+    <section className={`${styles.companion} ${exploring ? styles.companionAside : ''}`} style={exploring && place ? { left: `${LANDMARK_POSITIONS[place][0]}%`, '--arrival-y': `${LANDMARK_POSITIONS[place][1] - 22}%` } as CSSProperties : undefined}>
       <div className={styles.presence}><span className={styles.presenceDot} />{c[phase]}</div>
       <div className={styles.character}><Eyes phase={phase} avatar={avatar} level={voice.audioLevel} small={exploring} /><div className={styles.characterShadow} /></div>
       {!work.messages.length && <div className={styles.welcome}><h1>{work.target.kind !== 'guide' ? actor : canWork ? c.ready : c.hello}</h1><p aria-live="polite">{voiceMessages.at(-1)?.text || (work.target.kind !== 'guide' ? c.identityNote : snapshot?.workModel && !ready ? c.stale : canWork ? c.readyBody : c.guide)}</p>
