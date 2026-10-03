@@ -1,0 +1,171 @@
+# Scorecard #563: acceptance contract and evidence ledger
+
+This is the proposed contract for [#564](https://github.com/mario-andreschak/FLUJO/issues/564)
+and the claim-reconciliation portion of [#578](https://github.com/mario-andreschak/FLUJO/issues/578).
+The outcome is **all nine original dimensions independently reassessed at A- or better**.
+Implementation, a successful validator, and test counts do not award a grade.
+Maintainer/reviewer agreement, named human responsibility, installed release acceptance,
+human observation and external reassessment are pending.
+
+The complete [published plan](https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5973430942)
+remains the parent contract. No local-only substitution for the shared/public profile
+is accepted here. A proposed profile/threshold reduction needs an explicit separately
+reviewed contract change; version 1 rejects it. Persona exclusions may remain
+experimental only with explicit independent acceptance and visible limits.
+
+## Files and reproducible checks
+
+- [scorecard.json](scorecard.json) is the maintained contract, proposed budgets,
+  profile matrix, revision/artifact/evidence ledger, issue reconciliation and open gates.
+- [scorecard.schema.json](scorecard.schema.json) is its versioned JSON Schema.
+- [baseline snapshot](evidence/baseline-2026-10-03.json) retains public GitHub/npm
+  observations and the last three issue comments at capture.
+- [source observation](evidence/source-observation-2026-10-03.json) retains exact
+  main-source blob hashes and excerpts for the existing #520 fixes and the
+  still-unintegrated #517 tool-refresh/prefill behavior.
+- [historical failed soak](evidence/2026-09-16-persona-soak.json) is a byte-preserved
+  copy of the existing public audit payload. Evidence-directory attributes disable
+  Git line-ending conversion so hashes identify the same bytes on Windows and Unix.
+- [validator](../../../scripts/validate-scorecard.mjs) checks structure, complete rows,
+  references, local SHA-256 payloads, source/artifact/profile correspondence, windows,
+  protected Persona contracts and truthful claim promotion.
+- [boundary tests](../../../scripts/validate-scorecard.test.mjs) exercise rejected
+  claims, altered evidence, missing profiles, simulated live evidence and closure semantics.
+
+Run from the repository root with Node >=22; no dependency installation is needed:
+
+```sh
+node scripts/validate-scorecard.mjs
+node --test scripts/validate-scorecard.test.mjs
+node scripts/validate-scorecard.mjs --closure
+```
+
+Exit 0 from ordinary validation means a valid ledger, which may be incomplete.
+Exit 1 means malformed/inconsistent records, unavailable evidence or checksum failure.
+Exit 2 from `--closure` means declared acceptance gates remain open.
+The validator never downloads remote artifacts, calls models, changes accounts,
+starts runtimes, performs releases or changes repository settings.
+Its small documented schema vocabulary fails closed on unsupported keywords.
+The published schema can also be consumed by a draft-2020-12 JSON Schema tool;
+cross-record/evidence rules still require the repository validator.
+
+## Verified dated baseline
+
+The original audit assesses `d68492712315d30c856c8d2ba95b0a26a859bd18`.
+On October 3, 2026, fresh fetch and remote-main comparison identified
+`3511ba49514fe8cf525f5a22c16c3806bf3886ba`, source package version 3.46.2.
+The public API reports verify run 37129765836 attempt 1 passed at that source SHA.
+Artifact IDs/digests are retained, but their test payloads were not downloaded/revalidated
+by this slice. A source version and CI metadata are not installed-release acceptance.
+
+The 3.46.2 tag resolves to `320347356891aa1c24e0f2f9ce12719317e58bde`.
+npm reports the 3.46.2 package's SHA-512 integrity and provenance URL, with no
+`gitHead` in the captured response. GitHub reports the Windows installer's SHA-256.
+Package and installer contents were not installed or checked against compiled source.
+No immutable container image digest was captured. These remain distinct ledger entries.
+
+The September 16 offline failure stays checksummed and attributed to its synthetic
+source snapshot: 560 completed Activities, 12/13 criteria passing, one append p95
+169.6893 ms against strict <150 ms, **overall failed**. Later #418/#505 reported
+automated passes at an older identified implementation, including rollback/restoration
+history. They do not erase this failure or demonstrate current-release equivalence,
+28 elapsed days, independent human usability or public-world autonomy.
+
+## Nine retained rows
+
+All targets below are proposals for agreement. Accountable human names are unset;
+topic owners route delivery, while the maintainer must accept the human assignments.
+
+| Dimension | Original | A- evidence required | Delivery owner / issues |
+| --- | --- | --- | --- |
+| Idea / product fit | A- | Repeated independent use, eight-week retention and uncoached novice outcomes | Product fit; #572/#577 |
+| Feature surface | A- | Retained advertised journeys on installed artifacts, full 128-tool reachability and usable failures | Feature surface; #570/#572/#578/#517/#526 |
+| Engineering discipline | B+ | Enforced review/check gates, verifiable distributions and human release responsibility | Engineering; #564/#565/#576 |
+| Code health | B- | Owned module/behavior contracts, enforced boundaries and second-human maintenance | Code health; #571/#576 |
+| Security | C+ | Scoped ingress, safe migration/transfer, enforced MCP isolation and independent threat-model review | Security; #565–#568/#573–#575/#101/#527 |
+| Maturity / stability | C | Original-workload confirmation, resource/fault budgets, stable tools and unchanged Persona gates | Maturity; #569/#570/#572/#578/#520/#515/#517/#526/#505/#435 |
+| Community / bus factor | D | Sustained independent contributors/users and trained human backups | Community; #576/#577 |
+| Docs honesty | A | Release-bound consistent claims, preserved failures and visible support/experimental limits | Docs; #564/#565/#570/#578 |
+| Production-readiness | C- | Installed operation/recovery plus authenticated multi-user isolation/sharing | Production; #566–#570/#573–#575/#578/#553/#547/#212 |
+
+## Deployment profiles and autonomy
+
+The machine-readable OS/install matrix distinguishes documented availability from
+verified release acceptance. None of its current platform/install rows is marked verified.
+
+| Profile | Present declaration | Required acceptance |
+| --- | --- | --- |
+| Local single-owner | Current default envelope: one trusted operator, loopback, host-side MCP privileges; logical workspaces | Windows installer/npm/source; Linux npm/source/container; macOS npm/source journeys, external provider/tool prerequisites, scoped ingress, credential migration and MCP enforcement |
+| Authenticated persistent worker | Gated proposal, Linux container/service and Windows native-service matrices | Separate worker bearer/identity, proven local schedule opt-in, copied schedules suppressed, process receipts, health/audit/resources, coherent backup/restore and versioned consumer contracts |
+| Shared/public | Gated proposal, hardened Linux service; original objective retained | #573 architecture, #574 individual isolation, #575 team share/revoke/edit conflicts, credential/process/storage boundaries, authenticated ingress and independent threat-model/installed operator acceptance |
+
+Provider credentials/subscriptions/quotas, compatible local models and tool-specific
+git/Python/uv/browser/OS requirements are explicit prerequisites. Account provisioning
+time and failures must be recorded separately. Authentication, snapshots, SDK history,
+streams, worker identity and UI provenance/freshness need versioned compatibility
+agreements from FACTORY, O, brain-online and the UI owners. Original/current identity,
+digest recipes, dedicated bearer versus owner session, uncertainty observation and
+startup/COMMIT/transport fences remain distinct. A sealed source witness cannot authorize
+spending, migration capture, account adoption, replay or cleanup.
+
+Autonomy is separately gated: an offline simulation, short genuine-model test or
+successful process restart cannot establish useful public-world work or multi-week
+unattended success. The recorded live spend cap is zero because no paid-run authority
+is supplied; a dollar CLI argument is not monetary enforcement.
+
+## Numeric contracts before measurement
+
+Every budget has an owner, status, metric/operator/limit/unit, denominator, observation
+window, declaration time and basis. Agreement evidence is required before changing
+a proposal to agreed. Historical evidence remains under its original contract;
+capturing a contract today does not retroactively predeclare it for an older run.
+
+| Contract | Preserved or proposed target | Denominator/window |
+| --- | --- | --- |
+| Existing Persona soak | Daily append p95 <150 ms; peak RSS <=768 MiB; final RSS growth <=256 MiB; final-seven append median <=2× max(first-seven median,20 ms) | Exact-revision 28×20, seed 459, learning; every day's raw samples |
+| Existing Persona collections | <=1,248 records per detailed kind; daily uncompacted mailbox <=500, Activities/dispatches/pins <=200 each; lease history <=50 | Every checkpoint/sweep; missing/new uncontracted kinds fail |
+| Existing full recall | p95 <150 ms plus full-candidate/ranking checks | 50,000 items / 20 controlled searches |
+| Proposed ordinary runtime | Peak RSS <=1 GiB, retained growth <=128 MiB, <=4 active lanes from 8 queued | 24 elapsed hours on declared Node 22 Windows/Linux 2-CPU/2-GiB runner; parent >=2 MB, children <=5.6 MB; byte/media/paused/archive admission limits need #569 ratification |
+| Proposed recovery/backup | RTO <=120 s; zero lost accepted durable records; zero duplicate verified effects | 10 graceful +10 forced restart trials and 10 backup/restore trials per claimed OS/install profile; unknown effects remain unknown |
+| Proposed security | Zero accepted unauthorized matrix operations; zero unresolved high/critical findings | All declared session/token/CSRF/owner/process/export/share/revoke rows; skipped/missing rows block |
+| Proposed product evidence | 10 independent weekly users for 8 weeks; >=8/10 novices finish <=15 min without coding/live coaching | All enrollment, provisioning, missing/drop-off outcomes retained |
+| Proposed continuity | 2 additional human maintainers; >=3 substantive non-author humans | Independent review/release/recovery drills; 90 elapsed days of contributions/reviews |
+| Proposed live stages | Authorized 1-hour smoke then 7 elapsed days; 28 elapsed days for multi-week claim; >=99% verified due rounds, zero unscheduled interventions/duplicate effects | All due rounds including missed/stalled/rejected/failed, useful output-quality review, scheduled controls separate, authorized enforced spend accounting |
+
+These proposals are coordination inputs, not current performance guarantees.
+Security, Maturity, Production, Product fit and Community must ratify the workload,
+matrices and targets with the maintainer and independent reviewer before measuring.
+Do not reduce thresholds/workload because host capacity is low; schedule checks instead.
+
+## Adding evidence and reconciling claims
+
+1. Retain failures before adding later results. Add immutable IDs rather than replacing
+   a historical verdict. Refresh dated source/issue observations when integrations change.
+2. Record exact SHA, owner, profile IDs, environment/provider/tool versions, commands,
+   result, raw payload location/SHA-256, limits, metrics/positive denominators and real
+   versus simulated windows. Local payloads must remain inside the repository, including
+   resolved symlink targets. Use metadata-only external pointers for payloads not reverified.
+3. Record each npm/image/installer identity separately. Set verified-content only after
+   retaining matching content hash, exact source correspondence and installed acceptance.
+   Tags, API checksums or successful source builds alone leave content acceptance pending.
+4. Change a gate/claim only after the required passing checksummed evidence matches its
+   revision, artifact, profile, evidence kinds and agreed budgets. Source-supported is
+   limited to source scope. Report-only observations cannot qualify release-supported.
+5. Keep paid/live account work, independent humans, manual accessibility/recovery,
+   cross-stream contracts and independent reassessment pending until their owners
+   provide actual evidence. No bot/test count can satisfy those gates.
+6. At reassessment, record the identified independent reviewer, the selected release SHA,
+   verified artifact IDs, retained review, nine grades/rationales and explicitly accepted
+   experimental claims. Below-A- grades or disagreements keep the epic open.
+
+A checksum proves file correspondence, not that an author is independent or an experiment
+was honestly conducted. Human identity, review authenticity, complete coverage and useful
+outcomes require external review; the validator checks declarations and consistency.
+It does not substitute for any topic's artifact-specific validator or trusted live authority.
+
+Before final documentation publication, use the ledger to reconcile README product claims,
+project-status maturity/support, CHANGELOG release/migration notes, SECURITY.md threat model,
+and the topic-owned architecture/API/operations guides. Docs owns this scorecard directory
+and validator. Security owns SECURITY.md/security behavior; Engineering owns CI/release;
+other topics own their feature/architecture/operations guides. This slice adds only a
+project-status pointer and the evidence distinction, avoiding competing topic rewrites.

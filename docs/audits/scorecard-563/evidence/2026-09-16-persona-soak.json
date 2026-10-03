@@ -1,0 +1,2868 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-16T20:28:08.230Z",
+  "result": "failed",
+  "exitCode": 1,
+  "scope": "Offline deterministic Persona acceptance fixture: 28 simulated days, 20 generated activities/day, seed 459, learning enabled. Not 28 real days, a paid-provider test, or validation against existing user workspaces.",
+  "identity": {
+    "sha": "df485400e72f5772f50b1caa9674db22bfb3bf42",
+    "root": "persona-soak/source",
+    "node": "v22.13.1",
+    "createdAt": "2026-09-16T20:08:24.032Z",
+    "previousSnapshotSha": "c6b5d47159715d9ec509b722d99603811d2febc2",
+    "sourceHead": "26cd39856fd8a5580c77025ee0ec95732572045d",
+    "scope": "Local synthetic final-source snapshot, not an upstream commit or release"
+  },
+  "runIdentity": {
+    "activitiesPerDay": 20,
+    "authoritative": true,
+    "commitSha": "df485400e72f5772f50b1caa9674db22bfb3bf42",
+    "configuration": {
+      "eventAppendSamplesPerDay": 5,
+      "gatingMode": "enforce",
+      "percentileMethod": "nearest-rank",
+      "recallSamplesPerDay": 5,
+      "scheduledFaultIds": [
+        "day-2:lease-expiry",
+        "day-7:concurrent-claimant",
+        "day-12:graceful-restart",
+        "day-17:hard-crash",
+        "day-22:administrative-recovery"
+      ],
+      "wallClockBudgetMs": 2700000
+    },
+    "days": 28,
+    "endedAt": "2026-09-16T20:26:20.340Z",
+    "learningEnabled": true,
+    "mode": "acceptance",
+    "runId": "local-remediation-20260916-attempt2-df485400e72f",
+    "runner": {
+      "architecture": "x64",
+      "cpuModel": "Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz",
+      "logicalCpuCount": 8,
+      "node": "v22.13.1",
+      "osRelease": "10.0.19045",
+      "platform": "win32"
+    },
+    "schemaVersion": 2,
+    "seed": 459,
+    "startedAt": "2026-09-16T20:08:41.777Z"
+  },
+  "command": [
+    "toolchain/node.exe",
+    "scripts/run-persona-soak.mjs",
+    "--days=28",
+    "--activities-per-day=20",
+    "--seed=459",
+    "--with-learning",
+    "--commit=df485400e72f5772f50b1caa9674db22bfb3bf42",
+    "--run-id=local-remediation-20260916-attempt2-df485400e72f",
+    "persona-soak/attempt-2/artifacts"
+  ],
+  "wallDurationMs": 1058563,
+  "snapshotCleanAfterRun": true,
+  "sourceHead": "26cd39856fd8a5580c77025ee0ec95732572045d",
+  "dependencyLockSha256": "d3216b4115b4f9ceb2af43ec70ece9e96f07b7a13a9505c347277ba688ab27bd",
+  "sourceFileCount": 2314,
+  "workloadReconciliation": {
+    "accepted": 560,
+    "attempted": 560,
+    "completed": 560,
+    "duplicate": 0,
+    "duplicateSourceIds": [],
+    "failed": 0,
+    "identityMismatchSourceIds": [],
+    "mailboxLinkMismatchSourceIds": [],
+    "missingSourceIds": [],
+    "nonterminalSourceIds": [],
+    "unresolved": 0
+  },
+  "runtimeEvidence": {
+    "behaviorBindingId": "behavior_hY3cLk8vItcZ_ELSMqEdA0n8sqgdncB81vS4nNhckBE",
+    "behaviorRevisionId": "br_CzPZNIn781k_ZAJA5sLstU8tP1TEY2jFEsvnlD7ujXk",
+    "leaseAcquisitionProofSha256": "43a52b12cfb92c7782666ed26c480ad915ff9e82fa532164bdbb204091869b61",
+    "modelCalls": 994,
+    "observedFencingTokenCount": 1061,
+    "persistedActivities": 1060,
+    "persistedDispatches": 994,
+    "persistedLeaseAcquisitions": 1061,
+    "persistedMailboxItems": 1124,
+    "personaId": "persona_jVP7-nSOgg8uFzpaRTnbm3741CYlJosVNsk7bVE8ulE",
+    "retainedLeaseRecords": 50,
+    "workspaceId": "persona-soak-25740-459-1"
+  },
+  "splitBrainCount": 0,
+  "strandedLeaseCount": 0,
+  "stuckPersonaCount": 0,
+  "learning": "passed",
+  "learningEvidence": {
+    "activatedRevisionId": "br_nynMqZi4BDyqnbKndbIQYKkiwuSIaOmgl4_L1AEryhM",
+    "autoRollbackAt": 1789590378852,
+    "baseRevisionId": "br_LN5lYlgtGmYQAFHUvg9LQ5gkKXFZPrPgd8k1OV3HJgw",
+    "baselineSamples": 10,
+    "behaviorId": "behavior_1D1gSuqYVdbIapLDZJXYW1aUjBXWnKK3a80-7E1bl60",
+    "evaluated": true,
+    "finalRevisionId": "br_LN5lYlgtGmYQAFHUvg9LQ5gkKXFZPrPgd8k1OV3HJgw",
+    "metricId": "outcome_fLgZrd6Zbo5awlC5fzFrn-nrdubPLoPS6Pnc13Q1MKI",
+    "metricVerdict": "rolled_back",
+    "personaId": "persona_TdfPWyIZpAZSZIjRklvvsbuUt2afQtpo7laDPRv5c98",
+    "proposalId": "proposal_f9933b5d24e747809a2de38646bca1ca",
+    "proposalStatus": "rolled_back",
+    "regressionSamples": 10
+  },
+  "criteria": [
+    {
+      "id": "unattended-runtime-throughput",
+      "observed": {
+        "attempted": 560,
+        "completed": 560
+      },
+      "provenance": {
+        "sources": [
+          "generatePersonaSoakWorkload",
+          "listPersonaActivities"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "560/560 generated inputs became coherent terminal Activities.",
+      "threshold": {
+        "description": "All generated inputs complete; acceptance uses exactly 28 days x 20 activities/day.",
+        "source": "Issue #459 acceptance criterion 1"
+      }
+    },
+    {
+      "id": "persisted-workload-reconciliation",
+      "observed": {
+        "accepted": 560,
+        "attempted": 560,
+        "completed": 560,
+        "duplicate": 0,
+        "duplicateSourceIds": [],
+        "failed": 0,
+        "identityMismatchSourceIds": [],
+        "mailboxLinkMismatchSourceIds": [],
+        "missingSourceIds": [],
+        "nonterminalSourceIds": [],
+        "unresolved": 0
+      },
+      "provenance": {
+        "sources": [
+          "listPersonaMailboxItems",
+          "listPersonaActivities",
+          "active Behavior binding"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "Generated source IDs were reconciled to the expected ingress mailbox records and one terminal Activity.",
+      "threshold": {
+        "description": "Every generated input is accepted; no missing, duplicate, nonterminal, false-success, mailbox-link, Persona, or revision mismatch.",
+        "source": "Issue #489 required fix 1 and acceptance criterion 2"
+      }
+    },
+    {
+      "id": "scheduled-fault-recovery",
+      "observed": {
+        "passedIds": [
+          "day-2:lease-expiry",
+          "day-7:concurrent-claimant",
+          "day-12:graceful-restart",
+          "day-17:hard-crash",
+          "day-22:administrative-recovery"
+        ],
+        "scheduled": 5
+      },
+      "provenance": {
+        "recordIds": [
+          "day-2:lease-expiry",
+          "day-7:concurrent-claimant",
+          "day-12:graceful-restart",
+          "day-17:hard-crash",
+          "day-22:administrative-recovery"
+        ],
+        "sources": [
+          "faultEvidence",
+          "production runtime snapshots"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "All 5 scheduled faults executed and recovered.",
+      "threshold": {
+        "description": "Every scheduled fault emits passed before/fault/after evidence.",
+        "source": "Issue #489 required fix 3"
+      }
+    },
+    {
+      "id": "recall-precision-stability",
+      "observed": {
+        "allowedAbsoluteDrop": 0.05,
+        "day1": 1,
+        "final": 1
+      },
+      "provenance": {
+        "sources": [
+          "searchPersonaMemory lexical production path",
+          "deterministic ground-truth IDs"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "Day 1=1.0000, day 28=1.0000.",
+      "threshold": {
+        "description": "Final recall precision is within 5 percentage points of day 1.",
+        "source": "Issue #459 acceptance criterion 2"
+      }
+    },
+    {
+      "id": "runtime-scale-recall-latency",
+      "observed": {
+        "memoryItems": 0,
+        "p95Ms": 3.4114999999292195,
+        "samples": 5
+      },
+      "provenance": {
+        "sources": [
+          "performance.now",
+          "searchPersonaMemory",
+          "nearest-rank percentile"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "Measured production search p95=3.41 ms at soak scale; the controlled 50k gate runs separately.",
+      "threshold": {
+        "description": "p95 is strictly less than 150 ms; the release-scale 50k fixture is validated by the controlled benchmark.",
+        "source": "Issue #459 acceptance criterion 3 and issue #489 required fix 6"
+      }
+    },
+    {
+      "id": "bounded-detailed-runtime-state",
+      "observed": {
+        "collectionCountViolations": {},
+        "finalEventLogSegments": 18,
+        "leaseHistoryPruning": [
+          {
+            "afterCount": 36,
+            "beforeCount": 36,
+            "day": 1,
+            "deleted": 0,
+            "examined": 36,
+            "maxFencingToken": 36,
+            "minFencingToken": 1,
+            "observedAcquisitionCount": 36,
+            "observedFencingTokenCount": 36,
+            "prePruneSnapshotSha256": "cc239bd336ed10d8a9d07f44db84ad9e5f71bc6694ec85b457e514797edc17f0",
+            "retainedProtected": 36,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 77,
+            "day": 2,
+            "deleted": 27,
+            "examined": 77,
+            "maxFencingToken": 77,
+            "minFencingToken": 1,
+            "observedAcquisitionCount": 77,
+            "observedFencingTokenCount": 77,
+            "prePruneSnapshotSha256": "1829a9ade8f7302814f213744f305415b834f8b507d2b2185af3d40cb40a240d",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 86,
+            "day": 3,
+            "deleted": 36,
+            "examined": 86,
+            "maxFencingToken": 113,
+            "minFencingToken": 28,
+            "observedAcquisitionCount": 113,
+            "observedFencingTokenCount": 113,
+            "prePruneSnapshotSha256": "994d5edc72ee8eead770161a33bd6e699fe3e1c946254463214b2644362da9d0",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 4,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 152,
+            "minFencingToken": 64,
+            "observedAcquisitionCount": 152,
+            "observedFencingTokenCount": 152,
+            "prePruneSnapshotSha256": "9e8af602a2f27e9a9701e74421064720f5e4b099b71b18e59c32cc26a5f64579",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 5,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 191,
+            "minFencingToken": 103,
+            "observedAcquisitionCount": 191,
+            "observedFencingTokenCount": 191,
+            "prePruneSnapshotSha256": "5f06bcfd1974ea0ce220fcabbe8364194c6bb61b15083dbfc5ae05b79282d4a4",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 6,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 230,
+            "minFencingToken": 142,
+            "observedAcquisitionCount": 230,
+            "observedFencingTokenCount": 230,
+            "prePruneSnapshotSha256": "6e2115f3cca68b0d354082fddc4c55dbb22384d8c2198d4462ba3aecb17f83de",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 7,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 269,
+            "minFencingToken": 181,
+            "observedAcquisitionCount": 269,
+            "observedFencingTokenCount": 269,
+            "prePruneSnapshotSha256": "e44901fdf1b5e70ba27b5b5cb32d77425f8af669066c873dae4bdfe4595fba7a",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 8,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 307,
+            "minFencingToken": 220,
+            "observedAcquisitionCount": 307,
+            "observedFencingTokenCount": 307,
+            "prePruneSnapshotSha256": "182811b2edf6d659734471b2cea96776246f32f7842cae263230e5f1e34b6d91",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 9,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 345,
+            "minFencingToken": 258,
+            "observedAcquisitionCount": 345,
+            "observedFencingTokenCount": 345,
+            "prePruneSnapshotSha256": "e65f6919ed9de5c387f65a774a0e5bce8d8c87a1480aa9a9174ad392761bdaa2",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 10,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 383,
+            "minFencingToken": 296,
+            "observedAcquisitionCount": 383,
+            "observedFencingTokenCount": 383,
+            "prePruneSnapshotSha256": "7e3ddd4b0ed61c37a419e0e6d6b7ad348bd7b4e2990b9bf46dc009eeb7173d9a",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 11,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 422,
+            "minFencingToken": 334,
+            "observedAcquisitionCount": 422,
+            "observedFencingTokenCount": 422,
+            "prePruneSnapshotSha256": "0209f8e0dda9adc5471aa09175375e08e6a653dc5563c4b5b606fe3552952c11",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 90,
+            "day": 12,
+            "deleted": 40,
+            "examined": 90,
+            "maxFencingToken": 462,
+            "minFencingToken": 373,
+            "observedAcquisitionCount": 462,
+            "observedFencingTokenCount": 462,
+            "prePruneSnapshotSha256": "719c93afdd03bea73f3fbb60168fe7dae867f80bd112514152c860eda62a1479",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 13,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 501,
+            "minFencingToken": 413,
+            "observedAcquisitionCount": 501,
+            "observedFencingTokenCount": 501,
+            "prePruneSnapshotSha256": "0e10efcd2e76488abeef6e3f108d1a6a5b1fe7637be2ac368d23bc33f8f509ce",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 86,
+            "day": 14,
+            "deleted": 36,
+            "examined": 86,
+            "maxFencingToken": 537,
+            "minFencingToken": 452,
+            "observedAcquisitionCount": 537,
+            "observedFencingTokenCount": 537,
+            "prePruneSnapshotSha256": "b70988581f41b77d34840c3045e64d8718eb2db27b244231527f29436e2ab651",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 15,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 575,
+            "minFencingToken": 488,
+            "observedAcquisitionCount": 575,
+            "observedFencingTokenCount": 575,
+            "prePruneSnapshotSha256": "0a9c42e467bf7438bb0e7014d79ede22c61ff75d14032e67bd4854c267d2127f",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 16,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 613,
+            "minFencingToken": 526,
+            "observedAcquisitionCount": 613,
+            "observedFencingTokenCount": 613,
+            "prePruneSnapshotSha256": "87542dc2f04f5bb32e7a15ef85fd5f24b97fda6903b48c2edad23ac53015b07d",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 17,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 651,
+            "minFencingToken": 564,
+            "observedAcquisitionCount": 651,
+            "observedFencingTokenCount": 651,
+            "prePruneSnapshotSha256": "6e59ae1f9ea0112509d830a8156d67244f4f277fed9917b60e16ce7644c9a83f",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 84,
+            "day": 18,
+            "deleted": 34,
+            "examined": 84,
+            "maxFencingToken": 685,
+            "minFencingToken": 602,
+            "observedAcquisitionCount": 685,
+            "observedFencingTokenCount": 685,
+            "prePruneSnapshotSha256": "718be13a1cb019df3e26887816fc5540661848dbcb1faa868a2a2f876c5272e0",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 87,
+            "day": 19,
+            "deleted": 37,
+            "examined": 87,
+            "maxFencingToken": 722,
+            "minFencingToken": 636,
+            "observedAcquisitionCount": 722,
+            "observedFencingTokenCount": 722,
+            "prePruneSnapshotSha256": "193ea566a78ad314da60d710fc62101f855fff1593ef199b9ac23e2ca083c5c0",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 20,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 761,
+            "minFencingToken": 673,
+            "observedAcquisitionCount": 761,
+            "observedFencingTokenCount": 761,
+            "prePruneSnapshotSha256": "512a9187735d89df6cb71c6b9c9b8831829f1375fdca06d2ec28ec57c1daedda",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 21,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 800,
+            "minFencingToken": 712,
+            "observedAcquisitionCount": 800,
+            "observedFencingTokenCount": 800,
+            "prePruneSnapshotSha256": "ed0c8875dab97addc64272e305c8305c1cf462029ed740e10b8a954d29f1525b",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 86,
+            "day": 22,
+            "deleted": 36,
+            "examined": 86,
+            "maxFencingToken": 836,
+            "minFencingToken": 751,
+            "observedAcquisitionCount": 836,
+            "observedFencingTokenCount": 836,
+            "prePruneSnapshotSha256": "4d436c3f8cb2c3a66a0c2407cb263b2f555ad419b47c9b5e4b43656f0c2473a9",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 87,
+            "day": 23,
+            "deleted": 37,
+            "examined": 87,
+            "maxFencingToken": 873,
+            "minFencingToken": 787,
+            "observedAcquisitionCount": 873,
+            "observedFencingTokenCount": 873,
+            "prePruneSnapshotSha256": "05b7bce778d95f91c4310e72c076f753a7d5c4e82851fd8073a9b974113e944d",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 85,
+            "day": 24,
+            "deleted": 35,
+            "examined": 85,
+            "maxFencingToken": 908,
+            "minFencingToken": 824,
+            "observedAcquisitionCount": 908,
+            "observedFencingTokenCount": 908,
+            "prePruneSnapshotSha256": "cdc9d197f743ce80dc064911686a78ecdc1d9a5d83aea8f885e170431f2f6988",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 25,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 947,
+            "minFencingToken": 859,
+            "observedAcquisitionCount": 947,
+            "observedFencingTokenCount": 947,
+            "prePruneSnapshotSha256": "26ab554fa7ee67afa1f58ab3659f2c01af2931d24bf01e9b258f52a20d7893c7",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 88,
+            "day": 26,
+            "deleted": 38,
+            "examined": 88,
+            "maxFencingToken": 985,
+            "minFencingToken": 898,
+            "observedAcquisitionCount": 985,
+            "observedFencingTokenCount": 985,
+            "prePruneSnapshotSha256": "4e02ea4ae24e89f0697119040bcdd0d40411304030957854c3846d43c4509a9d",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 89,
+            "day": 27,
+            "deleted": 39,
+            "examined": 89,
+            "maxFencingToken": 1024,
+            "minFencingToken": 936,
+            "observedAcquisitionCount": 1024,
+            "observedFencingTokenCount": 1024,
+            "prePruneSnapshotSha256": "7e19ff9360d9fe2f69cbb12ad10cfdb04bc0fbcdc4bb0fbe5db503e8d2b734c0",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          },
+          {
+            "afterCount": 50,
+            "beforeCount": 87,
+            "day": 28,
+            "deleted": 37,
+            "examined": 87,
+            "maxFencingToken": 1061,
+            "minFencingToken": 975,
+            "observedAcquisitionCount": 1061,
+            "observedFencingTokenCount": 1061,
+            "prePruneSnapshotSha256": "942ace943c961777cd21e9a626317326a8ec044346b55f4e416bf253ba4de1f5",
+            "retainedProtected": 50,
+            "retainedUnverifiable": 0
+          }
+        ],
+        "leaseHistoryPruningPassed": true,
+        "maxCollectionCounts": {
+          "activities": 1060,
+          "flowDispatches": 994,
+          "leaseHistory": 50,
+          "mailboxItems": 1124
+        },
+        "maxUncompactedByKind": {
+          "activities": 200,
+          "flowDispatches": 200,
+          "leaseHistory": 50,
+          "mailboxItems": 500
+        },
+        "maxUncompactedCounts": {
+          "activities": 200,
+          "flowDispatches": 200,
+          "leaseHistory": 50,
+          "mailboxItems": 500
+        },
+        "missingCollectionKinds": [],
+        "totalCollectionCap": 1248,
+        "uncompactedCountViolations": {}
+      },
+      "provenance": {
+        "sources": [
+          "getPersonaStorageStats daily observations",
+          "strict sharded Activity scan",
+          "production lease-history pruning",
+          "daily pre-pruning SHA-256 proofs"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "All detailed runtime collections stayed within their committed total and uncompacted-record caps.",
+      "threshold": {
+        "description": "Every reported collection has at most 1248 total records; uncompacted maxima are mailboxItems<=500, activities<=200, flowDispatches<=200, leaseHistory<=50; missing or new uncontracted collections fail closed.",
+        "source": "Issue #489 acceptance repair numeric contract (2026-09-06)"
+      }
+    },
+    {
+      "failureReason": "Baseline-window median p95=17.59 ms, final-window median p95=18.33 ms, maximum daily p95=169.69 ms.",
+      "id": "flat-event-append-cost",
+      "observed": {
+        "absoluteDailyLimitMs": 150,
+        "allowedFinalMedianP95Ms": 35.18619999999646,
+        "baselineMedianP95Ms": 17.59309999999823,
+        "finalMedianP95Ms": 18.331199999898672,
+        "maxDailyP95Ms": 169.68929999996908,
+        "samplesPerDay": 5,
+        "windowDays": 7
+      },
+      "provenance": {
+        "sources": [
+          "performance.now",
+          "appendPersonaRuntimeEvent",
+          "nearest-rank percentile",
+          "daily-window median"
+        ]
+      },
+      "required": true,
+      "status": "failed",
+      "summary": "Baseline-window median p95=17.59 ms, final-window median p95=18.33 ms, maximum daily p95=169.69 ms.",
+      "threshold": {
+        "description": "The final seven-day median append p95 is no more than 2x the first seven-day median (with a 20 ms noise floor), and every daily p95 is strictly below 150 ms.",
+        "source": "Issue #489 acceptance repair numeric contract (2026-09-06)"
+      }
+    },
+    {
+      "id": "runtime-event-continuity",
+      "observed": {
+        "checkpointRangesContinuous": true,
+        "dailyRanges": [
+          {
+            "continuous": true,
+            "count": 229,
+            "day": 1,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 228
+          },
+          {
+            "continuous": true,
+            "count": 480,
+            "day": 2,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 479
+          },
+          {
+            "continuous": true,
+            "count": 709,
+            "day": 3,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 708
+          },
+          {
+            "continuous": true,
+            "count": 950,
+            "day": 4,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 949
+          },
+          {
+            "continuous": true,
+            "count": 1191,
+            "day": 5,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 1190
+          },
+          {
+            "continuous": true,
+            "count": 1432,
+            "day": 6,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 1431
+          },
+          {
+            "continuous": true,
+            "count": 1675,
+            "day": 7,
+            "firstSeq": 0,
+            "idsUnique": true,
+            "lastSeq": 1674
+          },
+          {
+            "continuous": true,
+            "count": 1712,
+            "day": 8,
+            "firstSeq": 200,
+            "idsUnique": true,
+            "lastSeq": 1911
+          },
+          {
+            "continuous": true,
+            "count": 1749,
+            "day": 9,
+            "firstSeq": 400,
+            "idsUnique": true,
+            "lastSeq": 2148
+          },
+          {
+            "continuous": true,
+            "count": 1686,
+            "day": 10,
+            "firstSeq": 700,
+            "idsUnique": true,
+            "lastSeq": 2385
+          },
+          {
+            "continuous": true,
+            "count": 1727,
+            "day": 11,
+            "firstSeq": 900,
+            "idsUnique": true,
+            "lastSeq": 2626
+          },
+          {
+            "continuous": true,
+            "count": 1776,
+            "day": 12,
+            "firstSeq": 1100,
+            "idsUnique": true,
+            "lastSeq": 2875
+          },
+          {
+            "continuous": true,
+            "count": 1717,
+            "day": 13,
+            "firstSeq": 1400,
+            "idsUnique": true,
+            "lastSeq": 3116
+          },
+          {
+            "continuous": true,
+            "count": 1746,
+            "day": 14,
+            "firstSeq": 1600,
+            "idsUnique": true,
+            "lastSeq": 3345
+          },
+          {
+            "continuous": true,
+            "count": 1683,
+            "day": 15,
+            "firstSeq": 1900,
+            "idsUnique": true,
+            "lastSeq": 3582
+          },
+          {
+            "continuous": true,
+            "count": 1720,
+            "day": 16,
+            "firstSeq": 2100,
+            "idsUnique": true,
+            "lastSeq": 3819
+          },
+          {
+            "continuous": true,
+            "count": 1757,
+            "day": 17,
+            "firstSeq": 2300,
+            "idsUnique": true,
+            "lastSeq": 4056
+          },
+          {
+            "continuous": true,
+            "count": 1678,
+            "day": 18,
+            "firstSeq": 2600,
+            "idsUnique": true,
+            "lastSeq": 4277
+          },
+          {
+            "continuous": true,
+            "count": 1711,
+            "day": 19,
+            "firstSeq": 2800,
+            "idsUnique": true,
+            "lastSeq": 4510
+          },
+          {
+            "continuous": true,
+            "count": 1652,
+            "day": 20,
+            "firstSeq": 3100,
+            "idsUnique": true,
+            "lastSeq": 4751
+          },
+          {
+            "continuous": true,
+            "count": 1693,
+            "day": 21,
+            "firstSeq": 3300,
+            "idsUnique": true,
+            "lastSeq": 4992
+          },
+          {
+            "continuous": true,
+            "count": 1722,
+            "day": 22,
+            "firstSeq": 3500,
+            "idsUnique": true,
+            "lastSeq": 5221
+          },
+          {
+            "continuous": true,
+            "count": 1655,
+            "day": 23,
+            "firstSeq": 3800,
+            "idsUnique": true,
+            "lastSeq": 5454
+          },
+          {
+            "continuous": true,
+            "count": 1680,
+            "day": 24,
+            "firstSeq": 4000,
+            "idsUnique": true,
+            "lastSeq": 5679
+          },
+          {
+            "continuous": true,
+            "count": 1721,
+            "day": 25,
+            "firstSeq": 4200,
+            "idsUnique": true,
+            "lastSeq": 5920
+          },
+          {
+            "continuous": true,
+            "count": 1658,
+            "day": 26,
+            "firstSeq": 4500,
+            "idsUnique": true,
+            "lastSeq": 6157
+          },
+          {
+            "continuous": true,
+            "count": 1699,
+            "day": 27,
+            "firstSeq": 4700,
+            "idsUnique": true,
+            "lastSeq": 6398
+          },
+          {
+            "continuous": true,
+            "count": 1732,
+            "day": 28,
+            "firstSeq": 4900,
+            "idsUnique": true,
+            "lastSeq": 6631
+          }
+        ],
+        "eventCount": 1732,
+        "eventIdsUnique": true,
+        "firstSeq": 4900,
+        "lastSeq": 6631,
+        "retainedSequenceContinuous": true
+      },
+      "provenance": {
+        "sources": [
+          "readPersonaRuntimeEvents",
+          "persisted segmented JSONL event log"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "1732 retained production runtime events and all daily retention checkpoints had continuous sequence ranges and unique IDs.",
+      "threshold": {
+        "description": "Each retained range is internally continuous and every daily range overlaps or directly follows the prior checkpoint; event IDs are unique.",
+        "source": "Issue #489 required fix 3"
+      }
+    },
+    {
+      "id": "zero-split-brain",
+      "observed": {
+        "leaseAcquisitionProofSha256": "43a52b12cfb92c7782666ed26c480ad915ff9e82fa532164bdbb204091869b61",
+        "observedFencingTokens": 1061,
+        "observedLeaseAcquisitions": 1061,
+        "retainedLeaseRecords": 50,
+        "splitBrainCount": 0
+      },
+      "provenance": {
+        "sources": [
+          "listPersonaLeaseRecords",
+          "daily pre-pruning overlap observations",
+          "immutable acquisition proof digest"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "0 overlapping acquisitions were found across daily pre-pruning lease snapshots.",
+      "threshold": {
+        "description": "Zero overlapping live lease intervals and one unique fencing token per observed acquisition for one Persona.",
+        "source": "Issue #459 acceptance criterion 6"
+      }
+    },
+    {
+      "id": "zero-stranded-or-stuck",
+      "observed": {
+        "strandedLeaseCount": 0,
+        "stuckPersonaCount": 0
+      },
+      "provenance": {
+        "sources": [
+          "listPersonaLeaseRecords",
+          "inspectAndReconcilePersonaRuntime"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "Active leases=0; stuck Personas=0.",
+      "threshold": {
+        "description": "Zero stranded leases and zero stuck Personas after the run.",
+        "source": "Issue #459 acceptance criterion 7"
+      }
+    },
+    {
+      "id": "resident-memory-bound",
+      "observed": {
+        "day1Bytes": 298115072,
+        "finalBytes": 407179264,
+        "finalGrowthBytes": 109064192,
+        "maxFinalGrowthBytes": 268435456,
+        "maxPeakBytes": 805306368,
+        "peakBytes": 483946496
+      },
+      "provenance": {
+        "sources": [
+          "process.memoryUsage().rss at daily checkpoints"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "Resident-memory final growth=109064192 bytes; peak=483946496 bytes.",
+      "threshold": {
+        "description": "Final RSS growth is at most 256 MiB from day 1 and peak RSS is at most 768 MiB.",
+        "source": "Issue #489 acceptance repair numeric contract (2026-09-06)"
+      }
+    },
+    {
+      "id": "learning-auto-rollback",
+      "observed": {
+        "activatedRevisionId": "br_nynMqZi4BDyqnbKndbIQYKkiwuSIaOmgl4_L1AEryhM",
+        "autoRollbackAt": 1789590378852,
+        "baseRevisionId": "br_LN5lYlgtGmYQAFHUvg9LQ5gkKXFZPrPgd8k1OV3HJgw",
+        "baselineSamples": 10,
+        "behaviorId": "behavior_1D1gSuqYVdbIapLDZJXYW1aUjBXWnKK3a80-7E1bl60",
+        "evaluated": true,
+        "finalRevisionId": "br_LN5lYlgtGmYQAFHUvg9LQ5gkKXFZPrPgd8k1OV3HJgw",
+        "metricId": "outcome_fLgZrd6Zbo5awlC5fzFrn-nrdubPLoPS6Pnc13Q1MKI",
+        "metricVerdict": "rolled_back",
+        "personaId": "persona_TdfPWyIZpAZSZIjRklvvsbuUt2afQtpo7laDPRv5c98",
+        "proposalId": "proposal_f9933b5d24e747809a2de38646bca1ca",
+        "proposalStatus": "rolled_back",
+        "regressionSamples": 10
+      },
+      "provenance": {
+        "sources": [
+          "behavior proposal store",
+          "outcome metric store",
+          "Behavior binding store"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "A persisted regression rolled the active Behavior binding back to its base revision.",
+      "threshold": {
+        "description": "Regression verdict is rolled_back and the active binding returns to the base revision.",
+        "source": "Issue #459 acceptance criterion 8"
+      }
+    },
+    {
+      "id": "os-process-hard-crash-recovery",
+      "observed": {
+        "evidenceIds": [
+          "day-17:hard-crash"
+        ],
+        "hardCrashExecuted": true
+      },
+      "provenance": {
+        "sources": [
+          "personaProcessBoundaryHarness",
+          "child-process persisted runtime snapshot"
+        ]
+      },
+      "required": true,
+      "status": "passed",
+      "summary": "A killed child process safely terminalized uncertain work without replay or a stranded lease.",
+      "threshold": {
+        "description": "Killed-worker recovery fails closed without replay, duplicate completion, or a live lease.",
+        "source": "Issue #489 required fix 3"
+      }
+    }
+  ],
+  "failedCriterionIds": [
+    "flat-event-append-cost"
+  ],
+  "testRun": {
+    "passedSuites": 2,
+    "failedSuites": 1,
+    "passedTests": 21,
+    "failedTests": 1,
+    "durationSeconds": 1074.408
+  },
+  "independentArtifactValidation": {
+    "exitCode": 1,
+    "rejectedCriterionIds": [
+      "flat-event-append-cost"
+    ],
+    "logPath": "persona-soak/attempt-2/artifact-validation.log"
+  },
+  "faultEvidence": [
+    {
+      "after": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 76
+        },
+        "eventCount": 475,
+        "firstEventSeq": 0,
+        "lastEventSeq": 474,
+        "leaseStatuses": {
+          "expired": 1,
+          "released": 76
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 5,
+          "completed": 76
+        },
+        "stuck": false
+      },
+      "before": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 75
+        },
+        "eventCount": 465,
+        "firstEventSeq": 0,
+        "lastEventSeq": 464,
+        "leaseStatuses": {
+          "released": 75
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 5,
+          "completed": 75
+        },
+        "stuck": false
+      },
+      "day": 2,
+      "fault": {
+        "activityId": "activity_86GrAGXMPcrfV5mABs6eHvG29y9ax5G2bqjp3w4yRlw",
+        "firstFencingToken": 76,
+        "firstHolderId": "holder_db4e1d6c586d465c8f5b47251a543666",
+        "firstLeaseId": "lease_QiSdVnzSK8g0IENPVWWhbeVTdJ2fovhupnUgf6SLYHc",
+        "holderChanged": true,
+        "recovered": true,
+        "recoveredFencingToken": 77,
+        "recoveredHolderId": "holder_28f8c462553f42ea9be5e2fbabaae6e6",
+        "recoveredLeaseId": "lease_77_p-Jnk7xSOhhvXYi9Pw_ucY6R67rGqxkOHX7GwqDw",
+        "staleCompletionRejected": true,
+        "terminalActivityCount": 1,
+        "terminalMailboxCount": 1,
+        "terminalStatus": "completed",
+        "terminalSuccessEventCount": 1
+      },
+      "id": "day-2:lease-expiry",
+      "kind": "lease-expiry",
+      "provenance": [
+        "production mailbox/activity/lease stores",
+        "inspectAndReconcilePersonaRuntime",
+        "production fault handler"
+      ],
+      "status": "passed"
+    },
+    {
+      "after": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 268
+        },
+        "eventCount": 1670,
+        "firstEventSeq": 0,
+        "lastEventSeq": 1669,
+        "leaseStatuses": {
+          "released": 89
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 14,
+          "completed": 268
+        },
+        "stuck": false
+      },
+      "before": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 267
+        },
+        "eventCount": 1664,
+        "firstEventSeq": 0,
+        "lastEventSeq": 1663,
+        "leaseStatuses": {
+          "released": 88
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 14,
+          "completed": 267
+        },
+        "stuck": false
+      },
+      "day": 7,
+      "fault": {
+        "activityId": "activity_DfSgfWfCpys1uX8FWGHTB_Y1qmuMDJSqNnE1rEduHxU",
+        "fencingToken": 269,
+        "fulfilledAttempts": 1,
+        "leaseId": "lease_Ic5oB6xFaNyPyySpBNThYWPvNItQcRHLSHdTjtCPzCk",
+        "successfulClaimCount": 1,
+        "terminalStatus": "completed"
+      },
+      "id": "day-7:concurrent-claimant",
+      "kind": "concurrent-claimant",
+      "provenance": [
+        "production mailbox/activity/lease stores",
+        "inspectAndReconcilePersonaRuntime",
+        "production fault handler"
+      ],
+      "status": "passed"
+    },
+    {
+      "after": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 461
+        },
+        "eventCount": 1971,
+        "firstEventSeq": 900,
+        "lastEventSeq": 2870,
+        "leaseStatuses": {
+          "released": 90
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 23,
+          "completed": 461
+        },
+        "stuck": false
+      },
+      "before": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 459
+        },
+        "eventCount": 1959,
+        "firstEventSeq": 900,
+        "lastEventSeq": 2858,
+        "leaseStatuses": {
+          "released": 88
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 23,
+          "completed": 459
+        },
+        "stuck": false
+      },
+      "day": 12,
+      "fault": {
+        "activityId": "activity_J5SgJGbULYlSv4lvSAU7awF_wA4_-Bi22kRSP1yGjAc",
+        "afterState": "completed",
+        "beforeState": "queued",
+        "dispatchId": "dispatch_dFvJ_HOxf92dAFIHnCDzgc6uc0exaIQrOC250DNjiCw",
+        "durableDrainCompleted": true
+      },
+      "id": "day-12:graceful-restart",
+      "kind": "graceful-restart",
+      "provenance": [
+        "production mailbox/activity/lease stores",
+        "inspectAndReconcilePersonaRuntime",
+        "production fault handler"
+      ],
+      "status": "passed"
+    },
+    {
+      "after": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 650
+        },
+        "eventCount": 1952,
+        "firstEventSeq": 2100,
+        "lastEventSeq": 4051,
+        "leaseStatuses": {
+          "released": 88
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 34,
+          "completed": 650
+        },
+        "stuck": false
+      },
+      "before": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 650
+        },
+        "eventCount": 1952,
+        "firstEventSeq": 2100,
+        "lastEventSeq": 4051,
+        "leaseStatuses": {
+          "released": 88
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 34,
+          "completed": 650
+        },
+        "stuck": false
+      },
+      "day": 17,
+      "fault": {
+        "activityId": "activity_UX_yXvjdlqApHHSJKGL_TEMJYi501A3Rt0BQTt8Qrh8",
+        "failClosed": true,
+        "fencingToken": 1,
+        "leaseStatus": "expired",
+        "mailboxItemId": "mailbox_aohSRAgMvgtcbhpYFosjnYrMDJeaeOZSNwpUN0EdqBE",
+        "mailboxStatus": "rejected",
+        "personaId": "persona_32wQyOHS8dZaOpTPOo2Bsd4VwI6lHlZYh2dLaEEYRHg",
+        "replayedClaim": false,
+        "terminalStatus": "error"
+      },
+      "id": "day-17:hard-crash",
+      "kind": "hard-crash",
+      "provenance": [
+        "production mailbox/activity/lease stores",
+        "inspectAndReconcilePersonaRuntime",
+        "production fault handler"
+      ],
+      "status": "passed"
+    },
+    {
+      "after": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 835
+        },
+        "eventCount": 1917,
+        "firstEventSeq": 3300,
+        "lastEventSeq": 5216,
+        "leaseStatuses": {
+          "released": 86
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 49,
+          "completed": 835
+        },
+        "stuck": false
+      },
+      "before": {
+        "activeLeaseCount": 0,
+        "activityStatuses": {
+          "completed": 835
+        },
+        "eventCount": 1917,
+        "firstEventSeq": 3300,
+        "lastEventSeq": 5216,
+        "leaseStatuses": {
+          "released": 86
+        },
+        "lifecycleState": "idle",
+        "mailboxStatuses": {
+          "coalesced": 49,
+          "completed": 835
+        },
+        "stuck": false
+      },
+      "day": 22,
+      "fault": {
+        "closedActivityIds": [],
+        "lifecycleState": "idle"
+      },
+      "id": "day-22:administrative-recovery",
+      "kind": "administrative-recovery",
+      "provenance": [
+        "production mailbox/activity/lease stores",
+        "inspectAndReconcilePersonaRuntime",
+        "production fault handler"
+      ],
+      "status": "passed"
+    }
+  ],
+  "maxima": {
+    "eventAppendP95Ms": 169.68929999996908,
+    "recallP95Ms": 9.652799999981653,
+    "residentMemoryBytes": 483946496,
+    "residentMemoryFinalGrowthBytes": 109064192,
+    "minimumRecallPrecision": 1
+  },
+  "timingDiagnosis": {
+    "status": "unresolved",
+    "explanation": "Day 12 event-append P95 exceeded the existing 150 ms daily ceiling. The nearest-rank P95 of five daily samples is their maximum. Day 12 also exercised graceful restart; temporal correlation does not establish a cause. No threshold was weakened, no source changed during the run, and no rerun was performed to obtain a passing result.",
+    "daysExceeding150Ms": [
+      {
+        "day": 12,
+        "eventAppendP95Ms": 169.68929999996908,
+        "faultsExecuted": [
+          "graceful-restart"
+        ]
+      }
+    ]
+  },
+  "dailyMetrics": [
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 36,
+        "flowDispatches": 32,
+        "leaseHistory": 36,
+        "mailboxItems": 40
+      },
+      "collectionUncompactedCounts": {
+        "activities": 36,
+        "flowDispatches": 32,
+        "leaseHistory": 36,
+        "mailboxItems": 40
+      },
+      "day": 1,
+      "eventAppendP95Ms": 16.481500000001688,
+      "eventCount": 229,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 228,
+      "eventLogSegments": 3,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 36,
+        "beforeCount": 36,
+        "deleted": 0,
+        "examined": 36,
+        "maxFencingToken": 36,
+        "minFencingToken": 1,
+        "observedAcquisitionCount": 36,
+        "observedFencingTokenCount": 36,
+        "prePruneSnapshotSha256": "cc239bd336ed10d8a9d07f44db84ad9e5f71bc6694ec85b457e514797edc17f0",
+        "retainedProtected": 36,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 4.300899999998364,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 298115072
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 76,
+        "flowDispatches": 70,
+        "leaseHistory": 50,
+        "mailboxItems": 81
+      },
+      "collectionUncompactedCounts": {
+        "activities": 76,
+        "flowDispatches": 70,
+        "leaseHistory": 50,
+        "mailboxItems": 81
+      },
+      "day": 2,
+      "eventAppendP95Ms": 17.59309999999823,
+      "eventCount": 480,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 479,
+      "eventLogSegments": 5,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [
+        "day-2:lease-expiry"
+      ],
+      "faultsExecuted": [
+        "lease-expiry"
+      ],
+      "faultsScheduled": [
+        "lease-expiry"
+      ],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 77,
+        "deleted": 27,
+        "examined": 77,
+        "maxFencingToken": 77,
+        "minFencingToken": 1,
+        "observedAcquisitionCount": 77,
+        "observedFencingTokenCount": 77,
+        "prePruneSnapshotSha256": "1829a9ade8f7302814f213744f305415b834f8b507d2b2185af3d40cb40a240d",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.0936000000001513,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 308420608
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 112,
+        "flowDispatches": 102,
+        "leaseHistory": 50,
+        "mailboxItems": 121
+      },
+      "collectionUncompactedCounts": {
+        "activities": 112,
+        "flowDispatches": 102,
+        "leaseHistory": 50,
+        "mailboxItems": 121
+      },
+      "day": 3,
+      "eventAppendP95Ms": 15.90899999999965,
+      "eventCount": 709,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 708,
+      "eventLogSegments": 8,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 86,
+        "deleted": 36,
+        "examined": 86,
+        "maxFencingToken": 113,
+        "minFencingToken": 28,
+        "observedAcquisitionCount": 113,
+        "observedFencingTokenCount": 113,
+        "prePruneSnapshotSha256": "994d5edc72ee8eead770161a33bd6e699fe3e1c946254463214b2644362da9d0",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.794099999999162,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 315404288
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 151,
+        "flowDispatches": 140,
+        "leaseHistory": 50,
+        "mailboxItems": 161
+      },
+      "collectionUncompactedCounts": {
+        "activities": 151,
+        "flowDispatches": 140,
+        "leaseHistory": 50,
+        "mailboxItems": 161
+      },
+      "day": 4,
+      "eventAppendP95Ms": 18.717600000003586,
+      "eventCount": 950,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 949,
+      "eventLogSegments": 10,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 152,
+        "minFencingToken": 64,
+        "observedAcquisitionCount": 152,
+        "observedFencingTokenCount": 152,
+        "prePruneSnapshotSha256": "9e8af602a2f27e9a9701e74421064720f5e4b099b71b18e59c32cc26a5f64579",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 6.171900000001187,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 315736064
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 190,
+        "flowDispatches": 178,
+        "leaseHistory": 50,
+        "mailboxItems": 201
+      },
+      "collectionUncompactedCounts": {
+        "activities": 190,
+        "flowDispatches": 178,
+        "leaseHistory": 50,
+        "mailboxItems": 201
+      },
+      "day": 5,
+      "eventAppendP95Ms": 26.525900000007823,
+      "eventCount": 1191,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 1190,
+      "eventLogSegments": 12,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 191,
+        "minFencingToken": 103,
+        "observedAcquisitionCount": 191,
+        "observedFencingTokenCount": 191,
+        "prePruneSnapshotSha256": "5f06bcfd1974ea0ce220fcabbe8364194c6bb61b15083dbfc5ae05b79282d4a4",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.176500000001397,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 313901056
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 229,
+        "flowDispatches": 216,
+        "leaseHistory": 50,
+        "mailboxItems": 241
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 241
+      },
+      "day": 6,
+      "eventAppendP95Ms": 16.143600000010338,
+      "eventCount": 1432,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 1431,
+      "eventLogSegments": 15,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 230,
+        "minFencingToken": 142,
+        "observedAcquisitionCount": 230,
+        "observedFencingTokenCount": 230,
+        "prePruneSnapshotSha256": "6e2115f3cca68b0d354082fddc4c55dbb22384d8c2198d4462ba3aecb17f83de",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 4.67850000000908,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 333856768
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 268,
+        "flowDispatches": 252,
+        "leaseHistory": 50,
+        "mailboxItems": 282
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 282
+      },
+      "day": 7,
+      "eventAppendP95Ms": 18.137799999996787,
+      "eventCount": 1675,
+      "eventFirstSeq": 0,
+      "eventIdsUnique": true,
+      "eventLastSeq": 1674,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [
+        "day-7:concurrent-claimant"
+      ],
+      "faultsExecuted": [
+        "concurrent-claimant"
+      ],
+      "faultsScheduled": [
+        "concurrent-claimant"
+      ],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 269,
+        "minFencingToken": 181,
+        "observedAcquisitionCount": 269,
+        "observedFencingTokenCount": 269,
+        "prePruneSnapshotSha256": "e44901fdf1b5e70ba27b5b5cb32d77425f8af669066c873dae4bdfe4595fba7a",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 5.4474000000045635,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 341958656
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 306,
+        "flowDispatches": 288,
+        "leaseHistory": 50,
+        "mailboxItems": 322
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 322
+      },
+      "day": 8,
+      "eventAppendP95Ms": 18.941400000010617,
+      "eventCount": 1712,
+      "eventFirstSeq": 200,
+      "eventIdsUnique": true,
+      "eventLastSeq": 1911,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 307,
+        "minFencingToken": 220,
+        "observedAcquisitionCount": 307,
+        "observedFencingTokenCount": 307,
+        "prePruneSnapshotSha256": "182811b2edf6d659734471b2cea96776246f32f7842cae263230e5f1e34b6d91",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 7.365000000019791,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 344002560
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 344,
+        "flowDispatches": 324,
+        "leaseHistory": 50,
+        "mailboxItems": 362
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 362
+      },
+      "day": 9,
+      "eventAppendP95Ms": 15.722200000018347,
+      "eventCount": 1749,
+      "eventFirstSeq": 400,
+      "eventIdsUnique": true,
+      "eventLastSeq": 2148,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 345,
+        "minFencingToken": 258,
+        "observedAcquisitionCount": 345,
+        "observedFencingTokenCount": 345,
+        "prePruneSnapshotSha256": "e65f6919ed9de5c387f65a774a0e5bce8d8c87a1480aa9a9174ad392761bdaa2",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.8052000000025146,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 344526848
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 382,
+        "flowDispatches": 360,
+        "leaseHistory": 50,
+        "mailboxItems": 402
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 402
+      },
+      "day": 10,
+      "eventAppendP95Ms": 18.50250000000233,
+      "eventCount": 1686,
+      "eventFirstSeq": 700,
+      "eventIdsUnique": true,
+      "eventLastSeq": 2385,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 383,
+        "minFencingToken": 296,
+        "observedAcquisitionCount": 383,
+        "observedFencingTokenCount": 383,
+        "prePruneSnapshotSha256": "7e3ddd4b0ed61c37a419e0e6d6b7ad348bd7b4e2990b9bf46dc009eeb7173d9a",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.8035999999847263,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 359944192
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 421,
+        "flowDispatches": 398,
+        "leaseHistory": 50,
+        "mailboxItems": 442
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 442
+      },
+      "day": 11,
+      "eventAppendP95Ms": 16.972800000046846,
+      "eventCount": 1727,
+      "eventFirstSeq": 900,
+      "eventIdsUnique": true,
+      "eventLastSeq": 2626,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 422,
+        "minFencingToken": 334,
+        "observedAcquisitionCount": 422,
+        "observedFencingTokenCount": 422,
+        "prePruneSnapshotSha256": "0209f8e0dda9adc5471aa09175375e08e6a653dc5563c4b5b606fe3552952c11",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.7311999999801628,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 431144960
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 461,
+        "flowDispatches": 436,
+        "leaseHistory": 50,
+        "mailboxItems": 484
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 484
+      },
+      "day": 12,
+      "eventAppendP95Ms": 169.68929999996908,
+      "eventCount": 1776,
+      "eventFirstSeq": 1100,
+      "eventIdsUnique": true,
+      "eventLastSeq": 2875,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [
+        "day-12:graceful-restart"
+      ],
+      "faultsExecuted": [
+        "graceful-restart"
+      ],
+      "faultsScheduled": [
+        "graceful-restart"
+      ],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 90,
+        "deleted": 40,
+        "examined": 90,
+        "maxFencingToken": 462,
+        "minFencingToken": 373,
+        "observedAcquisitionCount": 462,
+        "observedFencingTokenCount": 462,
+        "prePruneSnapshotSha256": "719c93afdd03bea73f3fbb60168fe7dae867f80bd112514152c860eda62a1479",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 9.652799999981653,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 330739712
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 500,
+        "flowDispatches": 474,
+        "leaseHistory": 50,
+        "mailboxItems": 524
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 13,
+      "eventAppendP95Ms": 17.15889999998035,
+      "eventCount": 1717,
+      "eventFirstSeq": 1400,
+      "eventIdsUnique": true,
+      "eventLastSeq": 3116,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 501,
+        "minFencingToken": 413,
+        "observedAcquisitionCount": 501,
+        "observedFencingTokenCount": 501,
+        "prePruneSnapshotSha256": "0e10efcd2e76488abeef6e3f108d1a6a5b1fe7637be2ac368d23bc33f8f509ce",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.6503999999840744,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 392564736
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 536,
+        "flowDispatches": 506,
+        "leaseHistory": 50,
+        "mailboxItems": 564
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 14,
+      "eventAppendP95Ms": 17.48639999999432,
+      "eventCount": 1746,
+      "eventFirstSeq": 1600,
+      "eventIdsUnique": true,
+      "eventLastSeq": 3345,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 86,
+        "deleted": 36,
+        "examined": 86,
+        "maxFencingToken": 537,
+        "minFencingToken": 452,
+        "observedAcquisitionCount": 537,
+        "observedFencingTokenCount": 537,
+        "prePruneSnapshotSha256": "b70988581f41b77d34840c3045e64d8718eb2db27b244231527f29436e2ab651",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.2396000000298955,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 483946496
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 574,
+        "flowDispatches": 542,
+        "leaseHistory": 50,
+        "mailboxItems": 604
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 15,
+      "eventAppendP95Ms": 18.09280000004219,
+      "eventCount": 1683,
+      "eventFirstSeq": 1900,
+      "eventIdsUnique": true,
+      "eventLastSeq": 3582,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 575,
+        "minFencingToken": 488,
+        "observedAcquisitionCount": 575,
+        "observedFencingTokenCount": 575,
+        "prePruneSnapshotSha256": "0a9c42e467bf7438bb0e7014d79ede22c61ff75d14032e67bd4854c267d2127f",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.8606000000145286,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 343158784
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 612,
+        "flowDispatches": 578,
+        "leaseHistory": 50,
+        "mailboxItems": 644
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 16,
+      "eventAppendP95Ms": 24.855600000009872,
+      "eventCount": 1720,
+      "eventFirstSeq": 2100,
+      "eventIdsUnique": true,
+      "eventLastSeq": 3819,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 613,
+        "minFencingToken": 526,
+        "observedAcquisitionCount": 613,
+        "observedFencingTokenCount": 613,
+        "prePruneSnapshotSha256": "87542dc2f04f5bb32e7a15ef85fd5f24b97fda6903b48c2edad23ac53015b07d",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 3.1264000000664964,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 372453376
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 650,
+        "flowDispatches": 614,
+        "leaseHistory": 50,
+        "mailboxItems": 684
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 17,
+      "eventAppendP95Ms": 17.548500000033528,
+      "eventCount": 1757,
+      "eventFirstSeq": 2300,
+      "eventIdsUnique": true,
+      "eventLastSeq": 4056,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [
+        "day-17:hard-crash"
+      ],
+      "faultsExecuted": [
+        "hard-crash"
+      ],
+      "faultsScheduled": [
+        "hard-crash"
+      ],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 651,
+        "minFencingToken": 564,
+        "observedAcquisitionCount": 651,
+        "observedFencingTokenCount": 651,
+        "prePruneSnapshotSha256": "6e59ae1f9ea0112509d830a8156d67244f4f277fed9917b60e16ce7644c9a83f",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.051699999952689,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 381485056
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 684,
+        "flowDispatches": 642,
+        "leaseHistory": 50,
+        "mailboxItems": 724
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 18,
+      "eventAppendP95Ms": 17.43869999994058,
+      "eventCount": 1678,
+      "eventFirstSeq": 2600,
+      "eventIdsUnique": true,
+      "eventLastSeq": 4277,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 84,
+        "deleted": 34,
+        "examined": 84,
+        "maxFencingToken": 685,
+        "minFencingToken": 602,
+        "observedAcquisitionCount": 685,
+        "observedFencingTokenCount": 685,
+        "prePruneSnapshotSha256": "718be13a1cb019df3e26887816fc5540661848dbcb1faa868a2a2f876c5272e0",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.624500000034459,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 384962560
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 721,
+        "flowDispatches": 676,
+        "leaseHistory": 50,
+        "mailboxItems": 764
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 19,
+      "eventAppendP95Ms": 20.231099999975413,
+      "eventCount": 1711,
+      "eventFirstSeq": 2800,
+      "eventIdsUnique": true,
+      "eventLastSeq": 4510,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 87,
+        "deleted": 37,
+        "examined": 87,
+        "maxFencingToken": 722,
+        "minFencingToken": 636,
+        "observedAcquisitionCount": 722,
+        "observedFencingTokenCount": 722,
+        "prePruneSnapshotSha256": "193ea566a78ad314da60d710fc62101f855fff1593ef199b9ac23e2ca083c5c0",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 6.052900000009686,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 389419008
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 760,
+        "flowDispatches": 714,
+        "leaseHistory": 50,
+        "mailboxItems": 804
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 20,
+      "eventAppendP95Ms": 21.79529999999795,
+      "eventCount": 1652,
+      "eventFirstSeq": 3100,
+      "eventIdsUnique": true,
+      "eventLastSeq": 4751,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 761,
+        "minFencingToken": 673,
+        "observedAcquisitionCount": 761,
+        "observedFencingTokenCount": 761,
+        "prePruneSnapshotSha256": "512a9187735d89df6cb71c6b9c9b8831829f1375fdca06d2ec28ec57c1daedda",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.99820000003092,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 386994176
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 799,
+        "flowDispatches": 752,
+        "leaseHistory": 50,
+        "mailboxItems": 844
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 21,
+      "eventAppendP95Ms": 17.67090000002645,
+      "eventCount": 1693,
+      "eventFirstSeq": 3300,
+      "eventIdsUnique": true,
+      "eventLastSeq": 4992,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 800,
+        "minFencingToken": 712,
+        "observedAcquisitionCount": 800,
+        "observedFencingTokenCount": 800,
+        "prePruneSnapshotSha256": "ed0c8875dab97addc64272e305c8305c1cf462029ed740e10b8a954d29f1525b",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 5.3989000000292435,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 388841472
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 835,
+        "flowDispatches": 784,
+        "leaseHistory": 50,
+        "mailboxItems": 884
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 22,
+      "eventAppendP95Ms": 17.240100000053644,
+      "eventCount": 1722,
+      "eventFirstSeq": 3500,
+      "eventIdsUnique": true,
+      "eventLastSeq": 5221,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [
+        "day-22:administrative-recovery"
+      ],
+      "faultsExecuted": [
+        "administrative-recovery"
+      ],
+      "faultsScheduled": [
+        "administrative-recovery"
+      ],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 86,
+        "deleted": 36,
+        "examined": 86,
+        "maxFencingToken": 836,
+        "minFencingToken": 751,
+        "observedAcquisitionCount": 836,
+        "observedFencingTokenCount": 836,
+        "prePruneSnapshotSha256": "4d436c3f8cb2c3a66a0c2407cb263b2f555ad419b47c9b5e4b43656f0c2473a9",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.023300000000745,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 385900544
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 872,
+        "flowDispatches": 818,
+        "leaseHistory": 50,
+        "mailboxItems": 924
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 23,
+      "eventAppendP95Ms": 18.615200000000186,
+      "eventCount": 1655,
+      "eventFirstSeq": 3800,
+      "eventIdsUnique": true,
+      "eventLastSeq": 5454,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 87,
+        "deleted": 37,
+        "examined": 87,
+        "maxFencingToken": 873,
+        "minFencingToken": 787,
+        "observedAcquisitionCount": 873,
+        "observedFencingTokenCount": 873,
+        "prePruneSnapshotSha256": "05b7bce778d95f91c4310e72c076f753a7d5c4e82851fd8073a9b974113e944d",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.0243999999947846,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 397225984
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 907,
+        "flowDispatches": 848,
+        "leaseHistory": 50,
+        "mailboxItems": 964
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 24,
+      "eventAppendP95Ms": 18.474099999992177,
+      "eventCount": 1680,
+      "eventFirstSeq": 4000,
+      "eventIdsUnique": true,
+      "eventLastSeq": 5679,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 85,
+        "deleted": 35,
+        "examined": 85,
+        "maxFencingToken": 908,
+        "minFencingToken": 824,
+        "observedAcquisitionCount": 908,
+        "observedFencingTokenCount": 908,
+        "prePruneSnapshotSha256": "cdc9d197f743ce80dc064911686a78ecdc1d9a5d83aea8f885e170431f2f6988",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 5.49800000002142,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 396410880
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 946,
+        "flowDispatches": 886,
+        "leaseHistory": 50,
+        "mailboxItems": 1004
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 25,
+      "eventAppendP95Ms": 22.84789999993518,
+      "eventCount": 1721,
+      "eventFirstSeq": 4200,
+      "eventIdsUnique": true,
+      "eventLastSeq": 5920,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 947,
+        "minFencingToken": 859,
+        "observedAcquisitionCount": 947,
+        "observedFencingTokenCount": 947,
+        "prePruneSnapshotSha256": "26ab554fa7ee67afa1f58ab3659f2c01af2931d24bf01e9b258f52a20d7893c7",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.201300000073388,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 396324864
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 984,
+        "flowDispatches": 922,
+        "leaseHistory": 50,
+        "mailboxItems": 1044
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 26,
+      "eventAppendP95Ms": 17.666800000006333,
+      "eventCount": 1658,
+      "eventFirstSeq": 4500,
+      "eventIdsUnique": true,
+      "eventLastSeq": 6157,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 88,
+        "deleted": 38,
+        "examined": 88,
+        "maxFencingToken": 985,
+        "minFencingToken": 898,
+        "observedAcquisitionCount": 985,
+        "observedFencingTokenCount": 985,
+        "prePruneSnapshotSha256": "4e02ea4ae24e89f0697119040bcdd0d40411304030957854c3846d43c4509a9d",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 2.071200000005774,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 395460608
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 1023,
+        "flowDispatches": 960,
+        "leaseHistory": 50,
+        "mailboxItems": 1084
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 27,
+      "eventAppendP95Ms": 16.31459999992512,
+      "eventCount": 1699,
+      "eventFirstSeq": 4700,
+      "eventIdsUnique": true,
+      "eventLastSeq": 6398,
+      "eventLogSegments": 17,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 89,
+        "deleted": 39,
+        "examined": 89,
+        "maxFencingToken": 1024,
+        "minFencingToken": 936,
+        "observedAcquisitionCount": 1024,
+        "observedFencingTokenCount": 1024,
+        "prePruneSnapshotSha256": "7e19ff9360d9fe2f69cbb12ad10cfdb04bc0fbcdc4bb0fbe5db503e8d2b734c0",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 1.8810999999986961,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 402882560
+    },
+    {
+      "activitiesAccepted": 20,
+      "activitiesAttempted": 20,
+      "activitiesDuplicate": 0,
+      "activitiesFailed": 0,
+      "activitiesSucceeded": 20,
+      "activitiesUnresolved": 0,
+      "collectionCounts": {
+        "activities": 1060,
+        "flowDispatches": 994,
+        "leaseHistory": 50,
+        "mailboxItems": 1124
+      },
+      "collectionUncompactedCounts": {
+        "activities": 200,
+        "flowDispatches": 200,
+        "leaseHistory": 50,
+        "mailboxItems": 500
+      },
+      "day": 28,
+      "eventAppendP95Ms": 18.331199999898672,
+      "eventCount": 1732,
+      "eventFirstSeq": 4900,
+      "eventIdsUnique": true,
+      "eventLastSeq": 6631,
+      "eventLogSegments": 18,
+      "eventSequenceContinuous": true,
+      "faultEvidenceIds": [],
+      "faultsExecuted": [],
+      "faultsScheduled": [],
+      "leaseHistoryPruning": {
+        "afterCount": 50,
+        "beforeCount": 87,
+        "deleted": 37,
+        "examined": 87,
+        "maxFencingToken": 1061,
+        "minFencingToken": 975,
+        "observedAcquisitionCount": 1061,
+        "observedFencingTokenCount": 1061,
+        "prePruneSnapshotSha256": "942ace943c961777cd21e9a626317326a8ec044346b55f4e416bf253ba4de1f5",
+        "retainedProtected": 50,
+        "retainedUnverifiable": 0
+      },
+      "recallP95Ms": 3.4114999999292195,
+      "recallPrecision": 1,
+      "residentMemoryBytes": 407179264
+    }
+  ],
+  "evidence": [
+    {
+      "path": "persona-soak/attempt-2/artifacts/persona-soak.json",
+      "originalRawSha256": "2b6d47a96079125948ab8aa99c38563f1656e1ccd113060c2b408347df410b3e"
+    },
+    {
+      "path": "persona-soak/attempt-2/artifacts/persona-soak.jsonl",
+      "originalRawSha256": "3837fec99be17a7dc36dc9c34e665bf59c90d8af3685152b292968c972a97e05"
+    },
+    {
+      "path": "persona-soak/attempt-2/artifacts/persona-soak.md",
+      "originalRawSha256": "627c4f89899d38ecbb5bb73c57e6095162c9f6100e642220ea05354de9a42a11"
+    },
+    {
+      "path": "persona-soak/attempt-2/artifacts/persona-soak-progress.jsonl",
+      "originalRawSha256": "99a3b198a3141d89bd457be8de7b965c14189b8b83b2e092252a83fd6db35e87"
+    },
+    {
+      "path": "persona-soak/attempt-2/artifacts/SHA256SUMS",
+      "originalRawSha256": "fdc85f4e9af356ef71cd56a0c78907edf4692353f5ccc228a4aea86d27898417"
+    },
+    {
+      "path": "persona-soak/attempt-2/snapshot-identity.json",
+      "originalRawSha256": "d5d6f8d9acb3c3a3583e772803e5a6e3deab97e002bc5fd0af63f1f946048d30"
+    },
+    {
+      "path": "persona-soak/attempt-2/run-manifest.json",
+      "originalRawSha256": "275bb51bb8ee19b55a16d9469fa0ba596b8fdbb8fff60cd4772ed9fffd0302fd"
+    },
+    {
+      "path": "persona-soak/attempt-2/source/validation-source-manifest.json",
+      "originalRawSha256": "cbdd84909b6191a1591e81f9ffc09a2bdaa0ff399b6b2a5a597c3ccbf196851c"
+    },
+    {
+      "path": "persona-soak/attempt-2/dependency-artifact-manifest.json",
+      "originalRawSha256": "ae4e92754fc8ce8380eb5ff632f3223bb9eff748b2bfd803aa990fd826deb0c9"
+    },
+    {
+      "path": "persona-soak/attempt-2/soak-run.log",
+      "originalRawSha256": "30833b17970de168b4ffdfcc9973f20578a05e9d0bedcdc0e0438f514f3679af"
+    },
+    {
+      "path": "persona-soak/attempt-2/artifact-validation.log",
+      "originalRawSha256": "d827b1a9d49ba0e604ba5d22780e37323f03f5b2a4a73ff1e5252ca5c1deb782"
+    },
+    {
+      "path": "persona-soak/attempt-2/validation-summary.json",
+      "originalRawSha256": "9c6ebedc21bc94a83a11707940c10b3ffb4fc94c6a24127c4ecb24fd0c1fd62c"
+    },
+    {
+      "path": "persona-soak/attempt-2/evidence-SHA256SUMS",
+      "originalRawSha256": "d4d2be3765923290f5a46e409ca8067cefb915981530070f55c0da90014ee7b4"
+    }
+  ],
+  "previousAttempt": {
+    "status": "interrupted_due_to_concurrent_host_validation",
+    "identitySha": "c6b5d47159715d9ec509b722d99603811d2febc2",
+    "startedAt": "2026-09-16T19:22:09.956Z",
+    "endedAt": "2026-09-16T19:26:56.443Z",
+    "completedSimulatedDays": 2,
+    "completedGeneratedActivities": 40,
+    "exitCode": 1,
+    "reason": "Concurrent build/full CI/soak made performance context invalid; first-day event-append P95 249.2073ms exceeded unchanged150ms cap. Retain partial evidence, rerun same frozen SHA only after quiet-host authorization.",
+    "evidenceDirectory": "persona-soak/attempt-1",
+    "checksumFile": "persona-soak/attempt-1/evidence-SHA256SUMS",
+    "checksumSha256": "16f82fa89c786d3d9bb75b59fcfd3834757cf1edae20d6cc4b46acb64a829923"
+  },
+  "postSnapshotDrift": {
+    "checkedAt": "2026-09-16T20:28:08.234Z",
+    "explanation": "The final build generated a next-env.d.ts type import after snapshot capture; it has no runtime effect. Audit documentation and evidence were finalized while the frozen soak ran. Exact differences are listed, so this result remains tied to its synthetic SHA.",
+    "changed": [
+      {
+        "path": "docs/audits/2026-09-16-remediation.md",
+        "classification": "documentation-or-audit-evidence",
+        "snapshotSha256": "35a32bd8b1fa7477d7187e8b8553138f805a77f833c9a22e1e5577fc704669ac",
+        "observedSha256": "72bdfd4ddb482df640536b47f5c331aba16ac89548602d2c87676f87f64e6f16"
+      },
+      {
+        "path": "docs/project-status.md",
+        "classification": "documentation-or-audit-evidence",
+        "snapshotSha256": "1457fff7e79fcdd596fd9563be7669466502570b4bcd8714cd0765ba2895bf80",
+        "observedSha256": "3dc45b43a04934ed0801201282bef28d862501a6e132d97b35ddd4caec662262"
+      },
+      {
+        "path": "next-env.d.ts",
+        "classification": "generated-type-declaration",
+        "snapshotSha256": "4e4da12aa061aac172fb1bcb48e9b6e4b293080d2f494327925fdba8f39632ac",
+        "observedSha256": "1b59d4c6b83807db275d43f3cf2cc8e9323f465fab764eea091cc5becd5bad37"
+      },
+      {
+        "path": "src/app/api/env/README.md",
+        "classification": "documentation-or-audit-evidence",
+        "snapshotSha256": "a5ea2b673da272d6deafa2a7ea4ed10bebc82fbb6d5e3a37c9a185963a1f026f",
+        "observedSha256": "ed3eed55c60dc7c05e950a1351f958b1f367cd7700f426422f325cfffacce711"
+      }
+    ],
+    "added": [
+      {
+        "path": "docs/audits/2026-09-16-validation.json",
+        "classification": "documentation-or-audit-evidence",
+        "observedSha256": "470e4b2b59f7e207d0afae3e34a52fb1cd6cdeb7e11425ee00d42e5f5af240ef"
+      }
+    ],
+    "hashScope": "observedSha256 records bytes at checkedAt, before publication sanitization and subsequent release-note edits; it is not a checksum of the current public documentation."
+  },
+  "limitations": [
+    "The synthetic local Git commit includes the current working changes and is not upstream HEAD, a published package, or a released installer.",
+    "The completion adapter and learning candidate compiler are deterministic local fixtures; learning evidence verifies the configured automatic rollback path, not model learning quality.",
+    "Windows timing measurements failed one committed numeric criterion. Successful workload/recovery checks do not turn this into an overall acceptance pass.",
+    "Provider credentials were excluded from the child environment; temporary home, data, filesystem roots and process-crash sandboxes were used."
+  ],
+  "publicationPrivacy": {
+    "sanitizedForPublicRepository": true,
+    "originalRawSha256": "c953e91f75d201fe4d49cc4a6250b7a52b64684e84ead7fa55026ac97eafbf35",
+    "artifactPathPolicy": "remediation/ and persona-soak/ paths identify files relative to a local evidence bundle; toolchain/ identifies local executables. Raw artifacts and exact pre-sanitization audit originals are retained locally and are not included in this repository.",
+    "hashPolicy": "originalRawSha256 identifies unchanged raw artifact bytes retained locally. sha256 on included repository files identifies their public bytes. Source and snapshot hashes retain their original measured scope; this sanitization is not a new validation run.",
+    "redactions": [
+      "Local user-specific absolute paths replaced by repository-relative or artifact-relative paths.",
+      "Private task identifiers omitted."
+    ]
+  }
+}

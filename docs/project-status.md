@@ -26,4 +26,6 @@ Persona readiness has separate [goal acceptance](performance/persona-goal-accept
 
 The September 16 remediation's full offline 28-day simulation completed all 560 activities and passed recovery, retention and learning checks, but failed the event-append latency criterion: one daily p95 was 169.6893 ms against a 150 ms limit. Twelve of thirteen criteria passed; overall acceptance did not. The remediation record preserves the exact snapshot, evidence and unresolved profiling work. This is neither 28 elapsed days nor proof of live-provider unattended operation.
 
+The [scorecard acceptance contract and evidence ledger](audits/scorecard-563/README.md) captures the October 3, 2026 source/release baseline and later reported automated Persona passes without replacing that historical failure. It separates current-source checks, unintegrated local patches, published-artifact observations, simulations, live runs and human acceptance. Its nine-row rubric and new budgets are proposals awaiting maintainer and independent-reviewer agreement; successful ledger validation does not award grades or establish release readiness.
+
 Open issues are tracked in [GitHub](https://github.com/mario-andreschak/FLUJO/issues). Release notes belong in [CHANGELOG.md](../CHANGELOG.md), including migration requirements, known regressions, and experimental limits.
