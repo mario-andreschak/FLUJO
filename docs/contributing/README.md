@@ -29,19 +29,23 @@ PowerShell:
 $contributorData = Join-Path $env:TEMP ('flujo-contributor-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $contributorData | Out-Null
 $env:FLUJO_DATA_DIR = $contributorData
-node scripts/launch-next.mjs dev --webpack --port 4300
+$env:FLUJO_EXPOSURE_MODE = 'localhost'
+node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
 POSIX shell:
 
 ```sh
 export FLUJO_DATA_DIR="$(mktemp -d -t flujo-contributor.XXXXXX)"
-node scripts/launch-next.mjs dev --webpack --port 4300
+export FLUJO_EXPOSURE_MODE=localhost
+node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
 
-Open `http://localhost:4300`, keep the terminal running, and stop with Ctrl+C.
-Use a fresh terminal afterward so the disposable data variable does not affect
-your regular installation. Do not import a personal backup or log into a provider
+Open `http://127.0.0.1:4300`, keep the terminal running, and stop with Ctrl+C.
+These commands select both local request policy and a loopback listener, even
+when the shell inherited a network/public exposure setting. Use a fresh terminal
+afterward so the disposable data and exposure variables do not affect your
+regular installation. Do not import a personal backup or log into a provider
 for the offline first PR. UI/model/MCP journeys have separate acceptance gates.
 See [getting started](../getting-started/README.md) when you deliberately choose
 to connect a provider or external tool.

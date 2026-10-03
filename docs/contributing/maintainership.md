@@ -80,7 +80,8 @@ never commit recovery material or assume all sessions were revoked from one UI.
 
 ## Security and release tabletop
 
-Use the current Security owner's private-reporting policy (tracked in #565).
+Use the current [security policy](../../SECURITY.md) and Security owner's
+private-reporting contract (tracked in #565).
 Reporting-channel availability, supported releases, response targets and real
 triage ownership must be verified there. Until available, ask the owner for a
 private channel without posting exploit details publicly.
