@@ -7,8 +7,10 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
-import { assertWorkerRequestReady } from '@/backend/services/workspace/workerMode';
-import { withExecutionExtensionRoute } from '@/backend/execution/extensions';
+import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { authorizeExecutionTransport, withExecutionExtensionRoute } from '@/backend/execution/extensions';
+import { assertOwnerRequest } from '@/backend/services/security/ownerAccess';
+import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 
 const log = createLogger('app/api/_workspace');
 
@@ -177,6 +179,18 @@ export function withWorkspaceRoute<
     // `{ json: async () => body }`) for the handler itself. Only workspace
     // parsing needs the normalized Fetch Request.
     const handlerRequest = request ?? normalizedRequest;
+    // Handler admission repeats transport auth before even selecting storage.
+    // Adapters still authenticate in withRoute; no caller-supplied identity is
+    // substituted for their opaque execution authority.
+    const transportRequest = (request ?? normalizedRequest) as Request;
+    const extensionResponse = authorizeExecutionTransport(transportRequest);
+    if (extensionResponse) return extensionResponse;
+    if (extensionResponse === undefined) {
+      const denied = isWorkerMode()
+        ? assertSnapshotBearer(transportRequest)
+        : assertOwnerRequest(transportRequest);
+      if (denied) return denied;
+    }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
       const selected = await withWorkspace(admittedRequest, () => Promise.resolve(
         (handler as unknown as (...a: unknown[]) => Promise<Response>)(
