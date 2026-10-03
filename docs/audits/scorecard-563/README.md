@@ -120,6 +120,38 @@ automated passes at an older identified implementation, including rollback/resto
 history. They do not erase this failure or demonstrate current-release equivalence,
 28 elapsed days, independent human usability or public-world autonomy.
 
+## Later source verification and automated review
+
+The publication slice `46af3225199fc7d59062f0a52fd36b5980c94c4a` has a
+[retained failed verification](evidence/ci-verification-46af3225.json).
+GitHub checked synthetic merge `4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e`;
+its tree equals the publication head tree. Verify run 37160686065 completed with
+failure: typecheck, both production builds, Ubuntu release safety, ordinary tests
+and final verification failed. Windows release safety was cancelled and the
+diagnostic Persona memory job was skipped. Installer run 37160686057 also failed
+its build. Ordinary tests finished with 5 failed, 5 skipped and 856 passed suites,
+and 3 failed, 11 skipped and 7,861 passed tests. Passing jobs do not qualify this
+candidate. The `build-verification` gate retains the failure; root owns source fixes.
+
+Three failing source blobs match later coordinator source `1ff266cb`; this byte
+comparison is not a rerun at that later candidate. The older passing baseline run
+above belongs to another tree. The [new source inventory](evidence/publication-source-46af3225.json)
+retains policy/API/architecture/status files and isolation code at the publication
+pin. `SECURITY.md` exists there; its absence at baseline `3511ba4` remains a
+separate historical fact. Source policy is not a reviewed release threat model.
+
+The maintainer selected the `Claude_Opus_Agent` FLUJO flow for automated review.
+Its [unchanged assessment](evidence/docs-automated-review-46af3225.json) assigns
+provisional Docs correctness **B+** and marks release acceptance **ungradable**.
+The [protocol](evidence/docs-review-protocol-46af3225.json) identifies the supplied
+source packet and tool-approval setting; the [triage](evidence/docs-review-triage-46af3225.json)
+records confirmed gaps, rejected findings and follow-up decisions. This review
+did not reproduce source checks or inspect installed artifacts. It also omitted
+whole publication files and historical raw payloads, which caused some incorrect
+findings. Its nine-row readiness labels concern that packet, not every topic's
+latest integration. The final assessment stays pending, and no replacement grade
+is awarded by this follow-up.
+
 ## Nine retained rows
 
 All targets below are proposals for agreement. Accountable human names are unset;
@@ -176,6 +208,12 @@ Passing acceptance must reconcile these bounds and retained agreement must preda
 measurement. Success-rate metrics retain an integer numerator and denominator;
 timeless labels or rounded percentages cannot stand in for counts.
 
+An unset proposed monetary envelope has a null limit. It cannot become an agreed
+numeric contract or qualify any measurement until its limit is declared; null
+does not mean a zero-dollar cap. Existing Persona thresholds remain numeric and
+unchanged. Production claims separately cover local-owner, persistent-worker and
+shared-public, alongside the complete OS/install matrix.
+
 | Contract | Preserved or proposed target | Denominator/window |
 | --- | --- | --- |
 | Existing Persona soak | Daily append p95 <150 ms; peak RSS <=768 MiB; final RSS growth <=256 MiB; final-seven append median <=2× max(first-seven median,20 ms) | Exact-revision 28×20, seed 459, learning; every day's raw samples |
@@ -228,5 +266,6 @@ and the topic-owned architecture/API/operations guides. Docs owns this scorecard
 and validator. Security owns SECURITY.md/security behavior; Engineering owns CI/release;
 other topics own their feature/architecture/operations guides. The
 [publication reconciliation](publication-reconciliation.md) retains source-era findings
-and candidate wording for their review. This slice changes only project-status among
-those publication files; the actual release needs a fresh inventory after integration.
+and candidate wording for their review. The later publication slice qualifies
+README, API, architecture and project-status guidance at its own source pin; the
+actual release still needs a fresh inventory after final integration.

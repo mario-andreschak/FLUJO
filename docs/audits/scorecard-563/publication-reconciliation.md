@@ -61,7 +61,8 @@ remain relevant evidence for that review.
 1. Select the integrated release SHA and its actual npm/container/installer
    identities. Capture a new immutable inventory from that Git tree; retain
    this baseline report. Include the candidate security, architecture, API,
-   recovery, install and resource guides created by the delivery topics.
+   recovery, install and resource guides created by the delivery topics. Check
+   that newly published local links resolve in that exact tree.
 2. Bind each publication claim to the candidate source/artifact/profile and
    the required passing evidence. Verify each advertised OS/install method,
    migration/rollback and external provider/tool prerequisites. Keep failed,
@@ -84,5 +85,14 @@ stream: Windows line-ending conversion can otherwise change the payload.
 Development/push/deployment authorization and empirical acceptance are separate
 records. The coordinator owns the integration and deployment candidate. No
 numeric paid-run envelope or concrete model/account scope is declared in this
-ledger; its proposed zero-dollar cap records that missing measurement contract,
+ledger; its proposed null limit records that missing measurement contract,
 without denying the user's development/deployment authorization.
+
+The later [publication-source inventory](evidence/publication-source-46af3225.json)
+records `SECURITY.md` and the owner-access/isolation documents present at
+`46af3225`. It supplements this immutable baseline; source policy presence does
+not establish accepted release security. The [CI receipt](evidence/ci-verification-46af3225.json)
+retains the failed publication-tree verification separately from source proposals
+and older passing runs. The selected flow's [assessment and triage](evidence/docs-review-triage-46af3225.json)
+retain its provisional grade, confirmed gaps and rejected findings without
+promoting a release claim.

@@ -10,6 +10,11 @@ import { validateScorecard, validateShape } from './validate-scorecard.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const baseline = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.json'), 'utf8'));
+function entry(ledger, collection, id) {
+  const found = ledger[collection].find(item => item.id === id);
+  assert.ok(found, `Fixture entry missing: ${collection}/${id}`);
+  return found;
+}
 function validate(edit = () => {}) {
   const ledger = structuredClone(baseline);
   edit(ledger);
@@ -39,9 +44,9 @@ test('missing/duplicated scorecard rows and silent profile reduction are rejecte
   rejects(l => { l.rubric[4].originalGrade = 'A'; }, /original dimension\/grade changed/);
 });
 test('references and all existing issue reconciliation rows must resolve', () => {
-  rejects(l => { l.claims[0].evidenceIds = ['invented-pass']; }, /unknown evidence ID/);
+  rejects(l => { entry(l, 'claims', 'product-fit-a-minus').evidenceIds = ['invented-pass']; }, /unknown evidence ID/);
   rejects(l => { l.issueReconciliation[0].issue = 999; }, /required complete set/);
-  rejects(l => { l.gates[0].evidenceIds = ['baseline-2026-10-03', 'baseline-2026-10-03']; }, /duplicate references/);
+  rejects(l => { entry(l, 'gates', 'rubric-agreement').evidenceIds = ['baseline-2026-10-03', 'baseline-2026-10-03']; }, /duplicate references/);
 });
 test('existing Persona thresholds cannot be weakened and historical failure cannot disappear', () => {
   rejects(l => { l.budgets.find(b => b.id === 'persona-append-p95').limit = 170; }, /existing numeric contract changed/);
@@ -50,10 +55,10 @@ test('existing Persona thresholds cannot be weakened and historical failure cann
   rejects(l => { l.evidence = l.evidence.filter(e => e.id !== 'persona-september16-failure'); }, /Historical/);
 });
 test('raw payload tampering, absent checksums and outside paths are rejected', () => {
-  rejects(l => { l.evidence[0].raw[0].sha256 = '0'.repeat(64); }, /checksum mismatch/);
-  rejects(l => { l.evidence[0].raw[0].sha256 = null; }, /missing SHA-256|needs a retained/);
-  rejects(l => { l.evidence[0].raw[0].location = '../outside.json'; }, /escapes repository/);
-  rejects(l => { l.evidence[0].raw[0].location = 'C:/private/file.json'; }, /repository-relative/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').raw[0].sha256 = '0'.repeat(64); }, /checksum mismatch/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').raw[0].sha256 = null; }, /missing SHA-256|needs a retained/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').raw[0].location = '../outside.json'; }, /escapes repository/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').raw[0].location = 'C:/private/file.json'; }, /repository-relative/);
 });
 test('realpath containment prevents symlink escape without reading foreign content', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'flujo-scorecard-'));
@@ -66,7 +71,7 @@ test('realpath containment prevents symlink escape without reading foreign conte
   symlinkSync(outside, join(repo, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
   try {
     const ledger = structuredClone(baseline);
-    ledger.evidence[0].raw[0].location = 'link/witness.json';
+    entry(ledger, 'evidence', 'baseline-2026-10-03').raw[0].location = 'link/witness.json';
     const result = validateScorecard(ledger, { root: repo });
     assert.ok(result.errors.some(e => e.includes('symlink escapes repository')));
   } finally {
@@ -78,26 +83,26 @@ test('realpath containment prevents symlink escape without reading foreign conte
 });
 test('reported CI/source metadata cannot promote a shipped-artifact claim or gate', () => {
   rejects(l => {
-    l.claims[0].status = 'release-supported';
-    l.claims[0].evidenceIds = ['verify-main-reported'];
+    entry(l, 'claims', 'product-fit-a-minus').status = 'release-supported';
+    entry(l, 'claims', 'product-fit-a-minus').evidenceIds = ['verify-main-reported'];
   }, /passing checksummed|installed-artifact acceptance/);
-  rejects(l => { l.gates[1].status = 'passed'; l.gates[1].evidenceIds = ['baseline-2026-10-03']; }, /wrong evidence kind/);
-  rejects(l => { l.artifacts[1].provenance = 'verified-content'; }, /verified content needs|no matching retained/);
+  rejects(l => { entry(l, 'gates', 'release-acceptance').status = 'passed'; entry(l, 'gates', 'release-acceptance').evidenceIds = ['baseline-2026-10-03']; }, /wrong evidence kind/);
+  rejects(l => { entry(l, 'artifacts', 'npm-3.46.2').provenance = 'verified-content'; }, /verified content needs|no matching retained/);
 });
 test('live/human evidence cannot use simulation or unbound release identity', () => {
-  rejects(l => { l.evidence[2].kind = 'live-provider'; }, /actual elapsed window/);
-  rejects(l => { l.evidence[0].kind = 'human-study'; }, /actual elapsed window/);
-  rejects(l => { l.evidence[0].kind = 'installed-artifact'; }, /matching release artifact/);
+  rejects(l => { entry(l, 'evidence', 'persona-later-reported').kind = 'live-provider'; }, /actual elapsed window/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').kind = 'human-study'; }, /actual elapsed window/);
+  rejects(l => { entry(l, 'evidence', 'baseline-2026-10-03').kind = 'installed-artifact'; }, /matching release artifact/);
 });
 test('measured results reject false pass, zero denominator and postdeclared budgets', () => {
-  rejects(l => { l.evidence[3].metrics[0].denominator = 0; }, /below minimum/);
+  rejects(l => { entry(l, 'evidence', 'persona-september16-failure').metrics[0].denominator = 0; }, /below minimum/);
   rejects(l => {
-    const e = l.evidence[0];
+    const e = entry(l, 'evidence', 'baseline-2026-10-03');
     e.budgetIds = ['novice-success'];
     e.metrics = [{ budgetId: 'novice-success', value: 8, denominator: 10, numerator: null }];
   }, /proposed budget cannot establish acceptance/);
   rejects(l => {
-    const e = l.evidence[0];
+    const e = entry(l, 'evidence', 'baseline-2026-10-03');
     e.budgetIds = ['persona-peak-rss'];
     e.metrics = [{ budgetId: 'persona-peak-rss', value: 1, denominator: 28, numerator: null }];
     e.window = { kind: 'elapsed', start: '2026-10-02T00:00:00Z', end: '2026-10-02T01:00:00Z', simulatedDays: null };
@@ -105,11 +110,11 @@ test('measured results reject false pass, zero denominator and postdeclared budg
 });
 test('mixed revisions and source-only evidence cannot support one accepted release', () => {
   rejects(l => {
-    const newer = structuredClone(l.evidence[0]);
+    const newer = structuredClone(entry(l, 'evidence', 'baseline-2026-10-03'));
     newer.id = 'different-revision';
     newer.sourceSha = '1'.repeat(40);
     l.evidence.push(newer);
-    const c = l.claims[0];
+    const c = entry(l, 'claims', 'product-fit-a-minus');
     c.status = 'release-supported';
     c.requiredKinds = ['baseline-observation'];
     c.evidenceIds = ['baseline-2026-10-03', 'different-revision'];
@@ -128,23 +133,23 @@ test('accepted claims require measured budgets and explicit profile coverage', (
     c.evidenceIds = ['baseline-2026-10-03'];
   }, /missing passing measurement/);
   rejects(l => {
-    const c = l.claims[0];
+    const c = entry(l, 'claims', 'product-fit-a-minus');
     c.status = 'source-supported';
     c.requiredKinds = ['baseline-observation'];
     c.evidenceIds = ['baseline-2026-10-03'];
-    l.evidence[0].profileIds = ['persistent-worker'];
+    entry(l, 'evidence', 'baseline-2026-10-03').profileIds = ['persistent-worker'];
   }, /does not cover claimed profile/);
   rejects(l => { l.gates = l.gates.filter(g => g.id !== 'shared-profile'); }, /Required gate omitted/);
 });
 // Synthetic in-memory records test the contract; they are never published as human evidence.
 function observedBudget(ledger, budgetId, value, denominator) {
-  const agreement = structuredClone(ledger.evidence[0]);
+  const agreement = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
   Object.assign(agreement, { id: 'synthetic-agreement', kind: 'external-agreement', artifactId: null, observedAt: '2026-10-04T00:00:00Z', scope: 'Synthetic validator fixture only.' });
   ledger.evidence.push(agreement);
   const budget = ledger.budgets.find(b => b.id === budgetId);
   budget.status = 'agreed';
   budget.agreementEvidenceIds = [agreement.id];
-  const study = structuredClone(ledger.evidence[0]);
+  const study = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
   Object.assign(study, { id: 'synthetic-study', kind: budgetId.startsWith('live-') ? 'live-provider' : 'human-study', artifactId: null, observedAt: '2026-12-01T00:00:00Z', scope: 'Synthetic validator fixture only.', budgetIds: [budgetId], metrics: [{ budgetId, value, denominator, numerator: null }], window: { kind: 'elapsed', start: '2026-10-05T00:00:00Z', end: '2026-11-30T00:00:00Z', simulatedDays: null } });
   ledger.evidence.push(study);
   return { budget, agreement, study };
@@ -186,7 +191,7 @@ function artifactReportFixture(edit = () => {}) {
     const payloadSha256 = createHash('sha256').update('synthetic package bytes, not an installed app').digest('hex');
     const artifact = { id: 'synthetic-npm', kind: 'npm', identity: 'Synthetic schema fixture only', sourceSha: ledger.scope.sourceBaselineSha, provenance: 'verified-content', payloadSha256, metadataEvidenceIds: [] };
     ledger.artifacts.push(artifact);
-    const evidence = structuredClone(ledger.evidence[0]);
+    const evidence = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
     const location = 'artifact-proof-fixture.json';
     Object.assign(evidence, { id: 'synthetic-installed', kind: 'installed-artifact', artifactId: artifact.id, sourceSha: artifact.sourceSha, profileIds: ['local-owner'], artifactProof: { location }, scope: 'Synthetic receipt fixture; no app installation or acceptance occurred.' });
     const report = { schemaVersion: 1, result: 'passed', artifactId: artifact.id, sourceSha: artifact.sourceSha, payloadSha256, profileIds: ['local-owner'], producer: { name: 'synthetic-fixture', version: '1', sourceSha: artifact.sourceSha }, checks: [
@@ -238,8 +243,8 @@ test('one package/profile check cannot certify every platform or installation me
   assert.ok(result.errors.some(e => e.includes('missing installed acceptance for method pinned source')));
   const wrong = artifactReportFixture(({ report }) => { report.checks[2].installMethod = 'versioned installer'; });
   assert.ok(wrong.errors.some(e => e.includes('does not match declared platform/install artifact')));
-  rejects(l => { l.profiles[0].osInstallMatrix.pop(); }, /platforms: required complete set/);
-  rejects(l => { l.profiles[0].osInstallMatrix[0].methods.pop(); }, /methods: required complete set/);
+  rejects(l => { entry(l, 'profiles', 'local-owner').osInstallMatrix.pop(); }, /platforms: required complete set/);
+  rejects(l => { entry(l, 'profiles', 'local-owner').osInstallMatrix[0].methods.pop(); }, /methods: required complete set/);
 });
 test('CLI distinguishes valid incomplete ledger from closure readiness and malformed input', () => {
   const run = args => spawnSync(process.execPath, ['scripts/validate-scorecard.mjs', ...args], { cwd: root, encoding: 'utf8' });
@@ -248,4 +253,53 @@ test('CLI distinguishes valid incomplete ledger from closure readiness and malfo
   assert.equal(closure.status, 2, closure.stderr);
   assert.match(closure.stdout, /Closure blockers/);
   assert.equal(run(['--award-A']).status, 1);
+});
+
+test('audit and full-soak gates reject evidence of the wrong source kind', () => {
+  rejects(l => {
+    const gate = entry(l, 'gates', 'persona-current-soak');
+    gate.status = 'passed';
+    gate.evidenceIds = ['publication-source-46af3225'];
+  }, /wrong evidence kind/);
+  rejects(l => {
+    const witness = structuredClone(entry(l, 'evidence', 'baseline-2026-10-03'));
+    Object.assign(witness, {id: 'synthetic-offline', kind: 'offline-simulation', window: {kind: 'simulated', start: null, end: null, simulatedDays: 28}});
+    l.evidence.push(witness);
+    const gate = entry(l, 'gates', 'dependency-audit');
+    gate.status = 'passed';
+    gate.evidenceIds = [witness.id];
+  }, /wrong evidence kind/);
+  rejects(l => { entry(l, 'gates', 'dependency-audit').kind = 'independent'; }, /required source gate kind changed/);
+});
+
+test('candidate verification and all production profiles remain mandatory', () => {
+  rejects(l => { l.gates = l.gates.filter(g => g.id !== 'build-verification'); }, /Required gate omitted/);
+  rejects(l => { entry(l, 'claims', 'docs-a-minus').gateIds = entry(l, 'claims', 'docs-a-minus').gateIds.filter(id => id !== 'build-verification'); }, /missing build-verification claim gate/);
+  for (const profileId of ['local-owner', 'persistent-worker', 'shared-public']) {
+    rejects(l => { l.claims = l.claims.filter(c => c.dimensionId !== 'production' || c.profileId !== profileId); }, /Missing production claim for profile/);
+  }
+});
+
+test('unset envelopes cannot be agreed or used by measurements', () => {
+  rejects(l => { entry(l, 'budgets', 'live-spend').status = 'agreed'; }, /unset envelope cannot/);
+  rejects(l => {
+    const e = entry(l, 'evidence', 'baseline-2026-10-03');
+    e.budgetIds = ['live-spend'];
+    e.metrics = [{budgetId: 'live-spend', value: 0, denominator: 1, numerator: null}];
+  }, /envelope not declared/);
+  rejects(l => { entry(l, 'budgets', 'persona-peak-rss').limit = null; }, /existing numeric contract changed/);
+});
+
+test('source-build receipts still require installed runtime checks', () => {
+  const missing = artifactReportFixture(({artifact, report}) => {
+    artifact.kind = 'source-build';
+    report.checks = report.checks.filter(c => c.id !== 'installed-runtime');
+  });
+  assert.ok(missing.errors.some(e => /missing\/failed\/skipped required/.test(e)), missing.errors.join('\n'));
+  const complete = artifactReportFixture(({artifact, report}) => {
+    artifact.kind = 'source-build';
+    report.checks.find(c => c.id === 'installed-runtime').installMethod = 'pinned source';
+  });
+  assert.deepEqual(complete.errors, []);
+  assert.ok(complete.blockers.length > 0);
 });

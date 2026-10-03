@@ -1,0 +1,232 @@
+﻿2026-10-03T23:07:59.1660408Z Current runner version: '2.337.0'
+2026-10-03T23:07:59.1692010Z ##[group]Runner Image Provisioner
+2026-10-03T23:07:59.1693616Z Hosted Compute Agent
+2026-10-03T23:07:59.1694507Z Version: 20260901.588
+2026-10-03T23:07:59.1695454Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-03T23:07:59.1696601Z Build Date: 2026-09-01T19:56:44Z
+2026-10-03T23:07:59.1697603Z Worker ID: {4d809e6e-0201-4584-a95a-9a88113c1d83}
+2026-10-03T23:07:59.1698689Z Azure Region: westus2
+2026-10-03T23:07:59.1699508Z ##[endgroup]
+2026-10-03T23:07:59.1701519Z ##[group]Operating System
+2026-10-03T23:07:59.1702475Z Microsoft Windows Server 2025
+2026-10-03T23:07:59.1703364Z 10.0.26100
+2026-10-03T23:07:59.1704108Z Datacenter
+2026-10-03T23:07:59.1704846Z ##[endgroup]
+2026-10-03T23:07:59.1705596Z ##[group]Runner Image
+2026-10-03T23:07:59.1706515Z Image: windows-2025-vs2026
+2026-10-03T23:07:59.1707392Z Version: 20260925.250.1
+2026-10-03T23:07:59.1709746Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260925.250/images/windows/Windows2025-VS2026-Readme.md
+2026-10-03T23:07:59.1712504Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260925.250
+2026-10-03T23:07:59.1714506Z ##[endgroup]
+2026-10-03T23:07:59.1716129Z ##[group]GITHUB_TOKEN Permissions
+2026-10-03T23:07:59.1718478Z Contents: read
+2026-10-03T23:07:59.1719338Z Metadata: read
+2026-10-03T23:07:59.1720150Z ##[endgroup]
+2026-10-03T23:07:59.1722819Z Secret source: Actions
+2026-10-03T23:07:59.1724144Z Cache mode: write
+2026-10-03T23:07:59.1725184Z Prepare workflow directory
+2026-10-03T23:07:59.2178590Z Prepare all required actions
+2026-10-03T23:07:59.2242350Z Getting action download info
+2026-10-03T23:07:59.5431082Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-03T23:07:59.6684975Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-03T23:07:59.9559148Z Complete job name: MCP artifact validation (Windows)
+2026-10-03T23:08:00.1008223Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-10-03T23:08:00.1009830Z with:
+2026-10-03T23:08:00.1010369Z   persist-credentials: false
+2026-10-03T23:08:00.1011058Z   repository: mario-andreschak/FLUJO
+2026-10-03T23:08:00.1016426Z   token: ***
+2026-10-03T23:08:00.1016966Z   ssh-strict: true
+2026-10-03T23:08:00.1017538Z   ssh-user: git
+2026-10-03T23:08:00.1018067Z   clean: true
+2026-10-03T23:08:00.1018623Z   sparse-checkout-cone-mode: true
+2026-10-03T23:08:00.1019288Z   fetch-depth: 1
+2026-10-03T23:08:00.1019835Z   fetch-tags: false
+2026-10-03T23:08:00.1020358Z   show-progress: true
+2026-10-03T23:08:00.1020817Z   lfs: false
+2026-10-03T23:08:00.1021239Z   submodules: false
+2026-10-03T23:08:00.1021699Z   set-safe-directory: true
+2026-10-03T23:08:00.1022228Z   allow-unsafe-pr-checkout: false
+2026-10-03T23:08:00.1022976Z ##[endgroup]
+2026-10-03T23:08:00.2511225Z Syncing repository: mario-andreschak/FLUJO
+2026-10-03T23:08:00.2515128Z ##[group]Getting Git version info
+2026-10-03T23:08:00.3759701Z Working directory is 'D:\a\FLUJO\FLUJO'
+2026-10-03T23:08:00.3781102Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-03T23:08:00.7281010Z git version 2.55.0.windows.5
+2026-10-03T23:08:00.7329737Z ##[endgroup]
+2026-10-03T23:08:00.7348652Z Temporarily overriding HOME='D:\a\_temp\77a05c42-520a-42ce-9b58-6e5a31a57fda' before making global git config changes
+2026-10-03T23:08:00.7350058Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:08:00.7359973Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\FLUJO\FLUJO
+2026-10-03T23:08:00.7968770Z Deleting the contents of 'D:\a\FLUJO\FLUJO'
+2026-10-03T23:08:00.7975645Z ##[group]Initializing the repository
+2026-10-03T23:08:00.7984822Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\FLUJO\FLUJO
+2026-10-03T23:08:00.8806850Z Initialized empty Git repository in D:/a/FLUJO/FLUJO/.git/
+2026-10-03T23:08:00.8850182Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:08:00.9437847Z ##[endgroup]
+2026-10-03T23:08:00.9439243Z ##[group]Disabling automatic garbage collection
+2026-10-03T23:08:00.9447752Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-10-03T23:08:00.9785269Z ##[endgroup]
+2026-10-03T23:08:00.9786366Z ##[group]Setting up auth
+2026-10-03T23:08:00.9794612Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:08:01.0084187Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-03T23:08:02.3842945Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:08:02.4129424Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-03T23:08:02.9460686Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:08:02.9762725Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-03T23:08:03.4957790Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-10-03T23:08:03.5267346Z ##[endgroup]
+2026-10-03T23:08:03.5268826Z ##[group]Fetching the repository
+2026-10-03T23:08:03.5284210Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e:refs/remotes/pull/607/merge
+2026-10-03T23:08:06.0154925Z From https://github.com/mario-andreschak/FLUJO
+2026-10-03T23:08:06.0155769Z  * [new ref]         4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e -> pull/607/merge
+2026-10-03T23:08:06.0195051Z ##[endgroup]
+2026-10-03T23:08:06.0195438Z ##[group]Determining the checkout info
+2026-10-03T23:08:06.0198096Z ##[endgroup]
+2026-10-03T23:08:06.0212614Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-10-03T23:08:06.0617213Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-10-03T23:08:06.0913519Z ##[group]Checking out the ref
+2026-10-03T23:08:06.0922319Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/607/merge
+2026-10-03T23:08:07.1356657Z Updating files:  94% (2496/2637)
+2026-10-03T23:08:07.1426251Z Updating files:  95% (2506/2637)
+2026-10-03T23:08:07.1501690Z Updating files:  96% (2532/2637)
+2026-10-03T23:08:07.1570034Z Updating files:  97% (2558/2637)
+2026-10-03T23:08:07.1665098Z Updating files:  98% (2585/2637)
+2026-10-03T23:08:07.1799868Z Updating files:  99% (2611/2637)
+2026-10-03T23:08:07.1800974Z Updating files: 100% (2637/2637)
+2026-10-03T23:08:07.1801469Z Updating files: 100% (2637/2637), done.
+2026-10-03T23:08:07.1943301Z Note: switching to 'refs/remotes/pull/607/merge'.
+2026-10-03T23:08:07.1943799Z 
+2026-10-03T23:08:07.1944179Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-03T23:08:07.1945091Z changes and commit them, and you can discard any commits you make in this
+2026-10-03T23:08:07.1945686Z state without impacting any branches by switching back to a branch.
+2026-10-03T23:08:07.1946465Z 
+2026-10-03T23:08:07.1946857Z If you want to create a new branch to retain commits you create, you may
+2026-10-03T23:08:07.1947822Z do so (now or later) by using -c with the switch command. Example:
+2026-10-03T23:08:07.1948299Z 
+2026-10-03T23:08:07.1949484Z   git switch -c <new-branch-name>
+2026-10-03T23:08:07.1949684Z 
+2026-10-03T23:08:07.1949807Z Or undo this operation with:
+2026-10-03T23:08:07.1949968Z 
+2026-10-03T23:08:07.1950054Z   git switch -
+2026-10-03T23:08:07.1950169Z 
+2026-10-03T23:08:07.1950382Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-03T23:08:07.1950688Z 
+2026-10-03T23:08:07.1951037Z HEAD is now at 4d8fe9f Merge 46af3225199fc7d59062f0a52fd36b5980c94c4a into 50113b6e9d7bf5f50291f55470af35ad6bb8189a
+2026-10-03T23:08:07.2114382Z ##[endgroup]
+2026-10-03T23:08:07.2519305Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-10-03T23:08:07.2774026Z 4d8fe9f0697ead3017c9b83f6cbae861f9e9cc0e
+2026-10-03T23:08:07.2811897Z ##[group]Removing auth
+2026-10-03T23:08:07.2819911Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:08:07.3105152Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-03T23:08:07.8688865Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:08:07.8936793Z http.https://github.com/.extraheader
+2026-10-03T23:08:07.8978693Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-10-03T23:08:07.9268928Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-03T23:08:08.4691804Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:08:08.4979375Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-03T23:08:09.0382532Z ##[endgroup]
+2026-10-03T23:08:09.0963487Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-03T23:08:09.0963935Z with:
+2026-10-03T23:08:09.0964125Z   node-version: 22
+2026-10-03T23:08:09.0964312Z   cache: npm
+2026-10-03T23:08:09.0964491Z   always-auth: false
+2026-10-03T23:08:09.0964689Z   check-latest: false
+2026-10-03T23:08:09.0967459Z   token: ***
+2026-10-03T23:08:09.0967651Z ##[endgroup]
+2026-10-03T23:08:09.2951967Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.3\x64
+2026-10-03T23:08:09.2961288Z (node:5676) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-03T23:08:09.2962594Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-03T23:08:09.2966524Z ##[group]Environment details
+2026-10-03T23:08:13.7648475Z node: v22.23.3
+2026-10-03T23:08:13.7648852Z npm: 10.9.9
+2026-10-03T23:08:13.7649154Z yarn: 1.22.22
+2026-10-03T23:08:13.7649998Z ##[endgroup]
+2026-10-03T23:08:13.8493712Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\22.23.3\x64\npm.cmd config get cache"
+2026-10-03T23:08:14.3887162Z C:\npm\cache
+2026-10-03T23:08:14.8031368Z npm cache is not found
+2026-10-03T23:08:14.8334599Z ##[group]Run npm ci --include=dev
+2026-10-03T23:08:14.8334977Z [36;1mnpm ci --include=dev[0m
+2026-10-03T23:08:14.8335217Z [36;1mnpm run build[0m
+2026-10-03T23:08:14.8878458Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-03T23:08:14.8878857Z ##[endgroup]
+2026-10-03T23:08:20.9789799Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-03T23:08:28.8539206Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-03T23:08:32.0022894Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:08:34.9687193Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-03T23:08:37.5369628Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-03T23:09:32.3819973Z 
+2026-10-03T23:09:32.3820821Z added 1338 packages, and audited 1345 packages in 1m
+2026-10-03T23:09:32.3821269Z 
+2026-10-03T23:09:32.3821518Z 446 packages are looking for funding
+2026-10-03T23:09:32.3822039Z   run `npm fund` for details
+2026-10-03T23:09:32.3845057Z 
+2026-10-03T23:09:32.3845308Z found 0 vulnerabilities
+2026-10-03T23:09:33.9110254Z 
+2026-10-03T23:09:33.9111004Z > flujo-ai@3.46.2 build
+2026-10-03T23:09:33.9112605Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-03T23:09:33.9113869Z 
+2026-10-03T23:09:34.2186262Z 
+2026-10-03T23:09:34.2186925Z > flujo-ai@3.46.2 build:mcp
+2026-10-03T23:09:34.2188474Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-03T23:09:34.2189734Z 
+2026-10-03T23:09:34.5465243Z 
+2026-10-03T23:09:34.5466073Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-03T23:09:34.5467154Z > tsc -p tsconfig.json
+2026-10-03T23:09:34.5467499Z 
+2026-10-03T23:09:35.9492145Z 
+2026-10-03T23:09:35.9492956Z > @mario.andreschak/mcp-filesystem@3.46.2 build
+2026-10-03T23:09:35.9493705Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem
+2026-10-03T23:09:35.9494040Z 
+2026-10-03T23:09:38.5965257Z 
+2026-10-03T23:09:38.5966203Z > @mario.andreschak/mcp-bash@3.46.2 build
+2026-10-03T23:09:38.5967081Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash
+2026-10-03T23:09:38.5967539Z 
+2026-10-03T23:09:41.2662132Z 
+2026-10-03T23:09:41.2662901Z > @mario.andreschak/mcp-browser@3.46.2 build
+2026-10-03T23:09:41.2663546Z > tsc -p tsconfig.json
+2026-10-03T23:09:44.4442212Z 
+2026-10-03T23:09:44.4442229Z 
+2026-10-03T23:09:44.4442941Z > @mario.andreschak/mcp-flujo@3.46.2 build
+2026-10-03T23:09:44.4443579Z > tsc -p tsconfig.json
+2026-10-03T23:09:44.4445109Z 
+2026-10-03T23:09:46.8176577Z ▲ Next.js 16.3.8 (webpack)
+2026-10-03T23:09:46.8543655Z ✓ Running next.config.mjs took 36ms
+2026-10-03T23:09:46.8547359Z ⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+2026-10-03T23:09:46.8600008Z Attention: Next.js now collects completely anonymous telemetry regarding usage.
+2026-10-03T23:09:46.8601023Z This information is used to shape Next.js' roadmap and prioritize features.
+2026-10-03T23:09:46.8605973Z You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+2026-10-03T23:09:46.8607351Z https://nextjs.org/telemetry
+2026-10-03T23:09:46.8607701Z 
+2026-10-03T23:09:46.8913587Z - Experiments (use with caution):
+2026-10-03T23:09:46.8918038Z   · proxyClientMaxBodySize: "100mb"
+2026-10-03T23:09:46.8919060Z   ✓ webpackBuildWorker
+2026-10-03T23:09:46.8919920Z   ✓ webpackMemoryOptimizations
+2026-10-03T23:09:46.8920361Z 
+2026-10-03T23:09:46.9970340Z   Creating an optimized production build ...
+2026-10-03T23:09:47.9563344Z   Using tsconfig file: tsconfig.build.json
+2026-10-03T23:11:05.1224656Z   Using tsconfig file: tsconfig.build.json
+2026-10-03T23:11:06.7055004Z   Using tsconfig file: tsconfig.build.json
+2026-10-03T23:11:23.6371794Z ✓ Compiled successfully in 92s
+2026-10-03T23:11:23.6519696Z   Running TypeScript ...
+2026-10-03T23:12:05.5693835Z ##[error]src/backend/services/security/isolatedMcp.ts(127,7): error TS2769: No overload matches this call.
+2026-10-03T23:12:05.5704027Z   Overload 3 of 8, '(file: string, args?: readonly string[] | undefined, options?: ExecFileSyncOptions | undefined): string | NonSharedBuffer', gave the following error.
+2026-10-03T23:12:05.5705105Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.
+2026-10-03T23:12:05.5706554Z ##[error]src/backend/services/security/isolatedMcp.ts(169,7): error TS2769: No overload matches this call.
+2026-10-03T23:12:05.5708112Z   Overload 3 of 8, '(file: string, args?: readonly string[] | undefined, options?: ExecFileSyncOptions | undefined): string | NonSharedBuffer', gave the following error.
+2026-10-03T23:12:05.5709104Z     Property 'NODE_ENV' is missing in type 'Record<string, string>' but required in type 'ProcessEnv'.
+2026-10-03T23:12:05.6935240Z Failed to type check.
+2026-10-03T23:12:05.6935497Z 
+2026-10-03T23:12:05.7449671Z ##[error]Process completed with exit code 1.
+2026-10-03T23:12:05.7760181Z Post job cleanup.
+2026-10-03T23:12:05.9694597Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-03T23:12:05.9961416Z git version 2.55.0.windows.5
+2026-10-03T23:12:06.0032257Z Temporarily overriding HOME='D:\a\_temp\2d638313-7c9f-4b02-a2da-7f0fdfb3d8e7' before making global git config changes
+2026-10-03T23:12:06.0033464Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-03T23:12:06.0042566Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\FLUJO\FLUJO
+2026-10-03T23:12:06.0342564Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-03T23:12:06.0639186Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-03T23:12:06.6394083Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-03T23:12:06.6717151Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-03T23:12:07.2285491Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-03T23:12:07.2571877Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-03T23:12:07.8007063Z Cleaning up orphan processes
+2026-10-03T23:12:07.8077569Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

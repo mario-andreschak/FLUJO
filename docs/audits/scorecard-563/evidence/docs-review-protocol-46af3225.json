@@ -1,0 +1,99 @@
+{
+  "capturedAt": "2026-10-03T23:40:55.589Z",
+  "reviewedSourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+  "reviewer": {
+    "selection": "Maintainer supplied local FLUJO flow URL in response to reviewer question",
+    "flowId": "6b0b98fd-aa5a-4d8a-bdf5-510bb70a7e03",
+    "flowName": "Claude_Opus_Agent",
+    "flowSnapshotSha256": "cfd1e910f587d06f96a421698feca21766ab0e465bbce0a6f8c4d345889f08bd",
+    "modelName": "opus",
+    "modelDisplayName": "Claude Opus",
+    "provider": "claude-subscription",
+    "adapter": "claude-cli",
+    "toolApprovalRequired": true
+  },
+  "transport": {
+    "startedAt": "2026-10-03T23:31:53.650Z",
+    "completedAt": "2026-10-03T23:34:29.575Z",
+    "sourceSha": "46af3225199fc7d59062f0a52fd36b5980c94c4a",
+    "requestSha256": "db32739a6300ac9ff7648578e77f6669d7acee2b8ba93a87f5693a469395425f",
+    "responseSha256": "1d246c91de8fa357f0c25ca7dd1cbe5848e1539d3e64ae8cfbb1fdf78a1d96be",
+    "responseByteLength": 322858,
+    "httpStatus": 200,
+    "flowId": "6b0b98fd-aa5a-4d8a-bdf5-510bb70a7e03",
+    "scope": "Automated supplied-packet review; not human adoption, installed release, independent reproduction, or final current integration acceptance"
+  },
+  "sourceFiles": [
+    {
+      "file": "docs/audits/scorecard-563/README.md",
+      "sha256": "67f9f5a6ea090e998f6bf5dd122d1529582612f72ef1eb2ec9e465f5389b8b07",
+      "byteLength": 17207
+    },
+    {
+      "file": "docs/audits/scorecard-563/scorecard.json",
+      "sha256": "86987bb9106421225beb3f83eb7c8a89457236df04ae3890c6d42086bf8c4aa1",
+      "byteLength": 87781
+    },
+    {
+      "file": "docs/audits/scorecard-563/scorecard.schema.json",
+      "sha256": "1fad5580707939cd3fa52047ca34d2cc9d459e097c2b9acea12b2a2a264d84cd",
+      "byteLength": 30366
+    },
+    {
+      "file": "docs/audits/scorecard-563/artifact-acceptance.md",
+      "sha256": "3dc9b5e4423fb33092dde21982255c168811c7758ac233d21b7efbdc2a34274b",
+      "byteLength": 6064
+    },
+    {
+      "file": "docs/audits/scorecard-563/publication-reconciliation.md",
+      "sha256": "86ac36ed4631b3c7a887c561ee485ff05abdaa208e96dc3fef16b758c1eadf75",
+      "byteLength": 8305
+    },
+    {
+      "file": "scripts/validate-scorecard.mjs",
+      "sha256": "4b781ac4f6333f0ef1d74f985a8d95d721bad6ae3b4ba825c9838eba861a5c31",
+      "byteLength": 30296
+    },
+    {
+      "file": "scripts/validate-scorecard.test.mjs",
+      "sha256": "e975711188f42a745cb210cfcd8718d0289f52e02fba25ab96509c859bfe4028",
+      "byteLength": 16245
+    },
+    {
+      "file": "docs/security/owner-access-v1.md",
+      "sha256": "70518a8a723d2aa701e5690e767ac58731e25eb8cf82a3edb5c655c37f922b48",
+      "byteLength": 8251
+    }
+  ],
+  "publicationDiffSha256": "95d9e311366b46eacc2d57ac5d72e21df913a73fd04a9047a926896bf66e6481",
+  "input": {
+    "sha256": "db32739a6300ac9ff7648578e77f6669d7acee2b8ba93a87f5693a469395425f",
+    "promptByteLength": 243026,
+    "content": "Source-pinned supplied packet; no tools requested; original plan, eight files, four-file diff and CI observations"
+  },
+  "extractedAssessment": {
+    "location": "docs/audits/scorecard-563/evidence/docs-automated-review-46af3225.json",
+    "sha256": "f5d5c6a7f89d46ea92a32ef1942cf351256485fd2208a7b15e1b609b5adb7aca",
+    "verification": "local"
+  },
+  "limitations": [
+    "Local capture does not authenticate a remote reviewer signature or reproduce source checks.",
+    "The source packet omitted raw historical evidence payloads and whole publication/security-policy files; reviewer explicitly declared those limits.",
+    "The user selected this automated reviewer. Release rubric agreement and final artifact-bound reassessment remain pending; this selection is not a human study.",
+    "Configured model is the opus alias; a resolved provider model-version pin or authenticated model signature was not captured. Flow usage counters are returned reports, not billing receipts."
+  ],
+  "returnedTranscript": {
+    "messageCount": 2,
+    "roles": [
+      "user",
+      "assistant"
+    ],
+    "toolCallCount": 0,
+    "toolResultCount": 0,
+    "usageReportedByFlow": {
+      "prompt_tokens": 183384,
+      "completion_tokens": 11550,
+      "total_tokens": 194934
+    }
+  }
+}

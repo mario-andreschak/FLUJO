@@ -1,3 +1,4 @@
 # Retained payload hashes identify bytes on Windows and Unix.
 *.json -text whitespace=cr-at-eol
-*.log -text whitespace=cr-at-eol
+# Raw terminal timestamps retain their original trailing spaces and line endings.
+*.log -text whitespace=-blank-at-eol,cr-at-eol
