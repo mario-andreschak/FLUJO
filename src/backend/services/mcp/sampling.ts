@@ -112,8 +112,8 @@ export function createSamplingHandler(
     if (!model) {
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
-    const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-    if (!apiKey) {
+    const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey) ?? (model.fallbackPolicy ? '' : null);
+    if (apiKey === null) {
       throw new McpError(ErrorCode.InternalError, 'Could not resolve the sampling model API key');
     }
 
@@ -129,7 +129,7 @@ export function createSamplingHandler(
     const adapter = getCompletionAdapter(model);
     // Prefer the per-policy token cap; fall back to the model's own default.
     const maxTokens = policy.maxTokens ?? normalizeMaxTokens(model.maxTokens);
-    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, maxTokens });
+    const { completion } = await adapter.createCompletion({ model, apiKey, messages, temperature, temperatureOverride: temperature, maxTokens });
 
     const raw = completion.choices?.[0]?.message?.content;
     const text = typeof raw === 'string' ? raw : '';

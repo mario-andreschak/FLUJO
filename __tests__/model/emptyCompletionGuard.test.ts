@@ -89,6 +89,20 @@ beforeEach(() => {
   resolveKeyMock.mockReset().mockResolvedValue('sk-test');
 });
 
+it('does not restart a policy through the outer session-limit retry loop', async () => {
+  getModelMock.mockResolvedValue({
+    id: 'model-1', name: 'policy/production', ApiKey: '', provider: 'openai',
+    fallbackPolicy: { modelIds: ['primary', 'backup'], triggers: ['unavailable'] },
+  });
+  createCompletionMock.mockRejectedValue(Object.assign(new Error('Rate limit reached'), {
+    status: 429, code: 'rate_limit_exceeded', headers: { 'retry-after': '0.01' },
+  }));
+  seedState('policy-retry-boundary');
+  const result = await callModel('policy-retry-boundary');
+  expect(result.success).toBe(false);
+  expect(createCompletionMock).toHaveBeenCalledTimes(1);
+});
+
 describe('empty stopped completion guard (#288)', () => {
   it.each([null, '', '   \t\n'])(
     'rejects stop completion with %p content and no tool calls',

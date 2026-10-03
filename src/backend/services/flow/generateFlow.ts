@@ -435,7 +435,7 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
   // SDK deliberately receives an empty key and the CLI uses `codex login`.
   // Keep this exception here (as in ModelHandler) rather than rejecting the
   // request before the Codex adapter can choose its authentication path.
-  const apiKey = resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {
     return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
   }
@@ -720,7 +720,7 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   // An empty Codex key means use the local ChatGPT-plan session from
   // `codex login`; all other unresolved keys remain an error.
-  const apiKey = resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) {
     return { success: false, error: 'Could not resolve the generator model API key', statusCode: 500 };
   }
