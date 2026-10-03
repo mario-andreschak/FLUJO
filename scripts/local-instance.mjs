@@ -6,7 +6,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const runFile = promisify(execFile);
-const unsafe = () => new Error('Private storage is unavailable or has unsafe ownership, permissions, or links.');
+const storageStages = new Set(['windows-lookup', 'windows-read', 'windows-owner', 'windows-write', 'windows-verify',
+  'windows-helper-timeout', 'windows-helper-failed', 'windows-helper-response']);
+export const privateStorageFailureStage = (error) => storageStages.has(error?.storageStage) ? error.storageStage : undefined;
+const unsafe = (storageStage) => Object.assign(new Error('Private storage is unavailable or has unsafe ownership, permissions, or links.'),
+  storageStages.has(storageStage) ? { storageStage } : {});
 
 // Pass only the path/action in the child environment. No secret contents enter
 // PowerShell arguments, output, or error messages. ACLs are owner-only on Windows;
@@ -14,6 +18,7 @@ const unsafe = () => new Error('Private storage is unavailable or has unsafe own
 const windowsAclScript = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$stage = 'lookup'
 try {
   $p = [Environment]::GetEnvironmentVariable('FLUJO_PRIVATE_PATH')
   # Avoid filesystem-provider cmdlet initialization: Get-Item can stall on a
@@ -23,9 +28,11 @@ try {
   $isDirectory = ($attributes -band [IO.FileAttributes]::Directory) -ne 0
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $sid = $identity.User
+  $stage = 'read'
   $acl = if ($isDirectory) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }
   $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
   $protect = [Environment]::GetEnvironmentVariable('FLUJO_PRIVATE_ACTION') -eq 'protect'
+  $stage = 'owner'
   if ($owner.Value -ne $sid.Value) {
     # Elevated Windows processes can create files owned by their token's
     # default owner (Administrators). Normalize only that exact token owner
@@ -34,6 +41,7 @@ try {
     $acl.SetOwner($sid)
   }
   if ($protect) {
+    $stage = 'write'
     if ($isDirectory) {
       $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     } else {
@@ -50,6 +58,7 @@ try {
     if ($isDirectory) { [IO.Directory]::SetAccessControl($p, $acl) } else { [IO.File]::SetAccessControl($p, $acl) }
     $acl = if ($isDirectory) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }
   }
+  $stage = 'verify'
   if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'unsafe' }
   if (-not $acl.AreAccessRulesProtected) { throw 'unsafe' }
   $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
@@ -59,7 +68,7 @@ try {
     if (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'unsafe' }
   }
   [Console]::Out.Write('private')
-} catch { [Environment]::Exit(1) }
+} catch { [Console]::Out.Write("windows-$stage"); [Environment]::Exit(1) }
 `;
 
 async function windowsAcl(filename, protect) {
@@ -72,8 +81,13 @@ async function windowsAcl(filename, protect) {
       env: { SystemRoot: systemRoot, WINDIR: systemRoot,
         FLUJO_PRIVATE_PATH: filename, FLUJO_PRIVATE_ACTION: protect ? 'protect' : 'check' },
     });
-    if (stdout !== 'private') throw unsafe();
-  } catch { throw unsafe(); }
+    if (stdout !== 'private') throw unsafe('windows-helper-response');
+  } catch (error) {
+    // Expose only a fixed stage label, never PowerShell output, a path, a SID,
+    // command arguments, filesystem exception details or secret contents.
+    const reportedStage = typeof error.stdout === 'string' && storageStages.has(error.stdout) ? error.stdout : undefined;
+    throw unsafe(privateStorageFailureStage(error) || reportedStage || (error.killed ? 'windows-helper-timeout' : 'windows-helper-failed'));
+  }
 }
 
 function plainDirectory(stat) { return stat.isDirectory() && !stat.isSymbolicLink(); }
@@ -123,7 +137,7 @@ export async function ensurePrivateDirectory(directory) {
     const resolved = await directoryTree(directory, true);
     await checkPrivate(resolved, { directory: true, protect: true });
     return resolved;
-  } catch { throw unsafe(); }
+  } catch (error) { throw unsafe(privateStorageFailureStage(error)); }
 }
 
 export async function readPrivateJson(filename, { maxBytes = 65536 } = {}) {
@@ -148,7 +162,7 @@ export async function readPrivateJson(filename, { maxBytes = 65536 } = {}) {
     return JSON.parse(buffer.subarray(0, offset).toString('utf8'));
   } catch (error) {
     if (error.code === 'ENOENT') throw Object.assign(new Error('Private file was not found.'), { code: 'ENOENT' });
-    throw unsafe();
+    throw unsafe(privateStorageFailureStage(error));
   } finally { await handle?.close().catch(() => undefined); }
 }
 
@@ -177,7 +191,7 @@ export async function writePrivateJson(filename, value, { exclusive = false } = 
     temporary = undefined;
   } catch (error) {
     if (error.code === 'EEXIST') throw Object.assign(new Error('Private file already exists.'), { code: 'EEXIST' });
-    throw unsafe();
+    throw unsafe(privateStorageFailureStage(error));
   } finally {
     await handle?.close().catch(() => undefined);
     if (temporary) await fs.unlink(temporary).catch(() => undefined);

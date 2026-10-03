@@ -29,6 +29,7 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   show('npm run lint:all');
   show('node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs');
   show('node --test tests/installer-repository.test.mjs');
+  show('node --test scripts/local-instance.test.mjs');
   show('npm run build');
   for (const [stage, script, result] of [
     ['ci', 'test:ci', 'jest-results.json'],
