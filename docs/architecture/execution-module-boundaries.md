@@ -133,3 +133,25 @@ performance comparison, second-human evidence, and independent reassessment.
 Those outstanding gates keep the complete #571/#563 outcome open. Engineering
 owns adding dedicated boundary-check invocation to verification workflows;
 the regression suite already discovers the boundary test without runner edits.
+
+## Shared package API contracts
+
+`src/shared/types/package/build.ts`, `install.ts`, and `registry.ts` own the
+package selection/build results, install inspection/progress/results, and
+public registry browse results. They export types only. Their dependencies are
+the existing shared manifest and install-origin types; importing a DTO does
+not import an installer, storage, registry transport, authentication, or MCP
+process code. Build and install entity-type names retain their different
+meanings in separate modules.
+
+Backend services retain type reexports for existing consumers. The package
+wizard, read-only graph preview and frontend fetch service import the shared
+definitions directly. The extraction preserves all 25 declaration bodies and
+the emitted JavaScript of the six affected services/components. Install consent,
+secret handling, disabled planned executions, deterministic identifiers and
+partial-result ordering remain backend responsibilities and are unchanged.
+
+Use package build/install, secret-derivation, Persona protection, registry
+transport and wizard/preview regressions when changing this seam. Type checking
+and the import guard verify consumer compatibility and direct layer boundaries;
+these checks do not establish packaged-release acceptance or authorize effects.

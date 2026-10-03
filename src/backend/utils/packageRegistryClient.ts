@@ -22,6 +22,15 @@
  * Node-only: never import from client code. Never logs passwords, tokens, or
  * full response bodies that may contain secrets.
  */
+import type {
+  RegistryPackageSearchResult,
+  RegistryPackageDetail,
+} from '@/shared/types/package/registry';
+export type {
+  RegistryPackageSummary,
+  RegistryPackageSearchResult,
+  RegistryPackageDetail,
+} from '@/shared/types/package/registry';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -170,31 +179,6 @@ async function deleteJson<T = unknown>(
   } finally {
     clearTimeout(timeout);
   }
-}
-
-export interface RegistryPackageSummary {
-  id: string;
-  handle: string;
-  name: string;
-  description: string;
-  tags: string[];
-  downloads: number;
-  latestVersion: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface RegistryPackageSearchResult {
-  items: RegistryPackageSummary[];
-  page: number;
-  pageSize: number;
-  total: number;
-  error?: string;
-}
-
-export interface RegistryPackageDetail extends RegistryPackageSummary {
-  versions?: Array<{ version: string; manifestSize: number; publishedAt: string }>;
-  error?: string;
 }
 
 /** Search/browse published packages (anonymous, no auth required). */
