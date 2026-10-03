@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ToolTester, { type ToolTesterPrefill } from '@/frontend/components/mcp/MCPToolManager/ToolTester';
 
 jest.mock('@/frontend/contexts/I18nContext', () => ({
@@ -112,7 +112,8 @@ describe('ToolTester complex parameter lifecycle', () => {
         prefill={firstPrefill}
       />,
     );
-    await screen.findByRole('textbox', { name: 'options (JSON object)' });
+    const options = await screen.findByRole('textbox', { name: 'options (JSON object)' });
+    fireEvent.change(options, { target: { value: '{"depth":2}' } });
 
     view.rerender(
       <ToolTester
@@ -126,5 +127,48 @@ describe('ToolTester complex parameter lifecycle', () => {
     await waitFor(() => expect(
       screen.getByRole('textbox', { name: 'options (JSON object)' }),
     ).toHaveValue(JSON.stringify({ depth: 3 }, null, 2)));
+  });
+
+  it('clears local JSON drafts when selecting a different tool with the same parameter name', async () => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    render(<ToolTester serverName="fixture" tools={[complexTool(), { ...complexTool(), name: 'other_tool' }]}
+      onTestTool={onTestTool} prefill={{ toolName: 'firecrawl_scrape', arguments: { options: { depth: 1 } } }} />);
+    const previous = await screen.findByRole('textbox', { name: 'options (JSON object)' });
+    fireEvent.change(previous, { target: { value: '{"depth":' } });
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'mcp.tester.select' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'other_tool' }));
+    const current = screen.getByRole('textbox', { name: 'options (JSON object)' });
+    expect(current).not.toBe(previous);
+    expect(current).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'mcp.tester.test' })).toBeEnabled();
+    expect(onTestTool).not.toHaveBeenCalled();
+  });
+
+  it('blocks Test while any object or array JSON draft is invalid, including after refresh', async () => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    const tool = () => ({ ...complexTool(), inputSchema: { ...complexTool().inputSchema,
+      properties: { ...complexTool().inputSchema.properties, tags: { type: 'array', items: { type: 'string' } } } } });
+    const prefill = { toolName: 'firecrawl_scrape', arguments: { options: { depth: 1 }, tags: ['one'] } };
+    const view = render(<ToolTester serverName="fixture" tools={[tool()]} onTestTool={onTestTool} prefill={prefill} />);
+    const options = await screen.findByRole('textbox', { name: 'options (JSON object)' });
+    const tags = screen.getByRole('textbox', { name: 'tags (JSON array)' });
+    const run = () => screen.getByRole('button', { name: 'mcp.tester.test' });
+    fireEvent.change(options, { target: { value: '{"depth":' } });
+    await act(async () => { fireEvent.click(run()); });
+    expect(onTestTool).not.toHaveBeenCalled();
+    expect(run()).toBeDisabled();
+    fireEvent.change(tags, { target: { value: '["two",' } });
+    fireEvent.change(options, { target: { value: '{"depth":3}' } });
+    expect(run()).toBeDisabled(); // Repairing one field must not hide another invalid draft.
+    view.rerender(<ToolTester serverName="fixture" tools={[tool()]} onTestTool={onTestTool} prefill={prefill} />);
+    expect(screen.getByRole('textbox', { name: 'tags (JSON array)' })).toBe(tags);
+    expect(tags).toHaveValue('["two",');
+    expect(run()).toBeDisabled();
+    fireEvent.change(tags, { target: { value: '["two"]' } });
+    expect(run()).toBeEnabled();
+    fireEvent.click(run());
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledWith('firecrawl_scrape',
+      { options: { depth: 3 }, tags: ['two'] }, 60));
+    expect(onTestTool).toHaveBeenCalledTimes(1);
   });
 });
