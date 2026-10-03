@@ -223,6 +223,8 @@ jobs:
           cache: npm
       - run: npm ci --include=dev
       # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
+      - name: Verify the locked Next lint adapter and real rule callers
+        run: npm run test:dependency-glob
       - run: npm run lint:all
 
   test:
