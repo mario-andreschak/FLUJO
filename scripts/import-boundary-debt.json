@@ -2,18 +2,6 @@
   "baseline": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
   "exceptions": [
     {
-      "from": "src/backend/execution/flow/FlowConverter.ts",
-      "to": "src/frontend/types/flow/flow.ts",
-      "declaration": "import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';",
-      "reason": "Move graph DTOs to shared contracts in a separately reviewed converter change."
-    },
-    {
-      "from": "src/backend/services/flow/modelAgent.ts",
-      "to": "src/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/autoLayout.ts",
-      "declaration": "import { computeAutoLayout } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/autoLayout';",
-      "reason": "Move the pure layout/geometry dependency cluster together, retaining frontend compatibility exports and geometry regressions."
-    },
-    {
       "from": "src/frontend/components/Chat/DebuggerCanvas.tsx",
       "to": "src/backend/execution/flow/types.ts",
       "declaration": "import { SharedState, DebugStep } from '@/backend/execution/flow/types';",

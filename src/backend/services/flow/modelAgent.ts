@@ -8,7 +8,7 @@
  */
 import { flowService } from '@/backend/services/flow';
 import { createLogger } from '@/utils/logger';
-import { computeAutoLayout } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/utils/autoLayout';
+import { computeAutoLayout } from '@/shared/utils/flowLayout/autoLayout';
 import { sanitizeFlowName } from '@/utils/shared/flowSpecCompiler';
 import {
   QuickChatServerSelection,
