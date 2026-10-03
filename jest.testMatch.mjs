@@ -5,6 +5,7 @@
 // the matcher and the "nothing is silently skipped" check can never drift
 // apart. See issue #176: a `.test.tsx` under `__tests__/` used to be dropped
 // because the matcher only listed `.test.ts`.
+import { fileURLToPath } from 'node:url';
 
 // Glob patterns relative to the repo root, posix separators.
 // The jsdom project owns component/render tests, plus hook tests that need a
@@ -23,12 +24,24 @@ export const NODE_IGNORE_GLOBS = [
   '__tests__/frontend/workspaceSelection\\.test\\.(?:ts|tsx)$',
 ];
 
-const withRoot = (globs) => globs.map((g) => `<rootDir>/${g}`);
+const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Jest-consumable shapes (with the <rootDir> token Jest substitutes).
-export const jsdomTestMatch = withRoot(JSDOM_TEST_GLOBS);
-export const nodeTestMatch = withRoot(NODE_TEST_GLOBS);
-export const nodeTestPathIgnorePatterns = ['/node_modules/', ...withRoot(NODE_IGNORE_GLOBS)];
+// Jest's Windows glob normalizer preserves `\.` as a glob escape. Substituting
+// a native <rootDir> containing `\.codex` therefore loses that separator.
+// Supply POSIX roots before normalization, and escape regex roots separately.
+export function testPatternsForRoot(root) {
+  const normalized = root.replaceAll('\\', '/').replace(/\/$/, '');
+  const globRoot = normalized;
+  const regexRoot = escapeForRegExp(normalized);
+  return {
+    nodeTestMatch: NODE_TEST_GLOBS.map((glob) => `${globRoot}/${glob}`),
+    jsdomTestMatch: JSDOM_TEST_GLOBS.map((glob) => `${globRoot}/${glob}`),
+    nodeTestPathIgnorePatterns: ['/node_modules/', ...NODE_IGNORE_GLOBS.map((pattern) => `${regexRoot}/${pattern}`)],
+    isolatedTestPathIgnorePatterns: ISOLATED_TEST_FILES.map((file) => `${regexRoot}/${escapeForRegExp(file)}$`),
+  };
+}
+
+// Initialized after the isolated-file contract below.
 
 // Union of every project's collection globs, relative to root (for the guard).
 export const ALL_TEST_GLOBS = [...NODE_TEST_GLOBS, ...JSDOM_TEST_GLOBS];
@@ -59,11 +72,8 @@ export const ISOLATED_TEST_FILES = [
 // scripts cannot portably prefix `VAR=value`).
 export const EXCLUDE_ISOLATED_SUITES_ENV = 'FLUJO_JEST_EXCLUDE_ISOLATED_SUITES';
 
-const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-export const isolatedTestPathIgnorePatterns = ISOLATED_TEST_FILES.map(
-  (file) => `<rootDir>/${escapeForRegExp(file)}$`,
-);
+export const { nodeTestMatch, jsdomTestMatch, nodeTestPathIgnorePatterns, isolatedTestPathIgnorePatterns } =
+  testPatternsForRoot(fileURLToPath(new URL('.', import.meta.url)));
 
 export function shouldExcludeIsolatedSuites(env = process.env) {
   return /^(?:1|true|yes|on)$/i.test(env[EXCLUDE_ISOLATED_SUITES_ENV] ?? '');
