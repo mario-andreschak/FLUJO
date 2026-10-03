@@ -9,7 +9,7 @@ import type {
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
-import type { WirePreviewResponse } from '@/backend/execution/flow/types';
+import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 

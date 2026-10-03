@@ -104,7 +104,8 @@ import {
   type McpAppModelContext,
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
-import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import type { SharedState } from '@/backend/execution/flow/types';
+import type { ModelInputSnapshot, WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ExecutionEvent, ModelDeltaEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
   mcpSkillCacheKey,
