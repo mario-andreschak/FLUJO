@@ -180,7 +180,7 @@ export async function finalizeCandidate({ run, directory, sha, version }) {
     dispatchAndFind(run, 'installer.yml', tag, sha),
     dispatchAndFind(run, 'publish-image.yml', 'main', sha, ['-f', `expected_sha=${sha}`, '-f', `expected_version=${version}`]),
   ]);
-  for (const id of runs) run('gh', ['run', 'watch', String(id), '--repo', REPOSITORY, '--exit-status', '--interval', '15'], { stdio: 'inherit', timeout: 3 * 60 * 60_000 });
+  for (const id of runs) run('gh', ['run', 'watch', String(id), '--repo', REPOSITORY, '--exit-status', '--interval', '15'], { stdio: 'inherit', timeout: 5 * 60 * 60_000 });
 }
 
 async function main() {

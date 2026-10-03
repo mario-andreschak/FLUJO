@@ -34,6 +34,7 @@ export function verifyReleaseRevision({ run, show, removeResults = (file) => rmS
   show('node --test scripts/run-local-jest.test.mjs');
   show('node --test scripts/release-evidence.test.mjs');
   show('node --test scripts/local-instance.test.mjs');
+  show('node --test scripts/image-release.test.mjs');
   show('npm run build');
   for (const [stage, script, result] of [
     ['ci', 'test:ci', 'jest-results.json'],

@@ -56,6 +56,10 @@ test('a quarantined Jest exit still requires its fresh baseline gate', () => {
   assert.ok(f.commands.includes('npm run verify:test-baseline -- --stage=ci --results=jest-results.json'));
 });
 
+test('a failed image publication safety gate cannot return release authority', () => {
+  assert.throws(() => verifyReleaseRevision(fixture({ fail: 'node --test scripts/image-release.test.mjs' })), /simulated failed gate/);
+});
+
 for (const change of ['dirtyAfter', 'moveAfter']) {
   test(`refuses publishing when ${change} changes after verification`, () => {
     assert.throws(() => verifyReleaseRevision(fixture({ [change]: true })), /changed or.*dirty/);

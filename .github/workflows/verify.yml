@@ -122,6 +122,7 @@ jobs:
       - run: npm run test:dependency-glob
       - name: Verify native private storage before building release artifacts
         run: node --test scripts/local-instance.test.mjs
+      - run: node --test scripts/image-release.test.mjs
 
   typecheck:
     name: typecheck
