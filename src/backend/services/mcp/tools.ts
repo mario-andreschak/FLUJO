@@ -28,6 +28,7 @@ import {
 } from "./externalAuthorization";
 import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 import { stampMcpAppOwnerScope } from "@/shared/utils/mcpAppOwnerScope";
+import { listCompleteTools } from './toolDiscovery';
 import {
   assertExecutionToolDispatch,
   assertExecutionExtensionCurrent,
@@ -140,10 +141,8 @@ export async function listServerTools(
 
   try {
     log.info(`Listing tools for server ${serverName}`);
-    const response = await client.listTools();
-    log.verbose("Raw response from MCP server:", response);
-
-    const tools = (response.tools || []).map((tool) => ({
+    const response = await listCompleteTools(client);
+    const tools = response.tools.map((tool) => ({
       // Preserve the complete SDK-validated definition so newer standard
       // display and execution metadata (title, icons, outputSchema, execution)
       // reaches host UIs without requiring another lossy mapping update. The
