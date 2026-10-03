@@ -41,6 +41,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+.avatar-preview-data/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)

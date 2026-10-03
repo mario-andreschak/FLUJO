@@ -484,6 +484,7 @@ class ChatService {
     modelId: string;
     servers?: Array<{ name: string; enabledTools?: string[] }>;
     systemPrompt?: string;
+    runArtifactName?: string;
   }): Promise<{ conversationId: string; flow: Flow }> {
     log.debug('synthesizeQuickChat: Entering method', { conversationId: payload.conversationId });
     const response = await fetch('/api/flow/quick-chat', {
