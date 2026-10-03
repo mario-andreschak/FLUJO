@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
 export const OWNER_SCOPES = [
-  'openai:read', 'openai:execute', 'mcp:access', 'control:admin', 'secrets:read',
+  'openai:read', 'openai:execute', 'mcp:access', 'control:admin', 'secrets:read', 'avatar:voice',
 ] as const;
 export type OwnerScope = typeof OWNER_SCOPES[number];
 
@@ -15,7 +15,12 @@ const credentialSchema = z.object({
   issuedAt: timestamp,
   expiresAt: timestamp,
   revokedAt: timestamp.nullable(),
-}).strict().refine(value => value.expiresAt > value.issuedAt);
+  // A voice-only private BFF grant selects its workspace durably. This is not
+  // generic workspace authorization for the legacy control scopes.
+  workspaceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/)
+    .refine(value => !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(value)).optional(),
+}).strict().refine(value => value.expiresAt > value.issuedAt)
+  .refine(value => value.workspaceId === undefined || value.scopes.every(scope => scope === 'avatar:voice'));
 
 export const ownerPolicySchema = z.object({
   schemaVersion: z.literal(1),
@@ -34,6 +39,7 @@ export interface OwnerPrincipal {
   readonly ownerId: string;
   readonly credentialId: string;
   readonly scopes: readonly OwnerScope[];
+  readonly workspaceId?: string;
 }
 
 function digest(value: string): Buffer {
@@ -41,13 +47,15 @@ function digest(value: string): Buffer {
 }
 
 /** Issuance returns plaintext once. Persist only the record in the policy file. */
-export function issueOwnerCredential(scopes: readonly OwnerScope[], expiresAt: number, now = Date.now()): {
+export function issueOwnerCredential(scopes: readonly OwnerScope[], expiresAt: number, now = Date.now(),
+  options: { workspaceId?: string } = {}): {
   token: string; record: OwnerCredential;
 } {
   const token = `flo_v1_${randomBytes(32).toString('base64url')}`;
   const record = credentialSchema.parse({
     id: randomBytes(16).toString('hex'), digest: digest(token).toString('hex'),
     scopes: [...scopes], issuedAt: now, expiresAt, revokedAt: null,
+    ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
   });
   return { token, record };
 }
@@ -65,7 +73,8 @@ export function authenticateOwnerBearer(request: Request, policy: OwnerPolicy, n
   if (!credential || credential.revokedAt !== null || credential.issuedAt > now
       || credential.expiresAt <= now) return null;
   return Object.freeze({ ownerId: policy.ownerId, credentialId: credential.id,
-    scopes: Object.freeze([...credential.scopes]) });
+    scopes: Object.freeze([...credential.scopes]),
+    ...(credential.workspaceId === undefined ? {} : { workspaceId: credential.workspaceId }) });
 }
 
 export function ownerHasScopes(principal: OwnerPrincipal, scopes: readonly OwnerScope[]): boolean {
