@@ -14,12 +14,14 @@ afterAll(() => { Object.defineProperty(globalThis, 'EventSource', { configurable
 
 it.each(['conversation', 'sidebar'] as const)('closes %s before snapshot recovery and does not dispatch a control as an execution event', mode => {
   const onEvent = jest.fn();
-  let source!: FakeEventSource;
-  const onReset = jest.fn(() => expect(source.close).toHaveBeenCalledTimes(1));
-  source = (mode === 'sidebar' ? chatService.subscribeToSidebarEvents({ onEvent, onReset }) : chatService.subscribeToEvents('conv', { onEvent, onReset })) as unknown as FakeEventSource;
+  const order: string[] = [];
+  const onReset = jest.fn(() => { order.push('reset'); });
+  const source = (mode === 'sidebar' ? chatService.subscribeToSidebarEvents({ onEvent, onReset }) : chatService.subscribeToEvents('conv', { onEvent, onReset })) as unknown as FakeEventSource;
+  source.close.mockImplementation(() => { order.push('closed'); });
   const control = { version: 1, reason: 'replay-gap', recovery: 'reload-snapshot', nextSeq: 4 };
   source.dispatchEvent(new MessageEvent(EXECUTION_STREAM_CONTROL_EVENT, { data: JSON.stringify(control) }));
   expect(onReset).toHaveBeenCalledWith(control);
+  expect(order).toEqual(['closed', 'reset']);
   expect(onEvent).not.toHaveBeenCalled();
 });
 
