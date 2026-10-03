@@ -45,6 +45,11 @@ const loadServerConfigsMock = jest.fn();
 const getServerStatusMock = jest.fn();
 const reconcileOrphanedTasksMock = jest.fn();
 const resumeRemoteMcpTasksMock = jest.fn();
+const workerRecoveryConfiguredMock = jest.fn();
+
+jest.mock('@/backend/services/scheduler/workerLocalRecovery', () => ({
+  isWorkerLocalRecoveryConfigured: () => workerRecoveryConfiguredMock(),
+}));
 
 jest.mock('@/backend/services/workspace/snapshotRestore', () => ({
   restoreConfiguredWorkerSnapshot: (...a: unknown[]) => restoreWorkerSnapshotMock(...a),
@@ -154,6 +159,7 @@ describe('backend init startup gating (#78)', () => {
     getServerStatusMock.mockResolvedValue({ status: 'connected' });
     reconcileOrphanedTasksMock.mockResolvedValue(undefined);
     resumeRemoteMcpTasksMock.mockResolvedValue(undefined);
+    workerRecoveryConfiguredMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -333,11 +339,35 @@ describe('backend init startup gating (#78)', () => {
     expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
+  it('starts configured worker-local recovery only after all MCP dependencies are ready, once', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
+    schedulerStartMock.mockImplementationOnce(async () => {
+      expect(getWorkerBootstrapStatus().state).toBe('ready');
+    });
+    await ensureBackendInitialized(); await ensureBackendInitialized();
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+    expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(schedulerStartMock.mock.invocationCallOrder[0]);
+    expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
+    expect(resumeRemoteMcpTasksMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start opted-in recovery when worker dependency installation fails', async () => {
+    process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
+    reinstallWorkspaceMcpServersMock.mockResolvedValueOnce({ ok: false, servers: [{ name: 'broken', status: 'failed' }] });
+    await expect(ensureBackendInitialized()).rejects.toThrow('MCP dependency');
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+    expect(getWorkerBootstrapStatus().state).toBe('error');
+  });
+
   it('worker readiness rejects a server whose startup silently failed', async () => {
     process.env.FLUJO_WORKER_MODE = '1';
+    workerRecoveryConfiguredMock.mockReturnValue(true);
     getServerStatusMock.mockResolvedValue({ status: 'error', message: 'credential-bearing diagnostic' });
     await expect(ensureBackendInitialized()).rejects.toThrow('MCP startup failed');
     expect(getWorkerBootstrapStatus().state).toBe('error');
     expect(JSON.stringify(getWorkerBootstrapStatus())).not.toContain('credential-bearing diagnostic');
+    expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 });

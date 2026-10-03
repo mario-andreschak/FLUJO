@@ -11,6 +11,7 @@ import {
   PlannedExecutionStatus,
   RunRecord,
   TriggerFirePayload,
+  type WorkerRecoveryStatus,
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
@@ -86,6 +87,12 @@ import {
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
 import { removePendingApprovalsForPersonaId } from './pendingApprovals';
+import { isWorkerMode, getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import {
+  assertWorkerOccurrenceCurrent, claimWorkerOccurrence, enrollWorkerRecovery,
+  inspectWorkerRecovery, observeWorkerOccurrence, recordWorkerLocalCreation,
+  recordWorkerTerminalObservation, reconcileWorkerTerminalObservation,
+} from './workerLocalRecovery';
 
 const log = createLogger('backend/services/scheduler/index');
 
@@ -241,6 +248,8 @@ interface PersonaAdmissionObserver {
  * once).
  */
 export class SchedulerService {
+  private workerRecoveryStatuses = new Map<string, WorkerRecoveryStatus>();
+  private workerLocalClaims = new Set<string>();
   /** Armed trigger per enabled execution id. */
   private armed = new Map<string, ArmedTrigger>();
   /** Config captured by each callback; unchanged timers survive reconciliation. */
@@ -327,6 +336,9 @@ export class SchedulerService {
     this.started = true;
     log.info('Starting scheduler');
     await this.reconcile();
+    // Worker snapshots never resume Persona deliveries, file-watch intents or
+    // terminal event fan-out. Only explicitly enrolled ordinary cron plans arm.
+    if (isWorkerMode()) return;
     // Subscribers are armed by reconcile before recovery publication, so a
     // terminal event pending from the prior process cannot be dropped at boot.
     await this.drainTerminalPublications();
@@ -351,10 +363,18 @@ export class SchedulerService {
     // lose a due occurrence and re-arm directly at the following cron boundary.
     const file = await this.loadFile();
     this.pausedCache = file.paused;
+    if (isWorkerMode()) {
+      this.workerRecoveryStatuses.clear();
+      for (const execution of file.executions) {
+        const status = await this.refreshWorkerRecoveryStatus(execution, file.paused);
+        if (status) this.workerRecoveryStatuses.set(execution.id, status);
+      }
+    }
     const configurations = new Map(file.executions
       .filter(execution => !file.paused && execution.enabled
         && !execution.personaRetired && !execution.personaArchived
-        && !isIncompletePersonaControlledExecution(execution))
+        && !isIncompletePersonaControlledExecution(execution)
+        && (!isWorkerMode() || this.workerRecoveryStatuses.get(execution.id)?.eligible === true))
       .map(execution => [execution.id, runtimeConfiguration(execution)] as const));
     for (const [id, trigger] of this.armed) {
       if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
@@ -372,6 +392,7 @@ export class SchedulerService {
     }
     const arming: Promise<void>[] = [];
     for (const execution of file.executions) {
+      if (isWorkerMode() && !this.workerRecoveryStatuses.get(execution.id)?.eligible) continue;
       if (!execution.enabled || execution.personaRetired || execution.personaArchived) {
         continue;
       }
@@ -424,7 +445,9 @@ export class SchedulerService {
   private async isCurrentSchedule(execution: PlannedExecution): Promise<boolean> {
     const file = await this.loadFile();
     const current = file.executions.find(candidate => candidate.id === execution.id);
-    return !file.paused && !!current?.enabled && !current.personaRetired && !current.personaArchived
+    const recovery = current ? await inspectWorkerRecovery(current, file.paused, this.workerLocalClaims) : undefined;
+    return (!isWorkerMode() || recovery?.eligible === true)
+      && !file.paused && !!current?.enabled && !current.personaRetired && !current.personaArchived
       && runtimeConfiguration(current) === runtimeConfiguration(execution);
   }
 
@@ -459,7 +482,7 @@ export class SchedulerService {
         log.error(`Catch-up continuation failed for ${execution.id}:`, error));
     } else {
       await advanceLastScheduledFireAt(execution.id, baseline);
-      void this.fire(execution, payload).catch(error => {
+      void this.fireOrdinarySchedule(execution, payload, occurrence.toISOString()).catch(error => {
         const reason = error instanceof Error ? error.message : String(error);
         this.lastTriggerErrors.set(execution.id, `Schedule catch-up failed: ${reason.slice(0, 1024)}`);
         log.error(`Catch-up fire failed for ${execution.id}:`, error);
@@ -500,7 +523,7 @@ export class SchedulerService {
               }
               await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
               this.lastTriggerErrors.delete(execution.id);
-              if (!execution.personaId) completion = this.fire(execution, payload);
+              if (!execution.personaId) completion = this.fireOrdinarySchedule(execution, payload, occurrence.toISOString());
             });
             // Cursor/admission serialization does not serialize Flow lifetimes:
             // the authored overlap policy still handles later occurrences.
@@ -794,17 +817,76 @@ export class SchedulerService {
   async list(): Promise<PlannedExecutionListEntry[]> {
     const file = await this.loadFile();
     return Promise.all(
-      file.executions.map(async execution => ({
-        execution,
-        status: this.getStatus(execution),
-        lastRun: await loadLastRunRecord(execution.id),
-      }))
+      file.executions.map(async execution => {
+        const recovery = await this.refreshWorkerRecoveryStatus(execution, file.paused);
+        if (recovery) this.workerRecoveryStatuses.set(execution.id, recovery);
+        return { execution, status: this.getStatus(execution), lastRun: await loadLastRunRecord(execution.id) };
+      })
     );
   }
 
   async get(id: string): Promise<PlannedExecution | null> {
     const file = await this.loadFile();
     return file.executions.find(e => e.id === id) ?? null;
+  }
+
+  private async refreshWorkerRecoveryStatus(execution: PlannedExecution, paused: boolean) {
+    let status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
+    if (status?.pending && !this.workerLocalClaims.has(status.pending.runId)
+        && ['unresolved-admission', 'not-opted-in', 'definition-changed'].includes(status.reason)) {
+      // Only a signed installation-local observation can clear uncertainty.
+      // Imported/caller-written history, ACKs and approval rows confer no authority.
+      if (await reconcileWorkerTerminalObservation(execution)) {
+        status = await inspectWorkerRecovery(execution, paused, this.workerLocalClaims);
+      }
+    }
+    return status;
+  }
+
+  async setWorkerLocalRecovery(id: string, input: {
+    enabled: boolean; expectedGenerationId: string; expectedDefinitionSha256: string;
+  }): Promise<void> {
+    if (!isWorkerMode() || getWorkerBootstrapStatus().state !== 'ready') {
+      throw new Error('Worker is not ready for local recovery enrollment');
+    }
+    await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async lock => {
+      const file = await this.loadFile();
+      const execution = file.executions.find(candidate => candidate.id === id);
+      if (!execution) throw new Error('Planned execution not found');
+      if (input.enabled && this.isRunning(id)) throw new Error('Plan has a live run; enrollment cannot replace it');
+      await lock.assertOwned();
+      await enrollWorkerRecovery(execution, input.enabled, input.expectedGenerationId, input.expectedDefinitionSha256);
+    });
+    await this.reconcile();
+  }
+
+  private async fireOrdinarySchedule(execution: PlannedExecution, payload: TriggerFirePayload,
+    occurrenceAt: string): Promise<RunRecord> {
+    if (!isWorkerMode()) return this.fire(execution, payload);
+    const runId = uuidv4();
+    // Register the local waiter before publishing its durable claim. A reconcile
+    // crossing the atomic write must not mistake this live owner for a restart.
+    this.workerLocalClaims.add(runId);
+    let admitted;
+    try { admitted = await claimWorkerOccurrence(execution, occurrenceAt, runId); }
+    catch (error) { this.workerLocalClaims.delete(runId); throw error; }
+    if (admitted !== 'eligible') {
+      this.workerLocalClaims.delete(runId);
+      const now = new Date().toISOString();
+      const record: RunRecord = { runId, executionGenerationId: this.executionGenerationId(execution),
+        conversationId: '', firedAt: now, finishedAt: now, status: 'skipped',
+        triggerSummary: payload.summary, error: `Worker schedule suppressed: ${admitted}` };
+      this.recordSchedulerSkip(execution, runId, record.error!);
+      return this.finishFireRecord(execution, payload, record);
+    }
+    try {
+      const result = await this.fire(execution, payload, runId);
+      await observeWorkerOccurrence(execution, result);
+      return result;
+    } finally {
+      this.workerLocalClaims.delete(runId);
+      await this.reconcile();
+    }
   }
 
   /**
@@ -983,6 +1065,10 @@ export class SchedulerService {
       const personaTargetError = await this.validatePersonaTarget(execution);
       if (personaTargetError) return { error: personaTargetError };
       await lock.assertOwned();
+      if (isWorkerMode()) {
+        if (getWorkerBootstrapStatus().state !== 'ready') throw new Error('Worker is not ready for local plan creation');
+        await recordWorkerLocalCreation(execution);
+      }
       await this.saveFile({ ...file, executions: [...file.executions, execution] });
       // A deliberate recreation establishes a new generation. Clear the
       // execution-wide admission fence while retaining old projection-id
@@ -1780,7 +1866,10 @@ export class SchedulerService {
     );
     // Webhook triggers have no armed component — they count as armed whenever
     // the execution is enabled and the scheduler isn't paused.
+    const workerRecovery = this.workerRecoveryStatuses.get(execution.id);
     const armed =
+      (!isWorkerMode() || workerRecovery?.eligible === true)
+      &&
       !personaRuntimeBlocked
       && (
         trigger !== undefined
@@ -1810,6 +1899,7 @@ export class SchedulerService {
       && this.isExclusiveActive();
     return {
       armed,
+      ...(workerRecovery ? { workerRecovery: { ...workerRecovery, state: armed ? 'armed' as const : workerRecovery.state } } : {}),
       notArmedReason,
       nextRun: trigger?.nextRun ? trigger.nextRun() : undefined,
       lastTriggerError: this.lastTriggerErrors.get(execution.id),
@@ -1967,6 +2057,10 @@ export class SchedulerService {
     record: RunRecord,
     terminalPublication?: StableTerminalPublicationReceipt,
   ): Promise<StableRunRecordUpsertResult> {
+    if (isWorkerMode() && this.workerLocalClaims.has(record.runId)) {
+      record = { ...record, executionGenerationId: this.executionGenerationId(execution) };
+      await recordWorkerTerminalObservation(execution, record);
+    }
     if (this.stablePersonaDeliveryId(execution, payload)) {
       return upsertStableRunRecord(execution.id, record, terminalPublication);
     }
@@ -2344,6 +2438,14 @@ export class SchedulerService {
     // the durable row before dispatch so a callback already in flight cannot
     // submit work after Persona deletion retired (or anonymized) that config.
     const currentExecution = await this.get(execution.id);
+    if (isWorkerMode() && (payload.kind === 'schedule' || payload.kind === 'schedule-catchup')
+        && !this.workerLocalClaims.has(runId)) {
+      return this.finishFireRecord(execution, payload, {
+        runId, executionGenerationId: this.executionGenerationId(execution), conversationId: '',
+        firedAt, finishedAt: firedAt, status: 'skipped', triggerSummary: payload.summary,
+        error: 'Worker automatic schedule execution requires a local recovery admission',
+      });
+    }
     if (
       execution.personaRetired
       || execution.personaArchived
@@ -2831,6 +2933,14 @@ export class SchedulerService {
         // Lazy import keeps the execution stack out of module-load paths and
         // mirrors SubflowNode's approach to the engine's import cycles.
         const { runFlow } = await import('@/backend/execution/flow/runFlow');
+        if (isWorkerMode() && this.workerLocalClaims.has(runId)) {
+          const file = await this.loadFile();
+          const current = file.executions.find(candidate => candidate.id === execution.id);
+          if (file.paused || !current || !current.enabled || runtimeConfiguration(current) !== runtimeConfiguration(execution)) {
+            throw new Error('Worker schedule definition or stop controls changed before execution');
+          }
+          await assertWorkerOccurrenceCurrent(current, runId);
+        }
         const result = await runFlow({
           flowId: execution.flowId,
           ...flowInput,
@@ -2871,6 +2981,9 @@ export class SchedulerService {
       this.drainExclusive();
       // Start the next queued fire (if any) now that this run has ended.
       this.drainQueue(execution.id);
+    }
+    if (isWorkerMode() && this.workerLocalClaims.has(runId)) {
+      record.executionGenerationId = this.executionGenerationId(execution);
     }
     return this.finishFireRecord(execution, payload, record);
   }
