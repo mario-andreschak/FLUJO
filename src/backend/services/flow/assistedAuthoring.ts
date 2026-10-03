@@ -80,7 +80,7 @@ async function authoringCompletion(
   const model = await modelService.getModel(modelId);
   if (!model) throw new Error(`AI model not found: ${modelId}`);
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-  const apiKey = resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+  const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');
   const adapter = getCompletionAdapter(model);
   const { completion } = await adapter.createCompletion({

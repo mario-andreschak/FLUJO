@@ -31,6 +31,8 @@ export function normalizeMaxTokens(value: unknown): number | undefined {
 }
 
 export interface Model {
+    /** A reusable ordered routing alias backed by existing workspace models. */
+    fallbackPolicy?: import('./fallbackPolicy').ModelFallbackPolicy;
     id: string;
     name: string;
     displayName?: string;
