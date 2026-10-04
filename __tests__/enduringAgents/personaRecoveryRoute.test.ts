@@ -47,8 +47,20 @@ describe('Persona recovery HTTP boundary', () => {
     expect((await POST(request('capture', { origin: 'https://external.example' }))).status).toBe(403);
     unlockMock.mockResolvedValueOnce(NextResponse.json({}, { status: 423 }));
     expect((await POST(request('capture'))).status).toBe(423);
-    workerMock.mockReturnValueOnce(true);
-    expect((await POST(request('capture'))).status).toBe(403);
+    // Admit the worker through the real control-plane bearer wrapper so this
+    // assertion reaches the recovery handler's explicit worker refusal.
+    const previousToken = process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+    process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = 'synthetic-recovery-worker-fixture';
+    workerMock.mockReturnValue(true);
+    try {
+      expect((await POST(request('capture', { headers: {
+        authorization: 'Bearer synthetic-recovery-worker-fixture',
+      } }))).status).toBe(403);
+    } finally {
+      workerMock.mockReturnValue(false);
+      if (previousToken === undefined) delete process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN;
+      else process.env.FLUJO_SNAPSHOT_CONTROL_TOKEN = previousToken;
+    }
     expect((await POST(request('capture', { query: '' }))).status).toBe(400);
     expect((await POST(request('capture', { query: '?workspace=does-not-exist' }))).status).toBe(404);
     expect(captureMock).not.toHaveBeenCalled();

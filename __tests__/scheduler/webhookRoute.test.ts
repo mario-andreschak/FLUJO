@@ -1,3 +1,10 @@
+// This unit fixture models an already unlocked workspace; fresh-profile denial
+// and real enrollment are covered by the dedicated encryption suites.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'),
+  isEncryptionLocked: async () => false,
+}));
+
 /**
  * Tests for the inbound webhook trigger route (/api/webhooks/[id]).
  *

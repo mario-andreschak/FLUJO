@@ -5,10 +5,12 @@ import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { MCPStreamableConfig } from '@/shared/types/mcp';
+import { enrollPrivateEncryptionFixture } from '../utils/privateEncryptionFixture';
 
 const serverUrl = 'https://mcp.oauth-test.example/mcp';
 
 beforeEach(async () => {
+  await enrollPrivateEncryptionFixture();
   await saveItem(StorageKey.MCP_SERVERS, {});
 });
 
