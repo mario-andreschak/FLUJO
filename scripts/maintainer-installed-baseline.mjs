@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
 import { fetchNpmProvenance, verifyNpmProvenance } from './maintainer-npm-provenance.mjs';
 import { stateSelections, seedSyntheticState, syntheticState, readSyntheticState, assertSyntheticState,
-  mutateSyntheticState, projectSyntheticStateArchive, restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
+  mutateSyntheticState, readFlowInventory, canonicalFlowInventory, assertFlowInventory,
+  verifySyntheticStateArchive, restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -122,7 +123,7 @@ export async function runInstalledBaseline(options) {
     pending: ['independent-human-review', 'human-operated-drill', 'private-triage-tabletop',
       'qualified-candidate-upgrade-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
     limits: ['Published baseline only; no version upgrade or integrated candidate acceptance',
-      'No provider/model call; synthetic flow/conversation/theme/non-secret variable only; no identity/secrets, Persona or schedules',
+      'Observed public seed inventory plus synthetic flow/conversation/theme/non-secret variable; no provider/model call, identity/secrets, Persona or schedules',
       'Fresh consumer transitive dependencies resolve now; retained lock records this graph',
       'Shutdown observations do not certify every descendant generation or graceful application cleanup'],
   };
@@ -291,6 +292,8 @@ export async function runInstalledBaseline(options) {
     }
     if (!ready) throw new Error('Installed baseline never became ready.');
     const json = body => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const initialFlows = await readFlowInventory(request, false);
+    await capture('initial-flows.json', JSON.stringify(initialFlows, null, 2) + '\n');
     if ((await request('/api/flow', { method: 'POST', ...json(flow) })).status !== 201) throw new Error('Synthetic flow creation failed.');
     const original = await request(`/api/flow/${flow.id}`);
     if (original.status !== 200) throw new Error('Created flow was not readable.');
@@ -299,15 +302,23 @@ export async function runInstalledBaseline(options) {
     receipt.syntheticState = { schemaVersion: 1, original: 'original-state.json', verified: false,
       selections: [...stateSelections], unsupported: ['provider/model configuration', 'identity/secrets', 'Persona state', 'schedule continuity'] };
     await seedSyntheticState(request, capture, JSZip);
+    const originalFlows = await readFlowInventory(request);
+    assertFlowInventory(originalFlows.filter(item => item.id !== flow.id), initialFlows, false);
+    await capture('original-flows.json', JSON.stringify(originalFlows, null, 2) + '\n');
+    receipt.flowInventory = { schemaVersion: 1, original: 'original-flows.json', initial: 'initial-flows.json',
+      ids: canonicalFlowInventory(originalFlows).map(item => item.id), ignoredFields: ['createdAt', 'updatedAt'],
+      verified: false, archiveIncludesAllFlows: false };
     const backup = await request('/api/backup', { method: 'POST', ...json({ selections: stateSelections }) });
     if (backup.status !== 200) throw new Error('Synthetic backup failed.');
     await capture('exported-backup.zip', backup.bytes);
-    const projected = await projectSyntheticStateArchive(backup.bytes, JSZip);
-    const backupBytes = projected.bytes; const archived = projected.verification;
+    const backupBytes = backup.bytes;
+    const archived = await verifySyntheticStateArchive(backupBytes, JSZip, syntheticState(), originalFlows);
     await capture('synthetic-backup.zip', backupBytes);
     receipt.backup = { sha256: sha256(backupBytes), bytes: backupBytes.length, entries: archived.entries,
-      exportedSha256: sha256(backup.bytes), exportedBytes: backup.bytes.length, excludedSeededFlows: archived.excludedSeededFlows };
+      exportedSha256: sha256(backup.bytes), exportedBytes: backup.bytes.length, flowIds: archived.flowInventory.ids };
+    receipt.flowInventory.archiveIncludesAllFlows = true;
     const mutated = { ...JSON.parse(original.bytes), name: 'Deliberately changed inside disposable root' };
+    const mutatedFlows = originalFlows.map(item => item.id === flow.id ? { ...item, name: mutated.name } : item);
     if ((await request(`/api/flow/${flow.id}`, { method: 'PUT', ...json(mutated) })).status !== 200) throw new Error('Disposable fault injection failed.');
     await mutateSyntheticState(request); receipt.invalidRestoreCases = [];
     for (const invalid of await invalidSyntheticStateArchives(backupBytes, JSZip)) {
@@ -316,6 +327,7 @@ export async function runInstalledBaseline(options) {
       const rejectedState = await request(`/api/flow/${flow.id}`);
       if (rejectedState.status !== 200) throw new Error('Flow unreadable after rejected restore.');
       assertRestoredFlow(JSON.parse(rejectedState.bytes), mutated);
+      assertFlowInventory(await readFlowInventory(request), mutatedFlows);
       assertSyntheticState(await readSyntheticState(request), syntheticState(true));
       receipt.invalidRestoreCases.push({ archive: invalid.name, status: 400, flowAndStateUnchanged: true });
     }
@@ -325,6 +337,13 @@ export async function runInstalledBaseline(options) {
     await capture('restored-flow.json', final.bytes); assertRestoredFlow(JSON.parse(final.bytes), flow);
     const restoredState = await readSyntheticState(request); assertSyntheticState(restoredState);
     await capture('restored-state.json', JSON.stringify(restoredState, null, 2) + '\n');
+    const restoredFlows = await readFlowInventory(request); assertFlowInventory(restoredFlows, originalFlows);
+    await capture('restored-flows.json', JSON.stringify(restoredFlows, null, 2) + '\n');
+    const reexported = await request('/api/backup', { method: 'POST', ...json({ selections: stateSelections }) });
+    if (reexported.status !== 200) throw new Error('Restored inventory could not be backed up again.');
+    await capture('restored-backup.zip', reexported.bytes);
+    receipt.flowInventory.restoredArchiveVerified = await verifySyntheticStateArchive(reexported.bytes, JSZip, syntheticState(), originalFlows);
+    receipt.flowInventory.verified = true;
     receipt.syntheticState.verified = true;
     receipt.syntheticState.archiveVerified = archived;
     receipt.semanticComparison = { fields: ['id', 'name', 'nodes', 'edges'], passed: true,

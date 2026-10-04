@@ -144,14 +144,20 @@ a theme preference and one non-secret environment label. The conversation starts
 through its create route; the two messages are imported through the restore route.
 They are synthetic records, not output from a provider or a workflow execution.
 The probe selects `flows`, `chatHistory`, `settings` and `globalEnvVars`, retains
-the complete API export, and creates a separate restore archive containing the
-prescribed synthetic records. FLUJO seeds its public `default-agent-flujo` on
-startup; that agent is excluded from this archive and from the comparison scope.
-Unexpected flows are refused. The probe checks every synthetic record, changes
+the complete API export and uses those same ZIP bytes for restore. Before creating
+the fixture it records the actual fresh-root flow inventory; afterwards it records
+the complete seeded and created inventory in `original-flows.json`. FLUJO's public
+`default-agent-flujo`, when present, stays in the archive and comparison, including
+its graph and every stable field. Only top-level `createdAt` and `updatedAt` are
+excluded from semantic comparison; their raw values are retained. Nested timestamps,
+node data, edges, favorites and other fields remain compared. Unknown or duplicate
+flows and Persona ownership markers are refused. The seeded agent is never executed.
+The probe checks every synthetic record, changes
 the flow/title/theme/label, and rejects both
 a missing-metadata archive and a conversation with a forbidden ownership marker.
 Every selected record must remain unchanged after rejection. The valid archive
-must restore the flow, conversation metadata and both messages, theme and label.
+must restore the entire flow inventory, conversation metadata and both messages,
+theme and label. A re-export must contain the same full flow inventory too.
 Fixed fixture timestamps never count as elapsed human activity. Response
 bytes, archives, logs, lockfile and SHA-256 receipts remain in the printed
 `flujo-maintainer-installed-*` directory, including on failure. The receipt binds
@@ -188,10 +194,13 @@ Readiness checks the responding install and new data root before mutation.
 The fresh root must return 404 for the flow and conversation and have no stored
 theme or synthetic environment label. Both invalid archives must return 400 and
 leave all four kinds of state absent. The valid backup must restore every expected
-record; a second raw API backup is retained and its synthetic projection must
-contain the same stable content. The seeded default agent is not compared or
-restored. Input restore archives must already contain only the prescribed state;
-projection never relaxes their validation. Expected JSON ZIP
+record, including the baseline's seeded agent; a second raw API backup is retained
+and must contain the same complete stable flow content. Before restore, the fresh
+root's seed inventory must match the independently recorded candidate baseline,
+and both invalid restores must leave that inventory unchanged. Successful broader
+receipts bind hashed initial and original flow snapshots; earlier receipts lacking
+this profile cannot qualify complete inventory recovery. No archive projection or
+default-flow deletion is used. Expected JSON ZIP
 members are read with a 1 MiB limit on emitted bytes, and unrelated/private entries
 or aliased paths are refused. The whole compressed archive is capped at 16 MiB.
 The command stops its owned launcher, records closed loopback port, restarts with
@@ -328,21 +337,28 @@ environments and explicit empty npm configuration, as in the baseline probe.
 
 After both consumer probes pass and stop, the candidate first opens the baseline's
 existing disposable data root. It must read the old flow, conversation (including
-both messages), theme and environment label before any successful restore, reject
+both messages), theme, environment label and complete baseline flow inventory
+before any successful restore, reject
 both invalid backups without changing any of them, export the preserved data and
 retain it through restart. It then restores the original
 baseline backup into a different, empty candidate data root and checks re-export
 and restart persistence. The in-place probe never successfully restores the old
 backup, so restoration cannot mask data lost during upgrade.
 
+The [complete inventory acceptance plan](maintainer-inventory-acceptance.md) describes
+the pending controls and signed rehearsal for this correction. Source preparation
+does not establish a passing run.
+
 The top receipt hashes every completed operation receipt and qualification log,
 including failed operations. Retain all referenced roots together. These probes
-cover an empty flow, a synthetic conversation with inert messages, a theme and
-one non-secret environment label. Both consumer probes require verified npm
+cover the observed public seed inventory, an empty created flow, a synthetic
+conversation with inert messages, a theme and one non-secret environment label.
+Both consumer probes require verified npm
 provenance before installation, and the top receipt removes each signature gate
 from pending only after that consumer reports verification. The version transition
-requires the broader state result from both consumers and both recovery operations;
-legacy flow-only receipts cannot satisfy it. Provider/model configuration,
+requires the broader state and complete inventory results from both consumers and
+both recovery operations; legacy flow-only or projected-inventory receipts cannot
+satisfy it. Provider/model configuration,
 identity/secrets, Persona and schedule continuity, every-descendant cleanup,
 independent human operation, access and the 90-day observation remain separate
 gates. Neither a source fixture nor a passed automated version transition is an

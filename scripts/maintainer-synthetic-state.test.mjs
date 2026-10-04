@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { stateSelections, syntheticState, assertSyntheticState, validateSyntheticStateReceipt,
-  readStateZipJson, verifySyntheticStateArchive, projectSyntheticStateArchive, seedSyntheticState, mutateSyntheticState, readSyntheticState,
+  readStateZipJson, verifySyntheticStateArchive, canonicalFlowInventory, assertFlowInventory, validateFlowInventoryReceipt,
+  readFlowInventory, seedSyntheticState, mutateSyntheticState, readSyntheticState,
   assertFreshSyntheticState, restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
 
 const JSZip = createRequire(import.meta.url)('jszip');
@@ -69,22 +70,76 @@ test('compressed oversized members are bounded by emitted bytes and malformed JS
   assert.throws(() => readStateZipJson(new JSZip(), 'missing.json'), /omitted/);
 });
 
-test('raw exports retain their bytes while only the seeded default agent is excluded from the restore fixture', async () => {
+test('raw exports must retain and compare the complete seeded and created flow inventory', async () => {
   const zip = archive(); const flows = await readStateZipJson(zip, 'storage/flows.json');
-  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', nodes: [{ id: 'not-executed' }], edges: [] };
+  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', favorite: true,
+    nodes: [{ id: 'not-executed', data: { label: 'Public seeded content' } }], edges: [], createdAt: 1, updatedAt: 2 };
   zip.file('storage/flows.json', JSON.stringify([seeded, ...flows]));
   const raw = await zip.generateAsync({ type: 'nodebuffer' }); const before = Buffer.from(raw);
-  await assert.rejects(verifySyntheticStateArchive(raw, JSZip), /flow differs/);
-  const projected = await projectSyntheticStateArchive(raw, JSZip);
-  assert.deepEqual(raw, before); assert.equal(projected.verification.passed, true);
-  assert.deepEqual(projected.verification.excludedSeededFlows, ['default-agent-flujo']);
-  assert.deepEqual(await readStateZipJson(await JSZip.loadAsync(projected.bytes), 'storage/flows.json'), flows);
-  for (const extra of [{ ...seeded, id: 'unrelated-private-flow' }, seeded]) {
-    const changed = archive(); changed.file('storage/flows.json', JSON.stringify([seeded, extra, ...flows]));
-    await assert.rejects(projectSyntheticStateArchive(await changed.generateAsync({ type: 'nodebuffer' }), JSZip));
+  const expected = [seeded, ...flows];
+  const verified = await verifySyntheticStateArchive(raw, JSZip, syntheticState(), expected);
+  assert.deepEqual(raw, before); assert.equal(verified.passed, true);
+  assert.deepEqual(verified.flowInventory.ids, ['default-agent-flujo', 'maintainer_drill_flow']);
+  assert.deepEqual(await readStateZipJson(await JSZip.loadAsync(raw), 'storage/flows.json'), expected);
+  for (const change of [value => value.shift(), value => value.pop(), value => value.push(copy(value[0])),
+    value => { value[0].nodes[0].data.label = 'corrupted'; }, value => { value[0].favorite = false; },
+    value => { value.push({ ...seeded, id: 'unrelated-private-flow' }); }]) {
+    const changed = archive(); const inventory = copy(expected); change(inventory);
+    changed.file('storage/flows.json', JSON.stringify(inventory));
+    await assert.rejects(verifySyntheticStateArchive(await changed.generateAsync({ type: 'nodebuffer' }), JSZip, syntheticState(), expected));
   }
   const aliased = archive(); aliased.file('storage/flows.json', JSON.stringify([seeded, ...flows])); aliased.file('../storage/theme.json', '"dark"');
-  await assert.rejects(projectSyntheticStateArchive(await aliased.generateAsync({ type: 'nodebuffer' }), JSZip), /aliased/);
+  await assert.rejects(verifySyntheticStateArchive(await aliased.generateAsync({ type: 'nodebuffer' }), JSZip, syntheticState(), expected), /aliased/);
+});
+
+test('flow comparison permits only collection order and top-level server timestamps to vary', () => {
+  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', favorite: true,
+    nodes: [{ id: 'node', data: { label: 'preserved', timestamp: 17 } }], edges: [{ id: 'edge', source: 'node', target: 'node' }],
+    createdAt: 1, updatedAt: 2, extraStableField: 'retained' };
+  const fixture = { id: 'maintainer_drill_flow', name: 'Synthetic maintainer recovery fixture', nodes: [], edges: [] };
+  const expected = [seeded, fixture];
+  assertFlowInventory([{ ...fixture, updatedAt: 999 }, { ...seeded, createdAt: 9, updatedAt: 10 }], expected);
+  for (const alter of [value => { value[0].nodes[0].data.timestamp++; }, value => { value[0].edges[0].target = 'changed'; },
+    value => { value[0].extraStableField = 'changed'; }, value => { delete value[0].favorite; },
+    value => { value[0].personaOwnership = false; }, value => { value[1].nodes.push({ id: 'runnable' }); },
+    value => { value[0].id = '../unrelated'; }]) {
+    const changed = copy(expected); alter(changed); assert.throws(() => assertFlowInventory(changed, expected));
+  }
+  assert.deepEqual(canonicalFlowInventory([seeded], false).map(flow => flow.id), ['default-agent-flujo']);
+  assert.throws(() => canonicalFlowInventory(expected, false), /presence/);
+  assert.throws(() => canonicalFlowInventory([], true), /presence/);
+});
+
+test('complete inventory receipts bind original and initial snapshots and refuse historical partial receipts', () => {
+  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', nodes: [{ id: 'preserved' }], edges: [] };
+  const fixture = { id: 'maintainer_drill_flow', name: 'Synthetic maintainer recovery fixture', nodes: [], edges: [] };
+  const original = Buffer.from(JSON.stringify([seeded, fixture])); const initial = Buffer.from(JSON.stringify([seeded]));
+  const receipt = { provenanceSignatureVerified: true,
+    flowInventory: { schemaVersion: 1, original: 'original-flows.json', initial: 'initial-flows.json', verified: true,
+      archiveIncludesAllFlows: true, ignoredFields: ['createdAt', 'updatedAt'], ids: ['default-agent-flujo', 'maintainer_drill_flow'] },
+    evidence: [['original-flows.json', original], ['initial-flows.json', initial]].map(([name, bytes]) => ({
+      path: name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })) };
+  assert.deepEqual(validateFlowInventoryReceipt(receipt, original, initial).original, [seeded, fixture]);
+  for (const alter of [value => { delete value.flowInventory; }, value => { value.flowInventory.verified = false; },
+    value => { value.flowInventory.ids.shift(); }, value => { value.flowInventory.ignoredFields.push('nodes'); },
+    value => { value.flowInventory.archiveIncludesAllFlows = false; }, value => { value.flowInventory.initial = '../outside'; },
+    value => { value.evidence.pop(); }, value => { value.provenanceSignatureVerified = false; }]) {
+    const changed = copy(receipt); alter(changed); assert.throws(() => validateFlowInventoryReceipt(changed, original, initial), /inventory/);
+  }
+  const changedInitial = Buffer.from(JSON.stringify([{ ...seeded, name: 'different baseline seed' }]));
+  const rehashed = copy(receipt); rehashed.evidence[1].bytes = changedInitial.length;
+  rehashed.evidence[1].sha256 = createHash('sha256').update(changedInitial).digest('hex');
+  assert.throws(() => validateFlowInventoryReceipt(rehashed, original, changedInitial), /inventory differs/);
+});
+
+test('inventory reads require exact status and reject unexpected fresh-root or private membership', async () => {
+  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', nodes: [], edges: [] };
+  const respond = (status, body) => async route => {
+    assert.equal(route, '/api/flow'); return { status, bytes: Buffer.from(JSON.stringify(body)) };
+  };
+  assert.deepEqual(await readFlowInventory(respond(200, [seeded]), false), [seeded]);
+  await assert.rejects(readFlowInventory(respond(500, []), false), /expected 200/);
+  await assert.rejects(readFlowInventory(respond(200, [{ ...seeded, id: 'private-flow' }]), false), /unrelated/);
 });
 
 function protocol() {

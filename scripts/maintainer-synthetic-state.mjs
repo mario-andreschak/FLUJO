@@ -6,6 +6,7 @@ const flowId = 'maintainer_drill_flow';
 const variable = 'FLUJO_MAINTAINER_LABEL';
 const conversationPath = `storage/conversations/${conversationId}.json`;
 const timestamp = 1700000000000;
+const flowTimestampFields = Object.freeze(['createdAt', 'updatedAt']);
 const json = body => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const stable = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
@@ -46,10 +47,60 @@ export function validateSyntheticStateReceipt(receipt, bytes) {
   const observed = JSON.parse(bytes); assertSyntheticState(observed); return observed;
 }
 
+/** Compare the entire observed flow inventory; only top-level server timestamps vary. */
+export function canonicalFlowInventory(flows, requireFixture = true) {
+  if (!Array.isArray(flows) || Buffer.byteLength(JSON.stringify(flows)) > 1024 * 1024) {
+    throw new Error('Flow inventory must be an array within 1 MiB.');
+  }
+  const ids = new Set();
+  const canonical = flows.map(flow => {
+    if (!flow || typeof flow !== 'object' || Array.isArray(flow)
+        || ![flowId, 'default-agent-flujo'].includes(flow.id) || ids.has(flow.id)
+        || typeof flow.name !== 'string' || !flow.name || !Array.isArray(flow.nodes) || !Array.isArray(flow.edges)
+        || Object.hasOwn(flow, 'personaOwnership')) throw new Error('Flow inventory contains duplicate, unrelated or invalid flows.');
+    ids.add(flow.id);
+    if (flow.id === flowId && (flow.nodes.length || flow.edges.length)) throw new Error('Created fixture must remain an empty flow.');
+    return Object.fromEntries(Object.entries(flow).filter(([key]) => !flowTimestampFields.includes(key)));
+  });
+  if (ids.has(flowId) !== requireFixture) throw new Error('Flow inventory has an unexpected created-fixture presence.');
+  return canonical.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function assertFlowInventory(observed, expected, requireFixture = true) {
+  if (stable(canonicalFlowInventory(observed, requireFixture)) !== stable(canonicalFlowInventory(expected, requireFixture))) {
+    throw new Error('Flow inventory differs from the complete observed baseline.');
+  }
+}
+
+export function validateFlowInventoryReceipt(receipt, originalBytes, initialBytes) {
+  const profile = receipt.flowInventory;
+  const originals = [['original-flows.json', originalBytes], ['initial-flows.json', initialBytes]];
+  if (profile?.schemaVersion !== 1 || profile.original !== 'original-flows.json' || profile.initial !== 'initial-flows.json'
+      || profile.verified !== true || profile.archiveIncludesAllFlows !== true || receipt.provenanceSignatureVerified !== true
+      || stable(profile.ignoredFields) !== stable(flowTimestampFields)
+      || originals.some(([name, bytes]) => {
+        const witness = receipt.evidence?.find(item => item.path === name);
+        return !bytes || bytes.length > 1024 * 1024 || witness?.bytes !== bytes.length
+          || witness.sha256 !== createHash('sha256').update(bytes).digest('hex');
+      })) throw new Error('Flow inventory receipt or original bytes differ from the verified baseline.');
+  const original = JSON.parse(originalBytes); const initial = JSON.parse(initialBytes);
+  const canonical = canonicalFlowInventory(original);
+  if (canonical.find(flow => flow.id === flowId).name !== 'Synthetic maintainer recovery fixture'
+      || stable(profile.ids) !== stable(canonical.map(flow => flow.id))) throw new Error('Flow inventory receipt has an invalid fixture or membership.');
+  assertFlowInventory(original.filter(flow => flow.id !== flowId), initial, false);
+  return { original, initial };
+}
+
 async function expect(request, route, status, options) {
   const response = await request(route, options);
   if (response.status !== status) throw new Error(`Synthetic state ${route} returned ${response.status}, expected ${status}.`);
   return response;
+}
+
+export async function readFlowInventory(request, requireFixture = true) {
+  const flows = JSON.parse((await expect(request, '/api/flow', 200)).bytes);
+  canonicalFlowInventory(flows, requireFixture);
+  return flows;
 }
 
 export async function readSyntheticState(request) {
@@ -96,28 +147,14 @@ async function loadStateArchive(bytes, JSZip) {
   return zip;
 }
 
-/** Keep the seeded public default agent out of the disposable restore fixture. */
-export async function projectSyntheticStateArchive(bytes, JSZip, expected = syntheticState()) {
-  const zip = await loadStateArchive(bytes, JSZip);
-  const flows = await readStateZipJson(zip, 'storage/flows.json');
-  if (!Array.isArray(flows)) throw new Error('Synthetic backup flow collection is not an array.');
-  const seeded = flows.filter(flow => flow?.id === 'default-agent-flujo');
-  if (seeded.length > 1) throw new Error('Synthetic backup repeats the seeded default agent.');
-  const selected = flows.filter(flow => flow?.id !== 'default-agent-flujo');
-  if (seeded.length) zip.file('storage/flows.json', JSON.stringify(selected));
-  const projected = seeded.length ? await zip.generateAsync({ type: 'nodebuffer' }) : bytes;
-  const verification = await verifySyntheticStateArchive(projected, JSZip, expected);
-  return { bytes: projected, verification: { ...verification, excludedSeededFlows: seeded.map(flow => flow.id),
-    scope: 'Prescribed synthetic records only; seeded default agent is neither restored nor compared.' } };
-}
-
-export async function verifySyntheticStateArchive(bytes, JSZip, expected = syntheticState()) {
+export async function verifySyntheticStateArchive(bytes, JSZip, expected = syntheticState(), expectedFlows = [
+  { id: flowId, name: 'Synthetic maintainer recovery fixture', nodes: [], edges: [] },
+]) {
   const zip = await loadStateArchive(bytes, JSZip);
   const metadata = await readStateZipJson(zip, 'backup-info.json');
   if (stable(metadata.selections?.slice().sort()) !== stable([...stateSelections].sort())) throw new Error('Synthetic backup selections are incomplete.');
   const flows = await readStateZipJson(zip, 'storage/flows.json');
-  if (!Array.isArray(flows) || flows.length !== 1 || flows[0].id !== flowId || flows[0].name !== 'Synthetic maintainer recovery fixture'
-      || stable(flows[0].nodes) !== '[]' || stable(flows[0].edges) !== '[]') throw new Error('Synthetic backup flow differs from the prescribed empty flow.');
+  assertFlowInventory(flows, expectedFlows);
   const variables = await readStateZipJson(zip, 'storage/global_env_vars.json');
   if (stable(Object.keys(variables)) !== stable([variable])) throw new Error('Synthetic backup includes unrelated variables.');
   if (zip.file('storage/history.json')) {
@@ -127,7 +164,9 @@ export async function verifySyntheticStateArchive(bytes, JSZip, expected = synth
   const observed = { theme: await readStateZipJson(zip, 'storage/theme.json'), environment: variables[variable],
     conversation: conversationProjection(await readStateZipJson(zip, conversationPath), true) };
   assertSyntheticState(observed, expected);
-  return { selections: [...stateSelections], entries: Object.keys(zip.files), compared: ['theme', 'environment', 'conversation metadata and both messages'], passed: true };
+  return { selections: [...stateSelections], entries: Object.keys(zip.files),
+    flowInventory: { ids: canonicalFlowInventory(flows).map(flow => flow.id), ignoredFields: [...flowTimestampFields], passed: true },
+    compared: ['complete seeded and created flow inventory', 'theme', 'environment', 'conversation metadata and both messages'], passed: true };
 }
 
 export async function restoreSyntheticState(request, bytes, selections = stateSelections) {

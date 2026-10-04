@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
 import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline } from './maintainer-installed-baseline.mjs';
 import { stateSelections, readSyntheticState, assertSyntheticState, assertFreshSyntheticState,
-  validateSyntheticStateReceipt, verifySyntheticStateArchive, projectSyntheticStateArchive,
+  validateSyntheticStateReceipt, verifySyntheticStateArchive, validateFlowInventoryReceipt,
+  readFlowInventory, canonicalFlowInventory, assertFlowInventory,
   restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -103,6 +104,11 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
   const broaderState = baseline.receipt.syntheticState !== undefined;
   const stateBytes = broaderState ? ordinary('original-state.json', 1024 * 1024) : undefined;
   const expectedState = broaderState ? validateSyntheticStateReceipt(baseline.receipt, stateBytes) : undefined;
+  const flowBytes = broaderState ? ordinary('original-flows.json', 1024 * 1024) : undefined;
+  const initialFlowBytes = broaderState ? ordinary('initial-flows.json', 1024 * 1024) : undefined;
+  const inventory = broaderState ? validateFlowInventoryReceipt(baseline.receipt, flowBytes, initialFlowBytes) : undefined;
+  const expectedFlows = inventory?.original;
+  let targetInitialFlows = inventory?.initial;
   let targetReceiptSha256 = digest(baselineReceipt);
   if (targetBaseline !== baseline) {
     validateRecoveryTarget(targetBaseline.receipt, toolRevision);
@@ -121,10 +127,13 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (broaderState) {
       validateSyntheticStateReceipt(targetBaseline.receipt,
         readBoundedFileSync(path.join(targetBaseline.directory, 'original-state.json'), 1024 * 1024));
+      targetInitialFlows = validateFlowInventoryReceipt(targetBaseline.receipt,
+        readBoundedFileSync(path.join(targetBaseline.directory, 'original-flows.json'), 1024 * 1024),
+        readBoundedFileSync(path.join(targetBaseline.directory, 'initial-flows.json'), 1024 * 1024)).initial;
     }
   }
   const JSZip = createRequire(import.meta.url)('jszip');
-  if (broaderState) await verifySyntheticStateArchive(archive, JSZip, expectedState);
+  if (broaderState) await verifySyntheticStateArchive(archive, JSZip, expectedState, expectedFlows);
   const directory = path.join(baseline.directory, mode === 'upgrade' ? 'candidate-upgrade' : 'fresh-recovery');
   // Evidence roots must be new; upgrade data comes only from the stopped baseline.
   mkdirSync(directory);
@@ -145,7 +154,7 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       'private-triage-tabletop', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
     limits: [targetBaseline === baseline ? 'Published baseline only; same artifact reused for fresh-root recovery and restart'
       : 'Two pinned consumers; candidate qualification is recorded by the version-transition orchestrator separately',
-      broaderState ? 'Synthetic flow/conversation/theme/non-secret variable; no provider/model, identity/secrets, schedule or Persona recovery'
+      broaderState ? 'Observed public seed inventory plus synthetic flow/conversation/theme/non-secret variable; no provider/model, identity/secrets, schedule or Persona recovery'
         : 'Legacy synthetic empty flow only; no broader state, provider/model, identity/secrets, schedule or Persona recovery',
       broaderState ? 'Signature result is linked from the verified baseline; no every-descendant/graceful-cleanup certification'
         : 'Legacy input does not establish provenance signatures or every-descendant/graceful-cleanup certification'],
@@ -241,6 +250,10 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (broaderState) {
       capture('original-state.json', stateBytes);
       receipt.syntheticState = { schemaVersion: 1, original: 'original-state.json', selections: [...stateSelections], verified: false };
+      capture('original-flows.json', flowBytes); capture('initial-flows.json', initialFlowBytes);
+      receipt.flowInventory = { schemaVersion: 1, original: 'original-flows.json', initial: 'initial-flows.json',
+        ids: canonicalFlowInventory(expectedFlows).map(flow => flow.id), ignoredFields: ['createdAt', 'updatedAt'],
+        archiveIncludesAllFlows: true, verified: false };
     }
     await start(mode === 'upgrade' ? 'upgrade-start' : 'fresh-start');
     const route = `/api/flow/${expected.id}`;
@@ -251,12 +264,18 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       if (broaderState) {
         const existingState = await readSyntheticState(request); assertSyntheticState(existingState, expectedState);
         capture('pre-upgrade-state.json', JSON.stringify(existingState, null, 2) + '\n'); receipt.baselineStateFoundBeforeRestore = true;
+        const existingFlows = await readFlowInventory(request); assertFlowInventory(existingFlows, expectedFlows);
+        capture('pre-upgrade-flows.json', JSON.stringify(existingFlows, null, 2) + '\n'); receipt.baselineFlowsFoundBeforeRestore = true;
       }
       receipt.baselineDataFoundBeforeRestore = true;
     } else {
       if (before.status !== 404) throw new Error('Fresh root already contains the synthetic flow.');
       receipt.preRestoreAbsent = true;
-      if (broaderState) { await assertFreshSyntheticState(request); receipt.preRestoreStateAbsent = true; }
+      if (broaderState) {
+        await assertFreshSyntheticState(request); receipt.preRestoreStateAbsent = true;
+        const freshFlows = await readFlowInventory(request, false); assertFlowInventory(freshFlows, targetInitialFlows, false);
+        capture('pre-restore-flows.json', JSON.stringify(freshFlows, null, 2) + '\n'); receipt.preRestoreFlowInventoryVerified = true;
+      }
     }
     const restore = bytes => {
       const form = new FormData(); form.set('file', new Blob([bytes]), 'synthetic-backup.zip'); form.set('selections', '["flows"]');
@@ -275,8 +294,14 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       }
       if (mode === 'upgrade') {
         assertRestoredFlow(JSON.parse(unchanged.bytes), expected);
-        if (broaderState) assertSyntheticState(await readSyntheticState(request), expectedState);
-      } else if (broaderState) await assertFreshSyntheticState(request);
+        if (broaderState) {
+          assertSyntheticState(await readSyntheticState(request), expectedState);
+          assertFlowInventory(await readFlowInventory(request), expectedFlows);
+        }
+      } else if (broaderState) {
+        await assertFreshSyntheticState(request);
+        assertFlowInventory(await readFlowInventory(request, false), targetInitialFlows, false);
+      }
       receipt.invalidRestoreCases.push({ archive: invalid.name, status: 400, flowAndStateUnchanged: true });
     }
     receipt.invalidRestoreUnchanged = true;
@@ -287,15 +312,16 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (broaderState) {
       const state = await readSyntheticState(request); assertSyntheticState(state, expectedState);
       capture(mode === 'upgrade' ? 'upgraded-state.json' : 'restored-state.json', JSON.stringify(state, null, 2) + '\n');
+      const flows = await readFlowInventory(request); assertFlowInventory(flows, expectedFlows);
+      capture(mode === 'upgrade' ? 'upgraded-flows.json' : 'restored-flows.json', JSON.stringify(flows, null, 2) + '\n');
     }
     const exported = await request('/api/backup', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ selections: broaderState ? stateSelections : ['flows'] }) });
     if (exported.status !== 200) throw new Error('Recovered data could not be backed up again.');
     capture('recovered-backup.zip', exported.bytes);
     if (broaderState) {
-      const projected = await projectSyntheticStateArchive(exported.bytes, JSZip, expectedState);
-      capture('verified-synthetic-backup.zip', projected.bytes);
-      receipt.syntheticState.archiveVerified = projected.verification;
+      receipt.syntheticState.archiveVerified = await verifySyntheticStateArchive(exported.bytes, JSZip, expectedState, expectedFlows);
+      receipt.flowInventory.reexportSha256 = digest(exported.bytes);
     }
     else {
       const zip = await JSZip.loadAsync(exported.bytes);
@@ -313,6 +339,8 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (broaderState) {
       const state = await readSyntheticState(request); assertSyntheticState(state, expectedState);
       capture('restarted-state.json', JSON.stringify(state, null, 2) + '\n'); receipt.syntheticState.verified = true;
+      const flows = await readFlowInventory(request); assertFlowInventory(flows, expectedFlows);
+      capture('restarted-flows.json', JSON.stringify(flows, null, 2) + '\n'); receipt.flowInventory.verified = true;
     }
     receipt.restartPersistenceVerified = true;
     receipt.semanticComparison = { fields: ['id', 'name', 'nodes', 'edges'], passed: true, timestamps: 'Retained; not stable content' };
