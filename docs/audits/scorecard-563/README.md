@@ -159,8 +159,8 @@ spending, migration capture, account adoption, replay or cleanup.
 
 Autonomy is separately gated: an offline simulation, short genuine-model test or
 successful process restart cannot establish useful public-world work or multi-week
-unattended success. The proposed live spend cap is zero because no numeric paid-run
-envelope or concrete model/account scope is declared here. Development/push/deployment
+unattended success. The proposed acceptance spend envelope is undeclared: no numeric
+limit or concrete model/account scope is recorded here. Development/push/deployment
 authorization is separate; the coordinator owns the deployment candidate. A dollar
 CLI argument is not monetary enforcement.
 
@@ -175,6 +175,15 @@ capturing a contract today does not retroactively predeclare it for an older run
 Passing acceptance must reconcile these bounds and retained agreement must predate
 measurement. Success-rate metrics retain an integer numerator and denominator;
 timeless labels or rounded percentages cannot stand in for counts.
+
+Passing checksummed metrics against agreed or existing contracts require an actual
+UTC measurement start, no earlier than declaration and no later than observation.
+Simulated days remain simulated. Existing Persona limits and their 28 daily append
+checkpoints / 20 recall-search denominators require a separately reviewed contract
+version to change. A proposed null monetary limit records a missing acceptance
+contract; it does not revoke the user's development/deployment authorization.
+Production claims cover all three profiles, and Engineering, Docs and Maturity
+claims retain a required candidate-build gate.
 
 | Contract | Preserved or proposed target | Denominator/window |
 | --- | --- | --- |
