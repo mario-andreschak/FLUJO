@@ -1,0 +1,110 @@
+TAP version 13
+# Subtest: rejects empty, failed, skipped and incomplete release TAP summaries
+ok 1 - rejects empty, failed, skipped and incomplete release TAP summaries
+  ---
+  duration_ms: 2.1896
+  ...
+# Subtest: requires exact recovery suites and completed assertions rather than a green aggregate
+ok 2 - requires exact recovery suites and completed assertions rather than a green aggregate
+  ---
+  duration_ms: 2.3268
+  ...
+# Subtest: child environment retains platform necessities and isolates all private/runtime inputs
+ok 3 - child environment retains platform necessities and isolates all private/runtime inputs
+  ---
+  duration_ms: 0.5881
+  ...
+# Subtest: serial fixed commands retain revision, raw checksums and explicit human/release gaps
+ok 4 - serial fixed commands retain revision, raw checksums and explicit human/release gaps
+  ---
+  duration_ms: 650.9614
+  ...
+# Subtest: failure retains raw diagnostics and prevents subsequent gates; partial mode never passes
+ok 5 - failure retains raw diagnostics and prevents subsequent gates; partial mode never passes
+  ---
+  duration_ms: 605.5146
+  ...
+# Subtest: dirty source and private dotenv files are refused before invoking gates
+ok 6 - dirty source and private dotenv files are refused before invoking gates
+  ---
+  duration_ms: 610.1619
+  ...
+# Subtest: a mid-drill source change invalidates an otherwise green rehearsal
+ok 7 - a mid-drill source change invalidates an otherwise green rehearsal
+  ---
+  duration_ms: 506.4635
+  ...
+# Subtest: timeouts, signals and missing recovery JSON never create a passing receipt
+ok 8 - timeouts, signals and missing recovery JSON never create a passing receipt
+  ---
+  duration_ms: 532.3929
+  ...
+# Subtest: read-only evidence verification checks raw bytes and rejects a different trusted revision/version
+ok 9 - read-only evidence verification checks raw bytes and rejects a different trusted revision/version
+  ---
+  duration_ms: 397.2437
+  ...
+# Subtest: recomputed receipt checksums cannot hide missing gates, fabricated counts or changed commands
+ok 10 - recomputed receipt checksums cannot hide missing gates, fabricated counts or changed commands
+  ---
+  duration_ms: 385.3029
+  ...
+# Subtest: v1 source-root inference and Windows path verification work after copying evidence across platforms
+ok 11 - v1 source-root inference and Windows path verification work after copying evidence across platforms
+  ---
+  duration_ms: 389.1383
+  ...
+# Subtest: failed recovery subprocess reports remain hashed and incomplete evidence cannot verify
+ok 12 - failed recovery subprocess reports remain hashed and incomplete evidence cannot verify
+  ---
+  duration_ms: 312.1171
+  ...
+# Subtest: evidence verification refuses linked files and directory junctions
+ok 13 - evidence verification refuses linked files and directory junctions
+  ---
+  duration_ms: 391.2223
+  ...
+# Subtest: evidence growth between metadata check and read cannot bypass the receipt size limit
+ok 14 - evidence growth between metadata check and read cannot bypass the receipt size limit
+  ---
+  duration_ms: 385.709
+  ...
+# Subtest: reads exact byte limits and empty files; refuses invalid limits
+ok 15 - reads exact byte limits and empty files; refuses invalid limits
+  ---
+  duration_ms: 5.8575
+  ...
+# Subtest: refuses nonregular and multiply linked files before reading; closes failures
+ok 16 - refuses nonregular and multiply linked files before reading; closes failures
+  ---
+  duration_ms: 3.9109
+  ...
+# Subtest: pathname replacement after opening cannot substitute a different checked file
+ok 17 - pathname replacement after opening cannot substitute a different checked file
+  ---
+  duration_ms: 3.764
+  ...
+# Subtest: replacement during read stays on the original descriptor and invalidates the result
+ok 18 - replacement during read stays on the original descriptor and invalidates the result
+  ---
+  duration_ms: 9.2461
+  ...
+# Subtest: growth after metadata validation is bounded and cannot return a passing payload
+ok 19 - growth after metadata validation is bounded and cannot return a passing payload
+  ---
+  duration_ms: 4.3441
+  ...
+# Subtest: same-length mutation after metadata validation is refused before returning bytes
+ok 20 - same-length mutation after metadata validation is refused before returning bytes
+  ---
+  duration_ms: 2.5835
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5293.0961

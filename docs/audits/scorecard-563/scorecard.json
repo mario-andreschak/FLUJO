@@ -1194,6 +1194,28 @@
       "metadataEvidenceIds": [
         "dependency-remediation-59b65de8"
       ]
+    },
+    {
+      "id": "proposal-pr-637",
+      "kind": "source",
+      "identity": "PR #637 draft; descriptor-bound maintainer/prototype reads; local source checks and assigned-query PR merge scan qualified; root integration pending",
+      "sourceSha": "d608e12057d0cc164bfad523146b178c522cf412",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "community-bounded-reads-d608e120"
+      ]
+    },
+    {
+      "id": "proposal-pr-629",
+      "kind": "source",
+      "identity": "PR #629 draft; contributor loopback recipe; exact-head CI qualified, human onboarding unobserved",
+      "sourceSha": "062df27b7563935c9106ed6dffc15c091b786b63",
+      "provenance": "observed-metadata",
+      "payloadSha256": null,
+      "metadataEvidenceIds": [
+        "community-loopback-recipe-062df27b"
+      ]
     }
   ],
   "evidence": [
@@ -1725,6 +1747,611 @@
       "kind": "source-check",
       "result": "passed",
       "integrity": "checksummed"
+    },
+    {
+      "id": "community-baseline-fresh-recovery-3.46.2",
+      "kind": "installed-artifact",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "artifactId": "npm-3.46.2",
+      "ownerId": "community",
+      "observedAt": "2026-10-04T01:04:33.862Z",
+      "environment": {
+        "platform": "Windows x64; CI rows explicitly scoped in retained reports",
+        "node": "v22.13.1 local; CI runtime in run/job metadata",
+        "provider": "No provider call; synthetic local flows and public GitHub metadata",
+        "tools": "Node, npm, git, gh; agent-operated receipts, no human identity assertion"
+      },
+      "commands": [
+        "Committed tool a9544f6f ran pinned published 3.46.2 consumer and fresh-root recovery; exact npm/app commands, arguments, PIDs, exits and HTTP observations retained in receipt.json and its recovery child."
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/inventory.json",
+          "sha256": "cab5d99d6a90de2506e03b75f907c93bbba67eb3bd18b9d7e5d9c2b1087616fb",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/receipt.json",
+          "sha256": "391a2035bdcb49aff21d0e859b6c7b9fb02cc164a30ccb1bcf17b323b88b98ac",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/receipt.sha256",
+          "sha256": "fb4e61fc50f62f938a6bbf5e96cdeeca18252bf5d939ba38c88d4013b06aad90",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/app.stderr.txt",
+          "sha256": "99981a10c47725d5ba606ce6281f1de70f5c95e2365ef7178fb0ae6d79793d9f",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/app.stdout.txt",
+          "sha256": "7f9025ad70490a90eef44b89bfa18d05807daa1334c05003c3451929f4586276",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/consumer/package-lock.json",
+          "sha256": "ad4371f23fd1bf424bb6a95df08d0d7ded81c982c9b130bee018eea36997a62c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/consumer/package.json",
+          "sha256": "21aaa4f2c727c6bf658ae07b9d75c8cfc8f98a04a4c3d95d970d7904e237c145",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/empty-global.npmrc",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/empty-user.npmrc",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/install.stderr.txt",
+          "sha256": "994deba829fb55b44d6db585aef2d486e8142990854f82c16ad05d85124327fb",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/install.stdout.txt",
+          "sha256": "15c610589cf37481d5a14c0672d57781095e156ddc13c2afc0fc50b5b90e3721",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/missing-metadata.zip",
+          "sha256": "1b4efb2e1b9f88624ae93285f5dce34d44de4a9e4895cc914c266a5e6482169c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/original-flow.json",
+          "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-001.bin",
+          "sha256": "f5357cad6d861c2092897b08f59ebd8ffaf7222bfcc6baa52ec5e32940f3737d",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-002.bin",
+          "sha256": "3450b6f7e8d4f8d5540a9df1664fb45fd923dfd2b75e3946dce46f7b71fb9ae0",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-003.bin",
+          "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-004.bin",
+          "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-005.bin",
+          "sha256": "aeeba16cd22c27aa537818017b75b2a9c0235b420a4557cf4391bec9385cbf9a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-006.bin",
+          "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-007.bin",
+          "sha256": "aeeba16cd22c27aa537818017b75b2a9c0235b420a4557cf4391bec9385cbf9a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-008.bin",
+          "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/response-009.bin",
+          "sha256": "b83df7edd33b90c8a0d2cf136851e1dc5e42af960f41b81e68384a454e6c291b",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/restored-flow.json",
+          "sha256": "b83df7edd33b90c8a0d2cf136851e1dc5e42af960f41b81e68384a454e6c291b",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/synthetic-backup.zip",
+          "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/receipt.json",
+          "sha256": "09b89cf472ae3f4fb2be09a1e5730802c9f19e3eae4c9cd7325d6c7228c6b955",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/receipt.sha256",
+          "sha256": "29521f9e2085f0e68eef8306cc01c10d0ae73604a0a88d340ea4d4cfac654c8a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/fresh-start.stderr.txt",
+          "sha256": "27e9d5b1f1906a506e4d72968f371b035b8271bc21c792d5042e7f9129005e36",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/fresh-start.stdout.txt",
+          "sha256": "2ffba7f8090c074d8cf02152ac25d078ab498e0dadb193e3c37f5c82e399b944",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/input-backup.zip",
+          "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/missing-metadata.zip",
+          "sha256": "3517e130bfda71fa024a063aa525dc90f8357a83629091a572c87adb69d39cee",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/original-flow.json",
+          "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/recovered-backup.zip",
+          "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-001.bin",
+          "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-002.bin",
+          "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-003.bin",
+          "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-004.bin",
+          "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-005.bin",
+          "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-006.bin",
+          "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-007.bin",
+          "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-008.bin",
+          "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/response-009.bin",
+          "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/restart.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/restart.stdout.txt",
+          "sha256": "7b03aceeecb774263d87db293fd3c7a6477ba8babf40294e7b1e4472d63e2440",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/restarted-flow.json",
+          "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/fresh-recovery/restored-flow.json",
+          "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/scripts/maintainer-installed-baseline.mjs",
+          "sha256": "792cc35b25ec194784c79fd286d29ae980daa73385b9e40e89fc97b85bf853cc",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/fresh-recovery/scripts/maintainer-installed-recovery.mjs",
+          "sha256": "cc6e369f9323931d8a405f92fa586db4a62a101b1cf40821c5c3696536d35ea0",
+          "verification": "local"
+        }
+      ],
+      "scope": "Partial agent-operated published 3.46.2 Windows npm consumer probe: synthetic empty-flow HTTP create/read/export/mutation, invalid restore rejection, fresh-root restore/re-export and persisted content after restart. Retained commands and two actual receipts; candidate upgrade and full artifact acceptance pending.",
+      "limits": [
+        "Attestation signature and compiled-source correspondence unverified; artifact provenance remains observed-metadata.",
+        "Same version baseline and recovery only; no version upgrade, independent human, provider/model call, runnable flow or schedule.",
+        "Forced owned Windows taskkill and selected loopback port closure do not prove graceful cleanup or every descendant generation.",
+        "10,286,028-byte tarball retained and checksum-verified externally; omitted from local raw entries because the ledger verifier limit is 5 MiB.",
+        "Pending installed-artifact record with artifactProof null cannot qualify release support or a grade gate."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/614"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "community-bounded-reads-d608e120",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "d608e12057d0cc164bfad523146b178c522cf412",
+      "artifactId": "proposal-pr-637",
+      "ownerId": "community",
+      "observedAt": "2026-10-04T01:04:33.862Z",
+      "environment": {
+        "platform": "Windows x64; CI rows explicitly scoped in retained reports",
+        "node": "v22.13.1 local; CI runtime in run/job metadata",
+        "provider": "No provider call; synthetic local flows and public GitHub metadata",
+        "tools": "Node, npm, git, gh; agent-operated receipts, no human identity assertion"
+      },
+      "commands": [
+        "node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs",
+        "node scripts/ownership-prototype/run.cjs <retained report>",
+        "Read-only --verify of both pinned retained source bundles; old-module negative control in private temporary directory.",
+        "Read-only GitHub CodeQL analysis, SARIF export, merge parents, paginated PR-ref open alerts and completed JavaScript job log."
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-tests.txt",
+          "sha256": "b2205bda2cb954336b999895e819ba888cba1d19edb4067fffbe7c66e662d621",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-ownership-fs-race-committed.json",
+          "sha256": "d6ea9b9eb91d881bcf489539efda2901d77b7396d127ccb64fd547adedd495d7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-fs-race-negative-control.json",
+          "sha256": "b386f88b3dddef6cf8990ef2196e48a36b99ef199d8f321ff0709d0d7317793e",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-fs-race-negative-control.stdout.txt",
+          "sha256": "aa98ba15e0228c498058eb87be8a651504cd00a4be304a9ec3f651d0956eb2dd",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-fs-race-negative-control.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-compatibility-0468cbd2.json",
+          "sha256": "115e5135dc3179f6077ed975c409cb6ff86d4d2f9112905d05b0e4762abb8ecb",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-compatibility-7acc3f35.json",
+          "sha256": "453b059fb022db28c331cf71df26904cdfbe8b6c72aeb61e4e297656e8db74c5",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-javascript-job.log",
+          "sha256": "40c948e97a04eac1b9e4234bdaf7686e3730d324c09a96c4f712765ed1bdc10d",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-analyses.json",
+          "sha256": "520e28834f407f7f31eea785af36e51223244362ed444a297995333b208b249e",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-javascript-typescript-commit.json",
+          "sha256": "7271fa13a5a77610ba1f9b531a3bfa32bd91922907b7726feefe0a383278f951",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-javascript-typescript.sarif.json",
+          "sha256": "fcf26dd8de20deb8695229a98745d17ce5b91851ccdd85250ae8bd832931d7f2",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-actions-commit.json",
+          "sha256": "7271fa13a5a77610ba1f9b531a3bfa32bd91922907b7726feefe0a383278f951",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-actions.sarif.json",
+          "sha256": "e8c7303be89a53a84031886dd19159725cb4a3d933bdf3623ac7dc6b690185d3",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-open-alerts.json",
+          "sha256": "cf1cbb66a638b4860a516671fb74850e6ccf787fe6c4c8d29e9c04efe880bd05",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/bounded-reads/community-codeql-637-scan-observation.json",
+          "sha256": "25e53e5ccc24861b524e645a429aa7ab72314e726aed076e8060aa215e25fdc5",
+          "verification": "local"
+        }
+      ],
+      "scope": "Committed descriptor-bound reads: 20 local Node tests passed without skips; 10 source prototype HTTP/IPC checks passed; old verifier reproducibly accepts oversized receipt and fails the new regression. Both retained source-bundle formats verify with the new CLI. PR #637 CodeQL scan at merge 389c1135 contains d608e120 as a direct parent, extracts both assigned files and executes js/file-system-race; analysis metadata, SARIF export and PR-ref open-alert query report zero findings.",
+      "limits": [
+        "Current root integration and original PR #611 alert instances require their own new-head scan; no alert dismissed or scanner weakened.",
+        "Prototype does not exercise actual application routes or production isolation; controlled private directories required.",
+        "Boundary tests not included in the current explicit Windows/Linux release-safety selector; local Node results retained separately.",
+        "Full source CI at d608e120 failed and is retained as community-source-ci-d608e120; this passing record covers only its stated local/scan checks."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/637"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "community-source-ci-d608e120",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "d608e12057d0cc164bfad523146b178c522cf412",
+      "artifactId": "proposal-pr-637",
+      "ownerId": "community",
+      "observedAt": "2026-10-04T01:04:33.862Z",
+      "environment": {
+        "platform": "Windows x64; CI rows explicitly scoped in retained reports",
+        "node": "v22.13.1 local; CI runtime in run/job metadata",
+        "provider": "No provider call; synthetic local flows and public GitHub metadata",
+        "tools": "Node, npm, git, gh; agent-operated receipts, no human identity assertion"
+      },
+      "commands": [
+        "Read-only GitHub run/job/artifact metadata and download of raw ordinary/isolated Jest reports from CI run 37165089984, bound by artifact metadata to d608e120."
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/ci-d608e120-run.json",
+          "sha256": "ec7946febce9c53b58ddacd470fd24fc966d6f522cc11717080b5cf302d20031",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/ci-d608e120-jobs.json",
+          "sha256": "54bcd421a1791e0a016bfff421e7c17972f1e65475196404d7bb7d3fec8fe8f9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/ci-d608e120-artifacts.json",
+          "sha256": "94a710ad898f8bca7c01503fc3981a720746a27e210f36ae5426675febfefed0",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/jest-results.json",
+          "sha256": "9a21d78d58bc7c52605dc52f8e796e65bb1bc0d8a593d762d6eb260e7935c431",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/jest-results-isolated.json",
+          "sha256": "e63206f114f48c66ccdfc5716d1bd0c78669d07130884672ed36cadb895a7f65",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/ci-d608e120/summary.json",
+          "sha256": "a2caf6927c0c12d2daca9bf098cea29b17cbcaa57e6f94461d2a57f33c5ca3af",
+          "verification": "local"
+        }
+      ],
+      "scope": "Full CI run 37165089984 failed ordinary test and final verification. Raw ordinary report: 7,964 total tests, 7,951 passed, two failed, 11 pending; 869 suites, three failed. SchedulerService has two failed assertions; two metadata suites could not load micromatch. Isolated report: 104 passed, zero failed/pending.",
+      "limits": [
+        "Integration owner corrected the two metadata imports separately in 65211255; that correction does not alter this historical failed run.",
+        "Corrected candidate full CI and root integration remain unqualified until their own exact-source results exist.",
+        "Passing local descriptor/prototype tests and PR CodeQL scan do not replace the failed full source gate."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/637",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37165089984"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "community-loopback-recipe-062df27b",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "062df27b7563935c9106ed6dffc15c091b786b63",
+      "artifactId": "proposal-pr-629",
+      "ownerId": "community",
+      "observedAt": "2026-10-04T01:04:33.862Z",
+      "environment": {
+        "platform": "Windows x64; CI rows explicitly scoped in retained reports",
+        "node": "v22.13.1 local; CI runtime in run/job metadata",
+        "provider": "No provider call; synthetic local flows and public GitHub metadata",
+        "tools": "Node, npm, git, gh; agent-operated receipts, no human identity assertion"
+      },
+      "commands": [
+        "Installed Next CLI guide/help and actual launcher policy helpers for inherited exposure modes",
+        "GitHub CI run 37163413847 at 062df27b; raw ordinary/isolated reports and artifact/run/job metadata retained."
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/recipe-check.json",
+          "sha256": "3fb5b00cd6825d464e8d42114ee5ec299a9bff4b82459acdc13bcfc0bd0aaa0c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/jest-results-ci.json",
+          "sha256": "913c14daed2455fb493a0b890f3ea981f352f92056c5d68b078386538ad9b068",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/jest-results-isolated.json",
+          "sha256": "433d4a3501162176272e38989846953792f39aef750928355f2743bfa4d64d7c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/ci-run.json",
+          "sha256": "eb93ec84636e864564787ce5006e4d46d60e112ee5708dcb475839ec931acf3e",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/ci-jobs.json",
+          "sha256": "dd21ab345a0f151bfada996b8f61b5e4b44b1cffdde4308770fb7d15959444f7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/loopback/ci-artifacts.json",
+          "sha256": "35f82d8a7514f19767bbf7d892a0a8314c893753fd0cf6cba327138cbcc1accb",
+          "verification": "local"
+        }
+      ],
+      "scope": "Contributor recipe explicitly binds loopback despite inherited network/public mode; source helper check and exact-head CI passed eight normal jobs. Ordinary Jest: 7,525 passed, zero failed, 11 pending; isolated: 104 passed, zero failed/pending.",
+      "limits": [
+        "Optional Persona diagnostic skipped; existing pending Jest tests retained.",
+        "Pure launcher helper and CI checks do not prove human onboarding, an independently useful first PR or candidate upgrade."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/629",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37163413847"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "community-human-evidence-pending-2026-10-03",
+      "kind": "human-study",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
+      "artifactId": null,
+      "ownerId": "community",
+      "observedAt": "2026-10-04T01:04:33.862Z",
+      "environment": {
+        "platform": "Windows x64; CI rows explicitly scoped in retained reports",
+        "node": "v22.13.1 local; CI runtime in run/job metadata",
+        "provider": "No provider call; synthetic local flows and public GitHub metadata",
+        "tools": "Node, npm, git, gh; agent-operated receipts, no human identity assertion"
+      },
+      "commands": [
+        "Paginated public merged-PR search and submitted-review retrieval; exact interval and raw response checksum inventory retained.",
+        "Exact owner-approved invitation posted and verified at issuecomment-5974718442; no follow-up outreach or permissions granted."
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/public-history/inventory.json",
+          "sha256": "03cd50a65989b2d98757b7d72c6cb9416a73320cf06bda07d7c1aef2733c977b",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/public-history/response-1.json",
+          "sha256": "7479079a2bb2d1e5ff8b95d01ea7002c32d4a74bedde3e056ec3e0b46a422618",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/community/public-history/invitation-posted.json",
+          "sha256": "33978fa310cf1318a6f0167e92ba283c2fea49f0a3147d30ed9bb42a405a1322",
+          "verification": "local"
+        }
+      ],
+      "scope": "Historical public merged-PR/review collection over exactly 90 elapsed days: 61 merged PRs and 24 submitted reviews, with complete pagination for this retrieval scope. Owner-approved invitation to RheagalFire posted on PR #82; recipient response, consent, human identity and independence unverified. No qualifying human count.",
+      "limits": [
+        "Historical retrieval interval is not the agreed prospective observation window; excludes unmerged/private changes and other contribution channels.",
+        "GitHub account type, author/reviewer counts and outreach are not independent human participation, substantive quality, training, access or role acceptance.",
+        "No human study acceptance, first-PR observation, two backup maintainers, three qualifying humans, access receipts or independent reassessment."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "elapsed",
+        "start": "2026-07-05T23:24:31.244Z",
+        "end": "2026-10-03T23:24:31.244Z",
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/issues/576",
+        "https://github.com/mario-andreschak/FLUJO/pull/82#issuecomment-5974718442"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [

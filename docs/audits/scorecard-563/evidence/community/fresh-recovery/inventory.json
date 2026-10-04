@@ -1,0 +1,256 @@
+{
+  "toolRevision": "a9544f6f9f728f97d9f8f81f45fede5325bf42e0",
+  "baselineReceiptSha256": "391a2035bdcb49aff21d0e859b6c7b9fb02cc164a30ccb1bcf17b323b88b98ac",
+  "recoveryReceiptSha256": "09b89cf472ae3f4fb2be09a1e5730802c9f19e3eae4c9cd7325d6c7228c6b955",
+  "files": [
+    {
+      "path": "receipt.json",
+      "bytes": 10422,
+      "sha256": "391a2035bdcb49aff21d0e859b6c7b9fb02cc164a30ccb1bcf17b323b88b98ac"
+    },
+    {
+      "path": "receipt.sha256",
+      "bytes": 79,
+      "sha256": "fb4e61fc50f62f938a6bbf5e96cdeeca18252bf5d939ba38c88d4013b06aad90"
+    },
+    {
+      "path": "app.stderr.txt",
+      "bytes": 128,
+      "sha256": "99981a10c47725d5ba606ce6281f1de70f5c95e2365ef7178fb0ae6d79793d9f"
+    },
+    {
+      "path": "app.stdout.txt",
+      "bytes": 5920,
+      "sha256": "7f9025ad70490a90eef44b89bfa18d05807daa1334c05003c3451929f4586276"
+    },
+    {
+      "path": "consumer/package-lock.json",
+      "bytes": 299396,
+      "sha256": "ad4371f23fd1bf424bb6a95df08d0d7ded81c982c9b130bee018eea36997a62c"
+    },
+    {
+      "path": "consumer/package.json",
+      "bytes": 74,
+      "sha256": "21aaa4f2c727c6bf658ae07b9d75c8cfc8f98a04a4c3d95d970d7904e237c145"
+    },
+    {
+      "path": "empty-global.npmrc",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "empty-user.npmrc",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "flujo-ai-3.46.2.tgz",
+      "bytes": 10286028,
+      "sha256": "470605df68d8d2afb1db4895ec3d51e2be1a4d0ba93805becad86733ae71135c"
+    },
+    {
+      "path": "install.stderr.txt",
+      "bytes": 222,
+      "sha256": "994deba829fb55b44d6db585aef2d486e8142990854f82c16ad05d85124327fb"
+    },
+    {
+      "path": "install.stdout.txt",
+      "bytes": 26,
+      "sha256": "15c610589cf37481d5a14c0672d57781095e156ddc13c2afc0fc50b5b90e3721"
+    },
+    {
+      "path": "missing-metadata.zip",
+      "bytes": 327,
+      "sha256": "1b4efb2e1b9f88624ae93285f5dce34d44de4a9e4895cc914c266a5e6482169c"
+    },
+    {
+      "path": "original-flow.json",
+      "bytes": 151,
+      "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7"
+    },
+    {
+      "path": "response-001.bin",
+      "bytes": 270,
+      "sha256": "f5357cad6d861c2092897b08f59ebd8ffaf7222bfcc6baa52ec5e32940f3737d"
+    },
+    {
+      "path": "response-002.bin",
+      "bytes": 151,
+      "sha256": "3450b6f7e8d4f8d5540a9df1664fb45fd923dfd2b75e3946dce46f7b71fb9ae0"
+    },
+    {
+      "path": "response-003.bin",
+      "bytes": 151,
+      "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7"
+    },
+    {
+      "path": "response-004.bin",
+      "bytes": 1723,
+      "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c"
+    },
+    {
+      "path": "response-005.bin",
+      "bytes": 157,
+      "sha256": "aeeba16cd22c27aa537818017b75b2a9c0235b420a4557cf4391bec9385cbf9a"
+    },
+    {
+      "path": "response-006.bin",
+      "bytes": 49,
+      "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8"
+    },
+    {
+      "path": "response-007.bin",
+      "bytes": 157,
+      "sha256": "aeeba16cd22c27aa537818017b75b2a9c0235b420a4557cf4391bec9385cbf9a"
+    },
+    {
+      "path": "response-008.bin",
+      "bytes": 16,
+      "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97"
+    },
+    {
+      "path": "response-009.bin",
+      "bytes": 151,
+      "sha256": "b83df7edd33b90c8a0d2cf136851e1dc5e42af960f41b81e68384a454e6c291b"
+    },
+    {
+      "path": "restored-flow.json",
+      "bytes": 151,
+      "sha256": "b83df7edd33b90c8a0d2cf136851e1dc5e42af960f41b81e68384a454e6c291b"
+    },
+    {
+      "path": "synthetic-backup.zip",
+      "bytes": 1723,
+      "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c"
+    },
+    {
+      "path": "fresh-recovery/receipt.json",
+      "bytes": 9499,
+      "sha256": "09b89cf472ae3f4fb2be09a1e5730802c9f19e3eae4c9cd7325d6c7228c6b955"
+    },
+    {
+      "path": "fresh-recovery/receipt.sha256",
+      "bytes": 79,
+      "sha256": "29521f9e2085f0e68eef8306cc01c10d0ae73604a0a88d340ea4d4cfac654c8a"
+    },
+    {
+      "path": "fresh-recovery/fresh-start.stderr.txt",
+      "bytes": 128,
+      "sha256": "27e9d5b1f1906a506e4d72968f371b035b8271bc21c792d5042e7f9129005e36"
+    },
+    {
+      "path": "fresh-recovery/fresh-start.stdout.txt",
+      "bytes": 6207,
+      "sha256": "2ffba7f8090c074d8cf02152ac25d078ab498e0dadb193e3c37f5c82e399b944"
+    },
+    {
+      "path": "fresh-recovery/input-backup.zip",
+      "bytes": 1723,
+      "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c"
+    },
+    {
+      "path": "fresh-recovery/missing-metadata.zip",
+      "bytes": 379,
+      "sha256": "3517e130bfda71fa024a063aa525dc90f8357a83629091a572c87adb69d39cee"
+    },
+    {
+      "path": "fresh-recovery/original-flow.json",
+      "bytes": 151,
+      "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7"
+    },
+    {
+      "path": "fresh-recovery/recovered-backup.zip",
+      "bytes": 1727,
+      "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166"
+    },
+    {
+      "path": "fresh-recovery/response-001.bin",
+      "bytes": 286,
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a"
+    },
+    {
+      "path": "fresh-recovery/response-002.bin",
+      "bytes": 52,
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14"
+    },
+    {
+      "path": "fresh-recovery/response-003.bin",
+      "bytes": 49,
+      "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8"
+    },
+    {
+      "path": "fresh-recovery/response-004.bin",
+      "bytes": 52,
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14"
+    },
+    {
+      "path": "fresh-recovery/response-005.bin",
+      "bytes": 16,
+      "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97"
+    },
+    {
+      "path": "fresh-recovery/response-006.bin",
+      "bytes": 151,
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9"
+    },
+    {
+      "path": "fresh-recovery/response-007.bin",
+      "bytes": 1727,
+      "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166"
+    },
+    {
+      "path": "fresh-recovery/response-008.bin",
+      "bytes": 286,
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a"
+    },
+    {
+      "path": "fresh-recovery/response-009.bin",
+      "bytes": 151,
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9"
+    },
+    {
+      "path": "fresh-recovery/restart.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "fresh-recovery/restart.stdout.txt",
+      "bytes": 1999,
+      "sha256": "7b03aceeecb774263d87db293fd3c7a6477ba8babf40294e7b1e4472d63e2440"
+    },
+    {
+      "path": "fresh-recovery/restarted-flow.json",
+      "bytes": 151,
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9"
+    },
+    {
+      "path": "fresh-recovery/restored-flow.json",
+      "bytes": 151,
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9"
+    },
+    {
+      "path": "scripts/maintainer-installed-baseline.mjs",
+      "bytes": 19824,
+      "sha256": "792cc35b25ec194784c79fd286d29ae980daa73385b9e40e89fc97b85bf853cc"
+    },
+    {
+      "path": "scripts/maintainer-installed-recovery.mjs",
+      "bytes": 16636,
+      "sha256": "cc6e369f9323931d8a405f92fa586db4a62a101b1cf40821c5c3696536d35ea0"
+    }
+  ],
+  "limits": [
+    "Published baseline only; same artifact reused for fresh-root recovery and restart",
+    "Synthetic empty flow only; no provider/model, identity/secrets, schedule or Persona recovery",
+    "No provenance signature or every-descendant/graceful-cleanup certification"
+  ],
+  "pending": [
+    "qualified-integrated-candidate-version-upgrade",
+    "independent-human-review",
+    "human-operated-drill",
+    "private-triage-tabletop",
+    "verified-backup-access",
+    "90-day-observation",
+    "independent-reassessment"
+  ]
+}

@@ -1,0 +1,41 @@
+[FLUJO] Node 22.13.1 has no --use-system-ca flag; using Node's bundled CAs. If an MCP server uses a private/corporate CA, set FLUJO_EXTRA_CA_CERTS (or NODE_EXTRA_CA_CERTS) to your CA file before starting FLUJO.
+[FLUJO] Starting on http://localhost:51807 [exposure: localhost]
+[FLUJO] Data directory: C:\Users\Moe\AppData\Local\Temp\flujo-maintainer-installed-qhXSFf\fresh-recovery\data
+▲ Next.js 16.3.5
+- Local:         http://127.0.0.1:51807
+- Network:       http://127.0.0.1:51807
+✓ Ready in 463ms
+✓ Running next.config.mjs took 52ms
+[FLUJO] Workspace startup hook: loading migration and recovery checks...
+[FLUJO] Workspace migration: started | version=2 pid=44556 dataRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data" workspaceRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace" strategy="direct rename/merge"
+[FLUJO] Workspace migration: exclusive lock acquired | pid=44556 lock="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\.workspace-layout.lock"
+[FLUJO] Workspace migration: preflight started | candidates=11 strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate | subtree="db" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\db" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="db" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="db" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\db" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="db" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="db" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\db" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="db" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="userdata" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\userdata" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="userdata" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="snapshots" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\snapshots" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="snapshots" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="screenshots" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\screenshots" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="screenshots" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="recordings" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\recordings" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="recordings" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="browser-profile" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\browser-profile" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="browser-profile" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="bash-utils" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\bash-utils" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="bash-utils" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="artifacts" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\artifacts" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="artifacts" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: preflight candidate | subtree="mcp-servers" sources=1 destination="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace\\mcp-servers" strategy="direct rename/merge"
+[FLUJO] Workspace migration: preflight candidate ready | subtree="mcp-servers" outcome="skipped" strategy="source absent"
+[FLUJO] Workspace migration: completion marker published | marker="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\.workspace-layout.json" strategy="direct rename/merge"
+[FLUJO] Workspace migration: exclusive lock released | lock="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\.workspace-layout.lock"
+[FLUJO] Workspace migration: finished successfully | elapsed="2.7s" workspaceRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace" errors=0
+
+[FLUJO] Workspace migration: nothing to do (11 skipped, 2.7s)
+[FLUJO] Start FLUJO in the browser: [http://localhost:51807](http://localhost:51807)
+

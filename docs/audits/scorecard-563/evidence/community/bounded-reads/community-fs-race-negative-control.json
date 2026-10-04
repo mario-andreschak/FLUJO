@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-10-04T00:27:33.312Z",
+  "result": "regression-reproduced",
+  "unfixedSourceRevision": "a9a974a10c543dafdcc5683f57b3c747514ee5a4",
+  "unfixedScriptSha256": "e909182ade2a70828800c2850e46d8658fa1d5c76f61f69f7c3e4e2dcc2ed9ad",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--test",
+    "--test-name-pattern=evidence growth between metadata check and read",
+    "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-fs-race-control-7FfEUa\\maintainer-drill.test.mjs"
+  ],
+  "exitCode": 1,
+  "temporary": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-fs-race-control-7FfEUa",
+  "scope": "Original verifier accepts checksum-valid receipt that grows beyond its size cap after path metadata check; new regression assertion fails as expected",
+  "limits": [
+    "Deterministic synthetic race; no human, installed-artifact or provenance qualification"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-04T00:29:07.943Z",
+  "sourceRevision": "d608e12057d0cc164bfad523146b178c522cf412",
+  "securityBase": "2c02fd0d3e4c36e702537a2e67bdd3d240101533",
+  "securityVerifierSha256": "1f617e639f05341ba1d5ea17b16dd8b21b74de49d7e41ca8060072cbd3895075",
+  "node": "v22.13.1",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "each independent runtime lists only its server-owned resources",
+      "passed": true
+    },
+    {
+      "name": "foreign valid bearer fails authentication in the other runtime",
+      "passed": true
+    },
+    {
+      "name": "guessed valid foreign resource IDs fail before data access",
+      "passed": true
+    },
+    {
+      "name": "forged identity/header/workspace claims do not change the principal",
+      "passed": true
+    },
+    {
+      "name": "scope-limited credential cannot obtain control resource access",
+      "passed": true
+    },
+    {
+      "name": "missing bearer and corrupt or mismatched private policy fail closed without affecting the other owner",
+      "passed": true
+    },
+    {
+      "name": "oversized or hard-linked policy is refused without changing the other owner",
+      "passed": true
+    },
+    {
+      "name": "concurrent edits with the same revision yield one update and one visible conflict",
+      "passed": true
+    },
+    {
+      "name": "concurrent background callbacks retain the immutable initiating principal",
+      "passed": true
+    },
+    {
+      "name": "revocation fences accepted background work and closes its existing stream",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "evidenceClass": "disposable source ownership prototype",
+  "actualAppRoutesVerified": false,
+  "productionIsolationVerified": false,
+  "designAccepted": false,
+  "limitations": [
+    "two fixture HTTP runtimes; not installed FLUJO",
+    "separate OS processes are not hostile-code/host filesystem isolation",
+    "no actual flow/provider/tool/approval/export/backup implementation verified",
+    "no browser identity provider/session/key lifecycle verified",
+    "background callback is controlled IPC, not durable schedule/worker restart recovery",
+    "source bearer remains in the fixture Request; production stream witnesses must use Security recheck contract"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "checkedAt": "2026-10-03T23:55:52.376Z",
+  "result": "passed",
+  "source": "C:/Users/Moe/.codex/worktrees/community-maintainer-drill/FLUJO",
+  "data": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-contributor-recipe-TjsLqN",
+  "observations": [
+    {
+      "inherited": "localhost",
+      "previousExposure": "localhost",
+      "previousArguments": [
+        "dev",
+        "--webpack",
+        "--port",
+        "4300",
+        "-H",
+        "127.0.0.1"
+      ],
+      "selectedExposure": "localhost",
+      "nextArguments": [
+        "dev",
+        "--webpack",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "4300"
+      ]
+    },
+    {
+      "inherited": "network",
+      "previousExposure": "network",
+      "previousArguments": [
+        "dev",
+        "--webpack",
+        "--port",
+        "4300",
+        "-H",
+        "::"
+      ],
+      "selectedExposure": "localhost",
+      "nextArguments": [
+        "dev",
+        "--webpack",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "4300"
+      ]
+    },
+    {
+      "inherited": "public",
+      "previousExposure": "public",
+      "previousArguments": [
+        "dev",
+        "--webpack",
+        "--port",
+        "4300",
+        "-H",
+        "::"
+      ],
+      "selectedExposure": "localhost",
+      "nextArguments": [
+        "dev",
+        "--webpack",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "4300"
+      ]
+    }
+  ],
+  "scope": "Pure launcher environment/argument validation and exact guide command presence; no server or human onboarding claim"
+}

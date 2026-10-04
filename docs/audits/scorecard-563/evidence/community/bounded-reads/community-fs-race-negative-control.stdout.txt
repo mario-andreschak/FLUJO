@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: evidence growth between metadata check and read cannot bypass the receipt size limit
+not ok 1 - evidence growth between metadata check and read cannot bypass the receipt size limit
+  ---
+  duration_ms: 1189.941
+  location: 'C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-fs-race-control-7FfEUa\\maintainer-drill.test.mjs:229:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected exception.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  operator: 'throws'
+  stack: |-
+    TestContext.<anonymous> (file:///C:/Users/Moe/AppData/Local/Temp/flujo-fs-race-control-7FfEUa/maintainer-drill.test.mjs:249:12)
+    Test.runInAsyncScope (node:async_hooks:211:14)
+    Test.run (node:internal/test_runner/test:931:25)
+    Test.start (node:internal/test_runner/test:829:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1357.901

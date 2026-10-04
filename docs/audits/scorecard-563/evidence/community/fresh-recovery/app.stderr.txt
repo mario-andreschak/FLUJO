@@ -1,0 +1,1 @@
+[2026-10-03T23:25:00.792Z] [app/api/restore/route] Invalid backup file: missing metadata [480bf74e-4df1-4aff-a938-17b4e7e24633]

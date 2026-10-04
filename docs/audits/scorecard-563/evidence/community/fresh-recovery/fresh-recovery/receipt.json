@@ -1,0 +1,301 @@
+{
+  "schemaVersion": 1,
+  "kind": "automated-installed-fresh-recovery",
+  "result": "passed-fresh-recovery",
+  "startedAt": "2026-10-03T23:25:01.827Z",
+  "toolRevision": "a9544f6f9f728f97d9f8f81f45fede5325bf42e0",
+  "toolScriptSha256": "cc6e369f9323931d8a405f92fa586db4a62a101b1cf40821c5c3696536d35ea0",
+  "sourceCleanBefore": true,
+  "sourceCleanAfter": true,
+  "version": "3.46.2",
+  "declaredArtifactSourceRevision": "320347356891aa1c24e0f2f9ce12719317e58bde",
+  "integrity": "sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ==",
+  "baselineReceiptSha256": "391a2035bdcb49aff21d0e859b6c7b9fb02cc164a30ccb1bcf17b323b88b98ac",
+  "backupSha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c",
+  "platform": "win32",
+  "arch": "x64",
+  "node": "v22.13.1",
+  "baselineDirectory": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf",
+  "directory": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery",
+  "commands": [
+    {
+      "name": "fresh-start",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\consumer\\node_modules\\flujo-ai\\bin\\flujo.mjs",
+        "--no-open",
+        "--port",
+        "51807"
+      ],
+      "cwd": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\consumer\\node_modules\\flujo-ai",
+      "pid": 21220,
+      "startedAt": "2026-10-03T23:25:01.838Z",
+      "port": 51807,
+      "exit": {
+        "code": 1,
+        "signal": null,
+        "observedAt": "2026-10-03T23:25:08.208Z"
+      }
+    },
+    {
+      "name": "restart",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\consumer\\node_modules\\flujo-ai\\bin\\flujo.mjs",
+        "--no-open",
+        "--port",
+        "51851"
+      ],
+      "cwd": "C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\consumer\\node_modules\\flujo-ai",
+      "pid": 9680,
+      "startedAt": "2026-10-03T23:25:08.213Z",
+      "port": 51851,
+      "exit": {
+        "code": 1,
+        "signal": null,
+        "observedAt": "2026-10-03T23:25:12.477Z"
+      }
+    }
+  ],
+  "observations": [
+    {
+      "route": "/api/cwd",
+      "method": "GET",
+      "status": 200,
+      "elapsedMs": 3691,
+      "body": "response-001.bin",
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+      "bytes": 286
+    },
+    {
+      "route": "/api/flow/maintainer_drill_flow",
+      "method": "GET",
+      "status": 404,
+      "elapsedMs": 509,
+      "body": "response-002.bin",
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+      "bytes": 52
+    },
+    {
+      "route": "/api/restore",
+      "method": "POST",
+      "status": 400,
+      "elapsedMs": 20,
+      "body": "response-003.bin",
+      "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8",
+      "bytes": 49
+    },
+    {
+      "route": "/api/flow/maintainer_drill_flow",
+      "method": "GET",
+      "status": 404,
+      "elapsedMs": 16,
+      "body": "response-004.bin",
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+      "bytes": 52
+    },
+    {
+      "route": "/api/restore",
+      "method": "POST",
+      "status": 200,
+      "elapsedMs": 194,
+      "body": "response-005.bin",
+      "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97",
+      "bytes": 16
+    },
+    {
+      "route": "/api/flow/maintainer_drill_flow",
+      "method": "GET",
+      "status": 200,
+      "elapsedMs": 14,
+      "body": "response-006.bin",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    },
+    {
+      "route": "/api/backup",
+      "method": "POST",
+      "status": 200,
+      "elapsedMs": 33,
+      "body": "response-007.bin",
+      "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166",
+      "bytes": 1727
+    },
+    {
+      "route": "/api/cwd",
+      "method": "GET",
+      "status": 200,
+      "elapsedMs": 2400,
+      "body": "response-008.bin",
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+      "bytes": 286
+    },
+    {
+      "route": "/api/flow/maintainer_drill_flow",
+      "method": "GET",
+      "status": 200,
+      "elapsedMs": 524,
+      "body": "response-009.bin",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    }
+  ],
+  "shutdowns": [
+    {
+      "name": "fresh-start",
+      "pid": 21220,
+      "mode": "forced-owned-process-tree",
+      "taskkill": {
+        "code": 0,
+        "output": "ERFOLGREICH: Der Prozess mit PID 44556 (untergeordnetem Prozess von PID 21220) wurde beendet.\r\nERFOLGREICH: Der Prozess mit PID 21220 (untergeordnetem Prozess von PID 50024) wurde beendet.\r\n"
+      },
+      "launcherExit": {
+        "code": 1,
+        "signal": null,
+        "observedAt": "2026-10-03T23:25:08.208Z"
+      },
+      "loopbackPortClosed": true
+    },
+    {
+      "name": "restart",
+      "pid": 9680,
+      "mode": "forced-owned-process-tree",
+      "taskkill": {
+        "code": 0,
+        "output": "ERFOLGREICH: Der Prozess mit PID 48864 (untergeordnetem Prozess von PID 9680) wurde beendet.\r\nERFOLGREICH: Der Prozess mit PID 9680 (untergeordnetem Prozess von PID 50024) wurde beendet.\r\n"
+      },
+      "launcherExit": {
+        "code": 1,
+        "signal": null,
+        "observedAt": "2026-10-03T23:25:12.477Z"
+      },
+      "loopbackPortClosed": true
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fresh-start.stderr.txt",
+      "sha256": "27e9d5b1f1906a506e4d72968f371b035b8271bc21c792d5042e7f9129005e36",
+      "bytes": 128
+    },
+    {
+      "path": "fresh-start.stdout.txt",
+      "sha256": "2ffba7f8090c074d8cf02152ac25d078ab498e0dadb193e3c37f5c82e399b944",
+      "bytes": 6207
+    },
+    {
+      "path": "input-backup.zip",
+      "sha256": "3d852e1249f24c51e114b5a887cd157ad8c0487157b47d2ac9fa6f4ca17c959c",
+      "bytes": 1723
+    },
+    {
+      "path": "missing-metadata.zip",
+      "sha256": "3517e130bfda71fa024a063aa525dc90f8357a83629091a572c87adb69d39cee",
+      "bytes": 379
+    },
+    {
+      "path": "original-flow.json",
+      "sha256": "2a21ccdbb70cebd4289ac4c21bbb490bceefcb75ec1ed63bd0e4f3a01035fee7",
+      "bytes": 151
+    },
+    {
+      "path": "recovered-backup.zip",
+      "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166",
+      "bytes": 1727
+    },
+    {
+      "path": "response-001.bin",
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+      "bytes": 286
+    },
+    {
+      "path": "response-002.bin",
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+      "bytes": 52
+    },
+    {
+      "path": "response-003.bin",
+      "sha256": "fa593d78c386008467ff39706d18d25456749bb7df1fa7a675ec572480a167a8",
+      "bytes": 49
+    },
+    {
+      "path": "response-004.bin",
+      "sha256": "73d2db7f7d99eaf3cc0a7a6f4bec4abfe67a6a8dd1c8cfaefbf49fa6196dfc14",
+      "bytes": 52
+    },
+    {
+      "path": "response-005.bin",
+      "sha256": "c955e57777ec0d73639dca6748560d00aa5eb8e12f13ebb2ed9656add3908f97",
+      "bytes": 16
+    },
+    {
+      "path": "response-006.bin",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    },
+    {
+      "path": "response-007.bin",
+      "sha256": "d21f33b1cc38117436c70ab8d17be846aa6b145133ddcdc6b1f0b69d3274a166",
+      "bytes": 1727
+    },
+    {
+      "path": "response-008.bin",
+      "sha256": "e27b6cd1bfbf2d926caadbada664a4edd158a6dbecbdf2f3af823e1b95cde61a",
+      "bytes": 286
+    },
+    {
+      "path": "response-009.bin",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    },
+    {
+      "path": "restart.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "restart.stdout.txt",
+      "sha256": "7b03aceeecb774263d87db293fd3c7a6477ba8babf40294e7b1e4472d63e2440",
+      "bytes": 1999
+    },
+    {
+      "path": "restarted-flow.json",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    },
+    {
+      "path": "restored-flow.json",
+      "sha256": "851e1b7931b1dac7d287d7f6099d06bd9ac84167666ac8865e9873551f329fd9",
+      "bytes": 151
+    }
+  ],
+  "pending": [
+    "qualified-integrated-candidate-version-upgrade",
+    "independent-human-review",
+    "human-operated-drill",
+    "private-triage-tabletop",
+    "verified-backup-access",
+    "90-day-observation",
+    "independent-reassessment"
+  ],
+  "limits": [
+    "Published baseline only; same artifact reused for fresh-root recovery and restart",
+    "Synthetic empty flow only; no provider/model, identity/secrets, schedule or Persona recovery",
+    "No provenance signature or every-descendant/graceful-cleanup certification"
+  ],
+  "preRestoreAbsent": true,
+  "invalidRestoreUnchanged": true,
+  "roundtripBackupVerified": true,
+  "restartPersistenceVerified": true,
+  "semanticComparison": {
+    "fields": [
+      "id",
+      "name",
+      "nodes",
+      "edges"
+    ],
+    "passed": true,
+    "timestamps": "Retained; not stable content"
+  },
+  "completedAt": "2026-10-03T23:25:12.640Z"
+}

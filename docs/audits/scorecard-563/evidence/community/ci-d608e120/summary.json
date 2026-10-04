@@ -1,0 +1,711 @@
+{
+  "checkedAt": "2026-10-04T01:00:02.050Z",
+  "pullRequest": "https://github.com/mario-andreschak/FLUJO/pull/637",
+  "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165089984",
+  "sourceRevision": "d608e12057d0cc164bfad523146b178c522cf412",
+  "status": "completed",
+  "conclusion": "failure",
+  "jobs": [
+    {
+      "name": "workflow-contract",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Production build (windows-latest)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "dependency-security",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "test",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "name": "Release safety (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Release safety (windows-latest)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "test-isolated",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "typecheck",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "CodeQL (actions)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "CodeQL (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Production build (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "diagnostic Persona memory profile (not release acceptance)",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "verification",
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "reports": [
+    {
+      "path": "community-evidence/ci-d608e120/ordinary/jest-results.json",
+      "bytes": 3525413,
+      "sha256": "9a21d78d58bc7c52605dc52f8e796e65bb1bc0d8a593d762d6eb260e7935c431",
+      "artifactId": 11288824239,
+      "artifactArchiveDigest": "sha256:0be6a96b9ec0b3de9d59060d73e50352e979dae044dee5b5cb6adea448e52870",
+      "success": false,
+      "tests": 7964,
+      "passed": 7951,
+      "failed": 2,
+      "pending": 11,
+      "suites": 869,
+      "passedSuites": 861,
+      "failedSuites": 3,
+      "failingSuites": [
+        {
+          "name": "/home/runner/work/FLUJO/FLUJO/__tests__/scheduler/schedulerService.test.ts",
+          "message": "  ● SchedulerService › exposes a live running flag + runningSince while a fire is in flight (issue #50)\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\n    \u001b[0m \u001b[90m 335 |\u001b[39m\n     \u001b[90m 336 |\u001b[39m     \u001b[36mconst\u001b[39m during \u001b[33m=\u001b[39m scheduler\u001b[33m.\u001b[39mgetStatus(execution\u001b[33m!\u001b[39m)\u001b[33m;\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 337 |\u001b[39m     expect(during\u001b[33m.\u001b[39mrunning)\u001b[33m.\u001b[39mtoBe(\u001b[36mtrue\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m     |\u001b[39m                            \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 338 |\u001b[39m     expect(during\u001b[33m.\u001b[39mrunningSince)\u001b[33m.\u001b[39mtoMatch(\u001b[35m/^\\d{4}-/\u001b[39m)\u001b[33m;\u001b[39m \u001b[90m// ISO start time for the elapsed timer\u001b[39m\n     \u001b[90m 339 |\u001b[39m\n     \u001b[90m 340 |\u001b[39m     release()\u001b[33m;\u001b[39m\u001b[0m\n\n      at Object.toBe (__tests__/scheduler/schedulerService.test.ts:337:28)\n\n  ● SchedulerService › catch-up: fires once at arm time when a run was missed and catchUp is on\n\n    expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\n    Expected number of calls: 1\n    Received number of calls: 2\n\n    \u001b[0m \u001b[90m 359 |\u001b[39m     \u001b[36mawait\u001b[39m \u001b[36mnew\u001b[39m \u001b[33mPromise\u001b[39m(r \u001b[33m=>\u001b[39m setTimeout(r\u001b[33m,\u001b[39m \u001b[35m20\u001b[39m))\u001b[33m;\u001b[39m\n     \u001b[90m 360 |\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 361 |\u001b[39m     expect(runFlowMock)\u001b[33m.\u001b[39mtoHaveBeenCalledTimes(\u001b[35m1\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m     |\u001b[39m                         \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 362 |\u001b[39m     \u001b[36mconst\u001b[39m runs \u001b[33m=\u001b[39m readRuns(execution\u001b[33m!\u001b[39m\u001b[33m.\u001b[39mid)\u001b[33m;\u001b[39m\n     \u001b[90m 363 |\u001b[39m     expect(runs)\u001b[33m.\u001b[39mtoHaveLength(\u001b[35m1\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m 364 |\u001b[39m     expect(runs[\u001b[35m0\u001b[39m]\u001b[33m.\u001b[39mtriggerSummary)\u001b[33m.\u001b[39mtoMatch(\u001b[35m/missed while FLUJO was closed/\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m\n\n      at Object.toHaveBeenCalledTimes (__tests__/scheduler/schedulerService.test.ts:361:25)\n",
+          "assertionResults": [
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 12,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService creates an execution, persists the envelope, and arms the schedule",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 8,
+              "retryReasons": [],
+              "startAt": 1791074056976,
+              "status": "passed",
+              "title": "creates an execution, persists the envelope, and arms the schedule"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 7,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService normalizes legacy restrictions and lets canonical patches take precedence",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 4,
+              "retryReasons": [],
+              "startAt": 1791074056988,
+              "status": "passed",
+              "title": "normalizes legacy restrictions and lets canonical patches take precedence"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 5,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects Singleton with parallel overlap after create and patch merging",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 4,
+              "retryReasons": [],
+              "startAt": 1791074056995,
+              "status": "passed",
+              "title": "rejects Singleton with parallel overlap after create and patch merging"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 2,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects malformed canonical restriction fields 0",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057001,
+              "status": "passed",
+              "title": "rejects malformed canonical restriction fields 0"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 1,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects malformed canonical restriction fields 1",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057003,
+              "status": "passed",
+              "title": "rejects malformed canonical restriction fields 1"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 2,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects malformed canonical restriction fields 2",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057017,
+              "status": "passed",
+              "title": "rejects malformed canonical restriction fields 2"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 5,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService persists folder organization without re-arming runtime triggers",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 7,
+              "retryReasons": [],
+              "startAt": 1791074057020,
+              "status": "passed",
+              "title": "persists folder organization without re-arming runtime triggers"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 2,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects an invalid cron pattern",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057025,
+              "status": "passed",
+              "title": "rejects an invalid cron pattern"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 5,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService does not arm disabled executions or anything while paused",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057027,
+              "status": "passed",
+              "title": "does not arm disabled executions or anything while paused"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 12,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService reports WHY a trigger is not armed so the UI need not guess (issue #118)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 7,
+              "retryReasons": [],
+              "startAt": 1791074057032,
+              "status": "passed",
+              "title": "reports WHY a trigger is not armed so the UI need not guess (issue #118)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 139,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService runNow runs the flow headlessly (ephemeral, no approvals) and records the outcome",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 12,
+              "retryReasons": [],
+              "startAt": 1791074057044,
+              "status": "passed",
+              "title": "runNow runs the flow headlessly (ephemeral, no approvals) and records the outcome"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 5,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService uses conversation mode when saveConversations is on",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 1,
+              "retryReasons": [],
+              "startAt": 1791074057183,
+              "status": "passed",
+              "title": "uses conversation mode when saveConversations is on"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 6,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService appends run info (timing + trigger data) to the prompt as a fenced block",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 9,
+              "retryReasons": [],
+              "startAt": 1791074057188,
+              "status": "passed",
+              "title": "appends run info (timing + trigger data) to the prompt as a fenced block"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 15,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService reports the previous run in the next run info",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057194,
+              "status": "passed",
+              "title": "reports the previous run in the next run info"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 15,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService reports an intervening errored attempt via lastRun.status (no output chaining)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057209,
+              "status": "passed",
+              "title": "reports an intervening errored attempt via lastRun.status (no output chaining)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 10,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService records an error run when the flow ends non-completed or throws",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 5,
+              "retryReasons": [],
+              "startAt": 1791074057224,
+              "status": "passed",
+              "title": "records an error run when the flow ends non-completed or throws"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 18,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService skips an overlapping fire and records it",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 4,
+              "retryReasons": [],
+              "startAt": 1791074057235,
+              "status": "passed",
+              "title": "skips an overlapping fire and records it"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 21,
+              "failing": false,
+              "failureDetails": [
+                {
+                  "matcherResult": {
+                    "actual": false,
+                    "expected": true,
+                    "message": "expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false",
+                    "name": "toBe",
+                    "pass": false
+                  }
+                }
+              ],
+              "failureMessages": [
+                "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/home/runner/work/FLUJO/FLUJO/__tests__/scheduler/schedulerService.test.ts:337:28)"
+              ],
+              "fullName": "SchedulerService exposes a live running flag + runningSince while a fire is in flight (issue #50)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057253,
+              "status": "failed",
+              "title": "exposes a live running flag + runningSince while a fire is in flight (issue #50)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 26,
+              "failing": false,
+              "failureDetails": [
+                {
+                  "matcherResult": {
+                    "message": "expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\nExpected number of calls: 1\nReceived number of calls: 2",
+                    "pass": false
+                  }
+                }
+              ],
+              "failureMessages": [
+                "Error: expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\nExpected number of calls: 1\nReceived number of calls: 2\n    at Object.toHaveBeenCalledTimes (/home/runner/work/FLUJO/FLUJO/__tests__/scheduler/schedulerService.test.ts:361:25)"
+              ],
+              "fullName": "SchedulerService catch-up: fires once at arm time when a run was missed and catchUp is on",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 0,
+              "retryReasons": [],
+              "startAt": 1791074057275,
+              "status": "failed",
+              "title": "catch-up: fires once at arm time when a run was missed and catchUp is on"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 27,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService catch-up off: a missed run is skipped silently",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 1,
+              "retryReasons": [],
+              "startAt": 1791074057302,
+              "status": "passed",
+              "title": "catch-up off: a missed run is skipped silently"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 8,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService delete removes the execution, its run history and trigger state",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 6,
+              "retryReasons": [],
+              "startAt": 1791074057329,
+              "status": "passed",
+              "title": "delete removes the execution, its run history and trigger state"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 4,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService update rejects unknown ids and invalid patches",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057337,
+              "status": "passed",
+              "title": "update rejects unknown ids and invalid patches"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 3,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService accepts a client-supplied UUID id and round-trips it",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 1,
+              "retryReasons": [],
+              "startAt": 1791074057341,
+              "status": "passed",
+              "title": "accepts a client-supplied UUID id and round-trips it"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 3,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService accepts a deterministic package-style id and round-trips it (issue #113)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057344,
+              "status": "passed",
+              "title": "accepts a deterministic package-style id and round-trips it (issue #113)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 3,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects a duplicate id with a conflict flag (issue #113)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057347,
+              "status": "passed",
+              "title": "rejects a duplicate id with a conflict flag (issue #113)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 9,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService rejects path-traversal / injection / oversized ids before any storage key is built (issue #113)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 17,
+              "retryReasons": [],
+              "startAt": 1791074057350,
+              "status": "passed",
+              "title": "rejects path-traversal / injection / oversized ids before any storage key is built (issue #113)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 26,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService publishes a FlowRunEvent for a completed fire, but not for a skipped one (issue #116)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 9,
+              "retryReasons": [],
+              "startAt": 1791074057359,
+              "status": "passed",
+              "title": "publishes a FlowRunEvent for a completed fire, but not for a skipped one (issue #116)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 6,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService tags a scheduler fire with source \"schedule\" and the planned execution id (issue #113)",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057385,
+              "status": "passed",
+              "title": "tags a scheduler fire with source \"schedule\" and the planned execution id (issue #113)"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 2,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService generates a webhook token server-side when absent",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 2,
+              "retryReasons": [],
+              "startAt": 1791074057391,
+              "status": "passed",
+              "title": "generates a webhook token server-side when absent"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 45,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService run history is a ring buffer capped at 100 records",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 3,
+              "retryReasons": [],
+              "startAt": 1791074057394,
+              "status": "passed",
+              "title": "run history is a ring buffer capped at 100 records"
+            },
+            {
+              "ancestorTitles": [
+                "SchedulerService"
+              ],
+              "duration": 2,
+              "failing": false,
+              "failureDetails": [],
+              "failureMessages": [],
+              "fullName": "SchedulerService concurrent history appends do not lose records",
+              "invocations": 1,
+              "location": null,
+              "numPassingAsserts": 1,
+              "retryReasons": [],
+              "startAt": 1791074057440,
+              "status": "passed",
+              "title": "concurrent history appends do not lose records"
+            }
+          ]
+        },
+        {
+          "name": "/home/runner/work/FLUJO/FLUJO/__tests__/meta/parseAllTestFiles.test.ts",
+          "message": "  ● Test suite failed to run\n\n    Cannot find module 'micromatch' from '__tests__/meta/parseAllTestFiles.test.ts'\n\n    \u001b[0m \u001b[90m 22 |\u001b[39m \u001b[36mimport\u001b[39m micromatch \u001b[36mfrom\u001b[39m \u001b[32m'micromatch'\u001b[39m\u001b[33m;\u001b[39m\n     \u001b[90m 23 |\u001b[39m \u001b[36mimport\u001b[39m ts \u001b[36mfrom\u001b[39m \u001b[32m'typescript'\u001b[39m\u001b[33m;\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 24 |\u001b[39m \u001b[36mimport\u001b[39m { \u001b[33mALL_TEST_GLOBS\u001b[39m } \u001b[36mfrom\u001b[39m \u001b[32m'../../jest.testMatch.mjs'\u001b[39m\u001b[33m;\u001b[39m\n     \u001b[90m    |\u001b[39m                                                            \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 25 |\u001b[39m\n     \u001b[90m 26 |\u001b[39m \u001b[36mconst\u001b[39m \u001b[33mROOT\u001b[39m \u001b[33m=\u001b[39m path\u001b[33m.\u001b[39mresolve(__dirname\u001b[33m,\u001b[39m \u001b[32m'..'\u001b[39m\u001b[33m,\u001b[39m \u001b[32m'..'\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m 27 |\u001b[39m \u001b[36mconst\u001b[39m \u001b[33mTESTS_DIR\u001b[39m \u001b[33m=\u001b[39m path\u001b[33m.\u001b[39mjoin(\u001b[33mROOT\u001b[39m\u001b[33m,\u001b[39m \u001b[32m'__tests__'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m\n\n      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:895:11)\n      at Object.<anonymous> (__tests__/meta/parseAllTestFiles.test.ts:24:60)\n",
+          "assertionResults": []
+        },
+        {
+          "name": "/home/runner/work/FLUJO/FLUJO/__tests__/meta/testMatchCoverage.test.ts",
+          "message": "  ● Test suite failed to run\n\n    Cannot find module 'micromatch' from '__tests__/meta/testMatchCoverage.test.ts'\n\n    \u001b[0m \u001b[90m 18 |\u001b[39m \u001b[36mimport\u001b[39m micromatch \u001b[36mfrom\u001b[39m \u001b[32m'micromatch'\u001b[39m\u001b[33m;\u001b[39m\n     \u001b[90m 19 |\u001b[39m \u001b[36mimport\u001b[39m { \u001b[33mALL_TEST_GLOBS\u001b[39m } \u001b[36mfrom\u001b[39m \u001b[32m'../../jest.testMatch.mjs'\u001b[39m\u001b[33m;\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 20 |\u001b[39m\n     \u001b[90m    |\u001b[39m \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 21 |\u001b[39m \u001b[36mconst\u001b[39m \u001b[33mROOT\u001b[39m \u001b[33m=\u001b[39m path\u001b[33m.\u001b[39mresolve(__dirname\u001b[33m,\u001b[39m \u001b[32m'..'\u001b[39m\u001b[33m,\u001b[39m \u001b[32m'..'\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m 22 |\u001b[39m \u001b[36mconst\u001b[39m \u001b[33mTESTS_DIR\u001b[39m \u001b[33m=\u001b[39m path\u001b[33m.\u001b[39mjoin(\u001b[33mROOT\u001b[39m\u001b[33m,\u001b[39m \u001b[32m'__tests__'\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m 23 |\u001b[39m \u001b[36mconst\u001b[39m \u001b[33mTEST_FILE\u001b[39m \u001b[33m=\u001b[39m \u001b[35m/\\.(test|spec)\\.tsx?$/\u001b[39m\u001b[33m;\u001b[39m\u001b[0m\n\n      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:895:11)\n      at Object.<anonymous> (__tests__/meta/testMatchCoverage.test.ts:20:60)\n",
+          "assertionResults": []
+        }
+      ]
+    },
+    {
+      "path": "community-evidence/ci-d608e120/isolated/jest-results-isolated.json",
+      "bytes": 47238,
+      "sha256": "e63206f114f48c66ccdfc5716d1bd0c78669d07130884672ed36cadb895a7f65",
+      "artifactId": 11288489572,
+      "artifactArchiveDigest": "sha256:d820f60d86772f48278bbf2fdccfa8768662423b07adef73dbe1d605cd7ce051",
+      "success": true,
+      "tests": 104,
+      "passed": 104,
+      "failed": 0,
+      "pending": 0,
+      "suites": 9,
+      "passedSuites": 9,
+      "failedSuites": 0,
+      "failingSuites": []
+    }
+  ],
+  "raw": [
+    {
+      "path": "community-evidence/ci-d608e120-run.json",
+      "bytes": 13241,
+      "sha256": "ec7946febce9c53b58ddacd470fd24fc966d6f522cc11717080b5cf302d20031"
+    },
+    {
+      "path": "community-evidence/ci-d608e120-jobs.json",
+      "bytes": 38674,
+      "sha256": "54bcd421a1791e0a016bfff421e7c17972f1e65475196404d7bb7d3fec8fe8f9"
+    },
+    {
+      "path": "community-evidence/ci-d608e120-artifacts.json",
+      "bytes": 3008,
+      "sha256": "94a710ad898f8bca7c01503fc3981a720746a27e210f36ae5426675febfefed0"
+    },
+    {
+      "path": "community-evidence/ci-d608e120/ordinary/jest-results.json",
+      "bytes": 3525413,
+      "sha256": "9a21d78d58bc7c52605dc52f8e796e65bb1bc0d8a593d762d6eb260e7935c431"
+    },
+    {
+      "path": "community-evidence/ci-d608e120/isolated/jest-results-isolated.json",
+      "bytes": 47238,
+      "sha256": "e63206f114f48c66ccdfc5716d1bd0c78669d07130884672ed36cadb895a7f65"
+    }
+  ],
+  "limits": [
+    "Full source CI is not qualified while ordinary test/final verification fails.",
+    "Local 20 descriptor tests, ten prototype checks and assigned-rule PR scan remain separately scoped evidence.",
+    "No duplicate source change for a failure already corrected by the integration owner; corrected candidate needs its own full CI."
+  ]
+}

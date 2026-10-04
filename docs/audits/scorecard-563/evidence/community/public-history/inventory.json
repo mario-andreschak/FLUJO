@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "kind": "public-community-history-inventory",
+  "repository": "mario-andreschak/FLUJO",
+  "collectedAt": "2026-10-03T23:24:34.832Z",
+  "interval": {
+    "startInclusive": "2026-07-05T23:24:31.244Z",
+    "endInclusive": "2026-10-03T23:24:31.244Z",
+    "elapsedDays": 90
+  },
+  "search": "repo:mario-andreschak/FLUJO is:pr is:merged merged:2026-07-05..2026-10-03 sort:created-asc",
+  "searchDateCandidates": 61,
+  "observedSearchTotals": [
+    61
+  ],
+  "mergedPrsInExactInterval": 61,
+  "searchPaginationComplete": true,
+  "submittedReviewsCompleteForMergedPrs": true,
+  "submittedReviewsOnThosePrs": 24,
+  "submittedReviewsInExactInterval": 24,
+  "authors": [
+    {
+      "login": "RheagalFire",
+      "accountType": "User",
+      "prs": [
+        82
+      ],
+      "additions": 400,
+      "deletions": 0,
+      "changedFiles": 6,
+      "humanIdentity": "unverified",
+      "independence": "unverified",
+      "consent": "not recorded"
+    },
+    {
+      "login": "flujo-app",
+      "accountType": "User",
+      "prs": [
+        269,
+        270,
+        271,
+        272,
+        276,
+        277,
+        278,
+        279,
+        280,
+        281,
+        282,
+        290,
+        310,
+        311,
+        312,
+        313,
+        340,
+        341,
+        342,
+        350,
+        351,
+        486,
+        490,
+        503,
+        504,
+        506,
+        507,
+        508,
+        509,
+        510,
+        511,
+        516,
+        521,
+        522,
+        523,
+        524,
+        525,
+        528,
+        530,
+        532,
+        533,
+        534,
+        541,
+        542,
+        543,
+        545,
+        546,
+        548,
+        549,
+        550,
+        551,
+        552,
+        554,
+        555,
+        556,
+        557,
+        558,
+        559,
+        562,
+        607
+      ],
+      "additions": 67846,
+      "deletions": 14809,
+      "changedFiles": 1404,
+      "humanIdentity": "unverified",
+      "independence": "unverified",
+      "consent": "not recorded"
+    }
+  ],
+  "reviewers": [
+    {
+      "login": "mario-andreschak",
+      "accountType": "User",
+      "reviews": [
+        {
+          "pr": 82,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/82#pullrequestreview-4666045182",
+          "state": "APPROVED",
+          "submittedAt": "2026-07-09T19:15:37Z",
+          "bodyCharacters": 0,
+          "inlineComments": 0
+        },
+        {
+          "pr": 528,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/528#pullrequestreview-5345090768",
+          "state": "CHANGES_REQUESTED",
+          "submittedAt": "2026-09-28T21:55:11Z",
+          "bodyCharacters": 5,
+          "inlineComments": 0
+        }
+      ],
+      "humanIdentity": "unverified",
+      "independence": "unverified",
+      "consent": "not recorded",
+      "substantiveQuality": "requires independent assessment"
+    },
+    {
+      "login": "flujo-app",
+      "accountType": "User",
+      "reviews": [
+        {
+          "pr": 269,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/269#pullrequestreview-4780143082",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T20:42:40Z",
+          "bodyCharacters": 1010,
+          "inlineComments": 0
+        },
+        {
+          "pr": 270,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/270#pullrequestreview-4780143245",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T20:42:44Z",
+          "bodyCharacters": 852,
+          "inlineComments": 0
+        },
+        {
+          "pr": 271,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/271#pullrequestreview-4780143452",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T20:42:53Z",
+          "bodyCharacters": 1132,
+          "inlineComments": 0
+        },
+        {
+          "pr": 272,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/272#pullrequestreview-4780143891",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T20:43:01Z",
+          "bodyCharacters": 956,
+          "inlineComments": 0
+        },
+        {
+          "pr": 276,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/276#pullrequestreview-4780304608",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:16:23Z",
+          "bodyCharacters": 1065,
+          "inlineComments": 0
+        },
+        {
+          "pr": 277,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/277#pullrequestreview-4780305873",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:16:52Z",
+          "bodyCharacters": 839,
+          "inlineComments": 0
+        },
+        {
+          "pr": 278,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/278#pullrequestreview-4780308181",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:17:50Z",
+          "bodyCharacters": 987,
+          "inlineComments": 0
+        },
+        {
+          "pr": 279,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/279#pullrequestreview-4780309886",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:18:25Z",
+          "bodyCharacters": 950,
+          "inlineComments": 0
+        },
+        {
+          "pr": 280,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/280#pullrequestreview-4780312175",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:19:11Z",
+          "bodyCharacters": 2133,
+          "inlineComments": 0
+        },
+        {
+          "pr": 281,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/281#pullrequestreview-4780313910",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:19:45Z",
+          "bodyCharacters": 592,
+          "inlineComments": 0
+        },
+        {
+          "pr": 282,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/282#pullrequestreview-4780316010",
+          "state": "COMMENTED",
+          "submittedAt": "2026-07-25T22:20:25Z",
+          "bodyCharacters": 2038,
+          "inlineComments": 0
+        },
+        {
+          "pr": 530,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/530#pullrequestreview-5355180490",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T16:00:03Z",
+          "bodyCharacters": 1264,
+          "inlineComments": 3
+        },
+        {
+          "pr": 530,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/530#pullrequestreview-5355641979",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T16:41:20Z",
+          "bodyCharacters": 1864,
+          "inlineComments": 0
+        },
+        {
+          "pr": 530,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/530#pullrequestreview-5355834710",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T16:59:22Z",
+          "bodyCharacters": 1036,
+          "inlineComments": 0
+        },
+        {
+          "pr": 532,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/532#pullrequestreview-5357744231",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T20:04:36Z",
+          "bodyCharacters": 1094,
+          "inlineComments": 0
+        },
+        {
+          "pr": 532,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/532#pullrequestreview-5358039740",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T20:29:08Z",
+          "bodyCharacters": 1180,
+          "inlineComments": 0
+        },
+        {
+          "pr": 532,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/532#pullrequestreview-5358310626",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T20:51:39Z",
+          "bodyCharacters": 1477,
+          "inlineComments": 0
+        },
+        {
+          "pr": 532,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/532#pullrequestreview-5358760587",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T21:33:10Z",
+          "bodyCharacters": 876,
+          "inlineComments": 0
+        },
+        {
+          "pr": 532,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/532#pullrequestreview-5359150142",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-29T22:09:21Z",
+          "bodyCharacters": 940,
+          "inlineComments": 0
+        },
+        {
+          "pr": 533,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/533#pullrequestreview-5361444572",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-30T04:20:51Z",
+          "bodyCharacters": 575,
+          "inlineComments": 0
+        },
+        {
+          "pr": 533,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/533#pullrequestreview-5361504345",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-30T04:31:39Z",
+          "bodyCharacters": 465,
+          "inlineComments": 0
+        },
+        {
+          "pr": 534,
+          "url": "https://github.com/mario-andreschak/FLUJO/pull/534#pullrequestreview-5365200302",
+          "state": "COMMENTED",
+          "submittedAt": "2026-09-30T10:52:23Z",
+          "bodyCharacters": 1820,
+          "inlineComments": 0
+        }
+      ],
+      "humanIdentity": "unverified",
+      "independence": "unverified",
+      "consent": "not recorded",
+      "substantiveQuality": "requires independent assessment"
+    }
+  ],
+  "raw": [
+    {
+      "path": "response-1.json",
+      "bytes": 56535,
+      "sha256": "7479079a2bb2d1e5ff8b95d01ea7002c32d4a74bedde3e056ec3e0b46a422618"
+    }
+  ],
+  "qualifiedIndependentHumanCount": null,
+  "observationWindowAgreement": "not recorded",
+  "roleConsent": "not recorded",
+  "outreachPerformed": false,
+  "limits": [
+    "Public historical GitHub records only; not an agreed prospective maintainer observation window",
+    "GitHub User account type does not prove human identity, independence, consent or substantive accepted quality",
+    "Merged-PR reviews only; unmerged changes, issue discussions, private work and training/access evidence excluded",
+    "Search is not a transactional snapshot; count/dedup checks expose changed pagination",
+    "Review inline counts retained; inline comment text and quality need independent inspection",
+    "No maintainer permission, human recruitment or A- assessment established by this inventory"
+  ]
+}

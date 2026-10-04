@@ -1,0 +1,83 @@
+{
+  "checkedAt": "2026-10-04T00:53:57.334Z",
+  "sourceRevision": "d608e12057d0cc164bfad523146b178c522cf412",
+  "ref": "refs/pull/637/merge",
+  "analyses": [
+    {
+      "language": "javascript-typescript",
+      "id": 1887337762,
+      "commit": "389c113517bd25937c71772c284efa70542c9d56",
+      "sourceHeadDirectParent": "d608e12057d0cc164bfad523146b178c522cf412",
+      "createdAt": "2026-10-04T00:47:03Z",
+      "reportedResults": 0,
+      "retainedSarifResults": 0,
+      "reportedRules": 103,
+      "retainedRules": 0,
+      "warning": "",
+      "assignedRuleInExport": false,
+      "assignedRuleExecuted": true,
+      "assignedFilesExtracted": true,
+      "assignedPathResults": []
+    },
+    {
+      "language": "actions",
+      "id": 1887330250,
+      "commit": "389c113517bd25937c71772c284efa70542c9d56",
+      "sourceHeadDirectParent": "d608e12057d0cc164bfad523146b178c522cf412",
+      "createdAt": "2026-10-04T00:42:11Z",
+      "reportedResults": 0,
+      "retainedSarifResults": 0,
+      "reportedRules": 23,
+      "retainedRules": 0,
+      "warning": "",
+      "assignedRuleInExport": null,
+      "assignedRuleExecuted": null,
+      "assignedFilesExtracted": null,
+      "assignedPathResults": []
+    }
+  ],
+  "openAlerts": 0,
+  "assignedOpenAlerts": [],
+  "raw": [
+    {
+      "path": "community-codeql-637-javascript-job.log",
+      "bytes": 1042076,
+      "sha256": "40c948e97a04eac1b9e4234bdaf7686e3730d324c09a96c4f712765ed1bdc10d"
+    },
+    {
+      "path": "community-codeql-637-analyses.json",
+      "bytes": 1114,
+      "sha256": "520e28834f407f7f31eea785af36e51223244362ed444a297995333b208b249e"
+    },
+    {
+      "path": "community-codeql-637-javascript-typescript-commit.json",
+      "bytes": 2653,
+      "sha256": "7271fa13a5a77610ba1f9b531a3bfa32bd91922907b7726feefe0a383278f951"
+    },
+    {
+      "path": "community-codeql-637-javascript-typescript.sarif.json",
+      "bytes": 577641,
+      "sha256": "fcf26dd8de20deb8695229a98745d17ce5b91851ccdd85250ae8bd832931d7f2"
+    },
+    {
+      "path": "community-codeql-637-actions-commit.json",
+      "bytes": 2653,
+      "sha256": "7271fa13a5a77610ba1f9b531a3bfa32bd91922907b7726feefe0a383278f951"
+    },
+    {
+      "path": "community-codeql-637-actions.sarif.json",
+      "bytes": 160021,
+      "sha256": "e8c7303be89a53a84031886dd19159725cb4a3d933bdf3623ac7dc6b690185d3"
+    },
+    {
+      "path": "community-codeql-637-open-alerts.json",
+      "bytes": 4,
+      "sha256": "cf1cbb66a638b4860a516671fb74850e6ccf787fe6c4c8d29e9c04efe880bd05"
+    }
+  ],
+  "limits": [
+    "PR #637 scan only; current root integration and original #611 alert instances require their own new-head scan.",
+    "SARIF export is the GitHub analysis subset, not a retained CodeQL database or full original runner SARIF.",
+    "No global alert dismissal or grade, human or release-acceptance claim."
+  ]
+}

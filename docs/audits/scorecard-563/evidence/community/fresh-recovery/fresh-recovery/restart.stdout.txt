@@ -1,0 +1,19 @@
+[FLUJO] Node 22.13.1 has no --use-system-ca flag; using Node's bundled CAs. If an MCP server uses a private/corporate CA, set FLUJO_EXTRA_CA_CERTS (or NODE_EXTRA_CA_CERTS) to your CA file before starting FLUJO.
+[FLUJO] Starting on http://localhost:51851 [exposure: localhost]
+[FLUJO] Data directory: C:\Users\Moe\AppData\Local\Temp\flujo-maintainer-installed-qhXSFf\fresh-recovery\data
+▲ Next.js 16.3.5
+- Local:         http://127.0.0.1:51851
+- Network:       http://127.0.0.1:51851
+✓ Ready in 335ms
+✓ Running next.config.mjs took 68ms
+[FLUJO] Workspace startup hook: loading migration and recovery checks...
+[FLUJO] Workspace migration: started | version=2 pid=48864 dataRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data" workspaceRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace" strategy="direct rename/merge"
+[FLUJO] Workspace migration: exclusive lock acquired | pid=48864 lock="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\.workspace-layout.lock"
+[FLUJO] Workspace migration: existing layout marker found | version=2
+[FLUJO] Workspace migration: layout already current; no data move required | workspaceRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace"
+[FLUJO] Workspace migration: exclusive lock released | lock="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\.workspace-layout.lock"
+[FLUJO] Workspace migration: finished successfully | elapsed="1.6s" workspaceRoot="C:\\Users\\Moe\\AppData\\Local\\Temp\\flujo-maintainer-installed-qhXSFf\\fresh-recovery\\data\\workspaces\\default-workspace" errors=0
+
+[FLUJO] Workspace migration: nothing to do (1 skipped, 1.6s)
+[FLUJO] Start FLUJO in the browser: [http://localhost:51851](http://localhost:51851)
+

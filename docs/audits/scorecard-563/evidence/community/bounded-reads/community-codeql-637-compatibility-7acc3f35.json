@@ -1,0 +1,25 @@
+{
+  "result": "verified-source-rehearsal",
+  "revision": "7acc3f35d1e966ce30fefef9d0357fdbbc7de15e",
+  "version": "3.46.2",
+  "release": {
+    "tests": 28,
+    "passed": 28,
+    "skipped": 0
+  },
+  "recovery": {
+    "suites": 4,
+    "tests": 51,
+    "passed": 51,
+    "skipped": 0
+  },
+  "pending": [
+    "independent-human-review",
+    "human-operated-drill",
+    "private-triage-tabletop",
+    "installed-artifact-release-upgrade-recovery",
+    "verified-backup-access",
+    "90-day-observation",
+    "independent-reassessment"
+  ]
+}

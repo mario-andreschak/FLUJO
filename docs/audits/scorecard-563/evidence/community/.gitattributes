@@ -1,0 +1,5 @@
+# Preserve all Community witness bytes, including text receipts, across checkouts.
+* -text whitespace=cr-at-eol
+# Captured runner/console output contains intentional trailing spaces/blank lines.
+*.log whitespace=-blank-at-eol,cr-at-eol
+*.stdout.txt whitespace=-blank-at-eof,cr-at-eol
