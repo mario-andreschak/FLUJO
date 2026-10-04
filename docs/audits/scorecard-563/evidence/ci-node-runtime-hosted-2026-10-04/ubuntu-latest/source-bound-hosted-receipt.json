@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T06:29:25.852Z",
+  "pr": 726,
+  "runId": 37181494470,
+  "runAttempt": 1,
+  "head": "9c7b567bc96fbe34dc970e4a18b34ffe178f2323",
+  "actualCheckout": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+  "testedTree": "3d6a1605de3beffd1075b250f44974acc640920d",
+  "sourceBoundToExactHeadTree": true,
+  "os": "ubuntu-latest",
+  "jobId": 111374822169,
+  "jobConclusion": "success",
+  "sourceFilePins": {
+    "scripts/verify-ci-node.mjs": {
+      "committedSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+      "checkoutCrlfSha256": "9a7b5e2b971454cc59bb8d03b6fc77a3ec8b0be1ef155f817709cb0b8690399a"
+    },
+    "scripts/ci-node-binaries.json": {
+      "committedSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+      "checkoutCrlfSha256": "c143d1f9fcef870edb7bdb189717a4a92c0486764841aa724e7505c7e42bff9a"
+    },
+    "bin/node-runtime.mjs": {
+      "committedSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3",
+      "checkoutCrlfSha256": "b3fde29811a79a880f84c95511b33e9dbd3e41ff38e8cafc89b0dad350ebeaba"
+    }
+  },
+  "artifact": {
+    "id": 11294649782,
+    "name": "ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1",
+    "bytes": 3570,
+    "actualSha256": "21185204a81c5b6e1c553861b34d0555c1970de080a43a588f36818dc3d0d834",
+    "apiDigestMatches": true
+  },
+  "measurements": [
+    {
+      "version": "22.13.1",
+      "present": true,
+      "record": {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-04T06:00:16.218Z",
+        "expectedVersion": "22.13.1",
+        "node": "22.13.1",
+        "libuv": "1.49.2",
+        "platform": "linux",
+        "architecture": "x64",
+        "osRelease": "6.17.0-1022-azure",
+        "executableSha256": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47",
+        "qualificationScope": "historical default-heap build only; unsupported for installed application acceptance",
+        "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+        "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+        "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+        "sourceTreeDirty": false,
+        "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+        "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+        "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+      },
+      "rawSha256": "eac68753851bc7e2bbcba2313936f32a98103895c2859adbac7ba2396dfd0a14"
+    },
+    {
+      "version": "22.17.0",
+      "present": true,
+      "record": {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-04T06:03:35.722Z",
+        "expectedVersion": "22.17.0",
+        "node": "22.17.0",
+        "libuv": "1.51.0",
+        "platform": "linux",
+        "architecture": "x64",
+        "osRelease": "6.17.0-1022-azure",
+        "executableSha256": "8071ae0fca095a272ad698a90c7061801a86fb6392ddb81e922b68a91a4374b9",
+        "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+        "signedChecksumsSha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4",
+        "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+        "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+        "sourceTreeDirty": false,
+        "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+        "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+        "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+      },
+      "rawSha256": "1ef13c33a288274061dec85af528a1cc333c1557270cfa22b9d91ae51bf0d2a4"
+    },
+    {
+      "version": "22.23.3",
+      "present": true,
+      "record": {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-04T06:07:12.626Z",
+        "expectedVersion": "22.23.3",
+        "node": "22.23.3",
+        "libuv": "1.51.0",
+        "platform": "linux",
+        "architecture": "x64",
+        "osRelease": "6.17.0-1022-azure",
+        "executableSha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+        "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+        "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+        "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+        "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+        "sourceTreeDirty": false,
+        "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+        "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+        "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+      },
+      "rawSha256": "1cfac5d48d80bb38d057c6327ba4cac018788b5c4a600848227357175471a1da"
+    },
+    {
+      "version": "24.2.0",
+      "present": true,
+      "record": {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-04T06:10:51.753Z",
+        "expectedVersion": "24.2.0",
+        "node": "24.2.0",
+        "libuv": "1.51.0",
+        "platform": "linux",
+        "architecture": "x64",
+        "osRelease": "6.17.0-1022-azure",
+        "executableSha256": "3fe8fd0442065d39c6a875e0672c8aa198c96983bf099c0d3b0ffee70622ddd2",
+        "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+        "signedChecksumsSha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c",
+        "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+        "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+        "sourceTreeDirty": false,
+        "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+        "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+        "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+      },
+      "rawSha256": "2c74c51026f66ea6fb0606cc557793940ad16e11dec468d95d0988e1a16026a7"
+    },
+    {
+      "version": "24.21.0",
+      "present": true,
+      "record": {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-04T06:14:06.728Z",
+        "expectedVersion": "24.21.0",
+        "node": "24.21.0",
+        "libuv": "1.52.1",
+        "platform": "linux",
+        "architecture": "x64",
+        "osRelease": "6.17.0-1022-azure",
+        "executableSha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+        "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+        "signedChecksumsSha256": "f410428039e2c922a14058df067a4482691c9304a5c01a75847f9f3f2d3307f6",
+        "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+        "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+        "sourceTreeDirty": false,
+        "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+        "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+        "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+      },
+      "rawSha256": "7b2de6bcc150aa38861b3cb0c189e9a7a92fbedc6365f2581b080f91f62daf2b"
+    }
+  ],
+  "steps": [
+    {
+      "name": "Build with the ordinary command and default Node heap",
+      "conclusion": "success",
+      "status": "completed"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 22.17.0",
+      "conclusion": "success",
+      "status": "completed"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 22.23.3",
+      "conclusion": "success",
+      "status": "completed"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 24.2.0",
+      "conclusion": "success",
+      "status": "completed"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 24.21.0",
+      "conclusion": "success",
+      "status": "completed"
+    }
+  ],
+  "supportedProfilesPassed": true,
+  "qualification": "this exact PR tree only; future combined integration/main release remains unqualified",
+  "operator": "AI evidence readback; no human acceptance"
+}

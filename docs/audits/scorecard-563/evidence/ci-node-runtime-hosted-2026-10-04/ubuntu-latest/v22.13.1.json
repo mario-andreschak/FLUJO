@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-04T06:00:16.218Z",
+  "expectedVersion": "22.13.1",
+  "node": "22.13.1",
+  "libuv": "1.49.2",
+  "platform": "linux",
+  "architecture": "x64",
+  "osRelease": "6.17.0-1022-azure",
+  "executableSha256": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47",
+  "qualificationScope": "historical default-heap build only; unsupported for installed application acceptance",
+  "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+  "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+  "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+  "sourceTreeDirty": false,
+  "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+  "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+  "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+}

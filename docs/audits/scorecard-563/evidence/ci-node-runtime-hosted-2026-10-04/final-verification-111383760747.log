@@ -1,0 +1,240 @@
+verification	Set up job	﻿2026-10-04T07:02:22.2618560Z Current runner version: '2.337.0'
+verification	Set up job	2026-10-04T07:02:22.2643149Z ##[group]Runner Image Provisioner
+verification	Set up job	2026-10-04T07:02:22.2643987Z Hosted Compute Agent
+verification	Set up job	2026-10-04T07:02:22.2644577Z Version: 20260901.588
+verification	Set up job	2026-10-04T07:02:22.2645451Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+verification	Set up job	2026-10-04T07:02:22.2646128Z Build Date: 2026-09-01T19:56:44Z
+verification	Set up job	2026-10-04T07:02:22.2646820Z Worker ID: {1c963b76-a6ce-4143-9edb-5d8f54a39d4b}
+verification	Set up job	2026-10-04T07:02:22.2647486Z Azure Region: westus3
+verification	Set up job	2026-10-04T07:02:22.2648056Z ##[endgroup]
+verification	Set up job	2026-10-04T07:02:22.2649508Z ##[group]Operating System
+verification	Set up job	2026-10-04T07:02:22.2650126Z Ubuntu
+verification	Set up job	2026-10-04T07:02:22.2650660Z 24.04.5
+verification	Set up job	2026-10-04T07:02:22.2651134Z LTS
+verification	Set up job	2026-10-04T07:02:22.2651592Z ##[endgroup]
+verification	Set up job	2026-10-04T07:02:22.2652125Z ##[group]Runner Image
+verification	Set up job	2026-10-04T07:02:22.2652672Z Image: ubuntu-24.04
+verification	Set up job	2026-10-04T07:02:22.2653226Z Version: 20260927.320.1
+verification	Set up job	2026-10-04T07:02:22.2654232Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+verification	Set up job	2026-10-04T07:02:22.2655940Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+verification	Set up job	2026-10-04T07:02:22.2656844Z ##[endgroup]
+verification	Set up job	2026-10-04T07:02:22.2657913Z ##[group]GITHUB_TOKEN Permissions
+verification	Set up job	2026-10-04T07:02:22.2660029Z Contents: read
+verification	Set up job	2026-10-04T07:02:22.2660684Z Metadata: read
+verification	Set up job	2026-10-04T07:02:22.2661197Z ##[endgroup]
+verification	Set up job	2026-10-04T07:02:22.2663213Z Secret source: Actions
+verification	Set up job	2026-10-04T07:02:22.2664146Z Cache mode: write
+verification	Set up job	2026-10-04T07:02:22.2665056Z Prepare workflow directory
+verification	Set up job	2026-10-04T07:02:22.2988132Z Prepare all required actions
+verification	Set up job	2026-10-04T07:02:22.3035948Z Getting action download info
+verification	Set up job	2026-10-04T07:02:22.6132669Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+verification	Set up job	2026-10-04T07:02:22.6884842Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+verification	Set up job	2026-10-04T07:02:22.8473713Z Complete job name: verification
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-10-04T07:02:22.9295627Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9296699Z with:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9297134Z   persist-credentials: false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9297646Z   repository: mario-andreschak/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9301000Z   token: ***
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9301407Z   ssh-strict: true
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9301818Z   ssh-user: git
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9302229Z   clean: true
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9302654Z   sparse-checkout-cone-mode: true
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9303154Z   fetch-depth: 1
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9303578Z   fetch-tags: false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9304009Z   show-progress: true
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9304441Z   lfs: false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9305013Z   submodules: false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9305442Z   set-safe-directory: true
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9305920Z   allow-unsafe-pr-checkout: false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:22.9306660Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0322933Z Syncing repository: mario-andreschak/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0326210Z ##[group]Getting Git version info
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0327532Z Working directory is '/home/runner/work/FLUJO/FLUJO'
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0329287Z [command]/usr/bin/git version
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0348700Z git version 2.55.0
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0368176Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0383000Z Temporarily overriding HOME='/home/runner/work/_temp/aecb6817-d925-425b-b024-699c18569a2f' before making global git config changes
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0386080Z Adding repository directory to the temporary git global config as a safe directory
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0388977Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0459424Z Deleting the contents of '/home/runner/work/FLUJO/FLUJO'
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0461394Z ##[group]Initializing the repository
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0462508Z [command]/usr/bin/git init /home/runner/work/FLUJO/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0536060Z hint: Using 'master' as the name for the initial branch. This default branch name
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0537864Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0540058Z hint: to use in all of your new repositories, which will suppress this warning,
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0541429Z hint: call:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0542201Z hint:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0543118Z hint: 	git config --global init.defaultBranch <name>
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0544226Z hint:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0545480Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0547166Z hint: 'development'. The just-created branch can be renamed via this command:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0548402Z hint:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0549158Z hint: 	git branch -m <name>
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0550018Z hint:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0551147Z hint: Disable this message with "git config set advice.defaultBranchName false"
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0552458Z Initialized empty Git repository in /home/runner/work/FLUJO/FLUJO/.git/
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0554791Z [command]/usr/bin/git remote add origin https://github.com/mario-andreschak/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0592706Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0594317Z ##[group]Disabling automatic garbage collection
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0595969Z [command]/usr/bin/git config --local gc.auto 0
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0626732Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0632659Z ##[group]Setting up auth
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0634033Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0661902Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.0978510Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1013968Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1224507Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1257137Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1444151Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1479170Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1480034Z ##[group]Fetching the repository
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:23.1489182Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a5d11370e7a52d6ac92c82accb91fbce87784dd6:refs/remotes/pull/726/merge
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6705164Z From https://github.com/mario-andreschak/FLUJO
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6707178Z  * [new ref]         a5d11370e7a52d6ac92c82accb91fbce87784dd6 -> pull/726/merge
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6717154Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6719008Z ##[group]Determining the checkout info
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6725026Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6726518Z [command]/usr/bin/git sparse-checkout disable
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6774288Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6799828Z ##[group]Checking out the ref
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.6805219Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/726/merge
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9963536Z Note: switching to 'refs/remotes/pull/726/merge'.
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9964536Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9965669Z You are in 'detached HEAD' state. You can look around, make experimental
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9968310Z changes and commit them, and you can discard any commits you make in this
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9971094Z state without impacting any branches by switching back to a branch.
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9972764Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9974073Z If you want to create a new branch to retain commits you create, you may
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9976848Z do so (now or later) by using -c with the switch command. Example:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9978252Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9978781Z   git switch -c <new-branch-name>
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9979713Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9980110Z Or undo this operation with:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9980683Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9981018Z   git switch -
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9981483Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9982239Z Turn off this advice by setting config variable advice.detachedHead to false
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9983618Z 
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9985080Z HEAD is now at a5d1137 Merge 9c7b567bc96fbe34dc970e4a18b34ffe178f2323 into 1486796b411351a3ade9291b85d195df6b7b41ad
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:25.9989877Z ##[endgroup]
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0031757Z [command]/usr/bin/git log -1 --format=%H
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0056966Z a5d11370e7a52d6ac92c82accb91fbce87784dd6
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0066989Z ##[group]Removing auth
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0071867Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0103736Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0301811Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0327510Z http.https://github.com/.extraheader
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0333303Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0361472Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0549386Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0575189Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verification	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:26.0754430Z ##[endgroup]
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	﻿2026-10-04T07:02:26.0988125Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0988627Z with:
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0988884Z   node-version: 22.23.3
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0989163Z   always-auth: false
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0989424Z   check-latest: false
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0991900Z   token: ***
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.0992147Z ##[endgroup]
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.2368876Z Found in cache @ /opt/hostedtoolcache/node/22.23.3/x64
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.2372936Z (node:2300) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.2373821Z (Use `node --trace-deprecation ...` to show where the warning was created)
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.2376282Z ##[group]Environment details
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.6270362Z node: v22.23.3
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.6271629Z npm: 10.9.9
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.6273158Z yarn: 1.22.22
+verification	Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020	2026-10-04T07:02:26.6275108Z ##[endgroup]
+verification	Verify exact official Node runtime	﻿2026-10-04T07:02:26.6396013Z ##[group]Run node scripts/verify-ci-node.mjs 22.23.3 --record
+verification	Verify exact official Node runtime	2026-10-04T07:02:26.6396638Z ^[[36;1mnode scripts/verify-ci-node.mjs 22.23.3 --record^[[0m
+verification	Verify exact official Node runtime	2026-10-04T07:02:26.6589691Z shell: /usr/bin/bash -e {0}
+verification	Verify exact official Node runtime	2026-10-04T07:02:26.6590044Z ##[endgroup]
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1605342Z {
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1605814Z   "schemaVersion": 1,
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1606187Z   "measuredAt": "2026-10-04T07:02:26.916Z",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1606597Z   "expectedVersion": "22.23.3",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1606902Z   "node": "22.23.3",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1607149Z   "libuv": "1.51.0",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1607415Z   "platform": "linux",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1607727Z   "architecture": "x64",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1608025Z   "osRelease": "6.17.0-1022-azure",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1608617Z   "executableSha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1609656Z   "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1610829Z   "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1611621Z   "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1612440Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1612874Z   "sourceTreeDirty": false,
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1613399Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1614420Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1615363Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+verification	Verify exact official Node runtime	2026-10-04T07:02:27.1615963Z }
+verification	Refuse missing, skipped, cancelled or failed prerequisites	﻿2026-10-04T07:02:27.1723614Z ##[group]Run node --input-type=module -e "import { assertDependencyResults } from './scripts/verification-contract.mjs'; assertDependencyResults(JSON.parse(process.env.VERIFICATION_NEEDS));"
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.1725505Z ^[[36;1mnode --input-type=module -e "import { assertDependencyResults } from './scripts/verification-contract.mjs'; assertDependencyResults(JSON.parse(process.env.VERIFICATION_NEEDS));"^[[0m
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.1764459Z shell: /usr/bin/bash -e {0}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.1765065Z env:
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.1766620Z   VERIFICATION_NEEDS: {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "production-build": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "release-safety": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "typecheck": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "lint": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "test": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "failure",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "test-isolated": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "workflow-contract": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "dependency-security": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  },
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  "codeql": {
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "result": "success",
+verification	Refuse missing, skipped, cancelled or failed prerequisites	    "outputs": {}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	  }
+verification	Refuse missing, skipped, cancelled or failed prerequisites	}
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.1768387Z ##[endgroup]
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2088478Z file:///home/runner/work/FLUJO/FLUJO/scripts/verification-contract.mjs:18
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2089552Z       throw new Error(`Required verification job ${id} concluded ${needs[id]?.result ?? 'missing'}.`);
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2090324Z             ^
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2090782Z 
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2091338Z Error: Required verification job test concluded failure.
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2092150Z     at assertDependencyResults (file:///home/runner/work/FLUJO/FLUJO/scripts/verification-contract.mjs:18:13)
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2092723Z     at file:///home/runner/work/FLUJO/FLUJO/[eval1]:1:80
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2093153Z     at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2093705Z     at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:282:26)
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2094328Z     at async ModuleLoader.executeModuleJob (node:internal/modules/esm/loader:278:20)
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2095060Z     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2095387Z 
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2095488Z Node.js v22.23.3
+verification	Refuse missing, skipped, cancelled or failed prerequisites	2026-10-04T07:02:27.2122219Z ##[error]Process completed with exit code 1.
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-10-04T07:02:27.2289201Z Post job cleanup.
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3112085Z [command]/usr/bin/git version
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3151465Z git version 2.55.0
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3188354Z Temporarily overriding HOME='/home/runner/work/_temp/73e856e8-0cfa-484c-b226-73bf384acd34' before making global git config changes
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3190488Z Adding repository directory to the temporary git global config as a safe directory
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3194763Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3230152Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3267618Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3472179Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3517501Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3742661Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verification	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-10-04T07:02:27.3779520Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verification	Complete job	﻿2026-10-04T07:02:27.4276266Z Cleaning up orphan processes
+verification	Complete job	2026-10-04T07:02:27.4522179Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "scope": "All packet members except this manifest; immutable Git commit pins the manifest itself",
+  "members": [
+    {
+      "file": "ubuntu-latest/runtime-records.zip",
+      "bytes": 3570,
+      "sha256": "21185204a81c5b6e1c553861b34d0555c1970de080a43a588f36818dc3d0d834"
+    },
+    {
+      "file": "ubuntu-latest/job-api.json",
+      "bytes": 7827,
+      "sha256": "bf7a6855a7e818cae73f5e91b54355da6ebe1c90bb1482d2bf7359fe0dfbbd72"
+    },
+    {
+      "file": "ubuntu-latest/artifact-api.json",
+      "bytes": 872,
+      "sha256": "f42b2a3e6f7d384e2a498be5e5610a514a8853a29c4d68fda2a8ea0f7039587a"
+    },
+    {
+      "file": "ubuntu-latest/source-bound-hosted-receipt.json",
+      "bytes": 8593,
+      "sha256": "098480fcdc582355b6b3db1902b5525c231887ef934819e5ee55693667b6539b"
+    },
+    {
+      "file": "ubuntu-latest/v22.13.1.json",
+      "bytes": 955,
+      "sha256": "eac68753851bc7e2bbcba2313936f32a98103895c2859adbac7ba2396dfd0a14"
+    },
+    {
+      "file": "ubuntu-latest/v22.17.0.json",
+      "bytes": 965,
+      "sha256": "1ef13c33a288274061dec85af528a1cc333c1557270cfa22b9d91ae51bf0d2a4"
+    },
+    {
+      "file": "ubuntu-latest/v22.23.3.json",
+      "bytes": 965,
+      "sha256": "1cfac5d48d80bb38d057c6327ba4cac018788b5c4a600848227357175471a1da"
+    },
+    {
+      "file": "ubuntu-latest/v24.2.0.json",
+      "bytes": 963,
+      "sha256": "2c74c51026f66ea6fb0606cc557793940ad16e11dec468d95d0988e1a16026a7"
+    },
+    {
+      "file": "ubuntu-latest/v24.21.0.json",
+      "bytes": 965,
+      "sha256": "7b2de6bcc150aa38861b3cb0c189e9a7a92fbedc6365f2581b080f91f62daf2b"
+    },
+    {
+      "file": "windows-latest/runtime-records.zip",
+      "bytes": 3527,
+      "sha256": "8af2b4f2624055325ea919f42398f4f6472486caf5dcfd77523240940302e343"
+    },
+    {
+      "file": "windows-latest/job-api.json",
+      "bytes": 7829,
+      "sha256": "195e3dd73d255ddae9eb7c81ee603c0eca929c2b518a8c622c063b4c1a805666"
+    },
+    {
+      "file": "windows-latest/artifact-api.json",
+      "bytes": 873,
+      "sha256": "42a7f3183ad55b4dfd8445fb61fab1cd0b725c5b29a944ee25111380809fe740"
+    },
+    {
+      "file": "windows-latest/source-bound-hosted-receipt.json",
+      "bytes": 8560,
+      "sha256": "0a99d809a0261789b089e7da1c04443898f937392edb2edab1a821a8f9c8d2dd"
+    },
+    {
+      "file": "windows-latest/v22.13.1.json",
+      "bytes": 948,
+      "sha256": "18929e47deb94ba9504ad5e542f6ef692ab7aab8cd20a44c425ea0f8a1a0512a"
+    },
+    {
+      "file": "windows-latest/v22.17.0.json",
+      "bytes": 958,
+      "sha256": "2e6e1974f4b70352df3217fd10911f51717a87cb103c89a9075eefdeb945489f"
+    },
+    {
+      "file": "windows-latest/v22.23.3.json",
+      "bytes": 958,
+      "sha256": "fea54f8c0c4cc47609b22feabdabbf30bd9fba1cfe28fa1524b62d0ffd1ef6a5"
+    },
+    {
+      "file": "windows-latest/v24.2.0.json",
+      "bytes": 956,
+      "sha256": "3ecb18569f65546d8636b9b42d040a140301b5f948a829e1de0e829802d292bc"
+    },
+    {
+      "file": "windows-latest/v24.21.0.json",
+      "bytes": 958,
+      "sha256": "b1a01f09a6ff852f2703219924cb375c1a467ab114d9e6b22beb462f353363e2"
+    },
+    {
+      "file": "verification-run-api.json",
+      "bytes": 13246,
+      "sha256": "332534cfba19e8560f16c92c492a22124f8fb5f22d3d6e439edfde576c954be8"
+    },
+    {
+      "file": "verification-jobs-api.json",
+      "bytes": 46648,
+      "sha256": "2c2952344eb969ec99cb0dcae5a21a2aa53726c2f26287ce31bf4c792c185fe9"
+    },
+    {
+      "file": "tested-merge-commit-api.json",
+      "bytes": 2653,
+      "sha256": "5c36acae40192ba52f8794894ca2aa0dbd391307872a7999790edb2b1b1938b0"
+    },
+    {
+      "file": "ubuntu-production-111374822169.log",
+      "bytes": 154452,
+      "sha256": "3bc158bfefe0715a6d2450c704ee1cd1c1c729a26e0c9f13d02cdbf3347b8dd7"
+    },
+    {
+      "file": "windows-production-111374822245.log",
+      "bytes": 359879,
+      "sha256": "5e4626e79fda77fed37a4f0c2ef311a2c7f7b4128cbb871508c109179b139070"
+    },
+    {
+      "file": "ordinary-test-111374822192.log",
+      "bytes": 1054035,
+      "sha256": "ce7bbd53817b35566ef7c03385b8950ddd18f90e104ef174833a390374a561a1"
+    },
+    {
+      "file": "final-verification-111383760747.log",
+      "bytes": 32893,
+      "sha256": "a440b04d88d3068bc1d7cb0134dc467827bbfa8c592ba3d50f5488c6a0a4ee4a"
+    },
+    {
+      "file": "hosted-qualification-receipt.json",
+      "bytes": 3496,
+      "sha256": "45f3c58070ad2d912ee24aa6cf24964ce69db406f70271087eb01929a65c680c"
+    },
+    {
+      "file": ".gitattributes",
+      "bytes": 115,
+      "sha256": "85ff3a434fad185c7b563e83a0ff441bcda4c717103ef98fd97408daec8d8058"
+    },
+    {
+      "file": "README.md",
+      "bytes": 2931,
+      "sha256": "5944ce07d366ea594f2959fccdc6c44a3fe5c5b28536689a10a3acaff7d7f81d"
+    }
+  ]
+}

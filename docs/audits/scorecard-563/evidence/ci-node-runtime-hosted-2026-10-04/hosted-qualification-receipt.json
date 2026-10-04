@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-04T07:11:16.962Z",
+  "pr": 726,
+  "source": {
+    "selectedHead": "9c7b567bc96fbe34dc970e4a18b34ffe178f2323",
+    "selectedBase": "1486796b411351a3ade9291b85d195df6b7b41ad",
+    "actualPrMergeCheckout": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+    "testedTree": "3d6a1605de3beffd1075b250f44974acc640920d",
+    "mergeAndSelectedHeadTreesMatch": true
+  },
+  "run": {
+    "id": 37181494470,
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "requiredSuccesses": 11,
+    "requiredFailures": 2,
+    "failedRequiredJobs": [
+      "test",
+      "verification"
+    ],
+    "optionalDiagnostic": "skipped; not acceptance"
+  },
+  "production": {
+    "ubuntu-latest": {
+      "jobId": 111374822169,
+      "jobConclusion": "success",
+      "allFourSupportedProfilesPassed": true,
+      "actualRuntimeRecords": 5,
+      "receiptSha256": "098480fcdc582355b6b3db1902b5525c231887ef934819e5ee55693667b6539b",
+      "artifact": {
+        "id": 11294649782,
+        "name": "ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1",
+        "bytes": 3570,
+        "actualSha256": "21185204a81c5b6e1c553861b34d0555c1970de080a43a588f36818dc3d0d834",
+        "apiDigestMatches": true
+      }
+    },
+    "windows-latest": {
+      "jobId": 111374822245,
+      "jobConclusion": "success",
+      "allFourSupportedProfilesPassed": true,
+      "actualRuntimeRecords": 5,
+      "receiptSha256": "0a99d809a0261789b089e7da1c04443898f937392edb2edab1a821a8f9c8d2dd",
+      "artifact": {
+        "id": 11295913435,
+        "name": "ci-node-runtime-windows-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1",
+        "bytes": 3527,
+        "actualSha256": "8af2b4f2624055325ea919f42398f4f6472486caf5dcfd77523240940302e343",
+        "apiDigestMatches": true
+      }
+    }
+  },
+  "qualifiedProfiles": {
+    "supported": [
+      "22.17.0",
+      "22.23.3",
+      "24.2.0",
+      "24.21.0"
+    ],
+    "supportedCommands": [
+      "npm ci --include=dev",
+      "npm run build",
+      "npm run typecheck:mcp",
+      "npm run validate:mcp-release",
+      "npm run smoke:mcp-artifacts"
+    ],
+    "historical": {
+      "version": "22.13.1",
+      "qualification": "ordinary default-heap build only; no installed acceptance"
+    },
+    "ordinaryHeap": true,
+    "sourceDirty": false,
+    "signingEvidence": "../official-node-integrity-2026-10-04/"
+  },
+  "retainedFailure": {
+    "job": 111374822192,
+    "file": "__tests__/meetings/MeetingPersonaIntegration.test.ts",
+    "line": 387,
+    "assertion": "first executionAuthority.assertCurrent() rejection expectation resolved undefined",
+    "commitCallbackReached": false,
+    "passedAssertions": 8322,
+    "failedAssertions": 1,
+    "skippedAssertions": 11,
+    "passedSuites": 888,
+    "failedSuites": 1,
+    "skippedSuites": 5,
+    "baselineConclusion": "failure",
+    "preparedCorrectionPr": 733,
+    "correctionCauseAndAcceptance": "unproven; separate source/validation dependency"
+  },
+  "limits": [
+    "This is exact component PR-tree qualification only, not the later combined candidate, main release or distribution acceptance.",
+    "Successful CodeQL analysis jobs do not establish native findings-gate acceptance.",
+    "Raw GH CLI log output and GitHub API bytes are retained unchanged, including warnings and failed assertions.",
+    "AI collection/readback provides no independent human review, private-reporting tabletop or A- grade acceptance."
+  ]
+}

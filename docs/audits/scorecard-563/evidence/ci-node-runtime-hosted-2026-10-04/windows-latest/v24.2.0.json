@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-04T06:34:45.644Z",
+  "expectedVersion": "24.2.0",
+  "node": "24.2.0",
+  "libuv": "1.51.0",
+  "platform": "win32",
+  "architecture": "x64",
+  "osRelease": "10.0.26100",
+  "executableSha256": "4f4c2bbda03106699e49ef2e7914c03d597c355a99a6b9a1b63dca19fe092c01",
+  "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+  "signedChecksumsSha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c",
+  "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+  "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+  "sourceTreeDirty": false,
+  "verifierSha256": "9a7b5e2b971454cc59bb8d03b6fc77a3ec8b0be1ef155f817709cb0b8690399a",
+  "binaryManifestSha256": "c143d1f9fcef870edb7bdb189717a4a92c0486764841aa724e7505c7e42bff9a",
+  "canonicalGuardSha256": "b3fde29811a79a880f84c95511b33e9dbd3e41ff38e8cafc89b0dad350ebeaba"
+}

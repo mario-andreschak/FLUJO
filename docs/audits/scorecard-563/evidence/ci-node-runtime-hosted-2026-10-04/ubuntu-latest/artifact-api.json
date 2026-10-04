@@ -1,0 +1,20 @@
+{
+  "id": 11294649782,
+  "node_id": "MDg6QXJ0aWZhY3QxMTI5NDY0OTc4Mg==",
+  "name": "ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1",
+  "size_in_bytes": 3570,
+  "url": "https://api.github.com/repos/mario-andreschak/FLUJO/actions/artifacts/11294649782",
+  "archive_download_url": "https://api.github.com/repos/mario-andreschak/FLUJO/actions/artifacts/11294649782/zip",
+  "expired": false,
+  "digest": "sha256:21185204a81c5b6e1c553861b34d0555c1970de080a43a588f36818dc3d0d834",
+  "created_at": "2026-10-04T06:17:30Z",
+  "updated_at": "2026-10-04T06:17:30Z",
+  "expires_at": "2026-11-03T06:17:30Z",
+  "workflow_run": {
+    "id": 37181494470,
+    "repository_id": 939611454,
+    "head_repository_id": 939611454,
+    "head_branch": "codex/ci-supported-node-runtimes-20261004",
+    "head_sha": "9c7b567bc96fbe34dc970e4a18b34ffe178f2323"
+  }
+}

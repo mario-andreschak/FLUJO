@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-04T06:00:30.807Z",
+  "expectedVersion": "22.13.1",
+  "node": "22.13.1",
+  "libuv": "1.49.2",
+  "platform": "win32",
+  "architecture": "x64",
+  "osRelease": "10.0.26100",
+  "executableSha256": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16",
+  "qualificationScope": "historical default-heap build only; unsupported for installed application acceptance",
+  "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+  "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+  "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+  "sourceTreeDirty": false,
+  "verifierSha256": "9a7b5e2b971454cc59bb8d03b6fc77a3ec8b0be1ef155f817709cb0b8690399a",
+  "binaryManifestSha256": "c143d1f9fcef870edb7bdb189717a4a92c0486764841aa724e7505c7e42bff9a",
+  "canonicalGuardSha256": "b3fde29811a79a880f84c95511b33e9dbd3e41ff38e8cafc89b0dad350ebeaba"
+}

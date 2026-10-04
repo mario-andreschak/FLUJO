@@ -1,0 +1,2228 @@
+﻿2026-10-04T06:00:07.9884337Z Current runner version: '2.337.0'
+2026-10-04T06:00:07.9908151Z ##[group]Runner Image Provisioner
+2026-10-04T06:00:07.9908994Z Hosted Compute Agent
+2026-10-04T06:00:07.9909667Z Version: 20260901.588
+2026-10-04T06:00:07.9910346Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-04T06:00:07.9911114Z Build Date: 2026-09-01T19:56:44Z
+2026-10-04T06:00:07.9911865Z Worker ID: {6142fc34-28f6-4739-8399-8f125c0bf1b9}
+2026-10-04T06:00:07.9912617Z Azure Region: eastus2
+2026-10-04T06:00:07.9913497Z ##[endgroup]
+2026-10-04T06:00:07.9915321Z ##[group]Operating System
+2026-10-04T06:00:07.9915988Z Ubuntu
+2026-10-04T06:00:07.9916655Z 24.04.5
+2026-10-04T06:00:07.9917195Z LTS
+2026-10-04T06:00:07.9917823Z ##[endgroup]
+2026-10-04T06:00:07.9918388Z ##[group]Runner Image
+2026-10-04T06:00:07.9919062Z Image: ubuntu-24.04
+2026-10-04T06:00:07.9919703Z Version: 20260927.320.1
+2026-10-04T06:00:07.9921019Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-04T06:00:07.9922680Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-04T06:00:07.9923952Z ##[endgroup]
+2026-10-04T06:00:07.9925054Z ##[group]GITHUB_TOKEN Permissions
+2026-10-04T06:00:07.9927253Z Contents: read
+2026-10-04T06:00:07.9927873Z Metadata: read
+2026-10-04T06:00:07.9928493Z ##[endgroup]
+2026-10-04T06:00:07.9930529Z Secret source: Actions
+2026-10-04T06:00:07.9931548Z Cache mode: write
+2026-10-04T06:00:07.9932605Z Prepare workflow directory
+2026-10-04T06:00:08.0255177Z Prepare all required actions
+2026-10-04T06:00:08.0301632Z Getting action download info
+2026-10-04T06:00:08.2311404Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-04T06:00:08.3488774Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-04T06:00:08.4427564Z Download action repository 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-10-04T06:00:08.6772156Z Complete job name: Production build (ubuntu-latest)
+2026-10-04T06:00:08.7672031Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-10-04T06:00:08.7673520Z with:
+2026-10-04T06:00:08.7674005Z   persist-credentials: false
+2026-10-04T06:00:08.7674541Z   repository: mario-andreschak/FLUJO
+2026-10-04T06:00:08.7678400Z   token: ***
+2026-10-04T06:00:08.7678827Z   ssh-strict: true
+2026-10-04T06:00:08.7679265Z   ssh-user: git
+2026-10-04T06:00:08.7679693Z   clean: true
+2026-10-04T06:00:08.7680136Z   sparse-checkout-cone-mode: true
+2026-10-04T06:00:08.7680657Z   fetch-depth: 1
+2026-10-04T06:00:08.7681090Z   fetch-tags: false
+2026-10-04T06:00:08.7681534Z   show-progress: true
+2026-10-04T06:00:08.7681985Z   lfs: false
+2026-10-04T06:00:08.7682396Z   submodules: false
+2026-10-04T06:00:08.7682900Z   set-safe-directory: true
+2026-10-04T06:00:08.7683582Z   allow-unsafe-pr-checkout: false
+2026-10-04T06:00:08.7684443Z ##[endgroup]
+2026-10-04T06:00:08.8663249Z Syncing repository: mario-andreschak/FLUJO
+2026-10-04T06:00:08.8665888Z ##[group]Getting Git version info
+2026-10-04T06:00:08.8666944Z Working directory is '/home/runner/work/FLUJO/FLUJO'
+2026-10-04T06:00:08.8668474Z [command]/usr/bin/git version
+2026-10-04T06:00:08.8766683Z git version 2.55.0
+2026-10-04T06:00:08.8801184Z ##[endgroup]
+2026-10-04T06:00:08.8812520Z Temporarily overriding HOME='/home/runner/work/_temp/ce9528c6-6707-4968-8636-2b298c7850f8' before making global git config changes
+2026-10-04T06:00:08.8815216Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-04T06:00:08.8818900Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-04T06:00:08.8878599Z Deleting the contents of '/home/runner/work/FLUJO/FLUJO'
+2026-10-04T06:00:08.8884214Z ##[group]Initializing the repository
+2026-10-04T06:00:08.8889497Z [command]/usr/bin/git init /home/runner/work/FLUJO/FLUJO
+2026-10-04T06:00:08.9015617Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-04T06:00:08.9017403Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-04T06:00:08.9018397Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-04T06:00:08.9019594Z hint: call:
+2026-10-04T06:00:08.9020755Z hint:
+2026-10-04T06:00:08.9021720Z hint: 	git config --global init.defaultBranch <name>
+2026-10-04T06:00:08.9022852Z hint:
+2026-10-04T06:00:08.9024202Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-04T06:00:08.9025973Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-04T06:00:08.9027365Z hint:
+2026-10-04T06:00:08.9028139Z hint: 	git branch -m <name>
+2026-10-04T06:00:08.9028944Z hint:
+2026-10-04T06:00:08.9030006Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-04T06:00:08.9031747Z Initialized empty Git repository in /home/runner/work/FLUJO/FLUJO/.git/
+2026-10-04T06:00:08.9035090Z [command]/usr/bin/git remote add origin https://github.com/mario-andreschak/FLUJO
+2026-10-04T06:00:08.9099739Z ##[endgroup]
+2026-10-04T06:00:08.9105031Z ##[group]Disabling automatic garbage collection
+2026-10-04T06:00:08.9106615Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-04T06:00:08.9126427Z ##[endgroup]
+2026-10-04T06:00:08.9127573Z ##[group]Setting up auth
+2026-10-04T06:00:08.9133233Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-04T06:00:08.9169643Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-04T06:00:08.9596868Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-04T06:00:08.9640010Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-04T06:00:08.9878037Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-04T06:00:08.9916048Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-04T06:00:09.0163365Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-04T06:00:09.0210011Z ##[endgroup]
+2026-10-04T06:00:09.0211255Z ##[group]Fetching the repository
+2026-10-04T06:00:09.0225754Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a5d11370e7a52d6ac92c82accb91fbce87784dd6:refs/remotes/pull/726/merge
+2026-10-04T06:00:10.6095146Z From https://github.com/mario-andreschak/FLUJO
+2026-10-04T06:00:10.6096740Z  * [new ref]         a5d11370e7a52d6ac92c82accb91fbce87784dd6 -> pull/726/merge
+2026-10-04T06:00:10.6100864Z ##[endgroup]
+2026-10-04T06:00:10.6102048Z ##[group]Determining the checkout info
+2026-10-04T06:00:10.6104041Z ##[endgroup]
+2026-10-04T06:00:10.6109347Z [command]/usr/bin/git sparse-checkout disable
+2026-10-04T06:00:10.6165657Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-04T06:00:10.6207905Z ##[group]Checking out the ref
+2026-10-04T06:00:10.6211082Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/726/merge
+2026-10-04T06:00:10.9867753Z Note: switching to 'refs/remotes/pull/726/merge'.
+2026-10-04T06:00:10.9868199Z 
+2026-10-04T06:00:10.9868487Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-04T06:00:10.9869074Z changes and commit them, and you can discard any commits you make in this
+2026-10-04T06:00:10.9869639Z state without impacting any branches by switching back to a branch.
+2026-10-04T06:00:10.9869958Z 
+2026-10-04T06:00:10.9870211Z If you want to create a new branch to retain commits you create, you may
+2026-10-04T06:00:10.9871060Z do so (now or later) by using -c with the switch command. Example:
+2026-10-04T06:00:10.9871350Z 
+2026-10-04T06:00:10.9871500Z   git switch -c <new-branch-name>
+2026-10-04T06:00:10.9871708Z 
+2026-10-04T06:00:10.9871851Z Or undo this operation with:
+2026-10-04T06:00:10.9872072Z 
+2026-10-04T06:00:10.9872183Z   git switch -
+2026-10-04T06:00:10.9872364Z 
+2026-10-04T06:00:10.9872629Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-04T06:00:10.9873317Z 
+2026-10-04T06:00:10.9873729Z HEAD is now at a5d1137 Merge 9c7b567bc96fbe34dc970e4a18b34ffe178f2323 into 1486796b411351a3ade9291b85d195df6b7b41ad
+2026-10-04T06:00:10.9886967Z ##[endgroup]
+2026-10-04T06:00:10.9936267Z [command]/usr/bin/git log -1 --format=%H
+2026-10-04T06:00:10.9963747Z a5d11370e7a52d6ac92c82accb91fbce87784dd6
+2026-10-04T06:00:10.9973705Z ##[group]Removing auth
+2026-10-04T06:00:10.9978040Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-04T06:00:11.0011576Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-04T06:00:11.0239904Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-04T06:00:11.0268733Z http.https://github.com/.extraheader
+2026-10-04T06:00:11.0276041Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-04T06:00:11.0311436Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-04T06:00:11.0532756Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-04T06:00:11.0566509Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-04T06:00:11.0789255Z ##[endgroup]
+2026-10-04T06:00:11.1042296Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-04T06:00:11.1042771Z with:
+2026-10-04T06:00:11.1043248Z   node-version: 22.13.1
+2026-10-04T06:00:11.1043518Z   cache: npm
+2026-10-04T06:00:11.1043759Z   always-auth: false
+2026-10-04T06:00:11.1044029Z   check-latest: false
+2026-10-04T06:00:11.1046575Z   token: ***
+2026-10-04T06:00:11.1046818Z ##[endgroup]
+2026-10-04T06:00:11.2416501Z Attempting to download 22.13.1...
+2026-10-04T06:00:11.2521277Z (node:2428) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:00:11.2522281Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:00:11.8872311Z Acquiring 22.13.1 - x64 from https://github.com/actions/node-versions/releases/download/22.13.1-12900459766/node-22.13.1-linux-x64.tar.gz
+2026-10-04T06:00:12.3162831Z Extracting ...
+2026-10-04T06:00:12.3285024Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/1399920d-51b4-47f1-8243-16fce98bf600 -f /home/runner/work/_temp/f405d5ac-be7b-4a13-8cd2-e5ce5c7ad741
+2026-10-04T06:00:13.4834973Z Adding to the cache ...
+2026-10-04T06:00:15.5299442Z ##[group]Environment details
+2026-10-04T06:00:15.7521675Z node: v22.13.1
+2026-10-04T06:00:15.7522338Z npm: 10.9.2
+2026-10-04T06:00:15.7522858Z yarn: 1.22.22
+2026-10-04T06:00:15.7523978Z ##[endgroup]
+2026-10-04T06:00:15.7547311Z [command]/opt/hostedtoolcache/node/22.13.1/x64/bin/npm config get cache
+2026-10-04T06:00:15.8450688Z /home/runner/.npm
+2026-10-04T06:00:15.9176919Z Cache hit for: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:00:15.9295357Z (node:2428) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:00:15.9827769Z Received 688 of 688 (100.0%), 0.0 MBs/sec
+2026-10-04T06:00:15.9828513Z Cache Size: ~0 MB (688 B)
+2026-10-04T06:00:15.9852206Z [command]/usr/bin/tar -xf /home/runner/work/_temp/b264ae76-2b87-4e8c-bf9e-bb12d3e0638f/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-04T06:00:15.9932458Z Cache restored successfully
+2026-10-04T06:00:15.9936609Z Cache restored from key: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:00:16.0107213Z ##[group]Run node scripts/verify-ci-node.mjs 22.13.1 --historical-build --record
+2026-10-04T06:00:16.0107882Z [36;1mnode scripts/verify-ci-node.mjs 22.13.1 --historical-build --record[0m
+2026-10-04T06:00:16.0396274Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:00:16.0396577Z ##[endgroup]
+2026-10-04T06:00:16.4839764Z {
+2026-10-04T06:00:16.4840274Z   "schemaVersion": 1,
+2026-10-04T06:00:16.4840846Z   "measuredAt": "2026-10-04T06:00:16.218Z",
+2026-10-04T06:00:16.4841438Z   "expectedVersion": "22.13.1",
+2026-10-04T06:00:16.4841868Z   "node": "22.13.1",
+2026-10-04T06:00:16.4842313Z   "libuv": "1.49.2",
+2026-10-04T06:00:16.4842754Z   "platform": "linux",
+2026-10-04T06:00:16.4843518Z   "architecture": "x64",
+2026-10-04T06:00:16.4844091Z   "osRelease": "6.17.0-1022-azure",
+2026-10-04T06:00:16.4845076Z   "executableSha256": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47",
+2026-10-04T06:00:16.4846621Z   "qualificationScope": "historical default-heap build only; unsupported for installed application acceptance",
+2026-10-04T06:00:16.4848146Z   "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+2026-10-04T06:00:16.4849361Z   "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+2026-10-04T06:00:16.4850281Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+2026-10-04T06:00:16.4850956Z   "sourceTreeDirty": false,
+2026-10-04T06:00:16.4851871Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+2026-10-04T06:00:16.4853519Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+2026-10-04T06:00:16.4855986Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+2026-10-04T06:00:16.4856923Z }
+2026-10-04T06:00:16.4958958Z ##[group]Run npm ci --include=dev
+2026-10-04T06:00:16.4959299Z [36;1mnpm ci --include=dev[0m
+2026-10-04T06:00:16.5022414Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:00:16.5022691Z ##[endgroup]
+2026-10-04T06:00:17.4012724Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4013758Z npm warn EBADENGINE   package: 'flujo-ai@3.46.3',
+2026-10-04T06:00:17.4014563Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4015439Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4016070Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4024927Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4026069Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-bash@3.46.3',
+2026-10-04T06:00:17.4027247Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4028326Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4029167Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4029905Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4030887Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-browser@3.46.3',
+2026-10-04T06:00:17.4031977Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4033308Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4034188Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4034857Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4035870Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-filesystem@3.46.3',
+2026-10-04T06:00:17.4037008Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4038494Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4039356Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4040022Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4041032Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-flujo@3.46.3',
+2026-10-04T06:00:17.4042088Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4043341Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4044126Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4044749Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4045612Z npm warn EBADENGINE   package: '@flujo-ai/mcp-shared@0.1.0',
+2026-10-04T06:00:17.4046564Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4047527Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4048379Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4148490Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4149446Z npm warn EBADENGINE   package: '@flujo-ai/mcp-shared@0.1.0',
+2026-10-04T06:00:17.4150425Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4151514Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4152292Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4153136Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4154098Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-bash@3.46.3',
+2026-10-04T06:00:17.4155146Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4156135Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4156888Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4157454Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4158343Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-browser@3.46.3',
+2026-10-04T06:00:17.4159330Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4160264Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4160967Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4161536Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4162441Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-filesystem@3.46.3',
+2026-10-04T06:00:17.4163952Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4164933Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4165641Z npm warn EBADENGINE }
+2026-10-04T06:00:17.4166206Z npm warn EBADENGINE Unsupported engine {
+2026-10-04T06:00:17.4167076Z npm warn EBADENGINE   package: '@mario.andreschak/mcp-flujo@3.46.3',
+2026-10-04T06:00:17.4168046Z npm warn EBADENGINE   required: { node: '^22.17.0 || ^24.2.0' },
+2026-10-04T06:00:17.4169067Z npm warn EBADENGINE   current: { node: 'v22.13.1', npm: '10.9.2' }
+2026-10-04T06:00:17.4169813Z npm warn EBADENGINE }
+2026-10-04T06:00:19.1396533Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-04T06:00:20.9270558Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-04T06:00:21.0846823Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-04T06:00:23.0116376Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:00:24.4034963Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:00:52.6703435Z 
+2026-10-04T06:00:52.6704492Z added 1341 packages, and audited 1348 packages in 36s
+2026-10-04T06:00:52.6705125Z 
+2026-10-04T06:00:52.6707489Z 447 packages are looking for funding
+2026-10-04T06:00:52.6708405Z   run `npm fund` for details
+2026-10-04T06:00:52.6718491Z 
+2026-10-04T06:00:52.6718765Z found 0 vulnerabilities
+2026-10-04T06:00:52.7667556Z ##[group]Run node --test scripts/exclude-workspaces-from-next-glob.test.mjs
+2026-10-04T06:00:52.7668444Z [36;1mnode --test scripts/exclude-workspaces-from-next-glob.test.mjs[0m
+2026-10-04T06:00:52.7737200Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:00:52.7737468Z ##[endgroup]
+2026-10-04T06:00:52.8174803Z TAP version 13
+2026-10-04T06:00:53.0406898Z # Subtest: Next tracer prunes runtime data before traversing a dynamic project-wide glob
+2026-10-04T06:00:53.0414316Z ok 1 - Next tracer prunes runtime data before traversing a dynamic project-wide glob
+2026-10-04T06:00:53.0415464Z   ---
+2026-10-04T06:00:53.0416855Z   duration_ms: 92.384174
+2026-10-04T06:00:53.0417562Z   ...
+2026-10-04T06:00:53.0422349Z # Subtest: Next tracer prunes runtime data before traversing a direct workspace glob
+2026-10-04T06:00:53.0423884Z ok 2 - Next tracer prunes runtime data before traversing a direct workspace glob
+2026-10-04T06:00:53.0431274Z   ---
+2026-10-04T06:00:53.0431632Z   duration_ms: 97.069346
+2026-10-04T06:00:53.0431934Z   ...
+2026-10-04T06:00:53.0499021Z 1..2
+2026-10-04T06:00:53.0500188Z # tests 2
+2026-10-04T06:00:53.0501013Z # suites 0
+2026-10-04T06:00:53.0501673Z # pass 2
+2026-10-04T06:00:53.0502274Z # fail 0
+2026-10-04T06:00:53.0503987Z # cancelled 0
+2026-10-04T06:00:53.0504480Z # skipped 0
+2026-10-04T06:00:53.0505043Z # todo 0
+2026-10-04T06:00:53.0505729Z # duration_ms 243.62161
+2026-10-04T06:00:53.0574849Z ##[group]Run npm run build
+2026-10-04T06:00:53.0575140Z [36;1mnpm run build[0m
+2026-10-04T06:00:53.0639114Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:00:53.0639388Z ##[endgroup]
+2026-10-04T06:00:53.1611498Z 
+2026-10-04T06:00:53.1611756Z > flujo-ai@3.46.3 build
+2026-10-04T06:00:53.1612721Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-04T06:00:53.1613524Z 
+2026-10-04T06:00:53.2535141Z 
+2026-10-04T06:00:53.2535592Z > flujo-ai@3.46.3 build:mcp
+2026-10-04T06:00:53.2537075Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-04T06:00:53.2537915Z 
+2026-10-04T06:00:53.3635310Z 
+2026-10-04T06:00:53.3635896Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-04T06:00:53.3636534Z > tsc -p tsconfig.json
+2026-10-04T06:00:53.3636888Z 
+2026-10-04T06:00:54.3388318Z 
+2026-10-04T06:00:54.3389123Z > @mario.andreschak/mcp-filesystem@3.46.3 build
+2026-10-04T06:00:54.3390444Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem && node ../embed-runtime.mjs filesystem
+2026-10-04T06:00:54.3390995Z 
+2026-10-04T06:00:56.3913128Z 
+2026-10-04T06:00:56.3914132Z > @mario.andreschak/mcp-bash@3.46.3 build
+2026-10-04T06:00:56.3915365Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash && node ../embed-runtime.mjs bash
+2026-10-04T06:00:56.3915847Z 
+2026-10-04T06:00:58.4542441Z 
+2026-10-04T06:00:58.4543259Z > @mario.andreschak/mcp-browser@3.46.3 build
+2026-10-04T06:00:58.4543947Z > tsc -p tsconfig.json && node ../embed-runtime.mjs browser
+2026-10-04T06:00:58.4544229Z 
+2026-10-04T06:01:00.9578169Z 
+2026-10-04T06:01:00.9578890Z > @mario.andreschak/mcp-flujo@3.46.3 build
+2026-10-04T06:01:00.9579889Z > tsc -p tsconfig.json && node ../embed-runtime.mjs flujo
+2026-10-04T06:01:00.9580228Z 
+2026-10-04T06:01:02.8374819Z ▲ Next.js 16.3.8 (webpack)
+2026-10-04T06:01:02.8621247Z ✓ Running next.config.mjs took 24ms
+2026-10-04T06:01:02.8624832Z ⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+2026-10-04T06:01:02.8762047Z Attention: Next.js now collects completely anonymous telemetry regarding usage.
+2026-10-04T06:01:02.8763587Z This information is used to shape Next.js' roadmap and prioritize features.
+2026-10-04T06:01:02.8765232Z You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+2026-10-04T06:01:02.8766438Z https://nextjs.org/telemetry
+2026-10-04T06:01:02.8766908Z 
+2026-10-04T06:01:02.9017824Z - Experiments (use with caution):
+2026-10-04T06:01:02.9021243Z   · proxyClientMaxBodySize: "100mb"
+2026-10-04T06:01:02.9021754Z   ✓ webpackBuildWorker
+2026-10-04T06:01:02.9022203Z   ✓ webpackMemoryOptimizations
+2026-10-04T06:01:02.9022526Z 
+2026-10-04T06:01:03.0267734Z   Creating an optimized production build ...
+2026-10-04T06:01:03.7166530Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:02:08.6169038Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:02:09.6734545Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:02:24.1178316Z ✓ Compiled successfully in 78s
+2026-10-04T06:02:24.1384461Z   Running TypeScript ...
+2026-10-04T06:03:01.8748454Z   Finished TypeScript in 37.7s ...
+2026-10-04T06:03:01.8787774Z   Collecting page data using 3 workers ...
+2026-10-04T06:03:08.5884131Z   Generating static pages using 3 workers (0/122) ...
+2026-10-04T06:03:11.0968402Z   Generating static pages using 3 workers (30/122) 
+2026-10-04T06:03:11.0972371Z   Generating static pages using 3 workers (60/122) 
+2026-10-04T06:03:11.0993749Z   Generating static pages using 3 workers (91/122) 
+2026-10-04T06:03:11.0994876Z ✓ Generating static pages using 3 workers (122/122) in 2.5s
+2026-10-04T06:03:18.3762871Z   Finalizing page optimization ...
+2026-10-04T06:03:18.3764863Z   Collecting build traces ...
+2026-10-04T06:03:30.6865369Z 
+2026-10-04T06:03:30.6913252Z Route (app)
+2026-10-04T06:03:30.6913889Z ┌ ○ /
+2026-10-04T06:03:30.6914281Z ├ ○ /_not-found
+2026-10-04T06:03:30.6914765Z ├ ƒ /api/approvals
+2026-10-04T06:03:30.6915219Z ├ ƒ /api/approvals/[id]
+2026-10-04T06:03:30.6915761Z ├ ƒ /api/automation-map
+2026-10-04T06:03:30.6916273Z ├ ƒ /api/avatar/[voiceAction]
+2026-10-04T06:03:30.6916784Z ├ ƒ /api/avatar/connections
+2026-10-04T06:03:30.6917305Z ├ ƒ /api/avatar/remote/[voiceAction]
+2026-10-04T06:03:30.6917672Z ├ ƒ /api/avatar/remote/availability
+2026-10-04T06:03:30.6917979Z ├ ƒ /api/avatar/voice
+2026-10-04T06:03:30.6918347Z ├ ƒ /api/avatar/work-model
+2026-10-04T06:03:30.6918836Z ├ ƒ /api/avatar/world
+2026-10-04T06:03:30.6919084Z ├ ƒ /api/backup
+2026-10-04T06:03:30.6919307Z ├ ƒ /api/browse
+2026-10-04T06:03:30.6919549Z ├ ƒ /api/bugs/enhance
+2026-10-04T06:03:30.6919802Z ├ ƒ /api/cloud/instance
+2026-10-04T06:03:30.6920040Z ├ ƒ /api/cwd
+2026-10-04T06:03:30.6920283Z ├ ƒ /api/encryption/secure
+2026-10-04T06:03:30.6920551Z ├ ƒ /api/env
+2026-10-04T06:03:30.6920766Z ├ ƒ /api/flow
+2026-10-04T06:03:30.6920993Z ├ ƒ /api/flow/[id]
+2026-10-04T06:03:30.6921335Z ├ ƒ /api/flow/[id]/convert-process-to-subflow
+2026-10-04T06:03:30.6921694Z ├ ƒ /api/flow/[id]/versions
+2026-10-04T06:03:30.6922049Z ├ ƒ /api/flow/[id]/versions/[versionId]
+2026-10-04T06:03:30.6922518Z ├ ƒ /api/flow/assist
+2026-10-04T06:03:30.6923215Z ├ ƒ /api/flow/compile
+2026-10-04T06:03:30.6923628Z ├ ƒ /api/flow/generate
+2026-10-04T06:03:30.6923907Z ├ ƒ /api/flow/generate/visual
+2026-10-04T06:03:30.6924230Z ├ ƒ /api/flow/generator
+2026-10-04T06:03:30.6924487Z ├ ƒ /api/flow/improve
+2026-10-04T06:03:30.6924759Z ├ ƒ /api/flow/model-agent
+2026-10-04T06:03:30.6925088Z ├ ƒ /api/flow/prompt-renderer
+2026-10-04T06:03:30.6925369Z ├ ƒ /api/flow/quick-chat
+2026-10-04T06:03:30.6925627Z ├ ƒ /api/flow/repair
+2026-10-04T06:03:30.6926019Z ├ ƒ /api/git
+2026-10-04T06:03:30.6926230Z ├ ƒ /api/init
+2026-10-04T06:03:30.6926506Z ├ ƒ /api/local-models/capability
+2026-10-04T06:03:30.6926826Z ├ ƒ /api/local-models/pull
+2026-10-04T06:03:30.6927341Z ├ ƒ /api/local-models/suggest
+2026-10-04T06:03:30.6927626Z ├ ƒ /api/mcp-registry
+2026-10-04T06:03:30.6927914Z ├ ƒ /api/mcp-registry/spotlight
+2026-10-04T06:03:30.6928211Z ├ ƒ /api/mcp/app-consent
+2026-10-04T06:03:30.6928721Z ├ ƒ /api/mcp/app-sandbox
+2026-10-04T06:03:30.6928983Z ├ ƒ /api/mcp/assistant
+2026-10-04T06:03:30.6929232Z ├ ƒ /api/mcp/cancel
+2026-10-04T06:03:30.6929495Z ├ ƒ /api/mcp/flujo/authoring
+2026-10-04T06:03:30.6929778Z ├ ƒ /api/mcp/flujo/automation
+2026-10-04T06:03:30.6930053Z ├ ƒ /api/mcp/flujo/flows
+2026-10-04T06:03:30.6930323Z ├ ƒ /api/mcp/flujo/resources
+2026-10-04T06:03:30.6930632Z ├ ƒ /api/mcp/flujo/resources/read
+2026-10-04T06:03:30.6930929Z ├ ƒ /api/mcp/flujo/servers
+2026-10-04T06:03:30.6931204Z ├ ƒ /api/mcp/flujo/skills
+2026-10-04T06:03:30.6931524Z ├ ƒ /api/mcp/flujo/state
+2026-10-04T06:03:30.6931951Z ├ ƒ /api/mcp/flujo/tools
+2026-10-04T06:03:30.6932580Z ├ ƒ /api/mcp/oauth-capability
+2026-10-04T06:03:30.6933614Z ├ ƒ /api/mcp/servers
+2026-10-04T06:03:30.6934506Z ├ ƒ /api/mcp/servers/[name]
+2026-10-04T06:03:30.6935540Z ├ ƒ /api/mcp/servers/[name]/prompts
+2026-10-04T06:03:30.6936801Z ├ ƒ /api/mcp/servers/[name]/prompts/get
+2026-10-04T06:03:30.6938051Z ├ ƒ /api/mcp/servers/[name]/resources
+2026-10-04T06:03:30.6939447Z ├ ƒ /api/mcp/servers/[name]/resources/read
+2026-10-04T06:03:30.6940378Z ├ ƒ /api/mcp/servers/[name]/skills
+2026-10-04T06:03:30.6941184Z ├ ƒ /api/mcp/servers/[name]/skills/approve
+2026-10-04T06:03:30.6941872Z ├ ƒ /api/mcp/servers/[name]/skills/get
+2026-10-04T06:03:30.6944976Z ├ ƒ /api/mcp/servers/[name]/skills/load
+2026-10-04T06:03:30.6945943Z ├ ƒ /api/mcp/servers/[name]/status
+2026-10-04T06:03:30.6946711Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/confirm
+2026-10-04T06:03:30.6947390Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/start
+2026-10-04T06:03:30.6947969Z ├ ƒ /api/mcp/servers/[name]/tools
+2026-10-04T06:03:30.6948547Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]
+2026-10-04T06:03:30.6949524Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]/stream
+2026-10-04T06:03:30.6950158Z ├ ƒ /api/mcp/test-connection
+2026-10-04T06:03:30.6950675Z ├ ƒ /api/mcp/test-connection/stream
+2026-10-04T06:03:30.6951092Z ├ ƒ /api/model
+2026-10-04T06:03:30.6951485Z ├ ƒ /api/model/[id]
+2026-10-04T06:03:30.6951923Z ├ ƒ /api/model/provider
+2026-10-04T06:03:30.6952327Z ├ ƒ /api/model/test
+2026-10-04T06:03:30.6952724Z ├ ƒ /api/network-exposure
+2026-10-04T06:03:30.6953401Z ├ ƒ /api/oauth/callback
+2026-10-04T06:03:30.6953938Z ├ ƒ /api/oauth/initiate
+2026-10-04T06:03:30.6954352Z ├ ƒ /api/oauth/reset
+2026-10-04T06:03:30.6954944Z ├ ƒ /api/packages/build
+2026-10-04T06:03:30.6955656Z ├ ƒ /api/packages/derive-secrets
+2026-10-04T06:03:30.6956333Z ├ ƒ /api/packages/install
+2026-10-04T06:03:30.6957111Z ├ ƒ /api/packages/install/status
+2026-10-04T06:03:30.6957834Z ├ ƒ /api/packages/installed
+2026-10-04T06:03:30.6958477Z ├ ƒ /api/packages/resolve
+2026-10-04T06:03:30.6959100Z ├ ƒ /api/packages/scan-targets
+2026-10-04T06:03:30.6959527Z ├ ƒ /api/packages/search
+2026-10-04T06:03:30.6959838Z ├ ƒ /api/packages/uninstall
+2026-10-04T06:03:30.6960126Z ├ ƒ /api/persona-recovery
+2026-10-04T06:03:30.6960420Z ├ ƒ /api/planned-executions
+2026-10-04T06:03:30.6960736Z ├ ƒ /api/planned-executions/[id]
+2026-10-04T06:03:30.6961088Z ├ ƒ /api/planned-executions/[id]/run
+2026-10-04T06:03:30.6961466Z ├ ƒ /api/planned-executions/[id]/runs
+2026-10-04T06:03:30.6961862Z ├ ƒ /api/planned-executions/[id]/worker-recovery
+2026-10-04T06:03:30.6962276Z ├ ƒ /api/planned-executions/preview-schedule
+2026-10-04T06:03:30.6962659Z ├ ƒ /api/planned-executions/reconcile
+2026-10-04T06:03:30.6963275Z ├ ƒ /api/reference-search/files
+2026-10-04T06:03:30.6963584Z ├ ƒ /api/registry/auth
+2026-10-04T06:03:30.6963864Z ├ ƒ /api/registry/auth/resend
+2026-10-04T06:03:30.6964172Z ├ ƒ /api/registry/auth/reset
+2026-10-04T06:03:30.6964462Z ├ ƒ /api/registry/feedback
+2026-10-04T06:03:30.6964794Z ├ ƒ /api/registry/oauth/callback
+2026-10-04T06:03:30.6965135Z ├ ƒ /api/registry/oauth/initiate
+2026-10-04T06:03:30.6965446Z ├ ƒ /api/registry/packages
+2026-10-04T06:03:30.6965726Z ├ ƒ /api/registry/publish
+2026-10-04T06:03:30.6966008Z ├ ƒ /api/registry/settings
+2026-10-04T06:03:30.6966252Z ├ ƒ /api/restore
+2026-10-04T06:03:30.6966489Z ├ ƒ /api/runs/active
+2026-10-04T06:03:30.6966756Z ├ ƒ /api/runtime-environment
+2026-10-04T06:03:30.6967268Z ├ ƒ /api/setup/ai-cli
+2026-10-04T06:03:30.6967527Z ├ ƒ /api/snapshot/abort
+2026-10-04T06:03:30.6967789Z ├ ƒ /api/snapshot/begin
+2026-10-04T06:03:30.6968054Z ├ ƒ /api/snapshot/download
+2026-10-04T06:03:30.6968326Z ├ ƒ /api/snapshot/finalize
+2026-10-04T06:03:30.6968588Z ├ ƒ /api/snapshot/info
+2026-10-04T06:03:30.6968852Z ├ ƒ /api/snapshot/status
+2026-10-04T06:03:30.6969111Z ├ ƒ /api/snapshots
+2026-10-04T06:03:30.6969365Z ├ ƒ /api/snapshots/cleanup
+2026-10-04T06:03:30.6969677Z ├ ƒ /api/snapshots/open-folder
+2026-10-04T06:03:30.6969964Z ├ ƒ /api/statistics
+2026-10-04T06:03:30.6970192Z ├ ƒ /api/storage
+2026-10-04T06:03:30.6970468Z ├ ƒ /api/telemetry/daily-active
+2026-10-04T06:03:30.6970737Z ├ ƒ /api/tickets
+2026-10-04T06:03:30.6970984Z ├ ƒ /api/tickets/[id]
+2026-10-04T06:03:30.6971237Z ├ ƒ /api/transcription
+2026-10-04T06:03:30.6971468Z ├ ƒ /api/update
+2026-10-04T06:03:30.6971691Z ├ ƒ /api/waves
+2026-10-04T06:03:30.6971928Z ├ ƒ /api/webhooks/[id]
+2026-10-04T06:03:30.6972191Z ├ ƒ /api/worker/status
+2026-10-04T06:03:30.6972441Z ├ ƒ /api/workspaces
+2026-10-04T06:03:30.6972690Z ├ ○ /automation/triggers
+2026-10-04T06:03:30.6973223Z ├ ○ /automation/waves
+2026-10-04T06:03:30.6973488Z ├ ○ /chain-chat
+2026-10-04T06:03:30.6973707Z ├ ○ /chat
+2026-10-04T06:03:30.6973905Z ├ ○ /docs
+2026-10-04T06:03:30.6974105Z ├ ○ /executions
+2026-10-04T06:03:30.6974318Z ├ ○ /flows
+2026-10-04T06:03:30.6974517Z ├ ○ /mcp
+2026-10-04T06:03:30.6974728Z ├ ƒ /mcp-flows
+2026-10-04T06:03:30.6974971Z ├ ƒ /mcp-proxy/[server]
+2026-10-04T06:03:30.6975214Z ├ ○ /meetings
+2026-10-04T06:03:30.6975420Z ├ ƒ /models
+2026-10-04T06:03:30.6975626Z ├ ○ /packages
+2026-10-04T06:03:30.6975841Z ├ ○ /personas
+2026-10-04T06:03:30.6976123Z ├ ƒ /personas/[personaId]
+2026-10-04T06:03:30.6976531Z ├ ○ /roles
+2026-10-04T06:03:30.6976767Z ├ ƒ /roles/[roleId]
+2026-10-04T06:03:30.6977022Z ├ ƒ /roles/[roleId]/edit
+2026-10-04T06:03:30.6977264Z ├ ○ /roles/new
+2026-10-04T06:03:30.6977547Z ├ ○ /settings
+2026-10-04T06:03:30.6977898Z ├ ○ /statistics
+2026-10-04T06:03:30.6978230Z ├ ƒ /v1/chat/completions
+2026-10-04T06:03:30.6978833Z ├ ƒ /v1/chat/conversation-chains
+2026-10-04T06:03:30.6979234Z ├ ƒ /v1/chat/conversations
+2026-10-04T06:03:30.6979738Z ├ ƒ /v1/chat/conversations/[conversationId]
+2026-10-04T06:03:30.6980331Z ├ ƒ /v1/chat/conversations/[conversationId]/breakpoints
+2026-10-04T06:03:30.6980933Z ├ ƒ /v1/chat/conversations/[conversationId]/cancel
+2026-10-04T06:03:30.6981575Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/attach
+2026-10-04T06:03:30.6982193Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/continue
+2026-10-04T06:03:30.6982853Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/state
+2026-10-04T06:03:30.6983791Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/step
+2026-10-04T06:03:30.6984507Z ├ ƒ /v1/chat/conversations/[conversationId]/edit-state
+2026-10-04T06:03:30.6985055Z ├ ƒ /v1/chat/conversations/[conversationId]/events
+2026-10-04T06:03:30.6985568Z ├ ƒ /v1/chat/conversations/[conversationId]/inject
+2026-10-04T06:03:30.6986225Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns
+2026-10-04T06:03:30.6986857Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]
+2026-10-04T06:03:30.7002712Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]
+2026-10-04T06:03:30.7004140Z ├ ƒ /v1/chat/conversations/[conversationId]/recovery
+2026-10-04T06:03:30.7004672Z ├ ƒ /v1/chat/conversations/[conversationId]/resources
+2026-10-04T06:03:30.7005258Z ├ ƒ /v1/chat/conversations/[conversationId]/resources/[resourceId]/content
+2026-10-04T06:03:30.7005807Z ├ ƒ /v1/chat/conversations/[conversationId]/respond
+2026-10-04T06:03:30.7006267Z ├ ƒ /v1/chat/conversations/[conversationId]/revert
+2026-10-04T06:03:30.7006761Z ├ ƒ /v1/chat/conversations/[conversationId]/wire-preview
+2026-10-04T06:03:30.7007122Z ├ ƒ /v1/chat/events
+2026-10-04T06:03:30.7007415Z ├ ƒ /v1/flows/[flowRef]/readiness
+2026-10-04T06:03:30.7007696Z ├ ƒ /v1/meetings
+2026-10-04T06:03:30.7007959Z ├ ƒ /v1/meetings/[meetingId]
+2026-10-04T06:03:30.7008526Z ├ ƒ /v1/meetings/[meetingId]/cancel
+2026-10-04T06:03:30.7008876Z ├ ƒ /v1/meetings/[meetingId]/events
+2026-10-04T06:03:30.7009230Z ├ ƒ /v1/meetings/[meetingId]/interventions
+2026-10-04T06:03:30.7009607Z ├ ƒ /v1/meetings/[meetingId]/private-notes
+2026-10-04T06:03:30.7009960Z ├ ƒ /v1/meetings/[meetingId]/resume
+2026-10-04T06:03:30.7010295Z ├ ƒ /v1/meetings/[meetingId]/start
+2026-10-04T06:03:30.7010566Z ├ ƒ /v1/models
+2026-10-04T06:03:30.7010812Z ├ ƒ /v1/persona-drafts
+2026-10-04T06:03:30.7011130Z ├ ƒ /v1/persona-drafts/[draftId]
+2026-10-04T06:03:30.7011403Z ├ ƒ /v1/personas
+2026-10-04T06:03:30.7011664Z ├ ƒ /v1/personas/[personaId]
+2026-10-04T06:03:30.7012003Z ├ ƒ /v1/personas/[personaId]/app-grants
+2026-10-04T06:03:30.7012418Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]
+2026-10-04T06:03:30.7012895Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]/launch
+2026-10-04T06:03:30.7013668Z ├ ƒ /v1/personas/[personaId]/behaviors/[behaviorId]/activate
+2026-10-04T06:03:30.7014095Z ├ ƒ /v1/personas/[personaId]/composition
+2026-10-04T06:03:30.7014520Z ├ ƒ /v1/personas/[personaId]/composition/behaviors
+2026-10-04T06:03:30.7014936Z ├ ƒ /v1/personas/[personaId]/composition/copy
+2026-10-04T06:03:30.7015338Z ├ ƒ /v1/personas/[personaId]/deletion-preview
+2026-10-04T06:03:30.7015749Z ├ ƒ /v1/personas/[personaId]/execution-preview
+2026-10-04T06:03:30.7016123Z ├ ƒ /v1/personas/[personaId]/export
+2026-10-04T06:03:30.7016482Z ├ ƒ /v1/personas/[personaId]/export-preview
+2026-10-04T06:03:30.7016862Z ├ ƒ /v1/personas/[personaId]/improvements
+2026-10-04T06:03:30.7017317Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/apply
+2026-10-04T06:03:30.7017830Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/promote
+2026-10-04T06:03:30.7018497Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/reject
+2026-10-04T06:03:30.7019010Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/undo
+2026-10-04T06:03:30.7019425Z ├ ƒ /v1/personas/[personaId]/memories
+2026-10-04T06:03:30.7019810Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]
+2026-10-04T06:03:30.7020278Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/activate
+2026-10-04T06:03:30.7020747Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/correct
+2026-10-04T06:03:30.7021185Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/pin
+2026-10-04T06:03:30.7021686Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict
+2026-10-04T06:03:30.7022138Z ├ ƒ /v1/personas/[personaId]/runtime-recovery
+2026-10-04T06:03:30.7022521Z ├ ƒ /v1/personas/[personaId]/storage-stats
+2026-10-04T06:03:30.7022895Z ├ ƒ /v1/personas/[personaId]/work-items
+2026-10-04T06:03:30.7023570Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]
+2026-10-04T06:03:30.7024069Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/assign
+2026-10-04T06:03:30.7024576Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/control
+2026-10-04T06:03:30.7025040Z ├ ƒ /v1/personas/[personaId]/work-items/promote-todo
+2026-10-04T06:03:30.7025389Z ├ ƒ /v1/personas/readiness
+2026-10-04T06:03:30.7025714Z ├ ƒ /v1/personas/settings-options
+2026-10-04T06:03:30.7026024Z ├ ƒ /v1/personas/summary
+2026-10-04T06:03:30.7026268Z ├ ƒ /v1/roles
+2026-10-04T06:03:30.7026503Z ├ ƒ /v1/roles/[roleId]
+2026-10-04T06:03:30.7026800Z ├ ƒ /v1/roles/[roleId]/duplicate
+2026-10-04T06:03:30.7027098Z ├ ƒ /v1/roles/[roleId]/impact
+2026-10-04T06:03:30.7027405Z ├ ƒ /v1/roles/[roleId]/restore
+2026-10-04T06:03:30.7027722Z ├ ƒ /v1/roles/[roleId]/rollback
+2026-10-04T06:03:30.7028030Z ├ ƒ /v1/roles/[roleId]/versions
+2026-10-04T06:03:30.7028302Z ├ ƒ /v1/tasks/[taskId]
+2026-10-04T06:03:30.7028535Z ├ ○ /waves
+2026-10-04T06:03:30.7028741Z └ ○ /world
+2026-10-04T06:03:30.7028845Z 
+2026-10-04T06:03:30.7028856Z 
+2026-10-04T06:03:30.7028986Z ƒ Proxy (Middleware)
+2026-10-04T06:03:30.7029123Z 
+2026-10-04T06:03:30.7029337Z ○  (Static)   prerendered as static content
+2026-10-04T06:03:30.7029723Z ƒ  (Dynamic)  server-rendered on demand
+2026-10-04T06:03:30.7029916Z 
+2026-10-04T06:03:30.8004407Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-04T06:03:30.8005014Z with:
+2026-10-04T06:03:30.8005230Z   node-version: 22.17.0
+2026-10-04T06:03:30.8005457Z   cache: npm
+2026-10-04T06:03:30.8005650Z   always-auth: false
+2026-10-04T06:03:30.8005860Z   check-latest: false
+2026-10-04T06:03:30.8008521Z   token: ***
+2026-10-04T06:03:30.8008730Z ##[endgroup]
+2026-10-04T06:03:30.9399144Z Attempting to download 22.17.0...
+2026-10-04T06:03:30.9510126Z (node:3008) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:03:30.9511827Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:03:31.4851101Z Acquiring 22.17.0 - x64 from https://github.com/actions/node-versions/releases/download/22.17.0-15866718879/node-22.17.0-linux-x64.tar.gz
+2026-10-04T06:03:31.9484876Z Extracting ...
+2026-10-04T06:03:31.9607313Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/81923521-4188-49e6-b80f-58bc289f5004 -f /home/runner/work/_temp/1258719e-3c51-420f-9657-d9e5b954882a
+2026-10-04T06:03:33.1182370Z Adding to the cache ...
+2026-10-04T06:03:35.0656237Z ##[group]Environment details
+2026-10-04T06:03:35.2766279Z node: v22.17.0
+2026-10-04T06:03:35.2766704Z npm: 10.9.2
+2026-10-04T06:03:35.2767042Z yarn: 1.22.22
+2026-10-04T06:03:35.2767763Z ##[endgroup]
+2026-10-04T06:03:35.2788714Z [command]/opt/hostedtoolcache/node/22.17.0/x64/bin/npm config get cache
+2026-10-04T06:03:35.3712496Z /home/runner/.npm
+2026-10-04T06:03:35.4450793Z Cache hit for: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:03:35.4556620Z (node:3008) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:03:35.5109365Z Received 688 of 688 (100.0%), 0.0 MBs/sec
+2026-10-04T06:03:35.5110002Z Cache Size: ~0 MB (688 B)
+2026-10-04T06:03:35.5137849Z [command]/usr/bin/tar -xf /home/runner/work/_temp/07aea7eb-78ef-4485-b997-c2ed9c7b64d7/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-04T06:03:35.5191097Z Cache restored successfully
+2026-10-04T06:03:35.5195581Z Cache restored from key: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:03:35.5337235Z ##[group]Run node scripts/verify-ci-node.mjs 22.17.0 --record
+2026-10-04T06:03:35.5337720Z [36;1mnode scripts/verify-ci-node.mjs 22.17.0 --record[0m
+2026-10-04T06:03:35.5400074Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:03:35.5400352Z ##[endgroup]
+2026-10-04T06:03:35.7467347Z {
+2026-10-04T06:03:35.7467877Z   "schemaVersion": 1,
+2026-10-04T06:03:35.7468517Z   "measuredAt": "2026-10-04T06:03:35.722Z",
+2026-10-04T06:03:35.7469184Z   "expectedVersion": "22.17.0",
+2026-10-04T06:03:35.7469770Z   "node": "22.17.0",
+2026-10-04T06:03:35.7470289Z   "libuv": "1.51.0",
+2026-10-04T06:03:35.7470770Z   "platform": "linux",
+2026-10-04T06:03:35.7471286Z   "architecture": "x64",
+2026-10-04T06:03:35.7471817Z   "osRelease": "6.17.0-1022-azure",
+2026-10-04T06:03:35.7472665Z   "executableSha256": "8071ae0fca095a272ad698a90c7061801a86fb6392ddb81e922b68a91a4374b9",
+2026-10-04T06:03:35.7474327Z   "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+2026-10-04T06:03:35.7475808Z   "signedChecksumsSha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4",
+2026-10-04T06:03:35.7477093Z   "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+2026-10-04T06:03:35.7478170Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+2026-10-04T06:03:35.7478939Z   "sourceTreeDirty": false,
+2026-10-04T06:03:35.7479772Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+2026-10-04T06:03:35.7480967Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+2026-10-04T06:03:35.7482190Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+2026-10-04T06:03:35.7483593Z }
+2026-10-04T06:03:35.7576626Z ##[group]Run set -euo pipefail
+2026-10-04T06:03:35.7576988Z [36;1mset -euo pipefail[0m
+2026-10-04T06:03:35.7577258Z [36;1mnpm ci --include=dev[0m
+2026-10-04T06:03:35.7577519Z [36;1mnpm run build[0m
+2026-10-04T06:03:35.7577764Z [36;1mnpm run typecheck:mcp[0m
+2026-10-04T06:03:35.7578042Z [36;1mnpm run validate:mcp-release[0m
+2026-10-04T06:03:35.7578341Z [36;1mnpm run smoke:mcp-artifacts[0m
+2026-10-04T06:03:35.7641684Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-04T06:03:35.7642055Z ##[endgroup]
+2026-10-04T06:03:48.5471132Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-04T06:03:48.7195040Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-04T06:03:48.9453799Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:03:49.4834583Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-04T06:03:50.1298667Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:04:02.4167007Z 
+2026-10-04T06:04:02.4167777Z added 1341 packages, and audited 1348 packages in 27s
+2026-10-04T06:04:02.4168387Z 
+2026-10-04T06:04:02.4168815Z 447 packages are looking for funding
+2026-10-04T06:04:02.4169738Z   run `npm fund` for details
+2026-10-04T06:04:02.4183316Z 
+2026-10-04T06:04:02.4183814Z found 0 vulnerabilities
+2026-10-04T06:04:02.7042041Z 
+2026-10-04T06:04:02.7042462Z > flujo-ai@3.46.3 build
+2026-10-04T06:04:02.7043741Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-04T06:04:02.7044302Z 
+2026-10-04T06:04:02.7976346Z 
+2026-10-04T06:04:02.7976927Z > flujo-ai@3.46.3 build:mcp
+2026-10-04T06:04:02.7978696Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-04T06:04:02.7979573Z 
+2026-10-04T06:04:02.9131126Z 
+2026-10-04T06:04:02.9131840Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-04T06:04:02.9132554Z > tsc -p tsconfig.json
+2026-10-04T06:04:02.9132876Z 
+2026-10-04T06:04:03.8766585Z 
+2026-10-04T06:04:03.8767478Z > @mario.andreschak/mcp-filesystem@3.46.3 build
+2026-10-04T06:04:03.8768448Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem && node ../embed-runtime.mjs filesystem
+2026-10-04T06:04:03.8768958Z 
+2026-10-04T06:04:05.9405548Z 
+2026-10-04T06:04:05.9406254Z > @mario.andreschak/mcp-bash@3.46.3 build
+2026-10-04T06:04:05.9407336Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash && node ../embed-runtime.mjs bash
+2026-10-04T06:04:05.9407821Z 
+2026-10-04T06:04:07.9855884Z 
+2026-10-04T06:04:07.9856600Z > @mario.andreschak/mcp-browser@3.46.3 build
+2026-10-04T06:04:07.9857455Z > tsc -p tsconfig.json && node ../embed-runtime.mjs browser
+2026-10-04T06:04:07.9857795Z 
+2026-10-04T06:04:10.4878605Z 
+2026-10-04T06:04:10.4879328Z > @mario.andreschak/mcp-flujo@3.46.3 build
+2026-10-04T06:04:10.4880269Z > tsc -p tsconfig.json && node ../embed-runtime.mjs flujo
+2026-10-04T06:04:10.4880772Z 
+2026-10-04T06:04:12.3961482Z ▲ Next.js 16.3.8 (webpack)
+2026-10-04T06:04:12.4205086Z ✓ Running next.config.mjs took 24ms
+2026-10-04T06:04:12.6598639Z - Experiments (use with caution):
+2026-10-04T06:04:12.6600861Z   · proxyClientMaxBodySize: "100mb"
+2026-10-04T06:04:12.6601944Z   ✓ webpackBuildWorker
+2026-10-04T06:04:12.6602924Z   ✓ webpackMemoryOptimizations
+2026-10-04T06:04:12.6603882Z 
+2026-10-04T06:04:12.7555337Z   Creating an optimized production build ...
+2026-10-04T06:04:13.4448475Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:05:18.6029061Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:05:19.6754537Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:05:34.1802452Z ✓ Compiled successfully in 78s
+2026-10-04T06:05:34.1913370Z   Running TypeScript ...
+2026-10-04T06:05:40.5259843Z   Finished TypeScript in 6.3s ...
+2026-10-04T06:05:40.5308485Z   Collecting page data using 3 workers ...
+2026-10-04T06:05:47.3547829Z   Generating static pages using 3 workers (0/122) ...
+2026-10-04T06:05:49.7011261Z   Generating static pages using 3 workers (30/122) 
+2026-10-04T06:05:49.7016094Z   Generating static pages using 3 workers (60/122) 
+2026-10-04T06:05:49.7020208Z   Generating static pages using 3 workers (91/122) 
+2026-10-04T06:05:49.7023555Z ✓ Generating static pages using 3 workers (122/122) in 2.3s
+2026-10-04T06:05:57.0607465Z   Finalizing page optimization ...
+2026-10-04T06:05:57.0610210Z   Collecting build traces ...
+2026-10-04T06:06:09.5873987Z 
+2026-10-04T06:06:09.5936003Z Route (app)
+2026-10-04T06:06:09.5955195Z ┌ ○ /
+2026-10-04T06:06:09.5955626Z ├ ○ /_not-found
+2026-10-04T06:06:09.5956085Z ├ ƒ /api/approvals
+2026-10-04T06:06:09.5956672Z ├ ƒ /api/approvals/[id]
+2026-10-04T06:06:09.5957106Z ├ ƒ /api/automation-map
+2026-10-04T06:06:09.5957434Z ├ ƒ /api/avatar/[voiceAction]
+2026-10-04T06:06:09.5957782Z ├ ƒ /api/avatar/connections
+2026-10-04T06:06:09.5958145Z ├ ƒ /api/avatar/remote/[voiceAction]
+2026-10-04T06:06:09.5958552Z ├ ƒ /api/avatar/remote/availability
+2026-10-04T06:06:09.5959041Z ├ ƒ /api/avatar/voice
+2026-10-04T06:06:09.5959612Z ├ ƒ /api/avatar/work-model
+2026-10-04T06:06:09.5960152Z ├ ƒ /api/avatar/world
+2026-10-04T06:06:09.5960712Z ├ ƒ /api/backup
+2026-10-04T06:06:09.5961115Z ├ ƒ /api/browse
+2026-10-04T06:06:09.5961598Z ├ ƒ /api/bugs/enhance
+2026-10-04T06:06:09.5962057Z ├ ƒ /api/cloud/instance
+2026-10-04T06:06:09.5962493Z ├ ƒ /api/cwd
+2026-10-04T06:06:09.5962794Z ├ ƒ /api/encryption/secure
+2026-10-04T06:06:09.5963487Z ├ ƒ /api/env
+2026-10-04T06:06:09.5964967Z ├ ƒ /api/flow
+2026-10-04T06:06:09.5965382Z ├ ƒ /api/flow/[id]
+2026-10-04T06:06:09.5965958Z ├ ƒ /api/flow/[id]/convert-process-to-subflow
+2026-10-04T06:06:09.5966556Z ├ ƒ /api/flow/[id]/versions
+2026-10-04T06:06:09.5967224Z ├ ƒ /api/flow/[id]/versions/[versionId]
+2026-10-04T06:06:09.5967807Z ├ ƒ /api/flow/assist
+2026-10-04T06:06:09.5968279Z ├ ƒ /api/flow/compile
+2026-10-04T06:06:09.5968754Z ├ ƒ /api/flow/generate
+2026-10-04T06:06:09.5969806Z ├ ƒ /api/flow/generate/visual
+2026-10-04T06:06:09.5970314Z ├ ƒ /api/flow/generator
+2026-10-04T06:06:09.5970669Z ├ ƒ /api/flow/improve
+2026-10-04T06:06:09.5971022Z ├ ƒ /api/flow/model-agent
+2026-10-04T06:06:09.5971366Z ├ ƒ /api/flow/prompt-renderer
+2026-10-04T06:06:09.5971713Z ├ ƒ /api/flow/quick-chat
+2026-10-04T06:06:09.5972073Z ├ ƒ /api/flow/repair
+2026-10-04T06:06:09.5972312Z ├ ƒ /api/git
+2026-10-04T06:06:09.5972534Z ├ ƒ /api/init
+2026-10-04T06:06:09.5972845Z ├ ƒ /api/local-models/capability
+2026-10-04T06:06:09.5973577Z ├ ƒ /api/local-models/pull
+2026-10-04T06:06:09.5973966Z ├ ƒ /api/local-models/suggest
+2026-10-04T06:06:09.5974311Z ├ ƒ /api/mcp-registry
+2026-10-04T06:06:09.5974764Z ├ ƒ /api/mcp-registry/spotlight
+2026-10-04T06:06:09.5975129Z ├ ƒ /api/mcp/app-consent
+2026-10-04T06:06:09.5975626Z ├ ƒ /api/mcp/app-sandbox
+2026-10-04T06:06:09.5975907Z ├ ƒ /api/mcp/assistant
+2026-10-04T06:06:09.5976169Z ├ ƒ /api/mcp/cancel
+2026-10-04T06:06:09.5976434Z ├ ƒ /api/mcp/flujo/authoring
+2026-10-04T06:06:09.5976735Z ├ ƒ /api/mcp/flujo/automation
+2026-10-04T06:06:09.5977023Z ├ ƒ /api/mcp/flujo/flows
+2026-10-04T06:06:09.5977307Z ├ ƒ /api/mcp/flujo/resources
+2026-10-04T06:06:09.5977627Z ├ ƒ /api/mcp/flujo/resources/read
+2026-10-04T06:06:09.5978610Z ├ ƒ /api/mcp/flujo/servers
+2026-10-04T06:06:09.5978912Z ├ ƒ /api/mcp/flujo/skills
+2026-10-04T06:06:09.5979363Z ├ ƒ /api/mcp/flujo/state
+2026-10-04T06:06:09.5979661Z ├ ƒ /api/mcp/flujo/tools
+2026-10-04T06:06:09.5979948Z ├ ƒ /api/mcp/oauth-capability
+2026-10-04T06:06:09.5980239Z ├ ƒ /api/mcp/servers
+2026-10-04T06:06:09.5980507Z ├ ƒ /api/mcp/servers/[name]
+2026-10-04T06:06:09.5980846Z ├ ƒ /api/mcp/servers/[name]/prompts
+2026-10-04T06:06:09.5981211Z ├ ƒ /api/mcp/servers/[name]/prompts/get
+2026-10-04T06:06:09.5981574Z ├ ƒ /api/mcp/servers/[name]/resources
+2026-10-04T06:06:09.5981945Z ├ ƒ /api/mcp/servers/[name]/resources/read
+2026-10-04T06:06:09.5982304Z ├ ƒ /api/mcp/servers/[name]/skills
+2026-10-04T06:06:09.5982670Z ├ ƒ /api/mcp/servers/[name]/skills/approve
+2026-10-04T06:06:09.6003414Z ├ ƒ /api/mcp/servers/[name]/skills/get
+2026-10-04T06:06:09.6004130Z ├ ƒ /api/mcp/servers/[name]/skills/load
+2026-10-04T06:06:09.6004741Z ├ ƒ /api/mcp/servers/[name]/status
+2026-10-04T06:06:09.6005399Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/confirm
+2026-10-04T06:06:09.6006140Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/start
+2026-10-04T06:06:09.6006773Z ├ ƒ /api/mcp/servers/[name]/tools
+2026-10-04T06:06:09.6007389Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]
+2026-10-04T06:06:09.6008082Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]/stream
+2026-10-04T06:06:09.6008701Z ├ ƒ /api/mcp/test-connection
+2026-10-04T06:06:09.6009269Z ├ ƒ /api/mcp/test-connection/stream
+2026-10-04T06:06:09.6009750Z ├ ƒ /api/model
+2026-10-04T06:06:09.6010150Z ├ ƒ /api/model/[id]
+2026-10-04T06:06:09.6010627Z ├ ƒ /api/model/provider
+2026-10-04T06:06:09.6011040Z ├ ƒ /api/model/test
+2026-10-04T06:06:09.6011433Z ├ ƒ /api/network-exposure
+2026-10-04T06:06:09.6011852Z ├ ƒ /api/oauth/callback
+2026-10-04T06:06:09.6012259Z ├ ƒ /api/oauth/initiate
+2026-10-04T06:06:09.6012685Z ├ ƒ /api/oauth/reset
+2026-10-04T06:06:09.6013304Z ├ ƒ /api/packages/build
+2026-10-04T06:06:09.6013829Z ├ ƒ /api/packages/derive-secrets
+2026-10-04T06:06:09.6014349Z ├ ƒ /api/packages/install
+2026-10-04T06:06:09.6014902Z ├ ƒ /api/packages/install/status
+2026-10-04T06:06:09.6015438Z ├ ƒ /api/packages/installed
+2026-10-04T06:06:09.6015924Z ├ ƒ /api/packages/resolve
+2026-10-04T06:06:09.6016443Z ├ ƒ /api/packages/scan-targets
+2026-10-04T06:06:09.6016913Z ├ ƒ /api/packages/search
+2026-10-04T06:06:09.6017350Z ├ ƒ /api/packages/uninstall
+2026-10-04T06:06:09.6017804Z ├ ƒ /api/persona-recovery
+2026-10-04T06:06:09.6018252Z ├ ƒ /api/planned-executions
+2026-10-04T06:06:09.6018779Z ├ ƒ /api/planned-executions/[id]
+2026-10-04T06:06:09.6019374Z ├ ƒ /api/planned-executions/[id]/run
+2026-10-04T06:06:09.6019995Z ├ ƒ /api/planned-executions/[id]/runs
+2026-10-04T06:06:09.6020690Z ├ ƒ /api/planned-executions/[id]/worker-recovery
+2026-10-04T06:06:09.6021402Z ├ ƒ /api/planned-executions/preview-schedule
+2026-10-04T06:06:09.6022059Z ├ ƒ /api/planned-executions/reconcile
+2026-10-04T06:06:09.6022652Z ├ ƒ /api/reference-search/files
+2026-10-04T06:06:09.6023276Z ├ ƒ /api/registry/auth
+2026-10-04T06:06:09.6024005Z ├ ƒ /api/registry/auth/resend
+2026-10-04T06:06:09.6024509Z ├ ƒ /api/registry/auth/reset
+2026-10-04T06:06:09.6025037Z ├ ƒ /api/registry/feedback
+2026-10-04T06:06:09.6025569Z ├ ƒ /api/registry/oauth/callback
+2026-10-04T06:06:09.6026126Z ├ ƒ /api/registry/oauth/initiate
+2026-10-04T06:06:09.6026626Z ├ ƒ /api/registry/packages
+2026-10-04T06:06:09.6027112Z ├ ƒ /api/registry/publish
+2026-10-04T06:06:09.6027578Z ├ ƒ /api/registry/settings
+2026-10-04T06:06:09.6028001Z ├ ƒ /api/restore
+2026-10-04T06:06:09.6028402Z ├ ƒ /api/runs/active
+2026-10-04T06:06:09.6028838Z ├ ƒ /api/runtime-environment
+2026-10-04T06:06:09.6029295Z ├ ƒ /api/setup/ai-cli
+2026-10-04T06:06:09.6029708Z ├ ƒ /api/snapshot/abort
+2026-10-04T06:06:09.6030134Z ├ ƒ /api/snapshot/begin
+2026-10-04T06:06:09.6030558Z ├ ƒ /api/snapshot/download
+2026-10-04T06:06:09.6031005Z ├ ƒ /api/snapshot/finalize
+2026-10-04T06:06:09.6031431Z ├ ƒ /api/snapshot/info
+2026-10-04T06:06:09.6031847Z ├ ƒ /api/snapshot/status
+2026-10-04T06:06:09.6032263Z ├ ƒ /api/snapshots
+2026-10-04T06:06:09.6032691Z ├ ƒ /api/snapshots/cleanup
+2026-10-04T06:06:09.6033427Z ├ ƒ /api/snapshots/open-folder
+2026-10-04T06:06:09.6034071Z ├ ƒ /api/statistics
+2026-10-04T06:06:09.6034456Z ├ ƒ /api/storage
+2026-10-04T06:06:09.6034905Z ├ ƒ /api/telemetry/daily-active
+2026-10-04T06:06:09.6035341Z ├ ƒ /api/tickets
+2026-10-04T06:06:09.6035730Z ├ ƒ /api/tickets/[id]
+2026-10-04T06:06:09.6036151Z ├ ƒ /api/transcription
+2026-10-04T06:06:09.6036543Z ├ ƒ /api/update
+2026-10-04T06:06:09.6036891Z ├ ƒ /api/waves
+2026-10-04T06:06:09.6037281Z ├ ƒ /api/webhooks/[id]
+2026-10-04T06:06:09.6037693Z ├ ƒ /api/worker/status
+2026-10-04T06:06:09.6038099Z ├ ƒ /api/workspaces
+2026-10-04T06:06:09.6038502Z ├ ○ /automation/triggers
+2026-10-04T06:06:09.6038936Z ├ ○ /automation/waves
+2026-10-04T06:06:09.6039321Z ├ ○ /chain-chat
+2026-10-04T06:06:09.6039670Z ├ ○ /chat
+2026-10-04T06:06:09.6040003Z ├ ○ /docs
+2026-10-04T06:06:09.6040332Z ├ ○ /executions
+2026-10-04T06:06:09.6040688Z ├ ○ /flows
+2026-10-04T06:06:09.6041011Z ├ ○ /mcp
+2026-10-04T06:06:09.6041371Z ├ ƒ /mcp-flows
+2026-10-04T06:06:09.6041782Z ├ ƒ /mcp-proxy/[server]
+2026-10-04T06:06:09.6042239Z ├ ○ /meetings
+2026-10-04T06:06:09.6042608Z ├ ƒ /models
+2026-10-04T06:06:09.6043117Z ├ ○ /packages
+2026-10-04T06:06:09.6043485Z ├ ○ /personas
+2026-10-04T06:06:09.6043885Z ├ ƒ /personas/[personaId]
+2026-10-04T06:06:09.6044282Z ├ ○ /roles
+2026-10-04T06:06:09.6044651Z ├ ƒ /roles/[roleId]
+2026-10-04T06:06:09.6045052Z ├ ƒ /roles/[roleId]/edit
+2026-10-04T06:06:09.6045459Z ├ ○ /roles/new
+2026-10-04T06:06:09.6045811Z ├ ○ /settings
+2026-10-04T06:06:09.6046161Z ├ ○ /statistics
+2026-10-04T06:06:09.6046570Z ├ ƒ /v1/chat/completions
+2026-10-04T06:06:09.6047122Z ├ ƒ /v1/chat/conversation-chains
+2026-10-04T06:06:09.6047659Z ├ ƒ /v1/chat/conversations
+2026-10-04T06:06:09.6048198Z ├ ƒ /v1/chat/conversations/[conversationId]
+2026-10-04T06:06:09.6048903Z ├ ƒ /v1/chat/conversations/[conversationId]/breakpoints
+2026-10-04T06:06:09.6049614Z ├ ƒ /v1/chat/conversations/[conversationId]/cancel
+2026-10-04T06:06:09.6050436Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/attach
+2026-10-04T06:06:09.6051306Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/continue
+2026-10-04T06:06:09.6052128Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/state
+2026-10-04T06:06:09.6053088Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/step
+2026-10-04T06:06:09.6053893Z ├ ƒ /v1/chat/conversations/[conversationId]/edit-state
+2026-10-04T06:06:09.6054631Z ├ ƒ /v1/chat/conversations/[conversationId]/events
+2026-10-04T06:06:09.6055308Z ├ ƒ /v1/chat/conversations/[conversationId]/inject
+2026-10-04T06:06:09.6056030Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns
+2026-10-04T06:06:09.6056914Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]
+2026-10-04T06:06:09.6058064Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]
+2026-10-04T06:06:09.6059029Z ├ ƒ /v1/chat/conversations/[conversationId]/recovery
+2026-10-04T06:06:09.6059808Z ├ ƒ /v1/chat/conversations/[conversationId]/resources
+2026-10-04T06:06:09.6060953Z ├ ƒ /v1/chat/conversations/[conversationId]/resources/[resourceId]/content
+2026-10-04T06:06:09.6061786Z ├ ƒ /v1/chat/conversations/[conversationId]/respond
+2026-10-04T06:06:09.6062464Z ├ ƒ /v1/chat/conversations/[conversationId]/revert
+2026-10-04T06:06:09.6063390Z ├ ƒ /v1/chat/conversations/[conversationId]/wire-preview
+2026-10-04T06:06:09.6063996Z ├ ƒ /v1/chat/events
+2026-10-04T06:06:09.6064489Z ├ ƒ /v1/flows/[flowRef]/readiness
+2026-10-04T06:06:09.6064958Z ├ ƒ /v1/meetings
+2026-10-04T06:06:09.6065393Z ├ ƒ /v1/meetings/[meetingId]
+2026-10-04T06:06:09.6065953Z ├ ƒ /v1/meetings/[meetingId]/cancel
+2026-10-04T06:06:09.6066544Z ├ ƒ /v1/meetings/[meetingId]/events
+2026-10-04T06:06:09.6067167Z ├ ƒ /v1/meetings/[meetingId]/interventions
+2026-10-04T06:06:09.6067774Z ├ ƒ /v1/meetings/[meetingId]/private-notes
+2026-10-04T06:06:09.6068356Z ├ ƒ /v1/meetings/[meetingId]/resume
+2026-10-04T06:06:09.6068897Z ├ ƒ /v1/meetings/[meetingId]/start
+2026-10-04T06:06:09.6069354Z ├ ƒ /v1/models
+2026-10-04T06:06:09.6069794Z ├ ƒ /v1/persona-drafts
+2026-10-04T06:06:09.6070312Z ├ ƒ /v1/persona-drafts/[draftId]
+2026-10-04T06:06:09.6070949Z ├ ƒ /v1/personas
+2026-10-04T06:06:09.6071408Z ├ ƒ /v1/personas/[personaId]
+2026-10-04T06:06:09.6072001Z ├ ƒ /v1/personas/[personaId]/app-grants
+2026-10-04T06:06:09.6072699Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]
+2026-10-04T06:06:09.6073651Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]/launch
+2026-10-04T06:06:09.6074455Z ├ ƒ /v1/personas/[personaId]/behaviors/[behaviorId]/activate
+2026-10-04T06:06:09.6075177Z ├ ƒ /v1/personas/[personaId]/composition
+2026-10-04T06:06:09.6075891Z ├ ƒ /v1/personas/[personaId]/composition/behaviors
+2026-10-04T06:06:09.6076617Z ├ ƒ /v1/personas/[personaId]/composition/copy
+2026-10-04T06:06:09.6077332Z ├ ƒ /v1/personas/[personaId]/deletion-preview
+2026-10-04T06:06:09.6078021Z ├ ƒ /v1/personas/[personaId]/execution-preview
+2026-10-04T06:06:09.6078655Z ├ ƒ /v1/personas/[personaId]/export
+2026-10-04T06:06:09.6079269Z ├ ƒ /v1/personas/[personaId]/export-preview
+2026-10-04T06:06:09.6079933Z ├ ƒ /v1/personas/[personaId]/improvements
+2026-10-04T06:06:09.6080703Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/apply
+2026-10-04T06:06:09.6081573Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/promote
+2026-10-04T06:06:09.6082428Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/reject
+2026-10-04T06:06:09.6083657Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/undo
+2026-10-04T06:06:09.6084219Z ├ ƒ /v1/personas/[personaId]/memories
+2026-10-04T06:06:09.6084641Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]
+2026-10-04T06:06:09.6085120Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/activate
+2026-10-04T06:06:09.6085622Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/correct
+2026-10-04T06:06:09.6086103Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/pin
+2026-10-04T06:06:09.6086625Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict
+2026-10-04T06:06:09.6087114Z ├ ƒ /v1/personas/[personaId]/runtime-recovery
+2026-10-04T06:06:09.6087545Z ├ ƒ /v1/personas/[personaId]/storage-stats
+2026-10-04T06:06:09.6087943Z ├ ƒ /v1/personas/[personaId]/work-items
+2026-10-04T06:06:09.6088370Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]
+2026-10-04T06:06:09.6088852Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/assign
+2026-10-04T06:06:09.6089354Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/control
+2026-10-04T06:06:09.6089814Z ├ ƒ /v1/personas/[personaId]/work-items/promote-todo
+2026-10-04T06:06:09.6090177Z ├ ƒ /v1/personas/readiness
+2026-10-04T06:06:09.6090505Z ├ ƒ /v1/personas/settings-options
+2026-10-04T06:06:09.6090820Z ├ ƒ /v1/personas/summary
+2026-10-04T06:06:09.6091077Z ├ ƒ /v1/roles
+2026-10-04T06:06:09.6091325Z ├ ƒ /v1/roles/[roleId]
+2026-10-04T06:06:09.6091634Z ├ ƒ /v1/roles/[roleId]/duplicate
+2026-10-04T06:06:09.6091941Z ├ ƒ /v1/roles/[roleId]/impact
+2026-10-04T06:06:09.6092260Z ├ ƒ /v1/roles/[roleId]/restore
+2026-10-04T06:06:09.6092575Z ├ ƒ /v1/roles/[roleId]/rollback
+2026-10-04T06:06:09.6093141Z ├ ƒ /v1/roles/[roleId]/versions
+2026-10-04T06:06:09.6093727Z ├ ƒ /v1/tasks/[taskId]
+2026-10-04T06:06:09.6093977Z ├ ○ /waves
+2026-10-04T06:06:09.6094198Z └ ○ /world
+2026-10-04T06:06:09.6094316Z 
+2026-10-04T06:06:09.6094322Z 
+2026-10-04T06:06:09.6094463Z ƒ Proxy (Middleware)
+2026-10-04T06:06:09.6094606Z 
+2026-10-04T06:06:09.6094817Z ○  (Static)   prerendered as static content
+2026-10-04T06:06:09.6095215Z ƒ  (Dynamic)  server-rendered on demand
+2026-10-04T06:06:09.6095413Z 
+2026-10-04T06:06:09.7952486Z 
+2026-10-04T06:06:09.7953062Z > flujo-ai@3.46.3 typecheck:mcp
+2026-10-04T06:06:09.7954001Z > npm run typecheck --workspaces --if-present
+2026-10-04T06:06:09.7954440Z 
+2026-10-04T06:06:09.9091441Z 
+2026-10-04T06:06:09.9092038Z > @mario.andreschak/mcp-bash@3.46.3 typecheck
+2026-10-04T06:06:09.9092494Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:06:09.9092735Z 
+2026-10-04T06:06:11.6930019Z 
+2026-10-04T06:06:11.6930690Z > @mario.andreschak/mcp-browser@3.46.3 typecheck
+2026-10-04T06:06:11.6931420Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:06:11.6931794Z 
+2026-10-04T06:06:13.8951305Z 
+2026-10-04T06:06:13.8952627Z > @mario.andreschak/mcp-filesystem@3.46.3 typecheck
+2026-10-04T06:06:13.8953756Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:06:13.8954004Z 
+2026-10-04T06:06:15.6604926Z 
+2026-10-04T06:06:15.6605601Z > @mario.andreschak/mcp-flujo@3.46.3 typecheck
+2026-10-04T06:06:15.6606141Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:06:15.6606348Z 
+2026-10-04T06:06:17.0709397Z 
+2026-10-04T06:06:17.0710016Z > @flujo-ai/mcp-shared@0.1.0 typecheck
+2026-10-04T06:06:17.0710536Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:06:17.0710735Z 
+2026-10-04T06:06:17.9018059Z 
+2026-10-04T06:06:17.9018753Z > flujo-ai@3.46.3 validate:mcp-release
+2026-10-04T06:06:17.9019377Z > node scripts/validate-mcp-release.mjs
+2026-10-04T06:06:17.9019602Z 
+2026-10-04T06:06:24.1823587Z Validated flujo-ai and four standalone MCP packages at 3.46.3.
+2026-10-04T06:06:24.2831288Z 
+2026-10-04T06:06:24.2831853Z > flujo-ai@3.46.3 smoke:mcp-artifacts
+2026-10-04T06:06:24.2832357Z > node scripts/smoke-mcp-artifacts.mjs
+2026-10-04T06:06:24.2832579Z 
+2026-10-04T06:07:11.4378254Z Validated isolated packed MCP binaries and the installed FLUJO proxy.
+2026-10-04T06:07:11.4674499Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-04T06:07:11.4674912Z with:
+2026-10-04T06:07:11.4675126Z   node-version: 22.23.3
+2026-10-04T06:07:11.4675348Z   cache: npm
+2026-10-04T06:07:11.4675547Z   always-auth: false
+2026-10-04T06:07:11.4675769Z   check-latest: false
+2026-10-04T06:07:11.4678206Z   token: ***
+2026-10-04T06:07:11.4678411Z ##[endgroup]
+2026-10-04T06:07:11.6149391Z Found in cache @ /opt/hostedtoolcache/node/22.23.3/x64
+2026-10-04T06:07:11.6154452Z (node:3881) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:07:11.6155951Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:07:11.6157469Z ##[group]Environment details
+2026-10-04T06:07:12.0318598Z node: v22.23.3
+2026-10-04T06:07:12.0319283Z npm: 10.9.9
+2026-10-04T06:07:12.0319819Z yarn: 1.22.22
+2026-10-04T06:07:12.0320686Z ##[endgroup]
+2026-10-04T06:07:12.0345384Z [command]/opt/hostedtoolcache/node/22.23.3/x64/bin/npm config get cache
+2026-10-04T06:07:12.1506653Z /home/runner/.npm
+2026-10-04T06:07:12.2350256Z Cache hit for: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:07:12.2455580Z (node:3881) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:07:12.2973162Z Received 688 of 688 (100.0%), 0.0 MBs/sec
+2026-10-04T06:07:12.2974066Z Cache Size: ~0 MB (688 B)
+2026-10-04T06:07:12.3000656Z [command]/usr/bin/tar -xf /home/runner/work/_temp/0d73a10a-2aca-427e-b3b4-c8e832c7da96/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-04T06:07:12.3050514Z Cache restored successfully
+2026-10-04T06:07:12.3055174Z Cache restored from key: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:07:12.3198068Z ##[group]Run node scripts/verify-ci-node.mjs 22.23.3 --record
+2026-10-04T06:07:12.3198548Z [36;1mnode scripts/verify-ci-node.mjs 22.23.3 --record[0m
+2026-10-04T06:07:12.3267678Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:07:12.3267959Z ##[endgroup]
+2026-10-04T06:07:12.6494934Z {
+2026-10-04T06:07:12.6495355Z   "schemaVersion": 1,
+2026-10-04T06:07:12.6495869Z   "measuredAt": "2026-10-04T06:07:12.626Z",
+2026-10-04T06:07:12.6496245Z   "expectedVersion": "22.23.3",
+2026-10-04T06:07:12.6496528Z   "node": "22.23.3",
+2026-10-04T06:07:12.6496760Z   "libuv": "1.51.0",
+2026-10-04T06:07:12.6496992Z   "platform": "linux",
+2026-10-04T06:07:12.6497242Z   "architecture": "x64",
+2026-10-04T06:07:12.6497527Z   "osRelease": "6.17.0-1022-azure",
+2026-10-04T06:07:12.6498045Z   "executableSha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+2026-10-04T06:07:12.6498956Z   "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+2026-10-04T06:07:12.6499781Z   "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+2026-10-04T06:07:12.6500429Z   "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+2026-10-04T06:07:12.6500930Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+2026-10-04T06:07:12.6501290Z   "sourceTreeDirty": false,
+2026-10-04T06:07:12.6501774Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+2026-10-04T06:07:12.6502536Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+2026-10-04T06:07:12.6503513Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+2026-10-04T06:07:12.6503989Z }
+2026-10-04T06:07:12.6594638Z ##[group]Run set -euo pipefail
+2026-10-04T06:07:12.6595006Z [36;1mset -euo pipefail[0m
+2026-10-04T06:07:12.6595280Z [36;1mnpm ci --include=dev[0m
+2026-10-04T06:07:12.6595539Z [36;1mnpm run build[0m
+2026-10-04T06:07:12.6595791Z [36;1mnpm run typecheck:mcp[0m
+2026-10-04T06:07:12.6596070Z [36;1mnpm run validate:mcp-release[0m
+2026-10-04T06:07:12.6596383Z [36;1mnpm run smoke:mcp-artifacts[0m
+2026-10-04T06:07:12.6658542Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-04T06:07:12.6658931Z ##[endgroup]
+2026-10-04T06:07:25.2968381Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-04T06:07:25.5904833Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-04T06:07:25.6172682Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:07:26.6118305Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-04T06:07:27.5398308Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:07:42.6465403Z 
+2026-10-04T06:07:42.6468468Z added 1341 packages, and audited 1348 packages in 30s
+2026-10-04T06:07:42.6468985Z 
+2026-10-04T06:07:42.6469290Z 447 packages are looking for funding
+2026-10-04T06:07:42.6469814Z   run `npm fund` for details
+2026-10-04T06:07:42.6482633Z 
+2026-10-04T06:07:42.6483303Z found 0 vulnerabilities
+2026-10-04T06:07:42.9589982Z 
+2026-10-04T06:07:42.9590547Z > flujo-ai@3.46.3 build
+2026-10-04T06:07:42.9591724Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-04T06:07:42.9592275Z 
+2026-10-04T06:07:43.0562228Z 
+2026-10-04T06:07:43.0562683Z > flujo-ai@3.46.3 build:mcp
+2026-10-04T06:07:43.0564350Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-04T06:07:43.0565256Z 
+2026-10-04T06:07:43.1748772Z 
+2026-10-04T06:07:43.1750679Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-04T06:07:43.1751371Z > tsc -p tsconfig.json
+2026-10-04T06:07:43.1751673Z 
+2026-10-04T06:07:44.1602693Z 
+2026-10-04T06:07:44.1603449Z > @mario.andreschak/mcp-filesystem@3.46.3 build
+2026-10-04T06:07:44.1604396Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem && node ../embed-runtime.mjs filesystem
+2026-10-04T06:07:44.1604831Z 
+2026-10-04T06:07:46.2920914Z 
+2026-10-04T06:07:46.2921486Z > @mario.andreschak/mcp-bash@3.46.3 build
+2026-10-04T06:07:46.2922193Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash && node ../embed-runtime.mjs bash
+2026-10-04T06:07:46.2922574Z 
+2026-10-04T06:07:48.4332982Z 
+2026-10-04T06:07:48.4333609Z > @mario.andreschak/mcp-browser@3.46.3 build
+2026-10-04T06:07:48.4334312Z > tsc -p tsconfig.json && node ../embed-runtime.mjs browser
+2026-10-04T06:07:48.4334600Z 
+2026-10-04T06:07:50.9873987Z 
+2026-10-04T06:07:50.9874597Z > @mario.andreschak/mcp-flujo@3.46.3 build
+2026-10-04T06:07:50.9875506Z > tsc -p tsconfig.json && node ../embed-runtime.mjs flujo
+2026-10-04T06:07:50.9875801Z 
+2026-10-04T06:07:52.8720629Z ▲ Next.js 16.3.8 (webpack)
+2026-10-04T06:07:52.8937838Z ✓ Running next.config.mjs took 21ms
+2026-10-04T06:07:53.1481611Z - Experiments (use with caution):
+2026-10-04T06:07:53.1483418Z   · proxyClientMaxBodySize: "100mb"
+2026-10-04T06:07:53.1484169Z   ✓ webpackBuildWorker
+2026-10-04T06:07:53.1484835Z   ✓ webpackMemoryOptimizations
+2026-10-04T06:07:53.1485189Z 
+2026-10-04T06:07:53.2269030Z   Creating an optimized production build ...
+2026-10-04T06:07:53.9120997Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:08:59.2499411Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:09:00.3083796Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:09:14.9816427Z ✓ Compiled successfully in 78s
+2026-10-04T06:09:14.9923801Z   Running TypeScript ...
+2026-10-04T06:09:21.3419105Z   Finished TypeScript in 6.4s ...
+2026-10-04T06:09:21.3464071Z   Collecting page data using 3 workers ...
+2026-10-04T06:09:28.2961829Z   Generating static pages using 3 workers (0/122) ...
+2026-10-04T06:09:30.7418433Z   Generating static pages using 3 workers (30/122) 
+2026-10-04T06:09:30.7423017Z   Generating static pages using 3 workers (60/122) 
+2026-10-04T06:09:30.7427346Z   Generating static pages using 3 workers (91/122) 
+2026-10-04T06:09:30.7428879Z ✓ Generating static pages using 3 workers (122/122) in 2.4s
+2026-10-04T06:09:38.1766006Z   Finalizing page optimization ...
+2026-10-04T06:09:38.1793910Z   Collecting build traces ...
+2026-10-04T06:09:50.6668536Z 
+2026-10-04T06:09:50.6714590Z Route (app)
+2026-10-04T06:09:50.6715352Z ┌ ○ /
+2026-10-04T06:09:50.6715821Z ├ ○ /_not-found
+2026-10-04T06:09:50.6716356Z ├ ƒ /api/approvals
+2026-10-04T06:09:50.6716898Z ├ ƒ /api/approvals/[id]
+2026-10-04T06:09:50.6717479Z ├ ƒ /api/automation-map
+2026-10-04T06:09:50.6718058Z ├ ƒ /api/avatar/[voiceAction]
+2026-10-04T06:09:50.6718594Z ├ ƒ /api/avatar/connections
+2026-10-04T06:09:50.6719220Z ├ ƒ /api/avatar/remote/[voiceAction]
+2026-10-04T06:09:50.6719951Z ├ ƒ /api/avatar/remote/availability
+2026-10-04T06:09:50.6720562Z ├ ƒ /api/avatar/voice
+2026-10-04T06:09:50.6721100Z ├ ƒ /api/avatar/work-model
+2026-10-04T06:09:50.6721666Z ├ ƒ /api/avatar/world
+2026-10-04T06:09:50.6722152Z ├ ƒ /api/backup
+2026-10-04T06:09:50.6722623Z ├ ƒ /api/browse
+2026-10-04T06:09:50.6723446Z ├ ƒ /api/bugs/enhance
+2026-10-04T06:09:50.6724035Z ├ ƒ /api/cloud/instance
+2026-10-04T06:09:50.6724982Z ├ ƒ /api/cwd
+2026-10-04T06:09:50.6725471Z ├ ƒ /api/encryption/secure
+2026-10-04T06:09:50.6725981Z ├ ƒ /api/env
+2026-10-04T06:09:50.6726423Z ├ ƒ /api/flow
+2026-10-04T06:09:50.6726883Z ├ ƒ /api/flow/[id]
+2026-10-04T06:09:50.6727546Z ├ ƒ /api/flow/[id]/convert-process-to-subflow
+2026-10-04T06:09:50.6728276Z ├ ƒ /api/flow/[id]/versions
+2026-10-04T06:09:50.6728671Z ├ ƒ /api/flow/[id]/versions/[versionId]
+2026-10-04T06:09:50.6729176Z ├ ƒ /api/flow/assist
+2026-10-04T06:09:50.6729708Z ├ ƒ /api/flow/compile
+2026-10-04T06:09:50.6730227Z ├ ƒ /api/flow/generate
+2026-10-04T06:09:50.6730809Z ├ ƒ /api/flow/generate/visual
+2026-10-04T06:09:50.6731409Z ├ ƒ /api/flow/generator
+2026-10-04T06:09:50.6731951Z ├ ƒ /api/flow/improve
+2026-10-04T06:09:50.6732697Z ├ ƒ /api/flow/model-agent
+2026-10-04T06:09:50.6733534Z ├ ƒ /api/flow/prompt-renderer
+2026-10-04T06:09:50.6734139Z ├ ƒ /api/flow/quick-chat
+2026-10-04T06:09:50.6734721Z ├ ƒ /api/flow/repair
+2026-10-04T06:09:50.6735189Z ├ ƒ /api/git
+2026-10-04T06:09:50.6735623Z ├ ƒ /api/init
+2026-10-04T06:09:50.6736182Z ├ ƒ /api/local-models/capability
+2026-10-04T06:09:50.6736794Z ├ ƒ /api/local-models/pull
+2026-10-04T06:09:50.6737581Z ├ ƒ /api/local-models/suggest
+2026-10-04T06:09:50.6738481Z ├ ƒ /api/mcp-registry
+2026-10-04T06:09:50.6739464Z ├ ƒ /api/mcp-registry/spotlight
+2026-10-04T06:09:50.6740525Z ├ ƒ /api/mcp/app-consent
+2026-10-04T06:09:50.6741125Z ├ ƒ /api/mcp/app-sandbox
+2026-10-04T06:09:50.6741661Z ├ ƒ /api/mcp/assistant
+2026-10-04T06:09:50.6742206Z ├ ƒ /api/mcp/cancel
+2026-10-04T06:09:50.6742749Z ├ ƒ /api/mcp/flujo/authoring
+2026-10-04T06:09:50.6743586Z ├ ƒ /api/mcp/flujo/automation
+2026-10-04T06:09:50.6744214Z ├ ƒ /api/mcp/flujo/flows
+2026-10-04T06:09:50.6744801Z ├ ƒ /api/mcp/flujo/resources
+2026-10-04T06:09:50.6745430Z ├ ƒ /api/mcp/flujo/resources/read
+2026-10-04T06:09:50.6745991Z ├ ƒ /api/mcp/flujo/servers
+2026-10-04T06:09:50.6746606Z ├ ƒ /api/mcp/flujo/skills
+2026-10-04T06:09:50.6747570Z ├ ƒ /api/mcp/flujo/state
+2026-10-04T06:09:50.6747970Z ├ ƒ /api/mcp/flujo/tools
+2026-10-04T06:09:50.6748386Z ├ ƒ /api/mcp/oauth-capability
+2026-10-04T06:09:50.6748786Z ├ ƒ /api/mcp/servers
+2026-10-04T06:09:50.6749516Z ├ ƒ /api/mcp/servers/[name]
+2026-10-04T06:09:50.6750190Z ├ ƒ /api/mcp/servers/[name]/prompts
+2026-10-04T06:09:50.6750953Z ├ ƒ /api/mcp/servers/[name]/prompts/get
+2026-10-04T06:09:50.6751736Z ├ ƒ /api/mcp/servers/[name]/resources
+2026-10-04T06:09:50.6752560Z ├ ƒ /api/mcp/servers/[name]/resources/read
+2026-10-04T06:09:50.6753486Z ├ ƒ /api/mcp/servers/[name]/skills
+2026-10-04T06:09:50.6754107Z ├ ƒ /api/mcp/servers/[name]/skills/approve
+2026-10-04T06:09:50.6754804Z ├ ƒ /api/mcp/servers/[name]/skills/get
+2026-10-04T06:09:50.6755389Z ├ ƒ /api/mcp/servers/[name]/skills/load
+2026-10-04T06:09:50.6755935Z ├ ƒ /api/mcp/servers/[name]/status
+2026-10-04T06:09:50.6756565Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/confirm
+2026-10-04T06:09:50.6757259Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/start
+2026-10-04T06:09:50.6757864Z ├ ƒ /api/mcp/servers/[name]/tools
+2026-10-04T06:09:50.6758516Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]
+2026-10-04T06:09:50.6759212Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]/stream
+2026-10-04T06:09:50.6759807Z ├ ƒ /api/mcp/test-connection
+2026-10-04T06:09:50.6760405Z ├ ƒ /api/mcp/test-connection/stream
+2026-10-04T06:09:50.6760837Z ├ ƒ /api/model
+2026-10-04T06:09:50.6761220Z ├ ƒ /api/model/[id]
+2026-10-04T06:09:50.6761657Z ├ ƒ /api/model/provider
+2026-10-04T06:09:50.6762094Z ├ ƒ /api/model/test
+2026-10-04T06:09:50.6762523Z ├ ƒ /api/network-exposure
+2026-10-04T06:09:50.6763218Z ├ ƒ /api/oauth/callback
+2026-10-04T06:09:50.6763668Z ├ ƒ /api/oauth/initiate
+2026-10-04T06:09:50.6764105Z ├ ƒ /api/oauth/reset
+2026-10-04T06:09:50.6764526Z ├ ƒ /api/packages/build
+2026-10-04T06:09:50.6765372Z ├ ƒ /api/packages/derive-secrets
+2026-10-04T06:09:50.6766122Z ├ ƒ /api/packages/install
+2026-10-04T06:09:50.6766911Z ├ ƒ /api/packages/install/status
+2026-10-04T06:09:50.6767662Z ├ ƒ /api/packages/installed
+2026-10-04T06:09:50.6768499Z ├ ƒ /api/packages/resolve
+2026-10-04T06:09:50.6769272Z ├ ƒ /api/packages/scan-targets
+2026-10-04T06:09:50.6769721Z ├ ƒ /api/packages/search
+2026-10-04T06:09:50.6770151Z ├ ƒ /api/packages/uninstall
+2026-10-04T06:09:50.6770579Z ├ ƒ /api/persona-recovery
+2026-10-04T06:09:50.6771010Z ├ ƒ /api/planned-executions
+2026-10-04T06:09:50.6771491Z ├ ƒ /api/planned-executions/[id]
+2026-10-04T06:09:50.6772023Z ├ ƒ /api/planned-executions/[id]/run
+2026-10-04T06:09:50.6772572Z ├ ƒ /api/planned-executions/[id]/runs
+2026-10-04T06:09:50.6773419Z ├ ƒ /api/planned-executions/[id]/worker-recovery
+2026-10-04T06:09:50.6774063Z ├ ƒ /api/planned-executions/preview-schedule
+2026-10-04T06:09:50.6774638Z ├ ƒ /api/planned-executions/reconcile
+2026-10-04T06:09:50.6775167Z ├ ƒ /api/reference-search/files
+2026-10-04T06:09:50.6775645Z ├ ƒ /api/registry/auth
+2026-10-04T06:09:50.6776094Z ├ ƒ /api/registry/auth/resend
+2026-10-04T06:09:50.6776584Z ├ ƒ /api/registry/auth/reset
+2026-10-04T06:09:50.6777077Z ├ ƒ /api/registry/feedback
+2026-10-04T06:09:50.6777595Z ├ ƒ /api/registry/oauth/callback
+2026-10-04T06:09:50.6778160Z ├ ƒ /api/registry/oauth/initiate
+2026-10-04T06:09:50.6778655Z ├ ƒ /api/registry/packages
+2026-10-04T06:09:50.6779112Z ├ ƒ /api/registry/publish
+2026-10-04T06:09:50.6779554Z ├ ƒ /api/registry/settings
+2026-10-04T06:09:50.6779962Z ├ ƒ /api/restore
+2026-10-04T06:09:50.6780352Z ├ ƒ /api/runs/active
+2026-10-04T06:09:50.6780788Z ├ ƒ /api/runtime-environment
+2026-10-04T06:09:50.6781243Z ├ ƒ /api/setup/ai-cli
+2026-10-04T06:09:50.6781672Z ├ ƒ /api/snapshot/abort
+2026-10-04T06:09:50.6782103Z ├ ƒ /api/snapshot/begin
+2026-10-04T06:09:50.6782538Z ├ ƒ /api/snapshot/download
+2026-10-04T06:09:50.6783168Z ├ ƒ /api/snapshot/finalize
+2026-10-04T06:09:50.6783673Z ├ ƒ /api/snapshot/info
+2026-10-04T06:09:50.6784112Z ├ ƒ /api/snapshot/status
+2026-10-04T06:09:50.6784536Z ├ ƒ /api/snapshots
+2026-10-04T06:09:50.6784968Z ├ ƒ /api/snapshots/cleanup
+2026-10-04T06:09:50.6785474Z ├ ƒ /api/snapshots/open-folder
+2026-10-04T06:09:50.6786241Z ├ ƒ /api/statistics
+2026-10-04T06:09:50.6786655Z ├ ƒ /api/storage
+2026-10-04T06:09:50.6787136Z ├ ƒ /api/telemetry/daily-active
+2026-10-04T06:09:50.6787576Z ├ ƒ /api/tickets
+2026-10-04T06:09:50.6787967Z ├ ƒ /api/tickets/[id]
+2026-10-04T06:09:50.6788384Z ├ ƒ /api/transcription
+2026-10-04T06:09:50.6788781Z ├ ƒ /api/update
+2026-10-04T06:09:50.6789139Z ├ ƒ /api/waves
+2026-10-04T06:09:50.6789532Z ├ ƒ /api/webhooks/[id]
+2026-10-04T06:09:50.6789946Z ├ ƒ /api/worker/status
+2026-10-04T06:09:50.6790361Z ├ ƒ /api/workspaces
+2026-10-04T06:09:50.6790771Z ├ ○ /automation/triggers
+2026-10-04T06:09:50.6791224Z ├ ○ /automation/waves
+2026-10-04T06:09:50.6791620Z ├ ○ /chain-chat
+2026-10-04T06:09:50.6792002Z ├ ○ /chat
+2026-10-04T06:09:50.6792327Z ├ ○ /docs
+2026-10-04T06:09:50.6792664Z ├ ○ /executions
+2026-10-04T06:09:50.6793283Z ├ ○ /flows
+2026-10-04T06:09:50.6793620Z ├ ○ /mcp
+2026-10-04T06:09:50.6793941Z ├ ƒ /mcp-flows
+2026-10-04T06:09:50.6794340Z ├ ƒ /mcp-proxy/[server]
+2026-10-04T06:09:50.6794740Z ├ ○ /meetings
+2026-10-04T06:09:50.6795080Z ├ ƒ /models
+2026-10-04T06:09:50.6795418Z ├ ○ /packages
+2026-10-04T06:09:50.6795780Z ├ ○ /personas
+2026-10-04T06:09:50.6796183Z ├ ƒ /personas/[personaId]
+2026-10-04T06:09:50.6796578Z ├ ○ /roles
+2026-10-04T06:09:50.6796943Z ├ ƒ /roles/[roleId]
+2026-10-04T06:09:50.6797356Z ├ ƒ /roles/[roleId]/edit
+2026-10-04T06:09:50.6797758Z ├ ○ /roles/new
+2026-10-04T06:09:50.6798107Z ├ ○ /settings
+2026-10-04T06:09:50.6798450Z ├ ○ /statistics
+2026-10-04T06:09:50.6798865Z ├ ƒ /v1/chat/completions
+2026-10-04T06:09:50.6799376Z ├ ƒ /v1/chat/conversation-chains
+2026-10-04T06:09:50.6799875Z ├ ƒ /v1/chat/conversations
+2026-10-04T06:09:50.6800447Z ├ ƒ /v1/chat/conversations/[conversationId]
+2026-10-04T06:09:50.6801236Z ├ ƒ /v1/chat/conversations/[conversationId]/breakpoints
+2026-10-04T06:09:50.6801995Z ├ ƒ /v1/chat/conversations/[conversationId]/cancel
+2026-10-04T06:09:50.6802765Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/attach
+2026-10-04T06:09:50.6803852Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/continue
+2026-10-04T06:09:50.6804649Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/state
+2026-10-04T06:09:50.6805626Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/step
+2026-10-04T06:09:50.6806401Z ├ ƒ /v1/chat/conversations/[conversationId]/edit-state
+2026-10-04T06:09:50.6807122Z ├ ƒ /v1/chat/conversations/[conversationId]/events
+2026-10-04T06:09:50.6807833Z ├ ƒ /v1/chat/conversations/[conversationId]/inject
+2026-10-04T06:09:50.6808563Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns
+2026-10-04T06:09:50.6809447Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]
+2026-10-04T06:09:50.6810538Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]
+2026-10-04T06:09:50.6811466Z ├ ƒ /v1/chat/conversations/[conversationId]/recovery
+2026-10-04T06:09:50.6812213Z ├ ƒ /v1/chat/conversations/[conversationId]/resources
+2026-10-04T06:09:50.6813328Z ├ ƒ /v1/chat/conversations/[conversationId]/resources/[resourceId]/content
+2026-10-04T06:09:50.6814271Z ├ ƒ /v1/chat/conversations/[conversationId]/respond
+2026-10-04T06:09:50.6815044Z ├ ƒ /v1/chat/conversations/[conversationId]/revert
+2026-10-04T06:09:50.6815817Z ├ ƒ /v1/chat/conversations/[conversationId]/wire-preview
+2026-10-04T06:09:50.6816443Z ├ ƒ /v1/chat/events
+2026-10-04T06:09:50.6816965Z ├ ƒ /v1/flows/[flowRef]/readiness
+2026-10-04T06:09:50.6817429Z ├ ƒ /v1/meetings
+2026-10-04T06:09:50.6817848Z ├ ƒ /v1/meetings/[meetingId]
+2026-10-04T06:09:50.6818384Z ├ ƒ /v1/meetings/[meetingId]/cancel
+2026-10-04T06:09:50.6818963Z ├ ƒ /v1/meetings/[meetingId]/events
+2026-10-04T06:09:50.6819600Z ├ ƒ /v1/meetings/[meetingId]/interventions
+2026-10-04T06:09:50.6820273Z ├ ƒ /v1/meetings/[meetingId]/private-notes
+2026-10-04T06:09:50.6820907Z ├ ƒ /v1/meetings/[meetingId]/resume
+2026-10-04T06:09:50.6821498Z ├ ƒ /v1/meetings/[meetingId]/start
+2026-10-04T06:09:50.6821980Z ├ ƒ /v1/models
+2026-10-04T06:09:50.6822389Z ├ ƒ /v1/persona-drafts
+2026-10-04T06:09:50.6823168Z ├ ƒ /v1/persona-drafts/[draftId]
+2026-10-04T06:09:50.6823828Z ├ ƒ /v1/personas
+2026-10-04T06:09:50.6824304Z ├ ƒ /v1/personas/[personaId]
+2026-10-04T06:09:50.6824936Z ├ ƒ /v1/personas/[personaId]/app-grants
+2026-10-04T06:09:50.6825646Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]
+2026-10-04T06:09:50.6826462Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]/launch
+2026-10-04T06:09:50.6827322Z ├ ƒ /v1/personas/[personaId]/behaviors/[behaviorId]/activate
+2026-10-04T06:09:50.6828078Z ├ ƒ /v1/personas/[personaId]/composition
+2026-10-04T06:09:50.6828774Z ├ ƒ /v1/personas/[personaId]/composition/behaviors
+2026-10-04T06:09:50.6829440Z ├ ƒ /v1/personas/[personaId]/composition/copy
+2026-10-04T06:09:50.6830087Z ├ ƒ /v1/personas/[personaId]/deletion-preview
+2026-10-04T06:09:50.6830765Z ├ ƒ /v1/personas/[personaId]/execution-preview
+2026-10-04T06:09:50.6831431Z ├ ƒ /v1/personas/[personaId]/export
+2026-10-04T06:09:50.6832074Z ├ ƒ /v1/personas/[personaId]/export-preview
+2026-10-04T06:09:50.6832746Z ├ ƒ /v1/personas/[personaId]/improvements
+2026-10-04T06:09:50.6833891Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/apply
+2026-10-04T06:09:50.6834988Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/promote
+2026-10-04T06:09:50.6835810Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/reject
+2026-10-04T06:09:50.6836630Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/undo
+2026-10-04T06:09:50.6837344Z ├ ƒ /v1/personas/[personaId]/memories
+2026-10-04T06:09:50.6838037Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]
+2026-10-04T06:09:50.6838840Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/activate
+2026-10-04T06:09:50.6839627Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/correct
+2026-10-04T06:09:50.6840369Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/pin
+2026-10-04T06:09:50.6841210Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict
+2026-10-04T06:09:50.6841979Z ├ ƒ /v1/personas/[personaId]/runtime-recovery
+2026-10-04T06:09:50.6842619Z ├ ƒ /v1/personas/[personaId]/storage-stats
+2026-10-04T06:09:50.6843471Z ├ ƒ /v1/personas/[personaId]/work-items
+2026-10-04T06:09:50.6844161Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]
+2026-10-04T06:09:50.6844957Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/assign
+2026-10-04T06:09:50.6845774Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/control
+2026-10-04T06:09:50.6846535Z ├ ƒ /v1/personas/[personaId]/work-items/promote-todo
+2026-10-04T06:09:50.6847117Z ├ ƒ /v1/personas/readiness
+2026-10-04T06:09:50.6847638Z ├ ƒ /v1/personas/settings-options
+2026-10-04T06:09:50.6848138Z ├ ƒ /v1/personas/summary
+2026-10-04T06:09:50.6848541Z ├ ƒ /v1/roles
+2026-10-04T06:09:50.6848928Z ├ ƒ /v1/roles/[roleId]
+2026-10-04T06:09:50.6849425Z ├ ƒ /v1/roles/[roleId]/duplicate
+2026-10-04T06:09:50.6849935Z ├ ƒ /v1/roles/[roleId]/impact
+2026-10-04T06:09:50.6850472Z ├ ƒ /v1/roles/[roleId]/restore
+2026-10-04T06:09:50.6851002Z ├ ƒ /v1/roles/[roleId]/rollback
+2026-10-04T06:09:50.6851534Z ├ ƒ /v1/roles/[roleId]/versions
+2026-10-04T06:09:50.6852002Z ├ ƒ /v1/tasks/[taskId]
+2026-10-04T06:09:50.6852387Z ├ ○ /waves
+2026-10-04T06:09:50.6852746Z └ ○ /world
+2026-10-04T06:09:50.6853110Z 
+2026-10-04T06:09:50.6853135Z 
+2026-10-04T06:09:50.6853365Z ƒ Proxy (Middleware)
+2026-10-04T06:09:50.6853596Z 
+2026-10-04T06:09:50.6853968Z ○  (Static)   prerendered as static content
+2026-10-04T06:09:50.6854604Z ƒ  (Dynamic)  server-rendered on demand
+2026-10-04T06:09:50.6854919Z 
+2026-10-04T06:09:50.8993745Z 
+2026-10-04T06:09:50.8994371Z > flujo-ai@3.46.3 typecheck:mcp
+2026-10-04T06:09:50.8994960Z > npm run typecheck --workspaces --if-present
+2026-10-04T06:09:50.8995216Z 
+2026-10-04T06:09:51.0128355Z 
+2026-10-04T06:09:51.0129107Z > @mario.andreschak/mcp-bash@3.46.3 typecheck
+2026-10-04T06:09:51.0129799Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:09:51.0130017Z 
+2026-10-04T06:09:52.7885439Z 
+2026-10-04T06:09:52.7886135Z > @mario.andreschak/mcp-browser@3.46.3 typecheck
+2026-10-04T06:09:52.7886755Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:09:52.7886957Z 
+2026-10-04T06:09:54.9596706Z 
+2026-10-04T06:09:54.9597695Z > @mario.andreschak/mcp-filesystem@3.46.3 typecheck
+2026-10-04T06:09:54.9598204Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:09:54.9598425Z 
+2026-10-04T06:09:56.7430521Z 
+2026-10-04T06:09:56.7431206Z > @mario.andreschak/mcp-flujo@3.46.3 typecheck
+2026-10-04T06:09:56.7431935Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:09:56.7432266Z 
+2026-10-04T06:09:58.1806919Z 
+2026-10-04T06:09:58.1807513Z > @flujo-ai/mcp-shared@0.1.0 typecheck
+2026-10-04T06:09:58.1807958Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:09:58.1808164Z 
+2026-10-04T06:09:59.0293158Z 
+2026-10-04T06:09:59.0293800Z > flujo-ai@3.46.3 validate:mcp-release
+2026-10-04T06:09:59.0294307Z > node scripts/validate-mcp-release.mjs
+2026-10-04T06:09:59.0294531Z 
+2026-10-04T06:10:05.2844096Z Validated flujo-ai and four standalone MCP packages at 3.46.3.
+2026-10-04T06:10:05.3862480Z 
+2026-10-04T06:10:05.3863298Z > flujo-ai@3.46.3 smoke:mcp-artifacts
+2026-10-04T06:10:05.3863791Z > node scripts/smoke-mcp-artifacts.mjs
+2026-10-04T06:10:05.3864002Z 
+2026-10-04T06:10:46.8286192Z Validated isolated packed MCP binaries and the installed FLUJO proxy.
+2026-10-04T06:10:46.8643547Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-04T06:10:46.8643994Z with:
+2026-10-04T06:10:46.8644217Z   node-version: 24.2.0
+2026-10-04T06:10:46.8644453Z   cache: npm
+2026-10-04T06:10:46.8644666Z   always-auth: false
+2026-10-04T06:10:46.8644896Z   check-latest: false
+2026-10-04T06:10:46.8647331Z   token: ***
+2026-10-04T06:10:46.8647551Z ##[endgroup]
+2026-10-04T06:10:47.0030218Z Attempting to download 24.2.0...
+2026-10-04T06:10:47.0139704Z (node:4782) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:10:47.0141685Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:10:47.5296552Z Acquiring 24.2.0 - x64 from https://github.com/actions/node-versions/releases/download/24.2.0-15549907769/node-24.2.0-linux-x64.tar.gz
+2026-10-04T06:10:47.9402837Z Extracting ...
+2026-10-04T06:10:47.9539110Z [command]/usr/bin/tar xz --strip 1 --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/efaf566e-59b4-40e4-9445-39a4bc13bdaf -f /home/runner/work/_temp/cd99f0a6-dd9c-44ff-bd5a-9e954d66f545
+2026-10-04T06:10:49.1258525Z Adding to the cache ...
+2026-10-04T06:10:51.0788034Z ##[group]Environment details
+2026-10-04T06:10:51.2955248Z node: v24.2.0
+2026-10-04T06:10:51.2955703Z npm: 11.3.0
+2026-10-04T06:10:51.2956054Z yarn: 1.22.22
+2026-10-04T06:10:51.2956741Z ##[endgroup]
+2026-10-04T06:10:51.2978167Z [command]/opt/hostedtoolcache/node/24.2.0/x64/bin/npm config get cache
+2026-10-04T06:10:51.3941601Z /home/runner/.npm
+2026-10-04T06:10:51.4658688Z Cache hit for: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:10:51.4764661Z (node:4782) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:10:51.5371914Z Received 688 of 688 (100.0%), 0.0 MBs/sec
+2026-10-04T06:10:51.5372537Z Cache Size: ~0 MB (688 B)
+2026-10-04T06:10:51.5403262Z [command]/usr/bin/tar -xf /home/runner/work/_temp/29f7aa87-e25e-431d-b469-2b9b83096251/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-04T06:10:51.5468002Z Cache restored successfully
+2026-10-04T06:10:51.5472711Z Cache restored from key: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:10:51.5657001Z ##[group]Run node scripts/verify-ci-node.mjs 24.2.0 --record
+2026-10-04T06:10:51.5657490Z [36;1mnode scripts/verify-ci-node.mjs 24.2.0 --record[0m
+2026-10-04T06:10:51.5720259Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:10:51.5720545Z ##[endgroup]
+2026-10-04T06:10:51.7766254Z {
+2026-10-04T06:10:51.7766623Z   "schemaVersion": 1,
+2026-10-04T06:10:51.7766980Z   "measuredAt": "2026-10-04T06:10:51.753Z",
+2026-10-04T06:10:51.7767342Z   "expectedVersion": "24.2.0",
+2026-10-04T06:10:51.7767616Z   "node": "24.2.0",
+2026-10-04T06:10:51.7767846Z   "libuv": "1.51.0",
+2026-10-04T06:10:51.7768113Z   "platform": "linux",
+2026-10-04T06:10:51.7768358Z   "architecture": "x64",
+2026-10-04T06:10:51.7768641Z   "osRelease": "6.17.0-1022-azure",
+2026-10-04T06:10:51.7769149Z   "executableSha256": "3fe8fd0442065d39c6a875e0672c8aa198c96983bf099c0d3b0ffee70622ddd2",
+2026-10-04T06:10:51.7770001Z   "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+2026-10-04T06:10:51.7770823Z   "signedChecksumsSha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c",
+2026-10-04T06:10:51.7771459Z   "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+2026-10-04T06:10:51.7771993Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+2026-10-04T06:10:51.7772398Z   "sourceTreeDirty": false,
+2026-10-04T06:10:51.7773310Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+2026-10-04T06:10:51.7774108Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+2026-10-04T06:10:51.7775089Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+2026-10-04T06:10:51.7775558Z }
+2026-10-04T06:10:51.7846167Z ##[group]Run set -euo pipefail
+2026-10-04T06:10:51.7846516Z [36;1mset -euo pipefail[0m
+2026-10-04T06:10:51.7846789Z [36;1mnpm ci --include=dev[0m
+2026-10-04T06:10:51.7847051Z [36;1mnpm run build[0m
+2026-10-04T06:10:51.7847299Z [36;1mnpm run typecheck:mcp[0m
+2026-10-04T06:10:51.7847582Z [36;1mnpm run validate:mcp-release[0m
+2026-10-04T06:10:51.7847887Z [36;1mnpm run smoke:mcp-artifacts[0m
+2026-10-04T06:10:51.7910901Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-04T06:10:51.7911274Z ##[endgroup]
+2026-10-04T06:11:04.1901207Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-04T06:11:04.3681811Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-04T06:11:04.7068601Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:11:05.2919477Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-04T06:11:05.9510632Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:11:18.3416145Z 
+2026-10-04T06:11:18.3418906Z added 1414 packages, and audited 1421 packages in 26s
+2026-10-04T06:11:18.3419640Z 
+2026-10-04T06:11:18.3420226Z 472 packages are looking for funding
+2026-10-04T06:11:18.3420789Z   run `npm fund` for details
+2026-10-04T06:11:18.3432163Z 
+2026-10-04T06:11:18.3432433Z found 0 vulnerabilities
+2026-10-04T06:11:18.6692750Z 
+2026-10-04T06:11:18.6693461Z > flujo-ai@3.46.3 build
+2026-10-04T06:11:18.6694534Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-04T06:11:18.6695100Z 
+2026-10-04T06:11:18.7644497Z 
+2026-10-04T06:11:18.7644947Z > flujo-ai@3.46.3 build:mcp
+2026-10-04T06:11:18.7646314Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-04T06:11:18.7647255Z 
+2026-10-04T06:11:18.8794373Z 
+2026-10-04T06:11:18.8794970Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-04T06:11:18.8795652Z > tsc -p tsconfig.json
+2026-10-04T06:11:18.8796010Z 
+2026-10-04T06:11:19.7335217Z 
+2026-10-04T06:11:19.7335921Z > @mario.andreschak/mcp-filesystem@3.46.3 build
+2026-10-04T06:11:19.7336749Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem && node ../embed-runtime.mjs filesystem
+2026-10-04T06:11:19.7337189Z 
+2026-10-04T06:11:21.5276337Z 
+2026-10-04T06:11:21.5276997Z > @mario.andreschak/mcp-bash@3.46.3 build
+2026-10-04T06:11:21.5277841Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash && node ../embed-runtime.mjs bash
+2026-10-04T06:11:21.5278230Z 
+2026-10-04T06:11:23.3245233Z 
+2026-10-04T06:11:23.3245864Z > @mario.andreschak/mcp-browser@3.46.3 build
+2026-10-04T06:11:23.3246450Z > tsc -p tsconfig.json && node ../embed-runtime.mjs browser
+2026-10-04T06:11:23.3246742Z 
+2026-10-04T06:11:25.4691371Z 
+2026-10-04T06:11:25.4692013Z > @mario.andreschak/mcp-flujo@3.46.3 build
+2026-10-04T06:11:25.4692884Z > tsc -p tsconfig.json && node ../embed-runtime.mjs flujo
+2026-10-04T06:11:25.4693617Z 
+2026-10-04T06:11:27.1328535Z ▲ Next.js 16.3.8 (webpack)
+2026-10-04T06:11:27.1576344Z ✓ Running next.config.mjs took 24ms
+2026-10-04T06:11:27.3789345Z - Experiments (use with caution):
+2026-10-04T06:11:27.3790850Z   · proxyClientMaxBodySize: "100mb"
+2026-10-04T06:11:27.3791671Z   ✓ webpackBuildWorker
+2026-10-04T06:11:27.3792261Z   ✓ webpackMemoryOptimizations
+2026-10-04T06:11:27.3792612Z 
+2026-10-04T06:11:27.4350889Z   Creating an optimized production build ...
+2026-10-04T06:11:28.1067280Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:12:26.5524289Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:12:27.6234851Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:12:41.0764610Z ✓ Compiled successfully in 70s
+2026-10-04T06:12:41.0766983Z   Running TypeScript ...
+2026-10-04T06:12:46.8918488Z   Finished TypeScript in 5.8s ...
+2026-10-04T06:12:46.8940068Z   Collecting page data using 3 workers ...
+2026-10-04T06:12:53.6822354Z   Generating static pages using 3 workers (0/122) ...
+2026-10-04T06:12:55.8829522Z   Generating static pages using 3 workers (30/122) 
+2026-10-04T06:12:55.8832059Z   Generating static pages using 3 workers (60/122) 
+2026-10-04T06:12:55.8835323Z   Generating static pages using 3 workers (91/122) 
+2026-10-04T06:12:55.8836565Z ✓ Generating static pages using 3 workers (122/122) in 2.2s
+2026-10-04T06:13:03.2018755Z   Finalizing page optimization ...
+2026-10-04T06:13:03.2021502Z   Collecting build traces ...
+2026-10-04T06:13:14.8922074Z 
+2026-10-04T06:13:14.8968124Z Route (app)
+2026-10-04T06:13:14.8968832Z ┌ ○ /
+2026-10-04T06:13:14.8969240Z ├ ○ /_not-found
+2026-10-04T06:13:14.8969717Z ├ ƒ /api/approvals
+2026-10-04T06:13:14.8970151Z ├ ƒ /api/approvals/[id]
+2026-10-04T06:13:14.8970736Z ├ ƒ /api/automation-map
+2026-10-04T06:13:14.8971344Z ├ ƒ /api/avatar/[voiceAction]
+2026-10-04T06:13:14.8971952Z ├ ƒ /api/avatar/connections
+2026-10-04T06:13:14.8972596Z ├ ƒ /api/avatar/remote/[voiceAction]
+2026-10-04T06:13:14.8973544Z ├ ƒ /api/avatar/remote/availability
+2026-10-04T06:13:14.8974204Z ├ ƒ /api/avatar/voice
+2026-10-04T06:13:14.8974807Z ├ ƒ /api/avatar/work-model
+2026-10-04T06:13:14.8975325Z ├ ƒ /api/avatar/world
+2026-10-04T06:13:14.8975776Z ├ ƒ /api/backup
+2026-10-04T06:13:14.8976038Z ├ ƒ /api/browse
+2026-10-04T06:13:14.8976316Z ├ ƒ /api/bugs/enhance
+2026-10-04T06:13:14.8976595Z ├ ƒ /api/cloud/instance
+2026-10-04T06:13:14.8976852Z ├ ƒ /api/cwd
+2026-10-04T06:13:14.8977119Z ├ ƒ /api/encryption/secure
+2026-10-04T06:13:14.8977382Z ├ ƒ /api/env
+2026-10-04T06:13:14.8977688Z ├ ƒ /api/flow
+2026-10-04T06:13:14.8978155Z ├ ƒ /api/flow/[id]
+2026-10-04T06:13:14.8978719Z ├ ƒ /api/flow/[id]/convert-process-to-subflow
+2026-10-04T06:13:14.8979104Z ├ ƒ /api/flow/[id]/versions
+2026-10-04T06:13:14.8979464Z ├ ƒ /api/flow/[id]/versions/[versionId]
+2026-10-04T06:13:14.8979902Z ├ ƒ /api/flow/assist
+2026-10-04T06:13:14.8980250Z ├ ƒ /api/flow/compile
+2026-10-04T06:13:14.8980526Z ├ ƒ /api/flow/generate
+2026-10-04T06:13:14.8980816Z ├ ƒ /api/flow/generate/visual
+2026-10-04T06:13:14.8981119Z ├ ƒ /api/flow/generator
+2026-10-04T06:13:14.8981400Z ├ ƒ /api/flow/improve
+2026-10-04T06:13:14.8981704Z ├ ƒ /api/flow/model-agent
+2026-10-04T06:13:14.8982006Z ├ ƒ /api/flow/prompt-renderer
+2026-10-04T06:13:14.8982313Z ├ ƒ /api/flow/quick-chat
+2026-10-04T06:13:14.8982775Z ├ ƒ /api/flow/repair
+2026-10-04T06:13:14.8983451Z ├ ƒ /api/git
+2026-10-04T06:13:14.8983788Z ├ ƒ /api/init
+2026-10-04T06:13:14.8984238Z ├ ƒ /api/local-models/capability
+2026-10-04T06:13:14.8984629Z ├ ƒ /api/local-models/pull
+2026-10-04T06:13:14.8984947Z ├ ƒ /api/local-models/suggest
+2026-10-04T06:13:14.8985250Z ├ ƒ /api/mcp-registry
+2026-10-04T06:13:14.8985569Z ├ ƒ /api/mcp-registry/spotlight
+2026-10-04T06:13:14.8985900Z ├ ƒ /api/mcp/app-consent
+2026-10-04T06:13:14.8986200Z ├ ƒ /api/mcp/app-sandbox
+2026-10-04T06:13:14.8986480Z ├ ƒ /api/mcp/assistant
+2026-10-04T06:13:14.8986753Z ├ ƒ /api/mcp/cancel
+2026-10-04T06:13:14.8987032Z ├ ƒ /api/mcp/flujo/authoring
+2026-10-04T06:13:14.8987342Z ├ ƒ /api/mcp/flujo/automation
+2026-10-04T06:13:14.8987646Z ├ ƒ /api/mcp/flujo/flows
+2026-10-04T06:13:14.8987933Z ├ ƒ /api/mcp/flujo/resources
+2026-10-04T06:13:14.8988521Z ├ ƒ /api/mcp/flujo/resources/read
+2026-10-04T06:13:14.8988848Z ├ ƒ /api/mcp/flujo/servers
+2026-10-04T06:13:14.8989135Z ├ ƒ /api/mcp/flujo/skills
+2026-10-04T06:13:14.8989573Z ├ ƒ /api/mcp/flujo/state
+2026-10-04T06:13:14.8989872Z ├ ƒ /api/mcp/flujo/tools
+2026-10-04T06:13:14.8990163Z ├ ƒ /api/mcp/oauth-capability
+2026-10-04T06:13:14.8990455Z ├ ƒ /api/mcp/servers
+2026-10-04T06:13:14.8990733Z ├ ƒ /api/mcp/servers/[name]
+2026-10-04T06:13:14.8991077Z ├ ƒ /api/mcp/servers/[name]/prompts
+2026-10-04T06:13:14.8991454Z ├ ƒ /api/mcp/servers/[name]/prompts/get
+2026-10-04T06:13:14.8991834Z ├ ƒ /api/mcp/servers/[name]/resources
+2026-10-04T06:13:14.8992215Z ├ ƒ /api/mcp/servers/[name]/resources/read
+2026-10-04T06:13:14.8992628Z ├ ƒ /api/mcp/servers/[name]/skills
+2026-10-04T06:13:14.8993394Z ├ ƒ /api/mcp/servers/[name]/skills/approve
+2026-10-04T06:13:14.8994118Z ├ ƒ /api/mcp/servers/[name]/skills/get
+2026-10-04T06:13:14.8994570Z ├ ƒ /api/mcp/servers/[name]/skills/load
+2026-10-04T06:13:14.8995068Z ├ ƒ /api/mcp/servers/[name]/status
+2026-10-04T06:13:14.8995503Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/confirm
+2026-10-04T06:13:14.8996146Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/start
+2026-10-04T06:13:14.8996833Z ├ ƒ /api/mcp/servers/[name]/tools
+2026-10-04T06:13:14.8997243Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]
+2026-10-04T06:13:14.8997911Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]/stream
+2026-10-04T06:13:14.8999017Z ├ ƒ /api/mcp/test-connection
+2026-10-04T06:13:14.9000076Z ├ ƒ /api/mcp/test-connection/stream
+2026-10-04T06:13:14.9000999Z ├ ƒ /api/model
+2026-10-04T06:13:14.9001811Z ├ ƒ /api/model/[id]
+2026-10-04T06:13:14.9002703Z ├ ƒ /api/model/provider
+2026-10-04T06:13:14.9003893Z ├ ƒ /api/model/test
+2026-10-04T06:13:14.9004880Z ├ ƒ /api/network-exposure
+2026-10-04T06:13:14.9005874Z ├ ƒ /api/oauth/callback
+2026-10-04T06:13:14.9006743Z ├ ƒ /api/oauth/initiate
+2026-10-04T06:13:14.9007429Z ├ ƒ /api/oauth/reset
+2026-10-04T06:13:14.9008090Z ├ ƒ /api/packages/build
+2026-10-04T06:13:14.9008723Z ├ ƒ /api/packages/derive-secrets
+2026-10-04T06:13:14.9009377Z ├ ƒ /api/packages/install
+2026-10-04T06:13:14.9009969Z ├ ƒ /api/packages/install/status
+2026-10-04T06:13:14.9010623Z ├ ƒ /api/packages/installed
+2026-10-04T06:13:14.9010952Z ├ ƒ /api/packages/resolve
+2026-10-04T06:13:14.9011318Z ├ ƒ /api/packages/scan-targets
+2026-10-04T06:13:14.9011701Z ├ ƒ /api/packages/search
+2026-10-04T06:13:14.9012070Z ├ ƒ /api/packages/uninstall
+2026-10-04T06:13:14.9012408Z ├ ƒ /api/persona-recovery
+2026-10-04T06:13:14.9012709Z ├ ƒ /api/planned-executions
+2026-10-04T06:13:14.9013332Z ├ ƒ /api/planned-executions/[id]
+2026-10-04T06:13:14.9013738Z ├ ƒ /api/planned-executions/[id]/run
+2026-10-04T06:13:14.9014130Z ├ ƒ /api/planned-executions/[id]/runs
+2026-10-04T06:13:14.9014565Z ├ ƒ /api/planned-executions/[id]/worker-recovery
+2026-10-04T06:13:14.9015010Z ├ ƒ /api/planned-executions/preview-schedule
+2026-10-04T06:13:14.9015406Z ├ ƒ /api/planned-executions/reconcile
+2026-10-04T06:13:14.9015777Z ├ ƒ /api/reference-search/files
+2026-10-04T06:13:14.9016108Z ├ ƒ /api/registry/auth
+2026-10-04T06:13:14.9016403Z ├ ƒ /api/registry/auth/resend
+2026-10-04T06:13:14.9016710Z ├ ƒ /api/registry/auth/reset
+2026-10-04T06:13:14.9035219Z ├ ƒ /api/registry/feedback
+2026-10-04T06:13:14.9035609Z ├ ƒ /api/registry/oauth/callback
+2026-10-04T06:13:14.9035987Z ├ ƒ /api/registry/oauth/initiate
+2026-10-04T06:13:14.9036463Z ├ ƒ /api/registry/packages
+2026-10-04T06:13:14.9037073Z ├ ƒ /api/registry/publish
+2026-10-04T06:13:14.9037474Z ├ ƒ /api/registry/settings
+2026-10-04T06:13:14.9037928Z ├ ƒ /api/restore
+2026-10-04T06:13:14.9038210Z ├ ƒ /api/runs/active
+2026-10-04T06:13:14.9038513Z ├ ƒ /api/runtime-environment
+2026-10-04T06:13:14.9038823Z ├ ƒ /api/setup/ai-cli
+2026-10-04T06:13:14.9039103Z ├ ƒ /api/snapshot/abort
+2026-10-04T06:13:14.9039391Z ├ ƒ /api/snapshot/begin
+2026-10-04T06:13:14.9039674Z ├ ƒ /api/snapshot/download
+2026-10-04T06:13:14.9039977Z ├ ƒ /api/snapshot/finalize
+2026-10-04T06:13:14.9040268Z ├ ƒ /api/snapshot/info
+2026-10-04T06:13:14.9040554Z ├ ƒ /api/snapshot/status
+2026-10-04T06:13:14.9041072Z ├ ƒ /api/snapshots
+2026-10-04T06:13:14.9041348Z ├ ƒ /api/snapshots/cleanup
+2026-10-04T06:13:14.9041682Z ├ ƒ /api/snapshots/open-folder
+2026-10-04T06:13:14.9042106Z ├ ƒ /api/statistics
+2026-10-04T06:13:14.9042359Z ├ ƒ /api/storage
+2026-10-04T06:13:14.9042670Z ├ ƒ /api/telemetry/daily-active
+2026-10-04T06:13:14.9043342Z ├ ƒ /api/tickets
+2026-10-04T06:13:14.9043641Z ├ ƒ /api/tickets/[id]
+2026-10-04T06:13:14.9043922Z ├ ƒ /api/transcription
+2026-10-04T06:13:14.9044186Z ├ ƒ /api/update
+2026-10-04T06:13:14.9044431Z ├ ƒ /api/waves
+2026-10-04T06:13:14.9044689Z ├ ƒ /api/webhooks/[id]
+2026-10-04T06:13:14.9045013Z ├ ƒ /api/worker/status
+2026-10-04T06:13:14.9045290Z ├ ƒ /api/workspaces
+2026-10-04T06:13:14.9045573Z ├ ○ /automation/triggers
+2026-10-04T06:13:14.9045855Z ├ ○ /automation/waves
+2026-10-04T06:13:14.9046108Z ├ ○ /chain-chat
+2026-10-04T06:13:14.9046345Z ├ ○ /chat
+2026-10-04T06:13:14.9046556Z ├ ○ /docs
+2026-10-04T06:13:14.9046773Z ├ ○ /executions
+2026-10-04T06:13:14.9047029Z ├ ○ /flows
+2026-10-04T06:13:14.9047250Z ├ ○ /mcp
+2026-10-04T06:13:14.9047473Z ├ ƒ /mcp-flows
+2026-10-04T06:13:14.9047737Z ├ ƒ /mcp-proxy/[server]
+2026-10-04T06:13:14.9048011Z ├ ○ /meetings
+2026-10-04T06:13:14.9048234Z ├ ƒ /models
+2026-10-04T06:13:14.9048461Z ├ ○ /packages
+2026-10-04T06:13:14.9048689Z ├ ○ /personas
+2026-10-04T06:13:14.9048957Z ├ ƒ /personas/[personaId]
+2026-10-04T06:13:14.9049227Z ├ ○ /roles
+2026-10-04T06:13:14.9049471Z ├ ƒ /roles/[roleId]
+2026-10-04T06:13:14.9049744Z ├ ƒ /roles/[roleId]/edit
+2026-10-04T06:13:14.9050004Z ├ ○ /roles/new
+2026-10-04T06:13:14.9050238Z ├ ○ /settings
+2026-10-04T06:13:14.9050469Z ├ ○ /statistics
+2026-10-04T06:13:14.9050738Z ├ ƒ /v1/chat/completions
+2026-10-04T06:13:14.9051063Z ├ ƒ /v1/chat/conversation-chains
+2026-10-04T06:13:14.9051390Z ├ ƒ /v1/chat/conversations
+2026-10-04T06:13:14.9051757Z ├ ƒ /v1/chat/conversations/[conversationId]
+2026-10-04T06:13:14.9052244Z ├ ƒ /v1/chat/conversations/[conversationId]/breakpoints
+2026-10-04T06:13:14.9052735Z ├ ƒ /v1/chat/conversations/[conversationId]/cancel
+2026-10-04T06:13:14.9053521Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/attach
+2026-10-04T06:13:14.9054045Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/continue
+2026-10-04T06:13:14.9054540Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/state
+2026-10-04T06:13:14.9055016Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/step
+2026-10-04T06:13:14.9055487Z ├ ƒ /v1/chat/conversations/[conversationId]/edit-state
+2026-10-04T06:13:14.9055940Z ├ ƒ /v1/chat/conversations/[conversationId]/events
+2026-10-04T06:13:14.9056385Z ├ ƒ /v1/chat/conversations/[conversationId]/inject
+2026-10-04T06:13:14.9056857Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns
+2026-10-04T06:13:14.9057417Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]
+2026-10-04T06:13:14.9058093Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]
+2026-10-04T06:13:14.9058664Z ├ ƒ /v1/chat/conversations/[conversationId]/recovery
+2026-10-04T06:13:14.9059145Z ├ ƒ /v1/chat/conversations/[conversationId]/resources
+2026-10-04T06:13:14.9059731Z ├ ƒ /v1/chat/conversations/[conversationId]/resources/[resourceId]/content
+2026-10-04T06:13:14.9060291Z ├ ƒ /v1/chat/conversations/[conversationId]/respond
+2026-10-04T06:13:14.9060742Z ├ ƒ /v1/chat/conversations/[conversationId]/revert
+2026-10-04T06:13:14.9061217Z ├ ƒ /v1/chat/conversations/[conversationId]/wire-preview
+2026-10-04T06:13:14.9061595Z ├ ƒ /v1/chat/events
+2026-10-04T06:13:14.9061899Z ├ ƒ /v1/flows/[flowRef]/readiness
+2026-10-04T06:13:14.9062201Z ├ ƒ /v1/meetings
+2026-10-04T06:13:14.9062477Z ├ ƒ /v1/meetings/[meetingId]
+2026-10-04T06:13:14.9062824Z ├ ƒ /v1/meetings/[meetingId]/cancel
+2026-10-04T06:13:14.9063436Z ├ ƒ /v1/meetings/[meetingId]/events
+2026-10-04T06:13:14.9063818Z ├ ƒ /v1/meetings/[meetingId]/interventions
+2026-10-04T06:13:14.9064217Z ├ ƒ /v1/meetings/[meetingId]/private-notes
+2026-10-04T06:13:14.9064591Z ├ ƒ /v1/meetings/[meetingId]/resume
+2026-10-04T06:13:14.9064942Z ├ ƒ /v1/meetings/[meetingId]/start
+2026-10-04T06:13:14.9065428Z ├ ƒ /v1/models
+2026-10-04T06:13:14.9065695Z ├ ƒ /v1/persona-drafts
+2026-10-04T06:13:14.9066029Z ├ ƒ /v1/persona-drafts/[draftId]
+2026-10-04T06:13:14.9066438Z ├ ƒ /v1/personas
+2026-10-04T06:13:14.9066732Z ├ ƒ /v1/personas/[personaId]
+2026-10-04T06:13:14.9067095Z ├ ƒ /v1/personas/[personaId]/app-grants
+2026-10-04T06:13:14.9067529Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]
+2026-10-04T06:13:14.9068014Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]/launch
+2026-10-04T06:13:14.9068528Z ├ ƒ /v1/personas/[personaId]/behaviors/[behaviorId]/activate
+2026-10-04T06:13:14.9068979Z ├ ƒ /v1/personas/[personaId]/composition
+2026-10-04T06:13:14.9069408Z ├ ƒ /v1/personas/[personaId]/composition/behaviors
+2026-10-04T06:13:14.9069842Z ├ ƒ /v1/personas/[personaId]/composition/copy
+2026-10-04T06:13:14.9070269Z ├ ƒ /v1/personas/[personaId]/deletion-preview
+2026-10-04T06:13:14.9070693Z ├ ƒ /v1/personas/[personaId]/execution-preview
+2026-10-04T06:13:14.9071088Z ├ ƒ /v1/personas/[personaId]/export
+2026-10-04T06:13:14.9071526Z ├ ƒ /v1/personas/[personaId]/export-preview
+2026-10-04T06:13:14.9071927Z ├ ƒ /v1/personas/[personaId]/improvements
+2026-10-04T06:13:14.9072416Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/apply
+2026-10-04T06:13:14.9073188Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/promote
+2026-10-04T06:13:14.9073772Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/reject
+2026-10-04T06:13:14.9074304Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/undo
+2026-10-04T06:13:14.9074746Z ├ ƒ /v1/personas/[personaId]/memories
+2026-10-04T06:13:14.9075156Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]
+2026-10-04T06:13:14.9075640Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/activate
+2026-10-04T06:13:14.9076131Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/correct
+2026-10-04T06:13:14.9076600Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/pin
+2026-10-04T06:13:14.9077120Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict
+2026-10-04T06:13:14.9077614Z ├ ƒ /v1/personas/[personaId]/runtime-recovery
+2026-10-04T06:13:14.9078019Z ├ ƒ /v1/personas/[personaId]/storage-stats
+2026-10-04T06:13:14.9078418Z ├ ƒ /v1/personas/[personaId]/work-items
+2026-10-04T06:13:14.9078844Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]
+2026-10-04T06:13:14.9079343Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/assign
+2026-10-04T06:13:14.9079878Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/control
+2026-10-04T06:13:14.9080368Z ├ ƒ /v1/personas/[personaId]/work-items/promote-todo
+2026-10-04T06:13:14.9080746Z ├ ƒ /v1/personas/readiness
+2026-10-04T06:13:14.9081091Z ├ ƒ /v1/personas/settings-options
+2026-10-04T06:13:14.9081421Z ├ ƒ /v1/personas/summary
+2026-10-04T06:13:14.9081686Z ├ ƒ /v1/roles
+2026-10-04T06:13:14.9081943Z ├ ƒ /v1/roles/[roleId]
+2026-10-04T06:13:14.9082255Z ├ ƒ /v1/roles/[roleId]/duplicate
+2026-10-04T06:13:14.9082578Z ├ ƒ /v1/roles/[roleId]/impact
+2026-10-04T06:13:14.9083105Z ├ ƒ /v1/roles/[roleId]/restore
+2026-10-04T06:13:14.9083486Z ├ ƒ /v1/roles/[roleId]/rollback
+2026-10-04T06:13:14.9083821Z ├ ƒ /v1/roles/[roleId]/versions
+2026-10-04T06:13:14.9084111Z ├ ƒ /v1/tasks/[taskId]
+2026-10-04T06:13:14.9084361Z ├ ○ /waves
+2026-10-04T06:13:14.9084587Z └ ○ /world
+2026-10-04T06:13:14.9084701Z 
+2026-10-04T06:13:14.9084708Z 
+2026-10-04T06:13:14.9084850Z ƒ Proxy (Middleware)
+2026-10-04T06:13:14.9085001Z 
+2026-10-04T06:13:14.9085206Z ○  (Static)   prerendered as static content
+2026-10-04T06:13:14.9085612Z ƒ  (Dynamic)  server-rendered on demand
+2026-10-04T06:13:14.9085824Z 
+2026-10-04T06:13:15.1166655Z 
+2026-10-04T06:13:15.1167310Z > flujo-ai@3.46.3 typecheck:mcp
+2026-10-04T06:13:15.1167904Z > npm run typecheck --workspaces --if-present
+2026-10-04T06:13:15.1168169Z 
+2026-10-04T06:13:15.2283617Z 
+2026-10-04T06:13:15.2284221Z > @mario.andreschak/mcp-bash@3.46.3 typecheck
+2026-10-04T06:13:15.2284788Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:13:15.2284995Z 
+2026-10-04T06:13:16.7513599Z 
+2026-10-04T06:13:16.7514310Z > @mario.andreschak/mcp-browser@3.46.3 typecheck
+2026-10-04T06:13:16.7515501Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:13:16.7515833Z 
+2026-10-04T06:13:18.5706872Z 
+2026-10-04T06:13:18.5707762Z > @mario.andreschak/mcp-filesystem@3.46.3 typecheck
+2026-10-04T06:13:18.5708284Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:13:18.5708487Z 
+2026-10-04T06:13:20.0619582Z 
+2026-10-04T06:13:20.0620217Z > @mario.andreschak/mcp-flujo@3.46.3 typecheck
+2026-10-04T06:13:20.0620688Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:13:20.0620898Z 
+2026-10-04T06:13:21.2461773Z 
+2026-10-04T06:13:21.2462430Z > @flujo-ai/mcp-shared@0.1.0 typecheck
+2026-10-04T06:13:21.2463264Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:13:21.2463497Z 
+2026-10-04T06:13:21.9790097Z 
+2026-10-04T06:13:21.9790740Z > flujo-ai@3.46.3 validate:mcp-release
+2026-10-04T06:13:21.9791318Z > node scripts/validate-mcp-release.mjs
+2026-10-04T06:13:21.9791551Z 
+2026-10-04T06:13:27.9277557Z Validated flujo-ai and four standalone MCP packages at 3.46.3.
+2026-10-04T06:13:28.0261654Z 
+2026-10-04T06:13:28.0262311Z > flujo-ai@3.46.3 smoke:mcp-artifacts
+2026-10-04T06:13:28.0263086Z > node scripts/smoke-mcp-artifacts.mjs
+2026-10-04T06:13:28.0263336Z 
+2026-10-04T06:14:05.5479733Z Validated isolated packed MCP binaries and the installed FLUJO proxy.
+2026-10-04T06:14:05.5836339Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-10-04T06:14:05.5836752Z with:
+2026-10-04T06:14:05.5836965Z   node-version: 24.21.0
+2026-10-04T06:14:05.5837202Z   cache: npm
+2026-10-04T06:14:05.5837407Z   always-auth: false
+2026-10-04T06:14:05.5837639Z   check-latest: false
+2026-10-04T06:14:05.5840066Z   token: ***
+2026-10-04T06:14:05.5840282Z ##[endgroup]
+2026-10-04T06:14:05.7294014Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-10-04T06:14:05.7296903Z (node:5649) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:14:05.7298327Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:14:05.7300007Z ##[group]Environment details
+2026-10-04T06:14:06.1542703Z node: v24.21.0
+2026-10-04T06:14:06.1543424Z npm: 11.19.0
+2026-10-04T06:14:06.1543833Z yarn: 1.22.22
+2026-10-04T06:14:06.1544587Z ##[endgroup]
+2026-10-04T06:14:06.1565041Z [command]/opt/hostedtoolcache/node/24.21.0/x64/bin/npm config get cache
+2026-10-04T06:14:06.2698893Z /home/runner/.npm
+2026-10-04T06:14:06.3599210Z Cache hit for: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:14:06.3734703Z (node:5649) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:14:06.4267184Z Received 688 of 688 (100.0%), 0.0 MBs/sec
+2026-10-04T06:14:06.4267875Z Cache Size: ~0 MB (688 B)
+2026-10-04T06:14:06.4295294Z [command]/usr/bin/tar -xf /home/runner/work/_temp/2643edbb-192d-4721-a3e6-59087d1b3077/cache.tzst -P -C /home/runner/work/FLUJO/FLUJO --use-compress-program unzstd
+2026-10-04T06:14:06.4341675Z Cache restored successfully
+2026-10-04T06:14:06.4345767Z Cache restored from key: node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda
+2026-10-04T06:14:06.4456610Z ##[group]Run node scripts/verify-ci-node.mjs 24.21.0 --record
+2026-10-04T06:14:06.4457122Z [36;1mnode scripts/verify-ci-node.mjs 24.21.0 --record[0m
+2026-10-04T06:14:06.4526101Z shell: /usr/bin/bash -e {0}
+2026-10-04T06:14:06.4526398Z ##[endgroup]
+2026-10-04T06:14:06.7509990Z {
+2026-10-04T06:14:06.7510455Z   "schemaVersion": 1,
+2026-10-04T06:14:06.7511039Z   "measuredAt": "2026-10-04T06:14:06.728Z",
+2026-10-04T06:14:06.7511693Z   "expectedVersion": "24.21.0",
+2026-10-04T06:14:06.7512219Z   "node": "24.21.0",
+2026-10-04T06:14:06.7512637Z   "libuv": "1.52.1",
+2026-10-04T06:14:06.7513314Z   "platform": "linux",
+2026-10-04T06:14:06.7513745Z   "architecture": "x64",
+2026-10-04T06:14:06.7514223Z   "osRelease": "6.17.0-1022-azure",
+2026-10-04T06:14:06.7515036Z   "executableSha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+2026-10-04T06:14:06.7515924Z   "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+2026-10-04T06:14:06.7516773Z   "signedChecksumsSha256": "f410428039e2c922a14058df067a4482691c9304a5c01a75847f9f3f2d3307f6",
+2026-10-04T06:14:06.7517403Z   "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+2026-10-04T06:14:06.7517894Z   "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+2026-10-04T06:14:06.7518252Z   "sourceTreeDirty": false,
+2026-10-04T06:14:06.7518739Z   "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+2026-10-04T06:14:06.7519440Z   "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+2026-10-04T06:14:06.7520158Z   "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+2026-10-04T06:14:06.7520626Z }
+2026-10-04T06:14:06.7676784Z ##[group]Run set -euo pipefail
+2026-10-04T06:14:06.7677335Z [36;1mset -euo pipefail[0m
+2026-10-04T06:14:06.7677769Z [36;1mnpm ci --include=dev[0m
+2026-10-04T06:14:06.7678188Z [36;1mnpm run build[0m
+2026-10-04T06:14:06.7678578Z [36;1mnpm run typecheck:mcp[0m
+2026-10-04T06:14:06.7679021Z [36;1mnpm run validate:mcp-release[0m
+2026-10-04T06:14:06.7679501Z [36;1mnpm run smoke:mcp-artifacts[0m
+2026-10-04T06:14:06.7745356Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-04T06:14:06.7745731Z ##[endgroup]
+2026-10-04T06:14:19.4620191Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-10-04T06:14:19.7630508Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+2026-10-04T06:14:19.7912531Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:14:20.8472817Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-10-04T06:14:21.8080439Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-10-04T06:14:37.1120352Z 
+2026-10-04T06:14:37.1121126Z added 1339 packages, and audited 1346 packages in 30s
+2026-10-04T06:14:37.1121627Z 
+2026-10-04T06:14:37.1122313Z 447 packages are looking for funding
+2026-10-04T06:14:37.1123369Z   run `npm fund` for details
+2026-10-04T06:14:37.1139250Z 
+2026-10-04T06:14:37.1139538Z found 0 vulnerabilities
+2026-10-04T06:14:37.1151736Z npm warn install-scripts 3 packages have install scripts not yet covered by allowScripts:
+2026-10-04T06:14:37.1152547Z npm warn install-scripts   @google/genai@2.15.0 (preinstall: echo 'preinstall: no-op')
+2026-10-04T06:14:37.1153526Z npm warn install-scripts   protobufjs@7.6.5 (postinstall: node scripts/postinstall)
+2026-10-04T06:14:37.1154234Z npm warn install-scripts   unrs-resolver@1.12.2 (postinstall: node postinstall.js)
+2026-10-04T06:14:37.1154707Z npm warn install-scripts
+2026-10-04T06:14:37.1155349Z npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+2026-10-04T06:14:37.4282699Z 
+2026-10-04T06:14:37.4283572Z > flujo-ai@3.46.3 build
+2026-10-04T06:14:37.4284750Z > npm run build:mcp && node --require ./scripts/exclude-workspaces-from-next-glob.cjs node_modules/next/dist/bin/next build --webpack
+2026-10-04T06:14:37.4285313Z 
+2026-10-04T06:14:37.5237471Z 
+2026-10-04T06:14:37.5238077Z > flujo-ai@3.46.3 build:mcp
+2026-10-04T06:14:37.5239639Z > npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo
+2026-10-04T06:14:37.5240511Z 
+2026-10-04T06:14:37.6401851Z 
+2026-10-04T06:14:37.6402562Z > @flujo-ai/mcp-shared@0.1.0 build
+2026-10-04T06:14:37.6403614Z > tsc -p tsconfig.json
+2026-10-04T06:14:37.6403871Z 
+2026-10-04T06:14:38.5811612Z 
+2026-10-04T06:14:38.5812387Z > @mario.andreschak/mcp-filesystem@3.46.3 build
+2026-10-04T06:14:38.5813311Z > tsc -p tsconfig.json && node ../embed-shared.mjs filesystem && node ../embed-runtime.mjs filesystem
+2026-10-04T06:14:38.5813749Z 
+2026-10-04T06:14:40.3762514Z 
+2026-10-04T06:14:40.3763722Z > @mario.andreschak/mcp-bash@3.46.3 build
+2026-10-04T06:14:40.3765093Z > tsc -p tsconfig.json && node ../embed-shared.mjs bash && node ../embed-runtime.mjs bash
+2026-10-04T06:14:40.3765877Z 
+2026-10-04T06:14:42.1898880Z 
+2026-10-04T06:14:42.1899554Z > @mario.andreschak/mcp-browser@3.46.3 build
+2026-10-04T06:14:42.1900413Z > tsc -p tsconfig.json && node ../embed-runtime.mjs browser
+2026-10-04T06:14:42.1900884Z 
+2026-10-04T06:14:44.3538452Z 
+2026-10-04T06:14:44.3539284Z > @mario.andreschak/mcp-flujo@3.46.3 build
+2026-10-04T06:14:44.3540166Z > tsc -p tsconfig.json && node ../embed-runtime.mjs flujo
+2026-10-04T06:14:44.3540522Z 
+2026-10-04T06:14:46.0178182Z ▲ Next.js 16.3.8 (webpack)
+2026-10-04T06:14:46.0392058Z ✓ Running next.config.mjs took 21ms
+2026-10-04T06:14:46.2675547Z - Experiments (use with caution):
+2026-10-04T06:14:46.2676780Z   · proxyClientMaxBodySize: "100mb"
+2026-10-04T06:14:46.2677390Z   ✓ webpackBuildWorker
+2026-10-04T06:14:46.2678010Z   ✓ webpackMemoryOptimizations
+2026-10-04T06:14:46.2678349Z 
+2026-10-04T06:14:46.3240516Z   Creating an optimized production build ...
+2026-10-04T06:14:46.9904810Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:15:48.7124820Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:15:49.8143802Z   Using tsconfig file: tsconfig.build.json
+2026-10-04T06:16:02.9444297Z ✓ Compiled successfully in 73s
+2026-10-04T06:16:02.9463714Z   Running TypeScript ...
+2026-10-04T06:16:08.7475211Z   Finished TypeScript in 5.8s ...
+2026-10-04T06:16:08.7499663Z   Collecting page data using 3 workers ...
+2026-10-04T06:16:15.4323480Z   Generating static pages using 3 workers (0/122) ...
+2026-10-04T06:16:17.6799547Z   Generating static pages using 3 workers (30/122) 
+2026-10-04T06:16:17.6802700Z   Generating static pages using 3 workers (60/122) 
+2026-10-04T06:16:17.6806210Z   Generating static pages using 3 workers (91/122) 
+2026-10-04T06:16:17.6807457Z ✓ Generating static pages using 3 workers (122/122) in 2.2s
+2026-10-04T06:16:24.9874056Z   Finalizing page optimization ...
+2026-10-04T06:16:24.9876977Z   Collecting build traces ...
+2026-10-04T06:16:36.0949614Z 
+2026-10-04T06:16:36.0997300Z Route (app)
+2026-10-04T06:16:36.0998066Z ┌ ○ /
+2026-10-04T06:16:36.0998554Z ├ ○ /_not-found
+2026-10-04T06:16:36.0999196Z ├ ƒ /api/approvals
+2026-10-04T06:16:36.0999764Z ├ ƒ /api/approvals/[id]
+2026-10-04T06:16:36.1000362Z ├ ƒ /api/automation-map
+2026-10-04T06:16:36.1000978Z ├ ƒ /api/avatar/[voiceAction]
+2026-10-04T06:16:36.1001559Z ├ ƒ /api/avatar/connections
+2026-10-04T06:16:36.1002266Z ├ ƒ /api/avatar/remote/[voiceAction]
+2026-10-04T06:16:36.1003568Z ├ ƒ /api/avatar/remote/availability
+2026-10-04T06:16:36.1004278Z ├ ƒ /api/avatar/voice
+2026-10-04T06:16:36.1004867Z ├ ƒ /api/avatar/work-model
+2026-10-04T06:16:36.1005453Z ├ ƒ /api/avatar/world
+2026-10-04T06:16:36.1005970Z ├ ƒ /api/backup
+2026-10-04T06:16:36.1006464Z ├ ƒ /api/browse
+2026-10-04T06:16:36.1006913Z ├ ƒ /api/bugs/enhance
+2026-10-04T06:16:36.1007422Z ├ ƒ /api/cloud/instance
+2026-10-04T06:16:36.1007951Z ├ ƒ /api/cwd
+2026-10-04T06:16:36.1008461Z ├ ƒ /api/encryption/secure
+2026-10-04T06:16:36.1009005Z ├ ƒ /api/env
+2026-10-04T06:16:36.1009469Z ├ ƒ /api/flow
+2026-10-04T06:16:36.1009942Z ├ ƒ /api/flow/[id]
+2026-10-04T06:16:36.1010668Z ├ ƒ /api/flow/[id]/convert-process-to-subflow
+2026-10-04T06:16:36.1011645Z ├ ƒ /api/flow/[id]/versions
+2026-10-04T06:16:36.1012041Z ├ ƒ /api/flow/[id]/versions/[versionId]
+2026-10-04T06:16:36.1012504Z ├ ƒ /api/flow/assist
+2026-10-04T06:16:36.1013294Z ├ ƒ /api/flow/compile
+2026-10-04T06:16:36.1013907Z ├ ƒ /api/flow/generate
+2026-10-04T06:16:36.1014509Z ├ ƒ /api/flow/generate/visual
+2026-10-04T06:16:36.1014928Z ├ ƒ /api/flow/generator
+2026-10-04T06:16:36.1015211Z ├ ƒ /api/flow/improve
+2026-10-04T06:16:36.1015497Z ├ ƒ /api/flow/model-agent
+2026-10-04T06:16:36.1015811Z ├ ƒ /api/flow/prompt-renderer
+2026-10-04T06:16:36.1016125Z ├ ƒ /api/flow/quick-chat
+2026-10-04T06:16:36.1016411Z ├ ƒ /api/flow/repair
+2026-10-04T06:16:36.1016667Z ├ ƒ /api/git
+2026-10-04T06:16:36.1016900Z ├ ƒ /api/init
+2026-10-04T06:16:36.1017201Z ├ ƒ /api/local-models/capability
+2026-10-04T06:16:36.1017537Z ├ ƒ /api/local-models/pull
+2026-10-04T06:16:36.1017855Z ├ ƒ /api/local-models/suggest
+2026-10-04T06:16:36.1018152Z ├ ƒ /api/mcp-registry
+2026-10-04T06:16:36.1018709Z ├ ƒ /api/mcp-registry/spotlight
+2026-10-04T06:16:36.1019054Z ├ ƒ /api/mcp/app-consent
+2026-10-04T06:16:36.1019358Z ├ ƒ /api/mcp/app-sandbox
+2026-10-04T06:16:36.1019641Z ├ ƒ /api/mcp/assistant
+2026-10-04T06:16:36.1019919Z ├ ƒ /api/mcp/cancel
+2026-10-04T06:16:36.1020208Z ├ ƒ /api/mcp/flujo/authoring
+2026-10-04T06:16:36.1020530Z ├ ƒ /api/mcp/flujo/automation
+2026-10-04T06:16:36.1020850Z ├ ƒ /api/mcp/flujo/flows
+2026-10-04T06:16:36.1021146Z ├ ƒ /api/mcp/flujo/resources
+2026-10-04T06:16:36.1021533Z ├ ƒ /api/mcp/flujo/resources/read
+2026-10-04T06:16:36.1021861Z ├ ƒ /api/mcp/flujo/servers
+2026-10-04T06:16:36.1022164Z ├ ƒ /api/mcp/flujo/skills
+2026-10-04T06:16:36.1022466Z ├ ƒ /api/mcp/flujo/state
+2026-10-04T06:16:36.1022755Z ├ ƒ /api/mcp/flujo/tools
+2026-10-04T06:16:36.1023517Z ├ ƒ /api/mcp/oauth-capability
+2026-10-04T06:16:36.1024040Z ├ ƒ /api/mcp/servers
+2026-10-04T06:16:36.1024342Z ├ ƒ /api/mcp/servers/[name]
+2026-10-04T06:16:36.1024708Z ├ ƒ /api/mcp/servers/[name]/prompts
+2026-10-04T06:16:36.1025118Z ├ ƒ /api/mcp/servers/[name]/prompts/get
+2026-10-04T06:16:36.1025523Z ├ ƒ /api/mcp/servers/[name]/resources
+2026-10-04T06:16:36.1025915Z ├ ƒ /api/mcp/servers/[name]/resources/read
+2026-10-04T06:16:36.1026297Z ├ ƒ /api/mcp/servers/[name]/skills
+2026-10-04T06:16:36.1026678Z ├ ƒ /api/mcp/servers/[name]/skills/approve
+2026-10-04T06:16:36.1027063Z ├ ƒ /api/mcp/servers/[name]/skills/get
+2026-10-04T06:16:36.1027442Z ├ ƒ /api/mcp/servers/[name]/skills/load
+2026-10-04T06:16:36.1027810Z ├ ƒ /api/mcp/servers/[name]/status
+2026-10-04T06:16:36.1028358Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/confirm
+2026-10-04T06:16:36.1029506Z ├ ƒ /api/mcp/servers/[name]/stdio-oauth/start
+2026-10-04T06:16:36.1031048Z ├ ƒ /api/mcp/servers/[name]/tools
+2026-10-04T06:16:36.1032253Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]
+2026-10-04T06:16:36.1033235Z ├ ƒ /api/mcp/servers/[name]/tools/[toolName]/stream
+2026-10-04T06:16:36.1034086Z ├ ƒ /api/mcp/test-connection
+2026-10-04T06:16:36.1034584Z ├ ƒ /api/mcp/test-connection/stream
+2026-10-04T06:16:36.1035413Z ├ ƒ /api/model
+2026-10-04T06:16:36.1035703Z ├ ƒ /api/model/[id]
+2026-10-04T06:16:36.1036064Z ├ ƒ /api/model/provider
+2026-10-04T06:16:36.1036536Z ├ ƒ /api/model/test
+2026-10-04T06:16:36.1037043Z ├ ƒ /api/network-exposure
+2026-10-04T06:16:36.1037583Z ├ ƒ /api/oauth/callback
+2026-10-04T06:16:36.1037872Z ├ ƒ /api/oauth/initiate
+2026-10-04T06:16:36.1038144Z ├ ƒ /api/oauth/reset
+2026-10-04T06:16:36.1038429Z ├ ƒ /api/packages/build
+2026-10-04T06:16:36.1038754Z ├ ƒ /api/packages/derive-secrets
+2026-10-04T06:16:36.1039083Z ├ ƒ /api/packages/install
+2026-10-04T06:16:36.1039436Z ├ ƒ /api/packages/install/status
+2026-10-04T06:16:36.1039766Z ├ ƒ /api/packages/installed
+2026-10-04T06:16:36.1040074Z ├ ƒ /api/packages/resolve
+2026-10-04T06:16:36.1040403Z ├ ƒ /api/packages/scan-targets
+2026-10-04T06:16:36.1040727Z ├ ƒ /api/packages/search
+2026-10-04T06:16:36.1041030Z ├ ƒ /api/packages/uninstall
+2026-10-04T06:16:36.1041334Z ├ ƒ /api/persona-recovery
+2026-10-04T06:16:36.1041637Z ├ ƒ /api/planned-executions
+2026-10-04T06:16:36.1042008Z ├ ƒ /api/planned-executions/[id]
+2026-10-04T06:16:36.1042380Z ├ ƒ /api/planned-executions/[id]/run
+2026-10-04T06:16:36.1042772Z ├ ƒ /api/planned-executions/[id]/runs
+2026-10-04T06:16:36.1044017Z ├ ƒ /api/planned-executions/[id]/worker-recovery
+2026-10-04T06:16:36.1044754Z ├ ƒ /api/planned-executions/preview-schedule
+2026-10-04T06:16:36.1045236Z ├ ƒ /api/planned-executions/reconcile
+2026-10-04T06:16:36.1045854Z ├ ƒ /api/reference-search/files
+2026-10-04T06:16:36.1046200Z ├ ƒ /api/registry/auth
+2026-10-04T06:16:36.1046509Z ├ ƒ /api/registry/auth/resend
+2026-10-04T06:16:36.1046842Z ├ ƒ /api/registry/auth/reset
+2026-10-04T06:16:36.1047162Z ├ ƒ /api/registry/feedback
+2026-10-04T06:16:36.1047501Z ├ ƒ /api/registry/oauth/callback
+2026-10-04T06:16:36.1047855Z ├ ƒ /api/registry/oauth/initiate
+2026-10-04T06:16:36.1048183Z ├ ƒ /api/registry/packages
+2026-10-04T06:16:36.1048494Z ├ ƒ /api/registry/publish
+2026-10-04T06:16:36.1048797Z ├ ƒ /api/registry/settings
+2026-10-04T06:16:36.1049276Z ├ ƒ /api/restore
+2026-10-04T06:16:36.1049585Z ├ ƒ /api/runs/active
+2026-10-04T06:16:36.1049886Z ├ ƒ /api/runtime-environment
+2026-10-04T06:16:36.1050191Z ├ ƒ /api/setup/ai-cli
+2026-10-04T06:16:36.1050482Z ├ ƒ /api/snapshot/abort
+2026-10-04T06:16:36.1050779Z ├ ƒ /api/snapshot/begin
+2026-10-04T06:16:36.1051076Z ├ ƒ /api/snapshot/download
+2026-10-04T06:16:36.1051388Z ├ ƒ /api/snapshot/finalize
+2026-10-04T06:16:36.1051682Z ├ ƒ /api/snapshot/info
+2026-10-04T06:16:36.1051973Z ├ ƒ /api/snapshot/status
+2026-10-04T06:16:36.1052256Z ├ ƒ /api/snapshots
+2026-10-04T06:16:36.1052545Z ├ ƒ /api/snapshots/cleanup
+2026-10-04T06:16:36.1052881Z ├ ƒ /api/snapshots/open-folder
+2026-10-04T06:16:36.1053492Z ├ ƒ /api/statistics
+2026-10-04T06:16:36.1053754Z ├ ƒ /api/storage
+2026-10-04T06:16:36.1054064Z ├ ƒ /api/telemetry/daily-active
+2026-10-04T06:16:36.1054361Z ├ ƒ /api/tickets
+2026-10-04T06:16:36.1054634Z ├ ƒ /api/tickets/[id]
+2026-10-04T06:16:36.1054918Z ├ ƒ /api/transcription
+2026-10-04T06:16:36.1055187Z ├ ƒ /api/update
+2026-10-04T06:16:36.1055446Z ├ ƒ /api/waves
+2026-10-04T06:16:36.1055725Z ├ ƒ /api/webhooks/[id]
+2026-10-04T06:16:36.1056006Z ├ ƒ /api/worker/status
+2026-10-04T06:16:36.1056277Z ├ ƒ /api/workspaces
+2026-10-04T06:16:36.1056551Z ├ ○ /automation/triggers
+2026-10-04T06:16:36.1056844Z ├ ○ /automation/waves
+2026-10-04T06:16:36.1057105Z ├ ○ /chain-chat
+2026-10-04T06:16:36.1057341Z ├ ○ /chat
+2026-10-04T06:16:36.1057564Z ├ ○ /docs
+2026-10-04T06:16:36.1057792Z ├ ○ /executions
+2026-10-04T06:16:36.1058020Z ├ ○ /flows
+2026-10-04T06:16:36.1058247Z ├ ○ /mcp
+2026-10-04T06:16:36.1058476Z ├ ƒ /mcp-flows
+2026-10-04T06:16:36.1058745Z ├ ƒ /mcp-proxy/[server]
+2026-10-04T06:16:36.1059010Z ├ ○ /meetings
+2026-10-04T06:16:36.1059242Z ├ ƒ /models
+2026-10-04T06:16:36.1059473Z ├ ○ /packages
+2026-10-04T06:16:36.1059753Z ├ ○ /personas
+2026-10-04T06:16:36.1060122Z ├ ƒ /personas/[personaId]
+2026-10-04T06:16:36.1060457Z ├ ○ /roles
+2026-10-04T06:16:36.1060799Z ├ ƒ /roles/[roleId]
+2026-10-04T06:16:36.1061145Z ├ ƒ /roles/[roleId]/edit
+2026-10-04T06:16:36.1061541Z ├ ○ /roles/new
+2026-10-04T06:16:36.1062037Z ├ ○ /settings
+2026-10-04T06:16:36.1062362Z ├ ○ /statistics
+2026-10-04T06:16:36.1062753Z ├ ƒ /v1/chat/completions
+2026-10-04T06:16:36.1063769Z ├ ƒ /v1/chat/conversation-chains
+2026-10-04T06:16:36.1064334Z ├ ƒ /v1/chat/conversations
+2026-10-04T06:16:36.1064895Z ├ ƒ /v1/chat/conversations/[conversationId]
+2026-10-04T06:16:36.1065605Z ├ ƒ /v1/chat/conversations/[conversationId]/breakpoints
+2026-10-04T06:16:36.1066324Z ├ ƒ /v1/chat/conversations/[conversationId]/cancel
+2026-10-04T06:16:36.1067047Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/attach
+2026-10-04T06:16:36.1067815Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/continue
+2026-10-04T06:16:36.1068609Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/state
+2026-10-04T06:16:36.1069392Z ├ ƒ /v1/chat/conversations/[conversationId]/debug/step
+2026-10-04T06:16:36.1070173Z ├ ƒ /v1/chat/conversations/[conversationId]/edit-state
+2026-10-04T06:16:36.1070938Z ├ ƒ /v1/chat/conversations/[conversationId]/events
+2026-10-04T06:16:36.1071715Z ├ ƒ /v1/chat/conversations/[conversationId]/inject
+2026-10-04T06:16:36.1072485Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns
+2026-10-04T06:16:36.1073582Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]
+2026-10-04T06:16:36.1074718Z ├ ƒ /v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/media/[mediaId]
+2026-10-04T06:16:36.1075688Z ├ ƒ /v1/chat/conversations/[conversationId]/recovery
+2026-10-04T06:16:36.1076468Z ├ ƒ /v1/chat/conversations/[conversationId]/resources
+2026-10-04T06:16:36.1077423Z ├ ƒ /v1/chat/conversations/[conversationId]/resources/[resourceId]/content
+2026-10-04T06:16:36.1078319Z ├ ƒ /v1/chat/conversations/[conversationId]/respond
+2026-10-04T06:16:36.1079075Z ├ ƒ /v1/chat/conversations/[conversationId]/revert
+2026-10-04T06:16:36.1079868Z ├ ƒ /v1/chat/conversations/[conversationId]/wire-preview
+2026-10-04T06:16:36.1080480Z ├ ƒ /v1/chat/events
+2026-10-04T06:16:36.1080996Z ├ ƒ /v1/flows/[flowRef]/readiness
+2026-10-04T06:16:36.1081681Z ├ ƒ /v1/meetings
+2026-10-04T06:16:36.1082165Z ├ ƒ /v1/meetings/[meetingId]
+2026-10-04T06:16:36.1082743Z ├ ƒ /v1/meetings/[meetingId]/cancel
+2026-10-04T06:16:36.1083524Z ├ ƒ /v1/meetings/[meetingId]/events
+2026-10-04T06:16:36.1084143Z ├ ƒ /v1/meetings/[meetingId]/interventions
+2026-10-04T06:16:36.1084877Z ├ ƒ /v1/meetings/[meetingId]/private-notes
+2026-10-04T06:16:36.1085577Z ├ ƒ /v1/meetings/[meetingId]/resume
+2026-10-04T06:16:36.1086224Z ├ ƒ /v1/meetings/[meetingId]/start
+2026-10-04T06:16:36.1086702Z ├ ƒ /v1/models
+2026-10-04T06:16:36.1087125Z ├ ƒ /v1/persona-drafts
+2026-10-04T06:16:36.1087655Z ├ ƒ /v1/persona-drafts/[draftId]
+2026-10-04T06:16:36.1088129Z ├ ƒ /v1/personas
+2026-10-04T06:16:36.1088576Z ├ ƒ /v1/personas/[personaId]
+2026-10-04T06:16:36.1089151Z ├ ƒ /v1/personas/[personaId]/app-grants
+2026-10-04T06:16:36.1089867Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]
+2026-10-04T06:16:36.1090677Z ├ ƒ /v1/personas/[personaId]/app-grants/[grantId]/launch
+2026-10-04T06:16:36.1091548Z ├ ƒ /v1/personas/[personaId]/behaviors/[behaviorId]/activate
+2026-10-04T06:16:36.1092305Z ├ ƒ /v1/personas/[personaId]/composition
+2026-10-04T06:16:36.1093460Z ├ ƒ /v1/personas/[personaId]/composition/behaviors
+2026-10-04T06:16:36.1094338Z ├ ƒ /v1/personas/[personaId]/composition/copy
+2026-10-04T06:16:36.1095096Z ├ ƒ /v1/personas/[personaId]/deletion-preview
+2026-10-04T06:16:36.1095788Z ├ ƒ /v1/personas/[personaId]/execution-preview
+2026-10-04T06:16:36.1096452Z ├ ƒ /v1/personas/[personaId]/export
+2026-10-04T06:16:36.1097083Z ├ ƒ /v1/personas/[personaId]/export-preview
+2026-10-04T06:16:36.1097733Z ├ ƒ /v1/personas/[personaId]/improvements
+2026-10-04T06:16:36.1098515Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/apply
+2026-10-04T06:16:36.1099407Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/promote
+2026-10-04T06:16:36.1100313Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/reject
+2026-10-04T06:16:36.1101204Z ├ ƒ /v1/personas/[personaId]/improvements/[proposalId]/undo
+2026-10-04T06:16:36.1101958Z ├ ƒ /v1/personas/[personaId]/memories
+2026-10-04T06:16:36.1102861Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]
+2026-10-04T06:16:36.1103923Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/activate
+2026-10-04T06:16:36.1104828Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/correct
+2026-10-04T06:16:36.1105669Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/pin
+2026-10-04T06:16:36.1106531Z ├ ƒ /v1/personas/[personaId]/memories/[memoryId]/resolve-conflict
+2026-10-04T06:16:36.1107398Z ├ ƒ /v1/personas/[personaId]/runtime-recovery
+2026-10-04T06:16:36.1108135Z ├ ƒ /v1/personas/[personaId]/storage-stats
+2026-10-04T06:16:36.1108767Z ├ ƒ /v1/personas/[personaId]/work-items
+2026-10-04T06:16:36.1109494Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]
+2026-10-04T06:16:36.1110337Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/assign
+2026-10-04T06:16:36.1111269Z ├ ƒ /v1/personas/[personaId]/work-items/[workItemId]/control
+2026-10-04T06:16:36.1112142Z ├ ƒ /v1/personas/[personaId]/work-items/promote-todo
+2026-10-04T06:16:36.1112835Z ├ ƒ /v1/personas/readiness
+2026-10-04T06:16:36.1113597Z ├ ƒ /v1/personas/settings-options
+2026-10-04T06:16:36.1114166Z ├ ƒ /v1/personas/summary
+2026-10-04T06:16:36.1114621Z ├ ƒ /v1/roles
+2026-10-04T06:16:36.1115066Z ├ ƒ /v1/roles/[roleId]
+2026-10-04T06:16:36.1115620Z ├ ƒ /v1/roles/[roleId]/duplicate
+2026-10-04T06:16:36.1116184Z ├ ƒ /v1/roles/[roleId]/impact
+2026-10-04T06:16:36.1116771Z ├ ƒ /v1/roles/[roleId]/restore
+2026-10-04T06:16:36.1117365Z ├ ƒ /v1/roles/[roleId]/rollback
+2026-10-04T06:16:36.1117952Z ├ ƒ /v1/roles/[roleId]/versions
+2026-10-04T06:16:36.1118448Z ├ ƒ /v1/tasks/[taskId]
+2026-10-04T06:16:36.1118852Z ├ ○ /waves
+2026-10-04T06:16:36.1119200Z └ ○ /world
+2026-10-04T06:16:36.1119379Z 
+2026-10-04T06:16:36.1119388Z 
+2026-10-04T06:16:36.1119611Z ƒ Proxy (Middleware)
+2026-10-04T06:16:36.1119840Z 
+2026-10-04T06:16:36.1120179Z ○  (Static)   prerendered as static content
+2026-10-04T06:16:36.1120845Z ƒ  (Dynamic)  server-rendered on demand
+2026-10-04T06:16:36.1121199Z 
+2026-10-04T06:16:36.2859368Z 
+2026-10-04T06:16:36.2859997Z > flujo-ai@3.46.3 typecheck:mcp
+2026-10-04T06:16:36.2860798Z > npm run typecheck --workspaces --if-present
+2026-10-04T06:16:36.2861250Z 
+2026-10-04T06:16:36.4068652Z 
+2026-10-04T06:16:36.4069319Z > @mario.andreschak/mcp-bash@3.46.3 typecheck
+2026-10-04T06:16:36.4069802Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:16:36.4070011Z 
+2026-10-04T06:16:37.9355195Z 
+2026-10-04T06:16:37.9355937Z > @mario.andreschak/mcp-browser@3.46.3 typecheck
+2026-10-04T06:16:37.9356709Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:16:37.9357042Z 
+2026-10-04T06:16:39.7712438Z 
+2026-10-04T06:16:39.7713393Z > @mario.andreschak/mcp-filesystem@3.46.3 typecheck
+2026-10-04T06:16:39.7713948Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:16:39.7714156Z 
+2026-10-04T06:16:41.2927825Z 
+2026-10-04T06:16:41.2928527Z > @mario.andreschak/mcp-flujo@3.46.3 typecheck
+2026-10-04T06:16:41.2929068Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:16:41.2929278Z 
+2026-10-04T06:16:42.5035830Z 
+2026-10-04T06:16:42.5036522Z > @flujo-ai/mcp-shared@0.1.0 typecheck
+2026-10-04T06:16:42.5037118Z > tsc -p tsconfig.json --noEmit
+2026-10-04T06:16:42.5037326Z 
+2026-10-04T06:16:43.2429962Z 
+2026-10-04T06:16:43.2430718Z > flujo-ai@3.46.3 validate:mcp-release
+2026-10-04T06:16:43.2431217Z > node scripts/validate-mcp-release.mjs
+2026-10-04T06:16:43.2431458Z 
+2026-10-04T06:16:49.1701459Z Validated flujo-ai and four standalone MCP packages at 3.46.3.
+2026-10-04T06:16:49.2745530Z 
+2026-10-04T06:16:49.2746134Z > flujo-ai@3.46.3 smoke:mcp-artifacts
+2026-10-04T06:16:49.2746597Z > node scripts/smoke-mcp-artifacts.mjs
+2026-10-04T06:16:49.2746820Z 
+2026-10-04T06:17:29.8448960Z Validated isolated packed MCP binaries and the installed FLUJO proxy.
+2026-10-04T06:17:29.8892601Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+2026-10-04T06:17:29.8893347Z with:
+2026-10-04T06:17:29.8893799Z   name: ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1
+2026-10-04T06:17:29.8894327Z   path: ci-node-runtime/
+2026-10-04T06:17:29.8894821Z   if-no-files-found: error
+2026-10-04T06:17:29.8895083Z   retention-days: 30
+2026-10-04T06:17:29.8895318Z   compression-level: 6
+2026-10-04T06:17:29.8895559Z   overwrite: false
+2026-10-04T06:17:29.8895802Z   include-hidden-files: false
+2026-10-04T06:17:29.8896067Z ##[endgroup]
+2026-10-04T06:17:30.0559507Z (node:6484) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:30.0561073Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:30.0632099Z With the provided path, there will be 5 files uploaded
+2026-10-04T06:17:30.0637966Z Artifact name is valid!
+2026-10-04T06:17:30.0638966Z Root directory input is valid!
+2026-10-04T06:17:30.2804517Z Beginning upload of artifact content to blob storage
+2026-10-04T06:17:30.3053400Z (node:6484) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-04T06:17:30.3510225Z Uploaded bytes 3570
+2026-10-04T06:17:30.3703802Z Finished uploading artifact content to blob storage!
+2026-10-04T06:17:30.3705441Z SHA256 digest of uploaded artifact zip is 21185204a81c5b6e1c553861b34d0555c1970de080a43a588f36818dc3d0d834
+2026-10-04T06:17:30.3707023Z Finalizing artifact upload
+2026-10-04T06:17:30.6424859Z Artifact ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1.zip successfully finalized. Artifact ID 11294649782
+2026-10-04T06:17:30.6427726Z Artifact ci-node-runtime-ubuntu-latest-a5d11370e7a52d6ac92c82accb91fbce87784dd6-37181494470-1 has been successfully uploaded! Final size is 3570 bytes. Artifact ID is 11294649782
+2026-10-04T06:17:30.6432789Z Artifact download URL: https://github.com/mario-andreschak/FLUJO/actions/runs/37181494470/artifacts/11294649782
+2026-10-04T06:17:30.6604787Z Post job cleanup.
+2026-10-04T06:17:30.7840957Z (node:6498) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:30.7842578Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:30.7845527Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda, not saving cache.
+2026-10-04T06:17:30.7954426Z Post job cleanup.
+2026-10-04T06:17:30.9228660Z (node:6506) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:30.9230201Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:30.9233813Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda, not saving cache.
+2026-10-04T06:17:30.9375775Z Post job cleanup.
+2026-10-04T06:17:31.0667748Z (node:6514) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:31.0668637Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:31.0672058Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda, not saving cache.
+2026-10-04T06:17:31.0787422Z Post job cleanup.
+2026-10-04T06:17:31.2076013Z (node:6522) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:31.2077457Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:31.2079692Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda, not saving cache.
+2026-10-04T06:17:31.2207063Z Post job cleanup.
+2026-10-04T06:17:31.3445931Z (node:6530) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-04T06:17:31.3446820Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-04T06:17:31.3450377Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-5b43c3ab14e6f1af522c121d7e3ba89b8d74216f48a824dfdcaca4736d38ddda, not saving cache.
+2026-10-04T06:17:31.3572244Z Post job cleanup.
+2026-10-04T06:17:31.4465349Z [command]/usr/bin/git version
+2026-10-04T06:17:31.4510210Z git version 2.55.0
+2026-10-04T06:17:31.4553714Z Temporarily overriding HOME='/home/runner/work/_temp/3700ccf4-4f54-4583-9e9b-04ff0be7811a' before making global git config changes
+2026-10-04T06:17:31.4555248Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-04T06:17:31.4560053Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/FLUJO/FLUJO
+2026-10-04T06:17:31.4598003Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-04T06:17:31.4634484Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-04T06:17:31.4896652Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-04T06:17:31.4932517Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-04T06:17:31.5189263Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-04T06:17:31.5227232Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-04T06:17:31.5642190Z Cleaning up orphan processes
+2026-10-04T06:17:31.5994527Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020, actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

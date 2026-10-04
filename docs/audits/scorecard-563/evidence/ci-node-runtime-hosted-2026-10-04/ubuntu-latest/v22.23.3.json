@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-04T06:07:12.626Z",
+  "expectedVersion": "22.23.3",
+  "node": "22.23.3",
+  "libuv": "1.51.0",
+  "platform": "linux",
+  "architecture": "x64",
+  "osRelease": "6.17.0-1022-azure",
+  "executableSha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+  "qualificationScope": "official CI runtime binary identity; installed application acceptance requires separate checks",
+  "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+  "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+  "sourceSha": "a5d11370e7a52d6ac92c82accb91fbce87784dd6",
+  "sourceTreeDirty": false,
+  "verifierSha256": "e35b1d6bcd0ef8ce866a799640c07a91f016c65a3d43c388f7a924d7e6248d82",
+  "binaryManifestSha256": "495904f615eda8adef96154b097c096d79663dd9b430b7d21bfba4fd3e0f7fbc",
+  "canonicalGuardSha256": "469821f2f9b8e32749c8c11904f1f1ed5be6312bdddd1fd3be859002265a07a3"
+}

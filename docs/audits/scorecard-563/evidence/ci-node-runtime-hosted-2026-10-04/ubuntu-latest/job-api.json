@@ -1,0 +1,244 @@
+{
+  "id": 111374822169,
+  "run_id": 37181494470,
+  "workflow_name": "verify",
+  "head_branch": "codex/ci-supported-node-runtimes-20261004",
+  "run_url": "https://api.github.com/repos/mario-andreschak/FLUJO/actions/runs/37181494470",
+  "run_attempt": 1,
+  "node_id": "CR_kwDOOAFVPs8AAAAZ7nTrGQ",
+  "head_sha": "9c7b567bc96fbe34dc970e4a18b34ffe178f2323",
+  "url": "https://api.github.com/repos/mario-andreschak/FLUJO/actions/jobs/111374822169",
+  "html_url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37181494470/job/111374822169",
+  "status": "completed",
+  "conclusion": "success",
+  "created_at": "2026-10-04T06:00:05Z",
+  "started_at": "2026-10-04T06:00:07Z",
+  "completed_at": "2026-10-04T06:17:34Z",
+  "name": "Production build (ubuntu-latest)",
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 1,
+      "started_at": "2026-10-04T06:00:07Z",
+      "completed_at": "2026-10-04T06:00:08Z"
+    },
+    {
+      "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 2,
+      "started_at": "2026-10-04T06:00:08Z",
+      "completed_at": "2026-10-04T06:00:11Z"
+    },
+    {
+      "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 3,
+      "started_at": "2026-10-04T06:00:11Z",
+      "completed_at": "2026-10-04T06:00:16Z"
+    },
+    {
+      "name": "Verify exact official Node runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 4,
+      "started_at": "2026-10-04T06:00:16Z",
+      "completed_at": "2026-10-04T06:00:16Z"
+    },
+    {
+      "name": "Run npm ci --include=dev",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 5,
+      "started_at": "2026-10-04T06:00:16Z",
+      "completed_at": "2026-10-04T06:00:52Z"
+    },
+    {
+      "name": "Verify tracing against a populated runtime directory",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 6,
+      "started_at": "2026-10-04T06:00:52Z",
+      "completed_at": "2026-10-04T06:00:53Z"
+    },
+    {
+      "name": "Build with the ordinary command and default Node heap",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 7,
+      "started_at": "2026-10-04T06:00:53Z",
+      "completed_at": "2026-10-04T06:03:30Z"
+    },
+    {
+      "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 8,
+      "started_at": "2026-10-04T06:03:30Z",
+      "completed_at": "2026-10-04T06:03:35Z"
+    },
+    {
+      "name": "Verify exact official Node runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 9,
+      "started_at": "2026-10-04T06:03:35Z",
+      "completed_at": "2026-10-04T06:03:35Z"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 22.17.0",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 10,
+      "started_at": "2026-10-04T06:03:35Z",
+      "completed_at": "2026-10-04T06:07:11Z"
+    },
+    {
+      "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 11,
+      "started_at": "2026-10-04T06:07:11Z",
+      "completed_at": "2026-10-04T06:07:12Z"
+    },
+    {
+      "name": "Verify exact official Node runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 12,
+      "started_at": "2026-10-04T06:07:12Z",
+      "completed_at": "2026-10-04T06:07:12Z"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 22.23.3",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 13,
+      "started_at": "2026-10-04T06:07:12Z",
+      "completed_at": "2026-10-04T06:10:46Z"
+    },
+    {
+      "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 14,
+      "started_at": "2026-10-04T06:10:46Z",
+      "completed_at": "2026-10-04T06:10:51Z"
+    },
+    {
+      "name": "Verify exact official Node runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 15,
+      "started_at": "2026-10-04T06:10:51Z",
+      "completed_at": "2026-10-04T06:10:51Z"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 24.2.0",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 16,
+      "started_at": "2026-10-04T06:10:51Z",
+      "completed_at": "2026-10-04T06:14:05Z"
+    },
+    {
+      "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 17,
+      "started_at": "2026-10-04T06:14:05Z",
+      "completed_at": "2026-10-04T06:14:06Z"
+    },
+    {
+      "name": "Verify exact official Node runtime",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 18,
+      "started_at": "2026-10-04T06:14:06Z",
+      "completed_at": "2026-10-04T06:14:06Z"
+    },
+    {
+      "name": "Qualify installed app and packed MCP packages on Node 24.21.0",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 19,
+      "started_at": "2026-10-04T06:14:06Z",
+      "completed_at": "2026-10-04T06:17:29Z"
+    },
+    {
+      "name": "Retain exact runtime measurements",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 20,
+      "started_at": "2026-10-04T06:17:29Z",
+      "completed_at": "2026-10-04T06:17:30Z"
+    },
+    {
+      "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 35,
+      "started_at": "2026-10-04T06:17:30Z",
+      "completed_at": "2026-10-04T06:17:30Z"
+    },
+    {
+      "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 36,
+      "started_at": "2026-10-04T06:17:30Z",
+      "completed_at": "2026-10-04T06:17:30Z"
+    },
+    {
+      "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 37,
+      "started_at": "2026-10-04T06:17:30Z",
+      "completed_at": "2026-10-04T06:17:31Z"
+    },
+    {
+      "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 38,
+      "started_at": "2026-10-04T06:17:31Z",
+      "completed_at": "2026-10-04T06:17:31Z"
+    },
+    {
+      "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 39,
+      "started_at": "2026-10-04T06:17:31Z",
+      "completed_at": "2026-10-04T06:17:31Z"
+    },
+    {
+      "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 40,
+      "started_at": "2026-10-04T06:17:31Z",
+      "completed_at": "2026-10-04T06:17:31Z"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 41,
+      "started_at": "2026-10-04T06:17:31Z",
+      "completed_at": "2026-10-04T06:17:31Z"
+    }
+  ],
+  "check_run_url": "https://api.github.com/repos/mario-andreschak/FLUJO/check-runs/111374822169",
+  "labels": [
+    "ubuntu-latest"
+  ],
+  "runner_id": 1000010166,
+  "runner_name": "GitHub Actions 1000010166",
+  "runner_group_id": 0,
+  "runner_group_name": "GitHub Actions"
+}
