@@ -1,7 +1,9 @@
 import { promises as fs } from 'node:fs';
+import { execFile } from 'node:child_process';
 import type { FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 jest.mock('patchright', () => ({ chromium: { launch: jest.fn(), launchPersistentContext: jest.fn() } }));
 jest.mock('../../mcp-servers/browser/src/recording', () => ({
@@ -18,6 +20,7 @@ const mockedStop = stopRecording as jest.MockedFunction<typeof stopRecording>;
 const savedProfile = process.env.FLUJO_BROWSER_PROFILE_DIR;
 const savedExtensions = process.env.FLUJO_BROWSER_EXTENSION_DIRS;
 const savedInlineLimit = process.env.FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES;
+const execFileAsync = promisify(execFile);
 
 describe('browser file reads use the checked descriptor', () => {
   let parent: string;
@@ -184,4 +187,14 @@ describe('browser file reads use the checked descriptor', () => {
     await expect(readBoundedRegularFile(file, 8)).rejects.toBe(readError);
     expect(closed).toBe(true);
   });
+
+  const posixIt = process.platform === 'win32' ? it.skip : it;
+  posixIt('rejects an actual FIFO through the compiled package (POSIX)', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      '--test', path.resolve('mcp-servers/browser/scripts/bounded-file-read.test.mjs'),
+    ], { timeout: 12000 });
+    expect(stdout).toContain('"kind":"real-fifo-admission"');
+    expect(stdout).toContain('# pass 1');
+    expect(stdout).toContain('# skipped 0');
+  }, 15000);
 });
