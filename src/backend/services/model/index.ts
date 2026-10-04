@@ -693,6 +693,24 @@ class ModelService {
       const models = await this.loadModels();
       const needle = modelIdentifier.trim().toLowerCase();
 
+      // Public identifiers are aliases, not model IDs. A display name can
+      // shadow another model's technical name, so check every matching alias
+      // before display-name precedence can select a locally credentialed model.
+      if (needle && models.some(m => isOwnerCredentialBoundModel(m) &&
+          ((m.displayName?.trim().toLowerCase() || '') === needle ||
+           (m.name || '').trim().toLowerCase() === needle))) {
+        return {
+          success: false,
+          error: {
+            message: 'Owner-bound models require an authorized model-step transport.',
+            type: 'permission_error',
+            code: 'owner_model_step_required',
+            param: 'model',
+          },
+          statusCode: 403,
+        };
+      }
+
       let candidates = modelIdentifier.startsWith('policy/')
         ? models.filter(m => m.fallbackPolicy && m.name.toLowerCase() === needle)
         : models.filter(m => (m.displayName?.trim().toLowerCase() || '') === needle);

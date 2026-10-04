@@ -45,6 +45,7 @@ jest.mock('@/backend/services/model/adapters', () => ({
 }));
 
 import { modelService } from '@/backend/services/model';
+import { resolveAndDecryptApiKey } from '@/backend/services/model/encryption';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { GET as listModels } from '@/app/v1/models/route';
 import { StorageKey } from '@/shared/types/storage';
@@ -222,6 +223,35 @@ describe('ModelService.generateChatCompletion — resolution', () => {
     expect(result).toMatchObject({ success: false, statusCode: 403,
       error: { code: 'owner_model_step_required' } });
     expect(mockCreateCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('refuses a bound technical-name/display-name collision before local key resolution (bound first: %s)', async boundFirst => {
+    const bound = modelFixture({ id: 'bound', displayName: undefined, ApiKey: '', ownerCredentialBinding: ownerBinding });
+    const ordinary = modelFixture({ id: 'ordinary', name: 'other-model', displayName: 'gpt-test' });
+    store[StorageKey.MODELS] = boundFirst ? [bound, ordinary] : [ordinary, bound];
+    (resolveAndDecryptApiKey as jest.Mock).mockClear();
+
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'gpt-test', messages });
+
+    expect(result).toMatchObject({ success: false, statusCode: 403,
+      error: { code: 'owner_model_step_required' } });
+    expect(resolveAndDecryptApiKey).not.toHaveBeenCalled();
+    expect(mockCreateCompletion).not.toHaveBeenCalled();
+  });
+
+  it('keeps a distinct ordinary display alias usable beside a bound model', async () => {
+    store[StorageKey.MODELS] = [
+      modelFixture({ id: 'bound', displayName: undefined, ApiKey: '', ownerCredentialBinding: ownerBinding }),
+      modelFixture({ id: 'ordinary', name: 'other-model', displayName: 'Ordinary' }),
+    ];
+    mockCreateCompletion.mockResolvedValue({ completion: completionFixture() });
+
+    const result = await modelService.generateChatCompletion({ modelIdentifier: 'Ordinary', messages });
+
+    expect(result.success).toBe(true);
+    expect(mockCreateCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.objectContaining({ id: 'ordinary' }), apiKey: SECRET,
+    }));
   });
 
   it('refuses a persisted policy with an owner-bound member before routing', async () => {
