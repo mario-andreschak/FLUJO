@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from './snapshot-image-contract.mjs';
+import { checkWorkerImageBuild, generateWorkerImageCapability, readWorkerImageSource, WORKER_IMAGE_LABELS } from './worker-image-capability.mjs';
 import { IMAGE, IMAGE_EVIDENCE, IMAGE_SBOM, assertImageContext, inspectTestedImage, remoteImageConfig,
   selectImageCandidate, prepareImageEvidence, validateImageEvidence, promoteTestedImage } from './image-release.mjs';
 
@@ -345,4 +347,147 @@ test('worker publication validates the explicit restore label before fresh and r
   const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
   assert.match(dockerfile.slice(dockerfile.indexOf('AS runtime')), /io\.flujo\.worker\.snapshot-envelope-read-versions="1,2"/);
   assert.equal(dockerfile.match(/io\.flujo\.worker\.snapshot-default-limits='([^']+)'/)[1], WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);
+});
+
+const capabilityRoot = fileURLToPath(new URL('..', import.meta.url));
+function capabilityFixture(t, file, before, after) {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'flujo-image-source-'));
+  t.after(() => { assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); rmSync(directory, { recursive: true, force: true }); });
+  const workspace = path.join(directory, 'src/backend/services/workspace');
+  mkdirSync(workspace, { recursive: true });
+  for (const name of ['snapshotLimits.ts', 'snapshotEnvelope.ts', 'layoutVersion.ts', 'workerCompatibility.ts', 'snapshotRestore.ts']) {
+    copyFileSync(path.join(capabilityRoot, 'src/backend/services/workspace', name), path.join(workspace, name));
+  }
+  for (const name of ['package.json', 'Dockerfile']) copyFileSync(path.join(capabilityRoot, name), path.join(directory, name));
+  if (file) {
+    const target = path.join(directory, file === 'Dockerfile' ? file : `src/backend/services/workspace/${file}`);
+    const original = readFileSync(target, 'utf8');
+    assert.ok(original.includes(before), `Mutation fixture must match ${file}`);
+    const changed = original.replace(before, after);
+    assert.notEqual(changed, original);
+    writeFileSync(target, changed);
+  }
+  return directory;
+}
+
+test('source label generation proves actual v1/v2 reads, v2 writes, defaults and revision', () => {
+  const report = generateWorkerImageCapability(sha);
+  assert.equal(report.revision, sha);
+  assert.equal(report.workerSnapshotSourceVersion, 1);
+  assert.deepEqual(report.labels, WORKER_IMAGE_LABELS);
+  assert.equal(report.sourcePins.length, 6);
+  assert.ok(report.sourcePins.every(({ sha256 }) => /^[a-f0-9]{64}$/.test(sha256)));
+  assert.match(report.dockerfileSha256, /^[a-f0-9]{64}$/);
+  assert.match(report.proof, /not compiled\/installed image, effective target configuration/);
+});
+
+test('source probe isolates defaults without changing the caller configuration', () => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import assert from 'node:assert/strict';
+     import { generateWorkerImageCapability } from ${JSON.stringify(new URL('./worker-image-capability.mjs', import.meta.url).href)};
+     const report = generateWorkerImageCapability('${sha}');
+     assert.equal(process.env.FLUJO_SNAPSHOT_MAX_FILE_BYTES, '7');
+     assert.equal(process.env.FLUJO_SNAPSHOT_MAX_BYTES, '9');
+     assert.equal(JSON.parse(report.labels['io.flujo.worker.snapshot-default-limits']).maxFileBytes, 268435456);
+     assert.equal(JSON.parse(report.labels['io.flujo.worker.snapshot-default-limits']).maxUncompressedBytes, 1073741824);`],
+  { env: { ...process.env, FLUJO_SNAPSHOT_MAX_FILE_BYTES: '7', FLUJO_SNAPSHOT_MAX_BYTES: '9' }, encoding: 'utf8', timeout: 15_000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('the build gate requires source proof for a labelled revision without a Dockerfile in COPY context', (t) => {
+  assert.deepEqual(checkWorkerImageBuild(''), { qualified: false });
+  const directory = capabilityFixture(t);
+  rmSync(path.join(directory, 'Dockerfile'));
+  assert.equal(checkWorkerImageBuild(sha, directory).qualified, true);
+  assert.throws(() => generateWorkerImageCapability(sha, directory), /ENOENT/);
+  for (const revision of ['main', 'abc1234', 'A'.repeat(40), 'a'.repeat(39), 'a'.repeat(41)]) {
+    assert.throws(() => checkWorkerImageBuild(revision, directory), /full build revision/);
+  }
+});
+
+for (const [name, file, before, after] of [
+  ['v2 advertisement with a v1-only reader', 'snapshotEnvelope.ts', '(fields.version !== 1 && fields.version !== 2)', 'fields.version !== 1'],
+  ['v1 advertisement with a v2-only reader', 'snapshotEnvelope.ts', '(fields.version !== 1 && fields.version !== 2)', 'fields.version !== 2'],
+  ['v2 reader without the authenticated purpose', 'snapshotEnvelope.ts', 'if (fields.version === 2) decipher.setAAD(PURPOSE);', "if (fields.version === 2) decipher.setAAD(Buffer.from('different purpose'));"],
+  ['new writer downgrading its envelope', 'snapshotEnvelope.ts', 'format: FORMAT, version: 2, iv:', 'format: FORMAT, version: 1, iv:'],
+  ['reader silently ignoring authentication', 'snapshotEnvelope.ts', 'return { bytes: Buffer.concat([decipher.update(data), decipher.final()]), version: fields.version };', "return { bytes: Buffer.from('public bounded worker-image capability fixture'), version: fields.version };"],
+  ['stale source encryption advertisement', 'snapshotEnvelope.ts', 'Object.freeze([1, 2] as const)', 'Object.freeze([1] as const)'],
+  ['missing private source capability', 'workerCompatibility.ts', 'WORKER_SNAPSHOT_SOURCE_VERSION = 1', 'WORKER_SNAPSHOT_SOURCE_VERSION = 0'],
+  ['maxFileBytes drift', 'snapshotLimits.ts', "configuredLimit('FLUJO_SNAPSHOT_MAX_FILE_BYTES', 256 *", "configuredLimit('FLUJO_SNAPSHOT_MAX_FILE_BYTES', 128 *"],
+  ['maxUncompressedBytes drift', 'snapshotLimits.ts', "configuredLimit('FLUJO_SNAPSHOT_MAX_BYTES', 1024 *", "configuredLimit('FLUJO_SNAPSHOT_MAX_BYTES', 512 *"],
+  ['maxManifestBytes drift', 'snapshotLimits.ts', 'SNAPSHOT_MAX_MANIFEST_BYTES = 8 *', 'SNAPSHOT_MAX_MANIFEST_BYTES = 4 *'],
+  ['maxArchiveBytes drift', 'snapshotLimits.ts', 'maxUncompressedBytes + SNAPSHOT_MAX_MANIFEST_BYTES;', 'maxUncompressedBytes + SNAPSHOT_MAX_MANIFEST_BYTES + 1;'],
+  ['maxEncryptedBytes drift', 'snapshotLimits.ts', '/ 3) + 4096;', '/ 3) + 2048;'],
+  ['maxMembers drift', 'snapshotLimits.ts', 'SNAPSHOT_MAX_MEMBERS = 65_534', 'SNAPSHOT_MAX_MEMBERS = 65_533'],
+]) {
+  test(`image source verification refuses ${name}`, (t) => {
+    const directory = capabilityFixture(t, file, before, after);
+    assert.throws(() => readWorkerImageSource(sha, directory), /source capability\/codec verification failed/);
+  });
+}
+
+for (const [before, after] of [
+  ['snapshot-envelope-read-versions="1,2"', 'snapshot-envelope-read-versions="1"'],
+  ['snapshot-envelope-read-versions="1,2"', 'legacy-read-versions="1,2"'],
+  ['"maxMembers":65534', '"maxMembers":65533'],
+  ['snapshot-default-limits=', 'legacy-default-limits='],
+  ['snapshot-source="1"', 'snapshot-source="0"'],
+]) {
+  test(`image source generation refuses Docker contract mutation ${after}`, (t) => {
+    const directory = capabilityFixture(t, 'Dockerfile', before, after);
+    assert.throws(() => generateWorkerImageCapability(sha, directory));
+  });
+}
+
+function wrongCapabilityLabels() {
+  const readVersions = [undefined, '1', '2', '1, 2', [1, 2]].map(value => ({ key: 'io.flujo.worker.snapshot-envelope-read-versions', value }));
+  const bounds = JSON.parse(WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);
+  return [...readVersions, ...Object.keys(bounds).map(key => ({ key: 'io.flujo.worker.snapshot-default-limits', value: JSON.stringify({ ...bounds, [key]: bounds[key] + 1 }) })),
+    { key: 'io.flujo.worker.snapshot-default-limits', value: undefined }, { key: 'io.flujo.worker.snapshot-default-limits', value: bounds }];
+}
+
+test('retained capability/defaults mutations refuse before signatures or registry calls', (t) => {
+  for (const { key, value } of wrongCapabilityLabels()) {
+    const f = fixture(t);
+    const evidence = prepareImageEvidence(f);
+    evidence.labels[key] = value;
+    writeFileSync(path.join(f.directory, IMAGE_EVIDENCE), JSON.stringify(evidence));
+    f.calls.length = 0;
+    assert.throws(() => promoteTestedImage(f));
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test('immutable live readback rechecks every capability/defaults label before alias writes', (t) => {
+  for (const { key, value } of wrongCapabilityLabels()) {
+    const f = fixture(t);
+    prepareImageEvidence(f);
+    const readback = runner({ image: { Config: { User: 'node', Labels: { ...labels, [key]: value } } } });
+    assert.throws(() => promoteTestedImage({ ...f, ...readback, expectedDigest: digest }), /Tested image.*label/);
+    assert.equal(readback.calls.filter(({ command }) => command === 'gh').length, 4);
+    assert.ok(readback.calls.some(({ command, args }) => command === 'docker' && args[0] === 'pull'));
+    assert.equal(readback.calls.some(({ command, args }) => command === 'docker' && ['tag', 'push', 'build'].includes(args[0])), false);
+  }
+});
+
+test('image workflows prove source before builds and keep source execution out of signing and promotion', () => {
+  for (const [file, jobName] of [['publish-image.yml', 'candidate'], ['publish-cloud-worker.yml', 'publish']]) {
+    const workflow = YAML.parse(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'));
+    const steps = workflow.jobs[jobName].steps;
+    const gate = steps.findIndex(({ run }) => run === 'node scripts/worker-image-capability.mjs generate "$GITHUB_SHA"');
+    const build = steps.findIndex(({ uses }) => uses?.startsWith('docker/build-push-action@'));
+    assert.ok(gate >= 0 && gate < build);
+    assert.match(steps[build].with['build-args'], /FLUJO_BUILD_REVISION=\$\{\{ github\.sha \}\}/);
+    if (file === 'publish-image.yml') {
+      for (const job of [workflow.jobs.attest, workflow.jobs.publish]) {
+        assert.equal(job.steps.some(({ run }) => /worker-image-capability|snapshot-image-source|npm (?:ci|run build)|docker run/.test(run ?? '')), false);
+      }
+    }
+  }
+  const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const gate = dockerfile.indexOf('RUN node scripts/worker-image-capability.mjs check-build "$FLUJO_BUILD_REVISION"');
+  assert.ok(gate > dockerfile.indexOf('COPY . .'));
+  assert.ok(gate > dockerfile.indexOf('ARG FLUJO_BUILD_REVISION=""'));
+  assert.ok(gate < dockerfile.indexOf('NODE_OPTIONS=--max-old-space-size=4096 npm run build'));
 });

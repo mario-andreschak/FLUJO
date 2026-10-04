@@ -234,7 +234,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   const info = await infoResponse.json();
   const { snapshotEncryption, snapshotLimits, ...compatibility } = info.workerCompatibility;
   assert.deepEqual(compatibility, {
-    applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1,
+    applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, workerSnapshotSourceVersion: 1,
     ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),
   });
   assert.deepEqual(snapshotEncryption, {

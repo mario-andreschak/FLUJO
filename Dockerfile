@@ -27,6 +27,10 @@ RUN npm ci --include=dev
 # Build the Next.js production output.
 COPY . .
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
+ARG FLUJO_BUILD_REVISION=""
+# A revision-labelled image must prove its advertised source reader/defaults.
+# This gate runs in the candidate build stage, before the application build.
+RUN node scripts/worker-image-capability.mjs check-build "$FLUJO_BUILD_REVISION"
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
