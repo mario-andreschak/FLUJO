@@ -21,7 +21,7 @@ declare global {
   var __flujo_run_resource_indexes: IndexCacheState | undefined;
   var __flujo_run_resources: Map<string, RunResourceEntry[]> | undefined;
 }
-const state = global.__flujo_run_resource_indexes ?? (() => {
+const state: IndexCacheState = global.__flujo_run_resource_indexes ?? (() => {
   // Release the former unbounded cache on a development reload. Mixed old/new
   // route bundles require a process restart to share this version's policy.
   global.__flujo_run_resources?.clear();
