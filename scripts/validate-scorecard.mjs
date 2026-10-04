@@ -51,6 +51,28 @@ const protectedBudgets = new Map([
   ['persona-pins', ['<=', 200, 1]], ['persona-leases', ['<=', 50, 1]],
   ['persona-recall-p95', ['<', 150, 20]],
 ]);
+const recoveryBudgetIds = ['recovery-rto', 'backup-rpo', 'duplicate-effects'];
+const primaryBudgetBindings = {
+  'product-fit': ['pilot-users'],
+  'feature-surface': ['novice-success', 'novice-time'],
+  security: ['unauthorized-access', 'high-findings'],
+  maturity: [...protectedBudgets.keys(), 'runtime-peak-rss', 'runtime-rss-growth', 'runtime-concurrency',
+    'live-smoke', 'live-seven-days', 'live-28-days', 'live-success-rate', 'live-interventions', 'live-spend'],
+  community: ['backup-maintainers', 'human-contributors'],
+  production: recoveryBudgetIds,
+};
+const requiredClaimContracts = [...dimensions.keys()].map(dimensionId => ({
+  id: dimensionId + '-a-minus', dimensionId,
+  profileId: dimensionId === 'production' ? 'shared-public' : 'local-owner',
+  budgetIds: primaryBudgetBindings[dimensionId] ?? [],
+}));
+requiredClaimContracts.push(
+  { id: 'production-local-a-minus', dimensionId: 'production', profileId: 'local-owner', budgetIds: recoveryBudgetIds },
+  { id: 'production-worker-a-minus', dimensionId: 'production', profileId: 'persistent-worker', budgetIds: recoveryBudgetIds },
+  { id: 'persona-unattended', dimensionId: 'maturity', profileId: 'persistent-worker',
+    budgetIds: ['persona-append-p95', 'persona-peak-rss', 'persona-rss-growth', 'live-seven-days', 'live-28-days',
+      'live-success-rate', 'live-interventions', 'duplicate-effects', 'live-spend'] },
+);
 const supportedKeywords = new Set([
   '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
   'enum', 'anyOf', 'properties', 'required', 'additionalProperties', 'items',
@@ -367,6 +389,14 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       if (claim.gateIds.some(id => indexed.gates.get(id)?.status !== 'passed')) fail(claim.id + ': required gates remain open');
       for (const id of claim.gateIds) requireGateSource(indexed.gates.get(id), records[0]?.sourceSha, claim.id);
       for (const record of records.filter(e => e.kind === 'installed-artifact')) if (indexed.artifacts.get(record.artifactId)?.provenance !== 'verified-content') fail(claim.id + ': installed artifact content/provenance is unverified');
+    }
+  }
+  for (const required of requiredClaimContracts) {
+    const claim = indexed.claims.get(required.id);
+    if (!claim) { fail('Required primary claim omitted: ' + required.id); continue; }
+    if (claim.dimensionId !== required.dimensionId || claim.profileId !== required.profileId) fail(required.id + ': primary claim subject changed; requires a separately reviewed contract version');
+    for (const budgetId of required.budgetIds) {
+      if (!claim.budgetIds.includes(budgetId)) fail(required.id + ': required budget binding omitted: ' + budgetId);
     }
   }
   for (const issue of ledger.issueReconciliation) refs(issue.evidenceIds, 'evidence', '#' + issue.issue);
