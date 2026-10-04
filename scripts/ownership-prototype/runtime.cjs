@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { authenticateOwnerBearer, ownerHasScopes, ownerPolicySchema } = require('./auth-source.cjs');
+const { readBoundedFileSync } = require('../read-bounded-file.cjs');
 
 const root = process.argv[2];
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
@@ -16,8 +17,7 @@ const scopes = ['control:admin', 'secrets:read']; // Security's current coarse o
 function resolve(request) {
   const filename = path.join(root, 'owner-policy.json');
   try {
-    if (fs.statSync(filename).size > 65536) return { error: 503 };
-    const policy = ownerPolicySchema.parse(JSON.parse(fs.readFileSync(filename, 'utf8')));
+    const policy = ownerPolicySchema.parse(JSON.parse(readBoundedFileSync(filename, 65536).toString('utf8')));
     if (policy.ownerId !== manifest.ownerId) return { error: 503 };
     const principal = authenticateOwnerBearer(request, policy);
     if (!principal) return { error: 401 };

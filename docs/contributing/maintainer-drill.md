@@ -79,6 +79,13 @@ receipts, stale revision/version, changed commands, incomplete assertion counts,
 missing human/release gaps, linked files and oversized evidence. Exit 0 returns
 `verified-source-rehearsal`; an error exits 1.
 
+Use a private evidence directory you control, without concurrent writers. Each
+member is opened once; its regular-file identity, link count and size are checked
+against that handle before a bounded descriptor read. Changed metadata or pathname
+identity invalidates the read, and the handle closes on success or failure. A
+filesystem without a stable file identity is refused. This is evidence validation,
+not an OS sandbox for an attacker controlling the surrounding directory tree.
+
 Copied Windows receipts can be checked on another OS: serialized source paths are
 interpreted using their original platform and never opened. Earlier v1 receipts
 that omit `sourceRoot` remain readable by inferring the common root from a known

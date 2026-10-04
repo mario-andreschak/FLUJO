@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readBoundedFileSync } from './read-bounded-file.cjs';
 
 export const RECOVERY_SUITES = Object.freeze([
   '__tests__/settings/backupRestoreLinkSafety.test.ts',
@@ -60,11 +61,12 @@ export function verifyDrillEvidence({ directory, revision, version }) {
     // The caller and receipt can never select arbitrary paths: all names below
     // are fixed single components, and links/hard links are refused.
     const filename = path.join(directory, name);
-    const stats = lstatSync(filename);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink > 1 || stats.size > limit) {
+    try {
+      return readBoundedFileSync(filename, limit);
+    } catch (error) {
+      if (error.code === 'ENOENT') throw error;
       throw new Error(`Unsafe or oversized evidence member: ${name}`);
     }
-    return readFileSync(filename);
   };
   const bytes = readMember('receipt.json', 1024 * 1024);
   const expectedDigest = readMember('receipt.sha256', 128).toString('utf8');
