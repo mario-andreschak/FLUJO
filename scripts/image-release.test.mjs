@@ -193,6 +193,33 @@ test('the original candidate job digest is checked before signatures or registry
   assert.deepEqual(f.calls, []);
 });
 
+for (const marker of [undefined, '0', 'unknown', 1]) {
+  test(`evidence with snapshot-source ${String(marker)} refuses before signing or promotion`, (t) => {
+    const f = fixture(t);
+    const evidence = prepareImageEvidence(f);
+    if (marker === undefined) delete evidence.labels['io.flujo.worker.snapshot-source'];
+    else evidence.labels['io.flujo.worker.snapshot-source'] = marker;
+    writeFileSync(path.join(f.directory, IMAGE_EVIDENCE), JSON.stringify(evidence));
+    f.calls.length = 0;
+    assert.throws(() => validateImageEvidence(f), /Image evidence.*snapshot-source/);
+    assert.throws(() => promoteTestedImage({ ...f, expectedDigest: digest }), /Image evidence.*snapshot-source/);
+    assert.deepEqual(f.calls, []);
+  });
+
+  test(`immutable registry readback with snapshot-source ${String(marker)} refuses all aliases`, (t) => {
+    const f = fixture(t);
+    prepareImageEvidence(f);
+    const legacyLabels = { ...labels };
+    if (marker === undefined) delete legacyLabels['io.flujo.worker.snapshot-source'];
+    else legacyLabels['io.flujo.worker.snapshot-source'] = marker;
+    const readback = runner({ image: { Config: { User: 'node', Labels: legacyLabels } } });
+    assert.throws(() => promoteTestedImage({ ...f, ...readback, expectedDigest: digest }), /Tested image.*snapshot-source/);
+    assert.equal(readback.calls.filter(({ command, args }) => command === 'gh' && args[0] === 'attestation').length, 4);
+    assert.equal(readback.calls.some(({ command, args }) => command === 'docker' && args[0] === 'pull'), true);
+    assert.equal(readback.calls.some(({ command, args }) => command === 'docker' && ['tag', 'push', 'build'].includes(args[0])), false);
+  });
+}
+
 test('all immutable aliases are checked before latest can advance', (t) => {
   const f = fixture(t);
   prepareImageEvidence(f);
