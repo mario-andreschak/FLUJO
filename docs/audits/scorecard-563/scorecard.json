@@ -1725,6 +1725,114 @@
       "kind": "source-check",
       "result": "passed",
       "integrity": "checksummed"
+    },
+    {
+      "ownerId": "engineering",
+      "observedAt": "2026-10-04T05:42:53.917Z",
+      "environment": {
+        "platform": "GitHub-hosted source verification; audit job on Ubuntu",
+        "node": "v22.23.3",
+        "provider": "GitHub Actions and npm advisory data; no model/provider runtime",
+        "tools": "GitHub-hosted npm/git; gh and .NET archive byte inspection by Docs"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactId": null,
+      "artifactProof": null,
+      "sourceSha": "b8cf905ff263559d8591f7dd839c2c75cf29f79f",
+      "kind": "source-check",
+      "integrity": "checksummed",
+      "limits": [
+        "Downloaded archive digest matches artifact API metadata; payload bytes and executed/source tree correspondence were verified by Docs, not the producer execution repeated.",
+        "The audit covers the root Ubuntu development-inclusive installed graph. It is not a separately run production-only, Windows/macOS, container/plugin graph or released-artifact audit.",
+        "The source gate remains pending for selected-release/profile qualification. Planning audit failure, PR #600 producer receipts and the unbound replay remain historical evidence.",
+        "Overall verify and Windows installed-startup jobs failed; the clean audit does not replace those failures or establish a successful release.",
+        "No model run, human agreement, human observation, live elapsed window or independent nine-dimension grade is established."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37178001458",
+        "https://github.com/mario-andreschak/FLUJO/pull/611"
+      ],
+      "id": "dependency-audit-hosted-b8cf905f",
+      "result": "passed",
+      "commands": [
+        "npm ci --include=dev",
+        "npm audit --include=dev --audit-level=high --json > dependency-audit.json",
+        "Docs downloaded artifact 11293303890, matched its archive SHA-256 and inspected its sole dependency-audit.json member"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/npm-audit-hosted-b8cf905f-all.json",
+          "sha256": "0574bfa0dfb81a15024bd5ed9b28b5dbd5ab1b15efef8c59abd51070226bb263",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/hosted-ci-b8cf905f.json",
+          "sha256": "470f3cc4211597311f403bbfa74bf2c877cd4a3356f8017d8cbba60af66b1ad3",
+          "verification": "local"
+        }
+      ],
+      "window": {
+        "kind": "elapsed",
+        "start": "2026-10-04T04:48:19Z",
+        "end": "2026-10-04T04:49:12Z",
+        "simulatedDays": null
+      },
+      "scope": "Hosted Ubuntu root development-inclusive installed dependency audit at the candidate-equivalent merge tree: zero reported vulnerabilities across 1,420 dependencies. Producer step succeeded; direct numeric exit not separately recorded. No claimed deployment profile is qualified."
+    },
+    {
+      "ownerId": "engineering",
+      "observedAt": "2026-10-04T05:42:53.917Z",
+      "environment": {
+        "platform": "GitHub-hosted source verification; audit job on Ubuntu",
+        "node": "Per-job runtime versions; v22.23.3 belongs only to the Ubuntu audit job",
+        "provider": "GitHub Actions and npm advisory data; no model/provider runtime",
+        "tools": "GitHub-hosted npm/git; gh and .NET archive byte inspection by Docs"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactId": null,
+      "artifactProof": null,
+      "sourceSha": "b8cf905ff263559d8591f7dd839c2c75cf29f79f",
+      "kind": "source-check",
+      "integrity": "checksummed",
+      "limits": [
+        "Downloaded archive digest matches artifact API metadata; payload bytes and executed/source tree correspondence were verified by Docs, not the producer execution repeated.",
+        "The audit covers the root Ubuntu development-inclusive installed graph. It is not a separately run production-only, Windows/macOS, container/plugin graph or released-artifact audit.",
+        "The source gate remains pending for selected-release/profile qualification. Planning audit failure, PR #600 producer receipts and the unbound replay remain historical evidence.",
+        "Overall verify and Windows installed-startup jobs failed; the clean audit does not replace those failures or establish a successful release.",
+        "No model run, human agreement, human observation, live elapsed window or independent nine-dimension grade is established."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37178001458",
+        "https://github.com/mario-andreschak/FLUJO/pull/611"
+      ],
+      "id": "build-verification-hosted-b8cf905f",
+      "result": "failed",
+      "commands": [
+        "GitHub verify workflow at run 37178001458; required jobs and actual results in retained report",
+        "Docs read run/job metadata and matched executed/source trees"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/hosted-ci-b8cf905f.json",
+          "sha256": "470f3cc4211597311f403bbfa74bf2c877cd4a3356f8017d8cbba60af66b1ad3",
+          "verification": "local"
+        }
+      ],
+      "window": {
+        "kind": "elapsed",
+        "start": "2026-10-04T04:47:16.000Z",
+        "end": "2026-10-04T05:16:05.000Z",
+        "simulatedDays": null
+      },
+      "scope": "Exact candidate verify run failed overall: Linux production and ordinary/isolated jobs passed; Windows production and final verification failed. A clean dependency audit cannot establish full build/release acceptance."
     }
   ],
   "gates": [
@@ -1871,11 +1979,12 @@
         "persistent-worker",
         "shared-public"
       ],
-      "status": "failed",
-      "description": "Planning main retains its failed audit. PR #600 at 59b65de81b52db2e29cde2d5848436661d04e631 has checksummed producer-reported clean audit payloads; integration and the assessed release audit remain pending. An unbound concurrent replay cannot qualify a source SHA.",
+      "status": "pending",
+      "description": "Planning main retains its failed audit, PR #600 retains producer reports and the unbound replay remains rejected. Candidate b8cf905f has a byte-verified hosted Ubuntu development-inclusive audit with zero findings; selected-release and other installed graph/profile qualification remain pending.",
       "evidenceIds": [
         "dependency-audit-2026-10-03",
-        "dependency-remediation-59b65de8"
+        "dependency-remediation-59b65de8",
+        "dependency-audit-hosted-b8cf905f"
       ]
     },
     {
@@ -1887,9 +1996,11 @@
         "persistent-worker",
         "shared-public"
       ],
-      "status": "pending",
-      "description": "Selected candidate source must pass required typecheck, lint, ordinary/isolated tests, builds, release-safety and verification prerequisites; failed/cancelled/skipped required jobs remain non-acceptance.",
-      "evidenceIds": []
+      "status": "failed",
+      "description": "Candidate b8cf905f hosted verify failed: Windows production/installed startup and final verification did not pass. Required typecheck, lint, ordinary/isolated tests, builds, release-safety and prerequisites still need an accepted exact candidate; earlier/partial passes do not qualify it.",
+      "evidenceIds": [
+        "build-verification-hosted-b8cf905f"
+      ]
     }
   ],
   "claims": [
