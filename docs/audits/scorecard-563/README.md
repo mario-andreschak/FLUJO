@@ -53,6 +53,11 @@ experimental only with explicit independent acceptance and visible limits.
   and [author triage](evidence/docs-rereview-triage-61d212c4.json) distinguish executed
   checks from report inaccuracies. Later edits and integration need fresh verification;
   this record does not populate assessment grades or pass acceptance gates.
+- [filesystem-race scan observation](evidence/scorecard-race-codeql-f0cd4c10.json)
+  retains PR #635's exact synthetic merge, successful scanner execution, zero reported
+  results and zero open findings at that PR ref. Its SARIF lists the filesystem-race
+  rule and a PR-diff filter; this is scoped source evidence, not full-release security
+  acceptance or a replacement for the final candidate's findings gate.
 
 Run from the repository root with Node >=22; no dependency installation is needed:
 
