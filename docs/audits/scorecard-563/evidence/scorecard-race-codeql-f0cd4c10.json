@@ -1,0 +1,122 @@
+{
+  "capturedAt": "2026-10-04T00:36:29.151Z",
+  "sourceSha": "f0cd4c10c12e997b1c4a889671515e5817298626",
+  "sourceTreeSha": "2431491f5183f33816e59c0f178bb10498317fd9",
+  "sourceParents": [
+    "a9a974a10c543dafdcc5683f57b3c747514ee5a4",
+    "64f96ecb046fd71a38aee8b956a7daf5d19316f3"
+  ],
+  "ref": "refs/pull/635/merge",
+  "prHead": "64f96ecb046fd71a38aee8b956a7daf5d19316f3",
+  "analyses": [
+    {
+      "id": 1887317162,
+      "ref": "refs/pull/635/merge",
+      "commitSha": "f0cd4c10c12e997b1c4a889671515e5817298626",
+      "category": "/language:javascript-typescript",
+      "createdAt": "2026-10-04T00:33:31Z",
+      "resultsCount": 0,
+      "rulesCount": 103,
+      "error": "",
+      "tool": {
+        "name": "CodeQL",
+        "guid": null,
+        "version": "2.27.1"
+      }
+    },
+    {
+      "id": 1887304655,
+      "ref": "refs/pull/635/merge",
+      "commitSha": "f0cd4c10c12e997b1c4a889671515e5817298626",
+      "category": "/language:actions",
+      "createdAt": "2026-10-04T00:25:03Z",
+      "resultsCount": 0,
+      "rulesCount": 23,
+      "error": "",
+      "tool": {
+        "name": "CodeQL",
+        "guid": null,
+        "version": "2.27.1"
+      }
+    }
+  ],
+  "scannerJob": {
+    "id": 111325322804,
+    "name": "CodeQL (javascript-typescript)",
+    "status": "completed",
+    "conclusion": "success",
+    "startedAt": "2026-10-04T00:29:28Z",
+    "completedAt": "2026-10-04T00:33:42Z",
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37164766700/job/111325322804"
+  },
+  "queriedOpenAlerts": {
+    "ref": "refs/pull/635/merge",
+    "count": 0,
+    "commands": [
+      "gh api repos/mario-andreschak/FLUJO/code-scanning/alerts?ref=refs/pull/635/merge&state=open&per_page=100 --paginate --slurp"
+    ],
+    "apiObservation": "Every returned page inspected; no open findings at this ref at capture."
+  },
+  "files": [
+    {
+      "file": "scripts/validate-scorecard.mjs",
+      "gitBlob": "babc82c6b235604e9c4dc7b271cae4dfdf8ff6e7",
+      "byteLength": 30144,
+      "sha256": "b1e213fcc876ced3f2bcb1284d828eb9362aef4b3aebd70d4453a2e213224a3d"
+    },
+    {
+      "file": "scripts/read-scorecard-evidence.mjs",
+      "gitBlob": "89212b23f93beccb74dbe7208907d3bb29571aca",
+      "byteLength": 2072,
+      "sha256": "32cc0363b035cddca862db269b05fdcfacf51f4f88397c413785d5dfff6f1f7b"
+    },
+    {
+      "file": ".github/workflows/verify.yml",
+      "gitBlob": "06b13a9c107194b647be5eb5a6b49d59605ed077",
+      "byteLength": 13501,
+      "sha256": "b45241b9643ba371bddf75de1b0ab7b4f67369a8fd4e6ceac3d67c7efec55ac4"
+    }
+  ],
+  "commands": [
+    "gh api repos/mario-andreschak/FLUJO/code-scanning/analyses?ref=refs/pull/635/merge&per_page=100 --paginate --slurp",
+    "gh api repos/mario-andreschak/FLUJO/actions/jobs/111325322804",
+    "gh api repos/mario-andreschak/FLUJO/commits/f0cd4c10c12e997b1c4a889671515e5817298626",
+    "gh api repos/mario-andreschak/FLUJO/contents/{scopedPath}?ref=f0cd4c10c12e997b1c4a889671515e5817298626"
+  ],
+  "limits": [
+    "Exact PR #635 synthetic-merge scan; not the final integrated release candidate or a full threat-model assessment.",
+    "No alert dismissal, scan exclusion or rule change was performed by the Docs race-fix slice.",
+    "Alert #173 remains a historical open instance at a different PR ref/analysis until that ref is rescanned. This observation does not relabel or dismiss that instance.",
+    "Source receipt only: installed-release, human and elapsed-runtime acceptance remain pending.",
+    "The JavaScript SARIF identifies codeql-action/pr-diff-range; zero reported results and zero open findings at this PR ref must not be generalized to a clean full candidate, main, or a different PR ref."
+  ],
+  "sarifObservation": {
+    "analysisId": 1887317162,
+    "source": [
+      {
+        "branch": "refs/pull/635/merge",
+        "repositoryUri": "https://github.com/mario-andreschak/FLUJO",
+        "revisionId": "f0cd4c10c12e997b1c4a889671515e5817298626"
+      }
+    ],
+    "sha256": "72b1c8ae9ac8330977f2aec362b3834c56876d712fa0552bfe63ee7d3a8ff154",
+    "byteLength": 577641,
+    "rulePack": "codeql/javascript-queries",
+    "listedRules": 103,
+    "filesystemRaceRule": {
+      "id": "js/file-system-race",
+      "name": "js/file-system-race"
+    },
+    "resultsCount": 0,
+    "diffRangeExtensionPresent": true,
+    "configuredSuite": [
+      {
+        "type": "builtinSuite",
+        "uses": "security-extended"
+      }
+    ],
+    "artifactsListed": null,
+    "command": "gh api -H \"Accept: application/sarif+json\" repos/mario-andreschak/FLUJO/code-scanning/analyses/1887317162",
+    "scope": "SARIF confirms the rule was listed and no results were reported. It lists no source artifacts and includes the PR-diff range extension; this is not an attestation of exhaustive full-release coverage."
+  }
+}

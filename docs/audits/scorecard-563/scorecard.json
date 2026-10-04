@@ -2017,6 +2017,63 @@
         "Actual synthetic merge is distinct from the PR head and later integrated candidate.",
         "The unchanged review describes the run as live at its initial packet observation. Terminal state is retained separately."
       ]
+    },
+    {
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-04T00:36:29.151Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "none unless explicitly identified in scope",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/635",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37164766700/job/111325322804"
+      ],
+      "id": "scorecard-race-codeql-f0cd4c10",
+      "kind": "source-check",
+      "result": "not-evaluated",
+      "integrity": "checksummed",
+      "sourceSha": "f0cd4c10c12e997b1c4a889671515e5817298626",
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/code-scanning/analyses?ref=refs/pull/635/merge&per_page=100 --paginate --slurp",
+        "gh api repos/mario-andreschak/FLUJO/actions/jobs/111325322804",
+        "gh api repos/mario-andreschak/FLUJO/commits/f0cd4c10c12e997b1c4a889671515e5817298626",
+        "gh api repos/mario-andreschak/FLUJO/contents/{scopedPath}?ref=f0cd4c10c12e997b1c4a889671515e5817298626",
+        "gh api -H \"Accept: application/sarif+json\" repos/mario-andreschak/FLUJO/code-scanning/analyses/1887317162"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/scorecard-race-codeql-f0cd4c10.json",
+          "sha256": "613a8fd26a8831fb5f38c6ae776e2555cf3dbe95471f8fa8cb4ff1f2a1c6d62d",
+          "verification": "local"
+        }
+      ],
+      "scope": "Exact PR #635 synthetic-merge CodeQL observation: JavaScript and Actions report zero results; queried PR ref has zero open findings. SARIF includes filesystem-race rule and PR-diff filter. Not a full release security verdict.",
+      "limits": [
+        "Source observation left not-evaluated so it cannot pass acceptance gates or promote a claim.",
+        "Exact PR #635 synthetic-merge scan; not the final integrated release candidate or a full threat-model assessment.",
+        "No alert dismissal, scan exclusion or rule change was performed by the Docs race-fix slice.",
+        "Alert #173 remains a historical open instance at a different PR ref/analysis until that ref is rescanned. This observation does not relabel or dismiss that instance.",
+        "Source receipt only: installed-release, human and elapsed-runtime acceptance remain pending.",
+        "The JavaScript SARIF identifies codeql-action/pr-diff-range; zero reported results and zero open findings at this PR ref must not be generalized to a clean full candidate, main, or a different PR ref."
+      ]
     }
   ],
   "gates": [
