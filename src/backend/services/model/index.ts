@@ -42,6 +42,15 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
 import { withModelCatalogWriteLease } from './catalogAdmission';
+import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
+
+function catalogWriteFailure(error: unknown): ModelServiceResponse {
+  return {
+    success: false,
+    error: error instanceof Error ? error.message : 'Model catalog is unavailable',
+    ...(error instanceof ModelCatalogBusyError ? { code: error.code } : {}),
+  };
+}
 
 /**
  * Result of a direct (single-turn) chat completion through ModelService.
@@ -118,7 +127,7 @@ class ModelService {
     try {
       return await withModelCatalogWriteLease(() => this.addModelWithinLease(model));
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+      return catalogWriteFailure(error);
     }
   }
 
@@ -226,7 +235,7 @@ class ModelService {
     try {
       return await withModelCatalogWriteLease(() => this.updateModelWithinLease(model));
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+      return catalogWriteFailure(error);
     }
   }
 
@@ -356,7 +365,7 @@ class ModelService {
     try {
       return await withModelCatalogWriteLease(() => this.deleteModelWithinLease(id));
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+      return catalogWriteFailure(error);
     }
   }
 

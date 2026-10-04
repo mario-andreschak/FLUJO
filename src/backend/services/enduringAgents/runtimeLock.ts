@@ -186,6 +186,15 @@ export class PersonaRuntimeLockTimeoutError extends Error {
   }
 }
 
+export class ModelCatalogBusyError extends Error {
+  readonly code = 'MODEL_CATALOG_BUSY' as const;
+
+  constructor() {
+    super('Cannot edit the model catalog during an active model call; retry after it finishes.');
+    this.name = 'ModelCatalogBusyError';
+  }
+}
+
 export class PersonaRuntimeLockLostError extends Error {
   readonly code = 'PERSONA_RUNTIME_LOCK_LOST' as const;
 
@@ -1128,7 +1137,8 @@ export function withWorkspaceRuntimeLock<T>(
  * Cross-process shared readers / exclusive writer for the whole models file.
  * A reader registers a unique owned lock under a short admission gate, then
  * releases the gate during prompt preparation or a provider call. A writer
- * closes admission and drains every reader before replacing models.json.
+ * closes admission and refuses the edit if any live reader remains before
+ * replacing models.json.
  * None of this enters the workspace mutation gate: preparation can still write
  * run resources while a workspace snapshot is pending.
  */
@@ -1146,7 +1156,7 @@ async function withModelCatalogPhysicalLease<T>(
     // An agentic model call can synchronously start a child Process. It shares
     // the parent's lease rather than waiting on its own physical lock. Editing
     // the catalog inside that call would invalidate its admitted snapshot.
-    if (writer) throw new Error('Cannot edit the model catalog during an active model call.');
+    if (writer) throw new ModelCatalogBusyError();
     if (inherited.writer) throw new Error('Cannot prepare a model during a model catalog edit.');
     return withIssuedPersonaRuntimeLockOperation(
       inherited.lock,
@@ -1159,28 +1169,17 @@ async function withModelCatalogPhysicalLease<T>(
       const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
       try {
         const root = await ensureRuntimeLockRoot();
-        const started = clockForLock().monotonicNow();
-        while (true) {
-          await admission.lock.assertOwned();
-          if (clockForLock().monotonicNow() - started >= MODEL_CATALOG_WAIT_MS) {
-            throw new PersonaRuntimeLockTimeoutError(MODEL_CATALOG_LOCK);
-          }
-          const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
-          let live = false;
-          for (const name of readers) {
-            const owner = await readOwner(path.join(root, name));
-            if (!owner) continue;
-            if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
-            const abandoned = await listAbandonedOwnerIds(root, path.join(root, name));
-            if (await isOwnerProcessAlive(owner, abandoned)) {
-              live = true;
-              continue;
-            }
-            const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
-            await retired.release();
-          }
-          if (!live) break;
-          await clockForLock().sleep(LOCK_RETRY_MS);
+        await admission.lock.assertOwned();
+        const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
+        for (const name of readers) {
+          const readerPath = path.join(root, name);
+          const owner = await readOwner(readerPath);
+          if (!owner) continue;
+          if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
+          const abandoned = await listAbandonedOwnerIds(root, readerPath);
+          if (await isOwnerProcessAlive(owner, abandoned)) throw new ModelCatalogBusyError();
+          const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+          await retired.release();
         }
         await admission.lock.assertOwned();
         return await modelCatalogLeaseScope.run(

@@ -7,7 +7,6 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { withModelCatalogWriteLease } from '@/backend/services/model/catalogAdmission';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { getWorkspaceDbDir } from '@/utils/workspace';
 import type { ProcessNodeParams, SharedState } from '@/backend/execution/flow/types';
 import {
   removePersonaProcessEnvironment,
@@ -37,7 +36,7 @@ function fixture() {
   return { state, params };
 }
 
-it('holds a live catalog edit behind an awaited Process preparation effect, then rejects the bound model before effects', async () => {
+it('rejects catalog edits during awaited Process preparation effects, then rejects a bound model before effects', async () => {
   await withModelCatalogWriteLease(() => saveItem(StorageKey.MODELS, [ordinary]));
   // This child uses Jest's isolated data root, so its catalog is the same file
   // while its lock owner is a separate OS process.
@@ -75,27 +74,17 @@ it('holds a live catalog edit behind an awaited Process preparation effect, then
     const first = fixture();
     const preparation = new ProcessNode().prep(first.state, first.params);
     await renderEntered;
-    const edit = worker.request({ type: 'catalogGateEnter', mode: 'writer', token: 'bind', models: [bound] }, 30_000);
+    await expect(worker.request({ type: 'catalogReplace', models: [bound] }, 5_000))
+      .rejects.toMatchObject({ code: 'MODEL_CATALOG_BUSY' });
     releaseRender!();
     await discoveryEntered;
-    // The writer owns admission while it drains our live reader. This proves
-    // the worker reached the physical gate, not merely its RPC handler.
-    const admissionFile = path.join(getWorkspaceDbDir(), '.runtime-locks', 'enduring-agents', '.model-catalog-admission.lock');
-    const deadline = Date.now() + 5_000;
-    let ownerPid: number | undefined;
-    while (Date.now() < deadline) {
-      try { ownerPid = JSON.parse(await fs.readFile(admissionFile, 'utf8')).pid as number; }
-      catch { /* registration has not reached the filesystem yet */ }
-      if (ownerPid === worker.child.pid) break;
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    expect(ownerPid).toBe(worker.child.pid);
-    expect(await worker.request({ type: 'catalogGateStatus', token: 'bind' })).toEqual({ requested: true, held: false });
+    await expect(worker.request({ type: 'catalogReplace', models: [bound] }, 5_000))
+      .rejects.toMatchObject({ code: 'MODEL_CATALOG_BUSY' });
     releaseDiscovery!();
     await expect(preparation).resolves.toMatchObject({ boundModel: ordinary.id });
     expect(discovery).toHaveBeenCalledTimes(1);
-    await expect(edit).resolves.toMatchObject({ held: true });
-    await worker.request({ type: 'catalogGateLeave', token: 'bind' });
+    await expect(worker.request({ type: 'catalogReplace', models: [bound] }))
+      .resolves.toEqual({ saved: true });
 
     const second = fixture();
     await expect(new ProcessNode().prep(second.state, second.params))

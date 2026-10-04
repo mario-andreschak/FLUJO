@@ -8,6 +8,7 @@ import type { ModelMediaPart } from './media';
 export interface ModelServiceResponse {
   success: boolean;
   error?: string;
+  code?: 'MODEL_CATALOG_BUSY';
 }
 
 /**

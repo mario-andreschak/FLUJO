@@ -19,6 +19,7 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
 import { withModelCatalogWriteLease } from '@/backend/services/model/catalogAdmission';
+import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
 
 const log = createLogger('app/api/restore/route');
 
@@ -242,6 +243,7 @@ async function POST_handler(request: NextRequest) {
 
     // Persona safety preflight is complete; ordinary tolerant restore semantics
     // begin only after this point.
+    let modelCatalogBusy = false;
     for (const { storageKey, archivePath, data } of storageRestorePlan) {
       try {
         if (storageKey === StorageKey.FLOWS) {
@@ -259,6 +261,9 @@ async function POST_handler(request: NextRequest) {
         }
         log.debug(`Restored file [${requestId}]:`, archivePath);
       } catch (error) {
+        if (storageKey === StorageKey.MODELS && error instanceof ModelCatalogBusyError) {
+          modelCatalogBusy = true;
+        }
         log.error(`Error restoring file [${requestId}]:`, error);
       }
     }
@@ -290,6 +295,13 @@ async function POST_handler(request: NextRequest) {
       }
     }
     
+    if (modelCatalogBusy) {
+      return NextResponse.json({
+        error: 'Models were not restored because the catalog is in use by an active model call; retry after it finishes.',
+        code: 'MODEL_CATALOG_BUSY',
+        partial: true,
+      }, { status: 409 });
+    }
     log.info(`Restore completed successfully [${requestId}]`);
     return NextResponse.json({ success: true });
   } catch (error) {

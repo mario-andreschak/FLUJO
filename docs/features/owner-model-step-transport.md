@@ -46,20 +46,27 @@ looking up its model and holds that reader through prompt, resource, and MCP
 preparation. A missing model fails before those effects. The admitted model is
 detached from the saved catalog and is used for prompt composition, model
 metadata, compaction, and provider dispatch. Catalog add, update, delete, and
-legacy restore writers close reader admission and wait for active readers;
-the generic storage route cannot replace or clear the models file. A saved
-catalog generation check under a fresh reader refuses a late edit before
-local credential resolution or any provider attempt. Independent readers can
+legacy restore writers close reader admission and refuse an edit while active
+readers remain; the generic storage route cannot replace or clear the models
+file. A saved catalog generation check under a fresh reader refuses a late
+edit before local credential resolution or any provider attempt. Independent readers can
 run concurrently. These are cooperating application paths; arbitrary direct
 filesystem edits or unregistered older workers are outside the protocol.
 
 A model call retains its shared reader across compaction, provider response,
 native adapter tool loops, and tool approval. This keeps a live edit from
-interleaving with a physical attempt, but a catalog edit waits for those calls
-to settle and may time out after two minutes. A tool that calls back into a
-different FLUJO worker to edit the catalog during its own model call can fail
-on that timeout. Do not describe this as a liveness-safe final transport fence;
-the owner transport and budget broker remain separate adoption gates.
+interleaving with a physical attempt. An edit attempted during one of these
+calls fails without changing the catalog; the model API returns HTTP 409 with
+`MODEL_CATALOG_BUSY`, so a client may retry after the call finishes. A tool
+that edits the catalog during its own native model call receives this conflict
+instead of waiting for that call to finish. Acquiring the admission gate and
+retiring stale reader locks can still take time; the conflict has no fixed
+response-time guarantee. A legacy backup restore that skips
+models for this reason returns HTTP 409 with `partial: true`, since other
+selected items may already have been restored. The edit does not cancel the
+active call or commit during it. Do not describe this as a liveness-safe final
+transport fence; the owner transport and budget broker remain separate adoption
+gates.
 
 The generic `configuredExecutionAdapter` is **undefined**. There is no
 configured FACTORY credential broker, durable claim and physical sender, or

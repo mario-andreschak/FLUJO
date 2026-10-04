@@ -11,6 +11,7 @@
 import type { NextRequest } from 'next/server';
 import JSZip from 'jszip';
 import { StorageKey } from '@/shared/types/storage';
+import { withModelCatalogLease } from '@/backend/services/model/catalogAdmission';
 
 // Match the collection-backed fixture below at the authoring boundary as well.
 // Real filesystem locking/ownership is covered by personaOwnedFlows and its
@@ -261,6 +262,21 @@ describe('backup → restore round-trip', () => {
       'flow-1',
       expect.objectContaining({ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000 }),
     );
+  });
+
+  it('reports a partial 409 when an active model call prevents restoring models', async () => {
+    const zip = new JSZip();
+    const theme = { mode: 'dark' };
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['settings', 'models'] }));
+    zip.file(`storage/${StorageKey.THEME}.json`, JSON.stringify(theme));
+    zip.file(`storage/${StorageKey.MODELS}.json`, JSON.stringify(modelsData));
+    const zipBuffer = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const response = await withModelCatalogLease(() => callRestore(zipBuffer, ['settings', 'models']));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_CATALOG_BUSY', partial: true });
+    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.THEME, theme);
+    expect(saveItemMock).not.toHaveBeenCalledWith(StorageKey.MODELS, modelsData);
   });
 
   it('restores modern and legacy conversations independently and skips unsafe entries', async () => {

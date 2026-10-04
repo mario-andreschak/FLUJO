@@ -37,6 +37,7 @@ jest.mock('@/backend/services/model/encryption', () => ({
 
 import { GET as listModels, POST as createModel } from '@/app/api/model/route';
 import { GET as getModel, PUT as updateModel, DELETE as deleteModel } from '@/app/api/model/[id]/route';
+import { withModelCatalogLease } from '@/backend/services/model/catalogAdmission';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 
 // The handlers only call request.json(); a minimal stub stands in for NextRequest.
@@ -137,5 +138,22 @@ describe('Model REST API', () => {
 
     const delAgain = await deleteModel(req(), ctx('m1'));
     expect(delAgain.status).toBe(404);
+  });
+
+  it('returns a retryable 409 for a busy catalog on create, update, and delete', async () => {
+    expect((await createModel(req(modelFixture()))).status).toBe(201);
+    await withModelCatalogLease(async () => {
+      const requests = [
+        createModel(req(modelFixture({ id: 'm2', displayName: 'Other' }))),
+        updateModel(req(modelFixture({ displayName: 'Renamed' })), ctx('m1')),
+        deleteModel(req(), ctx('m1')),
+      ];
+      for (const response of await Promise.all(requests)) {
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_CATALOG_BUSY' });
+      }
+    });
+    const current = await getModel(req(), ctx('m1'));
+    await expect(current.json()).resolves.toMatchObject({ displayName: 'GPT Test' });
   });
 });
