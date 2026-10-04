@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T03:30:54.8230052Z",
+  "kind": "historical-npm-cryptographic-provenance",
+  "artifact": "flujo-ai@3.46.2",
+  "sourceSha": "320347356891aa1c24e0f2f9ce12719317e58bde",
+  "result": "passed",
+  "payload": {
+    "bytes": 10286028,
+    "sha256": "470605df68d8d2afb1db4895ec3d51e2be1a4d0ba93805becad86733ae71135c",
+    "sha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9",
+    "retainedExternally": true
+  },
+  "tool": {
+    "name": "GitHub CLI",
+    "version": "2.96.0",
+    "declaredReleaseSourceSha": "b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0",
+    "binarySha256": "cd79f16203f1fbe56937c4c96e2b6eadd10549418dcb241d91576ac77af0ac8b"
+  },
+  "positiveExit": 0,
+  "negativeControlsPassed": 6,
+  "certificate": {
+    "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+    "subjectAlternativeName": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "githubWorkflowTrigger": "workflow_dispatch",
+    "githubWorkflowSHA": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "githubWorkflowName": "Publish npm release",
+    "githubWorkflowRepository": "mario-andreschak/FLUJO",
+    "githubWorkflowRef": "refs/heads/main",
+    "buildSignerURI": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "buildSignerDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "runnerEnvironment": "github-hosted",
+    "sourceRepositoryURI": "https://github.com/mario-andreschak/FLUJO",
+    "sourceRepositoryDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "sourceRepositoryRef": "refs/heads/main",
+    "sourceRepositoryIdentifier": "939611454",
+    "sourceRepositoryOwnerURI": "https://github.com/mario-andreschak",
+    "sourceRepositoryOwnerIdentifier": "196235471",
+    "buildConfigURI": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "buildConfigDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "buildTrigger": "workflow_dispatch",
+    "runInvocationURI": "https://github.com/mario-andreschak/FLUJO/actions/runs/37023576093/attempts/5",
+    "sourceRepositoryVisibilityAtSigning": "public"
+  },
+  "verifiedTimestamps": [
+    {
+      "type": "Tlog",
+      "uri": "https://rekor.sigstore.dev",
+      "timestamp": "2026-10-02T10:30:21-05:00"
+    }
+  ],
+  "verifiedSubject": {
+    "name": "pkg:npm/flujo-ai@3.46.2",
+    "digest": {
+      "sha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9"
+    }
+  },
+  "raw": [
+    {
+      "file": "controls-receipt.json",
+      "sha256": "fdf3a6d71147ae86159ceefcf2e84d0bed6665882c440695ffbd0268ed109b24"
+    },
+    {
+      "file": "exact-policy.stdout.json",
+      "sha256": "23d3f08e319d6a162804de2e8d2044e005cd2eebca5d76edc154d0642d778596"
+    },
+    {
+      "file": "npm-provenance.sigstore.json",
+      "sha256": "db61ca6dab3510a071eff1600c0edf13df328a9e974694a16352360d62043032"
+    },
+    {
+      "file": "registry-manifest-observation.json",
+      "sha256": "48fb89b56dd0133500289fec27e44607d69d2efa38552b9ab7d4cef328fed180"
+    }
+  ],
+  "limits": [
+    "Historical 3.46.2 only; selected current candidate not qualified.",
+    "No dependencies, runtime, MCP process, migration or installed operator journey installed/executed.",
+    "No advisory/dependency audit, threat-model acceptance or independent Engineering grade supplied.",
+    "CLI declared source release tag retained with actual installed binary hash; no CLI rebuild performed."
+  ]
+}

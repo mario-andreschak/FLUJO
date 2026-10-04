@@ -131,7 +131,10 @@ test('both signature checks require official hosted workflow, source digest and 
     assert.equal(args[args.indexOf('--source-digest') + 1], revision);
     assert.equal(args[args.indexOf('--signer-digest') + 1], revision);
     assert.equal(args[args.indexOf('--source-ref') + 1], `refs/tags/v${version}`);
-    assert.equal(args[args.indexOf('--signer-workflow') + 1], 'mario-andreschak/FLUJO/.github/workflows/installer.yml');
+    assert.equal(args[args.indexOf('--cert-identity') + 1], `https://github.com/mario-andreschak/FLUJO/.github/workflows/installer.yml@refs/tags/v${version}`);
+    assert.equal(args[args.indexOf('--cert-oidc-issuer') + 1], 'https://token.actions.githubusercontent.com');
+    assert.equal(args.includes('--signer-workflow'), false);
+    assert.equal(args.includes('--cert-identity-regex'), false);
     assert.ok(args.includes('--deny-self-hosted-runners'));
   } });
   assert.equal(calls.length, 2);

@@ -26,7 +26,8 @@ A separate job receives the original evidence artifact ID, rechecks main CI and
 source/metadata identity, and signs registry provenance, the container SBOM and
 both retained JSON files. Build and application lifecycle commands have no
 attestation authority. The promotion job requires all four signature checks
-against the official main workflow/source SHA and hosted runner identity, pulls
+against the exact official main workflow certificate identity, GitHub Actions
+OIDC issuer, source SHA and hosted runner identity, pulls
 the signed digest, then checks every immutable alias before writing channels.
 Version, short-source and latest tags must all publish the same signed digest;
 latest is written last. An existing version or short-source alias with different
@@ -37,12 +38,13 @@ Main must still identify the release source before each write.
 
 Retain the image workflow run, source SHA, exact evidence artifact and registry
 digest. Verify provenance for each retained JSON file, requiring the official
-repository/workflow, main ref, exact source and workflow SHA, and hosted runners.
+repository and exact workflow certificate identity including the main ref,
+GitHub Actions OIDC issuer, exact source and workflow SHA, and hosted runners.
 Compare the source-lock and SBOM SHA-256 values with the evidence from that
 trusted source. For the image itself, use the fully qualified digest:
 
 ```text
-gh attestation verify oci://ghcr.io/mario-andreschak/flujo@sha256:<manifest-digest> --repo mario-andreschak/FLUJO --predicate-type https://slsa.dev/provenance/v1 --signer-workflow mario-andreschak/FLUJO/.github/workflows/publish-image.yml --source-digest <source-SHA> --signer-digest <source-SHA> --source-ref refs/heads/main --deny-self-hosted-runners
+gh attestation verify oci://ghcr.io/mario-andreschak/flujo@sha256:<manifest-digest> --repo mario-andreschak/FLUJO --predicate-type https://slsa.dev/provenance/v1 --cert-identity https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-image.yml@refs/heads/main --cert-oidc-issuer https://token.actions.githubusercontent.com --source-digest <source-SHA> --signer-digest <source-SHA> --source-ref refs/heads/main --deny-self-hosted-runners
 ```
 
 Repeat with `--predicate-type https://cyclonedx.org/bom` for its SBOM. Pull that

@@ -25,7 +25,8 @@ runs with its signing identity. Ordinary checkout credentials are not persisted.
 
 Publication and finalization verify provenance signatures for **all five
 tarballs plus manifest, release evidence and SBOM**, requiring the official
-`publish-npm.yml`, main ref, expected source SHA, matching workflow SHA and
+`publish-npm.yml` certificate identity including the main ref, GitHub Actions
+OIDC issuer, expected source SHA, matching workflow SHA and
 GitHub-hosted runners. Any failed signature stops the phase. Existing tested
 tarball SHA-512 registry readback, exact-main checks, immutable version handling,
 tag matching and original-run retries remain in force. npm trusted publishing
@@ -49,7 +50,7 @@ Then verify each tarball, `manifest.json`, `release-evidence.json` and
 `source-lock.sbom.cdx.json`:
 
 ```text
-gh attestation verify <file> --repo mario-andreschak/FLUJO --predicate-type https://slsa.dev/provenance/v1 --signer-workflow mario-andreschak/FLUJO/.github/workflows/publish-npm.yml --source-digest <SHA> --signer-digest <SHA> --source-ref refs/heads/main --deny-self-hosted-runners
+gh attestation verify <file> --repo mario-andreschak/FLUJO --predicate-type https://slsa.dev/provenance/v1 --cert-identity https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main --cert-oidc-issuer https://token.actions.githubusercontent.com --source-digest <SHA> --signer-digest <SHA> --source-ref refs/heads/main --deny-self-hosted-runners
 ```
 
 For the tarballs' SBOM predicates, additionally use

@@ -113,7 +113,10 @@ test('cryptographic verification binds all subjects to the official hosted exact
     assert.equal(args[args.indexOf('--source-digest') + 1], sha);
     assert.equal(args[args.indexOf('--signer-digest') + 1], sha);
     assert.equal(args[args.indexOf('--source-ref') + 1], 'refs/heads/main');
-    assert.equal(args[args.indexOf('--signer-workflow') + 1], 'mario-andreschak/FLUJO/.github/workflows/publish-npm.yml');
+    assert.equal(args[args.indexOf('--cert-identity') + 1], 'https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main');
+    assert.equal(args[args.indexOf('--cert-oidc-issuer') + 1], 'https://token.actions.githubusercontent.com');
+    assert.equal(args.includes('--signer-workflow'), false);
+    assert.equal(args.includes('--cert-identity-regex'), false);
     assert.ok(args.includes('--deny-self-hosted-runners'));
   } });
   assert.equal(calls.length, PUBLIC_PACKAGES.length + 3);

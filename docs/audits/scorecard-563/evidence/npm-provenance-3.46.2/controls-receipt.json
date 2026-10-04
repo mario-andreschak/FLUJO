@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T03:17:37.298Z",
+  "artifact": "flujo-ai@3.46.2",
+  "expectedSource": "320347356891aa1c24e0f2f9ce12719317e58bde",
+  "scope": "Historical published npm tarball provenance only; no installation, runtime, current-candidate qualification or grade acceptance.",
+  "scriptSha256": "643d5e24d9b4c3669158e65adda68510766cb45abb9863f78858ad608e02aa4c",
+  "expectedCertificateIdentity": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+  "expectedIssuer": "https://token.actions.githubusercontent.com",
+  "tool": {
+    "name": "GitHub CLI",
+    "version": "2.96.0",
+    "declaredReleaseSourceSha": "b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0",
+    "binarySha256": "cd79f16203f1fbe56937c4c96e2b6eadd10549418dcb241d91576ac77af0ac8b"
+  },
+  "tamperedFixture": {
+    "offset": 0,
+    "mutation": "XOR 1",
+    "sha256": "c70f132ec312c3cf7460ae14b2cf7827fd90b2af37dc8555094b893e656ea1d4",
+    "cleanedUp": true
+  },
+  "checks": [
+    {
+      "id": "exact-policy",
+      "expectedExit": 0,
+      "actualExit": 0,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "exact-policy.stdout.json",
+        "sha256": "23d3f08e319d6a162804de2e8d2044e005cd2eebca5d76edc154d0642d778596"
+      },
+      "stderr": {
+        "file": "exact-policy.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "diagnostic": ""
+    },
+    {
+      "id": "wrong-source",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "wrong-source.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "wrong-source.stderr.log",
+        "sha256": "e9083d5338b7b12a400e4c23f87f30556818c8d2146f2c34fa9c517ded21f5aa"
+      },
+      "diagnostic": "\nError: expected SourceRepositoryDigest to be aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, got 320347356891aa1c24e0f2f9ce12719317e58bde\n"
+    },
+    {
+      "id": "wrong-signer",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "wrong-signer.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "wrong-signer.stderr.log",
+        "sha256": "21877d7f557e79244487ac2122be4f32b02f424ceeea8dc33d3320a15a3203d0"
+      },
+      "diagnostic": "\nError: expected BuildSignerDigest to be aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, got 320347356891aa1c24e0f2f9ce12719317e58bde\n"
+    },
+    {
+      "id": "wrong-ref",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/unreviewed",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "wrong-ref.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "wrong-ref.stderr.log",
+        "sha256": "1190bd12ae5c032d5df95cdb277ba5c0c3872d8f77c66eb49ecf93c4113b6b96"
+      },
+      "diagnostic": "\nError: expected SourceRepositoryRef to be refs/heads/unreviewed, got refs/heads/main\n"
+    },
+    {
+      "id": "wrong-issuer",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://issuer.invalid"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "wrong-issuer.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "wrong-issuer.stderr.log",
+        "sha256": "8bede1af1c4b9b6412904ac0c8321cf2221ce63da5dc13e5d6099ae7b5f9f397"
+      },
+      "diagnostic": "\nError: expected Issuer to be https://issuer.invalid, got https://token.actions.githubusercontent.com\n"
+    },
+    {
+      "id": "wrong-certificate-identity",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/installer.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "wrong-certificate-identity.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "wrong-certificate-identity.stderr.log",
+        "sha256": "486941643d59bcaec905305a9ad2843539956d60f735745f77a05db562cfda19"
+      },
+      "diagnostic": "\nError: verifying with issuer \"sigstore.dev\"\n"
+    },
+    {
+      "id": "altered-tarball",
+      "expectedExit": 1,
+      "actualExit": 1,
+      "command": {
+        "executable": "gh",
+        "args": [
+          "attestation",
+          "verify",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\tampered-flujo-ai-3.46.2.tgz",
+          "--bundle",
+          "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\npm-baseline-3.46.2-crypto-20261004\\npm-provenance.sigstore.json",
+          "--repo",
+          "mario-andreschak/FLUJO",
+          "--predicate-type",
+          "https://slsa.dev/provenance/v1",
+          "--source-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--source-ref",
+          "refs/heads/main",
+          "--signer-digest",
+          "320347356891aa1c24e0f2f9ce12719317e58bde",
+          "--deny-self-hosted-runners",
+          "--digest-alg",
+          "sha512",
+          "--format",
+          "json",
+          "--cert-identity",
+          "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+          "--cert-oidc-issuer",
+          "https://token.actions.githubusercontent.com"
+        ]
+      },
+      "result": "passed",
+      "processError": null,
+      "stdout": {
+        "file": "altered-tarball.stdout.json",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "file": "altered-tarball.stderr.log",
+        "sha256": "486941643d59bcaec905305a9ad2843539956d60f735745f77a05db562cfda19"
+      },
+      "diagnostic": "\nError: verifying with issuer \"sigstore.dev\"\n"
+    }
+  ],
+  "result": "passed",
+  "verifiedCertificate": {
+    "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+    "subjectAlternativeName": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "githubWorkflowTrigger": "workflow_dispatch",
+    "githubWorkflowSHA": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "githubWorkflowName": "Publish npm release",
+    "githubWorkflowRepository": "mario-andreschak/FLUJO",
+    "githubWorkflowRef": "refs/heads/main",
+    "buildSignerURI": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "buildSignerDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "runnerEnvironment": "github-hosted",
+    "sourceRepositoryURI": "https://github.com/mario-andreschak/FLUJO",
+    "sourceRepositoryDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "sourceRepositoryRef": "refs/heads/main",
+    "sourceRepositoryIdentifier": "939611454",
+    "sourceRepositoryOwnerURI": "https://github.com/mario-andreschak",
+    "sourceRepositoryOwnerIdentifier": "196235471",
+    "buildConfigURI": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main",
+    "buildConfigDigest": "320347356891aa1c24e0f2f9ce12719317e58bde",
+    "buildTrigger": "workflow_dispatch",
+    "runInvocationURI": "https://github.com/mario-andreschak/FLUJO/actions/runs/37023576093/attempts/5",
+    "sourceRepositoryVisibilityAtSigning": "public"
+  },
+  "verifiedTimestamps": [
+    {
+      "type": "Tlog",
+      "uri": "https://rekor.sigstore.dev",
+      "timestamp": "2026-10-02T10:30:21-05:00"
+    }
+  ],
+  "verifiedIdentity": {
+    "subjectAlternativeName": {
+      "subjectAlternativeName": "https://github.com/mario-andreschak/FLUJO/.github/workflows/publish-npm.yml@refs/heads/main"
+    },
+    "issuer": {
+      "issuer": "",
+      "regexp": ".*"
+    },
+    "runnerEnvironment": "github-hosted"
+  },
+  "verifiedSubject": {
+    "name": "pkg:npm/flujo-ai@3.46.2",
+    "digest": {
+      "sha512": "4085f514128342f21904623a4d5c7bac704794efc5ca86d24e0a29f9185a630bed062ab886a6d936a7fbcad418723131052719e5f9fa02bb78b0979932cde5a9"
+    }
+  }
+}

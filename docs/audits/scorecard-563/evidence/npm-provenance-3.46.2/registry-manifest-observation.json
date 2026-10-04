@@ -1,0 +1,27 @@
+{
+  "name": "flujo-ai",
+  "version": "3.46.2",
+  "dist": {
+    "shasum": "3c0742c9850c8db6daa6d745de9f56d6e74659e1",
+    "tarball": "https://registry.npmjs.org/flujo-ai/-/flujo-ai-3.46.2.tgz",
+    "fileCount": 1694,
+    "integrity": "sha512-QIX1FBKDQvIZBGI6TVx7rHBHlO/FyobSTgop+RhaYwvtBiq4hqbZNqf7ytQYcjExBScZ5fn6Art4sJeZMs3lqQ==",
+    "signatures": [
+      {
+        "sig": "MEYCIQDtwU90Cz8N2eQCRsD7leOfLmHDQWQjhyL3N85XDxDqfgIhAJa2msFXBSChB8dwybqK15mYLpqDodkhpmycGqWDifL7",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIQDF+Q78OOKb72iFf2ngrFU2250tz73K8c8n+uW6k0nliwIgEzl6k22TlKhVQj/KQ5xkX5b5MKluNrpxpjrsAL64RDA=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/flujo-ai@3.46.2",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 44183071
+  }
+}

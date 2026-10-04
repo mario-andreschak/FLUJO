@@ -20,7 +20,8 @@ original digest. The pinned
 creates SLSA build provenance for both the executable and source inventory.
 The publisher downloads the same artifact, verifies both attestations with
 `gh attestation verify`, and rechecks main verification immediately before
-attaching the files. Verification requires the official repository/workflow,
+attaching the files. Verification requires the official repository and exact
+workflow certificate identity including the version tag, GitHub Actions OIDC issuer,
 exact source and signer digests, matching version tag and GitHub-hosted runner.
 Neither later job rebuilds or replaces the executable.
 
