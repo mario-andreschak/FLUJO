@@ -20,12 +20,28 @@ const versions = [
 ];
 
 for (const [version, supported] of versions) {
-  test(`runtime ${String(version)} is ${supported ? 'supported' : 'refused'}`, () => {
+  test(version === undefined ? 'runtime predicate refuses undefined'
+    : `runtime ${String(version)} is ${supported ? 'supported' : 'refused'}`, () => {
     assert.equal(isSupportedNodeRuntime(version), supported);
+    // Undefined is not a version for the pure predicate. The assertion API
+    // intentionally defaults it to the active runtime, checked separately.
+    if (version === undefined) return;
     if (supported) assert.doesNotThrow(() => assertSupportedNodeRuntime(version));
     else assert.throws(() => assertSupportedNodeRuntime(version), { code: 'UNSUPPORTED_NODE_RUNTIME' });
   });
 }
+
+test('runtime assertion defaults to the active runtime when omitted or undefined', () => {
+  const supported = isSupportedNodeRuntime(process.versions.node);
+  for (const assertion of [
+    () => assertSupportedNodeRuntime(),
+    () => assertSupportedNodeRuntime(undefined),
+    () => assertSupportedNodeRuntime(process.versions.node),
+  ]) {
+    if (supported) assert.doesNotThrow(assertion);
+    else assert.throws(assertion, { code: 'UNSUPPORTED_NODE_RUNTIME' });
+  }
+});
 
 test('runtime errors contain bounded migration guidance without interpolating probe input', () => {
   assert.throws(() => assertSupportedNodeRuntime('secret-probe-value'), (error) => {
