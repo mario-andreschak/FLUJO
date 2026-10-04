@@ -76,7 +76,10 @@ const STATE_TOOLS = new Set([
 
 export function flujoBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.FLUJO_BASE_URL?.trim();
-  const result = (configured || 'http://127.0.0.1:4200').replace(/\/+$/, '');
+  const base = configured || 'http://127.0.0.1:4200';
+  let end = base.length;
+  while (end > 0 && base.charCodeAt(end - 1) === 47) end -= 1;
+  const result = base.slice(0, end);
   if (env.FLUJO_WORKER_MODE === '1') {
     const url = new URL(result);
     if (!['http:', 'https:'].includes(url.protocol)

@@ -1,0 +1,1653 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-04T00:36:29.378Z",
+  "analysis": {
+    "id": 1887239452,
+    "tool": "CodeQL",
+    "version": "2.27.1",
+    "category": "/language:javascript-typescript",
+    "commitSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+    "ref": "refs/pull/611/merge",
+    "sarifSha256": "60331df4aa298430cb5a177ee91670b3c636864c38959a08736d9d0b6565a796"
+  },
+  "baseline": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "baselineSourceBindings": [
+    {
+      "path": "__tests__/mcp/browserServer.test.ts",
+      "analyzedBlob": "336eb7ccfaf3c0959207e79c56bc026b45254a47",
+      "baselineBlob": "336eb7ccfaf3c0959207e79c56bc026b45254a47",
+      "exactMatch": true
+    },
+    {
+      "path": "__tests__/mcp/filesystemApp.test.ts",
+      "analyzedBlob": "3889c082dece39dfb4b692556db7412a8d50b485",
+      "baselineBlob": "3889c082dece39dfb4b692556db7412a8d50b485",
+      "exactMatch": true
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "analyzedBlob": "7abbd89ae6c7f357fa6abe14f6c343dfc4f64976",
+      "baselineBlob": "7abbd89ae6c7f357fa6abe14f6c343dfc4f64976",
+      "exactMatch": true
+    },
+    {
+      "path": "__tests__/mcp/quality/orchestrator.test.ts",
+      "analyzedBlob": "f06b4ee42dac2eb4af30a93a3d0c6e02ac9ac869",
+      "baselineBlob": "f06b4ee42dac2eb4af30a93a3d0c6e02ac9ac869",
+      "exactMatch": true
+    },
+    {
+      "path": "__tests__/mcp/sandboxRelay.test.ts",
+      "analyzedBlob": "09aff993615d72776bc274ce437124943a75615d",
+      "baselineBlob": "09aff993615d72776bc274ce437124943a75615d",
+      "exactMatch": true
+    },
+    {
+      "path": "mcp-servers/bash/src/tools.ts",
+      "analyzedBlob": "b33c2166ce13de336e50cf83bfdfc520c1eecb91",
+      "baselineBlob": "b33c2166ce13de336e50cf83bfdfc520c1eecb91",
+      "exactMatch": true
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "analyzedBlob": "b1822be26c8290a554e63f3c913793b04dfdad74",
+      "baselineBlob": "b1822be26c8290a554e63f3c913793b04dfdad74",
+      "exactMatch": true
+    },
+    {
+      "path": "mcp-servers/flujo/src/client.ts",
+      "analyzedBlob": "fb9af709d87d3644b73b48e40dfbead7d6bcd728",
+      "baselineBlob": "fb9af709d87d3644b73b48e40dfbead7d6bcd728",
+      "exactMatch": true
+    }
+  ],
+  "gateAccepted": false,
+  "alertDismissals": [],
+  "scanConfigurationChanges": [],
+  "findings": [
+    {
+      "number": 162,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1121,
+      "end": 1121,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 161,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1054,
+      "end": 1054,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 160,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 993,
+      "end": 993,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 159,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 981,
+      "end": 981,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 158,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 967,
+      "end": 967,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 157,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 940,
+      "end": 940,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 156,
+      "rule": "js/insecure-temporary-file",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 725,
+      "end": 725,
+      "message": "Insecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.\nInsecure creation of file in the os temp dir.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 148,
+      "rule": "js/insecure-randomness",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/bash/src/tools.ts",
+      "line": 2647,
+      "end": 2647,
+      "message": "This uses a cryptographically insecure random number generated at Math.random() in a security context.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 147,
+      "rule": "js/insecure-randomness",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/bash/src/tools.ts",
+      "line": 2365,
+      "end": 2365,
+      "message": "This uses a cryptographically insecure random number generated at Math.random() in a security context.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 142,
+      "rule": "js/bad-tag-filter",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/sandboxRelay.test.ts",
+      "line": 31,
+      "end": 31,
+      "message": "This regular expression does not match upper case <SCRIPT> tags.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 141,
+      "rule": "js/bad-tag-filter",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/filesystemApp.test.ts",
+      "line": 89,
+      "end": 89,
+      "message": "This regular expression does not match upper case <SCRIPT> tags.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 140,
+      "rule": "js/bad-tag-filter",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/browserServer.test.ts",
+      "line": 159,
+      "end": 159,
+      "message": "This regular expression does not match upper case <SCRIPT> tags.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 139,
+      "rule": "js/bad-tag-filter",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/browserServer.test.ts",
+      "line": 138,
+      "end": 138,
+      "message": "This regular expression does not match upper case <SCRIPT> tags.",
+      "proposedDisposition": "false_positive_independent_review_required"
+    },
+    {
+      "number": 135,
+      "rule": "js/polynomial-redos",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/flujo/src/client.ts",
+      "line": 79,
+      "end": 79,
+      "message": "This regular expression that depends on library input may run slow on strings with many repetitions of '/'.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 134,
+      "rule": "js/polynomial-redos",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/bash/src/tools.ts",
+      "line": 1512,
+      "end": 1512,
+      "message": "This regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.\nThis regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 133,
+      "rule": "js/polynomial-redos",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "mcp-servers/bash/src/tools.ts",
+      "line": 1436,
+      "end": 1436,
+      "message": "This regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.\nThis regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.\nThis regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.\nThis regular expression that depends on library input may run slow on strings starting with '\"' and with many repetitions of '\\\\\"'.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 13,
+      "rule": "js/incomplete-url-substring-sanitization",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/quality/orchestrator.test.ts",
+      "line": 75,
+      "end": 75,
+      "message": "'api.npmjs.org' can be anywhere in the URL, and arbitrary hosts may come before or after it.",
+      "proposedDisposition": "source_change_requires_rescan"
+    },
+    {
+      "number": 12,
+      "rule": "js/incomplete-url-substring-sanitization",
+      "severity": "high",
+      "state": "open",
+      "analysisSha": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+      "path": "__tests__/mcp/quality/orchestrator.test.ts",
+      "line": 56,
+      "end": 56,
+      "message": "'api.npmjs.org' can be anywhere in the URL, and arbitrary hosts may come before or after it.",
+      "proposedDisposition": "source_change_requires_rescan"
+    }
+  ],
+  "filesystemThreadFlows": [
+    {
+      "sinkLine": 725,
+      "paths": [
+        {
+          "originalStepCount": 29,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28
+          ]
+        },
+        {
+          "originalStepCount": 29,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28
+          ]
+        },
+        {
+          "originalStepCount": 29,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28
+          ]
+        },
+        {
+          "originalStepCount": 29,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 940,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            51
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            51
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            51
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 967,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            52
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            52
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            52
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            52
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 981,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            53
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            53
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            53
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            53
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 993,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            54
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            54
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            54
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            44,
+            45,
+            46,
+            47,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            48,
+            49,
+            50,
+            54
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 1054,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            62
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            62
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            62
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            62
+          ]
+        }
+      ]
+    },
+    {
+      "sinkLine": 1121,
+      "paths": [
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            63
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            63
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            63
+          ]
+        },
+        {
+          "originalStepCount": 27,
+          "stepIds": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            5,
+            55,
+            56,
+            57,
+            58,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            59,
+            60,
+            61,
+            63
+          ]
+        }
+      ]
+    }
+  ],
+  "changedSourceSha256": [
+    {
+      "file": "mcp-servers/bash/src/tools.ts",
+      "sha256": "21aedab771d91455695b4affd25ab68bcf7b1fb9bc71d71ae1d19e214b882d32"
+    },
+    {
+      "file": "mcp-servers/flujo/src/client.ts",
+      "sha256": "251153a4ad500e3b94b97302e9e04454ff03fefe4876e9a89c3a4c7cd056dd76"
+    },
+    {
+      "file": "__tests__/mcp/packageInputBoundary.test.ts",
+      "sha256": "7b9d6b51778753eee056744ccee037a6e63aca867c05c3e84cb030011d0ff0a0"
+    },
+    {
+      "file": "__tests__/mcp/bashDialect.test.ts",
+      "sha256": "60f421800fd8554704a0bb315f51742a16c138d764c53cdcac7c3078687b6bd3"
+    },
+    {
+      "file": "__tests__/mcp/bashTools.test.ts",
+      "sha256": "3e1e926a9404e58aef10144f57d775b80225c591baf9aea279d964bed1569c27"
+    },
+    {
+      "file": "__tests__/mcp/filesystemRoots.test.ts",
+      "sha256": "202cb105f6d12e8aeb1ac7a3a4ac91aaaf63a8b07c1172e3c4f334ab241b5f30"
+    },
+    {
+      "file": "__tests__/mcp/flujoHttpClient.test.ts",
+      "sha256": "cd6528bb715743d959112e8b1f5a2fb5746cdcea082fc0788440b6740758db36"
+    },
+    {
+      "file": "__tests__/mcp/quality/orchestrator.test.ts",
+      "sha256": "5080889ce9cc08d72e911cf7d644cb030a14f1405b2bd91045fddc02ea9066fe"
+    }
+  ],
+  "validation": {
+    "passingChecksAcrossScopedSuites": 202,
+    "suites": 11,
+    "fullCleanMatrix": false,
+    "negativeControl": {
+      "failed": 2,
+      "reason": "Both compiled baseline adversarial checks hit the 5000 ms process deadline"
+    },
+    "initialRegression": {
+      "passed": 148,
+      "failed": 7,
+      "reason": "Unused child mock queue from the new PTY test; fixed and the affected entire Bash suite rerun"
+    },
+    "fixedFast": {
+      "passed": 47,
+      "failed": 0
+    },
+    "fixedBashRerun": {
+      "passed": 44,
+      "failed": 0
+    },
+    "unaffectedRegression": {
+      "passed": 111,
+      "failed": 0
+    },
+    "packageBuilds": "passed for Bash and FLUJO",
+    "packageTypechecks": "passed for Bash and FLUJO",
+    "lint": "changed files passed with --no-ignore",
+    "applicationBuild": "not_run_locally",
+    "updatedCodeqlScan": "pending"
+  },
+  "retainedEvidenceDirectory": "C:/Users/Moe/.codex/visualizations/2026/10/03/01a103ab-4561-7400-95ca-4be7249284cd",
+  "evidence": [
+    {
+      "file": "integration-d29fbd24-codeql.sarif.json",
+      "sha256": "60331df4aa298430cb5a177ee91670b3c636864c38959a08736d9d0b6565a796"
+    },
+    {
+      "file": "filesystem-codeql-d29-dataflows.json",
+      "sha256": "3579bbcf28294145fe139e5e9b7efcc575c873aa98bd0ebfc9863214d5cbfe70"
+    },
+    {
+      "file": "mcp-package-codeql-d29-results.json",
+      "sha256": "35e8af3b02ee0a8da989513c3c035ef3bd2fbe91a489603a307cb2d5a848adc3"
+    },
+    {
+      "file": "mcp-codeql-negative-control.json",
+      "sha256": "780a78df6a774b66849a5ae618aa9f1d5736f0b1161c09224a315845bdbf2868"
+    },
+    {
+      "file": "mcp-codeql-fixed-fast-tests.json",
+      "sha256": "c1316ae936d0e74ddf6d548fbdf967e71d9bd7a1eed979d7b0324ba222dba6f3"
+    },
+    {
+      "file": "mcp-codeql-fixed-regression-tests.json",
+      "sha256": "e0b9720330e4a833054d67b13df39c8b73879c1b0df1ec907f7229b3e504f508"
+    },
+    {
+      "file": "mcp-codeql-fixed-bash-tests-2.json",
+      "sha256": "1e97a4e1b935b101a17ad86c53b45df32011ccaecc1912c75ff03f3d2c866cb4"
+    },
+    {
+      "file": "mcp-codeql-fixed-bash-build.log",
+      "sha256": "a1cbd0ddf7547b2e19de4a83ca17aeac14b5db7818f3521c012fb1ddf8779af5"
+    },
+    {
+      "file": "mcp-codeql-fixed-flujo-build.log",
+      "sha256": "3f07bd8b3bd90ecd0cb0169b030111382bada00530fc0563610bcc1c7cbca437"
+    }
+  ],
+  "dataflowSteps": [
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 47,
+      "message": "os.tmpdir()"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 47,
+      "message": "path.jo ... }.txt`)"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 47,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 48,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 48,
+      "message": "{ path: ... : 'x' } [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1852,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1875,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 867,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 871,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 694,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 695,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 695,
+      "message": "args.path"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 246,
+      "message": "input"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 247,
+      "message": "input"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 247,
+      "message": "input.trim()"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 247,
+      "message": "raw"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 249,
+      "message": "raw"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 230,
+      "message": "raw"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 234,
+      "message": "raw"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 249,
+      "message": "_normal ... ts(raw)"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 249,
+      "message": "normalized"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 252,
+      "message": "normalized"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 252,
+      "message": "path.re ... alized)"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 251,
+      "message": "resolved"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 258,
+      "message": "resolved"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 695,
+      "message": "resolve ...  roots) [PromiseValue]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 695,
+      "message": "await r ...  roots)"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 695,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 725,
+      "message": "filePath"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 55,
+      "message": "os.tmpdir()"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 55,
+      "message": "path.jo ... }.txt`)"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 55,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 56,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemRoots.test.ts",
+      "line": 56,
+      "message": "{ path: ... : 'x' } [path]"
+    },
+    {
+      "path": "__tests__/mcp/filesystemNodeRoots.test.ts",
+      "line": 90,
+      "message": "os.tmpdir()"
+    },
+    {
+      "path": "__tests__/mcp/filesystemNodeRoots.test.ts",
+      "line": 90,
+      "message": "path.jo ... }.txt`)"
+    },
+    {
+      "path": "__tests__/mcp/filesystemNodeRoots.test.ts",
+      "line": 90,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemNodeRoots.test.ts",
+      "line": 91,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemNodeRoots.test.ts",
+      "line": 91,
+      "message": "{ path: ... : 'x' } [path]"
+    },
+    {
+      "path": "__tests__/mcp/filesystemTools.test.ts",
+      "line": 625,
+      "message": "os.tmpdir()"
+    },
+    {
+      "path": "__tests__/mcp/filesystemTools.test.ts",
+      "line": 625,
+      "message": "path.jo ... }.txt`)"
+    },
+    {
+      "path": "__tests__/mcp/filesystemTools.test.ts",
+      "line": 625,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemTools.test.ts",
+      "line": 626,
+      "message": "outside"
+    },
+    {
+      "path": "__tests__/mcp/filesystemTools.test.ts",
+      "line": 626,
+      "message": "{ path: ... : 'x' } [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1877,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 929,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 930,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 930,
+      "message": "args.path"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 930,
+      "message": "resolve ...  roots) [PromiseValue]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 930,
+      "message": "await r ...  roots)"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 930,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 940,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 967,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 981,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 993,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1879,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1016,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1017,
+      "message": "args [path]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1017,
+      "message": "args.path"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1017,
+      "message": "resolve ...  roots) [PromiseValue]"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1017,
+      "message": "await r ...  roots)"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1017,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1054,
+      "message": "filePath"
+    },
+    {
+      "path": "mcp-servers/filesystem/src/tools.ts",
+      "line": 1121,
+      "message": "filePath"
+    }
+  ],
+  "dataflowEncoding": "Each stepIds entry indexes dataflowSteps. All original ordered steps are retained; repeated records are shared."
+}

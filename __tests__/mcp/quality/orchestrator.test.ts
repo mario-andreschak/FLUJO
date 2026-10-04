@@ -20,6 +20,22 @@ function mockRes(body: unknown, ok = true): Response {
   } as unknown as Response;
 }
 
+function isNpmApiRequest(input: Parameters<typeof fetch>[0]): boolean {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  return url.protocol === 'https:' && url.hostname === 'api.npmjs.org';
+}
+
+it('routes fixture responses by the actual HTTPS hostname', () => {
+  expect(isNpmApiRequest('https://api.npmjs.org/downloads/point/last-week/pkg')).toBe(true);
+  for (const url of [
+    'https://api.npmjs.org.attacker.test/downloads',
+    'https://attacker.test/api.npmjs.org',
+    'https://attacker.test/?target=api.npmjs.org',
+    'https://api.npmjs.org@attacker.test/',
+    'http://api.npmjs.org/downloads',
+  ]) expect(isNpmApiRequest(url)).toBe(false);
+});
+
 function candidate(name: string, repo: string, pkg: string): ServerCandidate {
   return {
     registryName: name,
@@ -53,7 +69,7 @@ describe('enrichAndRank', () => {
           ],
         });
       }
-      if (url.includes('api.npmjs.org')) {
+      if (isNpmApiRequest(input)) {
         return mockRes({ 'high-pkg': { downloads: 500000 }, 'low-pkg': { downloads: 4 } });
       }
       return mockRes({});
@@ -72,7 +88,7 @@ describe('enrichAndRank', () => {
     jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/search/repositories')) throw new Error('github down');
-      if (url.includes('api.npmjs.org')) {
+      if (isNpmApiRequest(input)) {
         return mockRes({ 'high-pkg': { downloads: 500000 }, 'low-pkg': { downloads: 4 } });
       }
       return mockRes({});
