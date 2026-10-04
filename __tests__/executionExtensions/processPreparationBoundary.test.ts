@@ -98,6 +98,25 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     expect(discovery).not.toHaveBeenCalled();
   });
 
+  test('malformed owner-bound Process node ID is refused before prompt or MCP preparation', async () => {
+    const { state, params } = setup();
+    await saveItem(StorageKey.MODELS, [{
+      id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '',
+      ownerCredentialBinding: { ownerId: 'owner-fixture', credentialId: 'credential-fixture' },
+    }]);
+    const render = jest.spyOn(promptRenderer, 'renderPrompt');
+    const discovery = jest.spyOn(ToolHandler, 'processMCPNodes');
+    const input = params({ mcpNodes: [{ id: 'allowed', properties: {
+      boundServer: 'protected-fixture', enabledTools: [],
+    } }] });
+    input.id = 'process/invalid';
+
+    await expect(new ProcessNode().prep(state, input))
+      .rejects.toMatchObject({ code: 'execution_model_step_slot_required' });
+    expect(render).not.toHaveBeenCalled();
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
   test('a missing model is refused before prompt or MCP preparation', async () => {
     await saveItem(StorageKey.MODELS, []);
     const { state, params } = setup();

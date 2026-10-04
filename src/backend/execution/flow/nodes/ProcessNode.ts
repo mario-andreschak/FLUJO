@@ -53,7 +53,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { ExecutionExtensionError, MAX_EXECUTION_MODEL_STEP_ORDINAL, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, MAX_EXECUTION_MODEL_STEP_ORDINAL, assertExecutionExtensionCurrent, assertExecutionModelStepNodeId, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -443,6 +443,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         throw new ExecutionExtensionError('execution_model_step_context_required');
       }
     }
+    if (isOwnerCredentialBoundModel(admission.model)) assertExecutionModelStepNodeId(nodeId);
 
     // Tool definitions are collected by connecting to every bound MCP server.
     // A protected run must reject foreign bindings before prompt rendering or

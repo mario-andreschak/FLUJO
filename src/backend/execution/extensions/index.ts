@@ -162,6 +162,11 @@ function sameBoundModel(a: ExecutionBoundModelIdentity, candidate: unknown): boo
 }
 /** A trusted parent can request a fresh child only for a bound model. The
  * owner still authenticates the original step and accounts for its budget. */
+export function assertExecutionModelStepNodeId(candidate: unknown): asserts candidate is string {
+  if (typeof candidate !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(candidate)) {
+    throw new ExecutionExtensionError('execution_model_step_slot_required');
+  }
+}
 function snapshotModelStepSlot(candidate: unknown): ExecutionModelStepSlot {
   if (!candidate || typeof candidate !== 'object' || types.isProxy(candidate)
     || Object.getPrototypeOf(candidate) !== Object.prototype) {
@@ -174,8 +179,8 @@ function snapshotModelStepSlot(candidate: unknown): ExecutionModelStepSlot {
   }
   const nodeId = descriptors.nodeId.value;
   const ordinal = descriptors.ordinal.value;
-  if (typeof nodeId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(nodeId)
-    || !Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal > MAX_EXECUTION_MODEL_STEP_ORDINAL) {
+  assertExecutionModelStepNodeId(nodeId);
+  if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal > MAX_EXECUTION_MODEL_STEP_ORDINAL) {
     throw new ExecutionExtensionError('execution_model_step_slot_required');
   }
   return Object.freeze({ nodeId, ordinal });
