@@ -19,13 +19,14 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import micromatch from 'micromatch';
+import { globsToMatcher, replacePathSepForGlob } from 'jest-util';
 import ts from 'typescript';
 import { ALL_TEST_GLOBS } from '../../jest.testMatch.mjs';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const TESTS_DIR = path.join(ROOT, '__tests__');
 const TEST_FILE = /\.(test|spec)\.tsx?$/;
+const matchesCollectedTest = globsToMatcher(ALL_TEST_GLOBS.map(replacePathSepForGlob));
 
 async function walk(dir: string): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -72,7 +73,7 @@ describe('every collected test file parses', () => {
     expect(files.length).toBeGreaterThan(0);
 
     const collected = files.filter((file) =>
-      micromatch.isMatch(path.relative(ROOT, file).replace(/\\/g, '/'), ALL_TEST_GLOBS),
+      matchesCollectedTest(path.relative(ROOT, file).replace(/\\/g, '/')),
     );
     expect(collected.length).toBeGreaterThan(0);
 
