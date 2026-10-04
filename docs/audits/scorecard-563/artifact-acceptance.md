@@ -74,6 +74,27 @@ commands and underlying producer evidence must remain available for review and
 repetition. Do not turn a scanner summary, successful CI label, unsigned statement
 or source fixture into a passed producer row.
 
+## Scanner coverage
+
+Retain a scanner result's exact source and analyzed commit/tree, base/ref, languages,
+query suite, tool version and reporting filters with its raw report and job output.
+Record whether coverage is full or restricted to a patch. A synthetic merge commit
+can identify the same tree as a source head; compare the trees and retain both
+identities rather than silently replacing the analyzed SHA.
+
+[GitHub's CodeQL pull-request reporting](https://github.blog/changelog/2025-05-28-incremental-security-analysis-makes-codeql-up-to-20-faster-in-pull-requests/)
+reports new alerts within changed lines. Its
+[diff-informed analysis](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/scan-from-the-command-line/incremental-analysis#diff-informed-analysis)
+uses those ranges to restrict reported results. Zero results from a narrow patch
+therefore cannot establish zero findings across the repository or selected release.
+Keep earlier findings and remediation/triage evidence visible; a successful upload
+or a clean patch does not resolve them.
+
+Security acceptance still needs evidence covering the full selected release and
+declared installed threat matrix, with unresolved high/critical findings handled
+under the agreed contract. Scanner output cannot qualify installation, human
+review, workload windows or independent grade acceptance.
+
 ## Ledger wiring
 
 1. Retain the producer's JSON report under the evidence directory. Preserve its
