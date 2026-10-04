@@ -33,3 +33,6 @@ for (const [label, change] of [
     assert.throws(() => assertWorkflowContract(files));
   });
 }
+
+// Disposable gate fixture; never integrate this intentional failure into main.
+test('intentional merge-denial probe', () => assert.fail('expected red gate'));
