@@ -68,6 +68,25 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 
 export function assertWorkflowContract(workflows) {
   assertNodeRuntimeWorkflowContract(workflows);
+  const docsWorkflow = workflows['scorecard-source.yml'];
+  const docs = docsWorkflow?.jobs?.['scorecard-source'];
+  const docsSteps = docs?.steps ?? [];
+  const capture = docsSteps.findIndex(step => step.run === 'node scripts/check-scorecard-ci.mjs "${{ runner.temp }}/scorecard-source-checks"');
+  if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'pull_request') || docsWorkflow.on.pull_request?.paths || docsWorkflow.on.pull_request?.['paths-ignore']
+      || docs?.if || docs?.['continue-on-error'] || docs?.strategy?.['fail-fast'] !== false
+      || JSON.stringify(docs?.strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])
+      || docsWorkflow.env?.NODE_OPTIONS || docs.env?.NODE_OPTIONS
+      || capture < 0 || docsSteps[capture].if || docsSteps[capture]['continue-on-error']
+      || docsSteps[capture - 1]?.run !== `node scripts/verify-ci-node.mjs ${CI_NODE_PROFILES.current22} --record`
+      || !docsSteps.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.['fetch-depth'] === 0)) {
+    throw new Error('Dedicated Docs CI must retain both OSes, full Git history and mandatory direct capture after the verified runtime.');
+  }
+  for (const path of ['${{ runner.temp }}/scorecard-source-checks/', 'ci-node-runtime/']) {
+    if (!docsSteps.some(step => step.uses?.startsWith('actions/upload-artifact@') && step.if === 'always()'
+        && !step['continue-on-error'] && step.with?.path === path && step.with['if-no-files-found'] === 'error')) {
+      throw new Error('Dedicated Docs CI must retain source and binary evidence even on failure.');
+    }
+  }
   for (const [file, workflow] of Object.entries(workflows)) {
     if (!workflow?.permissions || typeof workflow.permissions !== 'object'
         || Object.values(workflow.permissions).some((value) => value !== 'read' && value !== 'none')) {

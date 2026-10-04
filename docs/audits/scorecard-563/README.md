@@ -34,8 +34,16 @@ experimental only with explicit independent acceptance and visible limits.
   published `b8cf905f` tree to its executed merge, downloaded audit archive and
   actual job results. The Ubuntu development-inclusive audit reports zero findings;
   Windows production and overall verification failed. The source dependency gate
-  remains pending for selected-release/profile qualification; the build gate is failed.
+  remained pending for selected-release/profile qualification; the build gate was failed at that capture.
   Historical failures, producer reports and the rejected replay remain retained.
+- [Later c255b867 verify failure](evidence/hosted-ci-c255b867-failure.json) retains
+  the failed Windows startup and final gate at that exact source, alongside its
+  successful Linux and ordinary/isolated test jobs. Later successes do not erase it.
+- [Integration-80 native CodeQL findings](evidence/native-codeql-1a53970d-failure.json)
+  retains the failing finding check: 56 new alerts, including 32 high and 24 medium.
+  Its large-change caveat remains. This source scanner has no verified exploit,
+  individual disposition or released-profile attribution here; npm audit results
+  are separate evidence. The local-security gate remains pending.
 - [npm content inspection](evidence/npm-content-inspection-3.46.2.json) retains
   verified tarball digests, decoded subject comparisons and shipped manifest/build
   identity, with signature and installation checks explicitly unperformed.
@@ -330,3 +338,20 @@ profiles passing on both OSes. Its ordinary Jest skips and omitted canonical run
 remain explicit. The earlier b8cf905f failure is preserved; the current combined candidate
 and selected-release/profile acceptance remain pending. This chronology changes the build
 gate to pending and supplies no human/live/security/grade acceptance.
+
+The version-1 schema pins the published policies for all thirty budgets: operator,
+limit, unit, sampling description, window, basis and minimum observation envelope.
+Stricter observation minima remain allowed. Pinning these proposals prevents silent
+weakening; it does not ratify them. The live-spend cap remains unset, and a concrete
+funded limit requires a separately reviewed contract update before measurement.
+New unmeasured proposals may still be recorded. Agreement or passing measurements
+require a reviewed policy, unit semantics and permitted evidence carriers. Signed
+growth and derived Persona flatness are explicit policies; identifier suffixes
+grant no measurement exceptions.
+
+Dedicated Docs CI requires all four named source suites and at least 99 tests, with
+zero failures, cancellations, skips or todos. Its tested result contract checks
+direct exits, both retained wall clocks, unchanged clean source and workflow SHA.
+Both OSes must run the capture immediately after binary verification and retain
+source and binary reports even on failure. Closure exit 2 records incompleteness;
+closure exit 0 remains a ledger declaration requiring external acceptance.

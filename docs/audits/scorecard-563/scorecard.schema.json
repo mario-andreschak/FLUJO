@@ -698,18 +698,44 @@
           "live-spend": "USD"
         },
         "unitKinds": {
-          "ms": { "kind": "duration", "millisecondsPerUnit": 1 },
-          "seconds": { "kind": "duration", "millisecondsPerUnit": 1000 },
-          "ratio": { "kind": "ratio" },
-          "USD": { "kind": "continuous" },
-          "bytes": { "kind": "integer" },
-          "records": { "kind": "integer" },
-          "humans": { "kind": "integer" },
-          "lanes": { "kind": "integer" },
-          "effects": { "kind": "integer" },
-          "operations": { "kind": "integer" },
-          "findings": { "kind": "integer" },
-          "interventions": { "kind": "integer" }
+          "ms": {
+            "kind": "duration",
+            "millisecondsPerUnit": 1
+          },
+          "seconds": {
+            "kind": "duration",
+            "millisecondsPerUnit": 1000
+          },
+          "ratio": {
+            "kind": "ratio"
+          },
+          "USD": {
+            "kind": "continuous"
+          },
+          "bytes": {
+            "kind": "integer"
+          },
+          "records": {
+            "kind": "integer"
+          },
+          "humans": {
+            "kind": "integer"
+          },
+          "lanes": {
+            "kind": "integer"
+          },
+          "effects": {
+            "kind": "integer"
+          },
+          "operations": {
+            "kind": "integer"
+          },
+          "findings": {
+            "kind": "integer"
+          },
+          "interventions": {
+            "kind": "integer"
+          }
         },
         "sourceMetricElapsedBudgets": [
           "persona-recall-p95"
@@ -809,7 +835,507 @@
             "offline-simulation",
             "source-check"
           ]
-        }
+        },
+        "budgetPolicies": {
+          "persona-append-p95": {
+            "operator": "<",
+            "limit": 150,
+            "unit": "ms",
+            "denominator": "Raw append samples for every one of 28 days, 20 Activities/day, seed 459, learning enabled",
+            "window": "28 simulated days; no elapsed-time inference",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 28
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-peak-rss": {
+            "operator": "<=",
+            "limit": 805306368,
+            "unit": "bytes",
+            "denominator": "Daily runtime observations on pinned controlled Node 22 runner",
+            "window": "Entire 28 x 20 simulated workload",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-rss-growth": {
+            "operator": "<=",
+            "limit": 268435456,
+            "unit": "bytes",
+            "denominator": "Matched day-1/final observations on same runner",
+            "window": "28 simulated days",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": true,
+            "ratioMode": null
+          },
+          "persona-append-flatness": {
+            "operator": "<=",
+            "limit": 2,
+            "unit": "ratio",
+            "denominator": "All daily raw append samples and nearest-rank p95",
+            "window": "First seven versus last seven simulated days",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": "derived"
+          },
+          "persona-total-collection": {
+            "operator": "<=",
+            "limit": 1248,
+            "unit": "records",
+            "denominator": "2 x 560 generated Activities + 128; all collection kinds included",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-mailbox": {
+            "operator": "<=",
+            "limit": 500,
+            "unit": "records",
+            "denominator": "All Persona mailbox records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-activities": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona Activity records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-dispatches": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona flow dispatch records",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-pins": {
+            "operator": "<=",
+            "limit": 200,
+            "unit": "records",
+            "denominator": "All Persona Behavior call pins",
+            "window": "Every daily checkpoint",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-leases": {
+            "operator": "<=",
+            "limit": 50,
+            "unit": "records",
+            "denominator": "All current and legacy Persona lease records",
+            "window": "After every guarded sweep",
+            "basis": "docs/performance/persona-runtime-soak-acceptance.md",
+            "observation": {
+              "clock": "simulated",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 28,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "persona-recall-p95": {
+            "operator": "<",
+            "limit": 150,
+            "unit": "ms",
+            "denominator": "50,000 items; 20 searches, with full-candidate and ranking quality checks",
+            "window": "One exact-revision controlled run",
+            "basis": "docs/performance/persona-memory-recall-benchmark.md",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 20
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "pilot-users": {
+            "operator": ">=",
+            "limit": 10,
+            "unit": "humans",
+            "denominator": "All enrolled humans reported; ten independent target users each week, excluding author/bots",
+            "window": "Eight consecutive elapsed weeks",
+            "basis": "#563 published plan; #577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 4838400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "novice-success": {
+            "operator": ">=",
+            "limit": 8,
+            "unit": "humans",
+            "denominator": "Ten novices; provisioning, drop-offs and missing outcomes separately recorded, no favorable replacement",
+            "window": "One attempt per novice, within 15 minutes",
+            "basis": "#563 published plan; #572/#577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "novice-time": {
+            "operator": "<=",
+            "limit": 900,
+            "unit": "seconds",
+            "denominator": "All ten attempts from install start; preprovisioning time separately reported",
+            "window": "Single 15-minute attempt",
+            "basis": "#563 published plan; #572/#577 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "backup-maintainers": {
+            "operator": ">=",
+            "limit": 2,
+            "unit": "humans",
+            "denominator": "Named additional humans completing review and disposable release/recovery drills",
+            "window": "After training; observed drills before acceptance",
+            "basis": "#563 published plan; #576 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 2
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "human-contributors": {
+            "operator": ">=",
+            "limit": 3,
+            "unit": "humans",
+            "denominator": "Unique humans, excluding author and all bots",
+            "window": "90 elapsed days",
+            "basis": "#563 published plan; #576 agreement pending",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 7776000,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 3
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "runtime-peak-rss": {
+            "operator": "<=",
+            "limit": 1073741824,
+            "unit": "bytes",
+            "denominator": "Node 22 controlled 2-CPU/2-GiB Windows/Linux runner, eight mixed lanes with <=four active; >=2 MB parent/<=5.6 MB child transcripts; media separately bounded",
+            "window": "24 elapsed hours; measured admission/refusal plus original #520 reproduction",
+            "basis": "#569 resource owner must ratify workload and admission budgets before measurement; not a current guarantee",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 24
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "runtime-rss-growth": {
+            "operator": "<=",
+            "limit": 134217728,
+            "unit": "bytes",
+            "denominator": "Same #569 workload, first hour baseline after warmup, no cache reset",
+            "window": "Hours 2 through 24",
+            "basis": "#569 proposal; must distinguish GC/allocator high water and retained growth",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 24
+            },
+            "allowNegative": true,
+            "ratioMode": null
+          },
+          "runtime-concurrency": {
+            "operator": "<=",
+            "limit": 4,
+            "unit": "lanes",
+            "denominator": "Eight queued lanes; refusal/backpressure counts, owned paused states and archive bytes reported",
+            "window": "24 elapsed hours",
+            "basis": "#569 proposal; does not authorize silently reducing configured parallelism",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 86400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 8
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "recovery-rto": {
+            "operator": "<=",
+            "limit": 120,
+            "unit": "seconds",
+            "denominator": "Ten injected process kills and ten graceful restarts per claimed OS/install profile; readiness plus admitted/suppressed schedule state, not port-open alone",
+            "window": "Twenty fault trials per profile",
+            "basis": "#570/#553 owners must ratify; interrupted effects never blindly replay",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 20
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "backup-rpo": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "records",
+            "denominator": "Ten disposable round trips per claimed profile; corruption/unknown-version/foreign-owner negative controls included",
+            "window": "Ten trials per OS/install profile",
+            "basis": "#570/#567 proposal; coherent writer freeze required before capture",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "duplicate-effects": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "effects",
+            "denominator": "All admitted effect IDs across restart/fault trials; unknown outcomes counted separately, never success",
+            "window": "All recovery trials and authorized live runs",
+            "basis": "#570/#553/#578 proposal",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "unauthorized-access": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "operations",
+            "denominator": "Every positive/negative row of session/token/origin/CSRF/account/workspace/process/export/share/revoke matrix; report exact row count, skipped rows block",
+            "window": "One complete release matrix per profile",
+            "basis": "#566-#568/#574-#575; security owner must sign coverage",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "high-findings": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "findings",
+            "denominator": "All independent review findings; severity dispute remains blocker",
+            "window": "At final independent reassessment",
+            "basis": "#563/#578",
+            "observation": {
+              "clock": "any",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-smoke": {
+            "operator": ">=",
+            "limit": 3600,
+            "unit": "seconds",
+            "denominator": "All due rounds, admitted Activities, verified effects, failures, unscheduled interventions and spend observations",
+            "window": "One elapsed hour, before longer live stages",
+            "basis": "#578 proposal; concrete account/model scope and separately declared enforced monetary envelope remain unset",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 3600,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-seven-days": {
+            "operator": ">=",
+            "limit": 604800,
+            "unit": "seconds",
+            "denominator": "All due rounds and verified effects across restarts; no omitted downtime; >=99% successful due rounds, zero duplicate effects",
+            "window": "Seven consecutive elapsed days",
+            "basis": "#578 proposal; enforceable account/model spend cap and owner authorization required",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 604800,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-28-days": {
+            "operator": ">=",
+            "limit": 2419200,
+            "unit": "seconds",
+            "denominator": "All due rounds and verified effects across entire claim; no simulated-time substitution",
+            "window": "28 consecutive elapsed days, if multi-week autonomy claimed",
+            "basis": "#578; claim stays experimental until demonstrated",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 2419200,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-success-rate": {
+            "operator": ">=",
+            "limit": 0.99,
+            "unit": "ratio",
+            "denominator": "All due rounds, including missed/stalled/rejected/failed; zero denominator fails; planned faults and unscheduled interventions separate",
+            "window": "Each authorized seven/28-day run",
+            "basis": "#505/#578 proposal; requires useful output-quality assessment, not repeated no-op checks",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": "fraction"
+          },
+          "live-interventions": {
+            "operator": "=",
+            "limit": 0,
+            "unit": "interventions",
+            "denominator": "All intervention requests/actions after setup; scheduled fault/control actions also reported separately",
+            "window": "Each claimed unattended live window",
+            "basis": "#505/#578 proposal; human absence cannot be inferred from fixture automation",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          },
+          "live-spend": {
+            "operator": "<=",
+            "limit": null,
+            "unit": "USD",
+            "denominator": "All provider charges attributable to the declared run/account/model scope, reconciled with enforced accounting. No numeric cap is declared here; the measurement owner records concrete funding and an accounted limit before acceptance measurement. Existing development/deployment authorization remains in force.",
+            "window": "Per future authorized run",
+            "basis": "#578; null records the undeclared numeric acceptance measurement envelope. The owner supplies concrete funding and accounted budget; existing development/deployment authorization remains in force.",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 1
+            },
+            "allowNegative": false,
+            "ratioMode": null
+          }
+        },
+        "retainedSourceFailures": [
+          {
+            "id": "build-verification-hosted-c255b867",
+            "sourceSha": "c255b867b2fc1fe7696e7aa4dcef0f42c5ed256a",
+            "result": "failed",
+            "kind": "source-check",
+            "location": "docs/audits/scorecard-563/evidence/hosted-ci-c255b867-failure.json",
+            "sha256": "ebc9a5ebcdd957b2a9896389ef78571be10da843f8f10dd9b0f4cc99406d05fd"
+          },
+          {
+            "id": "native-codeql-integration-80-failure",
+            "sourceSha": "1a53970d4966136095f747674f3b9e5ea58e34c2",
+            "result": "failed",
+            "kind": "source-check",
+            "location": "docs/audits/scorecard-563/evidence/native-codeql-1a53970d-failure.json",
+            "sha256": "5821bbb4207d3ac96fcb6f72c9cb79ef55ae701a98f972c0f99d29be4e61e5c6"
+          }
+        ]
       }
     },
     "owner": {

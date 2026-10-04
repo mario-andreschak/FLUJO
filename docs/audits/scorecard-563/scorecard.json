@@ -1886,6 +1886,98 @@
         "simulatedDays": null
       },
       "scope": "Exact bce52c3e source verify completed successfully: all 13 named checks, both OS production jobs and all four supported build/type/payload/packed-process profiles passed. This is predecessor source evidence; current combined candidate, protected main, identified release and all profile/human/live/grade acceptance remain pending."
+    },
+    {
+      "ownerId": "engineering",
+      "observedAt": "2026-10-04T06:23:16.251Z",
+      "environment": {
+        "platform": "GitHub-hosted source verification",
+        "node": "Per-job; failed Windows startup used historical unsupported Node 22.13.1",
+        "provider": "GitHub Actions/CodeQL; no model or live provider runtime",
+        "tools": "Docs read actual hosted metadata and retained public source observations"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "profileIds": [],
+      "artifactId": null,
+      "artifactProof": null,
+      "sourceSha": "c255b867b2fc1fe7696e7aa4dcef0f42c5ed256a",
+      "kind": "source-check",
+      "integrity": "checksummed",
+      "limits": [
+        "Terminal hosted verify results for #725. Ordinary Jest passed, Windows installed-process boundary failed and final verification failed. This workflow does not execute dedicated Docs source tests; no release, human/live or grade acceptance.",
+        "Author retained producer metadata and hashes; producer execution was not independently repeated.",
+        "Raw logs stay private; their hashes and actual ordinary Jest skips remain in the retained receipt.",
+        "No installed distribution, human agreement, live elapsed observation or independent A- grade is established."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37181228613"
+      ],
+      "id": "build-verification-hosted-c255b867",
+      "result": "failed",
+      "commands": [
+        "Docs retained terminal run 37181228613 and jobs 111374064460/111377736005"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/hosted-ci-c255b867-failure.json",
+          "sha256": "ebc9a5ebcdd957b2a9896389ef78571be10da843f8f10dd9b0f4cc99406d05fd",
+          "verification": "local"
+        }
+      ],
+      "window": {
+        "kind": "elapsed",
+        "start": "2026-10-04T05:54:42Z",
+        "end": "2026-10-04T06:21:03Z",
+        "simulatedDays": null
+      },
+      "scope": "Historical #725 hosted verify failed: Windows installed-startup and final verification failed, while ordinary Jest, isolated tests and Linux production passed. Later successful source workflows do not erase this revision-bound failure."
+    },
+    {
+      "ownerId": "security",
+      "observedAt": "2026-10-04T08:48:50.183Z",
+      "environment": {
+        "platform": "GitHub-hosted source verification",
+        "node": "Not asserted by the native findings API",
+        "provider": "GitHub Actions/CodeQL; no model or live provider runtime",
+        "tools": "Docs read actual hosted metadata and retained public source observations"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "profileIds": [],
+      "artifactId": null,
+      "artifactProof": null,
+      "sourceSha": "1a53970d4966136095f747674f3b9e5ea58e34c2",
+      "kind": "source-check",
+      "integrity": "checksummed",
+      "limits": [
+        "Actual coordinator integration-80 native CodeQL finding check, distinct from successful analysis jobs. Reports 32 high and 24 medium new alerts; its large-change caveat is retained. This is source scanning, not verified exploits, independent disposition or released-profile threat-model acceptance. The Docs intake preserves coordinator product source but does not clear this native finding gate.",
+        "Author retained producer metadata and hashes; producer execution was not independently repeated.",
+        "Alerts may not have been introduced by the large pull request; no individual disposition or profile attribution is asserted. Native CodeQL findings and npm dependency audits remain distinct.",
+        "No installed distribution, human agreement, live elapsed observation or independent A- grade is established."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/runs/111389907950"
+      ],
+      "id": "native-codeql-integration-80-failure",
+      "result": "failed",
+      "commands": [
+        "Docs read native CodeQL check run 111389907950; analysis completion is separate"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/native-codeql-1a53970d-failure.json",
+          "sha256": "5821bbb4207d3ac96fcb6f72c9cb79ef55ae701a98f972c0f99d29be4e61e5c6",
+          "verification": "local"
+        }
+      ],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "scope": "Native CodeQL finding check failed for coordinator integration-80: 56 new alerts, including 32 high and 24 medium. The large-change caveat remains; source-scanner output is not verified exploits, independent disposition or a released-profile assessment."
     }
   ],
   "gates": [
@@ -1924,7 +2016,9 @@
       ],
       "status": "pending",
       "description": "Authenticated/scoped ingress, credential migration and MCP enforcement accepted on local release.",
-      "evidenceIds": []
+      "evidenceIds": [
+        "native-codeql-integration-80-failure"
+      ]
     },
     {
       "id": "worker-operations",
@@ -2053,7 +2147,8 @@
       "description": "Historical b8cf905f verify failed; subsequent bce52c3e source verify passed all 13 named checks and four supported build/type/payload/packed-process profiles on both OSes. Both results remain retained. The new combined candidate and selected release still require their own exact-source full CI and profile/distribution acceptance; this predecessor success cannot qualify them.",
       "evidenceIds": [
         "build-verification-hosted-b8cf905f",
-        "build-verification-hosted-bce52c3e"
+        "build-verification-hosted-bce52c3e",
+        "build-verification-hosted-c255b867"
       ]
     }
   ],
@@ -2147,7 +2242,9 @@
         "security-review",
         "installed-artifact"
       ],
-      "evidenceIds": [],
+      "evidenceIds": [
+        "native-codeql-integration-80-failure"
+      ],
       "budgetIds": [
         "unauthorized-access",
         "high-findings"

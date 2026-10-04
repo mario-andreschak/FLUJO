@@ -117,6 +117,7 @@ export function checkPublication({ sourceSha, baselineSha = planningSource, repo
     documents, failures,
     limitations: [
       'Reads immutable Git objects, including their original bytes; checkout edits and line-ending conversion are excluded.',
+      'Discovery covers the twelve named required guides plus changed Markdown under docs since the planning baseline; other directories and file extensions are outside automatic discovery.',
       'Checks ordinary inline Markdown targets and reference definitions outside fenced and inline code. HTML links and arbitrary Markdown extensions are not parsed.',
       'Records removed nonmandatory guides for manual claim reconciliation; mandatory guide absence or a surviving link to a removed file fails the file-target check.',
       'Anchor existence, remote links, root-relative host/runtime routes, rendering and documented behavior are not verified.',
