@@ -97,9 +97,13 @@ function instrument(hooks: {
     } else {
       counts.destinationOpened++;
       const write = handle.write.bind(handle);
-      jest.spyOn(handle, 'write').mockImplementation(async (...args: unknown[]) => {
+      // Jest otherwise selects FileHandle.write's final (string) overload.
+      // This instrumentation observes the real Buffer overload used by copies.
+      const bufferWriter = handle as unknown as {
+        write(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesWritten: number; buffer: Buffer }>;
+      };
+      jest.spyOn(bufferWriter, 'write').mockImplementation(async (buffer, offset, length, position) => {
         if (hooks.failWrite) throw new Error('Injected destination I/O failure');
-        const [buffer, offset, length, position] = args as [Buffer, number, number, number];
         counts.maxWriteBuffer = Math.max(counts.maxWriteBuffer, buffer.length);
         const result = await write(buffer, offset, hooks.shortWrites ? Math.min(1, length) : length, position);
         counts.writtenBytes += result.bytesWritten;
