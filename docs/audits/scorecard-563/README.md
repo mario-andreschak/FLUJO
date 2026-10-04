@@ -58,6 +58,11 @@ experimental only with explicit independent acceptance and visible limits.
   results and zero open findings at that PR ref. Its SARIF lists the filesystem-race
   rule and a PR-diff filter; this is scoped source evidence, not full-release security
   acceptance or a replacement for the final candidate's findings gate.
+- [candidate replay receipt](evidence/docs-candidate-replay-28e1f6af.json) records
+  the frozen Docs changes combined with coordinator source `d6ffb0b2` in an owned
+  checkout. All 32 reader/scorecard boundary tests pass and all 27 retained payloads
+  match committed bytes. This checks integration of the Docs changes; final root
+  integrations, application verification and release acceptance remain separate.
 
 Run from the repository root with Node >=22; no dependency installation is needed:
 

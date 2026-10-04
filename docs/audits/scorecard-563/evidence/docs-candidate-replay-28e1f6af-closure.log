@@ -1,0 +1,22 @@
+Scorecard structure, references and retained checksums valid. This is not grade acceptance.
+Closure blockers:
+- Rubric agreement/disagreements unresolved
+- Accountable human owner assignments pending
+- Proposed numeric contracts require prior agreement
+- Declared profiles/OS/install acceptance incomplete
+- Gate rubric-agreement: pending
+- Gate release-acceptance: pending
+- Gate local-security: pending
+- Gate worker-operations: pending
+- Gate shared-profile: pending
+- Gate human-evidence: pending
+- Gate persona-current-soak: pending
+- Gate persona-manual: pending
+- Gate persona-live: pending
+- Gate cross-stream-contracts: pending
+- Gate independent-reassessment: pending
+- Gate dependency-audit: failed
+- Gate build-verification: failed
+- Release-bound claims are incomplete
+- Experimental exclusions not explicitly accepted by independent reviewer
+- All nine independent A- or better reassessments pending

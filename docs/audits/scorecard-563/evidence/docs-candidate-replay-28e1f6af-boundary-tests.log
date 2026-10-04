@@ -1,0 +1,170 @@
+TAP version 13
+# Subtest: accepts exactly 5 MiB and rejects an oversized opened file without reading it
+ok 1 - accepts exactly 5 MiB and rejects an oversized opened file without reading it
+  ---
+  duration_ms: 13.1683
+  ...
+# Subtest: a pathname replacement after metadata checks cannot replace the opened payload
+ok 2 - a pathname replacement after metadata checks cannot replace the opened payload
+  ---
+  duration_ms: 6.6637
+  ...
+# Subtest: growth after the descriptor size check stops after 5 MiB plus one byte
+ok 3 - growth after the descriptor size check stops after 5 MiB plus one byte
+  ---
+  duration_ms: 12.8124
+  ...
+# Subtest: redirecting a parent during open is rejected before foreign content is read
+ok 4 - redirecting a parent during open is rejected before foreign content is read
+  ---
+  duration_ms: 7.8533
+  ...
+# Subtest: rejects nonregular payloads and closes an opened descriptor when reading fails
+ok 5 - rejects nonregular payloads and closes an opened descriptor when reading fails
+  ---
+  duration_ms: 5.5051
+  ...
+# Subtest: dated baseline is structurally valid, checksummed and visibly incomplete
+ok 6 - dated baseline is structurally valid, checksummed and visibly incomplete
+  ---
+  duration_ms: 72.6123
+  ...
+# Subtest: unknown fields and future versions fail closed
+ok 7 - unknown fields and future versions fail closed
+  ---
+  duration_ms: 8.3763
+  ...
+# Subtest: missing/duplicated scorecard rows and silent profile reduction are rejected
+ok 8 - missing/duplicated scorecard rows and silent profile reduction are rejected
+  ---
+  duration_ms: 139.5752
+  ...
+# Subtest: references and all existing issue reconciliation rows must resolve
+ok 9 - references and all existing issue reconciliation rows must resolve
+  ---
+  duration_ms: 168.5797
+  ...
+# Subtest: existing Persona thresholds cannot be weakened and historical failure cannot disappear
+ok 10 - existing Persona thresholds cannot be weakened and historical failure cannot disappear
+  ---
+  duration_ms: 228.2027
+  ...
+# Subtest: raw payload tampering, absent checksums and outside paths are rejected
+ok 11 - raw payload tampering, absent checksums and outside paths are rejected
+  ---
+  duration_ms: 242.618
+  ...
+# Subtest: realpath containment prevents symlink escape without reading foreign content
+ok 12 - realpath containment prevents symlink escape without reading foreign content
+  ---
+  duration_ms: 28.8213
+  ...
+# Subtest: reported CI/source metadata cannot promote a shipped-artifact claim or gate
+ok 13 - reported CI/source metadata cannot promote a shipped-artifact claim or gate
+  ---
+  duration_ms: 248.2422
+  ...
+# Subtest: live/human evidence cannot use simulation or unbound release identity
+ok 14 - live/human evidence cannot use simulation or unbound release identity
+  ---
+  duration_ms: 232.7436
+  ...
+# Subtest: measured results reject false pass, zero denominator and postdeclared budgets
+ok 15 - measured results reject false pass, zero denominator and postdeclared budgets
+  ---
+  duration_ms: 143.5192
+  ...
+# Subtest: mixed revisions and source-only evidence cannot support one accepted release
+ok 16 - mixed revisions and source-only evidence cannot support one accepted release
+  ---
+  duration_ms: 70.7388
+  ...
+# Subtest: independent reassessment cannot be inferred from implementation or self review
+ok 17 - independent reassessment cannot be inferred from implementation or self review
+  ---
+  duration_ms: 147.3623
+  ...
+# Subtest: accepted claims require measured budgets and explicit profile coverage
+ok 18 - accepted claims require measured budgets and explicit profile coverage
+  ---
+  duration_ms: 201.1513
+  ...
+# Subtest: a complete predeclared eight-week observation validates without satisfying closure
+ok 19 - a complete predeclared eight-week observation validates without satisfying closure
+  ---
+  duration_ms: 70.3492
+  ...
+# Subtest: elapsed windows and cohort denominators cannot be silently reduced
+ok 20 - elapsed windows and cohort denominators cannot be silently reduced
+  ---
+  duration_ms: 320.191
+  ...
+# Subtest: agreement must precede measurement, not just a claimed declaration timestamp
+ok 21 - agreement must precede measurement, not just a claimed declaration timestamp
+  ---
+  duration_ms: 59.3654
+  ...
+# Subtest: live duration and success ratios reconcile with actual windows and integer counts
+ok 22 - live duration and success ratios reconcile with actual windows and integer counts
+  ---
+  duration_ms: 244.7095
+  ...
+# Subtest: a valid producer receipt uses its own checksum and leaves grade acceptance open
+ok 23 - a valid producer receipt uses its own checksum and leaves grade acceptance open
+  ---
+  duration_ms: 84.8964
+  ...
+# Subtest: artifact receipts reject stale identity, missing runtime profiles and skipped provenance
+ok 24 - artifact receipts reject stale identity, missing runtime profiles and skipped provenance
+  ---
+  duration_ms: 414.1044
+  ...
+# Subtest: a matching npm digest and declared provenance do not qualify as installed acceptance
+ok 25 - a matching npm digest and declared provenance do not qualify as installed acceptance
+  ---
+  duration_ms: 117.173
+  ...
+# Subtest: one package/profile check cannot certify every platform or installation method
+ok 26 - one package/profile check cannot certify every platform or installation method
+  ---
+  duration_ms: 269.3116
+  ...
+# Subtest: CLI distinguishes valid incomplete ledger from closure readiness and malformed input
+ok 27 - CLI distinguishes valid incomplete ledger from closure readiness and malformed input
+  ---
+  duration_ms: 287.9195
+  ...
+# Subtest: audit and full-soak gates reject evidence of the wrong source kind
+ok 28 - audit and full-soak gates reject evidence of the wrong source kind
+  ---
+  duration_ms: 166.2888
+  ...
+# Subtest: candidate verification and all production profiles remain mandatory
+ok 29 - candidate verification and all production profiles remain mandatory
+  ---
+  duration_ms: 306.7747
+  ...
+# Subtest: unset envelopes cannot be agreed or used by measurements
+ok 30 - unset envelopes cannot be agreed or used by measurements
+  ---
+  duration_ms: 175.0562
+  ...
+# Subtest: source-build receipts still require installed runtime checks
+ok 31 - source-build receipts still require installed runtime checks
+  ---
+  duration_ms: 166.4553
+  ...
+# Subtest: passing existing-contract metrics require a real start after declaration and before observation
+ok 32 - passing existing-contract metrics require a real start after declaration and before observation
+  ---
+  duration_ms: 419.7182
+  ...
+1..32
+# tests 32
+# suites 0
+# pass 32
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5137.9387

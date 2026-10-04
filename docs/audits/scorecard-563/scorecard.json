@@ -2074,6 +2074,74 @@
         "Source receipt only: installed-release, human and elapsed-runtime acceptance remain pending.",
         "The JavaScript SARIF identifies codeql-action/pr-diff-range; zero reported results and zero open findings at this PR ref must not be generalized to a clean full candidate, main, or a different PR ref."
       ]
+    },
+    {
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-04T00:46:53.520Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "none unless explicitly identified in scope",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/tree/28e1f6af1e1eca327a571878dd62c919ed43046f"
+      ],
+      "id": "docs-candidate-replay-28e1f6af",
+      "kind": "source-check",
+      "result": "not-evaluated",
+      "integrity": "checksummed",
+      "sourceSha": "28e1f6af1e1eca327a571878dd62c919ed43046f",
+      "commands": [
+        "node scripts/validate-scorecard.mjs",
+        "node scripts/validate-scorecard.mjs --closure",
+        "node --test scripts/read-scorecard-evidence.test.mjs scripts/validate-scorecard.test.mjs"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-candidate-replay-28e1f6af.json",
+          "sha256": "da6fb8690a2ee4fa9fb5e416933752772824533125c9678f2c518c8ac0d9830a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-candidate-replay-28e1f6af-validation.log",
+          "sha256": "3fcdfffede5176b4b39968da1cbbea3dcd1c84c31d4b5871ec2cb8d5fba082ad",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-candidate-replay-28e1f6af-closure.log",
+          "sha256": "3fcdfffede5176b4b39968da1cbbea3dcd1c84c31d4b5871ec2cb8d5fba082ad",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-candidate-replay-28e1f6af-boundary-tests.log",
+          "sha256": "198db2e9b6d0cd77c909390479d61703fb65ceb932132ec564b9f9e5e774caff",
+          "verification": "local"
+        }
+      ],
+      "scope": "Owned source replay of frozen Docs changes onto coordinator candidate d6ffb0b2: all 32 file-reader/scorecard boundary tests pass and 27 committed local payloads match their hashes. Ordinary validation exits 0; closure exits 2. Not final release acceptance.",
+      "limits": [
+        "Passing focused commands are retained with source binding; the evidence record remains not-evaluated to prevent acceptance promotion.",
+        "Owned isolated replay on the recorded coordinator source, not a change to the coordinator checkout or its final selected release.",
+        "Dependency-free Docs and file-reader checks only. No application build, full Jest run, hosted scanner or installed artifact acceptance was performed.",
+        "Later root integrations require new candidate verification. Earlier conditional Docs A- does not cover this replay.",
+        "All nine dimensions, all three profiles, protected Persona thresholds and pending human/installed/elapsed-runtime acceptance remain unchanged."
+      ]
     }
   ],
   "gates": [

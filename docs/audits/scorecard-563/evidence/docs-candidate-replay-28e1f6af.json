@@ -1,0 +1,98 @@
+{
+  "capturedAt": "2026-10-04T00:46:53.520Z",
+  "sourceSha": "28e1f6af1e1eca327a571878dd62c919ed43046f",
+  "sourceTreeSha": "4e3ffe0ad9f91a81411d81c8eeac6589f44f1032",
+  "parentCandidate": "d6ffb0b29ec7abaf3c8e57d85aa35bb36e29019b",
+  "replayedFrozenCommits": [
+    "a5b9fd0b1d72672668a6afac2c0cd28bbf61a060",
+    "8de1d7e28002e30e92732f216ec2cd7895f97fb6",
+    "facd1c76ec395f20a4657b9ba1a53fcc5b72c9fc",
+    "90814d6a29cbfec1ec6174e3e8aa5490cd4caa4f"
+  ],
+  "replayedHeads": [
+    "6a4f9e518204e509b18946d8974db927d03f0215",
+    "fb0e7ac322a06ed1dbd6f194c21acb1936da5abc",
+    "b765fa87458c27e4dd359a8405f0814db611c69c",
+    "28e1f6af1e1eca327a571878dd62c919ed43046f"
+  ],
+  "conflictResolution": {
+    "file": "docs/audits/scorecard-563/scorecard.json",
+    "rootBlob": "a44d89b1b186fd1556469e2d38530f9a7bd9351e",
+    "priorIntegrationBlob": "a44d89b1b186fd1556469e2d38530f9a7bd9351e",
+    "resolutionFromSource": "61d212c47e6f613ef075be9764466844752804b2",
+    "scope": "Exact matching pre-replay ledger bytes allowed reuse of the already reviewed combination, preserving the dependency-remediation receipt and all incoming Docs records."
+  },
+  "changedFiles": [
+    "docs/audits/scorecard-563/README.md",
+    "docs/audits/scorecard-563/evidence/.gitattributes",
+    "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307619.log",
+    "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307872.log",
+    "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313307955.log",
+    "docs/audits/scorecard-563/evidence/ci-46af3225-job-111313308018.log",
+    "docs/audits/scorecard-563/evidence/ci-verification-46af3225.json",
+    "docs/audits/scorecard-563/evidence/ci-verification-61d212c4.json",
+    "docs/audits/scorecard-563/evidence/docs-automated-rereview-61d212c4.txt",
+    "docs/audits/scorecard-563/evidence/docs-automated-review-46af3225.json",
+    "docs/audits/scorecard-563/evidence/docs-rereview-command-receipts-61d212c4.json",
+    "docs/audits/scorecard-563/evidence/docs-rereview-protocol-61d212c4.json",
+    "docs/audits/scorecard-563/evidence/docs-rereview-triage-61d212c4.json",
+    "docs/audits/scorecard-563/evidence/docs-review-protocol-46af3225.json",
+    "docs/audits/scorecard-563/evidence/docs-review-triage-46af3225.json",
+    "docs/audits/scorecard-563/evidence/publication-source-46af3225.json",
+    "docs/audits/scorecard-563/evidence/scorecard-race-codeql-f0cd4c10.json",
+    "docs/audits/scorecard-563/publication-reconciliation.md",
+    "docs/audits/scorecard-563/scorecard.json",
+    "docs/audits/scorecard-563/scorecard.schema.json",
+    "scripts/validate-scorecard.mjs",
+    "scripts/validate-scorecard.test.mjs"
+  ],
+  "commands": [
+    {
+      "command": "node scripts/validate-scorecard.mjs",
+      "startedAt": "2026-10-04T00:46:46.978Z",
+      "completedAt": "2026-10-04T00:46:47.133Z",
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "stdoutSha256": "3fcdfffede5176b4b39968da1cbbea3dcd1c84c31d4b5871ec2cb8d5fba082ad",
+      "stdoutByteLength": 914,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outputFile": "docs-candidate-replay-28e1f6af-validation.log"
+    },
+    {
+      "command": "node scripts/validate-scorecard.mjs --closure",
+      "startedAt": "2026-10-04T00:46:47.134Z",
+      "completedAt": "2026-10-04T00:46:47.259Z",
+      "exitCode": 2,
+      "expectedExitCode": 2,
+      "stdoutSha256": "3fcdfffede5176b4b39968da1cbbea3dcd1c84c31d4b5871ec2cb8d5fba082ad",
+      "stdoutByteLength": 914,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outputFile": "docs-candidate-replay-28e1f6af-closure.log"
+    },
+    {
+      "command": "node --test scripts/read-scorecard-evidence.test.mjs scripts/validate-scorecard.test.mjs",
+      "startedAt": "2026-10-04T00:46:47.259Z",
+      "completedAt": "2026-10-04T00:46:52.443Z",
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "stdoutSha256": "198db2e9b6d0cd77c909390479d61703fb65ceb932132ec564b9f9e5e774caff",
+      "stdoutByteLength": 6669,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outputFile": "docs-candidate-replay-28e1f6af-boundary-tests.log"
+    }
+  ],
+  "localCommittedPayloadsVerified": 27,
+  "contract": {
+    "dimensions": 9,
+    "profiles": 3,
+    "assessmentStatus": "pending",
+    "awardedGrades": 0,
+    "sourceOnlyReviewPin": "61d212c47e6f613ef075be9764466844752804b2"
+  },
+  "limitations": [
+    "Owned isolated replay on the recorded coordinator source, not a change to the coordinator checkout or its final selected release.",
+    "Dependency-free Docs and file-reader checks only. No application build, full Jest run, hosted scanner or installed artifact acceptance was performed.",
+    "Later root integrations require new candidate verification. Earlier conditional Docs A- does not cover this replay.",
+    "All nine dimensions, all three profiles, protected Persona thresholds and pending human/installed/elapsed-runtime acceptance remain unchanged."
+  ]
+}
