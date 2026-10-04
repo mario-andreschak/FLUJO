@@ -17,7 +17,11 @@ function sameFile(left: BigIntStats, right: BigIntStats): boolean {
 export async function readStableFile(
   file: string,
   maxBytes: number,
-  options: { allowSymbolicLink?: boolean } = {},
+  options: {
+    allowSymbolicLink?: boolean;
+    /** Synchronous caller policy, checked against the opened file before any content read. */
+    validateOpenedFile?: (stat: Readonly<BigIntStats>, canonicalPath: string) => boolean;
+  } = {},
 ): Promise<Buffer> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) {
     throw new Error('Invalid file read limit');
@@ -33,6 +37,9 @@ export async function readStableFile(
     const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || opened.size > BigInt(maxBytes)
       || (!requested.isSymbolicLink() && !sameFile(requested, opened))) {
+      throw new Error('File read unavailable');
+    }
+    if (options.validateOpenedFile && options.validateOpenedFile(opened, resolved) !== true) {
       throw new Error('File read unavailable');
     }
     const bytes = Buffer.alloc(Number(opened.size) + 1);

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getDataDir } from '@/utils/paths';
+import { readStableFile } from '@/utils/readStableFile';
 import { DEFAULT_PASSWORD } from './format';
 
 const MAX_PASSPHRASE_BYTES = 1024;
@@ -45,28 +46,15 @@ export async function readOperatorPassphrase(): Promise<string> {
     const configured = process.env.FLUJO_ENCRYPTION_PASSPHRASE_FILE;
     if (!configured || !path.isAbsolute(configured)) throw new Error();
     const file = path.resolve(configured);
-    const canonical = await fs.realpath(file);
     const data = await canonicalDataRoot();
     const comparable = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-    if (comparable(canonical) !== comparable(file) || contained(data, canonical)) throw new Error();
-    const before = await fs.lstat(file);
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_PASSPHRASE_BYTES + 2
-        || (process.platform !== 'win32' && ((before.mode & 0o077) !== 0
-          || (process.getuid && before.uid !== process.getuid())))) throw new Error();
-    const handle = await fs.open(file, 'r');
-    let bytes: Buffer;
-    try {
-      const opened = await handle.stat();
-      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error();
-      const buffer = Buffer.alloc(MAX_PASSPHRASE_BYTES + 3);
-      const result = await handle.read(buffer, 0, buffer.length, 0);
-      bytes = buffer.subarray(0, result.bytesRead);
-      const after = await fs.lstat(file);
-      if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
-          || after.mtimeMs !== before.mtimeMs || after.mode !== before.mode || after.uid !== before.uid
-          || after.nlink !== before.nlink
-          || bytes.length !== before.size) throw new Error();
-    } finally { await handle.close(); }
+    const bytes = await readStableFile(file, MAX_PASSPHRASE_BYTES + 2, {
+      validateOpenedFile: (stat, canonical) =>
+        comparable(canonical) === comparable(file) && !contained(data, canonical)
+        && stat.nlink === BigInt(1)
+        && (process.platform === 'win32' || ((stat.mode & BigInt(0o077)) === BigInt(0)
+          && (!process.getuid || stat.uid === BigInt(process.getuid())))),
+    });
     const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\r?\n$/, '');
     if (!isPrivatePassphrase(value) || Buffer.byteLength(value, 'utf8') < 32
         || /[\r\n]/.test(value)) throw new Error();

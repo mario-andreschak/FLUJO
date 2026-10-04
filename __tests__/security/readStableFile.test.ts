@@ -1,4 +1,4 @@
-import { promises as fs, constants } from 'node:fs';
+import { promises as fs, constants, type BigIntStats } from 'node:fs';
 import { readStableFile } from '@/utils/readStableFile';
 
 jest.mock('node:fs', () => ({ ...jest.requireActual('node:fs'), promises: {
@@ -30,6 +30,27 @@ test('short reads complete on one descriptor and close it after checking identit
   expect(mockFs.open).toHaveBeenCalledWith('/fixture/file', constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   expect(handle.read).toHaveBeenCalledTimes(3);
   expect(handle.stat).toHaveBeenCalledTimes(2);
+  expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+test('opened-file policy receives exact metadata before the first content read', async () => {
+  const validateOpenedFile = jest.fn((stat: Readonly<BigIntStats>, canonical: string) => {
+    expect(stat).toBe(original);
+    expect(canonical).toBe('/fixture/file');
+    expect(handle.read).not.toHaveBeenCalled();
+    return true;
+  });
+  expect((await readStableFile('/fixture/file', 10, { validateOpenedFile })).toString()).toBe('abc');
+  expect(validateOpenedFile).toHaveBeenCalledTimes(1);
+  expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+test.each(['deny', 'throw'])('opened-file policy %s closes without reading content', async kind => {
+  await expect(readStableFile('/fixture/file', 10, { validateOpenedFile: () => {
+    if (kind === 'throw') throw new Error('synthetic caller policy denied');
+    return false;
+  } })).rejects.toThrow(kind === 'throw' ? 'synthetic caller policy denied' : 'File read unavailable');
+  expect(handle.read).not.toHaveBeenCalled();
   expect(handle.close).toHaveBeenCalledTimes(1);
 });
 

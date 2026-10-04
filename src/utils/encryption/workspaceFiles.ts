@@ -2,25 +2,21 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { isSecretEnvVar } from '@/utils/shared/common';
+import { readStableFile } from '@/utils/readStableFile';
 
 /** Bounded strict read, without generic storage's parser logging/corrupt copies. */
 export async function readCredentialJson(file: string, limit: number): Promise<unknown> {
   try {
-    const stat = await fs.lstat(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > limit) throw new Error();
-    const handle = await fs.open(file, 'r');
     try {
-      const opened = await handle.stat();
-      if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error();
-      const buffer = Buffer.alloc(limit + 1);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      const after = await fs.lstat(file);
-      if (bytesRead !== stat.size || after.dev !== stat.dev || after.ino !== stat.ino
-          || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error();
-      return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead)));
-    } finally { await handle.close(); }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      await fs.lstat(file, { bigint: true });
+    } catch (error) {
+      // Only initial absence is a missing record. Disappearance during a read is invalid storage.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+    const bytes = await readStableFile(file, limit);
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
     throw new Error('Credential storage is invalid; restore a matching workspace backup');
   }
 }
