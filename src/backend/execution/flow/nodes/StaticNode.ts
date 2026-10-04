@@ -353,12 +353,12 @@ export class StaticNode extends BaseNode<
       sharedState.messages.push(...messages);
       // Drop markers left by earlier logical runs while writing this one, so the map
       // cannot grow unbounded over a long conversation.
-      const markers: Record<string, string> = {};
+      const markers = new Map<string, string>();
       for (const [id, marker] of Object.entries(sharedState.staticInjected ?? {})) {
-        if (marker === runId) markers[id] = marker;
+        if (marker === runId) markers.set(id, marker);
       }
-      markers[nodeId] = runId;
-      sharedState.staticInjected = markers;
+      markers.set(nodeId, runId);
+      sharedState.staticInjected = Object.fromEntries(markers);
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
     }
 

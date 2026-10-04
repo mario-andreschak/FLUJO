@@ -22,27 +22,24 @@ function errorToPlain(err: unknown, depth = 0): unknown {
   if (depth > 6) return String(err);
   if (!(err instanceof Error)) return err;
 
-  const plain: Record<string, unknown> = {
-    name: err.name,
-    message: err.message,
-  };
+  const plain = new Map<string, unknown>([['name', err.name], ['message', err.message]]);
 
   for (const key of Object.getOwnPropertyNames(err)) {
     if (key === 'name' || key === 'message') continue;
     const value = (err as unknown as Record<string, unknown>)[key];
     if (typeof value === 'function') continue;
     if (key === 'stack') {
-      plain.stack = value;
+      plain.set('stack', value);
     } else if (key === 'cause') {
-      plain.cause = errorToPlain(value, depth + 1);
+      plain.set('cause', errorToPlain(value, depth + 1));
     } else if (key === 'errors' && Array.isArray(value)) {
-      plain.errors = value.map(e => errorToPlain(e, depth + 1));
+      plain.set('errors', value.map(e => errorToPlain(e, depth + 1)));
     } else {
-      plain[key] = value;
+      plain.set(key, value);
     }
   }
 
-  return plain;
+  return Object.fromEntries(plain);
 }
 
 function logWithLevel(level: number, filepath: string, message: string, data?: unknown, overrideLogLevel?: number) {
@@ -87,6 +84,9 @@ function logWithLevel(level: number, filepath: string, message: string, data?: u
       }
     }
 
+    // Each console call is one physical record; data cannot forge another line
+    // or inject a terminal escape sequence through a path, message or payload.
+    output = output.replace(/[\r\n\u2028\u2029]/g, ' ').replaceAll(String.fromCharCode(27), '[ESC]');
     switch (level) {
       case LOG_LEVEL.VERBOSE:
         console.debug(`[VERBOSE] ${output}`);
