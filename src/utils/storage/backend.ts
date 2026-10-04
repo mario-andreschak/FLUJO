@@ -2,6 +2,7 @@ import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
 import { readPlainFile } from '@/utils/readPlainFile';
+import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -415,27 +416,8 @@ async function assertLinkFreeDirectory(
   return shardDir;
 }
 
-type TextFileWithStats = {
-  content: string;
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-async function readTextWithStatsOrNull(filePath: string): Promise<TextFileWithStats | null> {
-  const stats = await fs.lstat(filePath, { bigint: true }).catch(error => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  });
-  if (!stats) return null;
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
-  }
-  return {
-    content: (await readPlainFile(filePath, { expected: stats })).toString('utf8'),
-    // Legacy display/index metadata stays numeric; admission used exact identity.
-    mtimeMs: Number(stats.mtimeNs) / 1_000_000,
-    sizeBytes: Number(stats.size),
-  };
+async function readTextWithStatsOrNull(filePath: string): Promise<PersonaRecordText | null> {
+  return readPersonaRecordText(filePath, storageDir());
 }
 
 async function readTextOrNull(filePath: string): Promise<string | null> {
