@@ -198,7 +198,7 @@ Start with the [first successful conversation guide](docs/getting-started/README
 ### Manual installation:
 ### Prerequisites
 
-- Node.js (v22 or higher)
+- Node.js 22.17+ within 22.x, or 24.2+ within 24.x ([runtime compatibility evidence](docs/operations/windows-native-runtime-profile.md))
 - claude code (optional, if you want to use Anthropic Subscription) 
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
@@ -371,7 +371,7 @@ to `main`.
 
 ### Corporate proxy and custom CA
 
-Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22 or newer and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
+Both one-line installers and `flujo-setup.exe` are network bootstrappers. They require Node.js 22.17+ within 22.x, or 24.2+ within 24.x and may contact GitHub/`raw.githubusercontent.com`, the OS package manager, the npm registry, and Patchright 1.61.1's managed-browser mirrors at `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`. Ask your network administrator to allow those services or provide an approved mirror.
 
 Prefer your organization's approved OS trust configuration. If that is unavailable, set an explicit proxy and readable PEM CA bundle for the installer session. The `FLUJO_*` aliases are mapped only into installer child processes; they do not change global npm/Git configuration, the certificate store, or persistent environment variables.
 

@@ -35,9 +35,8 @@ set -euo pipefail
 
 REPO_URL='https://github.com/mario-andreschak/FLUJO/'
 BRANCH="${FLUJO_BRANCH:-main}"
-# FLUJO requires Node >= 22.0.0 (see package.json#engines.node).
-MIN_NODE_MAJOR=22
-MIN_NODE_MINOR=0
+# Match all five public package engines; Node 23 and early 24 lack the required libuv fix.
+SUPPORTED_NODE_DESCRIPTION="22.17+ within 22.x, or 24.2+ within 24.x"
 BIN_DIR="$HOME/.local/bin"
 MANIFEST_DIR="$HOME/.local/share/flujo-cli"
 
@@ -202,21 +201,25 @@ flag() {
 
 node_version_ok() {
   have node || return 1
-  local v major minor patch
+  local v major minor patch component
   v="$(node -v 2>/dev/null)" || return 1
   # Require successful command resolution and zero exit status
   # Normalize only one optional leading 'v'
   v="${v#v}"
   # Require complete numeric version shape before arithmetic comparison
-  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ ! "$v" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     return 1
   fi
   IFS=. read -r major minor patch <<EOF
 $v
 EOF
   # Compare numeric components without shell coercion of malformed values
-  [ "${major:-0}" -gt "$MIN_NODE_MAJOR" ] 2>/dev/null && return 0
-  [ "${major:-0}" -eq "$MIN_NODE_MAJOR" ] 2>/dev/null && [ "${minor:-0}" -ge "$MIN_NODE_MINOR" ] 2>/dev/null
+  for component in "$major" "$minor" "$patch"; do
+    [ "$component" -le 2147483647 ] 2>/dev/null || return 1
+  done
+  [ "$major" -eq 22 ] 2>/dev/null && [ "$minor" -ge 17 ] 2>/dev/null && return 0
+  [ "$major" -eq 24 ] 2>/dev/null && [ "$minor" -ge 2 ] 2>/dev/null && return 0
+  return 1
 }
 
 printf '%sFLUJO Installer%s\n' "$C_TITLE" "$C_END" >&2
@@ -339,7 +342,7 @@ else
   elif have yum;    then PM='yum'
   else
     warn "No supported package manager found (apt/dnf/pacman/zypper/apk/yum)."
-    warn "Install git, Node.js >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}, and python3 yourself, then re-run."
+    warn "Install git, Node.js ${SUPPORTED_NODE_DESCRIPTION}, and python3 yourself, then re-run."
   fi
 fi
 
@@ -409,7 +412,7 @@ if node_version_ok; then
   ok "Node.js already installed ($(node -v), $(command -v node))"
 else
   if have node; then
-    warn "Node.js $(node -v) is older than the required ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}; upgrading."
+    die "The active Node.js runtime is outside ${SUPPORTED_NODE_DESCRIPTION}, or its version probe failed. Install and activate a current patched 22.x or 24.x release, then re-run. The installer will not switch an existing Node installation automatically."
   fi
   step "Installing Node.js (includes npm)"
   case "$PM" in
@@ -426,15 +429,17 @@ else
       curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -
       pm_install nodejs
       ;;
-    pacman) pm_install nodejs npm ;;
+    pacman) pm_install nodejs-lts-krypton npm ;;
     apk)    pm_install nodejs npm ;;
     zypper) pm_install nodejs22 npm22 || pm_install nodejs npm ;;
     brew)
-      if have node; then brew upgrade node || true; else brew install node; fi
+      brew install node@24
+      step "Activating the installed Node.js 24 LTS formula on Homebrew's PATH"
+      brew link --force --overwrite node@24
       ;;
-    *) die "Cannot install Node.js automatically. Install Node.js >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} and re-run." ;;
+    *) die "Cannot install Node.js automatically. Install Node.js ${SUPPORTED_NODE_DESCRIPTION} and re-run." ;;
   esac
-  node_version_ok || die "Node.js install finished but 'node' >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} is not on PATH. Open a new terminal and re-run."
+  node_version_ok || die "Node.js install finished but 'node' ${SUPPORTED_NODE_DESCRIPTION} is not on PATH. Open a new terminal and re-run."
 fi
 
 # Python 3 (many MCP servers need it; uv manages venvs but needs an interpreter).

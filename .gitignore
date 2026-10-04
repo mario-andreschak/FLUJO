@@ -140,6 +140,7 @@ dist
 /mcp-servers/*
 !/mcp-servers/README.md
 !/mcp-servers/embed-shared.mjs
+!/mcp-servers/embed-runtime.mjs
 !/mcp-servers/bash/
 !/mcp-servers/browser/
 !/mcp-servers/filesystem/

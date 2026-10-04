@@ -21,6 +21,7 @@
  * The TLS/CA logic is exported as `buildLaunchEnv()` so the npm-package bin wrapper
  * (bin/flujo.mjs, issue #59) reuses it verbatim instead of duplicating it.
  */
+import { assertSupportedNodeRuntime } from '../bin/node-runtime.mjs';
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -187,6 +188,7 @@ async function launchNext(passthroughArgs) {
 // Next.js command, e.g. ["start", "-p", "4200"].
 const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
 if (isMain) {
+  assertSupportedNodeRuntime();
   launchNext(process.argv.slice(2)).catch((error) => {
     const stage = privateStorageFailureStage(error);
     console.error(`[FLUJO] Could not prepare a private local instance.${stage ? ` Storage stage: ${stage}.` : ''}`);
