@@ -126,3 +126,21 @@ it('takes the Process ordinal in ModelHandler only for a bound call and stops at
   expect(issueModelStep).not.toHaveBeenCalled();
   expect(mockAdapterCalled).not.toHaveBeenCalled();
 });
+
+it('does not consume a Process ordinal for an ordinary model', async () => {
+  const ordinary: Model = { ...bound, ApiKey: 'fixture-key', ownerCredentialBinding: undefined };
+  jest.spyOn(modelService, 'getModel').mockResolvedValue(ordinary);
+  jest.spyOn(modelService, 'resolveAndDecryptApiKey').mockResolvedValue('fixture-key');
+  const takeModelStepOrdinal = jest.fn(() => 0);
+
+  const result = await ModelHandler.callModel({
+    modelId: ordinary.id, prompt: 'offline fixture',
+    messages: [{ id: 'u', role: 'user', content: 'offline fixture', timestamp: 1 }],
+    iteration: 1, maxIterations: 1, nodeId: 'process-a', nodeName: 'Process',
+    takeModelStepOrdinal,
+  });
+
+  expect(result.success).toBe(false); // The mocked provider adapter is a hard HOLD.
+  expect(takeModelStepOrdinal).not.toHaveBeenCalled();
+  expect(mockAdapterCalled).toHaveBeenCalledTimes(1);
+});
