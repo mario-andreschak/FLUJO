@@ -28,6 +28,18 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
       }
     }
   }
+  const contractTests = ['verification-contract', 'workflow-contract', 'verify-repository-rules', 'verify-ci-node', 'node-runtime']
+    .map((name) => `scripts/${name}.test.mjs`);
+  const contractSteps = workflows['verify.yml']?.jobs?.['workflow-contract']?.steps ?? [];
+  if (!contractSteps.some((step) => {
+    const words = step.run?.trim().split(/\s+/) ?? [];
+    return words[0] === 'node' && words[1] === '--test'
+      && contractTests.every((file) => words.includes(file))
+      && words.slice(2).every((file) => /^scripts\/[\w.-]+\.test\.mjs$/.test(file))
+      && !step.if && !step['continue-on-error'];
+  })) {
+    throw new Error('The guarded workflow-contract job must enforce all canonical runtime and verification fixtures without filters or tolerated failures.');
+  }
   const build = workflows['verify.yml']?.jobs?.['production-build'];
   if (build?.env?.NODE_OPTIONS || build?.env?.NODE_V8_OPTIONS || workflows['verify.yml']?.env?.NODE_OPTIONS) {
     throw new Error('Production qualification must use the ordinary default Node heap.');
