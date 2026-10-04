@@ -134,7 +134,7 @@ export async function runVersionTransition(options) {
     baseline: options.baseline, candidate: options.candidate, commands: [], operations: [],
     pending: ['baseline-provenance-signature-verification', 'candidate-npm-provenance-signature-verification', 'independent-human-review', 'human-operated-drill',
       'private-triage-tabletop', 'broader-state-and-schedule-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
-    limits: ['Empty synthetic flow only; no provider/model, identities/secrets, Persona or schedule continuity.',
+    limits: ['Synthetic flow/conversation/theme/non-secret variable only; no provider/model, identities/secrets, Persona or schedule continuity.',
       'Automated main/signature/scan gates do not establish human role consent, independence or an A- judgment.',
       'Owned launcher/port receipts do not certify every descendant generation or hostile-code isolation.'] };
   const run = (command, args) => {
@@ -160,18 +160,22 @@ export async function runVersionTransition(options) {
     recordOperation('baseline', baseline);
     if (baseline.receipt.result !== 'passed-baseline-probe') throw new Error('Baseline consumer probe failed.');
     if (baseline.receipt.provenanceSignatureVerified !== true) throw new Error('Baseline npm provenance was not verified.');
+    if (baseline.receipt.syntheticState?.verified !== true) throw new Error('Baseline broader synthetic state was not verified.');
     receipt.pending = receipt.pending.filter(item => item !== 'baseline-provenance-signature-verification');
     const candidate = await runInstalledBaseline(options.candidate);
     recordOperation('candidate-consumer', candidate);
     if (candidate.receipt.result !== 'passed-baseline-probe') throw new Error('Candidate consumer probe failed.');
     if (candidate.receipt.provenanceSignatureVerified !== true) throw new Error('Candidate npm provenance was not verified.');
+    if (candidate.receipt.syntheticState?.verified !== true) throw new Error('Candidate broader synthetic state was not verified.');
     receipt.pending = receipt.pending.filter(item => item !== 'candidate-npm-provenance-signature-verification');
     const upgrade = await upgradeExistingRoot(baseline, candidate);
     recordOperation('existing-data-upgrade', upgrade);
-    if (upgrade.receipt.result !== 'passed-version-upgrade' || !upgrade.receipt.baselineDataFoundBeforeRestore) throw new Error('Existing-data candidate upgrade failed.');
+    if (upgrade.receipt.result !== 'passed-version-upgrade' || !upgrade.receipt.baselineDataFoundBeforeRestore
+        || !upgrade.receipt.baselineStateFoundBeforeRestore || upgrade.receipt.syntheticState?.verified !== true) throw new Error('Existing-data candidate upgrade failed.');
     const recovery = await recoverIntoFreshRoot(baseline, candidate);
     recordOperation('baseline-backup-to-fresh-candidate', recovery);
-    if (recovery.receipt.result !== 'passed-fresh-recovery') throw new Error('Fresh candidate recovery failed.');
+    if (recovery.receipt.result !== 'passed-fresh-recovery' || !recovery.receipt.preRestoreStateAbsent
+        || recovery.receipt.syntheticState?.verified !== true) throw new Error('Fresh candidate recovery failed.');
     receipt.candidateAdmissionAfter = await qualifyCandidate(options, run);
     receipt.result = 'passed-version-transition-probe';
   } catch (error) { receipt.failure = error.message; }

@@ -100,7 +100,7 @@ the human, installed-artifact and elapsed-observation gates as pending.
 ## Consumer-installed baseline probe
 
 This optional networked command installs a pinned published npm artifact into a
-fresh consumer directory and exercises the real loopback HTTP flow/backup/restore
+fresh consumer directory and exercises real loopback HTTP storage/backup/restore
 routes. It requires the clean committed source checkout and local dependencies
 above. It performs no build, publication or provider call. Coordinate its install
 and server with the epic's resource owner; Windows x64 is the exercised profile.
@@ -139,9 +139,16 @@ application tarball is pinned; transitive dependencies resolve at install time.
 Retain `consumer/package-lock.json` to identify the graph actually exercised.
 
 The probe confirms the responding install/data root before any mutation. It
-creates a synthetic empty flow, checks its backup contains the expected record,
-changes the flow, rejects an archive missing required metadata without changing
-the record, restores the valid archive, and compares id/name/nodes/edges. Response
+creates an empty flow, a conversation with two prescribed inert text messages,
+a theme preference and one non-secret environment label. The conversation starts
+through its create route; the two messages are imported through the restore route.
+They are synthetic records, not output from a provider or a workflow execution.
+The probe selects `flows`, `chatHistory`, `settings` and `globalEnvVars`, checks
+every record in the backup, changes the flow/title/theme/label, and rejects both
+a missing-metadata archive and a conversation with a forbidden ownership marker.
+Every selected record must remain unchanged after rejection. The valid archive
+must restore the flow, conversation metadata and both messages, theme and label.
+Fixed fixture timestamps never count as elapsed human activity. Response
 bytes, archives, logs, lockfile and SHA-256 receipts remain in the printed
 `flujo-maintainer-installed-*` directory, including on failure. The receipt binds
 the tool's clean Git SHA separately from the declared artifact source SHA.
@@ -174,9 +181,12 @@ already exist. The baseline must pass with the same clean tool revision; backup
 and original-record bytes must match its receipt before any recovery process starts.
 Readiness checks the responding install and new data root before mutation.
 
-The fresh root must return 404 for the synthetic flow. A missing-metadata archive
-must return 400 and leave it absent. The valid backup must restore the expected
-id/name/nodes/edges, and a second backup must contain those same stable fields.
+The fresh root must return 404 for the flow and conversation and have no stored
+theme or synthetic environment label. Both invalid archives must return 400 and
+leave all four kinds of state absent. The valid backup must restore every expected
+record; a second backup must contain the same stable content. Expected JSON ZIP
+members are read with a 1 MiB limit on emitted bytes, and unrelated/private entries
+or aliased paths are refused. The whole compressed archive is capped at 16 MiB.
 The command stops its owned launcher, records closed loopback port, restarts with
 that recovery root, and verifies the record remains readable and unchanged.
 
@@ -188,9 +198,10 @@ changes, recovery mismatch or cleanup failure. Preserve the complete parent bund
 
 `passed-fresh-recovery` establishes this automated synthetic baseline recovery
 and restart scope. The same artifact is used at both stages: **no version upgrade
-is claimed**. Qualified integrated-candidate upgrade, broader workflow/conversation/
-configuration/Persona recovery, schedules/effects, human operation, signature and
-access evidence remain separate gates. Do not substitute this result for them.
+is claimed**. Provider/model configuration, identity/secrets, Persona recovery,
+schedules/effects, qualified integrated-candidate upgrade, human operation and
+access evidence remain separate gates. These four synthetic state kinds do not
+establish full application recovery. Do not substitute this result for them.
 
 ## Human operator / observer exercise
 
@@ -296,19 +307,23 @@ validates all pins and uses separate disposable consumers, stripped child
 environments and explicit empty npm configuration, as in the baseline probe.
 
 After both consumer probes pass and stop, the candidate first opens the baseline's
-existing disposable data root. It must read the old synthetic flow before any
-successful restore, reject the invalid backup without changing that flow, export
-the preserved data and retain it through restart. It then restores the original
+existing disposable data root. It must read the old flow, conversation (including
+both messages), theme and environment label before any successful restore, reject
+both invalid backups without changing any of them, export the preserved data and
+retain it through restart. It then restores the original
 baseline backup into a different, empty candidate data root and checks re-export
 and restart persistence. The in-place probe never successfully restores the old
 backup, so restoration cannot mask data lost during upgrade.
 
 The top receipt hashes every completed operation receipt and qualification log,
 including failed operations. Retain all referenced roots together. These probes
-cover an empty synthetic flow only. Both consumer probes require verified npm
+cover an empty flow, a synthetic conversation with inert messages, a theme and
+one non-secret environment label. Both consumer probes require verified npm
 provenance before installation, and the top receipt removes each signature gate
-from pending only after that consumer reports verification. Broader
-conversation/configuration/Persona/schedule continuity, every-descendant cleanup,
+from pending only after that consumer reports verification. The version transition
+requires the broader state result from both consumers and both recovery operations;
+legacy flow-only receipts cannot satisfy it. Provider/model configuration,
+identity/secrets, Persona and schedule continuity, every-descendant cleanup,
 independent human operation, access and the 90-day observation remain separate
 gates. Neither a source fixture nor a passed automated version transition is an
 independent maintainer assignment or an A- assessment.
