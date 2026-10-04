@@ -1,10 +1,11 @@
-import { constants, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import { readPlainFile } from '@/utils/readPlainFile';
 import path from 'node:path';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { getDataDir } from '@/utils/paths';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
-import { atomicWriteWithoutLinks } from '@/backend/services/workspace/backupRestoreFs';
+import { atomicWriteWithoutLinks, assertLinkFreeFileParent } from '@/backend/services/workspace/backupRestoreFs';
 import { isWorkerMode, getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import { isPersonaControlledPlannedExecution, normalizeStartRestrictions, type PlannedExecution, type RunRecord } from '@/shared/types/plannedExecution';
 import type { WorkerRecoveryReason, WorkerRecoveryStatus } from '@/shared/types/plannedExecution/workerRecovery';
@@ -136,18 +137,13 @@ async function read(execution: PlannedExecution): Promise<LocalRecord | undefine
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_RECORD_BYTES) {
     throw new Error('Unsafe recovery control file');
   }
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const opened = await handle.stat();
-    if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1 || opened.size > MAX_RECORD_BYTES) {
-      throw new Error('Recovery control file changed');
-    }
-    const bytes = await handle.readFile();
-    if (bytes.length > MAX_RECORD_BYTES) throw new Error('Recovery control file exceeds budget');
-    const result: unknown = JSON.parse(bytes.toString('utf8'));
-    if (!validRecord(result)) throw new Error('Invalid recovery provenance');
-    return result;
-  } finally { await handle.close(); }
+  const bytes = await readPlainFile(file, {
+    expected: before, maxBytes: MAX_RECORD_BYTES,
+    verifyPath: () => assertLinkFreeFileParent(root, file),
+  });
+  const result: unknown = JSON.parse(bytes.toString('utf8'));
+  if (!validRecord(result)) throw new Error('Invalid recovery provenance');
+  return result;
 }
 
 function check(record: LocalRecord | undefined, execution: PlannedExecution, current: Authority): WorkerRecoveryReason {

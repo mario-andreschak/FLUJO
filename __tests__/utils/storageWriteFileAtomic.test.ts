@@ -69,4 +69,43 @@ describe('writeFileAtomic rename retries', () => {
     expect(rename).toHaveBeenCalledTimes(15);
     await expect(fs.readdir(dir)).resolves.toEqual([]);
   });
+
+  it('refuses a pre-created temporary file without overwriting or deleting it', async () => {
+    const target = path.join(dir, 'item.json');
+    const open = fs.open.bind(fs);
+    let planted: string | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith(`${target}.tmp.`)) {
+        planted = String(args[0]);
+        await fs.writeFile(planted, 'unowned');
+      }
+      return open(...args);
+    });
+    await expect(writeFileAtomic(target, 'replacement')).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await fs.readFile(planted!, 'utf8')).toBe('unowned');
+    expect(await fs.readdir(dir)).toHaveLength(1);
+  });
+
+  it('publishes private file permissions on POSIX', async () => {
+    const target = path.join(dir, 'item.json');
+    await writeFileAtomic(target, 'replacement');
+    if (process.platform !== 'win32') expect((await fs.stat(target)).mode & 0o077).toBe(0);
+    expect(await fs.readFile(target, 'utf8')).toBe('replacement');
+  });
+
+  it('refuses a changed temporary inode before retrying rename and preserves its replacement', async () => {
+    const target = path.join(dir, 'item.json');
+    let replacement: string | undefined;
+    const rename = fs.rename.bind(fs);
+    jest.spyOn(fs, 'rename').mockImplementation(async (from) => {
+      replacement = String(from);
+      await rename(from, `${from}.original`);
+      await fs.writeFile(replacement, 'unowned replacement');
+      throw errno('EPERM');
+    });
+    await expect(writeFileAtomic(target, 'intended')).rejects.toThrow('file or parent changed');
+    expect(await fs.readFile(replacement!, 'utf8')).toBe('unowned replacement');
+    expect(await fs.readFile(`${replacement}.original`, 'utf8')).toBe('intended');
+    expect(await fs.readdir(dir)).not.toContain('item.json');
+  });
 });

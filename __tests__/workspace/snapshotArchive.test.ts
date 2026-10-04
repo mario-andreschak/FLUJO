@@ -45,6 +45,7 @@ describe('portable workspace capture', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     environmentKeys.forEach((key, index) => {
       if (previous[index] === undefined) delete process.env[key];
       else process.env[key] = previous[index];
@@ -157,5 +158,19 @@ describe('portable workspace capture', () => {
     expect(manifestFiles[0].sha256).toBe(createHash('sha256').update(content).digest('hex'));
     expect(captured.manifest.runtime.selectedFlowIds).toEqual(['selected']);
     expect(captured.bytes).toBe(captured.manifest.files.reduce((total, file) => total + file.size, 0));
+  });
+
+  it('refuses workspace metadata swapped after containment checks', async () => {
+    await put('.workspace.json', '{"roots":[]}');
+    const metadata = path.join(workspace, '.workspace.json');
+    const open = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === metadata) {
+        await fs.rename(metadata, `${metadata}.original`);
+        await fs.writeFile(metadata, '{"roots":["external"]}');
+      }
+      return open(...args);
+    });
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'UNSAFE_ENTRY' });
   });
 });
