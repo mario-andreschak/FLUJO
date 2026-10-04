@@ -8,7 +8,7 @@ The preceding Linux installed smoke in run `37174184550` timed out after the ins
 
 ## Real installed sequence
 
-Only the smoke's newly created immediate-child `flujo-packed-artifacts-*` temporary directory and its real `data` directory qualify. The helper refuses unrelated directories, aliases/leaf links, non-directories and non-loopback endpoints before any enrollment request. The installed child receives the fixture DataRoot, localhost exposure, worker mode disabled and no inherited operator passphrase-file selection.
+Only the smoke's newly created immediate-child `flujo-packed-artifacts-*` temporary directory and its real `data` directory qualify. The helper refuses unrelated directories, leaf links, non-directories and non-loopback endpoints before any enrollment request. Canonical directory relationships establish this placement; native drive-letter spelling is accepted. The installed child receives the fixture DataRoot, localhost exposure, worker mode disabled and no inherited operator passphrase-file selection.
 
 The first installed CLI process must report uninitialized interactive protection with a locked fresh workspace. Its `/api/cwd` must return the fixed lock error. Public `initialize_default` must return 423 `encryption_setup_required` and leave the workspace fresh and locked. A newly generated 48-byte random private passphrase then enrolls USER protection through POST `/api/encryption/secure`; enrollment alone must leave the effect route locked. The passphrase remains in the helper closure, and the authentication token is checked without being returned or logged.
 

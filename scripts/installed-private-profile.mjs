@@ -31,8 +31,8 @@ async function assertOwnedDataRoot(sandbox, dataDir) {
   const ownedEntry = await fs.lstat(sandbox);
   const dataEntry = await fs.lstat(dataDir);
   if (path.dirname(owned) !== temporary || !/^flujo-packed-artifacts-[A-Za-z0-9]+$/.test(path.basename(owned))
-      || owned !== path.resolve(sandbox) || !ownedEntry.isDirectory() || ownedEntry.isSymbolicLink()
-      || data !== path.join(owned, 'data') || data !== path.resolve(dataDir)
+      || !ownedEntry.isDirectory() || ownedEntry.isSymbolicLink()
+      || data !== path.join(owned, 'data')
       || !dataEntry.isDirectory() || dataEntry.isSymbolicLink()) {
     throw new Error('Private enrollment requires the owned artifact fixture.');
   }

@@ -69,12 +69,10 @@ export function assertWorkflowContract(workflows) {
   for (const command of ['npm run build', 'npm run typecheck:mcp', 'npm run validate:mcp-release', 'npm run smoke:mcp-artifacts']) {
     if (!build.some((step) => step.run?.split('\n').includes(command))) throw new Error(`Production checks omitted ${command}.`);
   }
-  const profileChecks = build.findIndex(step => step.run?.split('\n').includes('node --test scripts/installed-private-profile.test.mjs'));
+  const profileChecks = build.findIndex(step => step.run === 'node --test scripts/installed-private-profile.test.mjs');
   const installedSmoke = build.findIndex(step => step.run?.split('\n').includes('npm run smoke:mcp-artifacts'));
-  if (profileChecks < 0 || profileChecks > installedSmoke || (profileChecks === installedSmoke
-      && build[profileChecks].run.indexOf('node --test scripts/installed-private-profile.test.mjs')
-        > build[profileChecks].run.indexOf('npm run smoke:mcp-artifacts'))) {
-    throw new Error('Installed private-profile checks must precede the artifact smoke.');
+  if (profileChecks < 0 || profileChecks >= installedSmoke) {
+    throw new Error('Installed private-profile checks require a separate mandatory step before the artifact smoke.');
   }
   for (const [id, stage, report] of [['test', 'ci', 'jest-results.json'], ['test-isolated', 'isolated', 'jest-results-isolated.json']]) {
     const steps = workflow.jobs[id].steps;

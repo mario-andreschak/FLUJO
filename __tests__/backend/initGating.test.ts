@@ -17,6 +17,7 @@
 // down modules and writing to a disposed test workspace. Scheduling behavior
 // belongs to its own tests; this suite only exercises startup orchestration.
 jest.mock('croner', () => ({ Cron: jest.fn() }));
+jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: (handler: unknown) => handler }));
 
 // Plain jest.fn()s (untyped, so the `(...a)` delegators below type-check).
 // Async return values are configured in beforeEach; a bare undefined return is
@@ -119,6 +120,8 @@ import {
 } from '@/backend/init';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
 import { getWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { NextRequest } from 'next/server';
+import { GET as initializeRoute } from '@/app/api/init/route';
 
 function clearGlobals(): void {
   (global as any).__flujo_init_promise = undefined;
@@ -235,6 +238,60 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
     expect(startPersonaGoalRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('the init response joins deferred services after a completed locked boot and an unlock', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    await ensureBackendInitialized();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+
+    isEncryptionLockedMock.mockResolvedValue(false);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const enteredGate = new Promise<void>(resolve => { entered = resolve; });
+    migrateInternalMcpServersMock.mockImplementation(async () => { entered(); await gate; });
+    const unlocking = onUnlocked();
+    await enteredGate;
+    let responded = false;
+    const response = initializeRoute(new NextRequest('http://localhost/api/init'));
+    void response.then(() => { responded = true; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(responded).toBe(false);
+      expect(startEnabledServersMock).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await unlocking;
+      await response;
+    }
+    expect((await response).status).toBe(200);
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the init response propagates deferred startup failure after a completed locked boot', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    await ensureBackendInitialized();
+    isEncryptionLockedMock.mockResolvedValue(false);
+    migrateInternalMcpServersMock.mockRejectedValue(new Error('synthetic shipped-service startup failure'));
+    const response = await initializeRoute(new NextRequest('http://localhost/api/init'));
+    expect(response.status).toBe(500);
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+  });
+
+  it('the init route retains the locked boot path without starting secret-dependent effects', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    const response = await initializeRoute(new NextRequest('http://localhost/api/init'));
+    expect(response.status).toBe(200);
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
   });
 
   it('onUnlocked starts services once and re-kicks durable Persona work on later unlocks', async () => {

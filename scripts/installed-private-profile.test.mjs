@@ -95,6 +95,17 @@ test('restart requires an observed USER lock and reuses the private passphrase w
   assert.equal(owned.calls.filter(name => name === 'authenticate').length, 2);
 });
 
+test('owned fixture admission uses canonical directories with native path spelling', async t => {
+  const owned = fixture(t);
+  const spelling = value => process.platform === 'win32'
+    ? value.replace(/^[A-Z]:/, drive => drive.toLowerCase()) : path.join(value, '.');
+  const result = await establishInstalledPrivateProfile('http://127.0.0.1:42001', {
+    ...owned, sandbox: spelling(owned.sandbox), dataDir: spelling(owned.dataDir),
+  });
+  assert.equal(result.profile, 'interactive-user');
+  assert.equal(owned.calls.filter(name => name === 'initialize').length, 1);
+});
+
 for (const fault of ['existingUser', 'existingLegacy', 'recovery', 'operator', 'openFreshCwd', 'publicSetup']) {
   test(`unsafe pre-enrollment state ${fault} denies before a private initialize request`, async t => {
     const owned = fixture(t, { [fault]: true });

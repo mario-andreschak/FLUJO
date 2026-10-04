@@ -27,12 +27,25 @@ for (const [label, change] of [
   ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter((step) => !step.run?.split('\n').includes('npm run smoke:mcp-artifacts')); }],
   ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.run?.split('\n').includes('npm run smoke:mcp-artifacts')).if = 'false'; }],
   ['omitted installed private-profile checks', (files) => {
-    const step = files['verify.yml'].jobs['production-build'].steps.find((entry) => entry.run?.split('\n').includes('npm run smoke:mcp-artifacts'));
-    step.run = step.run.split('\n').filter((line) => line !== 'node --test scripts/installed-private-profile.test.mjs').join('\n');
+    files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps
+      .filter((step) => step.run !== 'node --test scripts/installed-private-profile.test.mjs');
   }],
   ['late installed private-profile checks', (files) => {
-    const step = files['verify.yml'].jobs['production-build'].steps.find((entry) => entry.run?.split('\n').includes('npm run smoke:mcp-artifacts'));
-    step.run = 'npm run smoke:mcp-artifacts\nnode --test scripts/installed-private-profile.test.mjs';
+    const steps = files['verify.yml'].jobs['production-build'].steps;
+    const index = steps.findIndex((step) => step.run === 'node --test scripts/installed-private-profile.test.mjs');
+    const [checks] = steps.splice(index, 1);
+    steps.push(checks);
+  }],
+  ['conditional installed private-profile checks', (files) => {
+    files['verify.yml'].jobs['production-build'].steps.find((step) => step.run === 'node --test scripts/installed-private-profile.test.mjs').if = 'false';
+  }],
+  ['optional installed private-profile checks', (files) => {
+    files['verify.yml'].jobs['production-build'].steps.find((step) => step.run === 'node --test scripts/installed-private-profile.test.mjs')['continue-on-error'] = true;
+  }],
+  ['combined installed private-profile checks', (files) => {
+    const build = files['verify.yml'].jobs['production-build'];
+    build.steps = build.steps.filter((step) => step.run !== 'node --test scripts/installed-private-profile.test.mjs');
+    build.steps.find((step) => step.run === 'npm run smoke:mcp-artifacts').run = 'node --test scripts/installed-private-profile.test.mjs\nnpm run smoke:mcp-artifacts';
   }],
   ['optional assertion baseline', (files) => { files['verify.yml'].jobs.test.steps.find((step) => step.run?.startsWith('npm run verify:test-baseline'))['continue-on-error'] = true; }],
   ['omitted final dependency', (files) => { files['verify.yml'].jobs.verification.needs.pop(); }],
