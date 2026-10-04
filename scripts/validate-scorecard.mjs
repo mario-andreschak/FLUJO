@@ -19,6 +19,16 @@ const dimensions = new Map([
   ['production', ['Production-readiness', 'C-']],
 ]);
 const profiles = ['local-owner', 'persistent-worker', 'shared-public'];
+const sourceGateEvidenceKinds = new Map([
+  ['dependency-audit', ['source-check']],
+  ['build-verification', ['source-check']],
+  ['persona-current-soak', ['offline-simulation']],
+]);
+const gateEvidenceKinds = gate => sourceGateEvidenceKinds.get(gate.id) ?? {
+  source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'],
+  human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'],
+  external: ['external-agreement'],
+}[gate.kind];
 const installArtifactKinds = new Map([
   ['versioned installer', ['windows-installer']], ['npm package', ['npm']],
   ['pinned source', ['source-build']], ['container', ['container']],
@@ -34,12 +44,12 @@ const declaredPlatforms = {
   'shared-public': { Linux: ['hardened pinned container/service with authenticated ingress'] },
 };
 const protectedBudgets = new Map([
-  ['persona-append-p95', ['<', 150]], ['persona-peak-rss', ['<=', 805306368]],
-  ['persona-rss-growth', ['<=', 268435456]], ['persona-append-flatness', ['<=', 2]],
-  ['persona-total-collection', ['<=', 1248]], ['persona-mailbox', ['<=', 500]],
-  ['persona-activities', ['<=', 200]], ['persona-dispatches', ['<=', 200]],
-  ['persona-pins', ['<=', 200]], ['persona-leases', ['<=', 50]],
-  ['persona-recall-p95', ['<', 150]],
+  ['persona-append-p95', ['<', 150, 28]], ['persona-peak-rss', ['<=', 805306368, 1]],
+  ['persona-rss-growth', ['<=', 268435456, 1]], ['persona-append-flatness', ['<=', 2, 1]],
+  ['persona-total-collection', ['<=', 1248, 1]], ['persona-mailbox', ['<=', 500, 1]],
+  ['persona-activities', ['<=', 200, 1]], ['persona-dispatches', ['<=', 200, 1]],
+  ['persona-pins', ['<=', 200, 1]], ['persona-leases', ['<=', 50, 1]],
+  ['persona-recall-p95', ['<', 150, 20]],
 ]);
 const supportedKeywords = new Set([
   '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
@@ -103,6 +113,7 @@ function timestamp(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19) ? parsed : NaN;
 }
 function satisfies(value, budget) {
+  if (!Number.isFinite(budget.limit)) return false;
   return ({ '<': value < budget.limit, '<=': value <= budget.limit, '>=': value >= budget.limit, '>': value > budget.limit, '=': value === budget.limit })[budget.operator];
 }
 
@@ -128,7 +139,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   }
   exact(ledger.rubric.map(row => row.id), [...dimensions.keys()], 'rubric');
   exact(ledger.profiles.map(profile => profile.id), profiles, 'profiles');
-  for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment']) {
+  for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment', 'dependency-audit', 'build-verification']) {
     if (!indexed.gates.has(id)) fail('Required gate omitted: ' + id);
   }
   exact(ledger.issueReconciliation.map(issue => issue.issue), [520, 517, 526, 553, 547, 101, 527, 505, 435, 418, 212], 'issue reconciliation');
@@ -150,16 +161,18 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     refs([budget.ownerId], 'owners', budget.id);
     refs(budget.agreementEvidenceIds, 'evidence', budget.id);
     if (!Number.isFinite(timestamp(budget.declaredAt))) fail(budget.id + ': invalid declaredAt');
+    if (budget.limit === null && budget.status !== 'proposed') fail(budget.id + ': unset envelope cannot be an agreed or existing numeric contract');
     if (budget.status === 'agreed' && budget.agreementEvidenceIds.length === 0) fail(budget.id + ': agreed budget needs retained agreement evidence');
     if (budget.status === 'agreed') {
       const records = acceptedEvidence(budget.agreementEvidenceIds, budget.id);
       if (!records.some(e => e.kind === 'external-agreement')) fail(budget.id + ': budget requires external agreement evidence');
     }
   }
-  for (const [id, [operator, limit]] of protectedBudgets) {
+  for (const [id, [operator, limit, denominator]] of protectedBudgets) {
     const actual = indexed.budgets.get(id);
     if (!actual || actual.operator !== operator || actual.limit !== limit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
     if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
+    if (actual && actual.observation.minimumDenominator !== denominator) fail(id + ': existing observation denominator contract changed; requires a separately reviewed contract version');
   }
   for (const [id, seconds, denominator] of [['pilot-users', 4838400, 10], ['human-contributors', 7776000, 3], ['novice-success', 0, 10], ['novice-time', 0, 10]]) {
     const budget = indexed.budgets.get(id);
@@ -251,12 +264,18 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     for (const metric of evidence.metrics) {
       refs([metric.budgetId], 'budgets', evidence.id + ' metric');
       const budget = indexed.budgets.get(metric.budgetId);
+      if (budget?.limit === null) fail(evidence.id + ': envelope not declared for ' + metric.budgetId);
       if (metric.value < 0 && !metric.budgetId.endsWith('-growth')) fail(evidence.id + ': only measured growth may be negative');
       if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
       if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
         if (budget.status === 'proposed') fail(evidence.id + ': proposed budget cannot establish acceptance');
-        if (window.start && timestamp(budget.declaredAt) > timestamp(window.start)) fail(evidence.id + ': budget declared after measurement began');
+        const measurementStart = timestamp(window.start);
+        if (budget.status !== 'proposed' && !Number.isFinite(measurementStart)) fail(evidence.id + ': acceptance under declared budget needs actual measurement start');
+        if (Number.isFinite(measurementStart)) {
+          if (timestamp(budget.declaredAt) > measurementStart) fail(evidence.id + ': budget declared after measurement began');
+          if (measurementStart > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before measurement began');
+        }
         if (evidence.kind === 'live-provider' && budget.unit === 'seconds' && metric.value > (timestamp(window.end) - timestamp(window.start)) / 1000) fail(evidence.id + ': duration metric exceeds actual elapsed time');
         const observation = budget.observation;
         if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
@@ -264,7 +283,6 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
         if (observation.minimumSimulatedDays > 0 && (window.kind !== 'simulated' || window.simulatedDays < observation.minimumSimulatedDays)) fail(evidence.id + ': simulated workload too short for ' + metric.budgetId);
         if (metric.denominator < observation.minimumDenominator) fail(evidence.id + ': denominator below declared minimum for ' + metric.budgetId);
         if (budget.status === 'agreed') {
-          if (!Number.isFinite(timestamp(window.start))) fail(evidence.id + ': acceptance under agreed budget needs actual measurement start');
           for (const id of budget.agreementEvidenceIds) {
             const agreement = indexed.evidence.get(id);
             if (agreement && timestamp(agreement.observedAt) > timestamp(window.start)) fail(evidence.id + ': budget agreement occurred after measurement began');
@@ -299,13 +317,29 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       }
     }
   }
+  function requireGateSource(gate, sourceSha, context) {
+    // External rubric/consumer agreements may predate a release. Their policy
+    // applicability still needs review; runtime/source gates qualify one source.
+    if (!gate || gate.status !== 'passed' || gate.kind === 'external') return;
+    const expected = gateEvidenceKinds(gate);
+    const records = gate.evidenceIds.map(id => indexed.evidence.get(id)).filter(Boolean);
+    for (const profileId of gate.profileIds.length ? gate.profileIds : [null]) {
+      if (!records.some(e => e.result === 'passed' && e.integrity === 'checksummed' &&
+        expected.includes(e.kind) && e.sourceSha === sourceSha &&
+        (profileId === null || e.profileIds.includes(profileId)))) {
+        fail(context + ': gate ' + gate.id + ' lacks acceptance for source ' + sourceSha +
+          (profileId === null ? '' : ' and profile ' + profileId));
+      }
+    }
+  }
   for (const gate of ledger.gates) {
     refs([gate.ownerId], 'owners', gate.id);
     refs(gate.profileIds, 'profiles', gate.id);
     refs(gate.evidenceIds, 'evidence', gate.id);
+    if (sourceGateEvidenceKinds.has(gate.id) && gate.kind !== 'source') fail(gate.id + ': required source gate kind changed');
     if (gate.status === 'passed') {
       const records = acceptedEvidence(gate.evidenceIds, gate.id);
-      const expected = { source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'], human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'], external: ['external-agreement'] }[gate.kind];
+      const expected = gateEvidenceKinds(gate);
       if (!records.some(e => expected.includes(e.kind))) fail(gate.id + ': wrong evidence kind for gate');
       for (const profileId of gate.profileIds) {
         if (!records.some(e => expected.includes(e.kind) && e.profileIds.includes(profileId))) fail(gate.id + ': missing acceptance evidence for profile ' + profileId);
@@ -331,12 +365,19 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (claim.status === 'release-supported') {
       if (!records.some(e => e.kind === 'installed-artifact')) fail(claim.id + ': source checks cannot substitute for installed-artifact acceptance');
       if (claim.gateIds.some(id => indexed.gates.get(id)?.status !== 'passed')) fail(claim.id + ': required gates remain open');
+      for (const id of claim.gateIds) requireGateSource(indexed.gates.get(id), records[0]?.sourceSha, claim.id);
       for (const record of records.filter(e => e.kind === 'installed-artifact')) if (indexed.artifacts.get(record.artifactId)?.provenance !== 'verified-content') fail(claim.id + ': installed artifact content/provenance is unverified');
     }
   }
   for (const issue of ledger.issueReconciliation) refs(issue.evidenceIds, 'evidence', '#' + issue.issue);
   for (const id of dimensions.keys()) {
     if (!ledger.claims.some(claim => claim.dimensionId === id)) fail('Missing claim for dimension ' + id);
+  }
+  for (const profileId of profiles) {
+    if (!ledger.claims.some(claim => claim.dimensionId === 'production' && claim.profileId === profileId)) fail('Missing production claim for profile ' + profileId);
+  }
+  for (const dimensionId of ['engineering', 'docs', 'maturity']) {
+    if (!ledger.claims.some(claim => claim.dimensionId === dimensionId && claim.gateIds.includes('build-verification'))) fail(dimensionId + ': missing build-verification claim gate');
   }
   const assessment = ledger.assessment;
   refs(assessment.artifactIds, 'artifacts', 'assessment');
@@ -350,6 +391,10 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (!records.some(e => e.kind === 'independent-assessment')) fail('Reassessment lacks independent assessment evidence');
     if (records.some(e => e.sourceSha !== assessment.sourceSha)) fail('Reassessment evidence does not match selected release SHA');
     if (!assessment.artifactIds.length || assessment.artifactIds.some(id => { const a = indexed.artifacts.get(id); return !a || a.provenance !== 'verified-content' || a.sourceSha !== assessment.sourceSha; })) fail('Reassessment needs verified artifacts of the same selected release SHA');
+    for (const gate of ledger.gates) requireGateSource(gate, assessment.sourceSha, 'assessment');
+    for (const claim of ledger.claims.filter(c => ['source-supported', 'release-supported'].includes(c.status))) {
+      if (claim.evidenceIds.some(id => indexed.evidence.get(id)?.sourceSha !== assessment.sourceSha)) fail(claim.id + ': claim evidence does not match assessed release source');
+    }
   }
   const blockers = [];
   if (ledger.agreements.maintainer.status !== 'agreed' || ledger.agreements.independentReviewer.status !== 'agreed' || ledger.agreements.disagreements.length) blockers.push('Rubric agreement/disagreements unresolved');

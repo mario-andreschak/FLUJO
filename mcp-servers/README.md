@@ -38,6 +38,16 @@ node mcp-servers/browser/dist/index.js
 
 ## Filesystem server
 
+Filesystem tool calls and tracked-file resource reads check both the logical
+configured roots and their resolved filesystem destinations. A symlink or
+junction into an unapproved directory is rejected, including when a new file's
+parent is missing. `FLUJO_FS_ROOTS` remains an independent ceiling over client
+roots. Links into another explicitly allowed root remain usable, and move/delete
+retain their behavior on the link itself. These checks run before each operation;
+they do not provide atomic isolation from concurrent host directory/link
+replacement. Directory listings report links as `other` without following their
+targets to obtain a size.
+
 The filesystem `search` tool keeps one small cross-platform interface for name
 and literal content matching. Directory traversal uses Node `Dirent` metadata to
 avoid a separate stat for every normal entry. Content search uses `ripgrep` when

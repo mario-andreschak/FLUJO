@@ -106,4 +106,76 @@ describe('snapshot lease publication and generation ownership', () => {
     expect(await fs.readdir(lock)).toEqual(['owner.json']);
     expect(JSON.parse(await fs.readFile(path.join(lock, 'owner.json'), 'utf8'))).toEqual(successor);
   }, 10_000);
+
+  it('refuses publication when a candidate and visible directory have colliding numeric inode values', async () => {
+    const lstat = fs.lstat.bind(fs);
+    const colliding = BigInt('9007199254740992');
+    expect(Number(colliding)).toBe(Number(colliding + BigInt(1)));
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (value.isDirectory() && String(args[0]).startsWith(lock)) {
+        expect(args[1]).toEqual({ bigint: true });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, {
+          ino: String(args[0]) === lock ? colliding + BigInt(1) : colliding,
+        });
+      }
+      return value;
+    });
+    const task = jest.fn(async () => undefined);
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    expect(task).not.toHaveBeenCalled();
+    expect(await fs.readdir(lock)).toEqual(['owner.json']);
+  });
+
+  it('refuses retirement of a directory replacement with identical owner bytes and a rounded inode collision', async () => {
+    const lstat = fs.lstat.bind(fs);
+    const colliding = BigInt('9007199254740992');
+    let replaced = false;
+    let ownerBytes = '';
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (value.isDirectory() && String(args[0]).startsWith(lock)) {
+        expect(args[1]).toEqual({ bigint: true });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding + BigInt(replaced ? 1 : 0) });
+      }
+      return value;
+    });
+    await expect(withSnapshotStoreLease(root, 'capture', async () => {
+      ownerBytes = await fs.readFile(path.join(lock, 'owner.json'), 'utf8');
+      replaced = true;
+    })).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    expect(await fs.readFile(path.join(lock, 'owner.json'), 'utf8')).toBe(ownerBytes);
+    expect(await fs.readdir(lock)).toEqual(['owner.json']);
+  });
+
+  it('preserves an unpublished owner replacement whose inode collides as a Number', async () => {
+    const colliding = BigInt('9007199254740992');
+    expect(Number(colliding)).toBe(Number(colliding + BigInt(1)));
+    const open = fs.open.bind(fs);
+    const lstat = fs.lstat.bind(fs);
+    let candidateOwnerPath = '';
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).startsWith(`${lock}.candidate-`)) {
+        candidateOwnerPath = String(args[0]);
+        const stat = handle.stat.bind(handle);
+        jest.spyOn(handle, 'stat').mockImplementation(async (...options) => {
+          const value = await stat(...options);
+          return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding });
+        });
+      }
+      return handle;
+    });
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (String(args[0]) === candidateOwnerPath) {
+        expect(args[1]).toEqual({ bigint: true });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding + BigInt(1) });
+      }
+      return value;
+    });
+    mockTransition.mockRejectedValueOnce(Object.assign(new Error('controlled transition failure'), { code: 'EIO' }));
+    await expect(withSnapshotStoreLease(root, 'capture', async () => undefined)).rejects.toMatchObject({ code: 'EIO' });
+    expect(JSON.parse(await fs.readFile(candidateOwnerPath, 'utf8'))).toMatchObject({ pid: process.pid });
+  });
 });

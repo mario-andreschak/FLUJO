@@ -159,8 +159,8 @@ spending, migration capture, account adoption, replay or cleanup.
 
 Autonomy is separately gated: an offline simulation, short genuine-model test or
 successful process restart cannot establish useful public-world work or multi-week
-unattended success. The proposed live spend cap is zero because no numeric paid-run
-envelope or concrete model/account scope is declared here. Development/push/deployment
+unattended success. The proposed acceptance spend envelope is undeclared: no numeric
+limit or concrete model/account scope is recorded here. Development/push/deployment
 authorization is separate; the coordinator owns the deployment candidate. A dollar
 CLI argument is not monetary enforcement.
 
@@ -175,6 +175,15 @@ capturing a contract today does not retroactively predeclare it for an older run
 Passing acceptance must reconcile these bounds and retained agreement must predate
 measurement. Success-rate metrics retain an integer numerator and denominator;
 timeless labels or rounded percentages cannot stand in for counts.
+
+Passing checksummed metrics against agreed or existing contracts require an actual
+UTC measurement start, no earlier than declaration and no later than observation.
+Simulated days remain simulated. Existing Persona limits and their 28 daily append
+checkpoints / 20 recall-search denominators require a separately reviewed contract
+version to change. A proposed null monetary limit records a missing acceptance
+contract; it does not revoke the user's development/deployment authorization.
+Production claims cover all three profiles, and Engineering, Docs and Maturity
+claims retain a required candidate-build gate.
 
 | Contract | Preserved or proposed target | Denominator/window |
 | --- | --- | --- |
@@ -210,6 +219,12 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
 4. Change a gate/claim only after the required passing checksummed evidence matches its
    revision, artifact, profile, evidence kinds and agreed budgets. Source-supported is
    limited to source scope. Report-only observations cannot qualify release-supported.
+   A release-supported claim needs qualifying evidence for its source at every declared
+   profile of each required source/runtime gate. Older passing results can remain in
+   that gate's history but cannot qualify the new source. A completed reassessment binds
+   supported claims and passed source/runtime gates to its selected release SHA.
+   External rubric/consumer agreements may predate a release; their policy applicability
+   and current consumer pins still need explicit review.
 5. Keep paid/live account work, independent humans, manual accessibility/recovery,
    cross-stream contracts and independent reassessment pending until their owners
    provide actual evidence. No bot/test count can satisfy those gates.
@@ -228,5 +243,6 @@ and the topic-owned architecture/API/operations guides. Docs owns this scorecard
 and validator. Security owns SECURITY.md/security behavior; Engineering owns CI/release;
 other topics own their feature/architecture/operations guides. The
 [publication reconciliation](publication-reconciliation.md) retains source-era findings
-and candidate wording for their review. This slice changes only project-status among
-those publication files; the actual release needs a fresh inventory after integration.
+and candidate wording for their review. The foundation changed project-status; later
+publication changes have their own source receipts. The actual release needs a fresh
+inventory and claim reconciliation after integration.

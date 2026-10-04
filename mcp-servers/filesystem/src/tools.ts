@@ -29,9 +29,9 @@ import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotoco
 import {
   createLogger,
   getDataDir,
-  isInside,
   loadEffectiveRoots,
 } from '@flujo-ai/mcp-shared';
+import { confineFilesystemPath } from './pathConfinement.js';
 import { recordTouchedFile } from './resources.js';
 import { detectMediaFile, mimeTypeFromExtension, mediaTypeFromMime, looksBinaryHeuristic } from './media.js';
 
@@ -252,10 +252,7 @@ async function resolvePath(input: unknown, roots: string[]): Promise<string> {
     ? path.resolve(normalized)
     : path.resolve(dataDir, normalized);
 
-  if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
-    throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);
-  }
-  return resolved;
+  return confineFilesystemPath(resolved, roots);
 }
 
 export function filesystemToolDefinitions(): Tool[] {
@@ -1273,7 +1270,9 @@ async function listDirTool(args: Record<string, unknown>, roots: string[]): Prom
       const type = await entryType(full);
       let size = 0;
       try {
-        size = (await fs.stat(full)).size;
+        // lstat classified links as "other"; do not follow their targets just
+        // to expose a size from outside this listing's configured roots.
+        if (type !== 'other') size = (await fs.stat(full)).size;
       } catch {
         /* ignore */
       }

@@ -1,4 +1,4 @@
-import { promises as fs, type Stats } from 'fs';
+import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
 import { readPlainFile } from '@/utils/readPlainFile';
@@ -144,29 +144,31 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   await withWorkspaceMutation(async () => {
     const dirPath = path.dirname(filePath);
     await fs.mkdir(dirPath, { recursive: true });
-    const directory = await fs.lstat(dirPath);
+    const directory = await fs.lstat(dirPath, { bigint: true });
     const canonicalDirectory = await fs.realpath(dirPath);
     if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Atomic write parent is unsafe');
     // Temp file lives next to the target (same filesystem) so rename is atomic.
     const tmpPath = `${filePath}.tmp.${randomUUID()}`;
     let created = false;
-    let owned: Stats | undefined;
+    let owned: BigIntStats | undefined;
     try {
       const handle = await fs.open(tmpPath, 'wx', 0o600);
       created = true;
       try {
-        owned = await handle.stat();
+        owned = await handle.stat({ bigint: true });
         await handle.writeFile(data);
         await handle.sync();
-        owned = await handle.stat();
+        owned = await handle.stat({ bigint: true });
       } finally { await handle.close(); }
       await renameWithRetry(tmpPath, filePath, async () => {
-        const [current, parent, canonicalParent] = await Promise.all([fs.lstat(tmpPath), fs.lstat(dirPath), fs.realpath(dirPath)]);
-        if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== 1
+        const [current, parent, canonicalParent] = await Promise.all([fs.lstat(tmpPath, { bigint: true }), fs.lstat(dirPath, { bigint: true }), fs.realpath(dirPath)]);
+        if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
             || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size
-            || current.mtimeMs !== owned.mtimeMs || current.ctimeMs !== owned.ctimeMs
+            || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs
+            || current.mode !== owned.mode || current.uid !== owned.uid || current.gid !== owned.gid
             || !parent.isDirectory() || parent.isSymbolicLink() || parent.dev !== directory.dev
-            || parent.ino !== directory.ino || canonicalParent !== canonicalDirectory) {
+            || parent.ino !== directory.ino || parent.mode !== directory.mode || parent.uid !== directory.uid
+            || parent.gid !== directory.gid || canonicalParent !== canonicalDirectory) {
           throw new Error('Atomic write file or parent changed');
         }
       });
@@ -175,7 +177,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
       // Best-effort cleanup so a failed write doesn't leave temp files behind.
       if (created) {
         try {
-          const current = await fs.lstat(tmpPath);
+          const current = await fs.lstat(tmpPath, { bigint: true });
           if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(tmpPath);
         } catch { /* never clean up an unowned replacement */ }
       }
@@ -420,15 +422,19 @@ type TextFileWithStats = {
 };
 
 async function readTextWithStatsOrNull(filePath: string): Promise<TextFileWithStats | null> {
-  const stats = await lstatOrNull(filePath);
+  const stats = await fs.lstat(filePath, { bigint: true }).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  });
   if (!stats) return null;
   if (!stats.isFile() || stats.isSymbolicLink()) {
     throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
   }
   return {
     content: (await readPlainFile(filePath, { expected: stats })).toString('utf8'),
-    mtimeMs: stats.mtimeMs,
-    sizeBytes: stats.size,
+    // Legacy display/index metadata stays numeric; admission used exact identity.
+    mtimeMs: Number(stats.mtimeNs) / 1_000_000,
+    sizeBytes: Number(stats.size),
   };
 }
 
@@ -603,7 +609,7 @@ async function readPersonaShardDirectory<T>(
     const recordId = entry.slice(0, -'.json'.length);
     assertSafeCollectionId(recordId);
     const filePath = path.join(shardDir, entry);
-    const stats = await fs.lstat(filePath);
+    const stats = await fs.lstat(filePath, { bigint: true });
     if (!stats.isFile() || stats.isSymbolicLink()) {
       throw new Error(`Persona shard item is not a regular link-free file: ${filePath}`);
     }
