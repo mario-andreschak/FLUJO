@@ -46,5 +46,5 @@ test.each(fields)('rejects a declared secret placeholder in public field %s', fi
 test('public identities remain valid while declared runtime prompt placeholders are allowed', () => {
   const result = validatePackage(manifest());
   expect(result.success).toBe(true);
-  expect(result.data?.flows[0].flow.nodes[0].data.properties.prompt).toContain('{{secret.API_KEY}}');
+  expect(result.data?.flows[0]?.flow.nodes[0]?.data?.properties?.prompt).toContain('{{secret.API_KEY}}');
 });

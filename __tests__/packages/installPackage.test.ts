@@ -1009,12 +1009,10 @@ describe('installPackage — public identity and credential boundary', () => {
   );
 
   it('keeps long public flow ids stable across different credentials without publishing the credentials in identities or ledger', async () => {
-    const pkg = manifest();
     const localId = `public-local-${'A'.repeat(100)}`;
-    pkg.mcpServers = [];
-    pkg.flows = [{ flow: { id: localId, name: 'Public Flow',
+    const pkg = { ...manifest(), mcpServers: [], flows: [{ flow: { id: localId, name: 'Public Flow',
       nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { prompt: '{{secret.API_KEY}}' } } }],
-      edges: [] } }];
+      edges: [] } }] };
     pkg.plannedExecutions[0].flowId = localId;
     pkg.plannedExecutions[0].prompt = '{{secret.API_KEY}}';
     fetchPackageManifestMock.mockResolvedValue(pkg);
@@ -1042,13 +1040,11 @@ describe('installPackage — public identity and credential boundary', () => {
   });
 
   it.each(['__proto__', 'constructor', 'toString'])('preserves own public key %s through references, renames and ledger round-trip', async key => {
-    const pkg = manifest();
+    const pkg = { ...manifest(), mcpServers: [], flows: [{ flow: { id: key, name: 'Public Flow',
+      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { boundModel: key } } }], edges: [] } }] };
     pkg.name = key;
-    pkg.mcpServers = [];
     pkg.models[0].id = key;
     pkg.models[0].displayName = key;
-    pkg.flows = [{ flow: { id: key, name: 'Public Flow',
-      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { boundModel: key } } }], edges: [] } }];
     pkg.plannedExecutions[0].flowId = key;
     fetchPackageManifestMock.mockResolvedValue(pkg);
     const renamed = Object.fromEntries([[key, 'Renamed Public Flow']]);
