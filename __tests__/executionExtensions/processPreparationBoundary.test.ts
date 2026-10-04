@@ -60,6 +60,19 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     ];
   }
 
+  test('owned state without live context is refused before prompt preparation', async () => {
+    const { state, params } = setup();
+    state.executionExtensionOwned = true;
+    delete state.executionExtensionContext;
+    const render = jest.spyOn(promptRenderer, 'renderPrompt');
+    const discovery = jest.spyOn(ToolHandler, 'processMCPNodes');
+
+    await expect(new ProcessNode().prep(state, params()))
+      .rejects.toMatchObject({ code: 'trusted_execution_context_required' });
+    expect(render).not.toHaveBeenCalled();
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
   test('foreign bound server is denied before tool discovery or prompt rendering', async () => {
     const { state, params } = setup();
     const effects = watchMcpEffects();

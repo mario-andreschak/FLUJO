@@ -51,6 +51,17 @@ beforeEach(() => {
 });
 
 describe('testModelConnection', () => {
+  it('refuses an owner-bound record before SDK, axios, or tool diagnostics', async () => {
+    await expect(testModelConnection({
+      modelName: 'test/model', baseUrl: 'https://owner.example/v1', apiKey: 'local-override',
+      model: { id: 'owner-model', name: 'test/model', ApiKey: '',
+        ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' } },
+    })).rejects.toThrow('authorized model-step transport');
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(axiosPost).not.toHaveBeenCalled();
+    expect(toolTest).not.toHaveBeenCalled();
+  });
+
   it('reports success when both transports reach the provider', async () => {
     sdkCreate.mockResolvedValue(okCompletion);
     axiosPost.mockResolvedValue(okAxios);

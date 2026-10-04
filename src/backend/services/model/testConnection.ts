@@ -415,6 +415,9 @@ interface ModelTestParams {
 
 /** Test the model's transport, then its production tool conversion and result loop. */
 export async function testModelConnection(params: ModelTestParams): Promise<ModelTestResult> {
+  if (params.model?.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const model: Model = {
     ...params.model,
     id: params.model?.id ?? 'model-connection-test',

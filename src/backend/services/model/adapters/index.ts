@@ -1,4 +1,4 @@
-import { Model } from '@/shared/types/model';
+import { isOwnerCredentialBoundModel, Model } from '@/shared/types/model';
 import { resolveModelAdapter } from '@/shared/types/model/provider';
 import { CompletionAdapter } from './types';
 import { OpenAiAdapter } from './openaiAdapter';
@@ -40,6 +40,9 @@ export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAda
   // Resolve once for this factory call. A protected ModelHandler supplies the
   // qualified route after its async preparation, before any native adapter can run.
   const route = resolveCompletionAdapterRoute(model);
+  if (isOwnerCredentialBoundModel(model) && route !== 'openai') {
+    throw new ExecutionExtensionError('execution_owner_model_adapter_unsupported');
+  }
   if (requiredRoute && route !== requiredRoute) {
     throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
   }

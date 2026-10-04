@@ -690,6 +690,12 @@ describe('authenticated single physical OpenAI attempt', () => {
   const boundInput = (context: ExecutionExtensionContext, bound = boundModel()): CompletionInput =>
     ({ ...input(context), model: bound, apiKey: '' });
 
+  it('refuses native adapter selection for a loaded owner-bound record', () => {
+    expect(() => getCompletionAdapter({
+      ...boundModel(), provider: 'anthropic', adapter: 'anthropic',
+    })).toThrow(expect.objectContaining({ code: 'execution_owner_model_adapter_unsupported' }));
+  });
+
   it.each(['response', 'stream'] as const)('sends a bound %s step only through the owner with no FLUJO credential', async mode => {
     const dispatchModelRequest = jest.fn(async (_step: object, request: ExecutionOwnerModelDispatchRequest) => {
       expect(request.version).toBe(2);

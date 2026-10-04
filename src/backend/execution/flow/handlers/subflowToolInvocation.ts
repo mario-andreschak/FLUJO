@@ -21,6 +21,7 @@ import {
 import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import { pinnedSubflowDefinition } from '../subflowDependencies';
 import { subflowExecutionAuthority } from '../executionAuthority';
+import { isExecutionProtectedState } from '@/backend/execution/extensions';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -192,6 +193,12 @@ export async function executeSubflowToolCall(
     const sharedState = FlowExecutor.conversationStates.get(conversationId);
     if (!sharedState) {
       return { success: false, error: 'Live conversation state not found for the subflow tool call.' };
+    }
+    // This synthetic path constructs its own SubflowNodePrepResult and skips
+    // SubflowNode.prep. Until the owner can issue child authority, refuse it
+    // before projecting the task or looking up any child flow.
+    if (sharedState.executionExtensionContext || isExecutionProtectedState(sharedState)) {
+      return { success: false, error: 'execution_subflow_child_authority_required' };
     }
     const targetNodeId = sharedState.subflowToolNameMap?.[name];
     if (!targetNodeId) {

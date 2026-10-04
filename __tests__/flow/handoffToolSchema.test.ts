@@ -271,6 +271,27 @@ describe('ProcessNode.generateHandoffTools — caller-prompt for an ISOLATED PRO
 
 
 describe('subflow collaboration defaults', () => {
+  it('hides synthetic child tools and clears stale maps for protected preparation', async () => {
+    const proc = makeProcessNode([{ edgeId: 'edge', nodeId: 'worker' }]);
+    getFlowMock.mockResolvedValue({ nodes: [{ id: 'worker', type: 'subflow', data: { properties: { subflowId: 'child' } } }] });
+    const state = {
+      flowId: 'flow-1',
+      subflowToolNameMap: { call_subflow_stale: 'worker' },
+      subflowDetachedToolNameMap: { start_subflow_stale: 'worker' },
+      behaviorToolRegistry: {
+        call_behavior_research: { personaId: 'persona', behaviorId: 'research', name: 'Research', description: 'Research' },
+      },
+    } as unknown as SharedState;
+    const tools = await (proc as any).generateHandoffTools(state, true);
+    const names = tools.map((tool: { name: string }) => tool.name);
+    for (const hidden of ['call_subflow_worker', 'start_subflow_worker', 'call_behavior_research']) {
+      expect(names).not.toContain(hidden);
+    }
+    expect(names).toContain('handoff_to_worker');
+    expect(state.subflowToolNameMap).toEqual({});
+    expect(state.subflowDetachedToolNameMap).toEqual({});
+  });
+
   it.each([undefined, 'handoff', 'tool', 'detached'])('offers all execution choices for saved mode %s without settings', async invocationMode => {
     const proc = makeProcessNode([{ edgeId: 'edge', nodeId: 'worker' }]);
     getFlowMock.mockResolvedValue({ nodes: [{ id: 'worker', type: 'subflow', data: { properties: { invocationMode } } }] });

@@ -38,6 +38,9 @@ export async function testModelToolConnection(model: Model, apiKey: string): Pro
   let stage = 'schema';
   let conversationId: string | undefined;
   try {
+    if (model.ownerCredentialBinding !== undefined) {
+      throw new Error('Owner-bound models require an authorized model-step transport.');
+    }
     const prepared = ToolHandler.prepareTools({ availableTools: [definition] });
     if (!prepared.success) throw new Error(prepared.error.message);
 

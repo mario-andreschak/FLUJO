@@ -51,7 +51,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { ExecutionExtensionError, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -188,14 +188,16 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       .map(([id, name]) => [id, name.replace(SUBFLOW_TOOL_PREFIX, SUBFLOW_DETACHED_TOOL_PREFIX)]));
     sharedState.handoffNameMap = sharedState.handoffNameMap || {};
     sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
-    sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
-    sharedState.subflowDetachedToolNameMap = sharedState.subflowDetachedToolNameMap || {};
+    // A protected run has no owner-issued child authority. Clear any maps
+    // retained from earlier turns so synthetic calls are not offered or routed.
+    sharedState.subflowToolNameMap = protectedPreparation ? {} : sharedState.subflowToolNameMap || {};
+    sharedState.subflowDetachedToolNameMap = protectedPreparation ? {} : sharedState.subflowDetachedToolNameMap || {};
 
     const handoffTools: ToolDefinition[] = [];
     for (const target of targets) {
       const flowNodeForTarget = flowNodesById?.get(target.id);
 
-      if (target.type === 'subflow') {
+      if (target.type === 'subflow' && !protectedPreparation) {
         const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
         sharedState.subflowDetachedToolNameMap[toolName] = target.id;
         const description = !protectedPreparation && flowNodeForTarget
@@ -205,7 +207,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
       }
 
-      if (target.type === 'subflow') {
+      if (target.type === 'subflow' && !protectedPreparation) {
         // Inline calls return structured results without changing graph nodes.
         const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
         sharedState.subflowToolNameMap[toolName] = target.id;
@@ -360,7 +362,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ...handoffTools,
       ...((hasSubflowTargets || sharedState.parentRunId || sharedState.parentConversationId || sharedState.launchedTaskIds?.length || Object.keys(sharedState.subflowInvocations ?? {}).length)
         ? buildSubflowCommunicationTools() : []),
-      ...buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry),
+      ...(protectedPreparation ? [] : buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry)),
     ];
   }
 
@@ -375,6 +377,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
     const executionExtensionContext = sharedState.executionExtensionContext;
+    if (isExecutionProtectedState(sharedState) && !executionExtensionContext) {
+      throw new ExecutionExtensionError('trusted_execution_context_required');
+    }
     // The protected graph may be mutated while this async preparation awaits.
     // Detach the inputs used by every MCP/resource side effect before checking
     // them, then keep using these exact admitted values through model dispatch.
