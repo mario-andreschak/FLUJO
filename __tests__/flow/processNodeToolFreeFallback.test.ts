@@ -1,6 +1,6 @@
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { modelService } from '@/backend/services/model';
-import { registerExecutionExtension } from '@/backend/execution/extensions';
+import { MAX_EXECUTION_MODEL_STEP_ORDINAL, registerExecutionExtension } from '@/backend/execution/extensions';
 import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import type {
@@ -282,6 +282,21 @@ describe('ProcessNode unsupported-tool fallback', () => {
     await expect(nodeWithFinish().execCore({ ...prep(), nodeId: 'different' }, params()))
       .rejects.toMatchObject({ code: 'execution_model_step_slot_required' });
     expect(callModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('exhausts the Process ordinal range before returning a reused slot', async () => {
+    let takeOrdinal: (() => number) | undefined;
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      takeOrdinal = input.takeModelStepOrdinal;
+      return successfulCompletion as any;
+    });
+    await nodeWithFinish().execCore(prep([]), params());
+    expect(takeOrdinal).toBeDefined();
+    for (let ordinal = 0; ordinal < MAX_EXECUTION_MODEL_STEP_ORDINAL; ordinal++) {
+      takeOrdinal!();
+    }
+    expect(takeOrdinal!()).toBe(MAX_EXECUTION_MODEL_STEP_ORDINAL);
+    expect(takeOrdinal!).toThrow(expect.objectContaining({ code: 'execution_model_step_slot_exhausted' }));
   });
 
   it('retries handoff-only tools when conditioned edges own the routing decision', async () => {

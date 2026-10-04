@@ -2042,7 +2042,7 @@ export class ModelHandler {
       }
       // The parent run context covers tools and durable state. Every bound
       // provider call gets a separate owner-issued child that can dispatch once.
-      if (ownerBound && (!opts?.nodeId || !opts.takeModelStepOrdinal)) {
+      if (ownerBound && (!opts?.nodeId || typeof opts.takeModelStepOrdinal !== 'function')) {
         throw new ExecutionExtensionError('execution_model_step_slot_required');
       }
       const modelStepContext = ownerBound

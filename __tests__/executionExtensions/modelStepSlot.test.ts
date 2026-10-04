@@ -117,4 +117,12 @@ it('takes the Process ordinal in ModelHandler only for a bound call and stops at
   expect(issueModelStep).not.toHaveBeenCalled();
   expect(takeModelStepOrdinal).not.toHaveBeenCalled();
   expect(mockAdapterCalled).not.toHaveBeenCalled();
+
+  const exhausted = await ModelHandler.callModel({
+    ...input,
+    takeModelStepOrdinal: () => { throw new ExecutionExtensionError('execution_model_step_slot_exhausted'); },
+  });
+  expect(exhausted.success).toBe(false);
+  expect(issueModelStep).not.toHaveBeenCalled();
+  expect(mockAdapterCalled).not.toHaveBeenCalled();
 });

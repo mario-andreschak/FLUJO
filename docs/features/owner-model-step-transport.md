@@ -10,6 +10,16 @@ logical model call**. A child is consumed before owner I/O and cannot be reused
 after a denial, failure, or uncertain outcome. Tool loops and later Process
 turns need new children and new owner budget decisions.
 
+The owner issuer receives a closed `{ nodeId, ordinal }` slot with each child.
+`nodeId` comes from the active Process node; `ordinal` starts at zero for that
+Process execution and advances for each owner-bound model call, including an
+error-driven tool-free fallback. The counter is bounded and a missing, changed,
+or malformed slot fails before the owner callback. Ordinary models do not
+consume it. This slot is only a call-site hint: the owner must match it to its
+independently frozen graph and original call plan, then durably refuse a reused
+slot. A later visit to the same Process node starts a new local counter, so
+multi-visit plans need separately qualified run-wide issuance before use.
+
 At the OpenAI SDK's final `fetch` seam, FLUJO checks the resolved recipient,
 method, JSON body, and headers, then passes their snapshot and digests to
 `dispatchModelRequest`. The SDK's construction-only bearer placeholder is
