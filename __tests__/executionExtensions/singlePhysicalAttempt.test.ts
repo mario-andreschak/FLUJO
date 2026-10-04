@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { createHash } from 'node:crypto';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
+import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { FallbackAdapter } from '@/backend/services/model/adapters/fallbackAdapter';
-import { executionExtensionSinglePhysicalAttempt, registerExecutionExtension, type ExecutionExtensionContext, type ExecutionModelIdentity } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, executionExtensionSinglePhysicalAttempt, registerExecutionExtension, type ExecutionExtensionContext, type ExecutionModelIdentity, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { Model } from '@/shared/types/model';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
@@ -16,9 +18,13 @@ describe('authenticated single physical OpenAI attempt', () => {
   let restore: (() => void) | undefined;
   const run = () => {
     const privateRun = fixtureRun();
-    const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
+    const claimModelRequest = jest.fn(async () => undefined);
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
     restore = registerExecutionExtension(adapter);
-    return { context: mintFixture(adapter, privateRun), privateRun, adapter };
+    return { context: mintFixture(adapter, privateRun), privateRun, adapter, claimModelRequest };
   };
   const model = (): Model => ({ id: 'fixture-model', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '', baseUrl });
   const input = (context?: ExecutionExtensionContext): CompletionInput => ({
@@ -41,8 +47,8 @@ describe('authenticated single physical OpenAI attempt', () => {
       // Count a physical POST received by the loopback endpoint, independently
       // of the SDK observer and adapter invocation count.
       physicalRequests += 1;
-      request.resume();
       respond(request, response);
+      request.resume();
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
@@ -55,7 +61,7 @@ describe('authenticated single physical OpenAI attempt', () => {
   });
 
   it.each(['response', 'stream'] as const)('sends one physical %s request on HTTP 503 with one SDK marker', async mode => {
-    const { context } = run();
+    const { context, claimModelRequest } = run();
     const request = input(context);
     request.onSdkRequest = jest.fn(async () => 'dispatch-1');
     request.onSdkRequestResult = jest.fn(async () => undefined);
@@ -63,6 +69,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     const adapter = new OpenAiAdapter();
     await expect(mode === 'stream' ? adapter.createStreamCompletion(request) : adapter.createCompletion(request)).rejects.toMatchObject({ status: 503 });
     expect(physicalRequests).toBe(1);
+    expect(claimModelRequest).toHaveBeenCalledTimes(1);
     expect(request.onSdkRequest).toHaveBeenCalledTimes(1);
     expect(request.onSdkRequestResult).toHaveBeenCalledWith({ dispatchId: 'dispatch-1', outcome: 'error' });
     if (mode === 'response') expect(request.onProviderAttempt).toHaveBeenCalledTimes(1);
@@ -72,6 +79,137 @@ describe('authenticated single physical OpenAI attempt', () => {
     respond = request => request.socket.destroy();
     const { context } = run();
     await expect(new OpenAiAdapter().createCompletion(input(context))).rejects.toThrow();
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('consumes one protected context before any second logical call can send', async () => {
+    respond = (_request, response) => success(response);
+    const { context, claimModelRequest } = run();
+    const adapter = new OpenAiAdapter();
+    await adapter.createCompletion(input(context));
+    await expect(adapter.createCompletion(input(context)))
+      .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+    expect(claimModelRequest).toHaveBeenCalledTimes(1);
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('consumes the context before awaiting a slow owner claim', async () => {
+    respond = (_request, response) => success(response);
+    let enterClaim!: () => void;
+    let releaseClaim!: () => void;
+    const claimEntered = new Promise<void>(resolve => { enterClaim = resolve; });
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const claimModelRequest = jest.fn(async () => { enterClaim(); await claimGate; });
+    const owner = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    const context = mintFixture(owner);
+    const first = new OpenAiAdapter().createCompletion(input(context));
+    await claimEntered;
+    try {
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+      expect(claimModelRequest).toHaveBeenCalledTimes(1);
+      expect(physicalRequests).toBe(0);
+    } finally {
+      releaseClaim();
+    }
+    await first;
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('rejects a missing or failing owner claim before any POST', async () => {
+    for (const claimModelRequest of [undefined, async () => { throw new ExecutionExtensionError('fixture_claim_denied'); }]) {
+      const adapter = fixtureAdapter({
+        modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+        claimModelRequest,
+      });
+      restore?.(); restore = registerExecutionExtension(adapter);
+      const context = mintFixture(adapter);
+      const request = input(context);
+      request.onSdkRequest = jest.fn(async () => 'archived-intent');
+      request.onSdkRequestResult = jest.fn(async () => undefined);
+      await expect(new OpenAiAdapter().createCompletion(request))
+        .rejects.toMatchObject({ code: claimModelRequest ? 'fixture_claim_denied' : 'execution_model_request_claim_required' });
+      expect(request.onSdkRequest).toHaveBeenCalledTimes(1);
+      expect(request.onSdkRequestResult).toHaveBeenCalledWith({ dispatchId: 'archived-intent', outcome: 'error' });
+      expect(physicalRequests).toBe(0);
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+    }
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('hides an untrusted claim error and still consumes the protected context', async () => {
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest: async () => { throw new Error('private credential detail'); },
+    });
+    restore = registerExecutionExtension(adapter);
+    const context = mintFixture(adapter);
+    await expect(new OpenAiAdapter().createCompletion(input(context)))
+      .rejects.toMatchObject({ code: 'execution_model_request_claim_denied', message: 'execution_model_request_claim_denied' });
+    await expect(new OpenAiAdapter().createCompletion(input(context)))
+      .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('binds the final provider body digest and rejects a changed body', async () => {
+    let acceptedDigest: string | undefined;
+    let postedDigest: string | undefined;
+    const claimModelRequest = jest.fn(async (_context: object, intent: ExecutionModelRequestIntent) => {
+      if (acceptedDigest && intent.bodySha256 !== acceptedDigest) {
+        throw new ExecutionExtensionError('fixture_body_mismatch');
+      }
+      acceptedDigest = intent.bodySha256;
+    });
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(adapter);
+    respond = (request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        postedDigest = createHash('sha256').update(Buffer.concat(chunks)).digest('hex');
+        success(response);
+      })();
+    };
+    await new OpenAiAdapter().createCompletion(input(mintFixture(adapter)));
+    expect(claimModelRequest).toHaveBeenCalledTimes(1);
+    expect(claimModelRequest.mock.calls[0][1]).toMatchObject({
+      version: 1, operation: 'chat.completions.create',
+      model: { id: 'fixture-model', name: 'fixture', provider: 'openai', adapter: 'openai', baseUrl },
+    });
+    expect(acceptedDigest).toBe(postedDigest);
+    const changed = input(mintFixture(adapter));
+    changed.messages = [{ role: 'user', content: 'changed after original authorization' }];
+    await expect(new OpenAiAdapter().createCompletion(changed))
+      .rejects.toMatchObject({ code: 'fixture_body_mismatch' });
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('documents that a subclass can route away from the declared endpoint', async () => {
+    respond = (_request, response) => success(response);
+    const claimModelRequest = jest.fn(async (_context: object, _intent: ExecutionModelRequestIntent) => undefined);
+    const owner = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    const declared = 'https://declared.invalid/v1';
+    const request = input(mintFixture(owner));
+    request.model = { ...request.model, baseUrl: declared };
+    class ReroutedAdapter extends OpenAiAdapter {
+      protected createClient(_model: Model, apiKey: string) {
+        return createOpenAIClient({ apiKey, baseURL: baseUrl });
+      }
+    }
+    await new ReroutedAdapter().createCompletion(request);
+    expect(claimModelRequest.mock.calls[0][1].model.baseUrl).toBe(declared);
     expect(physicalRequests).toBe(1);
   });
 
@@ -140,7 +278,7 @@ describe('authenticated single physical OpenAI attempt', () => {
 
   it('honors the original owner abort signal without a public caller signal', async () => {
     const abort = new AbortController();
-    const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }), signal: () => abort.signal });
+    const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }), claimModelRequest: async () => undefined, signal: () => abort.signal });
     restore = registerExecutionExtension(adapter);
     const request = input(mintFixture(adapter));
     request.onSdkRequest = async () => { abort.abort(); return 'cancelled-intent'; };
@@ -160,7 +298,7 @@ describe('authenticated single physical OpenAI attempt', () => {
 
   it('gives the owner only model/endpoint identity, excluding provider credentials', async () => {
     const policy = jest.fn((_context: object, _model: ExecutionModelIdentity) => ({ version: 1 as const, maxPhysicalAttempts: 1 as const }));
-    const adapter = fixtureAdapter({ modelAttemptPolicy: policy });
+    const adapter = fixtureAdapter({ modelAttemptPolicy: policy, claimModelRequest: async () => undefined });
     restore = registerExecutionExtension(adapter);
     await expect(new OpenAiAdapter().createCompletion(input(mintFixture(adapter)))).rejects.toMatchObject({ status: 503 });
     expect(policy).toHaveBeenCalledTimes(2);

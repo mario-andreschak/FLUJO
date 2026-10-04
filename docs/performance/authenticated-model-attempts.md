@@ -38,6 +38,28 @@ The hook can run at ModelHandler entry, adapter entry and again after the durabl
 SDK marker callback, immediately before the SDK request. It must not debit or
 reserve on every policy query. Original per-call booking remains owner work.
 
+The same opt-in path now also requires `claimModelRequest(context, intent)` at
+the OpenAI adapter's final provider-native body boundary. The intent contains
+the model/endpoint identity, SDK operation and SHA-256 of the detached JSON body;
+it contains no API key or prompt bytes. A missing or rejected claim prevents the
+POST. FLUJO consumes the branded context before awaiting this callback, so one
+process cannot reuse it for a second logical model request, even after a failed
+claim or an unknown remote outcome. The callback must perform the original
+owner's durable cross-worker compare-and-swap; FLUJO's in-memory consumption is
+not a durable claim and does not prove that the provider received the request.
+Unknown callback errors become a fixed denial instead of exposing their message;
+trusted execution-extension denials retain their error code.
+`configuredExecutionAdapter` is still undefined in generic FLUJO. No FACTORY
+issuer or claim implementation is wired by this source change, and ordinary
+calls retain their previous request options and retry behavior.
+
+The intent names the declared `model.baseUrl`, not the effective SDK URL or
+transport. `OpenAiAdapter.createClient` can be overridden; an original owner
+must pin the actual client/endpoint and check it at the fetch boundary before
+using this as endpoint-bound authority. A lease can also be revoked after the
+last `assertRun` and before the network send. This callback does not close that
+time gap or provide a continuous physical fence.
+
 ## Enforced request behavior
 
 For an attested call through the `openai` Chat Completions adapter:
@@ -53,16 +75,20 @@ For an attested call through the `openai` Chat Completions adapter:
 - The current owner policy is rechecked after archival; its AbortSignal is
   combined with the ordinary caller signal at the SDK boundary.
 
-This bounds one logical call to at most one physical SDK transport attempt. A
-new Process/tool-loop turn or a new authorized call needs its own original owner
-budget/identity handling. The policy does not make a whole multi-turn Flow a
+This bounds one claimed logical call to at most one physical SDK transport attempt. A
+new Process/tool-loop turn or a new authorized call needs its own freshly minted,
+coordinator-backed context and original owner budget/identity handling. The
+current run-level context is reused across turns, so protected multi-turn Flow
+adoption must add that per-step issuer before this opt-in gate can be enabled.
+The policy does not make a whole multi-turn Flow a
 single inference, stop an already completed remote side effect, refund spend or
 prove OFF propagation at an original live endpoint.
 
 A lost response remains an unknown remote outcome requiring reconciliation.
 Provider errors propagate; absence of a response is not proof that inference was
 not executed. A durable SDK intent marker can also precede an authority failure
-that blocks network dispatch; the marker alone is not a physical HTTP receipt.
+or denied claim that blocks network dispatch; the marker alone is not a physical
+HTTP receipt.
 
 ## Source verification and adoption
 

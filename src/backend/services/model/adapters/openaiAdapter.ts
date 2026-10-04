@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createHash } from 'node:crypto';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
@@ -9,7 +10,7 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import type { Model } from '@/shared/types/model';
-import { ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -53,6 +54,27 @@ async function assertModelRequestPolicy(context: ExecutionExtensionContext | und
   if (context && await executionExtensionSinglePhysicalAttempt(context, model) !== singlePhysicalAttempt) {
     throw new ExecutionExtensionError('execution_model_attempt_policy_changed');
   }
+}
+
+async function claimProtectedOpenAiRequest<T extends object>(
+  context: ExecutionExtensionContext,
+  model: Model,
+  operation: ExecutionModelRequestIntent['operation'],
+  body: T,
+): Promise<T> {
+  // Use the same detached JSON value for the digest and SDK call. The owner
+  // receives no prompt bytes, and a caller cannot mutate a nested message while
+  // its asynchronous claim is pending.
+  const serialized = JSON.stringify(body);
+  if (typeof serialized !== 'string') throw new ExecutionExtensionError('execution_model_request_invalid');
+  const fixedBody = JSON.parse(serialized) as T;
+  await claimExecutionModelRequest(context, {
+    version: 1,
+    operation,
+    model: { id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl },
+    bodySha256: createHash('sha256').update(serialized).digest('hex'),
+  });
+  return fixedBody;
 }
 
 function applyRequestedOutputModalities(
@@ -243,8 +265,11 @@ export class OpenAiAdapter implements CompletionAdapter {
           },
           async () => {
             await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
+            const requestBody = singlePhysicalAttempt
+              ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create', body)
+              : body;
             return openai.chat.completions.create(
-              body as OpenAI.Chat.ChatCompletionCreateParams,
+              requestBody as OpenAI.Chat.ChatCompletionCreateParams,
               singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             );
           },
@@ -370,8 +395,11 @@ export class OpenAiAdapter implements CompletionAdapter {
         },
         async () => {
           await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
+          const requestBody = singlePhysicalAttempt
+            ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create(stream)', body)
+            : body;
           return openai.chat.completions.create(
-            body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+            requestBody as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
             singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
           );
         },

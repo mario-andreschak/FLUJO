@@ -11,6 +11,13 @@ export interface ExecutionExtensionContext { readonly [contextBrand]: true }
 /** Retry restriction only; never a grant of inference, spend or replay authority. */
 export interface ExecutionModelAttemptPolicy { version: 1; maxPhysicalAttempts: 1 }
 export type ExecutionModelIdentity = Pick<Model, 'id' | 'name' | 'adapter' | 'provider' | 'baseUrl'>;
+/** The final provider-native JSON body is hashed before its one allowed SDK call. */
+export interface ExecutionModelRequestIntent {
+  version: 1;
+  operation: 'chat.completions.create' | 'chat.completions.create(stream)';
+  model: ExecutionModelIdentity;
+  bodySha256: string;
+}
 const errorRoot = globalThis as typeof globalThis & { __flujoExecutionExtensionErrors?: WeakSet<object> };
 const trustedErrors = errorRoot.__flujoExecutionExtensionErrors ??= new WeakSet<object>();
 export class ExecutionExtensionError extends Error {
@@ -53,8 +60,11 @@ export interface ExecutionExtensionAdapter {
    * Verify model/endpoint, request, lease, OFF and budget in the owning adapter;
    * public Model records and caller options cannot supply this attestation. */
   modelAttemptPolicy?(context: object, model: ExecutionModelIdentity): ExecutionModelAttemptPolicy | undefined | Promise<ExecutionModelAttemptPolicy | undefined>;
+  /** Required for the one-attempt path. The original owner must durably claim
+   * this exact model/body under its own run and budget before any POST starts. */
+  claimModelRequest?(context: object, intent: ExecutionModelRequestIntent): Promise<void>;
 }
-type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object };
+type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object; modelRequestConsumed?: boolean };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
 type Registry = { adapter?: ExecutionExtensionAdapter; configuredAdapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
 const root = globalThis as typeof globalThis & { __flujoExecutionExtensions?: Registry };
@@ -188,4 +198,25 @@ export async function executionExtensionSinglePhysicalAttempt(
     throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
   }
   return true;
+}
+
+/** Consume one trusted context before awaiting owner I/O, so parallel calls
+ * cannot both cross the local adapter boundary. This is process-local hygiene;
+ * only the original owner's durable claim can fence other workers or restarts. */
+export async function claimExecutionModelRequest(
+  context: ExecutionExtensionContext,
+  intent: ExecutionModelRequestIntent,
+): Promise<void> {
+  const item = record(context);
+  if (item.modelRequestConsumed) throw new ExecutionExtensionError('execution_model_request_already_claimed');
+  item.modelRequestConsumed = true;
+  if (!item.adapter.claimModelRequest) throw new ExecutionExtensionError('execution_model_request_claim_required');
+  try {
+    await item.adapter.assertRun(item.value);
+    await item.adapter.claimModelRequest(item.value, intent);
+    await item.adapter.assertRun(item.value);
+  } catch (error) {
+    if (error instanceof ExecutionExtensionError) throw error;
+    throw new ExecutionExtensionError('execution_model_request_claim_denied');
+  }
 }
