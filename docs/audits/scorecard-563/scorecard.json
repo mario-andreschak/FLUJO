@@ -1009,7 +1009,7 @@
       "status": "proposed",
       "metric": "Authorized live-provider monetary cap",
       "operator": "<=",
-      "limit": 0,
+      "limit": null,
       "unit": "USD",
       "denominator": "No separately declared numeric paid-run envelope is recorded: proposed cap is zero. Record concrete account/model scope, enforced accounting and an agreed limit before measurement; broad development/deployment authority is not measured spend.",
       "window": "Per future authorized run",
@@ -1877,6 +1877,19 @@
         "dependency-audit-2026-10-03",
         "dependency-remediation-59b65de8"
       ]
+    },
+    {
+      "id": "build-verification",
+      "ownerId": "engineering",
+      "kind": "source",
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "status": "pending",
+      "description": "Selected candidate source must pass required typecheck, lint, ordinary/isolated tests, builds, release-safety and verification prerequisites; failed/cancelled/skipped required jobs remain non-acceptance.",
+      "evidenceIds": []
     }
   ],
   "claims": [
@@ -1937,7 +1950,8 @@
         "rubric-agreement",
         "independent-reassessment",
         "release-acceptance",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -2018,7 +2032,8 @@
         "rubric-agreement",
         "independent-reassessment",
         "persona-current-soak",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -2061,7 +2076,8 @@
         "rubric-agreement",
         "independent-reassessment",
         "release-acceptance",
-        "dependency-audit"
+        "dependency-audit",
+        "build-verification"
       ]
     },
     {
@@ -2381,6 +2397,61 @@
         "shared-profile",
         "independent-reassessment",
         "dependency-audit"
+      ]
+    },
+    {
+      "id": "production-local-a-minus",
+      "dimensionId": "production",
+      "profileId": "local-owner",
+      "statement": "Proposed production acceptance for local-owner: installed operation, migration/upgrade, backup/restore and bounded recovery require profile-specific retained observations; external judgment pending.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review",
+        "human-study"
+      ],
+      "evidenceIds": [],
+      "budgetIds": [
+        "recovery-rto",
+        "backup-rpo",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "independent-reassessment",
+        "release-acceptance",
+        "local-security",
+        "worker-operations",
+        "dependency-audit",
+        "build-verification"
+      ]
+    },
+    {
+      "id": "production-worker-a-minus",
+      "dimensionId": "production",
+      "profileId": "persistent-worker",
+      "statement": "Proposed production acceptance for persistent-worker: installed operation, migration/upgrade, backup/restore and bounded recovery require profile-specific retained observations; external judgment pending.",
+      "status": "pending",
+      "requiredKinds": [
+        "installed-artifact",
+        "security-review",
+        "human-study"
+      ],
+      "evidenceIds": [],
+      "budgetIds": [
+        "recovery-rto",
+        "backup-rpo",
+        "duplicate-effects"
+      ],
+      "gateIds": [
+        "rubric-agreement",
+        "independent-reassessment",
+        "release-acceptance",
+        "local-security",
+        "worker-operations",
+        "dependency-audit",
+        "build-verification",
+        "cross-stream-contracts"
       ]
     }
   ],

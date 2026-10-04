@@ -534,8 +534,10 @@
           ]
         },
         "limit": {
-          "type": "number",
-          "minimum": 0
+          "anyOf": [
+            { "type": "number", "minimum": 0 },
+            { "type": "null" }
+          ]
         },
         "unit": {
           "type": "string",
