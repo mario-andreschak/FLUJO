@@ -31,12 +31,12 @@ describe('standalone flujo HTTP client', () => {
   });
 
   it('removes only terminal slashes, keeping path and query bytes intact', () => {
-    expect(flujoBaseUrl({ FLUJO_BASE_URL: '  https://example.test/a//b?value=x/y///  ' }))
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: '  https://example.test/a//b?value=x/y///  ' }))
       .toBe('https://example.test/a//b?value=x/y');
-    expect(flujoBaseUrl({ FLUJO_BASE_URL: 'http://127.0.0.1:4200/path///', FLUJO_WORKER_MODE: '1' }))
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: 'http://127.0.0.1:4200/path///', FLUJO_WORKER_MODE: '1' }))
       .toBe('http://127.0.0.1:4200/path');
-    expect(flujoBaseUrl({ FLUJO_BASE_URL: '/' })).toBe('');
-    expect(() => flujoBaseUrl({ FLUJO_BASE_URL: 'http://user:pass@localhost:4200///',
+    expect(flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: '/' })).toBe('');
+    expect(() => flujoBaseUrl({ NODE_ENV: 'test', FLUJO_BASE_URL: 'http://user:pass@localhost:4200///',
       FLUJO_WORKER_MODE: '1' })).toThrow('loopback');
   });
 
