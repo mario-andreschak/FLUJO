@@ -33,18 +33,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Verify the selected trusted checkout
         env:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
-          test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
           git merge-base --is-ancestor "$PERSONA_JOURNEY_COMMIT" "$WORKFLOW_SHA"
+          git checkout --detach "$PERSONA_JOURNEY_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm ci --include=dev
       - run: npx playwright install --with-deps chromium
       - name: Verify report rejection and source guards
