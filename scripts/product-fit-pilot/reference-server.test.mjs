@@ -83,13 +83,18 @@ test('installed MCP SDK stdio process: actual requests, clean protocol stdout an
   const connection = client();
   const transport = new StdioClientTransport({ command: process.execPath, args: [fixturePath], stderr: 'pipe' });
   let startup = '';
+  let pid;
   transport.stderr?.on('data', chunk => { if (startup.length < 4096) startup += chunk.toString(); });
   try {
     await connection.connect(transport);
+    pid = transport.pid;
     await checkProtocol(connection);
     assert.match(startup, /"synthetic":true/);
     assert.match(startup, /"definitionSha256":/);
   } finally {
     await connection.close();
   }
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH',
+    'The owned fixture must actually exit after transport close; an acknowledgement is insufficient.');
 });
