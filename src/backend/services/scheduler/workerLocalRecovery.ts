@@ -130,11 +130,11 @@ async function read(execution: PlannedExecution): Promise<LocalRecord | undefine
     }
   }
   let before;
-  try { before = await fs.lstat(file); } catch (error) {
+  try { before = await fs.lstat(file, { bigint: true }); } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_RECORD_BYTES) {
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== BigInt(1) || before.size > BigInt(MAX_RECORD_BYTES)) {
     throw new Error('Unsafe recovery control file');
   }
   const bytes = await readPlainFile(file, {

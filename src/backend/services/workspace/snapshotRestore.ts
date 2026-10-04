@@ -205,8 +205,8 @@ export async function verifyWorkerCodexAuth(
   const root = path.join(workspaceRoot, 'db', 'codex-runtime');
   const credentials: Buffer[] = [];
   for (const file of ['auth.json', 'flujo-auth-source.json']) {
-    const stat = await fs.lstat(path.join(root, file));
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 1024 * 1024) {
+    const stat = await fs.lstat(path.join(root, file), { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > BigInt(1) || stat.size > BigInt(1024 * 1024)) {
       throw new Error('Worker Codex authentication is not a valid workspace credential file.');
     }
     const credentialPath = path.join(root, file);
@@ -225,11 +225,11 @@ export async function verifyWorkerCodexAuth(
 async function readWorkerUnlockKey(result: WorkerSnapshotRestoreResult, root = getWorkspaceDir(result.workspace)): Promise<string | null> {
   if (result.encryption !== 'user') return null;
   const keyPath = path.join(root, 'db', 'worker-bootstrap-secrets.json');
-  const stat = await fs.lstat(keyPath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 4096) {
+  const stat = await fs.lstat(keyPath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > BigInt(1) || stat.size > BigInt(4096)) {
     throw new Error('Worker workspace encryption requires valid bootstrap credentials.');
   }
-  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+  if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) {
     throw new Error('Worker workspace encryption credentials must be owner-only.');
   }
   const value = parseJson((await readPlainFile(keyPath, {
@@ -259,8 +259,8 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
   const encrypted = Boolean(process.env.FLUJO_WORKER_SNAPSHOT_KEY);
   const maxArchiveBytes = maxBytes + MAX_MANIFEST_BYTES;
   const maxInputBytes = encrypted ? Math.ceil(maxArchiveBytes * 4 / 3) + 4096 : maxArchiveBytes;
-  const stat = await fs.lstat(archivePath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxInputBytes) {
+  const stat = await fs.lstat(archivePath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > BigInt(maxInputBytes)) {
     throw new Error('Worker snapshot must be an ordinary ZIP file within the size limit.');
   }
   let bytes = await readPlainFile(archivePath, { expected: stat, maxBytes: maxInputBytes });
@@ -317,8 +317,8 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
     await plainDirectory(target);
     const markerPath = path.join(target, RESTORE_MARKER);
     if (await optionalStat(markerPath)) {
-      const markerStat = await fs.lstat(markerPath);
-      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink > 1 || markerStat.size > 4096) {
+      const markerStat = await fs.lstat(markerPath, { bigint: true });
+      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink > BigInt(1) || markerStat.size > BigInt(4096)) {
         throw new Error('Invalid worker restore marker.');
       }
       const marker = parseJson((await readPlainFile(markerPath, {

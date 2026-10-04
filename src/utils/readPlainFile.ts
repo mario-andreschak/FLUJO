@@ -1,4 +1,4 @@
-import { constants, promises as fs, type Stats } from 'node:fs';
+import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { constants as bufferConstants } from 'node:buffer';
 
 export class PlainFileReadError extends Error {
@@ -8,10 +8,11 @@ export class PlainFileReadError extends Error {
   }
 }
 
-function sameFile(first: Stats, second: Stats): boolean {
+function sameFile(first: BigIntStats, second: BigIntStats): boolean {
   return first.dev === second.dev && first.ino === second.ino
-    && first.size === second.size && first.mtimeMs === second.mtimeMs
-    && first.ctimeMs === second.ctimeMs && first.mode === second.mode
+    && first.size === second.size && first.mtimeNs === second.mtimeNs
+    && first.ctimeNs === second.ctimeNs && first.mode === second.mode
+    && first.uid === second.uid && first.gid === second.gid
     && first.nlink === second.nlink;
 }
 
@@ -22,7 +23,7 @@ function sameFile(first: Stats, second: Stats): boolean {
  * Parent containment remains the caller's responsibility; this is no OS sandbox.
  */
 export async function readPlainFile(file: string, options: {
-  expected?: Stats;
+  expected?: BigIntStats;
   maxBytes?: number;
   ownerOnly?: boolean;
   signal?: AbortSignal;
@@ -31,19 +32,21 @@ export async function readPlainFile(file: string, options: {
   options.signal?.throwIfAborted();
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat();
-    const named = await fs.lstat(file);
-    if (!opened.isFile() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== 1
+    const opened = await handle.stat({ bigint: true });
+    const named = await fs.lstat(file, { bigint: true });
+    if (!opened.isFile() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== BigInt(1)
         || !sameFile(opened, named) || (options.expected && !sameFile(options.expected, opened))
-        || (options.ownerOnly && process.platform !== 'win32' && (opened.mode & 0o077) !== 0)) {
+        || (options.ownerOnly && process.platform !== 'win32' && (opened.mode & BigInt(0o077)) !== BigInt(0))) {
       throw new PlainFileReadError('UNSAFE_FILE');
     }
     const maxBytes = Math.min(options.maxBytes ?? bufferConstants.MAX_LENGTH - 1, bufferConstants.MAX_LENGTH - 1);
-    if (!Number.isSafeInteger(opened.size) || opened.size < 0 || opened.size > maxBytes) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || opened.size < BigInt(0) || opened.size > BigInt(maxBytes)) {
       throw new PlainFileReadError('SIZE_LIMIT');
     }
     await options.verifyPath?.();
-    const bytes = Buffer.alloc(opened.size + 1);
+    // Conversion is only for a size already bounded below Buffer.MAX_LENGTH;
+    // filesystem identity and nanosecond timestamps never pass through Number.
+    const bytes = Buffer.alloc(Number(opened.size) + 1);
     let offset = 0;
     while (offset < bytes.length) {
       options.signal?.throwIfAborted();
@@ -51,8 +54,8 @@ export async function readPlainFile(file: string, options: {
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    if (offset !== opened.size || !sameFile(opened, await handle.stat())) throw new PlainFileReadError('FILE_CHANGED');
-    const finalNamed = await fs.lstat(file);
+    if (BigInt(offset) !== opened.size || !sameFile(opened, await handle.stat({ bigint: true }))) throw new PlainFileReadError('FILE_CHANGED');
+    const finalNamed = await fs.lstat(file, { bigint: true });
     if (finalNamed.isSymbolicLink() || !sameFile(opened, finalNamed)) throw new PlainFileReadError('FILE_CHANGED');
     await options.verifyPath?.();
     options.signal?.throwIfAborted();
