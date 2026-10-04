@@ -45,10 +45,12 @@ The Process preflight reads the saved model before asynchronous prompt,
 resource, and MCP preparation. The model handler reads it again before the
 provider request. A concurrent catalog edit can make an initially ordinary
 model owner-bound between those reads: the later check blocks the model send,
-but preparation effects may already have happened. This repository does not
-yet pin one admitted model snapshot for the whole Process turn or serialize
-catalog edits across workers. Do not treat the preflight as an atomic
-no-side-effect guarantee under concurrent model changes.
+but preparation effects may already have happened. A missing model also passes
+the preflight and can be added during preparation. This repository does not
+yet pin one admitted model snapshot for the whole Process turn or coordinate
+Process preparation with catalog edits across workers. The workspace mutation
+gate serializes registered writes, but this preflight is outside that gate.
+Do not treat it as an atomic no-side-effect guarantee under concurrent edits.
 
 The generic `configuredExecutionAdapter` is **undefined**. There is no
 configured FACTORY credential broker, durable claim and physical sender, or
