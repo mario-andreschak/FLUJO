@@ -41,3 +41,24 @@ probe outputs and exact image/source identities; then run the ordinary default
 heap production build, payload validation and installed app/MCP process smoke
 with the proposed runtime. A passed probe alone does not qualify installation,
 change the supported Node requirement or satisfy the production scorecard.
+
+## Hosted comparison
+
+`windows-filesystem-identity.yml` runs both pinned Node versions sequentially on
+one `windows-2025` runner. It records the exact checked-out source, image version,
+OS caption/build, Node/libuv versions, executable/source hashes and all six native
+metadata samples. Raw stdout and stderr are retained with their sizes and SHA-256
+in a 30-day Actions artifact, including when a probe exits unsuccessfully.
+
+The two capture steps continue so the second runtime can be measured after the
+first fails. The final comparison verifies both retained outputs and exits 1 if
+either probe failed, evidence is missing or changed, the image/source identity is
+missing, or the two runtimes executed different probe bytes. A device mismatch
+remains a failed identity contract. The workflow uses built-in Node modules,
+fresh probe files and read-only repository permissions; it performs no npm install,
+application build, provider/model call or publication.
+
+Retain the run/attempt, artifact ID and downloaded artifact bytes before the
+30-day expiry. A passing newer-runtime probe is diagnostic evidence only; the
+ordinary installed-app production job must independently qualify any proposed
+runtime change.

@@ -1,0 +1,91 @@
+name: Windows filesystem identity diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-filesystem-identity.yml'
+      - 'scripts/probe-filesystem-identity.mjs'
+      - 'scripts/record-filesystem-identity-probe.mjs'
+      - 'docs/operations/windows-filesystem-identity.md'
+  push:
+    branches: [main, 'codex/windows-filesystem-runtime-comparison-*']
+    paths:
+      - '.github/workflows/windows-filesystem-identity.yml'
+      - 'scripts/probe-filesystem-identity.mjs'
+      - 'scripts/record-filesystem-identity-probe.mjs'
+      - 'docs/operations/windows-filesystem-identity.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: filesystem-identity-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime-comparison:
+    if: github.repository == 'mario-andreschak/FLUJO'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Retain exact source and Windows image identity
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[a-f0-9]{40}$' -or $revision -ne $env:EXPECTED_SOURCE_SHA) {
+            throw 'Diagnostic checkout does not match the requested exact source.'
+          }
+          New-Item -ItemType Directory -Path filesystem-identity-evidence -ErrorAction Stop | Out-Null
+          $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem
+          $receipt = [ordered]@{
+            schemaVersion = 1
+            createdAt = [DateTimeOffset]::UtcNow.ToString('o')
+            sourceRevision = $revision
+            expectedSourceRevision = $env:EXPECTED_SOURCE_SHA
+            repository = $env:GITHUB_REPOSITORY
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            runnerLabel = 'windows-2025'
+            imageOS = $env:ImageOS
+            imageVersion = $env:ImageVersion
+            operatingSystem = [ordered]@{
+              caption = $operatingSystem.Caption
+              version = $operatingSystem.Version
+              buildNumber = $operatingSystem.BuildNumber
+              architecture = $operatingSystem.OSArchitecture
+            }
+          }
+          $json = $receipt | ConvertTo-Json -Depth 5
+          [IO.File]::WriteAllText((Join-Path $PWD 'filesystem-identity-evidence/host.json'), $json + "`n", [Text.UTF8Encoding]::new($false))
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.13.1
+      - name: Capture Node 22.13.1 native identity comparison
+        id: node-22-13
+        continue-on-error: true
+        run: node scripts/record-filesystem-identity-probe.mjs run 22.13.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.17.0
+      - name: Capture Node 22.17.0 native identity comparison
+        id: node-22-17
+        continue-on-error: true
+        run: node scripts/record-filesystem-identity-probe.mjs run 22.17.0
+      - name: Compare retained evidence and preserve any mismatch failure
+        if: always()
+        run: node scripts/record-filesystem-identity-probe.mjs compare
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-filesystem-identity-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: filesystem-identity-evidence/
+          if-no-files-found: error
+          retention-days: 30
