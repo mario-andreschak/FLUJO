@@ -68,3 +68,66 @@ test('rejects a shared writable cache directory on POSIX', { skip: process.platf
   assert.equal(f.count(), 2);
   assert.deepEqual(fs.readdirSync(f.root), []);
 });
+
+for (const field of ['ino', 'mtimeNs', 'ctimeNs']) test(`rejects cached-code ${field} identities that collide as Numbers`, t => {
+  const f = fixture(t);
+  const compile = createTranspileCache(f.compiler, f.root);
+  compile('ts', 'source.ts', 'source', {});
+  const cacheFile = path.join(f.root, fs.readdirSync(f.root)[0]);
+  const colliding = BigInt('9007199254740992');
+  assert.equal(Number(colliding), Number(colliding + BigInt(1)));
+  const originals = { open: fs.openSync, close: fs.closeSync, fstat: fs.fstatSync, lstat: fs.lstatSync };
+  let cacheDescriptor;
+  fs.openSync = function (...args) {
+    const descriptor = originals.open(...args);
+    if (String(args[0]) === cacheFile) cacheDescriptor = descriptor;
+    return descriptor;
+  };
+  fs.closeSync = function (descriptor) {
+    if (descriptor === cacheDescriptor) cacheDescriptor = undefined;
+    return originals.close(descriptor);
+  };
+  fs.fstatSync = function (...args) {
+    const value = originals.fstat(...args);
+    if (args[0] === cacheDescriptor) {
+      assert.deepEqual(args[1], { bigint: true });
+      return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { [field]: colliding });
+    }
+    return value;
+  };
+  fs.lstatSync = function (...args) {
+    const value = originals.lstat(...args);
+    if (String(args[0]) === cacheFile) {
+      assert.deepEqual(args[1], { bigint: true });
+      return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { [field]: colliding + BigInt(1) });
+    }
+    return value;
+  };
+  try {
+    assert.equal(compile('ts', 'source.ts', 'source', {}), 'trusted compiled source');
+    assert.equal(f.count(), 2);
+  } finally {
+    fs.openSync = originals.open; fs.closeSync = originals.close;
+    fs.fstatSync = originals.fstat; fs.lstatSync = originals.lstat;
+  }
+});
+
+test('refuses a private cache directory whose exact inode drifts below Number precision', t => {
+  const f = fixture(t);
+  const colliding = BigInt('9007199254740992');
+  const lstat = fs.lstatSync;
+  let admitted = false;
+  fs.lstatSync = function (...args) {
+    const value = lstat(...args);
+    if (String(args[0]) !== f.root) return value;
+    assert.deepEqual(args[1], { bigint: true });
+    const ino = colliding + BigInt(admitted ? 1 : 0);
+    admitted = true;
+    return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino });
+  };
+  try {
+    const compile = createTranspileCache(f.compiler, f.root);
+    assert.equal(compile('ts', 'source.ts', 'source', {}), 'trusted compiled source');
+    assert.deepEqual(fs.readdirSync(f.root), []);
+  } finally { fs.lstatSync = lstat; }
+});

@@ -108,4 +108,24 @@ describe('writeFileAtomic rename retries', () => {
     expect(await fs.readFile(`${replacement}.original`, 'utf8')).toBe('intended');
     expect(await fs.readdir(dir)).not.toContain('item.json');
   });
+
+  it('rejects a parent inode change hidden by numeric Stats rounding', async () => {
+    const target = path.join(dir, 'item.json');
+    const lstat = fs.lstat.bind(fs);
+    const colliding = BigInt('9007199254740992');
+    expect(Number(colliding)).toBe(Number(colliding + BigInt(1)));
+    let checked = false;
+    jest.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const value = await lstat(...args);
+      if (String(args[0]) === dir) {
+        expect(args[1]).toEqual({ bigint: true });
+        const ino = checked ? colliding + BigInt(1) : colliding;
+        checked = true;
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino });
+      }
+      return value;
+    });
+    await expect(writeFileAtomic(target, 'intended')).rejects.toThrow('file or parent changed');
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
 });

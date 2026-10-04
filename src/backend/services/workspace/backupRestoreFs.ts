@@ -1,6 +1,7 @@
-import { constants as fsConstants, promises as fs, type Stats } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { constants as bufferConstants } from 'node:buffer';
 import type JSZip from 'jszip';
 
 const MAX_ARCHIVE_FILE_BYTES = 10 * 1024 * 1024;
@@ -12,7 +13,7 @@ export interface ArchiveTraversalOptions {
   maxFileBytes?: number;
   skippedDirectories?: ReadonlySet<string>;
   allowHardLinks?: boolean;
-  onFile?: (entryPath: string, content: Buffer, stats: Stats) => void;
+  onFile?: (entryPath: string, content: Buffer, stats: BigIntStats) => void;
   /** Rebuildable runtime paths can be omitted before following or inspecting them. */
   skipPath?: (entryPath: string) => boolean;
   signal?: AbortSignal;
@@ -25,26 +26,27 @@ function isInside(root: string, candidate: string, allowRoot = false): boolean {
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-async function lstatOptional(candidate: string): Promise<Stats | null> {
+async function lstatOptional(candidate: string): Promise<BigIntStats | null> {
   try {
-    return await fs.lstat(candidate);
+    return await fs.lstat(candidate, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
 }
 
-function assertPlainDirectory(stats: Stats | null, label: string): asserts stats is Stats {
+function assertPlainDirectory(stats: BigIntStats | null, label: string): asserts stats is BigIntStats {
   if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`${label} must be a real directory, not a symbolic link or junction.`);
   }
 }
 
-function sameFileIdentity(first: Stats, second: Stats): boolean {
+function sameFileIdentity(first: BigIntStats, second: BigIntStats): boolean {
   return first.dev === second.dev
     && first.ino === second.ino
     && first.size === second.size
-    && first.mtimeMs === second.mtimeMs;
+    && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs
+    && first.mode === second.mode && first.uid === second.uid && first.gid === second.gid && first.nlink === second.nlink;
 }
 
 async function readBoundedFile(handle: Awaited<ReturnType<typeof fs.open>>, size: number, signal?: AbortSignal): Promise<Buffer> {
@@ -171,7 +173,7 @@ export async function addFolderToZipLinkSafe(
       const fullPath = path.join(directory, entry.name);
       const archivePath = path.posix.join(archiveDirectory, entry.name);
       if (options.skipPath?.(archivePath)) continue;
-      let stats: Stats | null;
+      let stats: BigIntStats | null;
       try {
         stats = await lstatOptional(fullPath);
       } catch (error) {
@@ -208,11 +210,11 @@ export async function addFolderToZipLinkSafe(
       }
       // A hard link can alias a file outside the workspace without any
       // symlink bit for lstat to reveal. Never archive multiply-linked files.
-      if (stats.nlink > 1 && !options.allowHardLinks) {
+      if (stats.nlink > BigInt(1) && !options.allowHardLinks) {
         onSkip(archivePath, 'hard-linked files are not backed up');
         continue;
       }
-      if (stats.size > maxFileBytes) {
+      if (stats.size > BigInt(Math.min(maxFileBytes, bufferConstants.MAX_LENGTH))) {
         onSkip(archivePath, 'file exceeds backup size limit');
         continue;
       }
@@ -221,28 +223,28 @@ export async function addFolderToZipLinkSafe(
       try {
         const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
         handle = await fs.open(fullPath, fsConstants.O_RDONLY | noFollow);
-        const openedStats = await handle.stat();
+        const openedStats = await handle.stat({ bigint: true });
         const canonicalFile = await fs.realpath(fullPath);
         if (
           !openedStats.isFile()
-          || (openedStats.nlink > 1 && !options.allowHardLinks)
-          || openedStats.size > maxFileBytes
+          || (openedStats.nlink > BigInt(1) && !options.allowHardLinks)
+          || openedStats.size > BigInt(Math.min(maxFileBytes, bufferConstants.MAX_LENGTH))
           || !sameFileIdentity(stats, openedStats)
           || !isInside(canonicalRoot, canonicalFile)
         ) {
           onSkip(archivePath, 'file changed or escaped while being opened');
           continue;
         }
-        const content = await readBoundedFile(handle, openedStats.size, options.signal);
-        const finalStats = await handle.stat();
-        if (content.byteLength !== openedStats.size || !sameFileIdentity(openedStats, finalStats)) {
+        const content = await readBoundedFile(handle, Number(openedStats.size), options.signal);
+        const finalStats = await handle.stat({ bigint: true });
+        if (BigInt(content.byteLength) !== openedStats.size || !sameFileIdentity(openedStats, finalStats)) {
           onSkip(archivePath, 'file changed while being read');
           continue;
         }
         options.signal?.throwIfAborted();
         options.onFile?.(archivePath, content, finalStats);
         zip.file(archivePath, content, options.preserveMode
-          ? { unixPermissions: finalStats.mode & 0o100777 }
+          ? { unixPermissions: Number(finalStats.mode & BigInt(0o100777)) }
           : undefined);
       } catch (error) {
         options.signal?.throwIfAborted();
@@ -274,14 +276,17 @@ export async function atomicWriteWithoutLinks(
 
   const temporary = path.join(parent, `.flujo-restore-${randomUUID()}.tmp`);
   let created = false;
+  let owned: BigIntStats | undefined;
   try {
     // Only owner permissions are restored; never import setuid or broad secret access.
     const mode = 0o600 | ((options.mode ?? 0) & 0o100);
     const handle = await fs.open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
     created = true;
     try {
+      owned = await handle.stat({ bigint: true });
       await handle.writeFile(content);
       await handle.sync();
+      owned = await handle.stat({ bigint: true });
     } finally {
       await handle.close();
     }
@@ -289,6 +294,10 @@ export async function atomicWriteWithoutLinks(
     // Revalidate immediately before the atomic rename. rename replaces a final
     // symlink itself; it never writes through that link to its target.
     await ensureLinkFreeDirectory(boundaryPath, parent, false);
+    const temporaryNow = await fs.lstat(temporary, { bigint: true });
+    if (!owned || temporaryNow.isSymbolicLink() || !temporaryNow.isFile() || !sameFileIdentity(owned, temporaryNow)) {
+      throw new Error('Restore temporary file changed before publication.');
+    }
     const currentTarget = await lstatOptional(destination);
     if (currentTarget?.isSymbolicLink() || (currentTarget && !currentTarget.isFile())) {
       throw new Error(`Restore target became unsafe: ${destination}`);
@@ -296,7 +305,12 @@ export async function atomicWriteWithoutLinks(
     await fs.rename(temporary, destination);
     created = false;
   } finally {
-    if (created) await fs.unlink(temporary).catch(() => undefined);
+    if (created) {
+      try {
+        const current = await fs.lstat(temporary, { bigint: true });
+        if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(temporary);
+      } catch { /* never remove an unowned replacement */ }
+    }
   }
 }
 

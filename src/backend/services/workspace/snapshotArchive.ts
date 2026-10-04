@@ -1,4 +1,4 @@
-import { promises as fs, type Stats } from 'node:fs';
+import { promises as fs, type Stats, type BigIntStats } from 'node:fs';
 import { readPlainFile, PlainFileReadError } from '@/utils/readPlainFile';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -94,21 +94,21 @@ async function addWorkspaceMetadata(
 ): Promise<void> {
   signal?.throwIfAborted();
   const metadataPath = path.join(root, WORKSPACE_METADATA_FILE);
-  let before: Stats;
+  let before: BigIntStats;
   try {
-    before = await fs.lstat(metadataPath);
+    before = await fs.lstat(metadataPath, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
   }
 
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink > 1) {
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink > BigInt(1)) {
     throw new SnapshotArchiveError(
       'UNSAFE_ENTRY',
       'Workspace metadata is not a plain, singly-linked file.',
     );
   }
-  if (before.size > maxFileBytes) throw new SnapshotArchiveError('SIZE_LIMIT', 'Workspace metadata exceeds the configured file limit.');
+  if (before.size > BigInt(maxFileBytes)) throw new SnapshotArchiveError('SIZE_LIMIT', 'Workspace metadata exceeds the configured file limit.');
 
   const canonicalRoot = await fs.realpath(root);
   const canonicalMetadata = await fs.realpath(metadataPath);
@@ -177,7 +177,7 @@ export async function captureWorkspaceSnapshot(
   let totalBytes = 0;
   const zip = new JSZip();
 
-  const recordFile = (archivePath: string, content: Buffer, stats?: Stats): void => {
+  const recordFile = (archivePath: string, content: Buffer, stats?: BigIntStats): void => {
     signal?.throwIfAborted();
     if (content.byteLength > maxFileBytes) throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot member exceeds the configured file limit.');
     // FLUJO's JSON state is portable. Opaque live databases in user data need
@@ -196,7 +196,7 @@ export async function captureWorkspaceSnapshot(
       path: archivePath,
       size: content.byteLength,
       sha256: createHash('sha256').update(content).digest('hex'),
-      mode: stats ? 0o600 | (stats.mode & 0o100) : 0o600,
+      mode: stats ? 0o600 | Number(stats.mode & BigInt(0o100)) : 0o600,
     });
   };
 

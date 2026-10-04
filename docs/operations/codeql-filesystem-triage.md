@@ -57,7 +57,7 @@ real fixture and compiler. Full integration typecheck/build and a fresh scan of
 the assembled candidate are coordinator checks. No result here grants a grade
 or supports public/shared-user deployment.
 
-At this source slice, nine focused filesystem suites pass 104 assertions with
+At the retained PR #648 source slice, nine focused filesystem suites pass 104 assertions with
 one POSIX-only case skipped on Windows. The cache fixture passes four assertions
 with one POSIX-only case skipped. The selected real process test passes; its
 seven unrelated tests were not selected. Scoped lint passes for the 17 touched
@@ -65,6 +65,42 @@ TypeScript files. Removing only the caller-checked descriptor identity guard
 causes seven boundary assertions across five suites to fail (exit 1); the helper
 is then restored byte-for-byte. The retained evidence records raw results and
 source/log digests, separately from any future integration scan.
+
+## Exact filesystem identity follow-up
+
+Numeric `Stats` can collapse distinct filesystem identities or timestamps to
+the same JavaScript number. Admission snapshots, descriptor/path rechecks,
+archive traversal, private compiled-code caching, atomic publication and owned
+cleanup now use `BigIntStats`. They compare device/inode IDs and nanosecond
+timestamps directly. Callers pass exact snapshots to `readPlainFile`; converting
+those snapshots to numbers would undo that protection.
+
+Only bounded buffer sizes, serialized permission bits and legacy display/index
+metadata are converted to numbers. Those values do not authorize a file read,
+publication or deletion. Snapshot lease publication binds its initial private
+directory and opened owner file before rename, checks the published generation,
+and preserves an unowned candidate on failed cleanup. Release also binds the
+original admitted directory, even when a replacement has identical owner bytes.
+
+The follow-up passes 121 assertions across ten scoped filesystem suites, with
+one POSIX-only case skipped on Windows; the cache passes eight, with one POSIX
+skip. Coercing only identity comparisons to `Number` makes twelve assertions in
+four filesystem suites and four cache assertions fail. All five mutated files
+are then restored byte-for-byte. The selected real Windows two-child lease test
+also passes after owned process death and takeover; seven other process tests
+are not selected. It uses source-loaded fixtures, not an installed distribution.
+A small check against real Node/Jest types and
+the ES2017 target passes for the reader and two test files; it stubs the snapshot
+implementation import and is not a full application typecheck.
+
+PR #648's recorded build/typecheck failures remain part of the evidence. PR #657
+separately fixes the absent-owner guard and overloaded read-spy type contract;
+its hosted typecheck passes at `7a405701626b294bd2158f38a1f595da717172dd`.
+Its Linux production-build job passes, while the Windows job fails installed
+startup readiness after migration reports `Snapshot storage is temporarily busy`.
+That prerequisite does not qualify this later bigint source. Fresh combined
+typecheck/build/scanning, independent review and the acceptance gates above
+remain required.
 
 These paths operate in an owner-private data-root/OS profile with cooperating
 FLUJO writers. Descriptor checks and canonical fences are not an OS sandbox:
