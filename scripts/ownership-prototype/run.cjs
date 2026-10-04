@@ -91,6 +91,22 @@ async function run() {
       } finally { await fs.writeFile(policyPath, JSON.stringify(a.policy), { mode: 0o600 }); }
       assert.equal((await request(a, '/resources')).status, 200);
     });
+    await check('oversized or hard-linked policy is refused without changing the other owner', async () => {
+      const policyPath = path.join(a.root, 'owner-policy.json');
+      const linked = path.join(a.root, 'linked-policy.json');
+      try {
+        await fs.writeFile(policyPath, ' '.repeat(65537) + JSON.stringify(a.policy));
+        assert.equal((await request(a, '/resources')).status, 503);
+        await fs.writeFile(policyPath, JSON.stringify(a.policy));
+        await fs.link(policyPath, linked);
+        assert.equal((await request(a, '/resources')).status, 503);
+        assert.equal((await request(b, '/resources')).status, 200);
+      } finally {
+        await fs.unlink(linked).catch(error => { if (error.code !== 'ENOENT') throw error; });
+        await fs.writeFile(policyPath, JSON.stringify(a.policy));
+      }
+      assert.equal((await request(a, '/resources')).status, 200);
+    });
     await check('concurrent edits with the same revision yield one update and one visible conflict', async () => {
       const responses = await Promise.all(['first', 'second'].map(value => request(a, `/resources/${a.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', 'if-match': '1' }, body: JSON.stringify({ value }),

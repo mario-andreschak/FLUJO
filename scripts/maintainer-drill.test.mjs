@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -222,4 +224,32 @@ test('evidence verification refuses linked files and directory junctions', t => 
   const linkedRoot = path.join(output.directory, 'linked-root');
   symlinkSync(output.directory, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => verifyDrillEvidence({ directory: linkedRoot, revision: output.receipt.revision, version: '0.0.0' }), /ordinary directory/);
+});
+
+test('evidence growth between metadata check and read cannot bypass the receipt size limit', t => {
+  const output = evidenceFixture(t);
+  const filename = path.join(output.directory, 'receipt.json');
+  // The future bytes remain valid JSON and match their separately recorded
+  // checksum. Only the actual read's size boundary can refuse this bundle.
+  const expanded = Buffer.concat([readFileSync(filename), Buffer.alloc(1024 * 1024, 32)]);
+  writeFileSync(path.join(output.directory, 'receipt.sha256'),
+    `${createHash('sha256').update(expanded).digest('hex')}  receipt.json\n`);
+  const lstat = fs.lstatSync;
+  let changed = false;
+  const mocked = t.mock.method(fs, 'lstatSync', (...args) => {
+    const stats = lstat(...args);
+    if (!changed && args[0] === filename) {
+      changed = true;
+      writeFileSync(filename, expanded);
+    }
+    return stats;
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(output.verify, /Unsafe or oversized/);
+    assert.equal(changed, true);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
