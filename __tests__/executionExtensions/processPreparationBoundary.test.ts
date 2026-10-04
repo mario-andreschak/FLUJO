@@ -73,6 +73,24 @@ describe('protected Process preparation has no foreign MCP effects', () => {
     expect(discovery).not.toHaveBeenCalled();
   });
 
+  test('contextless owner-bound model is refused before prompt or MCP preparation', async () => {
+    const { state, params } = setup();
+    delete state.executionExtensionContext;
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '',
+      ownerCredentialBinding: { ownerId: 'owner-fixture', credentialId: 'credential-fixture' },
+    } as never);
+    const render = jest.spyOn(promptRenderer, 'renderPrompt');
+    const discovery = jest.spyOn(ToolHandler, 'processMCPNodes');
+
+    await expect(new ProcessNode().prep(state, params({ mcpNodes: [{
+      id: 'ordinary', properties: { boundServer: 'ordinary-server', enabledTools: [] },
+    }] }))).rejects.toMatchObject({ code: 'execution_model_step_context_required' });
+
+    expect(render).not.toHaveBeenCalled();
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
   test('foreign bound server is denied before tool discovery or prompt rendering', async () => {
     const { state, params } = setup();
     const effects = watchMcpEffects();

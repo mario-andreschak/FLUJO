@@ -27,6 +27,7 @@ import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handl
 import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
+import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
 import {
@@ -408,6 +409,19 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     if (!boundModel) {
       log.error('Missing bound model');
       throw new Error("Process node requires a bound model");
+    }
+
+    // A contextless Process must not render resources or connect an MCP server
+    // for a model that only the original owner may dispatch. ModelHandler also
+    // checks this at the provider boundary, after those preparation effects.
+    if (!executionExtensionContext) {
+      const model = await modelService.getModel(boundModel);
+      if (model && isOwnerCredentialBoundModel(model)) {
+        if (validateOwnerCredentialBinding(model)) {
+          throw new ExecutionExtensionError('owner_credential_binding_invalid');
+        }
+        throw new ExecutionExtensionError('execution_model_step_context_required');
+      }
     }
 
     // Tool definitions are collected by connecting to every bound MCP server.
