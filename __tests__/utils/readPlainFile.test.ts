@@ -25,7 +25,7 @@ describe('descriptor-bound plain file reads', () => {
     const expected = await fs.lstat(file, { bigint: true });
     await fs.rename(file, path.join(root, 'old.json'));
     await fs.writeFile(file, 'external');
-    await expect(readPlainFile(file, { expected })).rejects.toMatchObject({ code: 'UNSAFE_FILE' });
+    await expect(readPlainFile(file, { expected })).rejects.toMatchObject({ code: 'UNSAFE_FILE', detail: 'expected:ino' });
   });
 
   it('refuses a named-file replacement after open before any descriptor read', async () => {
@@ -109,7 +109,7 @@ describe('descriptor-bound plain file reads', () => {
       read = jest.spyOn(handle, 'read');
       return handle;
     });
-    await expect(readPlainFile(file, { expected })).rejects.toMatchObject({ code: 'UNSAFE_FILE' });
+    await expect(readPlainFile(file, { expected })).rejects.toMatchObject({ code: 'UNSAFE_FILE', detail: `expected:${field}` });
     expect(read).not.toHaveBeenCalled();
   });
 
@@ -127,7 +127,7 @@ describe('descriptor-bound plain file reads', () => {
       read = jest.spyOn(handle, 'read');
       return handle;
     });
-    await expect(readPlainFile(file)).rejects.toMatchObject({ code: 'UNSAFE_FILE' });
+    await expect(readPlainFile(file)).rejects.toMatchObject({ code: 'UNSAFE_FILE', detail: 'descriptor-path:ino' });
     expect(read).not.toHaveBeenCalled();
   });
 

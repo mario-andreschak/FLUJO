@@ -1,11 +1,22 @@
 import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { constants as bufferConstants } from 'node:buffer';
 
+type IdentityField = 'dev' | 'ino' | 'size' | 'mtimeNs' | 'ctimeNs' | 'mode' | 'uid' | 'gid' | 'nlink';
+type AdmissionDetail = 'not-plain-file' | 'hard-linked' | 'permissions'
+  | `descriptor-path:${IdentityField}` | `expected:${IdentityField}`;
+
 export class PlainFileReadError extends Error {
-  constructor(readonly code: 'UNSAFE_FILE' | 'FILE_CHANGED' | 'SIZE_LIMIT') {
+  constructor(readonly code: 'UNSAFE_FILE' | 'FILE_CHANGED' | 'SIZE_LIMIT', readonly detail?: AdmissionDetail) {
     super(code === 'SIZE_LIMIT' ? 'File exceeds the size limit.' : 'File is unsafe or changed while being read.');
     this.name = 'PlainFileReadError';
   }
+}
+
+function identityDetail(first: BigIntStats, second: BigIntStats): IdentityField | undefined {
+  for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const) {
+    if (first[field] !== second[field]) return field;
+  }
+  return undefined;
 }
 
 function sameFile(first: BigIntStats, second: BigIntStats): boolean {
@@ -37,7 +48,15 @@ export async function readPlainFile(file: string, options: {
     if (!opened.isFile() || !named.isFile() || named.isSymbolicLink() || opened.nlink !== BigInt(1)
         || !sameFile(opened, named) || (options.expected && !sameFile(options.expected, opened))
         || (options.ownerOnly && process.platform !== 'win32' && (opened.mode & BigInt(0o077)) !== BigInt(0))) {
-      throw new PlainFileReadError('UNSAFE_FILE');
+      // Only an allowlisted predicate is exposed; no pathname, identity value,
+      // owner record or credential is included in the diagnostic.
+      const namedDifference = identityDetail(opened, named);
+      const expectedDifference = options.expected && identityDetail(options.expected, opened);
+      const detail: AdmissionDetail = !opened.isFile() || !named.isFile() || named.isSymbolicLink() ? 'not-plain-file'
+        : opened.nlink !== BigInt(1) ? 'hard-linked'
+        : namedDifference ? `descriptor-path:${namedDifference}`
+        : expectedDifference ? `expected:${expectedDifference}` : 'permissions';
+      throw new PlainFileReadError('UNSAFE_FILE', detail);
     }
     const maxBytes = Math.min(options.maxBytes ?? bufferConstants.MAX_LENGTH - 1, bufferConstants.MAX_LENGTH - 1);
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || opened.size < BigInt(0) || opened.size > BigInt(maxBytes)) {

@@ -168,6 +168,8 @@ async function acquireFilesystemLease(
     pid: process.pid, startedAt: new Date().toISOString(), operation,
     ownerId: randomUUID(), identity: await getRuntimeProcessIdentity(),
   };
+  const ownerBytes = Buffer.from(JSON.stringify(owner), 'utf8');
+  const ownerDigest = createHash('sha256').update(ownerBytes).digest('hex');
   // Publish a complete private directory atomically. No process observes a
   // directory before its owner record exists, or executes shared temp contents.
   const candidate = await fs.mkdtemp(`${lock}.candidate-`);
@@ -180,11 +182,22 @@ async function acquireFilesystemLease(
     const ownerHandle = await fs.open(candidateOwnerPath, 'wx', 0o600);
     try {
       candidateOwner = await ownerHandle.stat({ bigint: true });
-      await ownerHandle.writeFile(JSON.stringify(owner));
+      await ownerHandle.writeFile(ownerBytes);
       await ownerHandle.sync();
       candidateOwner = await ownerHandle.stat({ bigint: true });
     }
     finally { await ownerHandle.close(); }
+    // Windows may finalize write timestamps when the last writable handle
+    // closes. Bind the closed snapshot to our descriptor's exact stable identity
+    // before using its timestamps for subsequent read admission. The authored
+    // bytes are checked separately; a fresh pathname stat alone grants nothing.
+    const closedOwner = await fs.lstat(candidateOwnerPath, { bigint: true });
+    if (!candidateOwner || !closedOwner.isFile() || closedOwner.isSymbolicLink()
+        || closedOwner.dev !== candidateOwner.dev || closedOwner.ino !== candidateOwner.ino
+        || closedOwner.mode !== candidateOwner.mode || closedOwner.uid !== candidateOwner.uid || closedOwner.gid !== candidateOwner.gid
+        || closedOwner.nlink !== BigInt(1) || closedOwner.nlink !== candidateOwner.nlink
+        || closedOwner.size !== BigInt(ownerBytes.byteLength)) throw new SnapshotLeaseBusyError();
+    candidateOwner = closedOwner;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       let exists = false;
       try { await fs.lstat(lock); exists = true; }
@@ -196,11 +209,14 @@ async function acquireFilesystemLease(
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
             await assertOwned();
             if (!sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) throw new SnapshotLeaseBusyError();
-            await readPlainFile(candidateOwnerPath, { expected: candidateOwner, maxBytes: 4096, ownerOnly: true });
+            const written = await readPlainFile(candidateOwnerPath, { expected: candidateOwner, maxBytes: 4096, ownerOnly: true });
+            if (!written.equals(ownerBytes)) throw new SnapshotLeaseBusyError();
+            await assertOwned();
             await fs.rename(candidate, lock);
             published = true;
             const admitted = await readOwner(root);
-            if (!admitted || admitted.owner.ownerId !== owner.ownerId || !sameDirectory(candidateDirectory, admitted.directory)) throw new SnapshotLeaseBusyError();
+            if (!admitted || admitted.owner.ownerId !== owner.ownerId || admitted.digest !== ownerDigest
+                || !sameDirectory(candidateDirectory, admitted.directory)) throw new SnapshotLeaseBusyError();
             return async () => {
               const current = await readOwner(root);
               if (!current || current.owner.ownerId !== owner.ownerId || current.digest !== admitted.digest

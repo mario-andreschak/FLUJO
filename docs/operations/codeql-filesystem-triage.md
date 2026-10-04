@@ -102,6 +102,32 @@ That prerequisite does not qualify this later bigint source. Fresh combined
 typecheck/build/scanning, independent review and the acceptance gates above
 remain required.
 
+## Closed owner-record admission
+
+[Microsoft's file-time contract](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times)
+guarantees finalized write timestamps after the writable handles close. A
+snapshot candidate previously carried its still-open writer's timestamps into
+a later read. The candidate now binds the closed pathname snapshot to the exact
+descriptor device/inode, mode, UID/GID and single-link ownership, and checks its
+size against the authored bytes. Only then can the closed timestamps become the
+reader's expected snapshot. Exact descriptor/path/timestamp checks remain in
+`readPlainFile`; the candidate's bytes and published digest must also match the
+original owner record, with the transition fence rechecked before rename.
+
+Admission errors carry only a bounded predicate name such as `expected:ctimeNs`
+or `descriptor-path:ino`. They include no path, filesystem identity value,
+owner bytes or credential. This makes a refusal diagnosable without weakening
+it or accepting a new pathname snapshot on its own.
+
+The delayed-close timestamp test is a controlled platform-contract fault case.
+Six native local Windows samples showed no metadata drift and did not reproduce
+the hosted failure. The recorded hosted `a6273e32` failure is
+`SNAPSHOT_STORE_BUSY`; the later `85644435` and current `6390bc01` failures are
+`PlainFileReadError/UNSAFE_FILE`. A strict-environment local installed run of
+`6390bc01` passes, on a different Windows version. None of these observations
+proves the cause of the hosted mismatch or qualifies this later source. The
+next exact compiled Windows run must retain the predicate and its result.
+
 These paths operate in an owner-private data-root/OS profile with cooperating
 FLUJO writers. Descriptor checks and canonical fences are not an OS sandbox:
 Node does not provide portable descriptor-relative rename/unlink. A hostile
