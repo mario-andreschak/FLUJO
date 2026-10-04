@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { createFeatureBrowserEnvironment } from '../../scripts/feature-surface-acceptance/browser-environment.mjs';
 
+const labelName = label => new RegExp('^' + label + '(?: |$)');
 const serverName = 'Public Firecrawl form observation';
 const endpoint = 'https://mcp.firecrawl.dev/v2/mcp';
 let environment;
@@ -54,10 +55,10 @@ test('actual public scrape form stays mounted through the former 30-second bound
     await page.goto(`${environment.baseURL}/mcp`);
     const guide = page.getByRole('button', { name: 'Your first AI + app agent', exact: true });
     if (await guide.getAttribute('aria-expanded') !== 'true') await guide.click();
-    await page.getByRole('combobox', { name: 'Saved app to inspect', exact: true }).click();
+    await page.getByRole('combobox', { name: labelName('Saved app to inspect') }).click();
     await page.getByRole('option', { name: serverName, exact: true }).click();
     await page.getByRole('button', { name: 'Inspect and test tools', exact: true }).click();
-    await page.getByRole('combobox', { name: 'Select tool', exact: true }).click();
+    await page.getByRole('combobox', { name: labelName('Select tool') }).click();
     await expect(page.getByRole('option')).toHaveCount(tools.length + 1);
     await page.getByRole('option', { name: 'firecrawl_scrape', exact: true }).click();
     const scrape = tools.find(tool => tool.name === 'firecrawl_scrape');

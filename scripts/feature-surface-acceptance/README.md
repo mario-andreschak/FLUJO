@@ -71,7 +71,8 @@ The coordinator must first select a compiled **native Node production**
 candidate containing #585, #589, #594 and #605 and their integration
 dependencies. Use a candidate without `.env`, `.env.local`, `.env.production`
 or `.env.production.local`. The runner refuses those files before starting a
-process. It starts its own loopback Next process and synthetic fixture with a
+process. It allocates separate loopback ports for Next and its MCP Apps sandbox,
+then starts its own Next process and synthetic fixture with a
 new temporary `FLUJO_DATA_DIR`, strips inherited provider/owner/worker settings,
 and seeds only the two fixture server entries. Existing listeners and profiles
 are never attached. Its private IPC handshake must establish child ownership

@@ -31,10 +31,12 @@ export async function inspectCandidateRoot(applicationRoot) {
 }
 
 /** New anonymous loopback test profile; never inherits account/provider/security configuration. */
-export function fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl, hostEnvironment = process.env }) {
+export function fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl, sandboxPort, hostEnvironment = process.env }) {
+  if (!Number.isInteger(sandboxPort) || sandboxPort < 1024 || sandboxPort > 65535) throw new Error('Expected an owned sandbox port.');
   const allowed = new Set(['PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE', 'TEMP', 'TMP']);
   const env = Object.fromEntries(Object.entries(hostEnvironment).filter(([key]) => allowed.has(key.toUpperCase())));
   return { ...env, FLUJO_DATA_DIR: dataDir, FLUJO_BASE_URL: baseURL,
+    FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
     FLUJO_TELEMETRY_URL: `${fixtureUrl}/disabled-telemetry`, NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' };
 }
 
@@ -99,12 +101,13 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-feature-browser-'));
   let fixture;
   let baseURL;
+  let sandboxPort;
   let appLog;
   let child;
   let owned;
   let closed = false;
   const snapshot = () => ({ scope: 'automated browser observations in disposable anonymous loopback profile',
-    ...candidate, dataDir, baseURL, epoch: owned ? { ...owned.epoch } : null, fixture: fixture?.state.snapshot() ?? null,
+    ...candidate, dataDir, baseURL, sandboxPort, epoch: owned ? { ...owned.epoch } : null, fixture: fixture?.state.snapshot() ?? null,
     limitations: ['Artifact/source correspondence not verified by this runner.', 'Not human, real-provider, private/shared-profile or full feature-matrix acceptance.'] });
   const request = async (route, body, timeoutMs = 15000) => {
     if (!route.startsWith('/') || route.startsWith('//')) throw new Error('Expected a same-instance route.');
@@ -132,10 +135,12 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
   try {
     fixture = await startHttpFixture();
     const selectedPort = port || await freePort();
+    sandboxPort = await freePort();
+    if (sandboxPort === selectedPort) throw new Error('Could not allocate distinct candidate and sandbox ports.');
     baseURL = `http://127.0.0.1:${selectedPort}`;
     appLog = createWriteStream(path.join(dataDir, 'application.log'));
     child = fork(launcher, [String(selectedPort)], { cwd: candidate.applicationRoot,
-      env: fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl: fixture.url }), silent: true, windowsHide: true });
+      env: fixtureRuntimeEnvironment({ dataDir, baseURL, fixtureUrl: fixture.url, sandboxPort }), silent: true, windowsHide: true });
     owned = observeOwnedCandidate(child);
     child.stdout.pipe(appLog, { end: false });
     child.stderr.pipe(appLog, { end: false });

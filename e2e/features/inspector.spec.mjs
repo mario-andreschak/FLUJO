@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { createFeatureBrowserEnvironment } from '../../scripts/feature-surface-acceptance/browser-environment.mjs';
 
+const labelName = label => new RegExp('^' + label + '(?: |$)');
 let environment;
 const toolNames = Array.from({ length: 128 }, (_, index) => `fixture_tool_${String(index + 1).padStart(3, '0')}`);
 const locales = [
@@ -34,13 +35,13 @@ async function openInspector(page, serverName, labels = locales[0], navigate = t
   await expect(guide.locator('a[href="/models"]')).toBeVisible();
   await expect(guide.locator('a[href="/flows?authoringMode=guided"]')).toBeVisible();
   await expect(guide.locator('a[href="/docs"]')).toBeVisible();
-  await page.getByRole('combobox', { name: savedApp, exact: true }).click();
+  await page.getByRole('combobox', { name: labelName(savedApp) }).click();
   await page.getByRole('option', { name: serverName, exact: true }).click();
   await page.getByRole('button', { name: inspect, exact: true }).click();
 }
 
 async function selectTool(page, name, label = 'Select tool') {
-  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.getByRole('combobox', { name: labelName(label) }).click();
   await page.getByRole('option', { name, exact: true }).click();
 }
 
@@ -74,7 +75,7 @@ test('128 tools and real draft/result/App retention with explicit execution', as
   try {
     await step('all 128 menu entries reached by keyboard without invoking a tool', async () => {
       await openInspector(page, 'Feature HTTP fixture');
-      const selector = page.getByRole('combobox', { name: 'Select tool', exact: true });
+      const selector = page.getByRole('combobox', { name: labelName('Select tool') });
       await selector.click();
       const options = page.getByRole('option');
       await expect(options).toHaveCount(129);
@@ -130,7 +131,7 @@ test('128 tools and real draft/result/App retention with explicit execution', as
         expect(await node.evaluate(element => element.isConnected)).toBe(true);
         expect((await appMount(page))?.id).toBe(observations.mountId);
         await expect(page.getByText('early-receipt', { exact: false }).first()).toBeVisible();
-        await page.getByRole('combobox', { name: 'Select tool', exact: true }).click();
+        await page.getByRole('combobox', { name: labelName('Select tool') }).click();
         await expect(page.getByRole('option')).toHaveCount(129);
         await page.keyboard.press('Escape');
       }
@@ -148,9 +149,9 @@ test('128 tools and real draft/result/App retention with explicit execution', as
       await page.getByRole('textbox', { name: 'ref *', exact: true }).fill('late-marker');
       await page.getByRole('textbox', { name: 'modifiers (JSON array)', exact: true }).fill('["Shift"]');
       await page.getByRole('textbox', { name: 'options (JSON object)', exact: true }).fill('{"marker":"late-receipt"}');
-      await page.getByRole('combobox', { name: 'button', exact: true }).click();
+      await page.getByRole('combobox', { name: labelName('button') }).click();
       await page.getByRole('option', { name: 'right', exact: true }).click();
-      const enabled = page.getByRole('switch', { name: 'enabled', exact: true });
+      const enabled = page.getByRole('checkbox', { name: 'enabled', exact: true });
       await enabled.check();
       await enabled.uncheck();
       await page.getByRole('button', { name: 'Test tool', exact: true }).click();
@@ -165,14 +166,14 @@ test('128 tools and real draft/result/App retention with explicit execution', as
     await step('successful empty discovery clears the selector and a different server cannot inherit results', async () => {
       await configure('empty');
       await page.getByRole('button', { name: 'Refresh tools', exact: true }).click();
-      await page.getByRole('combobox', { name: 'Select tool', exact: true }).click();
+      await page.getByRole('combobox', { name: labelName('Select tool') }).click();
       await expect(page.getByRole('option')).toHaveCount(1);
       await page.keyboard.press('Escape');
       await configure('normal');
       await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
       await openInspector(page, 'Feature SSE fixture', locales[0], false);
       await expect(page.getByText('late-receipt', { exact: false })).toHaveCount(0);
-      await page.getByRole('combobox', { name: 'Select tool', exact: true }).click();
+      await page.getByRole('combobox', { name: labelName('Select tool') }).click();
       await expect(page.getByRole('option')).toHaveCount(129);
       await page.getByRole('option', { name: 'fixture_tool_128', exact: true }).click();
       await expect(page.getByRole('textbox', { name: 'ref *', exact: true })).toHaveText('');
@@ -196,7 +197,7 @@ test('seven rendered guide/tool-selector languages without implicit execution', 
     for (const labels of locales) {
       await openInspector(page, 'Feature HTTP fixture', labels);
       await expect(page.locator('html')).toHaveAttribute('data-locale', labels[0]);
-      await page.getByRole('combobox', { name: labels[4], exact: true }).click();
+      await page.getByRole('combobox', { name: labelName(labels[4]) }).click();
       await expect(page.getByRole('option')).toHaveCount(129);
       await page.keyboard.press('Escape');
       observations.push({ locale: labels[0], completedAt: new Date().toISOString() });
