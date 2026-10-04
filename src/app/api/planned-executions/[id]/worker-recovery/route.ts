@@ -7,7 +7,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 
 type Context = { params: Promise<{ id: string }> };
 
-const wrapped = withWorkspaceRoute(async (request: NextRequest, { params }: Context) => {
+async function POST_handler(request: NextRequest, { params }: Context) {
   const locked = await assertUnlocked();
   if (locked) return locked;
   let body: unknown;
@@ -33,7 +33,9 @@ const wrapped = withWorkspaceRoute(async (request: NextRequest, { params }: Cont
     // token material, filesystem exception text or imported commands.
     return Response.json({ error: 'Recovery enrollment was refused. Inspect the plan recovery status and retained run history.' }, { status: 409 });
   }
-});
+}
+
+const wrapped = withWorkspaceRoute(POST_handler);
 
 /** Dedicated worker bearer before workspace resolution, including direct handler imports. */
 export function POST(request: NextRequest, context: Context) {
