@@ -26,6 +26,7 @@
     ".next/**/*",
     "!.next/cache/**",
     "!.next/dev/**",
+    "!.next/trace",
     "public/**/*",
     "scripts/launch-next.mjs",
     "scripts/local-instance.mjs",
