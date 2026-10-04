@@ -24,6 +24,8 @@ interface ConversationChannel {
   emitter: EventEmitter;
   seq: number;
   buffer: ExecutionEvent[];
+  /** The terminal event still owns this high-water mark; any later emit revokes it. */
+  terminalSeq?: number;
 }
 
 /**
@@ -95,8 +97,7 @@ class ExecutionEventBus {
     return channel;
   }
 
-  private cancelCleanup(conversationId: string): void {
-    const key = workspaceCacheKey(conversationId);
+  private cancelCleanup(key: string): void {
     const timer = this.cleanupTimers.get(key);
     if (timer) {
       clearTimeout(timer);
@@ -109,14 +110,15 @@ class ExecutionEventBus {
    *  gone: seq is now allocated by the durable log counter (issue #261), so a
    *  recreated channel continues the monotonic sequence rather than resetting to
    *  0, and a reconnect past the evicted buffer replays from the JSONL log. */
-  private scheduleCleanup(conversationId: string, seqAtDone: number): void {
-    this.cancelCleanup(conversationId);
-    const key = workspaceCacheKey(conversationId);
+  private scheduleCleanup(key: string, expectedChannel: ConversationChannel, expectedSeq: number): void {
+    this.cancelCleanup(key);
     const timer = setTimeout(() => {
+      if (this.cleanupTimers.get(key) !== timer) return;
       this.cleanupTimers.delete(key);
       const channel = this.channels.get(key);
-      if (!channel) return;
-      if (channel.seq !== seqAtDone) return; // a new run emitted since; keep
+      if (channel !== expectedChannel || channel.seq !== expectedSeq) return;
+      const empty = channel.seq === 0 && channel.buffer.length === 0;
+      if (!empty && channel.terminalSeq !== expectedSeq) return;
       if (channel.emitter.listenerCount('event') > 0) return; // active SSE subscriber
       this.channels.delete(key);
     }, CHANNEL_TTL_AFTER_DONE_MS);
@@ -128,9 +130,12 @@ class ExecutionEventBus {
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
     const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
     channel.seq = seq + 1; // in-memory high-water mirror for currentSeq()/cleanup
+    this.cancelCleanup(key);
+    channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
     const event = {
       ...raw,
       conversationId,
@@ -159,10 +164,10 @@ class ExecutionEventBus {
 
     // Terminal event → the channel becomes garbage once nobody replays it.
     // Any other event (e.g. run:start of a resumed conversation) revives it.
-    if (event.type === 'run:done') {
-      this.scheduleCleanup(conversationId, channel.seq);
-    } else {
-      this.cancelCleanup(conversationId);
+    if (event.type === 'run:done' && channel.seq === seq + 1 && channel.terminalSeq === seq + 1) {
+      // A synchronous listener can emit a resumed run. The old terminal event
+      // must not schedule cleanup for that newer channel revision.
+      this.scheduleCleanup(key, channel, seq + 1);
     }
     return event;
   }
@@ -193,9 +198,21 @@ class ExecutionEventBus {
   /** Subscribe to live events. Returns an unsubscribe function. */
   subscribe(conversationId: string, listener: (event: ExecutionEvent) => void): () => void {
     const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    this.cancelCleanup(key);
     channel.emitter.on('event', listener);
+    let subscribed = true;
     return () => {
+      if (!subscribed) return;
+      subscribed = false;
       channel.emitter.off('event', listener);
+      if (this.channels.get(key) !== channel || channel.emitter.listenerCount('event') > 0) return;
+      // A subscriber may outlive the original terminal cleanup timer. Re-arm
+      // when the final listener leaves; retain running, paused and unknown
+      // channels. The captured key also keeps deferred cleanup workspace-bound.
+      if (channel.terminalSeq === channel.seq || (channel.seq === 0 && channel.buffer.length === 0)) {
+        this.scheduleCleanup(key, channel, channel.seq);
+      }
     };
   }
 
