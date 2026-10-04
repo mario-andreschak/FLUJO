@@ -22,7 +22,7 @@ files, session keys and provider keys stay outside Git, browser code and URLs.
 | POST | `/api/avatar/remote/native-turn` | Existing setup voice request; NDJSON |
 | POST | `/api/avatar/remote/native-input` | Complete WAV recording; recognized text |
 | POST | `/api/avatar/remote/native-observe` | Existing single-use turn observation |
-| POST | `/api/avatar/remote/native-result-receipt` | Canonical conversation/message IDs and locale; receipt ID |
+| POST | `/api/avatar/remote/native-result-receipt` | Canonical conversation/message IDs, locale and optional expected digest; receipt ID |
 | POST | `/api/avatar/remote/native-result` | Receipt ID, avatar and locale; NDJSON |
 | POST | `/api/avatar/remote/native-played` | Exact turn/sample playback acknowledgement |
 | POST | `/api/avatar/remote/native-reset` | Exactly `{}`; clears owned voice history/receipts |
@@ -83,6 +83,25 @@ two minutes and is single-use. Currency and authority are checked before receipt
 consumption, before provider entry and while publishing audio/qualification.
 Changing the latest reply, editing its content or revoking access stops narration.
 No browser-supplied success claim or tool content becomes a narration result.
+
+Receipt requests may additionally supply `expectedResultDigest`, exactly 64
+lowercase hexadecimal characters. It is SHA-256 over the UTF-8 bytes of
+`JSON.stringify({reply,mode:'flujo',status})` in that property order, using the
+canonical resolver's exact stripped, trimmed and 8000 UTF-16-unit bounded reply
+and status. This is not a stable-key JSON digest or a hash of the unprojected
+assistant message. A mismatch returns 409 before any receipt is offered. The
+existing receipt then retains that matching digest and rechecks canonical
+currency before provider entry and during output. Requests omitting this field
+retain their existing local and authenticated behavior.
+
+The digest is a caller's currency constraint, not proof of reviewer acceptance.
+O must derive it from its trusted successful developer observation, bind the
+exact worker/workspace/conversation/message to a matching accepted review, and
+gate both issuance and use on its live session and accepted-task record. Browser
+output, O task IDs and caller-selected digests cannot establish that binding.
+This extension alone neither implements O's accepted-task gate nor enables its
+disabled result narration. Older servers reject the new field; callers must not
+retry issuance with the field removed after a refused or uncertain request.
 
 ## Evidence and deployment gates
 

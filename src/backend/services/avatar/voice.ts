@@ -230,16 +230,19 @@ async function handleVoice(request: Request, action: string, trusted?: TrustedAv
     if (action === 'native-played') return Response.json(session.ledger.played(body));
     if (!avatarVoiceAvailable()) throw new PublicError(503, 'voice_unconfigured', 'Voice is unavailable. You can type and connect your work AI.');
     if (action === 'native-result-receipt') {
-      if (Object.keys(body).some(key => !['conversationId', 'messageId', 'locale'].includes(key)) || !['es', 'pt', 'en'].includes(String(body.locale))) throw new PublicError(400, 'invalid_voice_request', 'Choose a recorded result.');
+      if (Object.keys(body).some(key => !['conversationId', 'messageId', 'locale', 'expectedResultDigest'].includes(key)) || !['es', 'pt', 'en'].includes(String(body.locale))
+        || (body.expectedResultDigest !== undefined && (typeof body.expectedResultDigest !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedResultDigest)))) throw new PublicError(400, 'invalid_voice_request', 'Choose a recorded result.');
       const resultKey = `${body.conversationId}:${body.messageId}`;
       if (session.results.has(resultKey)) throw new PublicError(409, 'result_already_offered', 'This result has already been offered.');
       const conversationId = String(body.conversationId), messageId = String(body.messageId);
       const result = await abortable(canonicalVoiceResult(conversationId, messageId), owned.signal); await check();
+      const digest = resultDigest(result);
+      if (body.expectedResultDigest !== undefined && body.expectedResultDigest !== digest) throw new PublicError(409, 'result_not_current', 'That reply is no longer current.');
       if (session.results.has(resultKey)) throw new PublicError(409, 'result_already_offered', 'This result has already been offered.');
       const taskId = session.ledger.receipt(result, owner);
       if (!taskId) throw new PublicError(409, 'result_unavailable', 'The result is unavailable.');
       session.results.add(resultKey); if (session.results.size > 64) session.results.delete(session.results.values().next().value!);
-      session.receipts.set(taskId, { conversationId, messageId, digest: resultDigest(result), expires: Date.now() + 120_000 });
+      session.receipts.set(taskId, { conversationId, messageId, digest, expires: Date.now() + 120_000 });
       while (session.receipts.size > 4) session.receipts.delete(session.receipts.keys().next().value!);
       return Response.json({ taskId });
     }
