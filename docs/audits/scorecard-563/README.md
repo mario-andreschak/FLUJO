@@ -39,6 +39,10 @@ experimental only with explicit independent acceptance and visible limits.
 - [publication reconciliation](publication-reconciliation.md) maps eleven concrete
   publication claims to a checksummed twelve-document source inventory, existing
   qualifications, topic owners and pending candidate-release acceptance.
+- [publication checker](../../../scripts/check-scorecard-publication.mjs) inventories
+  exact committed guide bytes and checks parsed local file targets in that tree.
+  [Invocation and limits](publication-reconciliation.md#repeat-for-the-actual-release)
+  keep this source check separate from claim coverage and installed acceptance.
 - [historical failed soak](evidence/2026-09-16-persona-soak.json) is a byte-preserved
   copy of the existing public audit payload. Evidence-directory attributes disable
   Git line-ending conversion so hashes identify the same bytes on Windows and Unix.

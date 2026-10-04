@@ -82,6 +82,32 @@ with the report, and use `git ls-tree <sourceSha> -- SECURITY.md` for the absenc
 witness. Hash Git blob bytes rather than a checkout or a shell-reencoded text
 stream: Windows line-ending conversion can otherwise change the payload.
 
+The dependency-free [publication checker](../../../scripts/check-scorecard-publication.mjs)
+reads an exact committed tree, inventories the twelve named guides and every
+Markdown file added, changed or removed under `docs` since planning main, and
+checks parsed relative file targets against that same tree. For the selected
+candidate, run:
+
+```sh
+node scripts/check-scorecard-publication.mjs --source <exact-40-character-release-source-SHA>
+node --test scripts/check-scorecard-publication.test.mjs
+```
+
+An explicit `--baseline <exact-40-character-SHA>` can select a different review
+baseline. Exit 0 means the scoped file-target check passed; exit 2 retains a
+report with missing or invalid targets or mandatory guides; exit 1 indicates
+invalid input or an execution error. Removed nonmandatory guides remain in the
+report for manual claim reconciliation. A surviving link to a removed guide
+still fails. Preserve stdout as bytes when retaining the report as evidence.
+
+The checker records each present guide's Git blob, byte length and SHA-256,
+including original line endings. It does not parse HTML or arbitrary Markdown
+extensions, check anchor existence, external or root-relative routes, render
+pages, or establish documented behavior or exhaustive claim coverage. Its
+report cannot award a grade, replace independent review, or qualify an installed
+artifact. Keep the original manual inventory and perform the release
+reconciliation above.
+
 Development/push/deployment authorization and empirical acceptance are separate
 records. The coordinator owns the integration and deployment candidate. No
 numeric paid-run envelope or concrete model/account scope is declared in this
