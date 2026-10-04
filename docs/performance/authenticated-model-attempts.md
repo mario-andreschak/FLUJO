@@ -38,15 +38,33 @@ The hook can run at ModelHandler entry, adapter entry and again after the durabl
 SDK marker callback, immediately before the SDK request. It must not debit or
 reserve on every policy query. Original per-call booking remains owner work.
 
-The same opt-in path now also requires `claimModelRequest(context, intent)` at
-the OpenAI adapter's final provider-native body boundary. The intent contains
-the model/endpoint identity, SDK operation and SHA-256 of the detached JSON body;
-it contains no API key or prompt bytes. A missing or rejected claim prevents the
-POST. FLUJO consumes the branded context before awaiting this callback, so one
-process cannot reuse it for a second logical model request, even after a failed
-claim or an unknown remote outcome. The callback must perform the original
-owner's durable cross-worker compare-and-swap; FLUJO's in-memory consumption is
-not a durable claim and does not prove that the provider received the request.
+The same opt-in path requires `claimModelRequest(context, intent)` in a private
+fetch wrapper, after the installed SDK has chosen its actual URL, method,
+headers and JSON body and before Undici is called. The adapter detaches the
+provider-native body first. The fetch wrapper rejects any URL or body different
+from those detached expectations, any method other than POST, an altered bearer
+credential, a non-JSON body, redirects and unexpected request or header fields.
+Protected client construction bypasses the overridable `createClient`; it uses
+an explicit base URL, ignoring `OPENAI_BASE_URL`. An omitted model base URL is
+pinned to `https://api.openai.com/v1`. Plain HTTP is allowed only for literal
+loopback addresses. `OPENAI_CUSTOM_HEADERS` cannot silently change Authorization
+or introduce an unknown routing header.
+
+The owner receives the SDK-final URL, method, model identity, operation,
+SHA-256 of the exact UTF-8 JSON body, SHA-256 of the effective Authorization
+header and SHA-256 of JSON-encoded, lower-case, name-sorted SDK-final header
+pairs. A closed projection also gives SHA-256 or explicit absence for
+OpenAI-Organization, OpenAI-Project, HTTP-Referer and X-Title. The owner must
+compare the URL, method, body, credential and this routing/account projection
+with its original authority, as well as checking lease, OFF state and budget.
+The full-header digest can support stricter exact matching when the owner pins
+the SDK/runtime's dynamic X-Stainless headers. The digests contain no raw
+credential or prompt. A missing or rejected claim prevents Undici dispatch.
+FLUJO consumes the branded context before awaiting this callback, so one process
+cannot reuse it for a second fetch, even after a failed claim or unknown remote
+outcome. The callback must perform the original owner's durable cross-worker
+compare-and-swap; FLUJO's in-memory consumption is not a durable claim and does
+not prove that the provider received the request.
 Unknown callback errors become a fixed denial instead of exposing their message;
 trusted execution-extension denials retain their error code.
 `configuredExecutionAdapter` is still undefined in generic FLUJO. No FACTORY
@@ -70,12 +88,24 @@ The direct `/v1/chat/completions` model-service route has no execution context;
 FACTORY must fence protected credentials and models at ingress or isolate them
 before adoption.
 
-The intent names the declared `model.baseUrl`, not the effective SDK URL or
-transport. `OpenAiAdapter.createClient` can be overridden; an original owner
-must pin the actual client/endpoint and check it at the fetch boundary before
-using this as endpoint-bound authority. A lease can also be revoked after the
-last `assertRun` and before the network send. This callback does not close that
-time gap or provide a continuous physical fence.
+The fetch wrapper snapshots the SDK's final `fetch` Headers and passes those
+same cloned headers and body bytes to pinned Undici. Undici can still add Host,
+Content-Length or encoding headers and resolve DNS/TLS afterward; the digest is
+not a transcript of physical wire bytes. After the owner claim, FLUJO checks
+the current registered adapter, owner run state and both cancellation signals
+before invoking Undici. If cancellation arrives during the claim, no POST is
+started and the consumed claim stays spent/unknown. A lease can still be revoked
+after this last check or while transport is running. Continuous physical OFF
+requires an owner-controlled outbound proxy or credential revocation, beyond
+this process-local pre-fetch gate.
+
+The direct `/v1/chat/completions` model route and other saved-model users can
+decrypt ordinary `Model.ApiKey` records without this execution context. Before
+protected adoption, FACTORY must isolate protected model catalog entries and
+hold their credentials in an owner-controlled broker. That broker must cover
+direct model completions, model connection tests, embeddings, fallback members,
+flow generation, MCP sampling and other key resolvers. The final-fetch guard
+alone cannot protect a key still available to those routes.
 
 ## Enforced request behavior
 
@@ -92,7 +122,7 @@ For an attested call through the `openai` Chat Completions adapter:
 - The current owner policy is rechecked after archival; its AbortSignal is
   combined with the ordinary caller signal at the SDK boundary.
 
-This bounds one claimed logical call to at most one physical SDK transport attempt. A
+This bounds one claimed logical call to at most one local SDK fetch invocation. A
 new Process/tool-loop turn or a new authorized call needs its own freshly minted,
 coordinator-backed context and original owner budget/identity handling. The
 current run-level context is reused across turns, so protected multi-turn Flow
@@ -114,7 +144,9 @@ installed OpenAI SDK with default client retries and an unpaid loopback HTTP
 server. Physical POST counts are independent of the SDK observer. It exercises
 HTTP503, lost responses after POST arrival, HTTP307/308 redirects, stream startup failures, cache-option
 rejection, forged/copied authority, policy replacement/revocation and owner
-cancellation. ModelHandler tests retain the ordinary seven-attempt empty-stop
+cancellation. It also checks the SDK-final URL/body/header claim, subclass
+rerouting, ambient URL/header overrides and an owner abort during a pending
+claim. ModelHandler tests retain the ordinary seven-attempt empty-stop
 behavior while verifying one attempt for restricted empty/rate-limit failures.
 
 The ordinary control intentionally observes two physical requests behind one

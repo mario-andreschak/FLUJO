@@ -27,6 +27,9 @@ const openAITransport = new Agent({
 // this single transport boundary instead of leaking it into every client.
 const openAIFetch = undiciFetch as unknown as typeof globalThis.fetch;
 
+/** Never inherit OPENAI_BASE_URL for an owner-bound protected request. */
+export const PROTECTED_OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+
 /**
  * Options for {@link createOpenAIClient}.
  */
@@ -101,6 +104,34 @@ export function createOpenAIClient(opts: CreateOpenAIClientOptions): OpenAI {
     timeout,
     ...(defaultHeaders ? { defaultHeaders } : {}),
   });
+}
+
+/** The protected path supplies its own final-fetch guard and an explicit base
+ * URL. Keep ordinary client construction and its retry policy untouched. */
+export function createProtectedOpenAIClient(
+  opts: CreateOpenAIClientOptions & { baseURL: string },
+  guardedFetch: typeof globalThis.fetch,
+): OpenAI {
+  const { apiKey, baseURL, timeout = LLM_REQUEST_TIMEOUT_MS, defaultHeaders } = opts;
+  return new OpenAI({
+    apiKey,
+    baseURL,
+    fetch: guardedFetch,
+    fetchOptions: { dispatcher: openAITransport },
+    maxRetries: 0,
+    timeout,
+    ...(defaultHeaders ? { defaultHeaders } : {}),
+  });
+}
+
+/** Called only after the guarded fetch has taken its immutable request snapshot,
+ * received the owner's claim and synchronously rechecked local authority. */
+export function sendPinnedOpenAIFetch(url: string, init: RequestInit): Promise<Response> {
+  return openAIFetch(url, {
+    ...init,
+    redirect: 'error',
+    dispatcher: openAITransport,
+  } as unknown as RequestInit);
 }
 
 /** Build the deployment-aware Azure OpenAI SDK client on the shared transport. */

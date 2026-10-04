@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { createHash } from 'node:crypto';
 import { contextUsageFromCompletion } from './contextUsage';
 import { createLogger } from '@/utils/logger';
-import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
+import { createOpenAIClient, createProtectedOpenAIClient, getProviderDefaultHeaders, PROTECTED_OPENAI_DEFAULT_BASE_URL, sendPinnedOpenAIFetch } from '../openaiClient';
 import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
@@ -10,7 +10,7 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import type { Model } from '@/shared/types/model';
-import { assertExecutionExtensionAdapterCurrent, claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
+import { assertExecutionExtensionAdapterCurrent, assertExecutionExtensionCurrent, claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -56,25 +56,117 @@ async function assertModelRequestPolicy(context: ExecutionExtensionContext | und
   }
 }
 
-async function claimProtectedOpenAiRequest<T extends object>(
+const protectedFetchOptions = new Set(['signal', 'method', 'headers', 'body', 'redirect', 'dispatcher']);
+const protectedHeaderNames = new Set([
+  'accept', 'authorization', 'content-type', 'user-agent',
+  'http-referer', 'x-title', 'openai-organization', 'openai-project',
+  'x-stainless-arch', 'x-stainless-lang', 'x-stainless-os',
+  'x-stainless-package-version', 'x-stainless-retry-count',
+  'x-stainless-runtime', 'x-stainless-runtime-version', 'x-stainless-timeout',
+]);
+
+function protectedChatUrl(baseURL: string): string {
+  try {
+    const base = new URL(baseURL);
+    if (!['http:', 'https:'].includes(base.protocol) ||
+        (base.protocol === 'http:' && !['127.0.0.1', '[::1]'].includes(base.hostname)) ||
+        base.username || base.password || base.search || base.hash) {
+      throw new Error('unsupported base URL');
+    }
+    // Match the SDK's baseURL + /chat/completions construction, then compare
+    // its actual final URL at fetch. A declared model URL alone is not proof.
+    return new URL(`${baseURL}${baseURL.endsWith('/') ? '' : '/'}chat/completions`).toString();
+  } catch {
+    throw new ExecutionExtensionError('execution_model_endpoint_invalid');
+  }
+}
+
+function prepareProtectedOpenAiRequest<T extends object>(
   context: ExecutionExtensionContext,
   model: Model,
   operation: ExecutionModelRequestIntent['operation'],
+  apiKey: string,
   body: T,
-): Promise<T> {
-  // Use the same detached JSON value for the digest and SDK call. The owner
-  // receives no prompt bytes, and a caller cannot mutate a nested message while
-  // its asynchronous claim is pending.
+): { client: OpenAI; body: T } {
+  // Detach nested caller data before the SDK receives it. The later fetch guard
+  // compares this digest to the SDK's actual serialized UTF-8 JSON bytes.
   const serialized = JSON.stringify(body);
   if (typeof serialized !== 'string') throw new ExecutionExtensionError('execution_model_request_invalid');
   const fixedBody = JSON.parse(serialized) as T;
-  await claimExecutionModelRequest(context, {
-    version: 1,
-    operation,
-    model: { id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl },
-    bodySha256: createHash('sha256').update(serialized).digest('hex'),
-  });
-  return fixedBody;
+  const expectedBodySha256 = createHash('sha256').update(Buffer.from(serialized, 'utf8')).digest('hex');
+  const modelIdentity = { id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl };
+  const baseURL = modelIdentity.baseUrl ?? PROTECTED_OPENAI_DEFAULT_BASE_URL;
+  const expectedUrl = protectedChatUrl(baseURL);
+  const guardedFetch: typeof globalThis.fetch = async (input, init) => {
+    if (typeof input !== 'string' || !init || Object.keys(init).some(key => !protectedFetchOptions.has(key)) ||
+        init.method !== 'POST' || init.redirect !== 'error' || input !== expectedUrl || typeof init.body !== 'string') {
+      throw new ExecutionExtensionError('execution_model_wire_mismatch');
+    }
+    const headers = new Headers(init.headers);
+    const authorization = headers.get('authorization');
+    if ([...headers.keys()].some(name => !protectedHeaderNames.has(name)) ||
+        headers.get('content-type') !== 'application/json' || authorization !== `Bearer ${apiKey}`) {
+      throw new ExecutionExtensionError('execution_model_wire_mismatch');
+    }
+    const headerPairs = [...headers.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    const headersSha256 = createHash('sha256').update(JSON.stringify(headerPairs), 'utf8').digest('hex');
+    const routingHeaderDigest = (name: string): string | null => {
+      const value = headers.get(name);
+      return value === null ? null : createHash('sha256').update(value, 'utf8').digest('hex');
+    };
+    const bodyBytes = Buffer.from(init.body, 'utf8');
+    const bodySha256 = createHash('sha256').update(bodyBytes).digest('hex');
+    if (bodySha256 !== expectedBodySha256) throw new ExecutionExtensionError('execution_model_wire_mismatch');
+
+    // The original owner must compare URL, method, body, credential and routing
+    // projection with its current task, lease and budget, then durably consume
+    // this call. A local digest or context is never that authority.
+    await claimExecutionModelRequest(context, {
+      version: 1,
+      operation,
+      model: modelIdentity,
+      method: 'POST',
+      url: input,
+      bodySha256,
+      authorizationSha256: createHash('sha256').update(authorization, 'utf8').digest('hex'),
+      headersSha256,
+      routingHeaderSha256: {
+        openaiOrganization: routingHeaderDigest('openai-organization'),
+        openaiProject: routingHeaderDigest('openai-project'),
+        httpReferer: routingHeaderDigest('http-referer'),
+        xTitle: routingHeaderDigest('x-title'),
+      },
+    });
+    await assertExecutionExtensionCurrent(context);
+    assertExecutionExtensionAdapterCurrent(context);
+    if (init.signal?.aborted || executionExtensionSignal(context)?.aborted) {
+      throw new ExecutionExtensionError('execution_model_request_aborted');
+    }
+    // No await between the final local check and the pinned transport call.
+    // Remote revocation after this point still needs an owner-controlled proxy.
+    return sendPinnedOpenAIFetch(input, {
+      method: 'POST',
+      headers,
+      body: bodyBytes,
+      signal: init.signal,
+      redirect: 'error',
+    } as unknown as RequestInit);
+  };
+  return {
+    client: createProtectedOpenAIClient({
+      apiKey,
+      baseURL,
+      defaultHeaders: getProviderDefaultHeaders(modelIdentity.provider),
+    }, guardedFetch),
+    body: fixedBody,
+  };
+}
+
+function unwrapProtectedFetchError(error: unknown): never {
+  if (error instanceof ExecutionExtensionError) throw error;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  if (cause instanceof ExecutionExtensionError) throw cause;
+  throw error;
 }
 
 function applyRequestedOutputModalities(
@@ -184,7 +276,9 @@ export class OpenAiAdapter implements CompletionAdapter {
   }: CompletionInput): Promise<CompletionResult> {
     const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
-    const openai = this.createClient(model, apiKey);
+    // A subclass may override createClient. Protected sends construct their
+    // canonical SDK client only after the final body is detached below.
+    const openai = singlePhysicalAttempt ? undefined : this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const providerMessages = translateMessagesForProvider(messages, toolNames);
     const providerTools = translateToolsForProvider(tools, toolNames);
@@ -265,14 +359,19 @@ export class OpenAiAdapter implements CompletionAdapter {
           },
           async () => {
             await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
-            const requestBody = singlePhysicalAttempt
-              ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create', body)
-              : body;
+            const prepared = singlePhysicalAttempt
+              ? prepareProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create', apiKey, body)
+              : { client: openai!, body };
             if (singlePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
-            return openai.chat.completions.create(
-              requestBody as OpenAI.Chat.ChatCompletionCreateParams,
-              singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
-            );
+            try {
+              return await prepared.client.chat.completions.create(
+                prepared.body as OpenAI.Chat.ChatCompletionCreateParams,
+                singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
+              );
+            } catch (error) {
+              if (singlePhysicalAttempt) unwrapProtectedFetchError(error);
+              throw error;
+            }
           },
         ),
         { signal, onAttempt: onProviderAttempt, ...(singlePhysicalAttempt ? { maxAttempts: 1 } : {}) }
@@ -338,7 +437,7 @@ export class OpenAiAdapter implements CompletionAdapter {
   }: CompletionInput): Promise<CompletionResult> {
     const singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(executionExtensionContext, model);
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
-    const openai = this.createClient(model, apiKey);
+    const openai = singlePhysicalAttempt ? undefined : this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
     const providerMessages = translateMessagesForProvider(messages, toolNames);
     const providerTools = translateToolsForProvider(tools, toolNames);
@@ -396,14 +495,19 @@ export class OpenAiAdapter implements CompletionAdapter {
         },
         async () => {
           await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
-          const requestBody = singlePhysicalAttempt
-            ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create(stream)', body)
-            : body;
+          const prepared = singlePhysicalAttempt
+            ? prepareProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create(stream)', apiKey, body)
+            : { client: openai!, body };
           if (singlePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
-          return openai.chat.completions.create(
-            requestBody as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-            singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
-          );
+          try {
+            return await prepared.client.chat.completions.create(
+              prepared.body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+              singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
+            );
+          } catch (error) {
+            if (singlePhysicalAttempt) unwrapProtectedFetchError(error);
+            throw error;
+          }
         },
       );
 

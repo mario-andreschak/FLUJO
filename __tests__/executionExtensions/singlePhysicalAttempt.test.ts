@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { createHash } from 'node:crypto';
+import OpenAI from 'openai';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
 import { OpenAiResponsesAdapter } from '@/backend/services/model/adapters/openaiResponsesAdapter';
 import { OpenRouterMediaAdapter } from '@/backend/services/model/adapters/openrouterMediaAdapter';
@@ -21,7 +22,7 @@ describe('authenticated single physical OpenAI attempt', () => {
   let restore: (() => void) | undefined;
   const run = () => {
     const privateRun = fixtureRun();
-    const claimModelRequest = jest.fn(async () => undefined);
+    const claimModelRequest = jest.fn(async (_context: object, _intent: ExecutionModelRequestIntent) => undefined);
     const adapter = fixtureAdapter({
       modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
       claimModelRequest,
@@ -123,6 +124,35 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(physicalRequests).toBe(1);
   });
 
+  it('does not send when the owner aborts while its final-fetch claim is pending', async () => {
+    const abort = new AbortController();
+    let ownerSignal = abort.signal;
+    let enterClaim!: () => void;
+    let releaseClaim!: () => void;
+    const claimEntered = new Promise<void>(resolve => { enterClaim = resolve; });
+    const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const claimModelRequest = jest.fn(async () => { enterClaim(); await claimGate; });
+    const owner = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+      signal: () => ownerSignal,
+    });
+    restore = registerExecutionExtension(owner);
+    const context = mintFixture(owner);
+    const pending = new OpenAiAdapter().createCompletion(input(context));
+    await claimEntered;
+    abort.abort();
+    releaseClaim();
+    // The SDK may surface its own abort error instead of the fetch guard's
+    // denial after the combined signal is already aborted.
+    await expect(pending).rejects.toThrow();
+    ownerSignal = new AbortController().signal;
+    await expect(new OpenAiAdapter().createCompletion(input(context)))
+      .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+    expect(claimModelRequest).toHaveBeenCalledTimes(1);
+    expect(physicalRequests).toBe(0);
+  });
+
   it('rejects a missing or failing owner claim before any POST', async () => {
     for (const claimModelRequest of [undefined, async () => { throw new ExecutionExtensionError('fixture_claim_denied'); }]) {
       const adapter = fixtureAdapter({
@@ -159,7 +189,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(physicalRequests).toBe(0);
   });
 
-  it('binds the final provider body digest and rejects a changed body', async () => {
+  it('binds the SDK-final URL, method, credential and body digest and rejects a changed body', async () => {
     let acceptedDigest: string | undefined;
     let postedDigest: string | undefined;
     const claimModelRequest = jest.fn(async (_context: object, intent: ExecutionModelRequestIntent) => {
@@ -186,6 +216,9 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(claimModelRequest.mock.calls[0][1]).toMatchObject({
       version: 1, operation: 'chat.completions.create',
       model: { id: 'fixture-model', name: 'fixture', provider: 'openai', adapter: 'openai', baseUrl },
+      method: 'POST', url: `${baseUrl}/chat/completions`,
+      authorizationSha256: createHash('sha256').update('Bearer loopback-fixture-not-a-provider-key').digest('hex'),
+      headersSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(acceptedDigest).toBe(postedDigest);
     const changed = input(mintFixture(adapter));
@@ -195,25 +228,199 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(physicalRequests).toBe(1);
   });
 
-  it('documents that a subclass can route away from the declared endpoint', async () => {
-    respond = (_request, response) => success(response);
-    const claimModelRequest = jest.fn(async (_context: object, _intent: ExecutionModelRequestIntent) => undefined);
+  it('bypasses an overridden createClient for protected calls while preserving ordinary overrides', async () => {
+    const paths: string[] = [];
+    respond = (request, response) => { paths.push(request.url ?? ''); success(response); };
+    let overridden = 0;
+    class ReroutedAdapter extends OpenAiAdapter {
+      protected createClient(_model: Model, apiKey: string) {
+        overridden += 1;
+        return createOpenAIClient({ apiKey, baseURL: `${baseUrl}/unapproved` });
+      }
+    }
+    const { context, claimModelRequest } = run();
+    await new ReroutedAdapter().createCompletion(input(context));
+    expect(overridden).toBe(0);
+    expect(claimModelRequest.mock.calls[0][1].url).toBe(`${baseUrl}/chat/completions`);
+    expect(physicalRequests).toBe(1);
+    expect(paths).toEqual(['/v1/chat/completions']);
+    await new ReroutedAdapter().createCompletion(input());
+    expect(overridden).toBe(1);
+    expect(physicalRequests).toBe(2);
+    expect(paths).toEqual(['/v1/chat/completions', '/v1/unapproved/chat/completions']);
+  });
+
+  it('does not inherit OPENAI_BASE_URL for a protected client', async () => {
+    respond = (request, response) => {
+      expect(request.url).toBe('/v1/chat/completions');
+      success(response);
+    };
+    const prior = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = `${baseUrl}/unapproved`;
+    try {
+      const { context, claimModelRequest } = run();
+      await new OpenAiAdapter().createCompletion(input(context));
+      expect(claimModelRequest.mock.calls[0][1].url).toBe(`${baseUrl}/chat/completions`);
+      expect(physicalRequests).toBe(1);
+    } finally {
+      if (prior === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = prior;
+    }
+  });
+
+  it('pins an omitted protected base URL to OpenAI rather than an ambient SDK URL', async () => {
+    const prior = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = `${baseUrl}/unapproved`;
+    let observed: ExecutionModelRequestIntent | undefined;
+    const claimModelRequest = jest.fn(async (_context: object, intent: ExecutionModelRequestIntent) => {
+      observed = intent;
+      throw new ExecutionExtensionError('fixture_stop_before_send');
+    });
     const owner = fixtureAdapter({
       modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
       claimModelRequest,
     });
     restore = registerExecutionExtension(owner);
-    const declared = 'https://declared.invalid/v1';
     const request = input(mintFixture(owner));
-    request.model = { ...request.model, baseUrl: declared };
-    class ReroutedAdapter extends OpenAiAdapter {
-      protected createClient(_model: Model, apiKey: string) {
-        return createOpenAIClient({ apiKey, baseURL: baseUrl });
-      }
+    request.model = { ...request.model, baseUrl: undefined };
+    try {
+      await expect(new OpenAiAdapter().createCompletion(request))
+        .rejects.toMatchObject({ code: 'fixture_stop_before_send' });
+      expect(observed?.url).toBe('https://api.openai.com/v1/chat/completions');
+      expect(claimModelRequest).toHaveBeenCalledTimes(1);
+      expect(physicalRequests).toBe(0);
+    } finally {
+      if (prior === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = prior;
     }
-    await new ReroutedAdapter().createCompletion(request);
-    expect(claimModelRequest.mock.calls[0][1].model.baseUrl).toBe(declared);
-    expect(physicalRequests).toBe(1);
+  });
+
+  it('rejects a non-loopback HTTP endpoint before claim or dispatch', async () => {
+    const { context, claimModelRequest } = run();
+    const request = input(context);
+    request.model = { ...request.model, baseUrl: 'http://remote.invalid/v1' };
+    await expect(new OpenAiAdapter().createCompletion(request))
+      .rejects.toMatchObject({ code: 'execution_model_endpoint_invalid' });
+    expect(claimModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('rejects SDK custom Authorization headers before claiming or sending', async () => {
+    const prior = process.env.OPENAI_CUSTOM_HEADERS;
+    process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer unauthorized-fixture';
+    try {
+      const { context, claimModelRequest } = run();
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+      expect(claimModelRequest).not.toHaveBeenCalled();
+      expect(physicalRequests).toBe(0);
+    } finally {
+      if (prior === undefined) delete process.env.OPENAI_CUSTOM_HEADERS;
+      else process.env.OPENAI_CUSTOM_HEADERS = prior;
+    }
+  });
+
+  it('rejects unrecognized protected routing headers before claiming or sending', async () => {
+    const prior = process.env.OPENAI_CUSTOM_HEADERS;
+    process.env.OPENAI_CUSTOM_HEADERS = 'X-Unapproved-Route: another-account';
+    try {
+      const { context, claimModelRequest } = run();
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+      expect(claimModelRequest).not.toHaveBeenCalled();
+      expect(physicalRequests).toBe(0);
+    } finally {
+      if (prior === undefined) delete process.env.OPENAI_CUSTOM_HEADERS;
+      else process.env.OPENAI_CUSTOM_HEADERS = prior;
+    }
+  });
+
+  it('lets the owner reject a changed known account header before any POST', async () => {
+    const prior = process.env.OPENAI_CUSTOM_HEADERS;
+    process.env.OPENAI_CUSTOM_HEADERS = 'OpenAI-Project: unapproved-fixture';
+    const claimModelRequest = jest.fn(async (_context: object, intent: ExecutionModelRequestIntent) => {
+      expect(intent.routingHeaderSha256.openaiProject)
+        .toBe(createHash('sha256').update('unapproved-fixture').digest('hex'));
+      if (intent.routingHeaderSha256.openaiProject !== null) {
+        throw new ExecutionExtensionError('fixture_routing_mismatch');
+      }
+    });
+    const owner = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    try {
+      await expect(new OpenAiAdapter().createCompletion(input(mintFixture(owner))))
+        .rejects.toMatchObject({ code: 'fixture_routing_mismatch' });
+      expect(claimModelRequest).toHaveBeenCalledTimes(1);
+      expect(physicalRequests).toBe(0);
+    } finally {
+      if (prior === undefined) delete process.env.OPENAI_CUSTOM_HEADERS;
+      else process.env.OPENAI_CUSTOM_HEADERS = prior;
+    }
+  });
+
+  it('lets the owner deny a different effective credential before any POST', async () => {
+    const expected = createHash('sha256').update('Bearer originally-authorized-fixture').digest('hex');
+    const claimModelRequest = jest.fn(async (_context: object, intent: ExecutionModelRequestIntent) => {
+      if (intent.authorizationSha256 !== expected) {
+        throw new ExecutionExtensionError('fixture_credential_mismatch');
+      }
+    });
+    const owner = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    const request = input(mintFixture(owner));
+    request.apiKey = 'different-fixture-key';
+    await expect(new OpenAiAdapter().createCompletion(request))
+      .rejects.toMatchObject({ code: 'fixture_credential_mismatch' });
+    expect(claimModelRequest).toHaveBeenCalledTimes(1);
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('rejects SDK-final URL and body changes before claim or network dispatch', async () => {
+    const { context, claimModelRequest } = run();
+    try {
+      const originalBuildURL = OpenAI.prototype.buildURL;
+      jest.spyOn(OpenAI.prototype, 'buildURL').mockImplementation(function (this: OpenAI, path, query, defaultBaseURL) {
+        return originalBuildURL.call(this, path, query, defaultBaseURL).replace('/chat/completions', '/unapproved');
+      });
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+      expect(claimModelRequest).not.toHaveBeenCalled();
+      expect(physicalRequests).toBe(0);
+      jest.restoreAllMocks();
+
+      const originalBuildRequest = OpenAI.prototype.buildRequest;
+      jest.spyOn(OpenAI.prototype, 'buildRequest').mockImplementation(async function (
+        this: OpenAI, ...args: Parameters<OpenAI['buildRequest']>
+      ) {
+        const result = await originalBuildRequest.apply(this, args);
+        return { ...result, req: { ...result.req, body: `${result.req.body} ` } };
+      });
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+      expect(claimModelRequest).not.toHaveBeenCalled();
+      expect(physicalRequests).toBe(0);
+      jest.restoreAllMocks();
+
+      const originalBuildRequestForUnknownBody = OpenAI.prototype.buildRequest;
+      jest.spyOn(OpenAI.prototype, 'buildRequest').mockImplementation(async function (
+        this: OpenAI, ...args: Parameters<OpenAI['buildRequest']>
+      ) {
+        const result = await originalBuildRequestForUnknownBody.apply(this, args);
+        return { ...result, req: { ...result.req, body: Buffer.from('unapproved body') } };
+      });
+      await expect(new OpenAiAdapter().createCompletion(input(context)))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+      expect(claimModelRequest).not.toHaveBeenCalled();
+      expect(physicalRequests).toBe(0);
+    } finally {
+      jest.restoreAllMocks();
+    }
   });
 
   it.each([307, 308])('does not resend an inference POST after a %i redirect', async status => {

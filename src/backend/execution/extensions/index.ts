@@ -12,12 +12,27 @@ export interface ExecutionExtensionContext { readonly [contextBrand]: true }
 /** Retry restriction only; never a grant of inference, spend or replay authority. */
 export interface ExecutionModelAttemptPolicy { version: 1; maxPhysicalAttempts: 1 }
 export type ExecutionModelIdentity = Pick<Model, 'id' | 'name' | 'adapter' | 'provider' | 'baseUrl'>;
-/** The final provider-native JSON body is hashed before its one allowed SDK call. */
+/** The SDK-final request is observed at its fetch seam. The owner must compare
+ * URL, method, body, credential and routing projection with original authority. */
 export interface ExecutionModelRequestIntent {
   version: 1;
   operation: 'chat.completions.create' | 'chat.completions.create(stream)';
   model: ExecutionModelIdentity;
+  method: 'POST';
+  url: string;
   bodySha256: string;
+  /** Digest of the effective Authorization header; never the credential itself. */
+  authorizationSha256: string;
+  /** SHA-256 of JSON-encoded, lower-case, name-sorted SDK-final header pairs. */
+  headersSha256: string;
+  /** Closed routing/account header projection; null means absent. Values are
+   * digests, not raw environment or credential material. */
+  routingHeaderSha256: {
+    openaiOrganization: string | null;
+    openaiProject: string | null;
+    httpReferer: string | null;
+    xTitle: string | null;
+  };
 }
 const errorRoot = globalThis as typeof globalThis & { __flujoExecutionExtensionErrors?: WeakSet<object> };
 const trustedErrors = errorRoot.__flujoExecutionExtensionErrors ??= new WeakSet<object>();
