@@ -25,6 +25,19 @@ export function assertImageContext(env, sha, version) {
   }
 }
 
+function requiredImageLabels(sha, version) {
+  return { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
+    'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
+    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+    'io.flujo.worker.snapshot-source': '1' };
+}
+
+function assertImageLabels(actual, sha, version, subject) {
+  for (const [key, value] of Object.entries(requiredImageLabels(sha, version))) {
+    if (actual?.[key] !== value) throw new Error(`${subject} has an incorrect ${key} label.`);
+  }
+}
+
 export function inspectTestedImage(run, imageId, sha, version) {
   if (!DIGEST.test(imageId) || !SHA.test(sha) || !VERSION.test(version)) throw new Error('Invalid tested image/source identity.');
   const images = JSON.parse(run('docker', ['image', 'inspect', imageId]));
@@ -32,13 +45,8 @@ export function inspectTestedImage(run, imageId, sha, version) {
   if (images.length !== 1 || image?.Id !== imageId || image.Os !== 'linux' || image.Architecture !== 'amd64' || image.Config?.User !== 'node') {
     throw new Error('Tested image must be a single Linux/amd64 image running as node.');
   }
-  const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
-    'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
-    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
-    'io.flujo.worker.snapshot-source': '1' };
-  for (const [key, value] of Object.entries(labels)) {
-    if (image.Config.Labels?.[key] !== value) throw new Error(`Tested image has an incorrect ${key} label.`);
-  }
+  const labels = requiredImageLabels(sha, version);
+  assertImageLabels(image.Config.Labels, sha, version, 'Tested image');
   return { imageId, platform: 'linux/amd64', user: 'node', labels };
 }
 
@@ -137,6 +145,7 @@ export function validateImageEvidence({ directory, sha, version, sourceLock, exp
       || (evidence.workflow?.ref && (evidence.workflow.ref !== `${WORKFLOW}@refs/heads/main` || evidence.workflow.sha !== sha))) {
     throw new Error('Image evidence differs from the requested source or tested inventory.');
   }
+  assertImageLabels(evidence.labels, sha, version, 'Image evidence');
   return evidence;
 }
 
