@@ -1,0 +1,918 @@
+{
+  "schemaVersion": 1,
+  "kind": "same-host-windows-filesystem-runtime-comparison",
+  "createdAt": "2026-10-04T04:18:36.947Z",
+  "host": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-04T04:18:11.8951015+00:00",
+    "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+    "expectedSourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+    "repository": "mario-andreschak/FLUJO",
+    "runId": "37176590984",
+    "runAttempt": "1",
+    "runnerLabel": "windows-2025",
+    "imageOS": "win25-vs2026",
+    "imageVersion": "20260925.250.1",
+    "operatingSystem": {
+      "caption": "Microsoft Windows Server 2025 Datacenter",
+      "version": "10.0.26100",
+      "buildNumber": "26100",
+      "architecture": "64-bit"
+    }
+  },
+  "hostSha256": "e3d3818135d6f990b0c77832823833ce784efd52551db3e16f2d2203c68b0431",
+  "errors": [],
+  "cases": [
+    {
+      "expectedNode": "22.13.1",
+      "errors": [
+        "Probe exited unsuccessfully; mismatch remains a failure.\n\n1 !== 0\n"
+      ],
+      "record": {
+        "schemaVersion": 1,
+        "kind": "captured-owned-temporary-file-identity-probe",
+        "startedAt": "2026-10-04T04:18:23.355Z",
+        "completedAt": "2026-10-04T04:18:23.502Z",
+        "expectedNode": "22.13.1",
+        "runtime": {
+          "node": "v22.13.1",
+          "libuv": "1.49.2",
+          "platform": "win32",
+          "architecture": "x64"
+        },
+        "probeSha256": "72c1901b7214c3454427c4d189ccb634a62ed93b0f304d7d0051734d4be1b56c",
+        "recorderSha256": "2e7e9580e17df4d629a5f04d908047f7d048ea20bccb8fb6098db1bca6c70b8c",
+        "nodeExecutableSha256": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16",
+        "child": {
+          "exitCode": 1,
+          "signal": null,
+          "error": null
+        },
+        "stdout": {
+          "file": "stdout.json",
+          "bytes": 10390,
+          "sha256": "8c6bd20d3f26e0ed43c9edf18b63675e00fb9cf1a46381a9265e9fa1bcebb014"
+        },
+        "stderr": {
+          "file": "stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "payloadParseError": null,
+        "identityContractSatisfied": false,
+        "cleanupCompleted": true,
+        "installedStartupQualified": false
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "owned-temporary-file-identity-contract",
+        "createdAt": "2026-10-04T04:18:23.492Z",
+        "runtime": {
+          "node": "v22.13.1",
+          "libuv": "1.49.2",
+          "platform": "win32",
+          "architecture": "x64",
+          "osRelease": "10.0.26100",
+          "osVersion": "Windows Server 2025 Datacenter"
+        },
+        "samples": [
+          {
+            "index": 0,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "1125899907179928",
+              "size": "15",
+              "mtimeNs": "1791087503413992000",
+              "ctimeNs": "1791087503413992000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "1125899907179928",
+              "size": "15",
+              "mtimeNs": "1791087503413992000",
+              "ctimeNs": "1791087503413992000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "1125899907179928",
+              "size": "15",
+              "mtimeNs": "1791087503413992000",
+              "ctimeNs": "1791087503413992000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "1125899907179928",
+              "size": "15",
+              "mtimeNs": "1791087503413992000",
+              "ctimeNs": "1791087503413992000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "1125899907179928",
+              "size": "15",
+              "mtimeNs": "1791087503413992000",
+              "ctimeNs": "1791087503413992000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          },
+          {
+            "index": 1,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "1125899907180091",
+              "size": "15",
+              "mtimeNs": "1791087503423016300",
+              "ctimeNs": "1791087503423016300",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "1125899907180091",
+              "size": "15",
+              "mtimeNs": "1791087503423016300",
+              "ctimeNs": "1791087503423016300",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "1125899907180091",
+              "size": "15",
+              "mtimeNs": "1791087503423016300",
+              "ctimeNs": "1791087503423016300",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "1125899907180091",
+              "size": "15",
+              "mtimeNs": "1791087503423016300",
+              "ctimeNs": "1791087503423016300",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "1125899907180091",
+              "size": "15",
+              "mtimeNs": "1791087503423016300",
+              "ctimeNs": "1791087503423016300",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          },
+          {
+            "index": 2,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930470296",
+              "size": "15",
+              "mtimeNs": "1791087503438867600",
+              "ctimeNs": "1791087503438867600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "844424930470296",
+              "size": "15",
+              "mtimeNs": "1791087503438867600",
+              "ctimeNs": "1791087503438867600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "844424930470296",
+              "size": "15",
+              "mtimeNs": "1791087503438867600",
+              "ctimeNs": "1791087503438867600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930470296",
+              "size": "15",
+              "mtimeNs": "1791087503438867600",
+              "ctimeNs": "1791087503438867600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "844424930470296",
+              "size": "15",
+              "mtimeNs": "1791087503438867600",
+              "ctimeNs": "1791087503438867600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          },
+          {
+            "index": 3,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930470470",
+              "size": "15",
+              "mtimeNs": "1791087503452952200",
+              "ctimeNs": "1791087503452952200",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "844424930470470",
+              "size": "15",
+              "mtimeNs": "1791087503452952200",
+              "ctimeNs": "1791087503452952200",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "844424930470470",
+              "size": "15",
+              "mtimeNs": "1791087503452952200",
+              "ctimeNs": "1791087503452952200",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930470470",
+              "size": "15",
+              "mtimeNs": "1791087503452952200",
+              "ctimeNs": "1791087503452952200",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "844424930470470",
+              "size": "15",
+              "mtimeNs": "1791087503452952200",
+              "ctimeNs": "1791087503452952200",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          },
+          {
+            "index": 4,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930471035",
+              "size": "15",
+              "mtimeNs": "1791087503466776600",
+              "ctimeNs": "1791087503466776600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "844424930471035",
+              "size": "15",
+              "mtimeNs": "1791087503466776600",
+              "ctimeNs": "1791087503466776600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "844424930471035",
+              "size": "15",
+              "mtimeNs": "1791087503466776600",
+              "ctimeNs": "1791087503466776600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930471035",
+              "size": "15",
+              "mtimeNs": "1791087503466776600",
+              "ctimeNs": "1791087503466776600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "844424930471035",
+              "size": "15",
+              "mtimeNs": "1791087503466776600",
+              "ctimeNs": "1791087503466776600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          },
+          {
+            "index": 5,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930471569",
+              "size": "15",
+              "mtimeNs": "1791087503480599100",
+              "ctimeNs": "1791087503480599100",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "0",
+              "ino": "844424930471569",
+              "size": "15",
+              "mtimeNs": "1791087503480599100",
+              "ctimeNs": "1791087503480599100",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "0",
+              "ino": "844424930471569",
+              "size": "15",
+              "mtimeNs": "1791087503480599100",
+              "ctimeNs": "1791087503480599100",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "844424930471569",
+              "size": "15",
+              "mtimeNs": "1791087503480599100",
+              "ctimeNs": "1791087503480599100",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "0",
+              "ino": "844424930471569",
+              "size": "15",
+              "mtimeNs": "1791087503480599100",
+              "ctimeNs": "1791087503480599100",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [
+              "dev"
+            ],
+            "readerDifferences": [
+              "dev"
+            ],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": false
+          }
+        ],
+        "identityContractSatisfied": false,
+        "cleanupCompleted": true,
+        "existingUserFilesRead": false,
+        "productionAdmissionChanged": false,
+        "installedStartupQualified": false
+      }
+    },
+    {
+      "expectedNode": "22.17.0",
+      "errors": [],
+      "record": {
+        "schemaVersion": 1,
+        "kind": "captured-owned-temporary-file-identity-probe",
+        "startedAt": "2026-10-04T04:18:36.217Z",
+        "completedAt": "2026-10-04T04:18:36.400Z",
+        "expectedNode": "22.17.0",
+        "runtime": {
+          "node": "v22.17.0",
+          "libuv": "1.51.0",
+          "platform": "win32",
+          "architecture": "x64"
+        },
+        "probeSha256": "72c1901b7214c3454427c4d189ccb634a62ed93b0f304d7d0051734d4be1b56c",
+        "recorderSha256": "2e7e9580e17df4d629a5f04d908047f7d048ea20bccb8fb6098db1bca6c70b8c",
+        "nodeExecutableSha256": "39d45b5933f339d3ebdebd76474893dab5d7da1038920f65cf5bbcf0f20f3636",
+        "child": {
+          "exitCode": 0,
+          "signal": null,
+          "error": null
+        },
+        "stdout": {
+          "file": "stdout.json",
+          "bytes": 10265,
+          "sha256": "f6e7a9f107058d068b7a20ff10c9c5d4b7a685ebdf40f65baf9fba7d4a5a5db7"
+        },
+        "stderr": {
+          "file": "stderr.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "payloadParseError": null,
+        "identityContractSatisfied": true,
+        "cleanupCompleted": true,
+        "installedStartupQualified": false
+      },
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "owned-temporary-file-identity-contract",
+        "createdAt": "2026-10-04T04:18:36.391Z",
+        "runtime": {
+          "node": "v22.17.0",
+          "libuv": "1.51.0",
+          "platform": "win32",
+          "architecture": "x64",
+          "osRelease": "10.0.26100",
+          "osVersion": "Windows Server 2025 Datacenter"
+        },
+        "samples": [
+          {
+            "index": 0,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954784844",
+              "size": "15",
+              "mtimeNs": "1791087516278673800",
+              "ctimeNs": "1791087516278673800",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "562949954784844",
+              "size": "15",
+              "mtimeNs": "1791087516278673800",
+              "ctimeNs": "1791087516278673800",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "562949954784844",
+              "size": "15",
+              "mtimeNs": "1791087516278673800",
+              "ctimeNs": "1791087516278673800",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954784844",
+              "size": "15",
+              "mtimeNs": "1791087516278673800",
+              "ctimeNs": "1791087516278673800",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "562949954784844",
+              "size": "15",
+              "mtimeNs": "1791087516278673800",
+              "ctimeNs": "1791087516278673800",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          },
+          {
+            "index": 1,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954785264",
+              "size": "15",
+              "mtimeNs": "1791087516299306900",
+              "ctimeNs": "1791087516299306900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "562949954785264",
+              "size": "15",
+              "mtimeNs": "1791087516299306900",
+              "ctimeNs": "1791087516299306900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "562949954785264",
+              "size": "15",
+              "mtimeNs": "1791087516299306900",
+              "ctimeNs": "1791087516299306900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954785264",
+              "size": "15",
+              "mtimeNs": "1791087516299306900",
+              "ctimeNs": "1791087516299306900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "562949954785264",
+              "size": "15",
+              "mtimeNs": "1791087516299306900",
+              "ctimeNs": "1791087516299306900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          },
+          {
+            "index": 2,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954785265",
+              "size": "15",
+              "mtimeNs": "1791087516351837000",
+              "ctimeNs": "1791087516351837000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "562949954785265",
+              "size": "15",
+              "mtimeNs": "1791087516351837000",
+              "ctimeNs": "1791087516351837000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "562949954785265",
+              "size": "15",
+              "mtimeNs": "1791087516351837000",
+              "ctimeNs": "1791087516351837000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "562949954785265",
+              "size": "15",
+              "mtimeNs": "1791087516351837000",
+              "ctimeNs": "1791087516351837000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "562949954785265",
+              "size": "15",
+              "mtimeNs": "1791087516351837000",
+              "ctimeNs": "1791087516351837000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          },
+          {
+            "index": 3,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074610",
+              "size": "15",
+              "mtimeNs": "1791087516361895000",
+              "ctimeNs": "1791087516361895000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "281474978074610",
+              "size": "15",
+              "mtimeNs": "1791087516361895000",
+              "ctimeNs": "1791087516361895000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "281474978074610",
+              "size": "15",
+              "mtimeNs": "1791087516361895000",
+              "ctimeNs": "1791087516361895000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074610",
+              "size": "15",
+              "mtimeNs": "1791087516361895000",
+              "ctimeNs": "1791087516361895000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "281474978074610",
+              "size": "15",
+              "mtimeNs": "1791087516361895000",
+              "ctimeNs": "1791087516361895000",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          },
+          {
+            "index": 4,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074611",
+              "size": "15",
+              "mtimeNs": "1791087516369683900",
+              "ctimeNs": "1791087516369683900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "281474978074611",
+              "size": "15",
+              "mtimeNs": "1791087516369683900",
+              "ctimeNs": "1791087516369683900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "281474978074611",
+              "size": "15",
+              "mtimeNs": "1791087516369683900",
+              "ctimeNs": "1791087516369683900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074611",
+              "size": "15",
+              "mtimeNs": "1791087516369683900",
+              "ctimeNs": "1791087516369683900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "281474978074611",
+              "size": "15",
+              "mtimeNs": "1791087516369683900",
+              "ctimeNs": "1791087516369683900",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          },
+          {
+            "index": 5,
+            "writableDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074612",
+              "size": "15",
+              "mtimeNs": "1791087516379746600",
+              "ctimeNs": "1791087516379746600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "namedWhileOpen": {
+              "dev": "742408122",
+              "ino": "281474978074612",
+              "size": "15",
+              "mtimeNs": "1791087516379746600",
+              "ctimeNs": "1791087516379746600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedNamed": {
+              "dev": "742408122",
+              "ino": "281474978074612",
+              "size": "15",
+              "mtimeNs": "1791087516379746600",
+              "ctimeNs": "1791087516379746600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerDescriptor": {
+              "dev": "742408122",
+              "ino": "281474978074612",
+              "size": "15",
+              "mtimeNs": "1791087516379746600",
+              "ctimeNs": "1791087516379746600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "readerNamed": {
+              "dev": "742408122",
+              "ino": "281474978074612",
+              "size": "15",
+              "mtimeNs": "1791087516379746600",
+              "ctimeNs": "1791087516379746600",
+              "mode": "33206",
+              "uid": "0",
+              "gid": "0",
+              "nlink": "1"
+            },
+            "closedBindingDifferences": [],
+            "readerDifferences": [],
+            "allRegularSingleLink": true,
+            "diagnosticLow32DeviceRelation": true
+          }
+        ],
+        "identityContractSatisfied": true,
+        "cleanupCompleted": true,
+        "existingUserFilesRead": false,
+        "productionAdmissionChanged": false,
+        "installedStartupQualified": false
+      }
+    }
+  ],
+  "identityContractSatisfiedForBoth": false,
+  "productionAdmissionChanged": false,
+  "installedStartupQualified": false
+}

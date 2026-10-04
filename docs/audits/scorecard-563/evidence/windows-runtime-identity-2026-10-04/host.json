@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-04T04:18:11.8951015+00:00",
+  "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+  "expectedSourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+  "repository": "mario-andreschak/FLUJO",
+  "runId": "37176590984",
+  "runAttempt": "1",
+  "runnerLabel": "windows-2025",
+  "imageOS": "win25-vs2026",
+  "imageVersion": "20260925.250.1",
+  "operatingSystem": {
+    "caption": "Microsoft Windows Server 2025 Datacenter",
+    "version": "10.0.26100",
+    "buildNumber": "26100",
+    "architecture": "64-bit"
+  }
+}

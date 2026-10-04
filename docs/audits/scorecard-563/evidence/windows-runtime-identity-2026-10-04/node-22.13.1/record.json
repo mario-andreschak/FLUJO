@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "captured-owned-temporary-file-identity-probe",
+  "startedAt": "2026-10-04T04:18:23.355Z",
+  "completedAt": "2026-10-04T04:18:23.502Z",
+  "expectedNode": "22.13.1",
+  "runtime": {
+    "node": "v22.13.1",
+    "libuv": "1.49.2",
+    "platform": "win32",
+    "architecture": "x64"
+  },
+  "probeSha256": "72c1901b7214c3454427c4d189ccb634a62ed93b0f304d7d0051734d4be1b56c",
+  "recorderSha256": "2e7e9580e17df4d629a5f04d908047f7d048ea20bccb8fb6098db1bca6c70b8c",
+  "nodeExecutableSha256": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16",
+  "child": {
+    "exitCode": 1,
+    "signal": null,
+    "error": null
+  },
+  "stdout": {
+    "file": "stdout.json",
+    "bytes": 10390,
+    "sha256": "8c6bd20d3f26e0ed43c9edf18b63675e00fb9cf1a46381a9265e9fa1bcebb014"
+  },
+  "stderr": {
+    "file": "stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "payloadParseError": null,
+  "identityContractSatisfied": false,
+  "cleanupCompleted": true,
+  "installedStartupQualified": false
+}

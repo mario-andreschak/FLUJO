@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T04:24:52.161Z",
+  "pullRequest": "https://github.com/mario-andreschak/FLUJO/pull/710",
+  "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+  "reviewedProbePrerequisite": "be939bc8f2e50e2f3e97357a4d2160b93fedd48b",
+  "run": {
+    "id": 37176590984,
+    "attempt": 1,
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "failure",
+    "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37176590984",
+    "workflowPath": ".github/workflows/windows-filesystem-identity.yml",
+    "jobId": 111360360300
+  },
+  "artifact": {
+    "id": 11293127563,
+    "name": "windows-filesystem-identity-8f09bfc177683ce34c95c09af22d83b17f423743-37176590984-1",
+    "reportedDigest": "sha256:297bcf2cdc3658e3462e11c45fd030287593a44f77ee39f79d1dcb33a5e6e0c1",
+    "downloadedZipBytes": 6336,
+    "downloadedZipSha256": "297bcf2cdc3658e3462e11c45fd030287593a44f77ee39f79d1dcb33a5e6e0c1",
+    "reportedDigestIndependentlyMatched": true
+  },
+  "host": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-04T04:18:11.8951015+00:00",
+    "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+    "expectedSourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+    "repository": "mario-andreschak/FLUJO",
+    "runId": "37176590984",
+    "runAttempt": "1",
+    "runnerLabel": "windows-2025",
+    "imageOS": "win25-vs2026",
+    "imageVersion": "20260925.250.1",
+    "operatingSystem": {
+      "caption": "Microsoft Windows Server 2025 Datacenter",
+      "version": "10.0.26100",
+      "buildNumber": "26100",
+      "architecture": "64-bit"
+    }
+  },
+  "sourceIdentities": [
+    {
+      "file": "scripts/probe-filesystem-identity.mjs",
+      "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+      "committedBlobSha256": "df5beac25778bfcf158a57f93963049ea1f3d3609fc8051af0ff064f51d3de40",
+      "executedBytesSha256": "72c1901b7214c3454427c4d189ccb634a62ed93b0f304d7d0051734d4be1b56c",
+      "gitCheckoutLineEnding": "CRLF"
+    },
+    {
+      "file": "scripts/record-filesystem-identity-probe.mjs",
+      "sourceRevision": "8f09bfc177683ce34c95c09af22d83b17f423743",
+      "committedBlobSha256": "ea0bc0ba72952f8b9ff5262c0a3e4f132eca5c85c8bc41e0cb9d3923725d19e2",
+      "executedBytesSha256": "2e7e9580e17df4d629a5f04d908047f7d048ea20bccb8fb6098db1bca6c70b8c",
+      "gitCheckoutLineEnding": "CRLF"
+    }
+  ],
+  "inventory": [
+    {
+      "file": "host.json",
+      "bytes": 590,
+      "sha256": "e3d3818135d6f990b0c77832823833ce784efd52551db3e16f2d2203c68b0431"
+    },
+    {
+      "file": "comparison.json",
+      "bytes": 29335,
+      "sha256": "e7fda11c6e15693b6673c952162844cf921c81e3427d7b5a7f78db77af730d93"
+    },
+    {
+      "file": "node-22.13.1/stdout.json",
+      "bytes": 10390,
+      "sha256": "8c6bd20d3f26e0ed43c9edf18b63675e00fb9cf1a46381a9265e9fa1bcebb014"
+    },
+    {
+      "file": "node-22.13.1/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "node-22.13.1/record.json",
+      "bytes": 1082,
+      "sha256": "acf5b74b75d612f066470d8bac194a6391741bb6d964be86c42b0c74efbbfb6c"
+    },
+    {
+      "file": "node-22.17.0/stdout.json",
+      "bytes": 10265,
+      "sha256": "f6e7a9f107058d068b7a20ff10c9c5d4b7a685ebdf40f65baf9fba7d4a5a5db7"
+    },
+    {
+      "file": "node-22.17.0/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "node-22.17.0/record.json",
+      "bytes": 1081,
+      "sha256": "2dd02a725c917a374527d191a69df446c7356b4da12290142224d3f09d03c618"
+    }
+  ],
+  "results": [
+    {
+      "node": "22.13.1",
+      "libuv": "1.49.2",
+      "nodeExecutableSha256": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16",
+      "childExitCode": 1,
+      "identityContractSatisfied": false,
+      "sampleCount": 6,
+      "cleanupCompleted": true,
+      "deviceValues": [
+        {
+          "index": 0,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        },
+        {
+          "index": 1,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        },
+        {
+          "index": 2,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        },
+        {
+          "index": 3,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        },
+        {
+          "index": 4,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        },
+        {
+          "index": 5,
+          "writableDescriptor": "742408122",
+          "closedNamed": "0",
+          "readerDescriptor": "742408122",
+          "readerNamed": "0",
+          "closedBindingDifferences": [
+            "dev"
+          ],
+          "readerDifferences": [
+            "dev"
+          ]
+        }
+      ]
+    },
+    {
+      "node": "22.17.0",
+      "libuv": "1.51.0",
+      "nodeExecutableSha256": "39d45b5933f339d3ebdebd76474893dab5d7da1038920f65cf5bbcf0f20f3636",
+      "childExitCode": 0,
+      "identityContractSatisfied": true,
+      "sampleCount": 6,
+      "cleanupCompleted": true,
+      "deviceValues": [
+        {
+          "index": 0,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        },
+        {
+          "index": 1,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        },
+        {
+          "index": 2,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        },
+        {
+          "index": 3,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        },
+        {
+          "index": 4,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        },
+        {
+          "index": 5,
+          "writableDescriptor": "742408122",
+          "closedNamed": "742408122",
+          "readerDescriptor": "742408122",
+          "readerNamed": "742408122",
+          "closedBindingDifferences": [],
+          "readerDifferences": []
+        }
+      ]
+    }
+  ],
+  "diagnosticConclusion": "Same-host native temporary-file contract fails for Node 22.13.1 and succeeds for Node 22.17.0. The job remains failed because the older-runtime mismatch was preserved.",
+  "limitations": [
+    "Only newly created temporary files were probed; no installed application or workspace snapshot was executed.",
+    "The two Node releases contain multiple changes; this result does not isolate an upstream commit as the sole cause.",
+    "No production guard, supported runtime requirement, required verification check, or release was changed.",
+    "Independent human acceptance and Engineering A- remain pending."
+  ]
+}
