@@ -53,7 +53,7 @@ it('indexes the checked descriptor when a rename replaces the pathname before re
     closes.push(close);
     if (args[0] === snapshotPath) {
       const stat = handle.stat.bind(handle);
-      handle.stat = jest.fn(async () => {
+      jest.spyOn(handle, 'stat').mockImplementation(async () => {
         const checked = await stat();
         checkedSize = checked.size;
         if (!replaced) {
@@ -64,7 +64,7 @@ it('indexes the checked descriptor when a rename replaces the pathname before re
           await fs.rename(replacementPath, snapshotPath);
         }
         return checked;
-      }) as typeof handle.stat;
+      });
     }
     return handle;
   });

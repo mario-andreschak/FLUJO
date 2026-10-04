@@ -93,13 +93,15 @@ it('bounds a file grown after fstat to 4097 bytes and closes on rejection', asyn
   jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
     const handle = await open(...args);
     const read = handle.read.bind(handle);
-    handle.read = jest.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+    jest.spyOn(handle, 'read').mockImplementation(async (...args: unknown[]) => {
+      // The bounded reader uses this four-argument overload, not read(options).
+      const [buffer, offset, length, position] = args as [Buffer, number, number, number];
       await fs.appendFile(marker, ' '.repeat(8192));
       maximumRead = Math.max(maximumRead, length);
       const result = await read(buffer, offset, length, position);
       totalRead += result.bytesRead;
       return result;
-    }) as typeof handle.read;
+    });
     close = jest.fn(handle.close.bind(handle));
     handle.close = close;
     return handle;
