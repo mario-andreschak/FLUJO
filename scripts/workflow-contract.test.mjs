@@ -39,6 +39,9 @@ for (const [label, change] of [
   ['lost shell failure propagation', (files) => { delete files['verify.yml'].jobs['production-build'].steps.find((step) => step.name?.endsWith('on Node 24.2.0')).shell; }],
   ['increased production heap', (files) => { files['verify.yml'].jobs['production-build'].env = { NODE_OPTIONS: '--max-old-space-size=8192' }; }],
   ['missing runtime evidence retention', (files) => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter((step) => step.name !== 'Retain exact runtime measurements'); }],
+  ['omitted canonical runtime fixtures', (files) => { files['verify.yml'].jobs['workflow-contract'].steps.find((step) => step.run?.startsWith('node --test')).run = files['verify.yml'].jobs['workflow-contract'].steps.find((step) => step.run?.startsWith('node --test')).run.replace(' scripts/node-runtime.test.mjs', ''); }],
+  ['filtered canonical runtime fixtures', (files) => { files['verify.yml'].jobs['workflow-contract'].steps.find((step) => step.run?.startsWith('node --test')).run += ' --test-name-pattern=embedding'; }],
+  ['tolerated canonical runtime failure', (files) => { files['verify.yml'].jobs['workflow-contract'].steps.find((step) => step.run?.startsWith('node --test')).run += ' || true'; }],
   ['unverified selected checkout', (files) => { files['persona-browser-journey.yml'].jobs.journey.steps.find((step) => step.uses?.startsWith('actions/checkout@')).with.ref = '${{ inputs.commit_sha }}'; }],
   ['selected-release cache', (files) => { files['persona-browser-journey.yml'].jobs.journey.steps.find((step) => step.uses?.startsWith('actions/setup-node@')).with.cache = 'npm'; }],
   ['late selected-source guard', (files) => {
