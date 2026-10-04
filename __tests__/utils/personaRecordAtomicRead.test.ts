@@ -160,7 +160,10 @@ it('rejects a nonregular replacement without accepting any bytes', async () => {
   expect(counts.read).toBe(0);
 });
 it.each(['ordinary', 'junction'] as const)('refuses a replaced %s parent rather than retrying through it', async kind => {
+  let changed = false;
   const counts = opens(async () => {
+    if (changed) return;
+    changed = true;
     const parent = path.dirname(file);
     await fs.rename(parent, path.join(root, 'saved-parent'));
     if (kind === 'junction') {
