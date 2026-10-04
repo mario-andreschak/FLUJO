@@ -132,9 +132,10 @@ export async function configureFeatureServers(request, selected) {
     ...await verifyFeatureServerSelection(request, expectedNames) };
 }
 
-export async function createFeatureBrowserEnvironment({ applicationRoot, port = 0 } = {}) {
+export async function createFeatureBrowserEnvironment({ applicationRoot, port = 0, initialConnections = 'seeded' } = {}) {
   if (!applicationRoot) throw new Error('Set FEATURE_BROWSER_APP_DIR to the coordinator-selected compiled candidate.');
   if (!Number.isInteger(port) || (port !== 0 && (port < 1024 || port > 65535))) throw new Error('Invalid feature browser port.');
+  if (!['seeded', 'ui'].includes(initialConnections)) throw new Error('Expected seeded or ui initial connections.');
   const candidate = await inspectCandidateRoot(applicationRoot);
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-feature-browser-'));
   let fixture;
@@ -146,7 +147,7 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
   let serverSelection;
   let closed = false;
   const snapshot = () => ({ scope: 'automated browser observations in disposable anonymous loopback profile',
-    ...candidate, dataDir, baseURL, sandboxPort, epoch: owned ? { ...owned.epoch } : null, fixture: fixture?.state.snapshot() ?? null,
+    ...candidate, initialConnections, dataDir, baseURL, sandboxPort, epoch: owned ? { ...owned.epoch } : null, fixture: fixture?.state.snapshot() ?? null,
     serverSelection,
     limitations: ['Artifact/source correspondence not verified by this runner.', 'Not human, real-provider, private/shared-profile or full feature-matrix acceptance.'] });
   const request = async (route, body, timeoutMs = 15000, method = body === undefined ? 'GET' : 'POST') => {
@@ -163,8 +164,8 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
     serverSelection = await configureFeatureServers(request, selected);
     return serverSelection;
   };
-  const verifyServerSelection = async () => {
-    serverSelection = { ...serverSelection, ...await verifyFeatureServerSelection(request, serverSelection.expectedEnabledNames) };
+  const verifyServerSelection = async (expectedNames = serverSelection.expectedEnabledNames) => {
+    serverSelection = { ...serverSelection, ...await verifyFeatureServerSelection(request, expectedNames) };
     return serverSelection;
   };
   async function close() {
@@ -210,9 +211,11 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
     }
     if (!ready) throw new Error('Owned disposable candidate did not become API-ready.');
     const configs = {};
-    for (const [name, transport, endpoint] of [['Feature HTTP fixture', 'streamable', '/mcp'], ['Feature SSE fixture', 'sse', '/sse']]) {
-      configs[name] = { name, transport, serverUrl: `${fixture.url}${endpoint}`, headers: {}, env: {}, disabled: false,
-        enableMcpApps: true, rootPath: '', _buildCommand: '', _installCommand: '' };
+    if (initialConnections === 'seeded') {
+      for (const [name, transport, endpoint] of [['Feature HTTP fixture', 'streamable', '/mcp'], ['Feature SSE fixture', 'sse', '/sse']]) {
+        configs[name] = { name, transport, serverUrl: `${fixture.url}${endpoint}`, headers: {}, env: {}, disabled: false,
+          enableMcpApps: true, rootPath: '', _buildCommand: '', _installCommand: '' };
+      }
     }
     await configureServers(configs);
     await fs.writeFile(path.join(dataDir, 'environment-start.json'), JSON.stringify(snapshot(), null, 2));

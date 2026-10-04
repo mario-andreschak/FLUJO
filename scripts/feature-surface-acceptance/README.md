@@ -222,3 +222,46 @@ candidate. Record real provider/tool journeys and existing-user regressions.
 These steps need additional equipment/participants and are not asserted by the
 fixture. External reassessment must evaluate the full #563/#564 profile before
 Feature surface can be accepted at A-.
+
+## UI-created connection checks
+
+The separate first-use equipment starts a fresh profile with no selected
+fixture configuration. It joins backend startup and disables existing defaults
+through the typed API, then uses **Connect App → I have connection details →
+At a remote URL → Configure manually**. It enters the server name and URL
+through their associated visible labels, performs the actual connection test,
+saves through the UI, reloads, inspects all 128 tools and explicitly tests tool
+128 once. HTTP and legacy SSE each have desktop and 360px cases. No fixture
+entry is saved through the setup API in this mode.
+
+```powershell
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/identified/compiled-or-installed/flujo-ai'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'declared-source-identity-not-an-attestation'
+node node_modules/@playwright/test/cli.js test --config=playwright.features-first-use.config.mjs
+```
+
+Run only against the coordinator-selected candidate containing the connection
+label correction and the supported manual setup route. Record the exact
+artifact/install provenance separately: metadata inspection and a declared
+source environment variable do not establish that correspondence. Retain the
+per-step fixture receipts, saved transport/URL, screenshot, browser errors and
+owned process exit/pipe-drain report. Keep any failure instead of changing the
+assertions or retry policy. The four cases are additional checks; they do not
+replace the existing retention, language, public-form or transport matrix.
+
+The default browser environment still seeds the two fixture entries for the
+existing retention suite. `initialConnections: 'ui'` selects the new no-fixture
+setup, and its receipt identifies that mode. Changing the verifier's expected
+server names after a UI save reads actual enabled configurations; it does not
+save or repair the connection.
+
+The source correction associates six existing visible labels with their inputs:
+server name/root path, run command, WebSocket URL, configured HTTP/SSE URL and
+the remote URL. IDs remain unique across repeated forms. Rendered source
+checks cover label association, editing without connection/save callbacks and
+the seven existing translations. These checks are not an actual screen-reader
+session or human linguistic review. Browser collection with `--list` confirms
+four planned cases and starts no browser; it does not count as their execution.
+The actual browser runs remain required on identified candidate bytes. This
+synthetic echo journey does not provide a real model, agent, external-client,
+upgrade, consenting novice or independently reassessed A- result.

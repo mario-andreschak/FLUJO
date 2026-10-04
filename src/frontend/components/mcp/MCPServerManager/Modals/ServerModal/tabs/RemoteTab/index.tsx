@@ -24,6 +24,7 @@ const RemoteTab: React.FC<TabProps> = ({
   onHandoff
 }) => {
   const { t } = useI18n();
+  const urlId = React.useId();
   const [url, setUrl] = useState<string>('');
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
@@ -170,10 +171,11 @@ const RemoteTab: React.FC<TabProps> = ({
         </Typography>
 
         <Box>
-          <Typography variant="subtitle2" gutterBottom>
+          <Typography component="label" htmlFor={urlId} variant="subtitle2" gutterBottom sx={{ display: 'block' }}>
             {t('mcp.remote.url')}
           </Typography>
           <TextField
+            id={urlId}
             fullWidth
             size="small"
             value={url}

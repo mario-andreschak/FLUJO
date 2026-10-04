@@ -218,3 +218,4 @@ next-env.d.ts
 /playwright-report/
 /persona-browser-artifacts/
 /feature-browser-artifacts/
+/feature-first-use-artifacts/

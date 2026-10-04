@@ -59,6 +59,9 @@ test('missing candidate and invalid ports fail before process/profile creation',
   for (const port of [-1, 1, 65536, 1.5, '4317']) {
     await assert.rejects(createFeatureBrowserEnvironment({ applicationRoot: 'unused', port }), /Invalid feature browser port/);
   }
+  for (const initialConnections of [null, false, 'unknown']) {
+    await assert.rejects(createFeatureBrowserEnvironment({ applicationRoot: 'unused', initialConnections }), /initial connections/);
+  }
 });
 
 test('server selection waits for startup, uses typed disable updates and retains disabled configurations', async () => {
