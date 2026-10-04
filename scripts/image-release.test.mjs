@@ -396,10 +396,10 @@ test('source probe isolates defaults without changing the caller configuration',
 });
 
 test('the build gate requires source proof for a labelled revision without a Dockerfile in COPY context', (t) => {
-  assert.deepEqual(checkWorkerImageBuild(''), { qualified: false });
+  assert.deepEqual(checkWorkerImageBuild(''), { sourceVerified: false });
   const directory = capabilityFixture(t);
   rmSync(path.join(directory, 'Dockerfile'));
-  assert.equal(checkWorkerImageBuild(sha, directory).qualified, true);
+  assert.equal(checkWorkerImageBuild(sha, directory).sourceVerified, true);
   assert.throws(() => generateWorkerImageCapability(sha, directory), /ENOENT/);
   for (const revision of ['main', 'abc1234', 'A'.repeat(40), 'a'.repeat(39), 'a'.repeat(41)]) {
     assert.throws(() => checkWorkerImageBuild(revision, directory), /full build revision/);
@@ -411,6 +411,8 @@ for (const [name, file, before, after] of [
   ['v1 advertisement with a v2-only reader', 'snapshotEnvelope.ts', '(fields.version !== 1 && fields.version !== 2)', 'fields.version !== 2'],
   ['v2 reader without the authenticated purpose', 'snapshotEnvelope.ts', 'if (fields.version === 2) decipher.setAAD(PURPOSE);', "if (fields.version === 2) decipher.setAAD(Buffer.from('different purpose'));"],
   ['new writer downgrading its envelope', 'snapshotEnvelope.ts', 'format: FORMAT, version: 2, iv:', 'format: FORMAT, version: 1, iv:'],
+  ['new writer emitting an incorrect envelope format', 'snapshotEnvelope.ts', 'format: FORMAT, version: 2, iv:', "format: 'incorrect-encrypted-format', version: 2, iv:"],
+  ['new writer adding an unexpected envelope member', 'snapshotEnvelope.ts', 'format: FORMAT, version: 2, iv:', 'format: FORMAT, version: 2, extra: true, iv:'],
   ['reader silently ignoring authentication', 'snapshotEnvelope.ts', 'return { bytes: Buffer.concat([decipher.update(data), decipher.final()]), version: fields.version };', "return { bytes: Buffer.from('public bounded worker-image capability fixture'), version: fields.version };"],
   ['stale source encryption advertisement', 'snapshotEnvelope.ts', 'Object.freeze([1, 2] as const)', 'Object.freeze([1] as const)'],
   ['missing private source capability', 'workerCompatibility.ts', 'WORKER_SNAPSHOT_SOURCE_VERSION = 1', 'WORKER_SNAPSHOT_SOURCE_VERSION = 0'],

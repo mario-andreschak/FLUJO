@@ -44,8 +44,8 @@ export function readWorkerImageSource(revision, sourceRoot = root) {
 
 export function checkWorkerImageBuild(revision, sourceRoot = root) {
   // Local builds without a revision cannot qualify an immutable worker image.
-  if (!revision) return { qualified: false };
-  return { qualified: true, ...readWorkerImageSource(revision, sourceRoot) };
+  if (!revision) return { sourceVerified: false };
+  return { sourceVerified: true, ...readWorkerImageSource(revision, sourceRoot) };
 }
 
 export function generateWorkerImageCapability(revision, sourceRoot = root) {
@@ -125,9 +125,19 @@ async function sourceProbe(revision, sourceRoot) {
       assert.equal(decoded.version, version);
       assert.deepEqual(decoded.bytes, plaintext);
       assert.throws(() => codec.decryptSnapshotEnvelope(wire, Buffer.alloc(32, 0x6f).toString('base64'), limits.maxArchiveBytes));
+      const changedTag = Buffer.from(cipher.getAuthTag());
+      changedTag[0] ^= 1;
+      const tampered = Buffer.from(JSON.stringify({ ...JSON.parse(wire), tag: changedTag.toString('base64') }));
+      assert.throws(() => codec.decryptSnapshotEnvelope(tampered, key.toString('base64'), limits.maxArchiveBytes));
     }
-    const written = JSON.parse(codec.encryptSnapshotEnvelope(plaintext, key).toString('utf8'));
+    const writtenWire = codec.encryptSnapshotEnvelope(plaintext, key);
+    const written = JSON.parse(writtenWire.toString('utf8'));
+    assert.equal(written.format, capability.format);
     assert.equal(written.version, capability.writeVersion);
+    assert.deepEqual(Object.keys(written).sort(), ['data', 'format', 'iv', 'tag', 'version']);
+    const readback = codec.decryptSnapshotEnvelope(writtenWire, key.toString('base64'), limits.maxArchiveBytes);
+    assert.equal(readback.version, capability.writeVersion);
+    assert.deepEqual(readback.bytes, plaintext);
     const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(written.iv, 'base64'));
     decipher.setAAD(Buffer.from(capability.v2Aad));
     decipher.setAuthTag(Buffer.from(written.tag, 'base64'));
@@ -139,7 +149,7 @@ async function sourceProbe(revision, sourceRoot) {
   assert.match(restoreBytes.toString('utf8'), /decryptSnapshotEnvelope\(/);
   sourcePins.push({ file: 'src/backend/services/workspace/snapshotRestore.ts', sha256: createHash('sha256').update(restoreBytes).digest('hex') });
   return { schemaVersion: 1, revision, workerSnapshotSourceVersion: info.workerSnapshotSourceVersion, labels, sourcePins,
-    proof: 'Actual isolated source metadata/defaults and independent v1/v2 crypto read/new-v2-write controls; not compiled/installed image, effective target configuration, private consent or lease acceptance' };
+    proof: 'Actual isolated source metadata/defaults and independent v1/v2 crypto reads, wrong-key/modified-tag refusals, and new-v2-write/readback controls; not compiled/installed image, effective target configuration, private consent or lease acceptance' };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
