@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
+import { types } from 'node:util';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
@@ -17,6 +18,9 @@ export interface ExecutionOwnerCredentialBinding { ownerId: string; credentialId
 export interface ExecutionBoundModelIdentity extends ExecutionModelIdentity {
   ownerCredentialBinding: ExecutionOwnerCredentialBinding;
 }
+/** A Process call-site hint, checked against the owner's frozen graph and plan. */
+export interface ExecutionModelStepSlot { readonly nodeId: string; readonly ordinal: number }
+export const MAX_EXECUTION_MODEL_STEP_ORDINAL = 1_048_576;
 /** The SDK-final request, without an upstream credential. The owner compares
  * the exact recipient, headers and body with its authenticated step, inserts
  * its held credential, and performs the physical send. */
@@ -102,7 +106,7 @@ export interface ExecutionExtensionAdapter {
   claimModelRequest?(context: object, intent: ExecutionModelRequestIntent): Promise<void>;
   /** Return a fresh private child authority for exactly one bound model step.
    * The returned value must be recognized by assertRun and dispatchModelRequest. */
-  issueModelStep?(parent: object, model: ExecutionBoundModelIdentity): Promise<object>;
+  issueModelStep?(parent: object, model: ExecutionBoundModelIdentity, slot: ExecutionModelStepSlot): Promise<object>;
   /** Must validate/claim the exact child and physically send once using the
    * owner-held credential. FLUJO never opens a socket for this path. */
   dispatchModelRequest?(step: object, request: ExecutionOwnerModelDispatchRequest): Promise<Response>;
@@ -158,15 +162,34 @@ function sameBoundModel(a: ExecutionBoundModelIdentity, candidate: unknown): boo
 }
 /** A trusted parent can request a fresh child only for a bound model. The
  * owner still authenticates the original step and accounts for its budget. */
-export async function issueExecutionModelStepContext(parent: ExecutionExtensionContext, model: Model): Promise<ExecutionExtensionContext> {
+function snapshotModelStepSlot(candidate: unknown): ExecutionModelStepSlot {
+  if (!candidate || typeof candidate !== 'object' || types.isProxy(candidate)
+    || Object.getPrototypeOf(candidate) !== Object.prototype) {
+    throw new ExecutionExtensionError('execution_model_step_slot_required');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(candidate);
+  if (Reflect.ownKeys(descriptors).length !== 2 || !['nodeId', 'ordinal'].every(key =>
+      Object.hasOwn(descriptors, key) && Object.hasOwn(descriptors[key], 'value') && descriptors[key].enumerable)) {
+    throw new ExecutionExtensionError('execution_model_step_slot_required');
+  }
+  const nodeId = descriptors.nodeId.value;
+  const ordinal = descriptors.ordinal.value;
+  if (typeof nodeId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(nodeId)
+    || !Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal > MAX_EXECUTION_MODEL_STEP_ORDINAL) {
+    throw new ExecutionExtensionError('execution_model_step_slot_required');
+  }
+  return Object.freeze({ nodeId, ordinal });
+}
+export async function issueExecutionModelStepContext(parent: ExecutionExtensionContext, model: Model, slot: ExecutionModelStepSlot): Promise<ExecutionExtensionContext> {
   const identity = boundModelIdentity(model);
   if (!identity) throw new ExecutionExtensionError('execution_owner_model_binding_required');
+  const fixedSlot = snapshotModelStepSlot(slot);
   const item = record(parent);
   if (item.modelStep) throw new ExecutionExtensionError('execution_model_step_parent_required');
   if (!item.adapter.issueModelStep) throw new ExecutionExtensionError('execution_model_step_issuer_required');
   try {
     await item.adapter.assertRun(item.value);
-    const value = await item.adapter.issueModelStep(item.value, identity);
+    const value = await item.adapter.issueModelStep(item.value, identity, fixedSlot);
     if (!value || typeof value !== 'object' || value === item.value) throw new ExecutionExtensionError('execution_model_step_invalid');
     const issued = registry.modelStepValues ??= new WeakSet<object>();
     if (issued.has(value)) throw new ExecutionExtensionError('execution_model_step_reused');

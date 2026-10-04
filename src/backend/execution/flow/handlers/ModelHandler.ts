@@ -1638,6 +1638,7 @@ export class ModelHandler {
       conversationId,
       runId,
       nodeId,
+      takeModelStepOrdinal: input.takeModelStepOrdinal,
       codexSession,
       onCodexSessionChange,
       localToolExecutors,
@@ -1927,6 +1928,8 @@ export class ModelHandler {
       conversationId?: string;
       runId?: string;
       nodeId?: string;
+      /** One-use ordinal from the active Process execution, not request metadata. */
+      takeModelStepOrdinal?: () => number;
       codexSession?: import('../types').CodexSessionMetadata;
       onCodexSessionChange?: (session: import('../types').CodexSessionMetadata | undefined) => void;
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
@@ -2039,8 +2042,13 @@ export class ModelHandler {
       }
       // The parent run context covers tools and durable state. Every bound
       // provider call gets a separate owner-issued child that can dispatch once.
+      if (ownerBound && (!opts?.nodeId || !opts.takeModelStepOrdinal)) {
+        throw new ExecutionExtensionError('execution_model_step_slot_required');
+      }
       const modelStepContext = ownerBound
-        ? await issueExecutionModelStepContext(opts!.executionExtensionContext!, model)
+        ? await issueExecutionModelStepContext(opts!.executionExtensionContext!, model, {
+          nodeId: opts!.nodeId!, ordinal: opts!.takeModelStepOrdinal!(),
+        })
         : opts?.executionExtensionContext;
       singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(modelStepContext, model);
 

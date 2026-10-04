@@ -256,6 +256,34 @@ describe('ProcessNode unsupported-tool fallback', () => {
     await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
   });
 
+  it('keeps the actual Process node and one ordinal source across the fallback', async () => {
+    const slots: Array<{ nodeId: string; ordinal: number }> = [];
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push({ nodeId: input.nodeId, ordinal: input.takeModelStepOrdinal!() });
+      return slots.length === 1 ? unsupportedTools as any : successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    const nodeParams = params();
+
+    const result = await node.execCore(prep(), nodeParams);
+
+    expect(result.success).toBe(true);
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(slots).toEqual([{ nodeId: 'proc', ordinal: 0 }, { nodeId: 'proc', ordinal: 1 }]);
+    expect(callModel.mock.calls[0][0].takeModelStepOrdinal)
+      .toBe(callModel.mock.calls[1][0].takeModelStepOrdinal);
+  });
+
+  it('refuses a changed Process node identity before taking an owner ordinal', async () => {
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      input.takeModelStepOrdinal!();
+      return successfulCompletion as any;
+    });
+    await expect(nodeWithFinish().execCore({ ...prep(), nodeId: 'different' }, params()))
+      .rejects.toMatchObject({ code: 'execution_model_step_slot_required' });
+    expect(callModel).toHaveBeenCalledTimes(1);
+  });
+
   it('retries handoff-only tools when conditioned edges own the routing decision', async () => {
     const callModel = jest
       .spyOn(ModelHandler, 'callModel')

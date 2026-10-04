@@ -62,6 +62,8 @@ export interface ModelCallInput {
   modelInputForArchive?: ModelInputSnapshot;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
+  /** Runtime-only Process execution counter. Only owner-bound calls consume it. */
+  takeModelStepOrdinal?: () => number;
   /**
    * Maps model-facing MCP tool names back to (server, tool). Forwarded to
    * adapters that run their own agentic tool loop (Claude subscription) so they

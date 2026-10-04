@@ -687,6 +687,7 @@ describe('authenticated single physical OpenAI attempt', () => {
   });
 
   const boundModel = (): Model => ({ ...model(), ownerCredentialBinding: { ownerId: 'owner-fixture', credentialId: 'credential-fixture' } });
+  const fixtureSlot = (ordinal = 0) => ({ nodeId: 'process', ordinal });
   const boundInput = (context: ExecutionExtensionContext, bound = boundModel()): CompletionInput =>
     ({ ...input(context), model: bound, apiKey: '' });
 
@@ -729,7 +730,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     };
     const bound = boundModel();
     const parent = mintFixture(owner);
-    const child = await issueExecutionModelStepContext(parent, bound);
+    const child = await issueExecutionModelStepContext(parent, bound, fixtureSlot());
     const adapter = new OpenAiAdapter();
     const result = mode === 'stream' ? await adapter.createStreamCompletion(boundInput(child, bound)) : await adapter.createCompletion(boundInput(child, bound));
     expect(result.completion.choices[0].message.content).toBe('OK');
@@ -746,7 +747,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     const noIssuer = fixtureAdapter({ dispatchModelRequest: async () => new Response('{}') });
     restore = registerExecutionExtension(noIssuer);
     const parent = mintFixture(noIssuer);
-    await expect(issueExecutionModelStepContext(parent, bound))
+    await expect(issueExecutionModelStepContext(parent, bound, fixtureSlot()))
       .rejects.toMatchObject({ code: 'execution_model_step_issuer_required' });
     await expect(new OpenAiAdapter().createCompletion(boundInput(parent, bound)))
       .rejects.toMatchObject({ code: 'execution_model_step_context_required' });
@@ -754,7 +755,7 @@ describe('authenticated single physical OpenAI attempt', () => {
 
     const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }) });
     restore = registerExecutionExtension(owner);
-    const child = await issueExecutionModelStepContext(mintFixture(owner), bound);
+    const child = await issueExecutionModelStepContext(mintFixture(owner), bound, fixtureSlot());
     await expect(new OpenAiAdapter().createCompletion(boundInput(child, bound)))
       .rejects.toMatchObject({ code: 'execution_model_dispatch_required' });
     expect(physicalRequests).toBe(0);
@@ -763,7 +764,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     const dispatchModelRequest = jest.fn(async () => new Response('{}'));
     const complete = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
     restore = registerExecutionExtension(complete);
-    const cleanChild = await issueExecutionModelStepContext(mintFixture(complete), bound);
+    const cleanChild = await issueExecutionModelStepContext(mintFixture(complete), bound, fixtureSlot());
     await expect(new OpenAiAdapter().createCompletion({ ...boundInput(cleanChild, bound), apiKey: 'local-secret' }))
       .rejects.toMatchObject({ code: 'execution_owner_model_local_credential_forbidden' });
     expect(dispatchModelRequest).not.toHaveBeenCalled();
@@ -796,12 +797,12 @@ describe('authenticated single physical OpenAI attempt', () => {
     restore = registerExecutionExtension(owner);
     const bound = boundModel();
     const parent = mintFixture(owner);
-    const first = await issueExecutionModelStepContext(parent, bound);
+    const first = await issueExecutionModelStepContext(parent, bound, fixtureSlot());
     await expect(new OpenAiAdapter().createCompletion(boundInput(first, { ...bound, id: 'different-model' })))
       .rejects.toMatchObject({ code: 'execution_model_step_context_required' });
     expect(dispatchModelRequest).not.toHaveBeenCalled();
     await new OpenAiAdapter().createCompletion(boundInput(first, bound));
-    const second = await issueExecutionModelStepContext(parent, bound);
+    const second = await issueExecutionModelStepContext(parent, bound, fixtureSlot(1));
     await new OpenAiAdapter().createCompletion(boundInput(second, bound));
     expect(dispatchModelRequest).toHaveBeenCalledTimes(2);
     expect(physicalRequests).toBe(2);
@@ -823,7 +824,7 @@ describe('authenticated single physical OpenAI attempt', () => {
     const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
     restore = registerExecutionExtension(owner);
     const bound = boundModel();
-    const child = await issueExecutionModelStepContext(mintFixture(owner), bound);
+    const child = await issueExecutionModelStepContext(mintFixture(owner), bound, fixtureSlot());
     const adapter = new OpenAiAdapter();
     const first = adapter.createCompletion(boundInput(child, bound));
     await ownerEntered;
@@ -856,10 +857,10 @@ describe('authenticated single physical OpenAI attempt', () => {
     });
     restore = registerExecutionExtension(owner);
     const parent = mintFixture(owner, privateRun);
-    const first = issueExecutionModelStepContext(parent, boundModel());
+    const first = issueExecutionModelStepContext(parent, boundModel(), fixtureSlot());
     await childCheckEntered;
     try {
-      await expect(issueExecutionModelStepContext(parent, boundModel()))
+      await expect(issueExecutionModelStepContext(parent, boundModel(), fixtureSlot(1)))
         .rejects.toMatchObject({ code: 'execution_model_step_reused' });
     } finally {
       release();
@@ -881,10 +882,10 @@ describe('authenticated single physical OpenAI attempt', () => {
     restore = registerExecutionExtension(owner);
     const bound = boundModel();
     const parent = mintFixture(owner);
-    await new OpenAiAdapter().createCompletion(boundInput(await issueExecutionModelStepContext(parent, bound), bound));
+    await new OpenAiAdapter().createCompletion(boundInput(await issueExecutionModelStepContext(parent, bound, fixtureSlot()), bound));
     expect(dispatchModelRequest).toHaveBeenCalledTimes(1);
 
-    const child = await issueExecutionModelStepContext(parent, bound);
+    const child = await issueExecutionModelStepContext(parent, bound, fixtureSlot(1));
     await dispatchExecutionModelRequest(child, { ...sdkFinal, extraAuthority: 'forged' } as ExecutionOwnerModelDispatchRequest);
     expect(dispatchModelRequest).toHaveBeenCalledTimes(2);
     expect(dispatchModelRequest.mock.calls[1][1]).not.toHaveProperty('extraAuthority');
@@ -894,7 +895,7 @@ describe('authenticated single physical OpenAI attempt', () => {
       { ...sdkFinal, body: Uint8Array.from([1, 2, 3]) },
       { ...sdkFinal, headers: [...sdkFinal.headers, ['authorization', 'Bearer smuggled']] },
     ]) {
-      const fresh = await issueExecutionModelStepContext(parent, bound);
+      const fresh = await issueExecutionModelStepContext(parent, bound, fixtureSlot(2));
       await expect(dispatchExecutionModelRequest(fresh, forged as ExecutionOwnerModelDispatchRequest))
         .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
     }

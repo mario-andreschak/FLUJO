@@ -53,7 +53,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { ExecutionExtensionError, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, MAX_EXECUTION_MODEL_STEP_ORDINAL, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -1225,6 +1225,19 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
       let modelResult;
       let usedToolFreeFallback = false;
+      // One counter belongs to this Process execution, including its possible
+      // tool-free fallback. Only an owner-bound completion consumes an ordinal.
+      const processNodeId = node_params?.id;
+      let modelStepOrdinal = 0;
+      const takeModelStepOrdinal = (): number => {
+        if (!processNodeId || node_params?.id !== processNodeId || prepResult.nodeId !== processNodeId) {
+          throw new ExecutionExtensionError('execution_model_step_slot_required');
+        }
+        if (modelStepOrdinal > MAX_EXECUTION_MODEL_STEP_ORDINAL) {
+          throw new ExecutionExtensionError('execution_model_step_slot_exhausted');
+        }
+        return modelStepOrdinal++;
+      };
       try {
         const callModelWithTools = async (
           attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
@@ -1287,6 +1300,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             modelInputForArchive: prepResult.modelInputForArchive,
             nodeName, // Pass the node name to be included in the response header
             nodeId: prepResult.nodeId, // Pass the node ID
+            takeModelStepOrdinal,
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
             conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
             runId: prepResult.runId,
