@@ -16,6 +16,14 @@ import { StorageKey } from '@/shared/types/storage';
 import { clearItem } from '@/utils/storage/backend';
 import * as snapshotLeases from '@/backend/services/snapshot/snapshotLock';
 
+// Next's SWC exports are non-configurable getters. Preserve every real lease
+// implementation in a mutable module fixture so the wrapper error injection
+// can replace and restore only the targeted function.
+jest.mock('@/backend/services/snapshot/snapshotLock', () => ({
+  __esModule: true,
+  ...jest.requireActual<typeof import('@/backend/services/snapshot/snapshotLock')>('@/backend/services/snapshot/snapshotLock'),
+}));
+
 describe('SnapshotStore', () => {
   let testDir: string;
   let store: SnapshotStore;
