@@ -24,6 +24,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  jest.restoreAllMocks();
   const relative = path.relative(path.resolve(os.tmpdir()), directory);
   if (!/^flujo-owner-principal-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe principal test cleanup');
   fs.rmSync(directory, { recursive: true, force: true });
@@ -156,6 +157,23 @@ test('witness fails closed on policy deletion/corruption/configuration switch', 
   expect(witness.recheck(2_000)?.status).toBe(503);
   process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'another.json');
   expect(witness.recheck(2_000)?.status).toBe(503);
+});
+
+test('authorization and a durable witness deny an actual policy replacement during the read', async () => {
+  const witness = authorize();
+  const nativeOpen = fs.openSync;
+  const open = jest.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
+    if (file === filename) persist();
+    return nativeOpen(file, flags, mode);
+  });
+  const denial = witness.recheck(2_000)!;
+  expect(denial.status).toBe(503);
+  expect(await denial.json()).toEqual({ error: 'Owner authentication is unavailable.', code: 'OWNER_AUTH_UNAVAILABLE' });
+  const current = resolveOwnerRequest(request(), ['avatar:voice'], { now: 2_000 });
+  expect(current.ok).toBe(false);
+  if (!current.ok) expect(current.response.status).toBe(503);
+  open.mockRestore();
+  expect(authorize().principal.ownerId).toBe('private-bff-owner');
 });
 
 test('workspace grants reject traversal, reserved device names, and mixed control authority', () => {

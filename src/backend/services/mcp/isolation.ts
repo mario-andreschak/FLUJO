@@ -1,4 +1,3 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -7,12 +6,12 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { ownerPolicySchema } from '../security/ownerCredentials';
+import { readPrivatePolicyJson } from '../security/readPrivatePolicy';
 import {
   createIsolatedMcpLaunch, isolatedMcpPolicyDigest, isolatedMcpPolicySchema, McpIsolationError,
   type IsolatedMcpLaunch,
 } from '../security/isolatedMcp';
 
-const MAX_POLICY_BYTES = 64 * 1024;
 const approvalSchema = z.object({
   schemaVersion: z.literal(1),
   ownerId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
@@ -24,25 +23,6 @@ const approvalSchema = z.object({
   }).strict()).max(128),
 }).strict().refine(value => new Set(value.approvals.map(item => JSON.stringify([item.workspace, item.serverName]))).size === value.approvals.length);
 
-function readPrivatePolicy(filename: string | undefined): unknown {
-  if (filename === undefined || !path.isAbsolute(filename.trim())) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-  const fd = openSync(filename.trim(), 'r');
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_POLICY_BYTES
-        || (process.platform !== 'win32' && (stat.mode & 0o077) !== 0)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-    const bytes = Buffer.alloc(MAX_POLICY_BYTES + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const count = readSync(fd, bytes, length, bytes.length - length, null);
-      if (count === 0) break;
-      length += count;
-    }
-    if (length > MAX_POLICY_BYTES) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
-  } finally { closeSync(fd); }
-}
-
 export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getCurrentWorkspace()): string {
   try {
     const policy = isolatedMcpPolicySchema.parse(config.isolation);
@@ -50,8 +30,8 @@ export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getC
         || config.enableMcpApps || config.enableMcpSkills || config.sampling?.enabled || config.elicitation?.enabled) {
       throw new McpIsolationError('ISOLATION_POLICY_INVALID');
     }
-    const approvals = approvalSchema.parse(readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
-    const owner = ownerPolicySchema.parse(readPrivatePolicy(process.env.FLUJO_OWNER_AUTH_FILE));
+    const approvals = approvalSchema.parse(readPrivatePolicyJson(process.env.FLUJO_MCP_ISOLATION_FILE));
+    const owner = ownerPolicySchema.parse(readPrivatePolicyJson(process.env.FLUJO_OWNER_AUTH_FILE));
     const approved = approvals.approvals.find(item => item.workspace === workspace && item.serverName === config.name);
     const digest = isolatedMcpPolicyDigest(policy);
     if (owner.ownerId !== approvals.ownerId || !approved || approved.expiresAt <= Date.now()
@@ -67,7 +47,7 @@ export function approvedIsolationDigest(config: MCPStdioConfig, workspace = getC
 export function assertHostMcpLaunchAllowed(config: MCPStdioConfig): void {
   if (process.env.FLUJO_MCP_ISOLATION_FILE === undefined) return;
   try {
-    const approvals = approvalSchema.parse(readPrivatePolicy(process.env.FLUJO_MCP_ISOLATION_FILE));
+    const approvals = approvalSchema.parse(readPrivatePolicyJson(process.env.FLUJO_MCP_ISOLATION_FILE));
     if (approvals.approvals.some(item => item.workspace === getCurrentWorkspace() && item.serverName === config.name)) {
       throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
     }

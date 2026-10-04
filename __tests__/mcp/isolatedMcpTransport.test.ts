@@ -234,6 +234,27 @@ test('private grant digest can be checked independently without creating a conta
   expect(create).not.toHaveBeenCalled();
 });
 
+test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])
+('an actual %s inode replacement denies creation and closes the existing generation at dispatch', async variable => {
+  const transport = createStdioTransport(config);
+  const target = process.env[variable]!;
+  const body = fs.readFileSync(target);
+  const nativeOpen = fs.openSync;
+  jest.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
+    if (file === target) {
+      fs.writeFileSync(`${target}.new`, body, { mode: 0o600 });
+      fs.renameSync(`${target}.new`, target);
+    }
+    return nativeOpen(file, flags, mode);
+  });
+  expect(() => approvedIsolationDigest(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(() => createBetaTransport(config)).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  expect(create).toHaveBeenCalledTimes(1);
+  await expect(assertMcpIsolationDispatch({ transport } as unknown as Client, config.name, config))
+    .rejects.toMatchObject({ code: 'ISOLATION_UNAVAILABLE' });
+  expect(close).toHaveBeenCalled();
+});
+
 test('private MCP approval composes with the new voice-only workspace credential schema', () => {
   const voice = issueOwnerCredential(['avatar:voice'], Date.now() + 60_000, Date.now(), { workspaceId: 'voice-workspace' });
   fs.writeFileSync(process.env.FLUJO_OWNER_AUTH_FILE!, JSON.stringify({ schemaVersion: 1, ownerId: 'approved-owner', credentials: [voice.record] }), { mode: 0o600 });
