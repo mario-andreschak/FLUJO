@@ -128,6 +128,16 @@ the hosted failure. The recorded hosted `a6273e32` failure is
 proves the cause of the hosted mismatch or qualifies this later source. The
 next exact compiled Windows run must retain the predicate and its result.
 
+The `181128c5` PR merge at `fc7494fd` builds and passes installed Linux startup,
+but hosted Windows still refuses migration with `SNAPSHOT_STORE_BUSY`. Its
+retained log has no `UNSAFE_FILE` diagnostic. The lease now adds bounded refusal
+stages, and `SnapshotStore` preserves them when wrapping a lease error. Strict
+admission of a newly published owner also retains a bounded plain-reader
+predicate; missing or unreadable owners remain uncertain. No stage identifies
+a path, owner record or identity value, and no refusal permits migration to
+continue. This observation does not establish the earlier failure's cause or a
+successful Windows outcome.
+
 These paths operate in an owner-private data-root/OS profile with cooperating
 FLUJO writers. Descriptor checks and canonical fences are not an OS sandbox:
 Node does not provide portable descriptor-relative rename/unlink. A hostile

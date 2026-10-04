@@ -55,7 +55,7 @@ describe('snapshot lease publication and generation ownership', () => {
   it('preserves an unknown partial owner and never admits a second operation', async () => {
     await fs.mkdir(lock);
     const task = jest.fn(async () => undefined);
-    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY', detail: 'contended' });
     expect(task).not.toHaveBeenCalled();
     expect((await fs.lstat(lock)).isDirectory()).toBe(true);
     expect(await fs.readdir(lock)).toEqual([]);
@@ -122,7 +122,7 @@ describe('snapshot lease publication and generation ownership', () => {
       return value;
     });
     const task = jest.fn(async () => undefined);
-    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY', detail: 'published-owner' });
     expect(task).not.toHaveBeenCalled();
     expect(await fs.readdir(lock)).toEqual(['owner.json']);
   });
@@ -224,7 +224,7 @@ describe('snapshot lease publication and generation ownership', () => {
       return handle;
     });
     const task = jest.fn(async () => undefined);
-    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY', detail: 'authored-owner-bytes' });
     expect(task).not.toHaveBeenCalled();
   });
 
@@ -247,9 +247,29 @@ describe('snapshot lease publication and generation ownership', () => {
       return handle;
     });
     const task = jest.fn(async () => undefined);
-    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY', detail: 'closed-owner:ino' });
     expect(task).not.toHaveBeenCalled();
     expect(await fs.readFile(candidateOwnerPath)).toEqual(originalBytes);
     expect(await fs.readFile(`${candidateOwnerPath}.original`)).toEqual(originalBytes);
+  });
+
+  it('preserves a bounded reader predicate when published ownership cannot be admitted', async () => {
+    const open = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]) === path.join(lock, 'owner.json')) {
+        const stat = await handle.stat({ bigint: true });
+        jest.spyOn(handle, 'stat').mockResolvedValue(Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          ctimeNs: stat.ctimeNs + BigInt(1),
+        }));
+      }
+      return handle;
+    });
+    const task = jest.fn(async () => undefined);
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({
+      code: 'SNAPSHOT_STORE_BUSY', detail: 'owner-read:descriptor-path:ctimeNs',
+    });
+    expect(task).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(path.join(lock, 'owner.json'), 'utf8'))).toMatchObject({ pid: process.pid });
   });
 });
