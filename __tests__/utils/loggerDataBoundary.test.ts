@@ -42,4 +42,25 @@ describe('logger data boundary', () => {
     expect(lazy).toHaveBeenCalledTimes(1);
     expect(sink).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['\u0000', '\b', '\t', '\u000b', '\f', '\u007f', '\u0085', '\u009b', '\u009d'])('neutralizes terminal control %j in raw paths and messages', control => {
+    const sink = jest.spyOn(console, 'error').mockImplementation(() => {});
+    createLogger(`source${control}label`, LOG_LEVEL.ERROR).error(`before${control}after with useful spaces`);
+    expect(sink).toHaveBeenCalledTimes(1);
+    const output = sink.mock.calls[0][0] as string;
+    expect(output).not.toMatch(/\p{Control}/u);
+    expect(output).toContain('with useful spaces');
+    expect(output).toContain('before');
+    expect(output).toContain('after');
+  });
+
+  it('keeps structured JSON data intact while escaping C1 terminal controls', () => {
+    const sink = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const data = { text: 'useful spaces \u0085next \u009b31m red \u009dtitle', nested: { tab: '\t', backspace: '\b' } };
+    createLogger('logger-boundary', LOG_LEVEL.ERROR).error('payload', () => data);
+    const output = sink.mock.calls[0][0] as string;
+    expect(output).not.toMatch(/\p{Control}/u);
+    const serialized = output.slice(output.indexOf('payload:') + 'payload:'.length).trim();
+    expect(JSON.parse(serialized)).toEqual(data);
+  });
 });

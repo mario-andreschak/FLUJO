@@ -86,7 +86,9 @@ function logWithLevel(level: number, filepath: string, message: string, data?: u
 
     // Each console call is one physical record; data cannot forge another line
     // or inject a terminal escape sequence through a path, message or payload.
-    output = output.replace(/[\r\n\u2028\u2029]/g, ' ').replaceAll(String.fromCharCode(27), '[ESC]');
+    output = output.replace(/[\r\n\u2028\u2029]/g, ' ')
+      .replaceAll(String.fromCharCode(27), '[ESC]')
+      .replace(/\p{Control}/gu, control => `\\u${control.charCodeAt(0).toString(16).padStart(4, '0')}`);
     switch (level) {
       case LOG_LEVEL.VERBOSE:
         console.debug(`[VERBOSE] ${output}`);
