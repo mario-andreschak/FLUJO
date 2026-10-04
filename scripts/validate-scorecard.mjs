@@ -127,10 +127,14 @@ function satisfies(value, budget) {
 }
 
 /** This checks records and declared evidence correspondence, never awards a grade. */
-export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON.parse(readFileSync(defaultSchema, 'utf8')), verifyFiles = true } = {}) {
+export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON.parse(readFileSync(defaultSchema, 'utf8')), verifyFiles = true, now = Date.now() } = {}) {
   const errors = validateShape(ledger, schema);
   if (errors.length) return { errors, blockers: [] };
   const fail = message => errors.push(message);
+  if (!Number.isFinite(now)) {
+    fail('Invalid validation clock');
+    return { errors, blockers: [] };
+  }
   const contract = schema.$defs?.acceptanceContract?.const;
   if (!contract || contract.contractVersion !== ledger.schemaVersion) {
     fail('Missing or mismatched reviewed acceptance contract version');
@@ -214,7 +218,9 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     refs(evidence.budgetIds, 'budgets', evidence.id);
     refs(evidence.profileIds, 'profiles', evidence.id);
     if (evidence.artifactId) refs([evidence.artifactId], 'artifacts', evidence.id);
-    if (!Number.isFinite(timestamp(evidence.observedAt))) fail(evidence.id + ': invalid observedAt');
+    const observedAt = timestamp(evidence.observedAt);
+    if (!Number.isFinite(observedAt)) fail(evidence.id + ': invalid observedAt');
+    else if (observedAt > now) fail(evidence.id + ': observation is in the future relative to validation clock');
     const window = evidence.window;
     if (window.kind === 'simulated' && !window.simulatedDays) fail(evidence.id + ': simulated window needs simulated days');
     if (window.kind !== 'simulated' && window.simulatedDays !== null) fail(evidence.id + ': non-simulated window contains simulated days');

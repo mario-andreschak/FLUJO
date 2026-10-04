@@ -59,6 +59,10 @@ node scripts/validate-scorecard.mjs --closure
 Exit 0 from ordinary validation means a valid ledger, which may be incomplete.
 Exit 1 means malformed/inconsistent records, unavailable evidence or checksum failure.
 Exit 2 from `--closure` means declared acceptance gates remain open.
+Every `observedAt` must be at or before the validator's current UTC wall clock.
+An elapsed window must have ended by that observation; future dates cannot establish
+completed human or live observations. The CLI has no clock override. Synthetic API
+tests use an explicit test clock to check admission rules, not to establish elapsed evidence.
 The validator never downloads remote artifacts, calls models, changes accounts,
 starts runtimes, performs releases or changes repository settings.
 Its small documented schema vocabulary fails closed on unsupported keywords.

@@ -35,7 +35,12 @@ explicit experimental status, with its future budgets, kinds and gates intact.
 Human metrics must be carried by human-study records, and live-stage metrics by
 live-provider records; a decoy record of the right kind cannot qualify measurements
 stored on a source or installed record. Duration measurements cannot exceed their
-actual elapsed window. The validator checks correspondence, while actual human
+actual elapsed window. Every observation must be at or before the current validator
+wall clock, and elapsed windows must have ended by their observation. A future-dated
+human study or live run cannot qualify as completed evidence. The API's explicit
+`now` option exists for deterministic synthetic admission tests; the CLI always
+uses its current clock and exposes no override. These tests do not establish actual
+elapsed observations. The validator checks correspondence, while actual human
 identity, cohort selection and execution remain responsibilities of external review.
 
 ## Producer requirements
