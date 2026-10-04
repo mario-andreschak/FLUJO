@@ -17,6 +17,23 @@ export function assertWorkflowContract(workflows) {
       }
     }
   }
+  const journey = workflows['persona-browser-journey.yml']?.jobs?.journey;
+  const journeySteps = journey?.steps ?? [];
+  const checkout = journeySteps.findIndex((step) => step.uses?.startsWith('actions/checkout@'));
+  const trust = journeySteps.findIndex((step) => step.name === 'Verify the selected trusted checkout');
+  const install = journeySteps.findIndex((step) => step.run === 'npm ci --include=dev');
+  const guard = journeySteps[trust];
+  const ancestry = guard?.run?.indexOf('git merge-base --is-ancestor "$PERSONA_JOURNEY_COMMIT" "$WORKFLOW_SHA"') ?? -1;
+  const detach = guard?.run?.indexOf('git checkout --detach "$PERSONA_JOURNEY_COMMIT"') ?? -1;
+  if (checkout < 0 || trust <= checkout || install <= trust
+      || journeySteps[checkout].with?.ref !== '${{ github.sha }}'
+      || guard?.env?.WORKFLOW_SHA !== '${{ github.sha }}'
+      || guard.if || guard['continue-on-error'] || ancestry < 0 || detach <= ancestry
+      || !guard.run.startsWith('test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"\n')
+      || !guard.run.includes('test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"')
+      || journeySteps.some((step) => step.with?.cache || step.uses?.startsWith('actions/cache'))) {
+    throw new Error('Selected-release journeys must verify ancestry from the workflow checkout before detaching or installing, without shared caches.');
+  }
   const workflow = workflows['verify.yml'];
   if (!workflow || !Object.hasOwn(workflow.on, 'pull_request')
       || workflow.on.pull_request != null
