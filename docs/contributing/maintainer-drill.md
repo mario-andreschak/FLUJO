@@ -107,9 +107,21 @@ and server with the epic's resource owner; Windows x64 is the exercised profile.
 Other platforms require their own retained run before claiming acceptance.
 
 Obtain version, npm SHA-512 integrity and source revision independently from the
-reviewed release metadata/provenance. The command verifies the tarball bytes and
-installed manifest. The source revision is an operator-supplied declaration;
-provenance signature verification remains with Engineering's release gate.
+reviewed release metadata/provenance. The command verifies the tarball bytes,
+then fetches the exact public npm version metadata and Sigstore provenance bundles
+from fixed registry endpoints. Before installation it requires `gh attestation
+verify` to verify the SHA-512 artifact with the official publish workflow on
+`main`, the pinned source and signer revision, and a GitHub hosted runner. It also
+checks the verifier's certificate identity, witnessed timestamp and npm package
+subject. Install GitHub CLI with attestation support before running this command.
+Missing or invalid provenance stops the probe before npm or the application runs;
+there is no skip option. Raw metadata, bundles and verifier stdout/stderr are
+retained with hashes, including failures. The installed manifest is checked too.
+
+This verifies the single npm package's provenance. Npm ECDSA registry signatures,
+full release distribution/main qualification and independent human acceptance
+remain separate requirements. Earlier receipts with unverified provenance remain
+historical evidence; use a new run to obtain the mandatory verification result.
 
 For the published 3.46.2 baseline (source `320347356891aa1c24e0f2f9ce12719317e58bde`):
 
@@ -293,7 +305,9 @@ backup, so restoration cannot mask data lost during upgrade.
 
 The top receipt hashes every completed operation receipt and qualification log,
 including failed operations. Retain all referenced roots together. These probes
-cover an empty synthetic flow only. Baseline provenance signatures, broader
+cover an empty synthetic flow only. Both consumer probes require verified npm
+provenance before installation, and the top receipt removes each signature gate
+from pending only after that consumer reports verification. Broader
 conversation/configuration/Persona/schedule continuity, every-descendant cleanup,
 independent human operation, access and the 90-day observation remain separate
 gates. Neither a source fixture nor a passed automated version transition is an

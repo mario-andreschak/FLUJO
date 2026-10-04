@@ -132,7 +132,7 @@ export async function runVersionTransition(options) {
     directory, platform: process.platform, arch: process.arch, node: process.version,
     startedAt: new Date().toISOString(), sourceCleanBefore: true, sourceCleanAfter: null,
     baseline: options.baseline, candidate: options.candidate, commands: [], operations: [],
-    pending: ['baseline-provenance-signature-verification', 'independent-human-review', 'human-operated-drill',
+    pending: ['baseline-provenance-signature-verification', 'candidate-npm-provenance-signature-verification', 'independent-human-review', 'human-operated-drill',
       'private-triage-tabletop', 'broader-state-and-schedule-recovery', 'verified-backup-access', '90-day-observation', 'independent-reassessment'],
     limits: ['Empty synthetic flow only; no provider/model, identities/secrets, Persona or schedule continuity.',
       'Automated main/signature/scan gates do not establish human role consent, independence or an A- judgment.',
@@ -159,9 +159,13 @@ export async function runVersionTransition(options) {
     const baseline = await runInstalledBaseline(options.baseline);
     recordOperation('baseline', baseline);
     if (baseline.receipt.result !== 'passed-baseline-probe') throw new Error('Baseline consumer probe failed.');
+    if (baseline.receipt.provenanceSignatureVerified !== true) throw new Error('Baseline npm provenance was not verified.');
+    receipt.pending = receipt.pending.filter(item => item !== 'baseline-provenance-signature-verification');
     const candidate = await runInstalledBaseline(options.candidate);
     recordOperation('candidate-consumer', candidate);
     if (candidate.receipt.result !== 'passed-baseline-probe') throw new Error('Candidate consumer probe failed.');
+    if (candidate.receipt.provenanceSignatureVerified !== true) throw new Error('Candidate npm provenance was not verified.');
+    receipt.pending = receipt.pending.filter(item => item !== 'candidate-npm-provenance-signature-verification');
     const upgrade = await upgradeExistingRoot(baseline, candidate);
     recordOperation('existing-data-upgrade', upgrade);
     if (upgrade.receipt.result !== 'passed-version-upgrade' || !upgrade.receipt.baselineDataFoundBeforeRestore) throw new Error('Existing-data candidate upgrade failed.');

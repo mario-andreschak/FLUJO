@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, createWriteStream, existsSync, openSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -10,6 +10,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
+import { fetchNpmProvenance, verifyNpmProvenance } from './maintainer-npm-provenance.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -96,6 +97,8 @@ async function listening(port) {
 }
 
 export async function runInstalledBaseline(options) {
+  options = parseBaselineOptions([`--version=${options.version}`, `--integrity=${options.integrity}`,
+    `--source-revision=${options.artifactSourceRevision}`].concat(options.npmCli ? [`--npm-cli=${options.npmCli}`] : []));
   // Resolve dependencies and npm before network access or creating any processes.
   const JSZip = createRequire(import.meta.url)('jszip');
   const toolRevision = cleanRevision();
@@ -109,7 +112,8 @@ export async function runInstalledBaseline(options) {
   const receipt = { schemaVersion: 1, kind: 'automated-installed-baseline-probe',
     startedAt: new Date().toISOString(), version: options.version, integrity: options.integrity,
     declaredArtifactSourceRevision: options.artifactSourceRevision,
-    artifactSourceVerification: 'Operator-supplied identity; this command does not verify provenance signatures',
+    artifactSourceVerification: 'Pending pinned npm provenance verification before consumer installation',
+    provenanceSignatureVerified: false, provenanceCommands: [],
     toolRevision, toolScriptSha256: sha256(readFileSync(fileURLToPath(import.meta.url))),
     sourceCleanBefore: true, sourceCleanAfter: null, sandbox, platform: process.platform,
     arch: process.arch, node: process.version, commands: [], observations: [], evidence: [], result: 'failed',
@@ -223,6 +227,32 @@ export async function runInstalledBaseline(options) {
     const integrity = `sha512-${hash.digest('base64')}`;
     receipt.tarball = { url, compressedBytes, observedIntegrity: integrity };
     if (integrity !== options.integrity) throw new Error('Published tarball integrity mismatch; no install allowed.');
+    const provenance = await fetchNpmProvenance(options, { directory: sandbox, capture, signal: interrupted.signal });
+    const runVerifier = (command, args) => {
+      const record = { command, args, startedAt: new Date().toISOString(), code: null };
+      receipt.provenanceCommands.push(record);
+      try {
+        const result = spawnSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+        record.code = result.status; record.signal = result.signal;
+        record.stdout = result.stdout ?? ''; record.stderr = result.stderr ?? '';
+        if (result.error) { record.launchFailure = result.error.message; throw result.error; }
+        if (result.status !== 0 || result.signal) throw new Error(`Npm provenance verifier exited ${result.signal ?? result.status}; no install allowed.`);
+        return record.stdout;
+      } finally { record.completedAt = new Date().toISOString(); }
+    };
+    try {
+      receipt.npmProvenance = { ...verifyNpmProvenance(options, { archive, bundlePath: provenance.bundlePath }, runVerifier),
+        metadataUrl: provenance.metadataUrl, attestationsUrl: provenance.attestationsUrl };
+      receipt.provenanceSignatureVerified = true;
+      receipt.artifactSourceVerification = 'Verified Sigstore signature and pinned official publish workflow, main source, hosted runner and SHA-512 package subject';
+    } finally {
+      for (const [index, command] of receipt.provenanceCommands.entries()) {
+        const prefix = `provenance-${index + 1}`;
+        await capture(`${prefix}.stdout.json`, command.stdout ?? '');
+        await capture(`${prefix}.stderr.txt`, command.stderr ?? '');
+        command.stdout = `${prefix}.stdout.json`; command.stderr = `${prefix}.stderr.txt`;
+      }
+    }
     await capture('consumer/package.json', '{"private":true}\n');
     await capture('empty-user.npmrc', ''); await capture('empty-global.npmrc', '');
     const consumer = path.join(sandbox, 'consumer');
