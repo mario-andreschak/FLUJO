@@ -303,3 +303,27 @@ test('source-build receipts still require installed runtime checks', () => {
   assert.deepEqual(complete.errors, []);
   assert.ok(complete.blockers.length > 0);
 });
+
+test('passing existing-contract metrics require a real start after declaration and before observation', () => {
+  function measurement(ledger, start) {
+    const witness = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
+    Object.assign(witness, {
+      id: 'synthetic-contract-start', kind: 'offline-simulation', result: 'passed',
+      observedAt: '2026-10-04T01:00:00Z', scope: 'Synthetic admission fixture; no real run or acceptance.',
+      budgetIds: ['persona-append-p95'],
+      metrics: [{budgetId: 'persona-append-p95', value: 1, denominator: 560, numerator: null}],
+      window: {kind: 'simulated', start, end: null, simulatedDays: 28},
+    });
+    ledger.evidence.push(witness);
+  }
+  for (const start of [null, 'not-a-timestamp', '2026-13-04T00:00:00Z']) {
+    rejects(l => measurement(l, start), /needs actual measurement start/);
+  }
+  rejects(l => measurement(l, '2026-10-02T00:00:00Z'), /budget declared after measurement/);
+  rejects(l => measurement(l, '2026-10-05T00:00:00Z'), /observed before measurement began/);
+  const result = validate(l => measurement(l, entry(l, 'budgets', 'persona-append-p95').declaredAt));
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+  // The failed September simulation remains valid without a retroactive start time.
+  assert.deepEqual(validate().errors, []);
+});
