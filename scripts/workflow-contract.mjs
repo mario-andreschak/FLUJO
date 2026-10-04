@@ -77,6 +77,20 @@ export function assertWorkflowContract(workflows) {
       throw new Error(`${id} must enforce completed assertions and explicit skip accounting after Jest.`);
     }
   }
+  const mcpSteps = workflow.jobs.test.steps;
+  const checkMcp = mcpSteps.findIndex(step => step.run === 'node --test scripts/prepare-isolation-ci-image.test.mjs');
+  const prepareMcp = mcpSteps.findIndex(step => step.run === 'node scripts/prepare-isolation-ci-image.cjs');
+  const runMcp = mcpSteps.findIndex(step => step.run === 'npm run test:ci');
+  const cleanupMcp = mcpSteps.findIndex(step => step.run === 'node scripts/prepare-isolation-ci-image.cjs cleanup');
+  const baselineMcp = mcpSteps.findIndex(step => step.run === 'npm run verify:test-baseline -- --stage=ci --results=jest-results.json');
+  const probeVariables = ['FLUJO_RUN_ISOLATION_SOURCE_PROBE', 'FLUJO_TEST_ISOLATION_DOCKER',
+    'FLUJO_TEST_ISOLATION_DAEMON', 'FLUJO_TEST_ISOLATION_IMAGE'];
+  if (checkMcp < 0 || checkMcp >= prepareMcp || prepareMcp >= runMcp || cleanupMcp <= runMcp || cleanupMcp >= baselineMcp
+      || probeVariables.some(key => Object.hasOwn(mcpSteps[runMcp].env ?? {}, key))
+      || !mcpSteps.some(step => step.uses?.startsWith('actions/upload-artifact@')
+        && step.with?.path?.split('\n').includes('.tmp/mcp-isolation-ci-image.json'))) {
+    throw new Error('Main CI must run the prepared MCP container profile, clean it before the baseline gate and retain its receipt.');
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
