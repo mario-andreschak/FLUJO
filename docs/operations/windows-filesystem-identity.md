@@ -37,6 +37,9 @@ It exits nonzero when exact device/inode or other required metadata differs.
 Only freshly rechecked, known probe leaves are deleted; no recursive cleanup
 or existing workspace read occurs. The lower-32-bit relation is diagnostic
 metadata only and never admits a file or changes a comparison.
+Unexpected descriptor replacements refuse before samples are collected. If
+cleanup encounters an unrecorded or changed leaf, it preserves that entry and
+reports a separate bounded cleanup failure without hiding the original refusal.
 
 The local Windows 10 Pro 10.0.19045 probe with Node 22.13.1/libuv 1.49.2 passed
 all six samples. That does not qualify Windows Server 2025. Retain both runtime

@@ -15,10 +15,15 @@ const rootIdentity = await fs.lstat(root, { bigint: true });
 const samples = [];
 const created = [];
 let cleaned = false;
+let probeFailure;
+let cleanupFailure;
+class ProbeRefusal extends Error {
+  constructor(code) { super(code); this.code = code; }
+}
 async function assertOwnedRoot() {
   const now = await fs.lstat(root, { bigint: true });
   if (!now.isDirectory() || now.isSymbolicLink() || differences(rootIdentity, now, ['dev', 'ino', 'mode', 'uid', 'gid']).length) {
-    throw new Error('Probe directory identity changed; preserve its contents');
+    throw new ProbeRefusal('probe-directory-changed');
   }
 }
 try {
@@ -39,7 +44,7 @@ try {
         const openedReader = await reader.stat({ bigint: true });
         if (!openedReader.isFile() || openedReader.isSymbolicLink() || openedReader.nlink !== BigInt(1)
             || differences(writable, openedReader, ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size']).length) {
-          throw new Error('Owned probe descriptor binding refused');
+          throw new ProbeRefusal('descriptor-binding');
         }
         namedWhileOpen = await fs.lstat(leaf, { bigint: true });
         await writer.close();
@@ -67,28 +72,35 @@ try {
       diagnosticLow32DeviceRelation: BigInt.asUintN(32, closedNamed.dev) === writable.dev,
     });
   }
+} catch (error) {
+  probeFailure = error instanceof ProbeRefusal ? error.code : 'probe-io-error';
 } finally {
   // Remove only known allocated leaves after fresh path-to-path identity checks.
   // No recursive deletion, masking, repair, or unknown-entry cleanup occurs.
-  await assertOwnedRoot();
-  for (const { leaf, namedIdentity } of created) {
-    const now = await fs.lstat(leaf, { bigint: true });
-    if (!now.isFile() || now.isSymbolicLink() || now.nlink !== BigInt(1) || differences(namedIdentity, now).length) {
-      throw new Error('Probe leaf changed; preserve it');
+  try {
+    await assertOwnedRoot();
+    for (const { leaf, namedIdentity } of created) {
+      const now = await fs.lstat(leaf, { bigint: true });
+      if (!now.isFile() || now.isSymbolicLink() || now.nlink !== BigInt(1) || differences(namedIdentity, now).length) {
+        throw new ProbeRefusal('probe-leaf-changed');
+      }
+      await fs.unlink(leaf);
     }
-    await fs.unlink(leaf);
+    await assertOwnedRoot();
+    await fs.rmdir(root);
+    cleaned = true;
+  } catch (error) {
+    cleanupFailure = error instanceof ProbeRefusal ? error.code
+      : error?.code === 'ENOTEMPTY' ? 'probe-unknown-entry-preserved' : 'probe-cleanup-io-error';
   }
-  await assertOwnedRoot();
-  await fs.rmdir(root);
-  cleaned = true;
 }
-const identityContractSatisfied = samples.length === 6 && samples.every(s => s.allRegularSingleLink
+const identityContractSatisfied = !probeFailure && samples.length === 6 && samples.every(s => s.allRegularSingleLink
   && !s.closedBindingDifferences.length && !s.readerDifferences.length);
 console.log(JSON.stringify({
   schemaVersion: 1, kind: 'owned-temporary-file-identity-contract', createdAt: new Date().toISOString(),
   runtime: { node: process.version, libuv: process.versions.uv, platform: process.platform, architecture: process.arch,
     osRelease: os.release(), osVersion: os.version() },
-  samples, identityContractSatisfied, cleanupCompleted: cleaned, existingUserFilesRead: false,
+  samples, identityContractSatisfied, cleanupCompleted: cleaned, probeFailure, cleanupFailure, existingUserFilesRead: false,
   productionAdmissionChanged: false, installedStartupQualified: false,
 }, null, 2));
-if (!identityContractSatisfied) process.exitCode = 1;
+if (!identityContractSatisfied || !cleaned) process.exitCode = 1;
