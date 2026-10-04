@@ -11,6 +11,8 @@ on:
       - 'scripts/install.ps1'
       - 'scripts/install.sh'
       - 'scripts/installer-functions.ps1'
+      - 'scripts/installer-release.mjs'
+      - 'scripts/installer-release.test.mjs'
       - 'scripts/uninstall.ps1'
       - 'scripts/update.ps1'
       - 'tests/installer.Tests.ps1'

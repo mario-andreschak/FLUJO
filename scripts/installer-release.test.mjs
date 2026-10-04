@@ -153,6 +153,20 @@ test('installer workflow reuses immutable build bytes with tag-only signing/publ
   assertWorkflowContract(workflows());
 });
 
+for (const file of ['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs']) {
+  test(`installer workflow refuses omitting the ${file} validation trigger`, () => {
+    const files = workflows();
+    files['installer.yml'].on.pull_request.paths = files['installer.yml'].on.pull_request.paths.filter((name) => name !== file);
+    assert.throws(() => assertWorkflowContract(files), /trigger hosted installer validation/);
+  });
+}
+
+test('installer workflow refuses excluding its helper files from validation', () => {
+  const files = workflows();
+  files['installer.yml'].on.pull_request.paths.push('!scripts/**');
+  assert.throws(() => assertWorkflowContract(files), /trigger hosted installer validation/);
+});
+
 for (const job of ['installer-attest', 'installer-publish']) {
   test(`${job} refuses an unavailable runner context in its job environment`, () => {
     const files = workflows();

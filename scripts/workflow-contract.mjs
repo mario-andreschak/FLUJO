@@ -1,6 +1,11 @@
 import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
 
 function assertInstallerProvenance(workflow) {
+  const paths = workflow?.on?.pull_request?.paths;
+  if (!Array.isArray(paths) || paths.some((file) => file.startsWith('!'))
+      || !['scripts/installer-release.mjs', 'scripts/installer-release.test.mjs'].every((file) => paths.includes(file))) {
+    throw new Error('Installer helper changes must trigger hosted installer validation.');
+  }
   const tagOnly = "${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}";
   const build = workflow?.jobs?.['installer-build'];
   const attest = workflow?.jobs?.['installer-attest'];
