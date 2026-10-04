@@ -48,14 +48,18 @@ published artifact or a human observation.
   clearing, authoritative empty discovery, explicit refresh and prefill behavior.
 
 Run the selected Node and jsdom checks serially with `scripts/run-local-jest.cjs`,
-then changed-file ESLint and root typecheck. On Windows managed paths containing
-`.codex`, the current runner may report zero matches. Until #565's runner repair
-lands, use equivalent explicit matches while retaining exact selected/executed
-counts and real process exits:
+then changed-file ESLint and root typecheck. The integrated runner and
+`jest.testMatch.mjs` canonicalize the checkout root and explicit suite paths,
+including Windows managed paths containing `.codex`. Use the normal project
+matches; the earlier broad `--testMatch` workaround belongs to source observations
+before that repair. The runner rejects zero completed assertions, an omitted
+explicitly selected suite, and a selected suite that completes no assertions.
+Retain actual passed/failed/skipped counts and process exits; `--listTests` is
+discovery only and cannot establish that assertions executed.
 
 ```powershell
-node scripts/run-local-jest.cjs --selectProjects node --runInBand '--testMatch=**/__tests__/**/*.test.{ts,tsx}' --runTestsByPath __tests__/mcp/toolDiscoveryPagination.test.ts __tests__/mcp/toolDiscoverySdk.test.ts __tests__/mcp/toolVisibility.test.ts __tests__/mcp/mcpAppsNegotiation.test.ts __tests__/mcp/listServerToolsResilience.test.ts __tests__/mcp/testConnectionStreaming.test.ts
-node scripts/run-local-jest.cjs --selectProjects jsdom --runInBand '--testMatch=**/__tests__/frontend/{components,hooks}/**/*.test.{ts,tsx}' --runTestsByPath __tests__/frontend/hooks/useServerTools.test.tsx __tests__/frontend/components/MCPToolManager.test.tsx __tests__/frontend/components/ToolTester.test.tsx __tests__/frontend/components/MCPToolRefresh.integration.test.tsx
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/mcp/toolDiscoveryPagination.test.ts __tests__/mcp/toolDiscoverySdk.test.ts __tests__/mcp/toolVisibility.test.ts __tests__/mcp/mcpAppsNegotiation.test.ts __tests__/mcp/listServerToolsResilience.test.ts __tests__/mcp/testConnectionStreaming.test.ts
+node scripts/run-local-jest.cjs --selectProjects jsdom --runInBand --runTestsByPath __tests__/frontend/hooks/useServerTools.test.tsx __tests__/frontend/components/MCPToolManager.test.tsx __tests__/frontend/components/ToolTester.test.tsx __tests__/frontend/components/MCPToolRefresh.integration.test.tsx
 ```
 
 ## Acceptance still required
