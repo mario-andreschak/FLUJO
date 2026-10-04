@@ -9,6 +9,7 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
 
@@ -16,6 +17,8 @@ jest.mock('node:child_process', () => {
   const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
   return { ...actual, spawn: jest.fn(actual.spawn), spawnSync: jest.fn(actual.spawnSync) };
 });
+
+jest.mock('@lydell/node-pty', () => ({ spawn: jest.fn() }));
 
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerRoots: jest.fn(),
@@ -48,6 +51,7 @@ function parse(r: CallToolResult): Record<string, unknown> {
 const isWin = process.platform === 'win32';
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
 const mockedSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
+const mockedSpawnPty = spawnPty as jest.MockedFunction<typeof spawnPty>;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
@@ -133,6 +137,7 @@ afterEach(async () => {
   _resetBashShellCacheForTests();
   mockedSpawn.mockClear();
   mockedSpawnSync.mockClear();
+  mockedSpawnPty.mockReset();
   mockedRoots.mockReset();
 });
 
@@ -725,6 +730,35 @@ describe('bash sleep (fixed duration)', () => {
 });
 
 describe('bash background sessions', () => {
+  it.each(['start', 'open_terminal'])('keeps %s sessions distinct with a frozen clock and weak RNG', async (tool) => {
+    await withResolvedPwsh(async () => {
+      if (tool === 'start') {
+        mockCompletedChild('one');
+        mockCompletedChild('two');
+      }
+      mockedSpawnPty.mockImplementation(() => ({
+        onData: jest.fn(), onExit: jest.fn(), kill: jest.fn(),
+      }) as unknown as IPty);
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      const weakRandom = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      try {
+        const first = parse(await bashCallTool(tool, { command: 'fixture', shell: 'pwsh' }, undefined, 'owner-a'));
+        const second = parse(await bashCallTool(tool, { command: 'fixture', shell: 'pwsh' }, undefined, 'owner-a'));
+        expect(first.sessionId).toEqual(expect.any(String));
+        expect(second.sessionId).toEqual(expect.any(String));
+        expect(first.sessionId).not.toBe(second.sessionId);
+        const listTool = tool === 'start' ? 'list_sessions' : 'terminal_list';
+        const controlTool = tool === 'start' ? 'status' : 'terminal_read';
+        expect(parse(await bashCallTool(listTool, {}, undefined, 'owner-a')).sessions).toHaveLength(2);
+        expect((await bashCallTool(controlTool, { sessionId: first.sessionId }, undefined, 'owner-b')).isError)
+          .toBe(true);
+      } finally {
+        clock.mockRestore();
+        weakRandom.mockRestore();
+      }
+    });
+  });
+
   it('starts multiple independent sessions in parallel', async () => {
     mockCompletedChild('parallel-one');
     mockCompletedChild('parallel-two');
