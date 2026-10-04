@@ -1833,6 +1833,59 @@
         "simulatedDays": null
       },
       "scope": "Exact candidate verify run failed overall: Linux production and ordinary/isolated jobs passed; Windows production and final verification failed. A clean dependency audit cannot establish full build/release acceptance."
+    },
+    {
+      "ownerId": "engineering",
+      "observedAt": "2026-10-04T08:00:34.254Z",
+      "environment": {
+        "platform": "GitHub-hosted Ubuntu and Windows source verification",
+        "node": "Historical build 22.13.1 only; supported serial profiles 22.17.0, 22.23.3, 24.2.0 and 24.21.0; other guarded jobs select 22.23.3",
+        "provider": "GitHub Actions; no model/provider runtime",
+        "tools": "GitHub-hosted npm/git/Node; gh, SHA-256 and bounded .NET archive inspection by Docs"
+      },
+      "budgetIds": [],
+      "metrics": [],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactId": null,
+      "artifactProof": null,
+      "sourceSha": "bce52c3ec346c51db7fe2527039f88988b4c887e",
+      "kind": "source-check",
+      "integrity": "checksummed",
+      "limits": [
+        "Author inspection of actual hosted producer output and downloaded bytes; the producer execution was not independently repeated by Docs or the selected reviewer.",
+        "All 13 named verify-workflow checks passed at bce52c3e. This is a pull-request source workflow, not an exact-main publication or protected-merge authorization.",
+        "The canonical node-runtime.test.mjs suite was omitted at this predecessor. Later fixture/selector corrections do not retroactively establish its execution here.",
+        "Historical Node 22.13.1 qualifies only its ordinary default-heap build. Four supported Node profiles passed build/type/payload/packed-process steps on Ubuntu and Windows; their runtime reports are source/binary/process evidence.",
+        "The ordinary Jest result retains 893 passing and 5 skipped suites, 8385 passing and 11 skipped assertions. The opt-in diagnostic Persona job was skipped and supplies no acceptance.",
+        "CodeQL analysis job completion is not findings disposition or full selected-release security qualification. Native findings protection and required human/code-owner review are separate.",
+        "This result does not qualify later 7e2a07b0, coordinator 1a53970d or their new combined Docs source, nor identified distributed artifacts, browser/operator/profile/migration acceptance, human agreements, live providers, elapsed endurance or an independent A- grade."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37184135312",
+        "https://github.com/mario-andreschak/FLUJO/pull/735"
+      ],
+      "id": "build-verification-hosted-bce52c3e",
+      "result": "passed",
+      "commands": [
+        "GitHub verify workflow run 37184135312; all 13 named required jobs and actual results retained",
+        "Docs inspected terminal API metadata, exact executed/source trees, actual runtime reports and downloaded archive/output hashes"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/hosted-ci-bce52c3e.json",
+          "sha256": "5076c38effed76321f0719a5805928a1d7bf31905331ac38232fdb64aad3c7f2",
+          "verification": "local"
+        }
+      ],
+      "window": {
+        "kind": "elapsed",
+        "start": "2026-10-04T06:53:34Z",
+        "end": "2026-10-04T07:50:02Z",
+        "simulatedDays": null
+      },
+      "scope": "Exact bce52c3e source verify completed successfully: all 13 named checks, both OS production jobs and all four supported build/type/payload/packed-process profiles passed. This is predecessor source evidence; current combined candidate, protected main, identified release and all profile/human/live/grade acceptance remain pending."
     }
   ],
   "gates": [
@@ -1996,10 +2049,11 @@
         "persistent-worker",
         "shared-public"
       ],
-      "status": "failed",
-      "description": "Candidate b8cf905f hosted verify failed: Windows production/installed startup and final verification did not pass. Required typecheck, lint, ordinary/isolated tests, builds, release-safety and prerequisites still need an accepted exact candidate; earlier/partial passes do not qualify it.",
+      "status": "pending",
+      "description": "Historical b8cf905f verify failed; subsequent bce52c3e source verify passed all 13 named checks and four supported build/type/payload/packed-process profiles on both OSes. Both results remain retained. The new combined candidate and selected release still require their own exact-source full CI and profile/distribution acceptance; this predecessor success cannot qualify them.",
       "evidenceIds": [
-        "build-verification-hosted-b8cf905f"
+        "build-verification-hosted-b8cf905f",
+        "build-verification-hosted-bce52c3e"
       ]
     }
   ],

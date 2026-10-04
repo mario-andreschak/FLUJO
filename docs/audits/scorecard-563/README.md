@@ -323,3 +323,10 @@ other topics own their feature/architecture/operations guides. The
 and candidate wording for their review. The foundation changed project-status; later
 publication changes have their own source receipts. The actual release needs a fresh
 inventory and claim reconciliation after integration.
+
+The [subsequent bce52c3e source workflow receipt](evidence/hosted-ci-bce52c3e.json)
+retains all thirteen named checks and the four supported Node build/type/payload/packed-process
+profiles passing on both OSes. Its ordinary Jest skips and omitted canonical runtime suite
+remain explicit. The earlier b8cf905f failure is preserved; the current combined candidate
+and selected-release/profile acceptance remain pending. This chronology changes the build
+gate to pending and supplies no human/live/security/grade acceptance.
