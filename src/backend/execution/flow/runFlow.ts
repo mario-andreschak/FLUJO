@@ -3180,7 +3180,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // A cancellation that lands while the final step is completing (or one the
   // provider ignored) must not let the run report 'completed' — Stop means
   // stop, even when the model's answer won the race.
-  if (currentAction !== ERROR_ACTION && runCancelled()) {
+  // Evaluate cancellation even when the SDK abort became ERROR_ACTION, so its
+  // durable recovery record cannot classify an intentional stop as retryable.
+  if (runCancelled() && currentAction !== ERROR_ACTION) {
     log.info(`Cancellation flag set at run end for conv ${effectiveConvId}; reporting cancelled instead of '${sharedState.status}'.`);
     sharedState.status = 'error';
     sharedState.lastResponse = { success: false, error: 'Execution cancelled by user.' };
