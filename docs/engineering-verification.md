@@ -4,6 +4,11 @@ Source checks, repository settings, distribution acceptance and human review are
 separate evidence. This change does not award a scorecard grade or authorize a
 merge, release, deployment, provider run or live controller operation.
 
+The [October 3 repository-control observations](audits/scorecard-563/engineering-repository-controls.md)
+record the active main policy and actual disposable-branch denials. They also
+retain the failed positive control and the remaining acceptance work; a policy
+payload or denied merge alone does not establish release readiness.
+
 ## Source contract
 
 `scripts/verification-contract.mjs` lists the required jobs and displayed check
@@ -33,7 +38,7 @@ jobs declaring writes require review. CodeQL has only source/actions read and
 security-results write permissions. Privileged publisher/installer jobs retain
 their existing separately scoped authority pending the distribution slice.
 
-## Scanner coverage and current blockers
+## Scanner coverage and baseline observations
 
 The dependency job audits the installed lockfile including development/build
 dependencies, preserves the JSON report, and fails at high/critical severity.
@@ -44,8 +49,9 @@ secrets. Secret detection/push protection must be verified in repository
 settings. Vulnerability response/private reporting belong to `SECURITY.md` and
 the Security topic; their human tabletop is still required.
 
-Read-only observations on October 3, 2026, against main
-`3511ba49514fe8cf525f5a22c16c3806bf3886ba`:
+Initial read-only observations on October 3, 2026, against main
+`3511ba49514fe8cf525f5a22c16c3806bf3886ba` follow. These are historical baseline
+observations, not the current repository settings or candidate audit result:
 
 - Effective main rules: empty. Visible ruleset `18583448`: disabled.
 - Current token: push/triage/pull, without admin or maintain permissions.
@@ -62,10 +68,11 @@ Read-only observations on October 3, 2026, against main
 
 ## Administrator configuration
 
-An administrator must review and apply
+For a new repository or a policy change, an administrator must review and apply
 `.github/rulesets/main-verification.json`. It is a proposed API payload,
-**not evidence that the rules are active**. It requires one independent
-approval, stale-approval dismissal, code-owner review, last-push approval,
+**not evidence that the rules are active**. The observed active policy for this
+repository is recorded in the linked control evidence. The payload requires one
+independent approval, stale-approval dismissal, code-owner review, last-push approval,
 resolved threads, up-to-date checks from GitHub Actions app `15368`, CodeQL
 high/critical findings protection, no force pushes/deletion, and an empty
 bypass list. The app ID was observed on baseline check runs; reverify it.
@@ -129,5 +136,7 @@ policy. This recipe does not attempt a merge into main.
 
 Retain source SHA, OS/Node/npm versions, exact commands, failures/skips,
 run/attempt IDs, artifact hashes and human owner in #564/#578's evidence ledger.
-The drill, fresh scanner/remediation evidence, installed-release acceptance,
-human security/release tabletop and independent reassessment remain open.
+The negative-control denials are recorded in the linked evidence. An allowed
+positive merge, stale-approval control, final-candidate scanner evidence,
+installed-release acceptance, human security/release tabletop and independent
+reassessment remain open.

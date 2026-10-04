@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "topic": "engineering",
+  "issue": 565,
+  "epic": 563,
+  "scope": "Observed repository controls and disposable precursor fixtures; no final-candidate or release acceptance",
+  "observedAtUtc": "2026-10-04T01:26:49.572Z",
+  "observedLocalDate": "2026-10-03",
+  "timeZone": "America/Bogota",
+  "acceptedGrade": null,
+  "sourceBranchBase": "a9a974a10c543dafdcc5683f57b3c747514ee5a4",
+  "policy": {
+    "main": {
+      "id": 24434701,
+      "url": "https://github.com/mario-andreschak/FLUJO/settings/rules/24434701",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "exclude": [],
+          "include": [
+            "refs/heads/main"
+          ]
+        }
+      },
+      "rules": [
+        {
+          "type": "deletion"
+        },
+        {
+          "type": "non_fast_forward"
+        },
+        {
+          "type": "pull_request",
+          "parameters": {
+            "required_approving_review_count": 1,
+            "dismiss_stale_reviews_on_push": true,
+            "required_reviewers": [],
+            "require_code_owner_review": true,
+            "require_last_push_approval": true,
+            "required_review_thread_resolution": true,
+            "require_extra_approval_for_unattributed_changes": true,
+            "allowed_merge_methods": [
+              "merge",
+              "squash",
+              "rebase"
+            ]
+          }
+        },
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "strict_required_status_checks_policy": true,
+            "do_not_enforce_on_create": false,
+            "required_status_checks": [
+              {
+                "context": "Production build (ubuntu-latest)",
+                "integration_id": 15368
+              },
+              {
+                "context": "Production build (windows-latest)",
+                "integration_id": 15368
+              },
+              {
+                "context": "Release safety (ubuntu-latest)",
+                "integration_id": 15368
+              },
+              {
+                "context": "Release safety (windows-latest)",
+                "integration_id": 15368
+              },
+              {
+                "context": "typecheck",
+                "integration_id": 15368
+              },
+              {
+                "context": "lint",
+                "integration_id": 15368
+              },
+              {
+                "context": "test",
+                "integration_id": 15368
+              },
+              {
+                "context": "test-isolated",
+                "integration_id": 15368
+              },
+              {
+                "context": "workflow-contract",
+                "integration_id": 15368
+              },
+              {
+                "context": "dependency-security",
+                "integration_id": 15368
+              },
+              {
+                "context": "CodeQL (javascript-typescript)",
+                "integration_id": 15368
+              },
+              {
+                "context": "CodeQL (actions)",
+                "integration_id": 15368
+              },
+              {
+                "context": "verification",
+                "integration_id": 15368
+              }
+            ]
+          }
+        },
+        {
+          "type": "code_scanning",
+          "parameters": {
+            "code_scanning_tools": [
+              {
+                "tool": "CodeQL",
+                "security_alerts_threshold": "high_or_higher",
+                "alerts_threshold": "errors"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "probe": {
+      "id": 24435558,
+      "url": "https://github.com/mario-andreschak/FLUJO/settings/rules/24435558",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "exclude": [],
+          "include": [
+            "refs/heads/codex/gate-probe-base-20261004"
+          ]
+        }
+      }
+    },
+    "apiVisibleRulesExactlyEqual": true,
+    "bypass": {
+      "apiFieldVisible": false,
+      "ownerUiObserved": {
+        "observedAtUtc": "2026-10-04T01:26:49.572Z",
+        "main": {
+          "rulesetId": 24434701,
+          "enforcement": "active",
+          "bypassList": "empty",
+          "target": "refs/heads/main"
+        },
+        "probe": {
+          "rulesetId": 24435558,
+          "enforcement": "active",
+          "bypassList": "empty",
+          "target": "refs/heads/codex/gate-probe-base-20261004"
+        },
+        "scope": "read-only owner UI observation; no settings changed"
+      },
+      "administratorApiAuditorPassClaimed": false,
+      "omittedApiFieldIsEmptyList": false
+    }
+  },
+  "contributor": {
+    "login": "flujo-app",
+    "permissions": {
+      "admin": false,
+      "maintain": false,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "permissionsRevalidatedAtUtc": "2026-10-04T01:33:51.8908388+00:00"
+  },
+  "negativeControl": {
+    "pr": 631,
+    "url": "https://github.com/mario-andreschak/FLUJO/pull/631",
+    "head": "d0612e2df1a8e9cb7fb377631b18fd06d3a884d5",
+    "protectedBase": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+    "run": {
+      "id": 37164120406,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37164120406",
+      "status": "completed",
+      "conclusion": "failure",
+      "workflowContract": {
+        "passed": 28,
+        "failed": 1,
+        "intentionalFailure": "expected red gate"
+      },
+      "finalVerification": {
+        "jobId": 111327178664,
+        "conclusion": "failure"
+      }
+    },
+    "merge": {
+      "observedAtUtc": "2026-10-04T00:40:08.6952015Z",
+      "actor": "flujo-app",
+      "cli": {
+        "exitCode": 1,
+        "output": [
+          "X Pull request mario-andreschak/FLUJO#631 is not mergeable: the base branch policy prohibits the merge.",
+          "To have the pull request merged after all the requirements have been met, add the `--auto` flag.",
+          "To use administrator privileges to immediately merge the pull request, add the `--admin` flag."
+        ]
+      },
+      "api": {
+        "method": "PUT",
+        "route": "repos/mario-andreschak/FLUJO/pulls/631/merge",
+        "exitCode": 1,
+        "httpStatus": 405,
+        "response": {
+          "message": "Repository rule violations found\n\nWaiting on code owner review from mario-andreschak.\n\n5 of 13 required status checks have not succeeded: 4 failing.\n\n",
+          "documentation_url": "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request",
+          "status": "405"
+        }
+      },
+      "baseBefore": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+      "baseAfter": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+      "prAfter": {
+        "baseRefOid": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+        "headRefOid": "d0612e2df1a8e9cb7fb377631b18fd06d3a884d5",
+        "mergeStateStatus": "BLOCKED",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "state": "OPEN"
+      },
+      "additionalBlockers": [
+        "independent Code Owner review missing",
+        "ordinary test baseline failed on this precursor source",
+        "Ubuntu release safety failed from intentional contract assertion",
+        "Windows release safety cancelled by matrix fail-fast"
+      ]
+    },
+    "directPush": {
+      "observedAt": "2026-10-04T00:26:31.0706466Z",
+      "actor": "flujo-app",
+      "target": "refs/heads/codex/gate-probe-base-20261004",
+      "source": "d0612e2df1a8e9cb7fb377631b18fd06d3a884d5",
+      "operation": "ordinary direct fast-forward push",
+      "exitCode": 1,
+      "output": [
+        "remote: error: GH013: Repository rule violations found for refs/heads/codex/gate-probe-base-20261004.        ",
+        "remote: Review all repository rules at https://github.com/mario-andreschak/FLUJO/rules?ref=refs%2Fheads%2Fcodex%2Fgate-probe-base-20261004        ",
+        "remote: ",
+        "remote: - Waiting on code owner review from mario-andreschak.        ",
+        "remote: ",
+        "remote: - 5 of 13 required status checks have not succeeded: 1 expected and 2 failing.        ",
+        "remote: ",
+        "To https://github.com/mario-andreschak/FLUJO.git",
+        " ! [remote rejected]   d0612e2df1a8e9cb7fb377631b18fd06d3a884d5 -> codex/gate-probe-base-20261004 (push declined due to repository rule violations)",
+        "error: failed to push some refs to 'https://github.com/mario-andreschak/FLUJO.git'"
+      ],
+      "baseBefore": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+      "baseAfter": "41921e125fe2750309aa39ff05edede4ff6dcaea"
+    },
+    "forcePush": {
+      "observedAt": "2026-10-04T00:26:33.8104617Z",
+      "actor": "flujo-app",
+      "target": "refs/heads/codex/gate-probe-base-20261004",
+      "source": "9d0afcb05aef57e3f790d1e78c4354b84bade4c8",
+      "operation": "non-fast-forward push with exact lease",
+      "lease": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+      "exitCode": 1,
+      "output": [
+        "remote: error: GH013: Repository rule violations found for refs/heads/codex/gate-probe-base-20261004.        ",
+        "remote: Review all repository rules at https://github.com/mario-andreschak/FLUJO/rules?ref=refs%2Fheads%2Fcodex%2Fgate-probe-base-20261004        ",
+        "remote: ",
+        "remote: - Cannot force-push to this branch        ",
+        "remote: ",
+        "remote: - Changes must be made through a pull request.        ",
+        "remote: ",
+        "remote: - 13 of 13 required status checks are expected.        ",
+        "remote: ",
+        "remote: - Waiting for Code Scanning results. Code Scanning may not be configured for the target branch.        ",
+        "remote: ",
+        "To https://github.com/mario-andreschak/FLUJO.git",
+        " ! [remote rejected]   9d0afcb05aef57e3f790d1e78c4354b84bade4c8 -> codex/gate-probe-base-20261004 (push declined due to repository rule violations)",
+        "error: failed to push some refs to 'https://github.com/mario-andreschak/FLUJO.git'"
+      ],
+      "baseBefore": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+      "baseAfter": "41921e125fe2750309aa39ff05edede4ff6dcaea"
+    },
+    "qualification": "Actual GitHub denial on a main-equivalent disposable policy. Named gate failure is confirmed; additional blockers remain, so this does not isolate failed-check causality or prove allowed positive merge."
+  },
+  "positiveControl": {
+    "pr": 639,
+    "url": "https://github.com/mario-andreschak/FLUJO/pull/639",
+    "head": "edf6531786a11af55023dddce845bccaf6ec67ee",
+    "protectedBase": "41921e125fe2750309aa39ff05edede4ff6dcaea",
+    "change": "one informational marker",
+    "run": {
+      "id": 37165111072,
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072",
+      "status": "completed",
+      "conclusion": "failure",
+      "attempt": 1,
+      "updatedAtUtc": "2026-10-04T01:16:01Z"
+    },
+    "requiredJobs": [
+      {
+        "id": 111326328046,
+        "name": "dependency-security",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328046"
+      },
+      {
+        "id": 111326328107,
+        "name": "Release safety (windows-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328107"
+      },
+      {
+        "id": 111326328127,
+        "name": "typecheck",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328127"
+      },
+      {
+        "id": 111326328137,
+        "name": "Release safety (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328137"
+      },
+      {
+        "id": 111326328141,
+        "name": "workflow-contract",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328141"
+      },
+      {
+        "id": 111326328146,
+        "name": "CodeQL (javascript-typescript)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328146"
+      },
+      {
+        "id": 111326328150,
+        "name": "Production build (windows-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328150"
+      },
+      {
+        "id": 111326328162,
+        "name": "Production build (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328162"
+      },
+      {
+        "id": 111326328166,
+        "name": "CodeQL (actions)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328166"
+      },
+      {
+        "id": 111326328193,
+        "name": "test-isolated",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328193"
+      },
+      {
+        "id": 111326328273,
+        "name": "test",
+        "status": "completed",
+        "conclusion": "failure",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328273"
+      },
+      {
+        "id": 111326328310,
+        "name": "lint",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111326328310"
+      },
+      {
+        "id": 111333314776,
+        "name": "verification",
+        "status": "completed",
+        "conclusion": "failure",
+        "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37165111072/job/111333314776"
+      }
+    ],
+    "optionalDiagnostic": [
+      {
+        "id": 111326328623,
+        "name": "diagnostic Persona memory profile (not release acceptance)",
+        "status": "completed",
+        "conclusion": "skipped"
+      }
+    ],
+    "ordinaryReport": {
+      "suites": {
+        "failed": 6,
+        "skipped": 5,
+        "passed": 858,
+        "selected": 864,
+        "total": 869
+      },
+      "assertions": {
+        "failed": 4,
+        "skipped": 11,
+        "passed": 7945,
+        "total": 7960
+      }
+    },
+    "allowedMergeProven": false,
+    "staleApprovalControlProven": false,
+    "scannerFindingsClearClaimed": false,
+    "qualification": "Failed precursor control; do not infer newer integration behavior or final release acceptance from this run"
+  },
+  "remaining": [
+    "All 13 required checks and both configured scanner categories at the exact final candidate",
+    "Compliant protected merge and qualified positive/stale-review controls",
+    "Release identities and provenance bound to merged main SHA",
+    "Actual npm/image/installer and installed-consumer distribution checks",
+    "Human security/release response tabletop and independent A- reassessment"
+  ],
+  "rawEvidence": {
+    "retained": true,
+    "retentionLocation": "Engineering evidence directory owned by this topic chat",
+    "hashAlgorithm": "SHA-256",
+    "files": [
+      {
+        "file": "probe-final-merge-denial.json",
+        "sha256": "f0a895a911b6ffd36bb7533b102a3c2dc06ae09dba5d4210d374488490d2d29d"
+      },
+      {
+        "file": "probe-direct-push-denial.json",
+        "sha256": "f7702df1f19f6a3a43b12b8813dc44bf185b8f58fa75b6fae5ad8069632905d8"
+      },
+      {
+        "file": "probe-force-push-denial.json",
+        "sha256": "6b195dfb7cd1794f9bb2d0675a9007a7e012f0fa08e2de6c228f780dc1545ad9"
+      },
+      {
+        "file": "main-ruleset-current-24434701.json",
+        "sha256": "0431bba7ff1f58a73314942be48ff534a162ae72b7440b973310201d69cfb26a"
+      },
+      {
+        "file": "probe-ruleset-current-24435558.json",
+        "sha256": "da12494c823401b522bc624a00c042cae27a5c1e9a9b1990f18e8dfd0b13c940"
+      },
+      {
+        "file": "main-ruleset-current-ui.txt",
+        "sha256": "dd8b994d82e015f43d9a2d72569e83d9c40b510a41e6fff84aa2b8eeb68c58c0"
+      },
+      {
+        "file": "main-ruleset-current-ui.jpg",
+        "sha256": "166f2d5a2ed7bfb9fc01d9cb6e676232370e8dd5949e1a0a802d0ac4391551ec"
+      },
+      {
+        "file": "probe-ruleset-current-ui.txt",
+        "sha256": "c009891c8cd379ca4d122c15dc0fc1daadf9419653171339726e101412a0bb37"
+      },
+      {
+        "file": "probe-ruleset-current-ui.jpg",
+        "sha256": "2cba6e424f5730c7008316a5fd9145add8fa337faada977077562c4189243b75"
+      },
+      {
+        "file": "repository-control-ui-observation.json",
+        "sha256": "e125b7df516c7c1f31720bc43060f64b3fe7213ed42b892ecc3bbaf670f80e1a"
+      },
+      {
+        "file": "probe-positive-final-run-37165111072.json",
+        "sha256": "d2c6bdfd30c98494bebf284af524ee39f083f1b97cc4e47cfc2710b240fc0007"
+      },
+      {
+        "file": "probe-positive-final-jobs-37165111072.json",
+        "sha256": "bfa9e8a06dd89e9cd27afec7607f9d99204aac6da6cbfeb0dc34c00d0a0a59b1"
+      },
+      {
+        "file": "probe-positive-test-111326328273.log",
+        "sha256": "630eed467d51e5f64966a0becc947260408977953ad5ae9464d9e694194270eb"
+      }
+    ]
+  }
+}
