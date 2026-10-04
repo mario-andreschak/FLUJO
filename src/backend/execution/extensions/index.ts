@@ -328,6 +328,15 @@ export async function executionExtensionSinglePhysicalAttempt(
   return true;
 }
 
+/** Reject owner-bound records at the concrete adapter boundary, before any
+ * native SDK, CLI, or local credential can be used. This check is synchronous
+ * and does not consult an owner or provider. */
+export function assertOwnerCredentialAdapterRoute(model: Model, concreteRoute: CompletionAdapterRoute): void {
+  if (isOwnerCredentialBoundModel(model) && concreteRoute !== 'openai') {
+    throw new ExecutionExtensionError('execution_owner_model_adapter_unsupported');
+  }
+}
+
 /** Direct adapter entry points must not treat a model's declared route as proof
  * that this concrete adapter has the protected pre-send claim boundary. */
 export async function assertExecutionExtensionConcreteAdapter(

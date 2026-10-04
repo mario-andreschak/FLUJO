@@ -161,6 +161,31 @@ beforeEach(() => {
 });
 
 describe('CodexAdapter — thread setup', () => {
+  it('rejects a direct owner-bound call before runtime setup or SDK construction', async () => {
+    const runtime = (jest.requireMock('@/backend/services/model/adapters/codexRuntimeHome') as {
+      prepareCodexRuntimeEnvironment: jest.Mock;
+    }).prepareCodexRuntimeEnvironment;
+    const catalog = (jest.requireMock('@/backend/services/model/adapters/codexModelCatalog') as {
+      resolveCodexModelCatalogPath: jest.Mock;
+    }).resolveCodexModelCatalogPath;
+    runtime.mockClear();
+    catalog.mockClear();
+
+    await expect(new CodexAdapter().createCompletion(baseInput({
+      model: {
+        id: 'owner-model', name: 'gpt-5.5', ApiKey: '', provider: 'codex', adapter: 'openai',
+        ownerCredentialBinding: { ownerId: 'owner', credentialId: 'credential' },
+      },
+      apiKey: 'local-secret',
+    }))).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+
+    expect(runtime).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+    expect(codexCtorMock).not.toHaveBeenCalled();
+    expect(startThreadMock).not.toHaveBeenCalled();
+    expect(runStreamedMock).not.toHaveBeenCalled();
+  });
+
   it('does not call or retry the SDK after archive authority is lost', async () => {
     const lost = new FlowExecutionAuthorityError('Persona was deleted');
     await expect(new CodexAdapter().createCompletion(baseInput({

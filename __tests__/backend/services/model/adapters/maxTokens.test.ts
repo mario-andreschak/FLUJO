@@ -52,6 +52,14 @@ const geminiGenerateStream =
 
 const MODEL: Model = { id: 'm1', name: 'test-model', ApiKey: 'key' } as Model;
 const MESSAGES: OpenAI.ChatCompletionMessageParam[] = [{ role: 'user', content: 'hi' }];
+const OWNER_BOUND_MODEL: Model = {
+  id: 'owner-model',
+  name: 'test-model',
+  ApiKey: '',
+  provider: 'openai',
+  adapter: 'openai',
+  ownerCredentialBinding: { ownerId: 'owner', credentialId: 'credential' },
+};
 
 describe('max_tokens threading across the completion-adapter seam (issue #173)', () => {
   beforeEach(() => {
@@ -73,6 +81,39 @@ describe('max_tokens threading across the completion-adapter seam (issue #173)',
     geminiGenerate.mockResolvedValue({
       candidates: [{ content: { parts: [{ text: 'hi' }] } }],
       usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 },
+    });
+  });
+
+  describe('direct native adapter owner-credential boundary', () => {
+    test.each(['createCompletion', 'createStreamCompletion'] as const)(
+      'Anthropic %s rejects an owner-bound model before constructing the SDK client',
+      async method => {
+        await expect(new AnthropicAdapter()[method]({
+          model: OWNER_BOUND_MODEL, apiKey: 'local-secret', messages: MESSAGES,
+        })).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+        expect(jest.requireMock('@anthropic-ai/sdk').default).not.toHaveBeenCalled();
+        expect(anthropicCreate).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each(['createCompletion', 'createStreamCompletion'] as const)(
+      'Gemini %s rejects an owner-bound model before constructing the SDK client',
+      async method => {
+        await expect(new GeminiAdapter()[method]({
+          model: OWNER_BOUND_MODEL, apiKey: 'local-secret', messages: MESSAGES,
+        })).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+        expect(jest.requireMock('@google/genai').GoogleGenAI).not.toHaveBeenCalled();
+        expect(geminiGenerate).not.toHaveBeenCalled();
+        expect(geminiGenerateStream).not.toHaveBeenCalled();
+      },
+    );
+
+    test('a malformed binding remains protected on the direct native path', async () => {
+      await expect(new AnthropicAdapter().createCompletion({
+        model: { ...OWNER_BOUND_MODEL, ownerCredentialBinding: null } as unknown as Model,
+        apiKey: 'local-secret', messages: MESSAGES,
+      })).rejects.toMatchObject({ code: 'execution_owner_model_adapter_unsupported' });
+      expect(jest.requireMock('@anthropic-ai/sdk').default).not.toHaveBeenCalled();
     });
   });
 

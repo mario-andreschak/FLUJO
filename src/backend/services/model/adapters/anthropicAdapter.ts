@@ -13,6 +13,7 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
+import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -655,6 +656,7 @@ export class AnthropicAdapter implements CompletionAdapter {
       options?: { signal: AbortSignal }
     ) => Promise<{ message: Anthropic.Message; liveMessageId?: string }>
   ): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(model, 'anthropic');
     const client = new Anthropic({
       apiKey,
       // Honour a custom base URL if one was configured; otherwise the SDK

@@ -42,6 +42,7 @@ import {
   invalidateSession,
 } from './claudeSessionStore';
 import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
+import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import {
@@ -341,6 +342,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // require SDK-managed sampling-control support that does not exist today; if
     // that is ever desired, revisit this seam (issues #173 and #191).
   }: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(model, 'claude-cli');
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.

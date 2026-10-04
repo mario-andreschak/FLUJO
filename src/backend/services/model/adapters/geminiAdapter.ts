@@ -10,6 +10,7 @@ import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import type { FlujoFunctionToolCall } from '@/shared/types/openai';
+import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/services/model/adapters/geminiAdapter');
 
@@ -346,6 +347,7 @@ export class GeminiAdapter implements CompletionAdapter {
     onSdkRequest,
     onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(model, 'gemini');
     // Raise the per-request timeout (SDK default is short relative to a long
     // agentic turn) via httpOptions; see shared timeouts config.
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
@@ -411,6 +413,7 @@ export class GeminiAdapter implements CompletionAdapter {
     onSdkRequest,
     onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
+    assertOwnerCredentialAdapterRoute(model, 'gemini');
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
     const functionDeclarations = toGeminiTools(tools);
