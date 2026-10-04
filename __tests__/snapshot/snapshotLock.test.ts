@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, type BigIntStats } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -161,7 +161,8 @@ describe('snapshot lease publication and generation ownership', () => {
         candidateOwnerPath = String(args[0]);
         const stat = handle.stat.bind(handle);
         jest.spyOn(handle, 'stat').mockImplementation(async (...options) => {
-          const value = await stat(...options);
+          expect(options[0]).toEqual({ bigint: true });
+          const value = await stat({ bigint: true });
           return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding });
         });
       }
@@ -188,8 +189,9 @@ describe('snapshot lease publication and generation ownership', () => {
     jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (String(args[0]).startsWith(`${lock}.candidate-`) && args[1] === 'wx') {
-        const stat = handle.stat.bind(handle);
-        jest.spyOn(handle, 'stat').mockImplementation(async (...options) => {
+        const bigintHandle: { stat: (options: { bigint: true }) => Promise<BigIntStats> } = handle;
+        const stat = bigintHandle.stat.bind(handle);
+        jest.spyOn(bigintHandle, 'stat').mockImplementation(async (...options) => {
           const value = await stat(...options);
           return Object.assign(Object.create(Object.getPrototypeOf(value)), value, {
             mtimeNs: value.mtimeNs - BigInt(100), ctimeNs: value.ctimeNs - BigInt(100),
