@@ -260,8 +260,9 @@ checks distribution consistency and the candidate pin, exact-source official
 `main` verification including every required current-attempt job, completed
 JavaScript/Actions analyses and absence of open main CodeQL findings. It verifies
 all distribution attestations with the existing signer workflow, source/ref and
-self-hosted-runner restrictions. It rechecks verification/alerts after signatures,
-and repeats admission before declaring the whole drill passed. A live, missing,
+self-hosted-runner restrictions. After signatures, it reads verification, the
+latest source analyses and open alerts again, and repeats admission before
+declaring the whole drill passed. A live, missing,
 failed or partial gate stops the operation; a local mock or source fixture does
 not qualify a candidate. Existing reviewed/dismissed findings may still be present
 in analysis results; the receipt reports those counts separately from open alerts.

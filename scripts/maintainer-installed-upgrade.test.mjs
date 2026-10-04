@@ -55,7 +55,11 @@ function commands(changes = {}) {
       headSha: source, headBranch: 'main', event: 'push', status: 'completed', conclusion: 'success' }]);
     const endpoint = argv[1];
     if (endpoint.endsWith('actions/workflows/verify.yml')) return JSON.stringify({ id: 9, path: '.github/workflows/verify.yml', state: 'active' });
-    if (endpoint.includes('/code-scanning/analyses')) return JSON.stringify([changes.analyses ?? analyses()]);
+    if (endpoint.includes('/code-scanning/analyses')) {
+      const entries = signerCalled && Object.hasOwn(changes, 'analysesAfterSigner')
+        ? changes.analysesAfterSigner : changes.analyses ?? analyses();
+      return JSON.stringify([entries]);
+    }
     if (endpoint.includes('/code-scanning/alerts')) return JSON.stringify([(signerCalled && changes.alertsAfterSigner) || changes.alerts || []]);
     if (endpoint.includes('/attempts/')) return JSON.stringify([{ jobs: changes.jobs ?? REQUIRED_CHECK_NAMES.map(name => ({ name, status: 'completed', conclusion: 'success' })) }]);
     if (endpoint.endsWith('/actions/runs/7')) return JSON.stringify({ id: 7, workflow_id: 9, head_sha: source,
@@ -137,5 +141,29 @@ test('new failed verification or open alerts during signer checks invalidate pri
     const fixture = commands(changes);
     await assert.rejects(qualifyCandidate(bundle(), fixture.run), /concluded failure|open main CodeQL/);
     assert.ok(fixture.calls.some(call => call.argv[0] === 'attestation'));
+  }
+});
+
+test('signer scan refresh rejects new incomplete source analyses before admission', async () => {
+  const warned = analyses().concat({ ...analyses()[0], id: 201, warning: 'partial extraction' });
+  const failed = analyses().concat({ ...analyses()[1], id: 202, error: 'failed extraction' });
+  const wrongSource = analyses().map(item => ({ ...item, commit_sha: 'c'.repeat(40) }));
+  for (const entries of [[], null, analyses().slice(0, 1), warned, failed, wrongSource]) {
+    const fixture = commands({ analysesAfterSigner: entries });
+    await assert.rejects(qualifyCandidate(bundle(), fixture.run), /missing|warned|final candidate analyses/);
+    assert.equal(fixture.calls.filter(call => call.argv[0] === 'attestation').length, PUBLIC_PACKAGES.length + 3);
+  }
+});
+
+test('signer scan refresh retains the newest valid analyses in admission evidence', async () => {
+  const latest = analyses().map(item => ({ ...item, id: item.id + 100 }));
+  const fixture = commands({ analysesAfterSigner: latest });
+  const result = await qualifyCandidate(bundle(), fixture.run);
+  assert.deepEqual(result.scans.map(item => item.id), latest.map(item => item.id));
+  const reads = fixture.calls.filter(call => call.argv[1]?.includes('/code-scanning/analyses'));
+  assert.equal(reads.length, 2);
+  for (const { argv } of reads) {
+    assert.ok(argv[1].includes('ref=refs%2Fheads%2Fmain'));
+    assert.ok(argv.includes('--paginate')); assert.ok(argv.includes('--slurp'));
   }
 });

@@ -105,13 +105,15 @@ export async function qualifyCandidate(options, run) {
   const analysisPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/analyses?ref=refs%2Fheads%2Fmain&per_page=100`, '--paginate', '--slurp']));
   const alertPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/alerts?ref=refs%2Fheads%2Fmain&state=open&per_page=100`, '--paginate', '--slurp']));
   if (![analysisPages, alertPages].every(pages => Array.isArray(pages) && pages.every(Array.isArray))) throw new Error('Invalid paginated candidate scan evidence.');
-  const scans = assertCandidateScans(analysisPages.flat(), alertPages.flat(), revision);
+  assertCandidateScans(analysisPages.flat(), alertPages.flat(), revision);
   verifyReleaseAttestations({ run, directory: candidateEvidence, sha: revision, version: candidate.version });
   const finalRun = await requireSuccessfulVerification(verificationOptions);
   if (finalRun !== verificationRunId || acceptedAttempt.attempt !== acceptedAttemptNumber) throw new Error('Candidate verification changed while verifying signatures.');
+  const finalAnalyses = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/analyses?ref=refs%2Fheads%2Fmain&per_page=100`, '--paginate', '--slurp']));
+  if (!Array.isArray(finalAnalyses) || !finalAnalyses.every(Array.isArray)) throw new Error('Invalid final candidate analyses response.');
   const finalAlerts = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/alerts?ref=refs%2Fheads%2Fmain&state=open&per_page=100`, '--paginate', '--slurp']));
   if (!Array.isArray(finalAlerts) || !finalAlerts.every(Array.isArray)) throw new Error('Invalid final candidate alerts response.');
-  assertCandidateScans(analysisPages.flat(), finalAlerts.flat(), revision);
+  const scans = assertCandidateScans(finalAnalyses.flat(), finalAlerts.flat(), revision);
   return { result: 'passed-automated-candidate-admission', version: candidate.version, sourceRevision: revision,
     integrity: candidate.integrity, verificationRunId, acceptedAttempt, scans, openMainCodeqlFindings: 0,
     signerWorkflow: `${repository}/.github/workflows/publish-npm.yml`, signerSourceRef: 'refs/heads/main',
