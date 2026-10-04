@@ -18,6 +18,7 @@ import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
+import { withModelCatalogWriteLease } from '@/backend/services/model/catalogAdmission';
 
 const log = createLogger('app/api/restore/route');
 
@@ -251,6 +252,8 @@ async function POST_handler(request: NextRequest) {
               log.warn(`Skipped restoring a flow [${requestId}]:`, result.error);
             }
           }
+        } else if (storageKey === StorageKey.MODELS) {
+          await withModelCatalogWriteLease(() => saveItem(storageKey, data));
         } else {
           await saveItem(storageKey, data);
         }

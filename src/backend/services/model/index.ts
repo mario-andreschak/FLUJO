@@ -41,6 +41,7 @@ import { resolveCompletionAdapterRoute } from './adapters/completionRoute';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
+import { withModelCatalogWriteLease } from './catalogAdmission';
 
 /**
  * Result of a direct (single-turn) chat completion through ModelService.
@@ -114,6 +115,14 @@ class ModelService {
    * Add a new model
    */
   async addModel(model: Model): Promise<ModelOperationResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.addModelWithinLease(model));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+    }
+  }
+
+  private async addModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
       const configurationError = validateModelConfiguration(model);
@@ -214,6 +223,14 @@ class ModelService {
    * Update an existing model
    */
   async updateModel(model: Model): Promise<ModelOperationResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.updateModelWithinLease(model));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+    }
+  }
+
+  private async updateModelWithinLease(model: Model): Promise<ModelOperationResponse> {
     log.debug('updateModel: Entering method');
     try {
       log.debug('updateModel: validating model metadata', {
@@ -336,6 +353,14 @@ class ModelService {
    * Delete a model by ID
    */
   async deleteModel(id: string): Promise<ModelServiceResponse> {
+    try {
+      return await withModelCatalogWriteLease(() => this.deleteModelWithinLease(id));
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Model catalog is unavailable' };
+    }
+  }
+
+  private async deleteModelWithinLease(id: string): Promise<ModelServiceResponse> {
     log.debug('deleteModel: Entering method');
     try {
       // Validate required fields

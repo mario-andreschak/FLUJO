@@ -18,6 +18,8 @@ import type { ModelInputSnapshot } from '../types';
 // Input for model call
 export interface ModelCallInput {
   modelId: string;
+  /** Process preparation's detached model, held to dispatch by a catalog fence. */
+  modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
   prompt: string;
   messages: FlujoChatMessage[]; // Use FlujoChatMessage
   /**

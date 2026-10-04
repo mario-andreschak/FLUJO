@@ -27,6 +27,7 @@ import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handl
 import { buildSubflowCommunicationTools } from '../subflowCommunication';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
+import { admitCatalogModel, assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
@@ -368,12 +369,32 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   }
 
   async prep(sharedState: SharedState, node_params?: ProcessNodeParams): Promise<ProcessNodePrepResult> {
+    if (isExecutionProtectedState(sharedState) && !sharedState.executionExtensionContext) {
+      throw new ExecutionExtensionError('trusted_execution_context_required');
+    }
+    const boundModel = node_params?.properties?.boundModel;
+    if (!boundModel) throw new Error('Process node requires a bound model');
+    // This lease starts before the first catalog lookup and stays outside the
+    // workspace mutation gate while resource/MCP preparation runs. A catalog
+    // writer cannot turn a missing or ordinary model into an owner-bound model
+    // between the preflight and any preparation effect.
+    return withModelCatalogLease(async () => {
+      const admission = await admitCatalogModel(boundModel);
+      return this.prepAdmitted(sharedState, node_params, admission);
+    });
+  }
+
+  private async prepAdmitted(
+    sharedState: SharedState,
+    node_params: ProcessNodeParams | undefined,
+    admission: ModelCatalogAdmission,
+  ): Promise<ProcessNodePrepResult> {
     log.info('prep() started');
 
     // Extract properties from node_params
     const nodeId = node_params?.id;
     const flowId = sharedState.flowId;
-    const boundModel = node_params?.properties?.boundModel;
+    const boundModel = admission.model.id;
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
@@ -415,9 +436,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // for a model that only the original owner may dispatch. ModelHandler also
     // checks this at the provider boundary, after those preparation effects.
     if (!executionExtensionContext) {
-      const model = await modelService.getModel(boundModel);
-      if (model && isOwnerCredentialBoundModel(model)) {
-        if (validateOwnerCredentialBinding(model)) {
+      if (isOwnerCredentialBoundModel(admission.model)) {
+        if (validateOwnerCredentialBinding(admission.model)) {
           throw new ExecutionExtensionError('owner_credential_binding_invalid');
         }
         throw new ExecutionExtensionError('execution_model_step_context_required');
@@ -450,7 +470,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
+    await assertModelCatalogLeaseOwned();
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
+      admittedModel: admission.model,
       renderMode: 'rendered',
       includeConversationHistory: false,
       excludeModelPrompt: executionExtensionContext ? true : excludeModelPrompt,
@@ -502,7 +524,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       nodeId,
       modelId: boundModel,
       appId: currentAppId,
-    }) as string;
+    }, admission.model) as string;
 
     // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
     // and resources. Scope needs the flow's folder, fetched once (lazily) and
@@ -529,6 +551,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // contents as a "## Resources" block — the graph-visible sibling of
     // resource pills. Reads never break the run (failures render as notes).
     if (resourceNodes.length > 0) {
+      await assertModelCatalogLeaseOwned();
       const resourceBlock = await ResourceHandler.processResourceNodes({
         resourceNodes,
         conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -581,6 +604,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           mcpNodesCount: mcpNodes.length
         });
 
+        await assertModelCatalogLeaseOwned();
         const mcpResult = await ToolHandler.processMCPNodes({
           mcpNodes,
           executionExtensionContext,
@@ -750,6 +774,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ? { temperatureOverride: sharedState.temperatureOverrideOnce }
       : {}),
   };
+  // The admitted model may contain an encrypted or legacy plaintext ApiKey.
+  // PocketFlow logs prepResult and the debugger clones it; keep this runtime
+  // capability on the same object but outside every enumerable trace surface.
+  Object.defineProperty(prepResult, 'modelCatalogAdmission', {
+    value: admission,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
@@ -829,7 +862,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     let preserveFullHistoryForClaudeResume = false;
     if (inputMode === 'full-history') {
       try {
-        const model = await modelService.getModel(boundModel);
+        const model = admission.model;
         preserveFullHistoryForClaudeResume =
           model?.adapter === 'claude-cli' &&
           await ModelHandler.isClaudeSessionResumeEnabled();
@@ -871,6 +904,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     )) {
       wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
+        await assertModelCatalogLeaseOwned();
         let content = await promptRenderer.resolveChatMessageReferences(
           message.content,
           mcpNodes,
@@ -893,7 +927,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           nodeId,
           modelId: boundModel,
           appId: currentAppId,
-        }) as string;
+        }, admission.model) as string;
         return content === message.content
           ? message
           : { ...message, content } as FlujoChatMessage;
@@ -925,7 +959,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           nodeId,
           modelId: boundModel,
           appId: currentAppId,
-        }) as string;
+        }, admission.model) as string;
       }
       if (!executionExtensionContext
         && typeof resolvedIsolatedPrompt === 'string'
@@ -934,7 +968,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       }
     }
 
-    const approvedMcpSkills = executionExtensionContext ? undefined : await loadApprovedMcpSkillSelections(
+      await assertModelCatalogLeaseOwned();
+      const approvedMcpSkills = executionExtensionContext ? undefined : await loadApprovedMcpSkillSelections(
       sharedState.conversationId,
       sharedState.mcpSkillSelections,
     );
@@ -1197,6 +1232,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           await prepResult.executionAuthority?.assertCurrent();
           const result = await ModelHandler.callModel({
             modelId: prepResult.boundModel,
+            modelCatalogAdmission: prepResult.modelCatalogAdmission,
             prompt: prepResult.currentPrompt,
             messages: prepResult.messages,
             // Scoped view for latest-message / isolated inputMode; when unset the
@@ -1577,8 +1613,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   private async discoverBoundModelToolSupport(
     prepResult: ProcessNodePrepResult,
   ): Promise<boolean | undefined> {
+    if (prepResult.modelCatalogAdmission) {
+      return withModelCatalogLease(async () => {
+        await assertCatalogAdmissionCurrent(prepResult.modelCatalogAdmission!);
+        return this.discoverBoundModelToolSupportAdmitted(prepResult);
+      });
+    }
+    return this.discoverBoundModelToolSupportAdmitted(prepResult);
+  }
+
+  private async discoverBoundModelToolSupportAdmitted(
+    prepResult: ProcessNodePrepResult,
+  ): Promise<boolean | undefined> {
     try {
-      const model = await modelService.getModel(prepResult.boundModel);
+      const model = prepResult.modelCatalogAdmission?.model
+        ?? await modelService.getModel(prepResult.boundModel);
       if (!model) return undefined;
       if (model.supportsTools !== undefined) return model.supportsTools;
       if (model.provider !== 'openrouter' || !model.baseUrl) return undefined;

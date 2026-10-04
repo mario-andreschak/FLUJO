@@ -27,6 +27,8 @@ import type {
   PersonaInstructionContext,
   RoleVersion,
 } from '@/shared/types/enduringAgent';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 
 const attribution = {
   personaId: 'persona-1',
@@ -136,7 +138,8 @@ function buildMemoryContext(
 }
 
 describe('trusted Persona instruction context', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '' }]);
     (promptRenderer.renderPrompt as jest.Mock).mockReset().mockResolvedValue(
       '# GENERAL INFORMATION:\nGeneral.\n\n'
       + '# YOUR OPERATIONAL INSTRUCTION:\nFollow the authored Process.',

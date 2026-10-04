@@ -2,6 +2,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
+import type { Model } from '@/shared/types/model';
 import { mcpService } from '@/backend/services/mcp';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import type { ToolReferenceContext } from '@/backend/execution/flow/types';
@@ -31,6 +32,7 @@ async function fileEntity(target: string): Promise<ReferenceEntity> {
 async function entityForReference(
   ref: DynamicReference,
   context: ToolReferenceContext,
+  admittedModel?: Model,
 ): Promise<ReferenceEntity> {
   if (ref.kind === 'time') {
     const now = new Date();
@@ -88,7 +90,7 @@ async function entityForReference(
   if (ref.kind === 'model') {
     const id = ref.target || context.modelId;
     if (!id) return {};
-    const model = await modelService.getModel(id);
+    const model = admittedModel?.id === id ? admittedModel : await modelService.getModel(id);
     const record = model as (typeof model & { createdAt?: number; updatedAt?: number });
     return {
       id,
@@ -122,14 +124,14 @@ function readableAppName(uri: string): string {
   }
 }
 
-async function resolveString(text: string, context: ToolReferenceContext): Promise<unknown> {
+async function resolveString(text: string, context: ToolReferenceContext, admittedModel?: Model): Promise<unknown> {
   const matches = findPromptRefs(text).filter((match) => match.kind === 'mention');
   if (matches.length === 0) return text;
 
   const resolved = await Promise.all(matches.map(async (match) => {
     const ref = parseDynamicReference(match.fullMatch);
     if (!ref) return { match, value: match.fullMatch as unknown };
-    const entity = await entityForReference(ref, context);
+    const entity = await entityForReference(ref, context, admittedModel);
     // An unavailable current-context value must not silently erase a command.
     return { match, value: entity[ref.field] ?? (ref.fullMatch.startsWith('@current.') ? ref.fullMatch : '') };
   }));
@@ -147,12 +149,12 @@ async function resolveString(text: string, context: ToolReferenceContext): Promi
   return output + text.slice(cursor);
 }
 
-async function resolveRecursive(value: unknown, context: ToolReferenceContext): Promise<unknown> {
-  if (typeof value === 'string') return resolveString(value, context);
-  if (Array.isArray(value)) return Promise.all(value.map((item) => resolveRecursive(item, context)));
+async function resolveRecursive(value: unknown, context: ToolReferenceContext, admittedModel?: Model): Promise<unknown> {
+  if (typeof value === 'string') return resolveString(value, context, admittedModel);
+  if (Array.isArray(value)) return Promise.all(value.map((item) => resolveRecursive(item, context, admittedModel)));
   if (value && typeof value === 'object') {
     const output: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) output[key] = await resolveRecursive(item, context);
+    for (const [key, item] of Object.entries(value)) output[key] = await resolveRecursive(item, context, admittedModel);
     return output;
   }
   return value;
@@ -162,8 +164,9 @@ async function resolveRecursive(value: unknown, context: ToolReferenceContext): 
 export async function resolvePromptDynamicReferences(
   value: unknown,
   context: ToolReferenceContext,
+  admittedModel?: Model,
 ): Promise<unknown> {
-  return resolveNonSecretGlobalVars(await resolveRecursive(value, context));
+  return resolveNonSecretGlobalVars(await resolveRecursive(value, context, admittedModel));
 }
 
 /** Resolve fixed tool arguments, including secret globals, immediately before dispatch. */

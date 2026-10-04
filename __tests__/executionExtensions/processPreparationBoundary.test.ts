@@ -9,6 +9,9 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { registerExecutionExtension } from '@/backend/execution/extensions';
 import type { ProcessNodeParams, SharedState } from '@/backend/execution/flow/types';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
+import cloneDeep from 'lodash/cloneDeep';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), verbose: jest.fn() }) }));
 jest.mock('@/backend/services/mcp/connection', () => ({
@@ -18,6 +21,10 @@ jest.mock('@/backend/services/mcp/connection', () => ({
 
 describe('protected Process preparation has no foreign MCP effects', () => {
   let restore: (() => void) | undefined;
+
+  beforeEach(async () => {
+    await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '' }]);
+  });
 
   afterEach(() => {
     restore?.();
@@ -76,10 +83,10 @@ describe('protected Process preparation has no foreign MCP effects', () => {
   test('contextless owner-bound model is refused before prompt or MCP preparation', async () => {
     const { state, params } = setup();
     delete state.executionExtensionContext;
-    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+    await saveItem(StorageKey.MODELS, [{
       id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: '',
       ownerCredentialBinding: { ownerId: 'owner-fixture', credentialId: 'credential-fixture' },
-    } as never);
+    }]);
     const render = jest.spyOn(promptRenderer, 'renderPrompt');
     const discovery = jest.spyOn(ToolHandler, 'processMCPNodes');
 
@@ -89,6 +96,28 @@ describe('protected Process preparation has no foreign MCP effects', () => {
 
     expect(render).not.toHaveBeenCalled();
     expect(discovery).not.toHaveBeenCalled();
+  });
+
+  test('a missing model is refused before prompt or MCP preparation', async () => {
+    await saveItem(StorageKey.MODELS, []);
+    const { state, params } = setup();
+    delete state.executionExtensionContext;
+    const render = jest.spyOn(promptRenderer, 'renderPrompt');
+    const discovery = jest.spyOn(ToolHandler, 'processMCPNodes');
+    await expect(new ProcessNode().prep(state, params())).rejects.toMatchObject({ code: 'execution_model_not_found' });
+    expect(render).not.toHaveBeenCalled();
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
+  test('the admitted credential is absent from serialized prep and debugger clones', async () => {
+    const marker = 'legacy-plaintext-credential-never-log-this';
+    await saveItem(StorageKey.MODELS, [{ id: 'model-1', name: 'fixture', provider: 'openai', adapter: 'openai', ApiKey: marker }]);
+    const { state, params } = setup();
+    const prepared = await new ProcessNode().prep(state, params());
+    expect(prepared.modelCatalogAdmission?.model.ApiKey).toBe(marker);
+    expect(Object.keys(prepared)).not.toContain('modelCatalogAdmission');
+    expect(JSON.stringify(prepared)).not.toContain(marker);
+    expect(JSON.stringify(cloneDeep(prepared))).not.toContain(marker);
   });
 
   test('foreign bound server is denied before tool discovery or prompt rendering', async () => {

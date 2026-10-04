@@ -26,6 +26,8 @@ import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { saveItem } from '@/utils/storage/backend';
+import { StorageKey } from '@/shared/types/storage';
 import type {
   SharedState,
   ProcessNodeParams,
@@ -54,7 +56,8 @@ function procParams(properties: Record<string, unknown>): ProcessNodeParams {
   return { id: 'proc', label: 'P', type: 'process', properties: { boundModel: 'm', ...properties } } as ProcessNodeParams;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await saveItem(StorageKey.MODELS, [{ id: 'm', name: 'm', provider: 'openai', adapter: 'openai', ApiKey: '' }]);
   renderPromptMock.mockReset();
   (flowService.getFlow as jest.Mock).mockResolvedValue({ id: 'flow-1', name: 'f', nodes: [], edges: [] });
   (modelService.getModel as jest.Mock).mockReset();
@@ -109,7 +112,7 @@ describe('ProcessNode.prep — ${var:NAME} resolution', () => {
 describe('ProcessNode.prep — Claude session resume and output folding (#294)', () => {
   it('keeps full history when another node folds output and Claude resume is enabled', async () => {
     renderPromptMock.mockResolvedValue('SYS');
-    (modelService.getModel as jest.Mock).mockResolvedValue({ adapter: 'claude-cli' });
+    await saveItem(StorageKey.MODELS, [{ id: 'm', name: 'm', provider: 'anthropic', adapter: 'claude-cli', ApiKey: '' }]);
     jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
     (flowService.getFlow as jest.Mock).mockResolvedValue({
       id: 'flow-1',

@@ -41,16 +41,25 @@ authority; a contextless child may not silently use ordinary transport. These
 guards are admission checks, not a substitute for the owner's broker and
 original-task accounting.
 
-The Process preflight reads the saved model before asynchronous prompt,
-resource, and MCP preparation. The model handler reads it again before the
-provider request. A concurrent catalog edit can make an initially ordinary
-model owner-bound between those reads: the later check blocks the model send,
-but preparation effects may already have happened. A missing model also passes
-the preflight and can be added during preparation. This repository does not
-yet pin one admitted model snapshot for the whole Process turn or coordinate
-Process preparation with catalog edits across workers. The workspace mutation
-gate serializes registered writes, but this preflight is outside that gate.
-Do not treat it as an atomic no-side-effect guarantee under concurrent edits.
+Process preparation now acquires a cross-worker shared catalog reader before
+looking up its model and holds that reader through prompt, resource, and MCP
+preparation. A missing model fails before those effects. The admitted model is
+detached from the saved catalog and is used for prompt composition, model
+metadata, compaction, and provider dispatch. Catalog add, update, delete, and
+legacy restore writers close reader admission and wait for active readers;
+the generic storage route cannot replace or clear the models file. A saved
+catalog generation check under a fresh reader refuses a late edit before
+local credential resolution or any provider attempt. Independent readers can
+run concurrently. These are cooperating application paths; arbitrary direct
+filesystem edits or unregistered older workers are outside the protocol.
+
+A model call retains its shared reader across compaction, provider response,
+native adapter tool loops, and tool approval. This keeps a live edit from
+interleaving with a physical attempt, but a catalog edit waits for those calls
+to settle and may time out after two minutes. A tool that calls back into a
+different FLUJO worker to edit the catalog during its own model call can fail
+on that timeout. Do not describe this as a liveness-safe final transport fence;
+the owner transport and budget broker remain separate adoption gates.
 
 The generic `configuredExecutionAdapter` is **undefined**. There is no
 configured FACTORY credential broker, durable claim and physical sender, or

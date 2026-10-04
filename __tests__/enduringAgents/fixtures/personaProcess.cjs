@@ -118,6 +118,9 @@ const {
 ));
 const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
 const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
+const {
+  admitCatalogModel, withModelCatalogLease, withModelCatalogWriteLease,
+} = require(path.join(repositoryRoot, 'src/backend/services/model/catalogAdmission.ts'));
 const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
 const { withWorkspaceMutation, withWorkspaceRecoveryCapture } = require(path.join(
   repositoryRoot, 'src/backend/services/workspace/workspaceMutationGate.ts',
@@ -139,6 +142,7 @@ function leaseFence(claim) {
 }
 
 const captureGates = new Map();
+const catalogGates = new Map();
 let recoveryCheckpoint;
 
 async function execute(command) {
@@ -232,6 +236,61 @@ async function execute(command) {
       }
       case 'captureGateStatus':
         return { requested: captureGates.has(command.token), held: captureGates.get(command.token)?.held ?? false };
+      case 'catalogReplace':
+        return withModelCatalogWriteLease(async () => {
+          await saveItem(StorageKey.MODELS, command.models);
+          return { saved: true };
+        });
+      case 'catalogAdmissionProbe':
+        return withModelCatalogLease(async () => {
+          const admission = await admitCatalogModel(command.modelId);
+          return { modelId: admission.model.id, ownerBound: Boolean(admission.model.ownerCredentialBinding) };
+        });
+      case 'catalogNestedProbe':
+        return withModelCatalogLease(async () => {
+          const nested = await withModelCatalogLease(() => admitCatalogModel(command.modelId));
+          let writeRejected = false;
+          try { await withModelCatalogWriteLease(() => saveItem(StorageKey.MODELS, [])); }
+          catch (error) { writeRejected = String(error).includes('active model call'); }
+          return { modelId: nested.model.id, writeRejected };
+        });
+      case 'catalogGateEnter': {
+        if (catalogGates.has(command.token)) throw new Error('Duplicate catalog gate token');
+        let release;
+        let entered;
+        let rejected;
+        const finish = new Promise(resolve => { release = resolve; });
+        const started = new Promise((resolve, reject) => { entered = resolve; rejected = reject; });
+        const state = { held: false, release, done: undefined };
+        catalogGates.set(command.token, state);
+        const task = async () => {
+          let modelId;
+          if (command.mode === 'reader' && command.modelId) {
+            modelId = (await admitCatalogModel(command.modelId)).model.id;
+          }
+          if (command.mode === 'writer' && command.models) {
+            await saveItem(StorageKey.MODELS, command.models);
+          }
+          state.held = true;
+          entered({ pid: process.pid, held: true, modelId });
+          await finish;
+          return { released: true };
+        };
+        state.done = (command.mode === 'writer'
+          ? withModelCatalogWriteLease(task) : withModelCatalogLease(task))
+          .catch(error => { rejected(error); throw error; });
+        state.done.catch(() => {});
+        return started;
+      }
+      case 'catalogGateLeave': {
+        const state = catalogGates.get(command.token);
+        if (!state) throw new Error('Unknown catalog gate token');
+        state.release();
+        try { return await state.done; }
+        finally { catalogGates.delete(command.token); }
+      }
+      case 'catalogGateStatus':
+        return { requested: catalogGates.has(command.token), held: catalogGates.get(command.token)?.held ?? false };
       case 'createPersona':
         await saveItem(StorageKey.MODELS, [{
           id: 'model-test',

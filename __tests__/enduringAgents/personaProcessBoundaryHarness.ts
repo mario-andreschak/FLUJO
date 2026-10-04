@@ -62,6 +62,11 @@ export type PersonaProcessCommand =
   | { type: 'deletePersona'; personaId: string; previewToken: string }
   | { type: 'captureGateLeave'; token: string }
   | { type: 'captureGateStatus'; token: string }
+  | { type: 'catalogReplace'; models: import('@/shared/types/model').Model[] }
+  | { type: 'catalogAdmissionProbe'; modelId: string }
+  | { type: 'catalogNestedProbe'; modelId: string }
+  | { type: 'catalogGateEnter'; token: string; mode: 'reader' | 'writer'; modelId?: string; models?: import('@/shared/types/model').Model[] }
+  | { type: 'catalogGateLeave' | 'catalogGateStatus'; token: string }
   | { type: 'captureRecovery' }
   | { type: 'previewRecovery'; archive: string; destination: string }
   | { type: 'restoreRecovery'; archive: string; destination: string; previewToken: string; holdAt?: 'file_written' | 'before_publish' | 'published' }

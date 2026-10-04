@@ -26,6 +26,7 @@ import {
 } from './modelInputCompaction';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import {
   filterUnsupportedMediaInputs,
@@ -534,6 +535,7 @@ export class ModelHandler {
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
+    modelCatalogAdmission?: ModelCatalogAdmission,
   ): Promise<CompactHistoryResult | null> {
     try {
       if (!conversationId || source.length < 4) return null;
@@ -600,6 +602,7 @@ export class ModelHandler {
           { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
         ];
         const response = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+          modelCatalogAdmission,
           maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
           beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
           durableContext,
@@ -1126,6 +1129,21 @@ export class ModelHandler {
    * Does NOT handle tool execution loops internally.
    */
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
+    if (input.modelCatalogAdmission && input.modelCatalogAdmission.model.id !== input.modelId) {
+      throw new ExecutionExtensionError('execution_model_binding_changed');
+    }
+    if (!input.modelCatalogAdmission) return this.callModelCore(input);
+    try {
+      return await withModelCatalogLease(async () => {
+        await assertCatalogAdmissionCurrent(input.modelCatalogAdmission!);
+        return this.callModelCore(input);
+      });
+    } catch (error) {
+      return this.shapeCompletionError(error, input.modelId, false);
+    }
+  }
+
+  private static async callModelCore(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
@@ -1145,7 +1163,7 @@ export class ModelHandler {
     let modelCompactionThreshold: number | undefined;
     const nodeDisplayName = nodeName;
     try {
-      const model = await modelService.getModel(modelId);
+      const model = input.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       if (model) {
         modelDisplayName = model.displayName || model.name;
         modelTechnicalName = model.name;
@@ -1582,6 +1600,7 @@ export class ModelHandler {
       effectiveMaxTokens,
       { compactionMode, compactionKeepTokens },
       durableContext,
+      input.modelCatalogAdmission,
     );
     const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
     const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
@@ -1605,6 +1624,7 @@ export class ModelHandler {
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
+      modelCatalogAdmission: input.modelCatalogAdmission,
       toolNameMap,
       maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1860,11 +1880,30 @@ export class ModelHandler {
    * Generate completion using model service - pure function
    */
   private static async generateCompletion(
+    ...args: Parameters<typeof ModelHandler.generateCompletionCore>
+  ): Promise<Result<ModelCallResult>> {
+    const admission = args[4]?.modelCatalogAdmission;
+    if (!admission) return this.generateCompletionCore(...args);
+    try {
+      if (admission.model.id !== args[0]) {
+        throw new ExecutionExtensionError('execution_model_binding_changed');
+      }
+      return await withModelCatalogLease(async () => {
+        await assertCatalogAdmissionCurrent(admission);
+        return this.generateCompletionCore(...args);
+      });
+    } catch (error) {
+      return ModelHandler.shapeCompletionError(error, args[0], false);
+    }
+  }
+
+  private static async generateCompletionCore(
     modelId: string,
     prompt: string,
     messages: FlujoChatMessage[], // Expect FlujoChatMessage
     tools?: OpenAI.ChatCompletionFunctionTool[],
     opts?: {
+      modelCatalogAdmission?: ModelCatalogAdmission;
       toolNameMap?: Record<string, DecodedTool>;
       maxTurns?: number;
       /** Effective per-completion output-token cap, already resolved by callModel
@@ -1968,7 +2007,7 @@ export class ModelHandler {
         await assertExecutionExtensionCurrent(opts.executionExtensionContext);
       }
       // Get the model
-      const model = await modelService.getModel(modelId);
+      const model = opts?.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       await assertFlowExecutionCurrent(opts?.durableContext ?? {});
       // Native adapters require a trusted, verified restriction profile. Claude
       // remains excluded until its native capabilities can be equivalently gated.
@@ -2018,6 +2057,7 @@ export class ModelHandler {
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
       // adapter then omits the apiKey and the CLI falls back to its own auth).
+      if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
       const resolvedKey = ownerBound ? '' : await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey = ownerBound ? '' :
         resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
@@ -2801,6 +2841,7 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
+              if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
               if (modelStepContext) {
                 await assertExecutionExtensionCurrent(modelStepContext);
               }
@@ -2816,6 +2857,7 @@ export class ModelHandler {
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
                   if (prev && prev !== model.name) {
+                    if (opts?.modelCatalogAdmission) await assertModelCatalogLeaseOwned();
                     await opts?.beforeModelDispatch?.();
                     log.info(
                       `[ModelHandler] Auto-unloading Ollama model "${prev}" to free VRAM for "${model.name}" on ${ollamaRootForUnload}`

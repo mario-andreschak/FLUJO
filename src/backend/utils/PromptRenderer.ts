@@ -7,6 +7,7 @@ import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import type { MCPNodeReference } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
+import type { Model } from '@/shared/types/model';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('backend/utils/PromptRenderer');
@@ -27,6 +28,8 @@ interface DescribedTool {
 }
 
 export interface PromptRenderOptions {
+  /** Process preparation's detached catalog model; never reread it mid-render. */
+  admittedModel?: Model;
   renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${_-_-_server_-_-_name}, rendered shows descriptions
   includeConversationHistory?: boolean;
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
@@ -162,7 +165,7 @@ export class PromptRenderer {
 
     // 2. Model Prompt (if not excluded)
     if (!excludeModelPrompt) {
-      const modelPromptResult = await this.findModelPrompt(nodeId, flowId, options?.flowSnapshot);
+      const modelPromptResult = await this.findModelPrompt(nodeId, flowId, options?.flowSnapshot, options?.admittedModel);
       if (modelPromptResult.prompt) {
         log.debug('Adding model prompt', { modelId: modelPromptResult.modelId, length: modelPromptResult.prompt.length });
         completePrompt += modelPromptResult.prompt + '\n\n';
@@ -268,7 +271,7 @@ export class PromptRenderer {
    * @param flowId - The ID of the flow
    * @returns The prompt template of the model, the model ID, and the reasoning and function calling schemas
    */
-  private async findModelPrompt(nodeId: string, flowId: string, flowSnapshot?: Flow): Promise<{
+  private async findModelPrompt(nodeId: string, flowId: string, flowSnapshot?: Flow, admittedModel?: Model): Promise<{
     prompt: string;
     modelId: string | null;
     reasoningSchema: string | null;
@@ -299,7 +302,10 @@ export class PromptRenderer {
     }
 
     // Get the model
-    const model = await modelService.getModel(modelId);
+    if (admittedModel && modelId !== admittedModel.id) {
+      throw new ExecutionExtensionError('execution_model_binding_changed');
+    }
+    const model = admittedModel ?? await modelService.getModel(modelId);
     if (!model) {
       log.warn(`Model not found: ${modelId}`);
       return { prompt: '', modelId: null, reasoningSchema: null, functionCallingSchema: null };

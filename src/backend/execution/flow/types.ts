@@ -1576,6 +1576,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     nodeType: 'process';
     currentPrompt: string;
     boundModel: string;
+    /** Detached model and catalog generation admitted before preparation effects. */
+    modelCatalogAdmission?: import('@/backend/services/model/catalogAdmission').ModelCatalogAdmission;
     /** MCP bindings admitted during prep; model dispatch must not reread mutable node params. */
     mcpNodesForDispatch?: MCPNodeReference[];
     modelDisplayName?: string;

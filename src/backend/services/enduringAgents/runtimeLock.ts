@@ -80,6 +80,12 @@ declare global {
   > | undefined;
   var __flujo_enduring_agent_deferred_lock_cleanups: Set<string> | undefined;
   var __flujo_workspace_writer_admission_chains: Map<string, Promise<void>> | undefined;
+  var __flujo_model_catalog_lease_scope: AsyncLocalStorage<{
+    lock: PersonaRuntimeLock;
+    workspace: string;
+    writer: boolean;
+    readerId?: string;
+  }> | undefined;
 }
 
 const PROCESS_INSTANCE_ID = global.__flujo_enduring_agent_process_instance_id ??= randomUUID();
@@ -88,6 +94,8 @@ const ISSUED_RUNTIME_LOCKS = global.__flujo_enduring_agent_issued_runtime_lock_s
   ??= new WeakMap<object, IssuedRuntimeLockScope>();
 const DEFERRED_CLEANUP_KEYS = global.__flujo_enduring_agent_deferred_lock_cleanups
   ??= new Set<string>();
+const modelCatalogLeaseScope = global.__flujo_model_catalog_lease_scope
+  ??= new AsyncLocalStorage<{ lock: PersonaRuntimeLock; workspace: string; writer: boolean; readerId?: string }>();
 const processBirthCache = new Map<number, { checkedAt: number; marker: string | null }>();
 const processBirthInFlight = new Map<number, Promise<string | null>>();
 
@@ -898,7 +906,7 @@ function scheduleOwnedCanonicalRetirement(
   });
 }
 
-async function acquireFilesystemLock(personaId: string): Promise<{
+async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE_TIMEOUT_MS): Promise<{
   lock: PersonaRuntimeLock;
   release: () => Promise<void>;
 }> {
@@ -937,7 +945,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
           await cleanupAbandonmentMarker(abandonmentMarkerPath(lockPath, recovery.ownerId));
         }));
       if (liveRecoveries.length > 0) {
-        if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+        if (clockForLock().monotonicNow() - acquireStartedAt >= timeoutMs) {
           throw new PersonaRuntimeLockTimeoutError(personaId);
         }
         await delay(LOCK_RETRY_MS);
@@ -1005,7 +1013,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         });
         continue;
       }
-      if (clockForLock().monotonicNow() - acquireStartedAt >= LOCK_ACQUIRE_TIMEOUT_MS) {
+      if (clockForLock().monotonicNow() - acquireStartedAt >= timeoutMs) {
         throw new PersonaRuntimeLockTimeoutError(personaId);
       }
       await delay(LOCK_RETRY_MS);
@@ -1114,6 +1122,115 @@ export function withWorkspaceRuntimeLock<T>(
       await acquired.release();
     }
   });
+}
+
+/**
+ * Cross-process shared readers / exclusive writer for the whole models file.
+ * A reader registers a unique owned lock under a short admission gate, then
+ * releases the gate during prompt preparation or a provider call. A writer
+ * closes admission and drains every reader before replacing models.json.
+ * None of this enters the workspace mutation gate: preparation can still write
+ * run resources while a workspace snapshot is pending.
+ */
+const MODEL_CATALOG_LOCK = '.model-catalog-admission';
+const MODEL_CATALOG_READER_PREFIX = '.model-catalog-reader-';
+const MODEL_CATALOG_READER_LOCK = /^\.model-catalog-reader-[0-9a-f-]{36}\.lock$/;
+const MODEL_CATALOG_WAIT_MS = 120_000;
+
+async function withModelCatalogPhysicalLease<T>(
+  task: () => Promise<T>,
+  writer: boolean,
+): Promise<T> {
+  const inherited = modelCatalogLeaseScope.getStore();
+  if (inherited?.workspace === getCurrentWorkspace()) {
+    // An agentic model call can synchronously start a child Process. It shares
+    // the parent's lease rather than waiting on its own physical lock. Editing
+    // the catalog inside that call would invalidate its admitted snapshot.
+    if (writer) throw new Error('Cannot edit the model catalog during an active model call.');
+    if (inherited.writer) throw new Error('Cannot prepare a model during a model catalog edit.');
+    return withIssuedPersonaRuntimeLockOperation(
+      inherited.lock,
+      inherited.writer ? MODEL_CATALOG_LOCK : inherited.readerId!,
+      task,
+    );
+  }
+  return systemLockTime.run(true, async () => {
+    if (writer) {
+      const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+      try {
+        const root = await ensureRuntimeLockRoot();
+        const started = clockForLock().monotonicNow();
+        while (true) {
+          await admission.lock.assertOwned();
+          if (clockForLock().monotonicNow() - started >= MODEL_CATALOG_WAIT_MS) {
+            throw new PersonaRuntimeLockTimeoutError(MODEL_CATALOG_LOCK);
+          }
+          const readers = (await fs.readdir(root)).filter(name => MODEL_CATALOG_READER_LOCK.test(name));
+          let live = false;
+          for (const name of readers) {
+            const owner = await readOwner(path.join(root, name));
+            if (!owner) continue;
+            if (owner.workspace !== getCurrentWorkspace()) throw new Error('Model catalog reader has foreign ownership.');
+            const abandoned = await listAbandonedOwnerIds(root, path.join(root, name));
+            if (await isOwnerProcessAlive(owner, abandoned)) {
+              live = true;
+              continue;
+            }
+            const retired = await acquireFilesystemLock(name.slice(0, -'.lock'.length));
+            await retired.release();
+          }
+          if (!live) break;
+          await clockForLock().sleep(LOCK_RETRY_MS);
+        }
+        await admission.lock.assertOwned();
+        return await modelCatalogLeaseScope.run(
+          { lock: admission.lock, workspace: getCurrentWorkspace(), writer: true },
+          task,
+        );
+      } finally {
+        await admission.release();
+      }
+    }
+    const admission = await acquireFilesystemLock(MODEL_CATALOG_LOCK, MODEL_CATALOG_WAIT_MS);
+    let reader: Awaited<ReturnType<typeof acquireFilesystemLock>> | undefined;
+    const readerId = `${MODEL_CATALOG_READER_PREFIX}${randomUUID()}`;
+    try {
+      await admission.lock.assertOwned();
+      reader = await acquireFilesystemLock(readerId, MODEL_CATALOG_WAIT_MS);
+    } finally {
+      try {
+        await admission.release();
+      } catch (error) {
+        await reader?.release();
+        throw error;
+      }
+    }
+    try {
+      await reader!.lock.assertOwned();
+      return await modelCatalogLeaseScope.run(
+        { lock: reader!.lock, workspace: getCurrentWorkspace(), writer: false, readerId },
+        task,
+      );
+    } finally {
+      await reader?.release();
+    }
+  });
+}
+
+export function withModelCatalogFilesystemLease<T>(task: () => Promise<T>): Promise<T> {
+  return withModelCatalogPhysicalLease(task, false);
+}
+
+export function withModelCatalogFilesystemWriteLease<T>(task: () => Promise<T>): Promise<T> {
+  return withModelCatalogPhysicalLease(task, true);
+}
+
+export async function assertModelCatalogFilesystemLeaseOwned(): Promise<void> {
+  const inherited = modelCatalogLeaseScope.getStore();
+  if (!inherited || inherited.workspace !== getCurrentWorkspace()) {
+    throw new Error('Model catalog lease is missing.');
+  }
+  await inherited.lock.assertOwned();
 }
 
 /** Serialize Role-version allocation and Role reference creation by definition. */
