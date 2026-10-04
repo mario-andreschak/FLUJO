@@ -288,14 +288,27 @@ private and controlled throughout the run, as required by the release verifier.
 Before any registry download, npm install or application launch, the command
 checks distribution consistency and the candidate pin, exact-source official
 `main` verification including every required current-attempt job, completed
-JavaScript/Actions analyses and absence of open main CodeQL findings. It verifies
+JavaScript/Actions analyses and absence of open main CodeQL findings. For each
+language it fetches the selected analysis's SARIF report, binds its source and
+category to the official main revision, and requires the configured
+`security-extended` suite with matching rule/result counts. The JavaScript report
+must include `js/http-to-file-access`. Reports containing a PR diff-range model
+pack or `diff-informed` mode cannot qualify a whole-source candidate. Raw SARIF
+bytes are retained with their hashes. It verifies
 all distribution attestations with the existing signer workflow, source/ref and
 self-hosted-runner restrictions. After signatures, it reads verification, the
-latest source analyses and open alerts again, and repeats admission before
+latest source analyses, both complete SARIF reports and open alerts again. Each
+pair of report reads is followed by another analysis/alert read; a changed
+analysis or new open finding requires fresh admission. It repeats admission before
 declaring the whole drill passed. A live, missing,
 failed or partial gate stops the operation; a local mock or source fixture does
 not qualify a candidate. Existing reviewed/dismissed findings may still be present
 in analysis results; the receipt reports those counts separately from open alerts.
+
+GitHub's [diff-informed PR analysis](https://docs.github.com/en/enterprise-cloud%40latest/code-security/how-tos/find-and-fix-code-vulnerabilities/scan-from-the-command-line/incremental-analysis)
+reports findings within changed code. A zero-result PR report does not resolve an
+inherited finding or establish whole-source main acceptance. Never substitute it
+for the main reports required above.
 
 Use values obtained from the pinned baseline and qualified published candidate;
 the variables below are placeholders, not an assertion that a candidate exists:

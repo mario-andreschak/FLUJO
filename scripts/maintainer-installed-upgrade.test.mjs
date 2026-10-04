@@ -7,7 +7,7 @@ import test, { after } from 'node:test';
 import { PUBLIC_PACKAGES } from './release-packages.mjs';
 import { writeReleaseEvidence } from './release-evidence.mjs';
 import { REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
-import { parseUpgradeOptions, assertCandidateScans, qualifyCandidate } from './maintainer-installed-upgrade.mjs';
+import { parseUpgradeOptions, assertCandidateScans, assertCandidateScanReport, qualifyCandidate } from './maintainer-installed-upgrade.mjs';
 
 const source = 'a'.repeat(40);
 const directories = [];
@@ -24,6 +24,13 @@ const args = value => ['baseline', 'candidate'].flatMap(role => [
 const analyses = () => ['javascript-typescript', 'actions'].map((language, index) => ({ id: 101 + index,
   commit_sha: source, ref: 'refs/heads/main', category: `/language:${language}`, results_count: 0,
   rules_count: 23, error: '', warning: '', tool: { name: 'CodeQL' } }));
+function sarif(language = 'javascript-typescript') {
+  return { version: '2.1.0', runs: [{ tool: { driver: { name: 'CodeQL' }, extensions: [{ name: `codeql/${language}-queries`,
+    rules: Array.from({ length: 23 }, (_, index) => ({ id: language === 'javascript-typescript' && index === 0 ? 'js/http-to-file-access' : `${language}/fixture-${index}` })) }] },
+  automationDetails: { id: `/language:${language}/` }, results: [],
+  versionControlProvenance: [{ repositoryUri: 'https://github.com/mario-andreschak/FLUJO', revisionId: source, branch: 'refs/heads/main' }],
+  properties: { codeqlConfigSummary: { queries: [{ type: 'builtinSuite', uses: 'security-extended' }] } } }] };
+}
 after(() => {
   for (const directory of directories) {
     assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
@@ -47,15 +54,22 @@ function bundle() {
   return options(directory);
 }
 function commands(changes = {}) {
-  const calls = []; let signerCalled = false;
+  const calls = []; let signerCalled = false; let reportRead = false;
   const run = (command, argv) => {
     calls.push({ command, argv }); assert.equal(command, 'gh');
     if (argv[0] === 'attestation') { signerCalled = true; return 'mock signer result: unit fixture only'; }
     if (argv[0] === 'run') return JSON.stringify((signerCalled && changes.runsAfterSigner) || changes.runs || [{ databaseId: 7, workflowDatabaseId: 9,
       headSha: source, headBranch: 'main', event: 'push', status: 'completed', conclusion: 'success' }]);
-    const endpoint = argv[1];
+    const endpoint = argv.find(value => value.startsWith('repos/'));
     if (endpoint.endsWith('actions/workflows/verify.yml')) return JSON.stringify({ id: 9, path: '.github/workflows/verify.yml', state: 'active' });
+    if (/\/code-scanning\/analyses\/\d+$/.test(endpoint)) {
+      reportRead = true;
+      assert.ok(argv.includes('-H')); assert.ok(argv.includes('Accept: application/sarif+json'));
+      const id = Number(endpoint.split('/').at(-1)); const language = id % 2 ? 'javascript-typescript' : 'actions';
+      return JSON.stringify((signerCalled && changes.sarifAfterSigner) || changes.sarif || sarif(language));
+    }
     if (endpoint.includes('/code-scanning/analyses')) {
+      if (reportRead && changes.analysesDuringSarif) return JSON.stringify([changes.analysesDuringSarif]);
       const entries = signerCalled && Object.hasOwn(changes, 'analysesAfterSigner')
         ? changes.analysesAfterSigner : changes.analyses ?? analyses();
       return JSON.stringify([entries]);
@@ -88,6 +102,27 @@ test('candidate scan admission rejects missing, wrong-source, warned and still-o
     { id: null }, { results_count: null }, { error: undefined }, { warning: undefined }, { tool: { name: 'unrelated' } }]) {
     const changed = analyses(); changed[0] = { ...changed[0], ...change };
     assert.throws(() => assertCandidateScans(changed, [], source), /missing|warned/);
+  }
+});
+
+test('a full SARIF report must bind main source, suite, rule/result counts and category without a PR diff range', () => {
+  const analysis = assertCandidateScans(analyses(), [], source)[0];
+  assert.equal(assertCandidateScanReport(sarif(), analysis).diffInformed, false);
+  for (const alter of [value => { value.version = 'unexpected'; }, value => { value.runs = []; },
+    value => { value.runs[0].tool.extensions.push({ name: 'codeql-action/pr-diff-range' }); },
+    value => { value.runs[0].properties.incrementalMode = 'diff-informed'; },
+    value => { value.runs[0].automationDetails.id = '/language:actions/'; },
+    value => { value.runs[0].versionControlProvenance[0].branch = 'refs/pull/731/merge'; },
+    value => { value.runs[0].versionControlProvenance[0].revisionId = 'b'.repeat(40); },
+    value => { value.runs[0].versionControlProvenance[0].repositoryUri = 'https://github.com/other/repository'; },
+    value => { value.runs[0].versionControlProvenance = []; },
+    value => { value.runs[0].properties.codeqlConfigSummary.queries = []; },
+    value => { value.runs[0].tool.extensions[0].rules.pop(); },
+    value => { value.runs[0].tool.extensions[0].rules[0].id = 'unrelated/query'; },
+    value => { value.runs[0].tool.extensions[0].rules[1].id = 'js/http-to-file-access'; },
+    value => { value.runs[0].tool.extensions[0].rules = {}; },
+    value => { value.runs[0].results = [{}]; }]) {
+    const changed = sarif(); alter(changed); assert.throws(() => assertCandidateScanReport(changed, analysis), /Candidate CodeQL/);
   }
 });
 
@@ -150,7 +185,7 @@ test('signer scan refresh rejects new incomplete source analyses before admissio
   const wrongSource = analyses().map(item => ({ ...item, commit_sha: 'c'.repeat(40) }));
   for (const entries of [[], null, analyses().slice(0, 1), warned, failed, wrongSource]) {
     const fixture = commands({ analysesAfterSigner: entries });
-    await assert.rejects(qualifyCandidate(bundle(), fixture.run), /missing|warned|final candidate analyses/);
+    await assert.rejects(qualifyCandidate(bundle(), fixture.run), /missing|warned|paginated candidate scan/);
     assert.equal(fixture.calls.filter(call => call.argv[0] === 'attestation').length, PUBLIC_PACKAGES.length + 3);
   }
 });
@@ -160,10 +195,33 @@ test('signer scan refresh retains the newest valid analyses in admission evidenc
   const fixture = commands({ analysesAfterSigner: latest });
   const result = await qualifyCandidate(bundle(), fixture.run);
   assert.deepEqual(result.scans.map(item => item.id), latest.map(item => item.id));
-  const reads = fixture.calls.filter(call => call.argv[1]?.includes('/code-scanning/analyses'));
-  assert.equal(reads.length, 2);
+  const reads = fixture.calls.filter(call => call.argv[1]?.includes('/code-scanning/analyses?'));
+  assert.equal(reads.length, 4);
   for (const { argv } of reads) {
     assert.ok(argv[1].includes('ref=refs%2Fheads%2Fmain'));
     assert.ok(argv.includes('--paginate')); assert.ok(argv.includes('--slurp'));
   }
+  const reportReads = fixture.calls.filter(call => call.argv.at(-1)?.match(/\/code-scanning\/analyses\/\d+$/));
+  assert.deepEqual(reportReads.map(call => Number(call.argv.at(-1).split('/').at(-1))), [101, 102, 201, 202]);
+  assert.ok(result.scans.every(item => /^[a-f0-9]{64}$/.test(item.report.rawSha256) && item.report.rawBytes > 0));
+});
+
+test('green main metadata cannot use a diff-informed SARIF report before signing acceptance', async () => {
+  const partial = sarif(); partial.runs[0].tool.extensions.push({ name: 'codeql-action/pr-diff-range' });
+  const fixture = commands({ sarif: partial });
+  await assert.rejects(qualifyCandidate(bundle(), fixture.run), /diff-informed/);
+  assert.equal(fixture.calls.filter(call => call.argv[0] === 'attestation').length, 0);
+});
+
+test('a partial SARIF appearing during signer checks invalidates prior full scan evidence', async () => {
+  const partial = sarif(); partial.runs[0].properties.incrementalMode = 'diff-informed';
+  const fixture = commands({ sarifAfterSigner: partial });
+  await assert.rejects(qualifyCandidate(bundle(), fixture.run), /diff-informed/);
+  assert.equal(fixture.calls.filter(call => call.argv[0] === 'attestation').length, PUBLIC_PACKAGES.length + 3);
+});
+
+test('an analysis replacement during SARIF reads requires fresh coherent admission', async () => {
+  const fixture = commands({ analysesDuringSarif: analyses().map(item => ({ ...item, id: item.id + 100 })) });
+  await assert.rejects(qualifyCandidate(bundle(), fixture.run), /changed while inspecting SARIF/);
+  assert.equal(fixture.calls.filter(call => call.argv[0] === 'attestation').length, 0);
 });

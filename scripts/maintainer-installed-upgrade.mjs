@@ -57,6 +57,42 @@ export function assertCandidateScans(analyses, alerts, revision) {
   return selected;
 }
 
+export function assertCandidateScanReport(sarif, analysis) {
+  const category = `/language:${analysis.language}`;
+  if (sarif?.version !== '2.1.0' || !Array.isArray(sarif.runs) || sarif.runs.length !== 1) {
+    throw new Error('Candidate CodeQL SARIF is missing or has an unexpected run scope.');
+  }
+  const report = sarif.runs[0]; const extensions = report.tool?.extensions ?? [];
+  if (report.tool?.driver?.name !== 'CodeQL' || !Array.isArray(extensions)
+      || ![category, `${category}/`].includes(report.automationDetails?.id)
+      || extensions.some(extension => extension.name === 'codeql-action/pr-diff-range')
+      || report.properties?.incrementalMode === 'diff-informed') {
+    throw new Error('Candidate CodeQL SARIF is partial, diff-informed or belongs to another category.');
+  }
+  const provenance = report.versionControlProvenance;
+  if (!Array.isArray(provenance) || provenance.length !== 1
+      || provenance[0].repositoryUri !== `https://github.com/${repository}`
+      || provenance[0].revisionId !== analysis.sourceRevision || provenance[0].branch !== 'refs/heads/main') {
+    throw new Error('Candidate CodeQL SARIF does not establish the selected official main source.');
+  }
+  const queries = report.properties?.codeqlConfigSummary?.queries;
+  if (!Array.isArray(queries) || queries.length !== 1 || queries[0].type !== 'builtinSuite' || queries[0].uses !== 'security-extended') {
+    throw new Error('Candidate CodeQL SARIF does not establish the configured security-extended suite.');
+  }
+  if ([report.tool.driver, ...extensions].some(tool => !Array.isArray(tool.rules ?? []))) {
+    throw new Error('Candidate CodeQL SARIF has an invalid rule collection.');
+  }
+  const rules = [report.tool.driver, ...extensions].flatMap(tool => tool.rules ?? []);
+  if (rules.length !== analysis.evaluatedRules || rules.some(rule => typeof rule.id !== 'string' || !rule.id)
+      || new Set(rules.map(rule => rule.id)).size !== rules.length
+      || !Array.isArray(report.results) || report.results.length !== analysis.results
+      || (analysis.language === 'javascript-typescript' && !rules.some(rule => rule.id === 'js/http-to-file-access'))) {
+    throw new Error('Candidate CodeQL SARIF rules or results differ from the selected analysis.');
+  }
+  return { category, evaluatedRules: rules.length,
+    results: report.results.length, diffInformed: false, suite: 'security-extended' };
+}
+
 function normalizeOptions(options) {
   if (options.baseline?.npmCli !== options.candidate?.npmCli) throw new Error('Use the same explicitly selected npm CLI for both consumers.');
   const args = ['baseline', 'candidate'].flatMap(role => [
@@ -102,20 +138,30 @@ export async function qualifyCandidate(options, run) {
   };
   const verificationRunId = await requireSuccessfulVerification(verificationOptions);
   const acceptedAttemptNumber = acceptedAttempt.attempt;
-  const analysisPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/analyses?ref=refs%2Fheads%2Fmain&per_page=100`, '--paginate', '--slurp']));
-  const alertPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/alerts?ref=refs%2Fheads%2Fmain&state=open&per_page=100`, '--paginate', '--slurp']));
-  if (![analysisPages, alertPages].every(pages => Array.isArray(pages) && pages.every(Array.isArray))) throw new Error('Invalid paginated candidate scan evidence.');
-  assertCandidateScans(analysisPages.flat(), alertPages.flat(), revision);
+  const readScanMetadata = () => {
+    const analysisPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/analyses?ref=refs%2Fheads%2Fmain&per_page=100`, '--paginate', '--slurp']));
+    const alertPages = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/alerts?ref=refs%2Fheads%2Fmain&state=open&per_page=100`, '--paginate', '--slurp']));
+    if (![analysisPages, alertPages].every(pages => Array.isArray(pages) && pages.every(Array.isArray))) throw new Error('Invalid paginated candidate scan evidence.');
+    return assertCandidateScans(analysisPages.flat(), alertPages.flat(), revision);
+  };
+  const readCompleteScans = () => {
+    const selected = readScanMetadata();
+    const complete = selected.map(analysis => {
+      const bytes = run('gh', ['api', '-H', 'Accept: application/sarif+json', `repos/${repository}/code-scanning/analyses/${analysis.id}`]);
+      return { ...analysis, report: { ...assertCandidateScanReport(JSON.parse(bytes), analysis),
+        rawSha256: digest(bytes), rawBytes: Buffer.byteLength(bytes) } };
+    });
+    const current = readScanMetadata();
+    if (JSON.stringify(current) !== JSON.stringify(selected)) throw new Error('Candidate scan analyses changed while inspecting SARIF.');
+    return complete;
+  };
+  const scansBeforeSignatures = readCompleteScans();
   verifyReleaseAttestations({ run, directory: candidateEvidence, sha: revision, version: candidate.version });
   const finalRun = await requireSuccessfulVerification(verificationOptions);
   if (finalRun !== verificationRunId || acceptedAttempt.attempt !== acceptedAttemptNumber) throw new Error('Candidate verification changed while verifying signatures.');
-  const finalAnalyses = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/analyses?ref=refs%2Fheads%2Fmain&per_page=100`, '--paginate', '--slurp']));
-  if (!Array.isArray(finalAnalyses) || !finalAnalyses.every(Array.isArray)) throw new Error('Invalid final candidate analyses response.');
-  const finalAlerts = JSON.parse(run('gh', ['api', `repos/${repository}/code-scanning/alerts?ref=refs%2Fheads%2Fmain&state=open&per_page=100`, '--paginate', '--slurp']));
-  if (!Array.isArray(finalAlerts) || !finalAlerts.every(Array.isArray)) throw new Error('Invalid final candidate alerts response.');
-  const scans = assertCandidateScans(finalAnalyses.flat(), finalAlerts.flat(), revision);
+  const scans = readCompleteScans();
   return { result: 'passed-automated-candidate-admission', version: candidate.version, sourceRevision: revision,
-    integrity: candidate.integrity, verificationRunId, acceptedAttempt, scans, openMainCodeqlFindings: 0,
+    integrity: candidate.integrity, verificationRunId, acceptedAttempt, scansBeforeSignatures, scans, openMainCodeqlFindings: 0,
     signerWorkflow: `${repository}/.github/workflows/publish-npm.yml`, signerSourceRef: 'refs/heads/main',
     selfHostedSignersAccepted: false, independentHumanAcceptance: false };
 }
