@@ -231,7 +231,9 @@ Retained failed historical runs do not receive invented or retroactive timestamp
 An unset proposed monetary envelope has a null limit. It cannot become an agreed
 numeric contract or qualify any measurement until its limit is declared; null
 does not mean a zero-dollar cap. Existing Persona thresholds remain numeric and
-unchanged. Production claims separately cover local-owner, persistent-worker and
+unchanged, including the 28 daily append checkpoints and 20 controlled recall searches.
+Changing a protected denominator requires a separately reviewed contract version.
+Production claims separately cover local-owner, persistent-worker and
 shared-public, alongside the complete OS/install matrix.
 
 | Contract | Preserved or proposed target | Denominator/window |

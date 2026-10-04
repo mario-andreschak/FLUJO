@@ -327,3 +327,35 @@ test('passing existing-contract metrics require a real start after declaration a
   // The failed September simulation remains valid without a retroactive start time.
   assert.deepEqual(validate().errors, []);
 });
+
+function personaMetricFixture(ledger, budgetId, denominator) {
+  const simulated = budgetId === 'persona-append-p95';
+  const budget = entry(ledger, 'budgets', budgetId);
+  const witness = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
+  Object.assign(witness, {
+    id: 'synthetic-sample-count-' + budgetId, result: 'passed',
+    kind: simulated ? 'offline-simulation' : 'source-check',
+    observedAt: '2026-10-04T01:00:00Z', scope: 'Synthetic sample-count admission fixture; no real measurement.',
+    budgetIds: [budgetId], metrics: [{budgetId, value: 1, denominator, numerator: null}],
+    window: {kind: simulated ? 'simulated' : 'instant', start: budget.declaredAt, end: null, simulatedDays: simulated ? 28 : null},
+  });
+  ledger.evidence.push(witness);
+}
+
+test('existing Persona sample counts cannot be lowered while retaining the contract label', () => {
+  for (const budgetId of ['persona-append-p95', 'persona-recall-p95']) {
+    rejects(l => {
+      entry(l, 'budgets', budgetId).observation.minimumDenominator = 1;
+      personaMetricFixture(l, budgetId, 1);
+    }, /existing observation denominator contract changed/);
+  }
+});
+
+test('Persona metrics reject undersampling and admit the original 28-day and 20-search denominators', () => {
+  for (const [budgetId, minimum] of [['persona-append-p95', 28], ['persona-recall-p95', 20]]) {
+    rejects(l => personaMetricFixture(l, budgetId, minimum - 1), /denominator below declared minimum/);
+    const result = validate(l => personaMetricFixture(l, budgetId, minimum));
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.blockers.length > 0);
+  }
+});

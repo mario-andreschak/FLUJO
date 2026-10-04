@@ -39,12 +39,12 @@ const declaredPlatforms = {
   'shared-public': { Linux: ['hardened pinned container/service with authenticated ingress'] },
 };
 const protectedBudgets = new Map([
-  ['persona-append-p95', ['<', 150]], ['persona-peak-rss', ['<=', 805306368]],
-  ['persona-rss-growth', ['<=', 268435456]], ['persona-append-flatness', ['<=', 2]],
-  ['persona-total-collection', ['<=', 1248]], ['persona-mailbox', ['<=', 500]],
-  ['persona-activities', ['<=', 200]], ['persona-dispatches', ['<=', 200]],
-  ['persona-pins', ['<=', 200]], ['persona-leases', ['<=', 50]],
-  ['persona-recall-p95', ['<', 150]],
+  ['persona-append-p95', ['<', 150, 28]], ['persona-peak-rss', ['<=', 805306368, 1]],
+  ['persona-rss-growth', ['<=', 268435456, 1]], ['persona-append-flatness', ['<=', 2, 1]],
+  ['persona-total-collection', ['<=', 1248, 1]], ['persona-mailbox', ['<=', 500, 1]],
+  ['persona-activities', ['<=', 200, 1]], ['persona-dispatches', ['<=', 200, 1]],
+  ['persona-pins', ['<=', 200, 1]], ['persona-leases', ['<=', 50, 1]],
+  ['persona-recall-p95', ['<', 150, 20]],
 ]);
 const supportedKeywords = new Set([
   '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
@@ -163,10 +163,11 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       if (!records.some(e => e.kind === 'external-agreement')) fail(budget.id + ': budget requires external agreement evidence');
     }
   }
-  for (const [id, [operator, limit]] of protectedBudgets) {
+  for (const [id, [operator, limit, denominator]] of protectedBudgets) {
     const actual = indexed.budgets.get(id);
     if (!actual || actual.operator !== operator || actual.limit !== limit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
     if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
+    if (actual && actual.observation.minimumDenominator !== denominator) fail(id + ': existing observation denominator contract changed; requires a separately reviewed contract version');
   }
   for (const [id, seconds, denominator] of [['pilot-users', 4838400, 10], ['human-contributors', 7776000, 3], ['novice-success', 0, 10], ['novice-time', 0, 10]]) {
     const budget = indexed.budgets.get(id);
