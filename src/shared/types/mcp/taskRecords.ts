@@ -10,10 +10,10 @@
  *
  * Privacy contract: this record never stores tool arguments, credentials,
  * headers, elicited input, or terminal result payloads. Requests are
- * identified by a salted-free, non-reversible-enough fingerprint (a truncated
- * SHA-256 of the normalized argument JSON) which is only used for diagnostics
- * and duplicate detection; results stay on the remote server and are re-fetched
- * through `tasks/result`.
+ * identified by opaque random request tags. The legacy field name remains
+ * `requestFingerprint`; older records can contain argument-derived hashes
+ * that permit offline guessing and are not remediated by new record writes.
+ * Results stay on the remote server and are re-fetched through `tasks/result`.
  */
 
 import type { McpTaskStatus } from './tasks';
@@ -60,7 +60,7 @@ export interface McpRemoteTaskRecord {
 
   /** Originating operation. */
   toolName: string;
-  /** Truncated SHA-256 of the normalized arguments; never the arguments. */
+  /** Opaque random request tag for new records; older records may contain a hash. */
   requestFingerprint: string;
 
   ownership: McpRemoteTaskOwnership;
