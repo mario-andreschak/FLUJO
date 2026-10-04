@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readScorecardEvidence } from './read-scorecard-evidence.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaultLedger = resolve(repositoryRoot, 'docs/audits/scorecard-563/scorecard.json');
@@ -204,10 +205,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       if (!inside(path)) { fail(evidence.id + ': evidence path escapes repository'); continue; }
       if (verifyFiles) {
         try {
-          const real = realpathSync(path);
-          if (!inside(real)) throw new Error('symlink escapes repository');
-          if (statSync(real).size > 5 * 1024 * 1024) throw new Error('payload exceeds 5 MiB');
-          const bytes = readFileSync(real);
+          const bytes = readScorecardEvidence(path, root);
           const actual = createHash('sha256').update(bytes).digest('hex');
           if (actual !== raw.sha256) fail(evidence.id + ': checksum mismatch for ' + raw.location);
           else verifiedPayloads.set(raw.location + ':' + raw.sha256, bytes);
