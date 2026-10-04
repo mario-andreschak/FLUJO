@@ -159,7 +159,7 @@ Write-Output 'Windows source preflight fixture passed'`;
   });
 }
 
-test('Unix installer source refuses unsupported existing Node before package-manager execution', (t) => {
+test('Unix Node-installation stage refuses unsupported existing Node after prerequisite checks', (t) => {
   const directory = fixture(t);
   const source = readFileSync(path.join(root, 'scripts/install.sh'), 'utf8').replaceAll('\r\n', '\n');
   const validator = source.match(/^node_version_ok\(\) \{[\s\S]*?^\}/m)?.[0];
@@ -190,3 +190,90 @@ echo FIXTURE_ADMITTED
     assert.match(supported ? result.stdout : result.stderr, supported ? /FIXTURE_ADMITTED/ : /FIXTURE_REFUSAL/);
   }
 });
+
+for (const scenario of [
+  { name: 'missing Git on Linux', os: 'Linux', missing: 'git', action: 'dnf' },
+  { name: 'missing ripgrep on Linux', os: 'Linux', missing: 'rg', action: 'dnf' },
+  { name: 'missing Homebrew on macOS', os: 'Darwin', missing: 'brew', action: 'curl-bootstrap' },
+]) {
+  test(`complete Unix installer refuses before bootstrap/prerequisites with ${scenario.name}`, (t) => {
+    const directory = fixture(t);
+    const installer = path.join(directory, 'complete-install.sh');
+    const hooks = path.join(directory, 'fixture-hooks.sh');
+    const marker = path.join(directory, 'prerequisite-action');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    // Run the complete repository script, with only CRLF normalized for Git Bash.
+    writeFileSync(installer, readFileSync(path.join(root, 'scripts/install.sh'), 'utf8').replaceAll('\r\n', '\n'));
+    writeFileSync(hooks, `
+command() {
+  if [ "$1" = -v ]; then
+    case "$2" in
+      node) [ "$FLUJO_FIXTURE_NODE_PRESENT" = 1 ] || return 1 ;;
+      git|rg|brew) [ "$2" != "$FLUJO_FIXTURE_MISSING" ] || return 1 ;;
+      apt-get|pacman|zypper|apk|yum|sudo) return 1 ;;
+    esac
+  fi
+  builtin command "$@"
+}
+function [() {
+  # The fixture has no terminal. Never open or read the operator's /dev/tty.
+  if [[ "\${1:-}" = -r && "\${2:-}" = /dev/tty ]]; then return 1; fi
+  builtin [ "$@"
+}
+node() { printf '%s\\n' "$FLUJO_FIXTURE_NODE_VERSION"; return "$FLUJO_FIXTURE_NODE_EXIT"; }
+uname() { printf '%s\\n' "$FLUJO_FIXTURE_OS"; }
+id() { printf '0\\n'; }
+read() { [ "\${2:-}" != answer ] || return 1; builtin read "$@"; }
+fixture_action() { printf '%s\\n' "$1" >> "$FLUJO_FIXTURE_ACTIONS"; exit 73; }
+dnf() { fixture_action dnf; }
+brew() { fixture_action brew; }
+git() { fixture_action git; }
+rg() { fixture_action rg; }
+curl() {
+  printf 'curl-bootstrap\\n' >> "$FLUJO_FIXTURE_ACTIONS"
+  # An absolute /bin/bash bootstrap receives this harmless command, never network content.
+  printf 'exit 73\\n'
+}
+`);
+    let caseIndex = 0;
+    for (const [version, exitCode, present, refused] of [
+      ['22.13.1', 0, true, true], ['23.11.0', 0, true, true],
+      ['24.1.9', 0, true, true], ['25.0.0', 0, true, true], ['26.0.0', 0, true, true],
+      ['22.17.x', 0, true, true], ['22.17.0', 1, true, true],
+      ['22.17.0', 0, true, false], ['24.2.0', 0, true, false], ['', 0, false, false],
+    ]) {
+      if (existsSync(marker)) rmSync(marker);
+      const fixtureHome = path.join(directory, `case-${caseIndex++}`);
+      const fixtureLog = path.join(fixtureHome, '.local/share/flujo-cli/install.log');
+      mkdirSync(path.dirname(fixtureLog), { recursive: true });
+      writeFileSync(fixtureLog, 'owned prior fixture log');
+      const fixtureEnv = {
+        PATH: process.env.PATH,
+        ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR } : {}),
+        // HOME retains its normal meaning in this child, pointing to an owned disposable fixture.
+        HOME: fixtureHome.replaceAll('\\', '/'),
+        BASH_ENV: hooks.replaceAll('\\', '/'),
+        FLUJO_DIR: path.join(directory, 'app').replaceAll('\\', '/'),
+        FLUJO_START: '0', FLUJO_SHORTCUT: '0', FLUJO_OLLAMA: '0',
+        FLUJO_FIXTURE_OS: scenario.os, FLUJO_FIXTURE_MISSING: scenario.missing,
+        FLUJO_FIXTURE_ACTIONS: marker.replaceAll('\\', '/'),
+        FLUJO_FIXTURE_NODE_PRESENT: present ? '1' : '0',
+        FLUJO_FIXTURE_NODE_VERSION: version, FLUJO_FIXTURE_NODE_EXIT: String(exitCode),
+      };
+      const result = spawnSync(bash, [installer.replaceAll('\\', '/')], { env: fixtureEnv, encoding: 'utf8', windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024 });
+      assert.ifError(result.error);
+      const action = existsSync(marker) ? readFileSync(marker, 'utf8').trim() : 'none';
+      t.diagnostic(JSON.stringify({ scenario: scenario.name, version, probeExit: exitCode, present, refused, installerExit: result.status, prerequisiteAction: action }));
+      if (refused) {
+        assert.equal(action, 'none', 'A bootstrap or prerequisite action preceded runtime refusal');
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /installer will not switch an existing Node installation automatically/);
+        assert.equal(readFileSync(fixtureLog, 'utf8'), 'owned prior fixture log', 'Runtime refusal truncated an existing diagnostic log');
+      } else {
+        // Supported or absent Node may reach only the trapped fixture prerequisite.
+        assert.equal(result.status, 73, result.stderr);
+        assert.equal(action, scenario.action);
+      }
+    }
+  });
+}
