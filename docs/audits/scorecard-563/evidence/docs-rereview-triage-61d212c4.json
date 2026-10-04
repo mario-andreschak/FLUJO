@@ -1,0 +1,52 @@
+{
+  "reviewedSourceSha": "61d212c47e6f613ef075be9764466844752804b2",
+  "reviewerVerdict": {
+    "docsSource": "conditional A-",
+    "docsRelease": "ungradable / not granted",
+    "allNine": "ungradable"
+  },
+  "disposition": "Preserve the report unchanged. Its source-only judgment is not final rubric agreement, a human observation, release acceptance, or a grade on later code.",
+  "authorCorrections": [
+    {
+      "issue": "A stale README sentence still describes an undeclared envelope as zero.",
+      "witness": "docs/audits/scorecard-563/README.md at 61d212c4 says the proposed live spend cap is zero, despite the later null-limit paragraph and ledger.",
+      "action": "Replace the stale sentence with an undeclared-envelope statement in this follow-up. The reviewer missed this contradiction; do not claim its source audit found every factual issue."
+    },
+    {
+      "issue": "The reviewer describes all 17 anyOf unions as leaves.",
+      "witness": "$defs.evidence.properties.artifactProof has an object branch with properties and additionalProperties:false, plus null. Sixteen other unions are scalar/null.",
+      "action": "Correct this claim in triage without editing the reviewer report. The self-contained object branch still enforces its own unknown-field rejection; no invalid containment example is demonstrated."
+    },
+    {
+      "issue": "The report summarizes several documents as read in full.",
+      "witness": "Actual command receipts show scorecard/schema projections, selected README matches and publication blob metadata. Complete public README/API/architecture/project-status text was not returned to the model.",
+      "action": "Use actual command receipts to describe review coverage. Validator execution consumed the full ledger/schema, which differs from the model inspecting every document in full."
+    }
+  ],
+  "reviewerFindings": [
+    {
+      "title": "Parent-pinned publication inventory",
+      "disposition": "Confirmed disclosed staleness. A new inventory remains required at the final integrated release SHA; historical inventory stays immutable."
+    },
+    {
+      "title": "Existing-contract metrics with no start timestamp",
+      "disposition": "Retain as pending hardening for future passing metric admission; no current passing evidence is promoted."
+    },
+    {
+      "title": "Self-declared reviewer independence",
+      "disposition": "Retain pending external rubric agreement and current-release reassessment; this automated output cannot grant human acceptance."
+    },
+    {
+      "title": "anyOf diagnostic detail",
+      "disposition": "Optional usability work; no gate weakening or source-grade promotion."
+    }
+  ],
+  "laterSecurityFinding": {
+    "alert": 173,
+    "ruleId": "js/file-system-race",
+    "analysisCommit": "d29fbd24355c741bbc5b9064d990fe03fbb2b993",
+    "fixPr": "https://github.com/mario-andreschak/FLUJO/pull/635",
+    "fixHead": "64f96ecb046fd71a38aee8b956a7daf5d19316f3",
+    "scope": "The automated review did not cover this subsequent fix. Integrated CodeQL findings verification remains required."
+  }
+}

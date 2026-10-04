@@ -1,0 +1,135 @@
+{
+  "capturedAt": "2026-10-04T00:28:06.787Z",
+  "run": {
+    "id": 37163060833,
+    "html_url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833",
+    "event": "pull_request",
+    "head_sha": "61d212c47e6f613ef075be9764466844752804b2",
+    "head_branch": "codex/scorecard-review-followup",
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 1,
+    "created_at": "2026-10-03T23:50:54Z",
+    "updated_at": "2026-10-04T00:10:10Z"
+  },
+  "testedSyntheticMerge": {
+    "sha": "fd15eba837dc5aebbbbbe5bb8f1f69510297978f",
+    "treeSha": "0ccb688b279dcf94d2f334f7021f724d523f3550",
+    "parents": [
+      "0eafaf75e5574ec8e0369a32a7e5df5987b52395",
+      "61d212c47e6f613ef075be9764466844752804b2"
+    ],
+    "message": "Merge 61d212c47e6f613ef075be9764466844752804b2 into 0eafaf75e5574ec8e0369a32a7e5df5987b52395"
+  },
+  "jobs": [
+    {
+      "id": 111320325946,
+      "name": "typecheck",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320325946"
+    },
+    {
+      "id": 111320326052,
+      "name": "Production build (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326052"
+    },
+    {
+      "id": 111320326065,
+      "name": "test-isolated",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326065"
+    },
+    {
+      "id": 111320326087,
+      "name": "workflow-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326087"
+    },
+    {
+      "id": 111320326088,
+      "name": "Production build (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326088"
+    },
+    {
+      "id": 111320326090,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326090"
+    },
+    {
+      "id": 111320326110,
+      "name": "CodeQL (actions)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326110"
+    },
+    {
+      "id": 111320326113,
+      "name": "Release safety (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326113"
+    },
+    {
+      "id": 111320326131,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326131"
+    },
+    {
+      "id": 111320326132,
+      "name": "CodeQL (javascript-typescript)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326132"
+    },
+    {
+      "id": 111320326143,
+      "name": "Release safety (windows-latest)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326143"
+    },
+    {
+      "id": 111320326190,
+      "name": "dependency-security",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326190"
+    },
+    {
+      "id": 111320326941,
+      "name": "diagnostic Persona memory profile (not release acceptance)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111320326941"
+    },
+    {
+      "id": 111323163774,
+      "name": "verification",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833/job/111323163774"
+    }
+  ],
+  "commands": [
+    "gh api repos/mario-andreschak/FLUJO/actions/runs/37163060833",
+    "gh api repos/mario-andreschak/FLUJO/actions/runs/37163060833/jobs?per_page=100",
+    "gh api repos/mario-andreschak/FLUJO/commits/fd15eba"
+  ],
+  "limits": [
+    "GitHub returned metadata captured after the reviewer prompt called this run live. No reviewer statement is retroactively rewritten.",
+    "Both production builds and scanner jobs passed; ordinary tests, Ubuntu release safety and final verification failed; Windows release safety was cancelled.",
+    "Scanner execution success does not establish a passing CodeQL findings gate. This receipt contains statuses, not a replay or a findings triage.",
+    "This tested synthetic merge predates the later filesystem-race fix and final combined candidate; it grants no release acceptance."
+  ]
+}
