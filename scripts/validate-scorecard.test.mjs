@@ -217,6 +217,96 @@ test('a valid producer receipt uses its own checksum and leaves grade acceptance
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
 });
+
+function releaseGateFixture(edit = () => {}) {
+  return artifactReportFixture(context => {
+    const { ledger, evidence } = context;
+    const witness = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
+    Object.assign(witness, { id: 'synthetic-build', kind: 'source-check', artifactId: null,
+      sourceSha: evidence.sourceSha, profileIds: ['local-owner', 'persistent-worker', 'shared-public'],
+      scope: 'Synthetic source gate fixture only; no actual build or acceptance.' });
+    ledger.evidence.push(witness);
+    const gate = entry(ledger, 'gates', 'build-verification');
+    Object.assign(gate, { status: 'passed', evidenceIds: [witness.id] });
+    const claim = { id: 'synthetic-release-claim', dimensionId: 'docs', profileId: 'local-owner',
+      statement: 'Synthetic release qualification fixture only.', status: 'release-supported',
+      requiredKinds: ['installed-artifact'], budgetIds: [], gateIds: [gate.id], evidenceIds: [evidence.id] };
+    ledger.claims.push(claim);
+    edit({ ...context, witness, gate, claim });
+  });
+}
+
+test('release qualification cannot reuse a passed gate from another source', () => {
+  const result = releaseGateFixture(({ witness }) => { witness.sourceSha = '1'.repeat(40); });
+  assert.ok(result.errors.some(error => /gate.*source|source.*gate/.test(error)), result.errors.join('\n'));
+});
+
+test('current gate evidence must match its kind and every declared profile', () => {
+  for (const edit of [w => { w.kind = 'baseline-observation'; }, w => { w.profileIds = ['local-owner']; }]) {
+    const result = releaseGateFixture(({ ledger, witness, gate }) => {
+      const older = structuredClone(witness);
+      Object.assign(older, { id: 'synthetic-older-build', sourceSha: '1'.repeat(40) });
+      ledger.evidence.push(older);
+      gate.evidenceIds.push(older.id);
+      edit(witness);
+    });
+    assert.ok(result.errors.some(error => /gate.*source/.test(error)), result.errors.join('\n'));
+  }
+});
+
+test('matching current gate evidence passes while preserving older results and policy agreements', () => {
+  const result = releaseGateFixture(({ ledger, witness, gate, claim }) => {
+    const older = structuredClone(witness);
+    Object.assign(older, { id: 'synthetic-older-build', sourceSha: '1'.repeat(40) });
+    ledger.evidence.push(older);
+    gate.evidenceIds.push(older.id);
+    const agreement = structuredClone(older);
+    Object.assign(agreement, { id: 'synthetic-policy-agreement', kind: 'external-agreement' });
+    ledger.evidence.push(agreement);
+    Object.assign(entry(ledger, 'gates', 'rubric-agreement'), { status: 'passed', evidenceIds: [agreement.id] });
+    claim.gateIds.push('rubric-agreement');
+  });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+});
+
+function completedAssessment({ ledger, artifact }) {
+  const review = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
+  Object.assign(review, { id: 'synthetic-independent-review', kind: 'independent-assessment',
+    sourceSha: artifact.sourceSha, artifactId: null,
+    scope: 'Synthetic independent-review fixture only; no actual reviewer or grade acceptance.' });
+  ledger.evidence.push(review);
+  ledger.agreements.independentReviewer.identity = 'synthetic-reviewer';
+  Object.assign(ledger.assessment, { status: 'completed', independent: true, reviewer: 'synthetic-reviewer',
+    sourceSha: artifact.sourceSha, artifactIds: [artifact.id], evidenceIds: [review.id],
+    grades: ledger.rubric.map(row => ({ dimensionId: row.id, grade: 'A-', rationale: 'Synthetic fixture only.' })) });
+}
+
+test('completed assessment binds passed gates to the selected release source', () => {
+  const result = artifactReportFixture(context => {
+    completedAssessment(context);
+    const older = structuredClone(entry(context.ledger, 'evidence', 'baseline-2026-10-03'));
+    Object.assign(older, { id: 'synthetic-older-build', kind: 'source-check', artifactId: null, sourceSha: '1'.repeat(40) });
+    context.ledger.evidence.push(older);
+    Object.assign(entry(context.ledger, 'gates', 'build-verification'), { status: 'passed', evidenceIds: [older.id] });
+  });
+  assert.ok(result.errors.some(error => /assessment: gate.*source/.test(error)), result.errors.join('\n'));
+});
+
+test('completed assessment rejects an individually supported claim for another release', () => {
+  const result = releaseGateFixture(context => {
+    completedAssessment(context);
+    const older = structuredClone(context.witness);
+    Object.assign(older, { id: 'synthetic-older-source-check', sourceSha: '1'.repeat(40) });
+    context.ledger.evidence.push(older);
+    context.ledger.claims.push({ ...context.claim, id: 'synthetic-source-claim', status: 'source-supported',
+      requiredKinds: ['source-check'], evidenceIds: [older.id] });
+  });
+  assert.ok(result.errors.some(error => /claim evidence does not match assessed release source/.test(error)), result.errors.join('\n'));
+  const positive = releaseGateFixture(completedAssessment);
+  assert.deepEqual(positive.errors, []);
+  assert.ok(positive.blockers.length > 0);
+});
 test('artifact receipts reject stale identity, missing runtime profiles and skipped provenance', () => {
   for (const edit of [
     ({ report }) => { report.sourceSha = '1'.repeat(40); },

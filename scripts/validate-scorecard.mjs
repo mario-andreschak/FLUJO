@@ -24,6 +24,11 @@ const sourceGateEvidenceKinds = new Map([
   ['build-verification', ['source-check']],
   ['persona-current-soak', ['offline-simulation']],
 ]);
+const gateEvidenceKinds = gate => sourceGateEvidenceKinds.get(gate.id) ?? {
+  source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'],
+  human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'],
+  external: ['external-agreement'],
+}[gate.kind];
 const installArtifactKinds = new Map([
   ['versioned installer', ['windows-installer']], ['npm package', ['npm']],
   ['pinned source', ['source-build']], ['container', ['container']],
@@ -312,6 +317,21 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       }
     }
   }
+  function requireGateSource(gate, sourceSha, context) {
+    // External rubric/consumer agreements may predate a release. Their policy
+    // applicability still needs review; runtime/source gates qualify one source.
+    if (!gate || gate.status !== 'passed' || gate.kind === 'external') return;
+    const expected = gateEvidenceKinds(gate);
+    const records = gate.evidenceIds.map(id => indexed.evidence.get(id)).filter(Boolean);
+    for (const profileId of gate.profileIds.length ? gate.profileIds : [null]) {
+      if (!records.some(e => e.result === 'passed' && e.integrity === 'checksummed' &&
+        expected.includes(e.kind) && e.sourceSha === sourceSha &&
+        (profileId === null || e.profileIds.includes(profileId)))) {
+        fail(context + ': gate ' + gate.id + ' lacks acceptance for source ' + sourceSha +
+          (profileId === null ? '' : ' and profile ' + profileId));
+      }
+    }
+  }
   for (const gate of ledger.gates) {
     refs([gate.ownerId], 'owners', gate.id);
     refs(gate.profileIds, 'profiles', gate.id);
@@ -319,7 +339,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (sourceGateEvidenceKinds.has(gate.id) && gate.kind !== 'source') fail(gate.id + ': required source gate kind changed');
     if (gate.status === 'passed') {
       const records = acceptedEvidence(gate.evidenceIds, gate.id);
-      const expected = sourceGateEvidenceKinds.get(gate.id) ?? { source: ['source-check', 'offline-simulation'], installed: ['installed-artifact'], human: ['human-study'], live: ['live-provider'], independent: ['independent-assessment'], external: ['external-agreement'] }[gate.kind];
+      const expected = gateEvidenceKinds(gate);
       if (!records.some(e => expected.includes(e.kind))) fail(gate.id + ': wrong evidence kind for gate');
       for (const profileId of gate.profileIds) {
         if (!records.some(e => expected.includes(e.kind) && e.profileIds.includes(profileId))) fail(gate.id + ': missing acceptance evidence for profile ' + profileId);
@@ -345,6 +365,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (claim.status === 'release-supported') {
       if (!records.some(e => e.kind === 'installed-artifact')) fail(claim.id + ': source checks cannot substitute for installed-artifact acceptance');
       if (claim.gateIds.some(id => indexed.gates.get(id)?.status !== 'passed')) fail(claim.id + ': required gates remain open');
+      for (const id of claim.gateIds) requireGateSource(indexed.gates.get(id), records[0]?.sourceSha, claim.id);
       for (const record of records.filter(e => e.kind === 'installed-artifact')) if (indexed.artifacts.get(record.artifactId)?.provenance !== 'verified-content') fail(claim.id + ': installed artifact content/provenance is unverified');
     }
   }
@@ -370,6 +391,10 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (!records.some(e => e.kind === 'independent-assessment')) fail('Reassessment lacks independent assessment evidence');
     if (records.some(e => e.sourceSha !== assessment.sourceSha)) fail('Reassessment evidence does not match selected release SHA');
     if (!assessment.artifactIds.length || assessment.artifactIds.some(id => { const a = indexed.artifacts.get(id); return !a || a.provenance !== 'verified-content' || a.sourceSha !== assessment.sourceSha; })) fail('Reassessment needs verified artifacts of the same selected release SHA');
+    for (const gate of ledger.gates) requireGateSource(gate, assessment.sourceSha, 'assessment');
+    for (const claim of ledger.claims.filter(c => ['source-supported', 'release-supported'].includes(c.status))) {
+      if (claim.evidenceIds.some(id => indexed.evidence.get(id)?.sourceSha !== assessment.sourceSha)) fail(claim.id + ': claim evidence does not match assessed release source');
+    }
   }
   const blockers = [];
   if (ledger.agreements.maintainer.status !== 'agreed' || ledger.agreements.independentReviewer.status !== 'agreed' || ledger.agreements.disagreements.length) blockers.push('Rubric agreement/disagreements unresolved');

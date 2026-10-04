@@ -219,6 +219,12 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
 4. Change a gate/claim only after the required passing checksummed evidence matches its
    revision, artifact, profile, evidence kinds and agreed budgets. Source-supported is
    limited to source scope. Report-only observations cannot qualify release-supported.
+   A release-supported claim needs qualifying evidence for its source at every declared
+   profile of each required source/runtime gate. Older passing results can remain in
+   that gate's history but cannot qualify the new source. A completed reassessment binds
+   supported claims and passed source/runtime gates to its selected release SHA.
+   External rubric/consumer agreements may predate a release; their policy applicability
+   and current consumer pins still need explicit review.
 5. Keep paid/live account work, independent humans, manual accessibility/recovery,
    cross-stream contracts and independent reassessment pending until their owners
    provide actual evidence. No bot/test count can satisfy those gates.
@@ -237,5 +243,6 @@ and the topic-owned architecture/API/operations guides. Docs owns this scorecard
 and validator. Security owns SECURITY.md/security behavior; Engineering owns CI/release;
 other topics own their feature/architecture/operations guides. The
 [publication reconciliation](publication-reconciliation.md) retains source-era findings
-and candidate wording for their review. This slice changes only project-status among
-those publication files; the actual release needs a fresh inventory after integration.
+and candidate wording for their review. The foundation changed project-status; later
+publication changes have their own source receipts. The actual release needs a fresh
+inventory and claim reconciliation after integration.

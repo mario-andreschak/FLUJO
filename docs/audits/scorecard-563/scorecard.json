@@ -1011,9 +1011,9 @@
       "operator": "<=",
       "limit": null,
       "unit": "USD",
-      "denominator": "No separately declared numeric paid-run envelope is recorded: proposed cap is zero. Record concrete account/model scope, enforced accounting and an agreed limit before measurement; broad development/deployment authority is not measured spend.",
+      "denominator": "All provider charges attributable to the declared run/account/model scope, reconciled with enforced accounting. No numeric cap is declared here; the measurement owner records concrete funding and an accounted limit before acceptance measurement. Existing development/deployment authorization remains in force.",
       "window": "Per future authorized run",
-      "basis": "#578; zero records the currently unset numeric run envelope, not a denial of development/deployment authorization or a performance target",
+      "basis": "#578; null records the undeclared numeric acceptance measurement envelope. The owner supplies concrete funding and accounted budget; existing development/deployment authorization remains in force.",
       "declaredAt": "2026-10-03T21:32:32.7220347Z",
       "agreementEvidenceIds": [],
       "observation": {
