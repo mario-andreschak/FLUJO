@@ -11,6 +11,8 @@ interface WorkspaceGateState {
 
 interface WorkspaceMutationLease {
   active: boolean;
+  recovery?: boolean;
+  assertOwned?: () => Promise<void>;
   participants: number;
   drained: Promise<void>;
   resolveDrained(): void;
@@ -23,6 +25,32 @@ interface WorkspaceMutationContext {
 export interface WorkspaceSnapshotBoundary {
   generation: number;
   release(): void;
+}
+
+interface WorkspaceRecoveryOptions {
+  workspace?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface WorkspaceRecoveryMutation {
+  readonly workspace: string;
+  /** Local capture counter, not a durable credential generation. */
+  readonly generation: number;
+  assertOwned(): Promise<void>;
+}
+
+export class WorkspaceRecoveryMutationError extends Error {
+  constructor(readonly code: 'RECOVERY_FINISHED' | 'RECOVERY_CANCELLED' | 'RECOVERY_WORKSPACE' | 'RECOVERY_OWNERSHIP') {
+    const messages = {
+      RECOVERY_FINISHED: 'Recovery write admission has finished; start a new recovery operation.',
+      RECOVERY_CANCELLED: 'Recovery write was cancelled; inspect its journal before resuming or rolling back.',
+      RECOVERY_WORKSPACE: 'Recovery write belongs to another workspace.',
+      RECOVERY_OWNERSHIP: 'Recovery write ownership was lost; inspect its journal before resuming or rolling back.',
+    };
+    super(messages[code]);
+    this.name = 'WorkspaceRecoveryMutationError';
+  }
 }
 
 declare global {
@@ -77,6 +105,7 @@ function createMutationLease(): WorkspaceMutationLease {
 async function participate<T>(lease: WorkspaceMutationLease, task: () => Promise<T>): Promise<T> {
   lease.participants += 1;
   try {
+    if (lease.assertOwned) await lease.assertOwned();
     return await task();
   } finally {
     lease.participants -= 1;
@@ -103,7 +132,12 @@ export async function withWorkspaceMutation<T>(
   // context, which has workspace names but no live lease.
   const inherited = current?.leases?.get(normalizedWorkspace);
   if (inherited?.active) {
-    return participate(inherited, () => runWithWorkspace(normalizedWorkspace, task));
+    return runWithWorkspace(normalizedWorkspace, () => participate(inherited, task));
+  }
+  if (inherited?.recovery) {
+    // A late recovery descendant may still hold staged values for an old
+    // transaction. It must not turn those into an ordinary fresh mutation.
+    throw new WorkspaceRecoveryMutationError('RECOVERY_FINISHED');
   }
 
   const state = stateFor(normalizedWorkspace);
@@ -141,9 +175,9 @@ export async function withWorkspaceMutation<T>(
 }
 
 /** A coherent capture for registered writers in all processes on this workspace. */
-export async function withWorkspaceRecoveryCapture<T>(
-  task: (generation: number) => Promise<T>,
-  options: { workspace?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+async function withWorkspaceRecoveryBoundary<T>(
+  task: (generation: number, assertOwned: () => Promise<void>) => Promise<T>,
+  options: WorkspaceRecoveryOptions,
 ): Promise<T> {
   const workspace = normalizeWorkspaceName(options.workspace ?? getCurrentWorkspace());
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -152,12 +186,69 @@ export async function withWorkspaceRecoveryCapture<T>(
   try {
     const { withWorkspaceProcessSnapshot } = await import('../enduringAgents/runtimeLock');
     return await runWithWorkspace(workspace, () => withWorkspaceProcessSnapshot(
-      () => task(boundary.generation),
+      lock => task(boundary.generation, () => lock.assertOwned()),
       { signal: options.signal, timeoutMs: Math.max(1, timeoutMs - (performance.now() - started)) },
     ));
   } finally {
     boundary.release();
   }
+}
+
+/** Read capture grants no nested write admission. */
+export function withWorkspaceRecoveryCapture<T>(
+  task: (generation: number) => Promise<T>,
+  options: WorkspaceRecoveryOptions = {},
+): Promise<T> {
+  return withWorkspaceRecoveryBoundary(generation => task(generation), options);
+}
+
+/**
+ * Explicit recovery writes after draining registered writers in every process.
+ * Only this operation's selected workspace may borrow the held admission.
+ * Callers must supply the durable journal/backup/commit protocol separately.
+ */
+export function withWorkspaceRecoveryMutation<T>(
+  task: (operation: WorkspaceRecoveryMutation) => Promise<T>,
+  options: WorkspaceRecoveryOptions = {},
+): Promise<T> {
+  const workspace = normalizeWorkspaceName(options.workspace ?? getCurrentWorkspace());
+  const signal = options.signal;
+  return withWorkspaceRecoveryBoundary(async (generation, assertProcessOwned) => {
+    const lease = createMutationLease();
+    lease.recovery = true;
+    const checkState = (requireLive: boolean) => {
+      if (requireLive && !lease.active) throw new WorkspaceRecoveryMutationError('RECOVERY_FINISHED');
+      if (signal?.aborted) throw new WorkspaceRecoveryMutationError('RECOVERY_CANCELLED');
+      if (getCurrentWorkspace() !== workspace) throw new WorkspaceRecoveryMutationError('RECOVERY_WORKSPACE');
+    };
+    const checkOwned = async (requireLive = true) => {
+      checkState(requireLive);
+      try { await assertProcessOwned(); }
+      catch {
+        checkState(requireLive);
+        throw new WorkspaceRecoveryMutationError('RECOVERY_OWNERSHIP');
+      }
+      checkState(requireLive);
+    };
+    lease.assertOwned = () => checkOwned();
+    const nextContext: WorkspaceMutationContext = { leases: new Map(mutationContext.getStore()?.leases ?? []) };
+    nextContext.leases.set(workspace, lease);
+    const operation = Object.freeze({ workspace, generation, assertOwned: lease.assertOwned });
+    return mutationContext.run(nextContext, async () => {
+      let result: T;
+      try { result = await participate(lease, () => task(operation)); }
+      finally { await lease.drained; }
+      // The public capability has retired. Recheck the still-held physical
+      // owner and cancellation before acknowledging settled recovery writes.
+      await checkOwned(false);
+      return result;
+    });
+  }, { ...options, workspace, signal }).catch(error => {
+    // The same fixed cancellation applies while initially draining/acquiring;
+    // caller-supplied abort reasons never become recovery diagnostics.
+    if (signal?.aborted) throw new WorkspaceRecoveryMutationError('RECOVERY_CANCELLED');
+    throw error;
+  });
 }
 
 /**
