@@ -10,9 +10,12 @@ import {
   isEncryptionInitialized,
   isUserEncryptionEnabled,
   getEncryptionType,
+  getEncryptionStatus,
   authenticate,
-  logout
+  logout,
+  EncryptionLockedError,
 } from '@/utils/encryption/secure';
+import { isPrivatePassphrase } from '@/utils/encryption/privateProfile';
 import { onUnlocked } from '@/backend/init';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
@@ -32,10 +35,6 @@ async function POST_handler(req: NextRequest) {
   if (notLocal) return notLocal;
 
   try {
-    // Module-load initialization has no request context and therefore always
-    // targets default-workspace. Await it only after the route wrapper has
-    // selected the request's workspace.
-    await initializeDefaultEncryption();
     const { action, password, oldPassword, newPassword, data, token } = await req.json();
 
     if (!action) {
@@ -47,9 +46,9 @@ async function POST_handler(req: NextRequest) {
     switch (action) {
       case 'initialize':
         log.info(`Processing initialize action`, { requestId }); // Keep as info
-        if (!password) {
+        if (!isPrivatePassphrase(password)) {
           log.error(`Missing password parameter`, { requestId });
-          return NextResponse.json({ error: 'Password is required' }, { status: 400 });
+          return NextResponse.json({ error: 'A private passphrase is required' }, { status: 400 });
         }
         
         const initialized = await initializeEncryption(password);
@@ -66,7 +65,7 @@ async function POST_handler(req: NextRequest) {
         const defaultInitialized = await initializeDefaultEncryption();
         if (!defaultInitialized) {
           log.error(`Failed to initialize default encryption`, { requestId });
-          return NextResponse.json({ error: 'Failed to initialize default encryption' }, { status: 500 });
+          return NextResponse.json({ error: 'encryption_setup_required' }, { status: 423 });
         }
         
         log.info(`Default encryption initialized successfully`, { requestId });
@@ -74,7 +73,7 @@ async function POST_handler(req: NextRequest) {
         
       case 'change_password':
         log.info(`Processing change_password action`, { requestId }); // Keep as info
-        if (!oldPassword || !newPassword) {
+        if (typeof oldPassword !== 'string' || !isPrivatePassphrase(newPassword)) {
           log.error(`Missing password parameters`, { requestId });
           return NextResponse.json({ error: 'Old and new passwords are required' }, { status: 400 });
         }
@@ -189,16 +188,20 @@ async function POST_handler(req: NextRequest) {
         const encryptionType = await getEncryptionType();
         log.debug(`Encryption type check completed`, { requestId, encryptionType }); // Keep as debug
         return NextResponse.json({ type: encryptionType });
+
+      case 'get_encryption_status':
+        return NextResponse.json(await getEncryptionStatus());
         
       default:
         log.error(`Invalid action`, { requestId, action });
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
   } catch (error) {
-    log.error(`Error processing request`, { requestId, error });
-    return NextResponse.json({ 
-      error: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}` 
-    }, { status: 500 });
+    if (error instanceof EncryptionLockedError) {
+      return NextResponse.json({ error: 'encryption_locked' }, { status: 423 });
+    }
+    log.error('Encryption request failed', { requestId });
+    return NextResponse.json({ error: 'Encryption request failed' }, { status: 500 });
   }
 }
 

@@ -1,10 +1,13 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { loadItem, saveItem } from '@/utils/storage/backend';
+import { createHash } from 'node:crypto';
+import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
+import type { EncryptionStatus } from '@/shared/types/encryption';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
-import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked } from './session';
+import { createSession, getDekFromSession, invalidateSession, unlockServer, lockServer, getServerDek, isServerLocked } from './session';
+import { hasOperatorPassphrase, isPrivatePassphrase, readOperatorPassphrase } from './privateProfile';
+import { assertFreshEncryptionSetup, readCredentialJson } from './workspaceFiles';
 import {
   DEFAULT_PASSWORD, decryptLegacy, keyId, newKeyring, open, parseSessionKey, seal,
   serializeKeyring, unwrapKeyring, unwrapLegacyKey, wrapKeyring,
@@ -14,6 +17,7 @@ export { isValidEncryptionSessionKey } from './format';
 
 const log = createLogger('utils/encryption/secure');
 const DATA_PURPOSE = 'flujo:secret:v2';
+const operatorUnlocks = new Map<string, string>();
 
 export class EncryptionLockedError extends Error {
   constructor(message = 'Encryption is locked: unlock with your password before accessing secrets') {
@@ -32,27 +36,31 @@ async function withMetadataLock<T>(operation: () => Promise<T>): Promise<T> {
   const locks = global.__flujo_encryption_metadata_locks ??= new Map();
   const key = workspaceCacheKey('encryption-metadata');
   const previous = locks.get(key) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(operation);
+  const current = previous.catch(() => undefined).then(async () => {
+    const { withWorkspaceRuntimeLock } = await import('@/backend/services/enduringAgents/runtimeLock');
+    return withWorkspaceRuntimeLock('encryption-metadata', async lock => {
+      await lock.assertOwned();
+      const result = await operation();
+      await lock.assertOwned();
+      return result;
+    });
+  });
   locks.set(key, current);
   try { return await current; } finally { if (locks.get(key) === current) locks.delete(key); }
 }
 
 async function readMetadata(): Promise<EncryptionMetadata | null> {
-  const stored = await loadItem<unknown>(StorageKey.ENCRYPTION_KEY, null);
-  if (stored === null || stored === undefined) {
-    // Generic storage treats empty/whitespace files and JSON null as absent.
-    // Key metadata cannot use that recovery policy: minting a replacement key
-    // would make the workspace's existing ciphertext permanently unreadable.
-    const metadataPath = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
-    try {
-      await fs.lstat(metadataPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
-    throw new Error('Existing encryption metadata is empty or invalid; restore it from a matching workspace backup');
+  const metadataPath = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
+  let stored: unknown;
+  try {
+    stored = await readCredentialJson(metadataPath, 32_768);
+  } catch {
+    // The generic storage parser logs diagnostics and copies corrupt input.
+    // Key metadata must fail closed without either payload-bearing side effect.
+    throw new Error('Encryption metadata is invalid; restore a matching workspace backup');
   }
-  if (typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid encryption metadata');
+  if (stored === undefined) return null;
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid encryption metadata');
   const metadata = stored as EncryptionMetadata;
   if (![1, 2].includes(metadata.encryption_version)) throw new Error('Unsupported encryption metadata version');
   if (metadata.encryption_type !== undefined && !['default', 'user'].includes(metadata.encryption_type)) {
@@ -70,7 +78,42 @@ async function persist(ring: Keyring, type: EncryptionType, password: string): P
 }
 
 async function metadataOrInitialize(): Promise<EncryptionMetadata> {
-  return await readMetadata() ?? await persist(newKeyring(), 'default', DEFAULT_PASSWORD);
+  const existing = await readMetadata();
+  if (existing) return existing;
+  if (!hasOperatorPassphrase()) throw new EncryptionLockedError('Encryption setup is required before saving credentials');
+  await assertFreshEncryptionSetup();
+  const password = await readOperatorPassphrase();
+  const ring = newKeyring();
+  const metadata = await persist(ring, 'user', password);
+  unlockServer(serializeKeyring(ring));
+  operatorUnlocks.set(workspaceCacheKey('operator-unlock'), operatorRevision(metadata, password));
+  return metadata;
+}
+
+function operatorRevision(metadata: EncryptionMetadata, password: string): string {
+  return createHash('sha256').update(JSON.stringify(metadata)).update('\0').update(password).digest('hex');
+}
+
+async function operatorKeys(metadata: EncryptionMetadata): Promise<Keyring> {
+  const cache = workspaceCacheKey('operator-unlock');
+  try {
+    if (metadata.encryption_type !== 'user') throw new Error();
+    const password = await readOperatorPassphrase();
+    const revision = operatorRevision(metadata, password);
+    const unlocked = getServerDek();
+    if (operatorUnlocks.get(cache) === revision && unlocked) {
+      const ring = parseSessionKey(unlocked);
+      if ('activeKey' in ring && metadata.key_id === keyId(ring)) return ring;
+    }
+    const ring = await unwrapAndUpgrade(metadata, password);
+    unlockServer(serializeKeyring(ring));
+    operatorUnlocks.set(cache, revision);
+    return ring;
+  } catch {
+    lockServer();
+    operatorUnlocks.delete(cache);
+    throw new EncryptionLockedError('Operator encryption secret is unavailable; restore it or complete the explicit migration');
+  }
 }
 
 /** Upgrade metadata only; keep v1 ciphertext decryptable without a bulk rewrite. */
@@ -84,17 +127,22 @@ async function unwrapAndUpgrade(metadata: EncryptionMetadata, password: string):
 
 export async function initializeDefaultEncryption(): Promise<boolean> {
   try {
-    return await withMetadataLock(async () => { await metadataOrInitialize(); return true; });
+    return await withMetadataLock(async () => {
+      const metadata = await metadataOrInitialize();
+      if (hasOperatorPassphrase()) await operatorKeys(metadata);
+      return true;
+    });
   } catch { log.error('Could not initialize encryption metadata'); return false; }
 }
 
 /** Existing USER metadata must never be overwritten by a second initialization. */
 export async function initializeEncryption(password: string): Promise<boolean> {
-  if (!password) return false;
+  if (!isPrivatePassphrase(password)) return false;
   try {
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
       if (metadata?.encryption_type === 'user') return false;
+      if (!metadata) await assertFreshEncryptionSetup();
       const ring = !metadata ? newKeyring()
         : metadata.encryption_version === 2 ? await unwrapKeyring(metadata, DEFAULT_PASSWORD)
           : newKeyring(await unwrapLegacyKey(metadata, DEFAULT_PASSWORD));
@@ -110,7 +158,7 @@ export async function migrateToUserEncryption(password: string): Promise<boolean
 }
 
 export async function changeEncryptionPassword(oldPassword: string, newPassword: string): Promise<boolean> {
-  if (!newPassword) return false;
+  if (!isPrivatePassphrase(newPassword)) return false;
   try {
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
@@ -128,6 +176,10 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
 async function getKeys(passwordOrToken?: string, isToken = false): Promise<Keyring | { legacyKey: string }> {
   return withMetadataLock(async () => {
     const metadata = await metadataOrInitialize();
+    if (hasOperatorPassphrase() && metadata.encryption_type !== 'user') {
+      throw new EncryptionLockedError('Explicit migration is required for public-password metadata');
+    }
+    if (hasOperatorPassphrase() && (!passwordOrToken || isToken)) return operatorKeys(metadata);
     if (metadata.encryption_type !== 'user') return unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
     // An explicit password is verified even if the process is already unlocked.
     if (passwordOrToken && !isToken) return unwrapAndUpgrade(metadata, passwordOrToken);
@@ -204,10 +256,42 @@ export async function isUserEncryptionEnabled(): Promise<boolean> {
 }
 
 export async function isEncryptionLocked(): Promise<boolean> {
-  return (await isUserEncryptionEnabled()) && isServerLocked();
+  const metadata = await readMetadata();
+  if (!metadata) {
+    if (!hasOperatorPassphrase()) return true;
+    return !await initializeDefaultEncryption();
+  }
+  if (hasOperatorPassphrase()) {
+    try { await withMetadataLock(() => operatorKeys(metadata)); return false; }
+    catch { return true; }
+  }
+  return metadata.encryption_type === 'user' && isServerLocked();
 }
 
 export async function getEncryptionType(): Promise<EncryptionType | null> {
   const metadata = await readMetadata();
   return metadata ? metadata.encryption_type ?? 'default' : null;
+}
+
+export async function getEncryptionStatus(): Promise<EncryptionStatus> {
+  return withMetadataLock<EncryptionStatus>(async () => {
+    let metadata = await readMetadata();
+    let recoveryRequired = false;
+    if (!metadata) {
+      try { await assertFreshEncryptionSetup(); }
+      catch { recoveryRequired = true; }
+    }
+    const operator = hasOperatorPassphrase();
+    let locked = !metadata || (metadata.encryption_type === 'user' && isServerLocked());
+    if (operator && !recoveryRequired) {
+      try {
+        metadata ??= await metadataOrInitialize();
+        await operatorKeys(metadata);
+        locked = false;
+      } catch { locked = true; }
+    }
+    const type = metadata ? metadata.encryption_type ?? 'default' : null;
+    return { initialized: !!metadata, type, locked, recoveryRequired,
+      protection: operator ? 'operator' : type === 'default' ? 'legacy' : 'interactive' };
+  });
 }

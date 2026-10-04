@@ -8,6 +8,7 @@ import {
 import { isSecretEnvVar } from '@/utils/shared/common';
 import { createLogger } from '@/utils/logger';
 import { Settings } from '@/shared/types/storage/storage';
+import type { EncryptionStatus } from '@/shared/types/encryption';
 import { createDefaultSettings } from '@/shared/config/defaultSettings';
 import {
   ENCRYPTION_UNLOCKED_EVENT,
@@ -22,6 +23,7 @@ interface StorageContextType {
   changeKey: (oldKey: string, newKey: string) => Promise<boolean>;
   verifyKey: (key: string) => Promise<boolean>;
   isEncryptionInitialized: () => Promise<boolean>;
+  getEncryptionStatus: () => Promise<EncryptionStatus>;
   globalEnvVars: Record<string, { value: string, metadata: { isSecret: boolean } }>;
   setGlobalEnvVars: (vars: Record<string, { value: string, metadata: { isSecret: boolean } } | string>) => Promise<void>;
   deleteGlobalEnvVar: (key: string) => Promise<void>;
@@ -46,6 +48,7 @@ const StorageContext = createContext<StorageContextType>({
   changeKey: async () => false,
   verifyKey: async () => false,
   isEncryptionInitialized: async () => false,
+  getEncryptionStatus: async () => { throw new Error('Encryption status unavailable'); },
   globalEnvVars: {} as Record<string, { value: string, metadata: { isSecret: boolean } }>,
   setGlobalEnvVars: async () => {},
   deleteGlobalEnvVar: async () => {},
@@ -70,6 +73,24 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [settings, setSettings] = useState<Settings>(createDefaultSettings);
 
   // Define encryption-related functions first
+  const getEncryptionStatus = useCallback(async (): Promise<EncryptionStatus> => {
+    const response = await fetch('/api/encryption/secure', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_encryption_status' }),
+    });
+    if (!response.ok) throw new Error('Encryption status unavailable');
+    const value: unknown = await response.json();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Encryption status unavailable');
+    const status = value as Record<string, unknown>;
+    if (typeof status.initialized !== 'boolean' || typeof status.locked !== 'boolean' || typeof status.recoveryRequired !== 'boolean'
+        || ![null, 'default', 'user'].includes(status.type as string | null)
+        || !['interactive', 'operator', 'legacy'].includes(status.protection as string)) {
+      throw new Error('Encryption status unavailable');
+    }
+    return { initialized: status.initialized, locked: status.locked, recoveryRequired: status.recoveryRequired,
+      type: status.type as EncryptionStatus['type'], protection: status.protection as EncryptionStatus['protection'] };
+  }, []);
+
   const isEncryptionInitialized = useCallback(async (): Promise<boolean> => {
     log.debug('isEncryptionInitialized: Entering method');
     try {
@@ -114,6 +135,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     } catch (error) {
       log.warn('setKey: Failed to set encryption key:', error);
+      throw new Error('Encryption setup failed');
     }
   }, []);
 
@@ -513,6 +535,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
         changeKey,
         verifyKey,
         isEncryptionInitialized,
+        getEncryptionStatus,
         globalEnvVars,
         setGlobalEnvVars,
         deleteGlobalEnvVar,

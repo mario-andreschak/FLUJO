@@ -41,10 +41,9 @@ export function openAiLockedResponse(): NextResponse {
 }
 
 /**
- * Whether requests should currently be denied: USER encryption is enabled AND
- * the server is locked. DEFAULT mode / encryption-not-initialized is never
- * locked, so its behavior is byte-for-byte unchanged. Cheap: touches only the
- * mode + lock flag, never the DEK or any secret.
+ * Deny an unconfigured workspace, locked USER encryption, or unavailable
+ * operator protection. Existing DEFAULT metadata retains its explicit legacy
+ * compatibility behavior when no operator profile is selected.
  */
 export async function isLocked(): Promise<boolean> {
   return isEncryptionLocked();

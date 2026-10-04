@@ -131,9 +131,10 @@ describe('USER encryption with server unlock state', () => {
   });
 });
 
-describe('DEFAULT encryption mode is unchanged', () => {
+describe('existing DEFAULT compatibility and fresh private setup', () => {
   it('round-trips without any password and never throws the locked error', async () => {
     const { secure } = await loadModules();
+    await (await import('./fixtures')).seedExistingDefaultProfile();
     expect(await secure.initializeDefaultEncryption()).toBe(true);
 
     const enc = await secure.encryptWithPassword('hello world');
@@ -142,13 +143,11 @@ describe('DEFAULT encryption mode is unchanged', () => {
     expect(dec).toBe('hello world');
   });
 
-  it('initializes default encryption on the fly when no metadata exists', async () => {
+  it('requires private setup when no metadata exists', async () => {
     const { secure } = await loadModules();
-    // No initialize* call: getDEK should lazily set up DEFAULT encryption.
-    const enc = await secure.encryptWithPassword('lazy-default');
-    expect(enc).toBeTruthy();
-    const dec = await secure.decryptWithPassword(enc as string);
-    expect(dec).toBe('lazy-default');
+    expect(await secure.initializeDefaultEncryption()).toBe(false);
+    await expect(secure.encryptWithPassword('must-not-be-saved')).rejects.toBeInstanceOf(secure.EncryptionLockedError);
+    expect(await secure.isEncryptionInitialized()).toBe(false);
   });
 });
 
