@@ -2435,7 +2435,7 @@ export class ModelHandler {
       // native adapters (Anthropic, Gemini, Claude CLI) translate to/from their
       // own APIs but return the same OpenAI-shaped response, so everything below
       // is provider-agnostic.
-      const adapter = getCompletionAdapter(model);
+      const adapter = getCompletionAdapter(model, singlePhysicalAttempt ? 'openai' : undefined);
 
       log.debug(`calling chatcompletion`)
       log.verbose('calling chatcompletion now with ADAPTER', model.adapter || 'openai')

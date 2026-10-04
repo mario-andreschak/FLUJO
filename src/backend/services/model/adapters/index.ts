@@ -11,6 +11,8 @@ import { CodexAdapter } from './codexAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 import { FallbackAdapter } from './fallbackAdapter';
+import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from './completionRoute';
+import { ExecutionExtensionError } from '@/backend/execution/extensions';
 
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
@@ -34,12 +36,18 @@ export type {
  * Pick the completion adapter for a model based on its `adapter` field.
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
-export function getCompletionAdapter(model: Model): CompletionAdapter {
-  if (model.fallbackPolicy) return new FallbackAdapter(getCompletionAdapter);
-  if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
-    return new OpenRouterMediaAdapter();
+export function getCompletionAdapter(model: Model, requiredRoute?: CompletionAdapterRoute): CompletionAdapter {
+  // Resolve once for this factory call. A protected ModelHandler supplies the
+  // qualified route after its async preparation, before any native adapter can run.
+  const route = resolveCompletionAdapterRoute(model);
+  if (requiredRoute && route !== requiredRoute) {
+    throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
   }
-  switch (resolveModelAdapter(model.provider, model.adapter)) {
+  switch (route) {
+    case 'fallback-policy':
+      return new FallbackAdapter(getCompletionAdapter);
+    case 'openrouter-media':
+      return new OpenRouterMediaAdapter();
     case 'azure':
       return new AzureOpenAiAdapter();
     case 'openai-responses':

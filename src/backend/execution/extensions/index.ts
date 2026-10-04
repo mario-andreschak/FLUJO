@@ -4,6 +4,7 @@ import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
 import type { Model } from '@/shared/types/model';
 import { configuredExecutionAdapter } from '@/backend/execution/extensions/configuredAdapter';
+import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
 
 declare const contextBrand: unique symbol;
 /** Opaque capability minted by trusted server code, never by request metadata. */
@@ -115,6 +116,8 @@ export function assertExecutionServerConfig(config: MCPServerConfig): void { exe
 export async function assertExecutionExtensionCurrent(context: ExecutionExtensionContext | undefined, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void> {
   const item = record(context); await item.adapter.assertRun(item.value, expected);
 }
+/** Synchronous registry check for the last local SDK call site. */
+export function assertExecutionExtensionAdapterCurrent(context: ExecutionExtensionContext): void { record(context); }
 export function runWithExecutionConversationAccess<T>(conversationId: string, assertCurrent: () => Promise<void>, task: () => T): T {
   return registry.access.run({ conversationId, assertCurrent }, task);
 }
@@ -194,10 +197,22 @@ export async function executionExtensionSinglePhysicalAttempt(
     throw new ExecutionExtensionError('execution_model_attempt_policy_invalid');
   }
   // Only this adapter's physical request boundary is qualified by this contract.
-  if (model.fallbackPolicy || (model.adapter && model.adapter !== 'openai')) {
+  if (resolveCompletionAdapterRoute(model) !== 'openai') {
     throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
   }
   return true;
+}
+
+/** Direct adapter entry points must not treat a model's declared route as proof
+ * that this concrete adapter has the protected pre-send claim boundary. */
+export async function assertExecutionExtensionConcreteAdapter(
+  context: ExecutionExtensionContext | undefined,
+  model: Model,
+  concreteRoute: CompletionAdapterRoute,
+): Promise<void> {
+  if (await executionExtensionSinglePhysicalAttempt(context, model) && concreteRoute !== 'openai') {
+    throw new ExecutionExtensionError('execution_single_attempt_adapter_unsupported');
+  }
 }
 
 /** Consume one trusted context before awaiting owner I/O, so parallel calls
@@ -214,7 +229,8 @@ export async function claimExecutionModelRequest(
   try {
     await item.adapter.assertRun(item.value);
     await item.adapter.claimModelRequest(item.value, intent);
-    await item.adapter.assertRun(item.value);
+    await assertExecutionExtensionCurrent(context);
+    record(context);
   } catch (error) {
     if (error instanceof ExecutionExtensionError) throw error;
     throw new ExecutionExtensionError('execution_model_request_claim_denied');

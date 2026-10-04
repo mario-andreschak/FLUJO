@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { createHash } from 'node:crypto';
 import { OpenAiAdapter } from '@/backend/services/model/adapters/openaiAdapter';
+import { OpenAiResponsesAdapter } from '@/backend/services/model/adapters/openaiResponsesAdapter';
+import { OpenRouterMediaAdapter } from '@/backend/services/model/adapters/openrouterMediaAdapter';
+import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { FallbackAdapter } from '@/backend/services/model/adapters/fallbackAdapter';
 import { ExecutionExtensionError, executionExtensionSinglePhysicalAttempt, registerExecutionExtension, type ExecutionExtensionContext, type ExecutionModelIdentity, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
@@ -315,6 +318,70 @@ describe('authenticated single physical OpenAI attempt', () => {
       model: { ...model(), fallbackPolicy: { modelIds: ['first', 'second'] } } }))
       .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
     expect(adapterFor).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it.each([
+    ['Requesty with explicit OpenAI adapter', { provider: 'requesty' as const, adapter: 'openai' as const }, OpenAiResponsesAdapter],
+    ['OpenRouter with implicit adapter', { provider: 'openrouter' as const, adapter: undefined }, OpenAiResponsesAdapter],
+    ['OpenRouter image-only route', { provider: 'openrouter' as const, adapter: 'openai' as const, outputModalities: ['image'] as Model['outputModalities'] }, OpenRouterMediaAdapter],
+    ['OpenRouter video-only route', { provider: 'openrouter' as const, adapter: undefined, outputModalities: ['video'] as Model['outputModalities'] }, OpenRouterMediaAdapter],
+  ])('rejects protected %s before either concrete native entry sends', async (_name, overrides, expectedAdapter) => {
+    const { context, claimModelRequest } = run();
+    const routedModel = { ...model(), ...overrides };
+    const selected = getCompletionAdapter(routedModel);
+    expect(selected).toBeInstanceOf(expectedAdapter);
+    await expect(executionExtensionSinglePhysicalAttempt(context, routedModel))
+      .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+    expect(() => getCompletionAdapter(routedModel, 'openai'))
+      .toThrow(expect.objectContaining({ code: 'execution_single_attempt_adapter_unsupported' }));
+    const request = { ...input(context), model: routedModel };
+    await expect(selected.createCompletion(request))
+      .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+    await expect(selected.createStreamCompletion!(request))
+      .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+    expect(claimModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('rejects route drift after policy attestation at the concrete adapter factory', async () => {
+    const { context, claimModelRequest } = run();
+    const mutableModel = model();
+    expect(await executionExtensionSinglePhysicalAttempt(context, mutableModel)).toBe(true);
+    mutableModel.provider = 'requesty';
+    expect(() => getCompletionAdapter(mutableModel, 'openai'))
+      .toThrow(expect.objectContaining({ code: 'execution_single_attempt_adapter_unsupported' }));
+    await expect(new OpenAiAdapter().createCompletion({ ...input(context), model: mutableModel }))
+      .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+    expect(claimModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it.each(['claim', 'final assert'] as const)('rejects adapter replacement during %s before any POST', async phase => {
+    let restoreReplacement: (() => void) | undefined;
+    let claimed = false;
+    let replaced = false;
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }),
+      claimModelRequest: async () => {
+        claimed = true;
+        if (phase === 'claim') restoreReplacement = registerExecutionExtension(fixtureAdapter());
+      },
+      assertRun: async () => {
+        if (phase === 'final assert' && claimed && !replaced) {
+          replaced = true;
+          await Promise.resolve();
+          restoreReplacement = registerExecutionExtension(fixtureAdapter());
+        }
+      },
+    });
+    restore = registerExecutionExtension(adapter);
+    try {
+      await expect(new OpenAiAdapter().createCompletion(input(mintFixture(adapter))))
+        .rejects.toMatchObject({ code: 'trusted_execution_context_required' });
+    } finally {
+      restoreReplacement?.();
+    }
     expect(physicalRequests).toBe(0);
   });
 

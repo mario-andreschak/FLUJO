@@ -53,6 +53,23 @@ trusted execution-extension denials retain their error code.
 issuer or claim implementation is wired by this source change, and ordinary
 calls retain their previous request options and retry behavior.
 
+The protected v1 path qualifies the resolved concrete route, using the same
+selector as `getCompletionAdapter`: only OpenAI Chat Completions is supported.
+Gateway profiles that resolve to Responses and OpenRouter's image/video-only
+routes fail before their native sends, including their direct adapter entries.
+ModelHandler requires the qualified route again when it constructs the adapter
+after asynchronous request preparation; the OpenAI adapter rechecks before its
+SDK call. The claim also checks that its registered adapter is still current
+after owner I/O and at the local SDK entry. Other exported native adapters do
+not constitute a universal direct-call physical fence; protected adoption must
+use the qualified ModelHandler route.
+
+A branded context whose owner returns no `modelAttemptPolicy` deliberately uses
+ordinary transport. FACTORY must return v1 or deny every protected model step.
+The direct `/v1/chat/completions` model-service route has no execution context;
+FACTORY must fence protected credentials and models at ingress or isolate them
+before adoption.
+
 The intent names the declared `model.baseUrl`, not the effective SDK URL or
 transport. `OpenAiAdapter.createClient` can be overridden; an original owner
 must pin the actual client/endpoint and check it at the fetch boundary before

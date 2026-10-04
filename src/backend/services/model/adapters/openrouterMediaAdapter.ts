@@ -11,6 +11,7 @@ import {
 } from './types';
 import { extractImageParts, extractText } from './messageUtils';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
+import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 
 const log = createLogger('backend/services/model/adapters/openrouterMediaAdapter');
 const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -367,6 +368,7 @@ async function generateVideo(input: CompletionInput): Promise<CompletionResult> 
  */
 export class OpenRouterMediaAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(input.executionExtensionContext, input.model, 'openrouter-media');
     const route = resolveOpenRouterMediaRoute(input.model);
     if (route.kind === 'videos') return generateVideo(input);
     if (route.kind === 'images') return generateImage(input);
@@ -376,6 +378,7 @@ export class OpenRouterMediaAdapter implements CompletionAdapter {
   }
 
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(input.executionExtensionContext, input.model, 'openrouter-media');
     const liveMessageId = `stream_${uuidv4()}`;
     const isVideo = resolveOpenRouterMediaRoute(input.model).kind === 'videos';
     input.onModelDelta?.({

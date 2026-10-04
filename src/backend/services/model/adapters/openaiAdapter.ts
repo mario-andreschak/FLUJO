@@ -10,7 +10,7 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import type { Model } from '@/shared/types/model';
-import { claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
+import { assertExecutionExtensionAdapterCurrent, claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -268,6 +268,7 @@ export class OpenAiAdapter implements CompletionAdapter {
             const requestBody = singlePhysicalAttempt
               ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create', body)
               : body;
+            if (singlePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
             return openai.chat.completions.create(
               requestBody as OpenAI.Chat.ChatCompletionCreateParams,
               singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
@@ -398,6 +399,7 @@ export class OpenAiAdapter implements CompletionAdapter {
           const requestBody = singlePhysicalAttempt
             ? await claimProtectedOpenAiRequest(executionExtensionContext!, model, 'chat.completions.create(stream)', body)
             : body;
+          if (singlePhysicalAttempt) assertExecutionExtensionAdapterCurrent(executionExtensionContext!);
           return openai.chat.completions.create(
             requestBody as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
             singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,

@@ -9,6 +9,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { parseDataUrl } from './messageUtils';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { assertExecutionExtensionConcreteAdapter } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -580,7 +581,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     nodeId,
     promptCacheKey,
     toolNameMap,
+    executionExtensionContext,
   }: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,
@@ -701,7 +704,9 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     onSdkRequest,
     onSdkRequestResult,
     toolNameMap,
+    executionExtensionContext,
   }: CompletionInput): Promise<CompletionResult> {
+    await assertExecutionExtensionConcreteAdapter(executionExtensionContext, model, 'openai-responses');
     const openai = createOpenAIClient({
       apiKey,
       baseURL: model.baseUrl,
