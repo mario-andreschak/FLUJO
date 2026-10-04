@@ -16,6 +16,7 @@ import { loadItem } from '@/utils/storage/backend';
 import { modelService } from '@/backend/services/model';
 import { discoverAvatarConnections } from '@/backend/services/avatar/connectionDiscovery';
 import { readAvatarWorkModel } from '@/backend/services/avatar/workModel';
+import { createHash } from 'node:crypto';
 
 const request = (body: object, id = crypto.randomUUID()) => new Request('http://localhost/api/avatar/native-turn', { method: 'POST', headers: { 'x-flujo-avatar-client': id, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const state = (status = 'completed') => ({ conversationId: 'conversation', status, messages: [] });
@@ -90,6 +91,33 @@ describe('avatar native voice uses canonical Flujo results', () => {
     expect((await handleAvatarVoice(request(payload, client), 'native-result-receipt')).status).toBe(409);
     jest.mocked(getCurrentWorkspace).mockReturnValue('other-workspace');
     expect((await handleAvatarVoice(request({ taskId: receipt.taskId, avatar: 'moss', locale: 'es' }, client), 'native-result')).status).toBe(409);
+  });
+  it.each([null, false, {}, '', 'a'.repeat(63), 'A'.repeat(64)])('refuses malformed expected result digest %j before canonical lookup', async expectedResultDigest => {
+    const auth = trusted();
+    const response = await handleAuthenticatedAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'en', expectedResultDigest }), 'native-result-receipt', auth.context);
+    expect(response.status).toBe(400); expect(recoverConversationTranscript).not.toHaveBeenCalled();
+  });
+  it('refuses a changed reviewed projection before offering a receipt and permits the matching result', async () => {
+    const client = crypto.randomUUID(), auth = trusted(); FlowExecutor.conversationStates.set('conversation', state() as never);
+    const expectedResultDigest = createHash('sha256').update(JSON.stringify({ reply: 'A recorded result.', mode: 'flujo', status: 'completed' })).digest('hex');
+    const payload = { conversationId: 'conversation', messageId: 'reply', locale: 'en', expectedResultDigest };
+    jest.mocked(recoverConversationTranscript).mockResolvedValueOnce({ messages: [{ id: 'reply', role: 'assistant', content: 'Changed after independent review.' }], source: 'snapshot' } as never);
+    expect((await handleAuthenticatedAvatarVoice(request(payload, client), 'native-result-receipt', auth.context)).status).toBe(409);
+    const matching = await handleAuthenticatedAvatarVoice(request(payload, client), 'native-result-receipt', auth.context);
+    expect(matching.status).toBe(200); expect(await matching.json()).toEqual({ taskId: expect.any(String) });
+    expect((await handleAuthenticatedAvatarVoice(request(payload, client), 'native-result-receipt', auth.context)).status).toBe(409);
+  });
+  it('keeps the reviewed digest current after receipt issuance without admitting a changed reply to the provider', async () => {
+    const original = global.fetch, fetchMock = jest.fn(); global.fetch = fetchMock;
+    try {
+      const client = crypto.randomUUID(), auth = trusted(); FlowExecutor.conversationStates.set('conversation', state() as never);
+      const expectedResultDigest = createHash('sha256').update(JSON.stringify({ reply: 'A recorded result.', mode: 'flujo', status: 'completed' })).digest('hex');
+      const receiptResponse = await handleAuthenticatedAvatarVoice(request({ conversationId: 'conversation', messageId: 'reply', locale: 'en', expectedResultDigest }, client), 'native-result-receipt', auth.context);
+      expect(receiptResponse.status).toBe(200); const receipt = await receiptResponse.json();
+      jest.mocked(recoverConversationTranscript).mockResolvedValue({ messages: [{ id: 'reply', role: 'assistant', content: 'Unreviewed replacement.' }], source: 'snapshot' } as never);
+      expect((await handleAuthenticatedAvatarVoice(request({ taskId: receipt.taskId, avatar: 'moss', locale: 'en' }, client), 'native-result', auth.context)).status).toBe(409);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally { global.fetch = original; }
   });
   it.each([undefined, 'en', 'es', 'pt'])('boots voice on an empty model list with the chosen/default locale %s', async locale => {
     const original = global.fetch;
