@@ -25,14 +25,19 @@ child. Teardown checks its exit code and the MCP shutdown receipt.
 | Provider error | One physical HTTP 401; error archive; error event; permanent-failure snapshot; terminal event. No retry is inferred from an invocation marker. |
 | Cancellation | Run owner, run owner with independent authority, and authority-only signals each close the open physical HTTP connection. The cancelled archive and nonretryable cancelled recovery precede the terminal event. |
 | Cold resume | Discard live conversation state and compiled graph cache after a durable debugger pause. Reload the real stored state and consume the saved action with the same logical run ID, without repeating HTTP. |
+| Process restart | In `executionRestartProcess.test.ts`, an actual child commits a debugger pause after its SDK result. Kill that owned child and observe its exit; a fresh child reads the same durable action, completes the same run/attempt, writes completed recovery before its terminal event, and exits cleanly. The parent observes one physical HTTP request across both processes. |
 | Subflow | Parent enters Subflow; translated child-start event; real child HTTP request; child commits completion; translated child-done event; parent continuation request; parent terminal event. Child state retains parent lineage. |
 
-The cold-resume case stays in one OS process. It does not prove worker restart,
-abrupt process termination, unknown external-effect recovery, an installed
-release, every provider adapter, or an external MCP server. Those need their
-separate process/release observations at the accepted combined revision. The
-fixture watchdog bounds a failed test's cleanup; it is not an agreed performance
-budget. Human maintenance and independent scorecard acceptance remain separate.
+The cold-resume case stays in one OS process. The separate process-restart case
+observes real process termination and fresh-state recovery at a completed model
+turn's durable debugger pause. It uses a source transpile loader, following the
+existing Persona fixture's import-only dependency mapping; catalogue/key lookup
+and the ordinary authority callback are controlled. It starts no MCP child.
+This does not prove worker admission, recovery during an uncertain external
+effect, an installed release, every provider adapter, or an external MCP server.
+Those need separate observations at the accepted combined revision. The fixture
+watchdog is not an agreed performance budget. Human maintenance and independent
+scorecard acceptance remain separate.
 
 ## Cancellation seam
 
@@ -53,6 +58,7 @@ Run the focused suite through the dependency guard:
 
 ```sh
 node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/executionOrdering.test.ts
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/executionRestartProcess.test.ts
 ```
 
 Retain raw Jest JSON/logs, source and lock identity, complete ordered observer
