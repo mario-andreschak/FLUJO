@@ -154,6 +154,7 @@ describe('snapshot lease publication and generation ownership', () => {
     const open = fs.open.bind(fs);
     const lstat = fs.lstat.bind(fs);
     let candidateOwnerPath = '';
+    let replaced = false;
     jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (String(args[0]).startsWith(`${lock}.candidate-`)) {
@@ -170,12 +171,83 @@ describe('snapshot lease publication and generation ownership', () => {
       const value = await lstat(...args);
       if (String(args[0]) === candidateOwnerPath) {
         expect(args[1]).toEqual({ bigint: true });
-        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding + BigInt(1) });
+        return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: colliding + BigInt(replaced ? 1 : 0) });
       }
       return value;
     });
-    mockTransition.mockRejectedValueOnce(Object.assign(new Error('controlled transition failure'), { code: 'EIO' }));
+    mockTransition.mockImplementationOnce(async () => {
+      replaced = true;
+      throw Object.assign(new Error('controlled transition failure'), { code: 'EIO' });
+    });
     await expect(withSnapshotStoreLease(root, 'capture', async () => undefined)).rejects.toMatchObject({ code: 'EIO' });
     expect(JSON.parse(await fs.readFile(candidateOwnerPath, 'utf8'))).toMatchObject({ pid: process.pid });
+  });
+
+  it('binds the completed owner write after timestamps settle at writer close', async () => {
+    const open = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).startsWith(`${lock}.candidate-`) && args[1] === 'wx') {
+        const stat = handle.stat.bind(handle);
+        jest.spyOn(handle, 'stat').mockImplementation(async (...options) => {
+          const value = await stat(...options);
+          return Object.assign(Object.create(Object.getPrototypeOf(value)), value, {
+            mtimeNs: value.mtimeNs - BigInt(100), ctimeNs: value.ctimeNs - BigInt(100),
+          });
+        });
+      }
+      return handle;
+    });
+    const task = jest.fn(async () => 'owned');
+    await expect(withSnapshotStoreLease(root, 'capture', task)).resolves.toBe('owned');
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(directory)).toEqual([]);
+  });
+
+  it('rejects different authored owner bytes at the same inode and length after writer close', async () => {
+    const open = fs.open.bind(fs);
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).startsWith(`${lock}.candidate-`) && args[1] === 'wx') {
+        const close = handle.close.bind(handle);
+        jest.spyOn(handle, 'close').mockImplementation(async () => {
+          await close();
+          const original = await fs.readFile(String(args[0]));
+          const replacement = Buffer.from(original.toString('utf8').replace('"operation":"capture"', '"operation":"cleanup"'));
+          expect(replacement.byteLength).toBe(original.byteLength);
+          expect(replacement.equals(original)).toBe(false);
+          await fs.writeFile(String(args[0]), replacement);
+        });
+      }
+      return handle;
+    });
+    const task = jest.fn(async () => undefined);
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('preserves a different inode with identical owner bytes after writer close', async () => {
+    const open = fs.open.bind(fs);
+    let candidateOwnerPath = '';
+    let originalBytes: Buffer | undefined;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).startsWith(`${lock}.candidate-`) && args[1] === 'wx') {
+        candidateOwnerPath = String(args[0]);
+        const close = handle.close.bind(handle);
+        jest.spyOn(handle, 'close').mockImplementation(async () => {
+          await close();
+          originalBytes = await fs.readFile(candidateOwnerPath);
+          await fs.rename(candidateOwnerPath, `${candidateOwnerPath}.original`);
+          await fs.writeFile(candidateOwnerPath, originalBytes, { flag: 'wx', mode: 0o600 });
+        });
+      }
+      return handle;
+    });
+    const task = jest.fn(async () => undefined);
+    await expect(withSnapshotStoreLease(root, 'capture', task)).rejects.toMatchObject({ code: 'SNAPSHOT_STORE_BUSY' });
+    expect(task).not.toHaveBeenCalled();
+    expect(await fs.readFile(candidateOwnerPath)).toEqual(originalBytes);
+    expect(await fs.readFile(`${candidateOwnerPath}.original`)).toEqual(originalBytes);
   });
 });
