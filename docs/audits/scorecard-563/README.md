@@ -213,6 +213,10 @@ capturing a contract today does not retroactively predeclare it for an older run
 Passing acceptance must reconcile these bounds and retained agreement must predate
 measurement. Success-rate metrics retain an integer numerator and denominator;
 timeless labels or rounded percentages cannot stand in for counts.
+Passing checksummed metrics against agreed or existing contracts require an actual
+UTC measurement start, no earlier than contract declaration and no later than observation.
+This execution timestamp does not turn simulated days into elapsed-runtime evidence.
+Retained failed historical runs do not receive invented or retroactive timestamps.
 
 An unset proposed monetary envelope has a null limit. It cannot become an agreed
 numeric contract or qualify any measurement until its limit is declared; null
