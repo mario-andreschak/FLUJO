@@ -37,6 +37,10 @@ hook. Returning a source boolean or querying a copied budget is insufficient.
 The hook can run at ModelHandler entry, adapter entry and again after the durable
 SDK marker callback, immediately before the SDK request. It must not debit or
 reserve on every policy query. Original per-call booking remains owner work.
+Once this context observes a valid v1 policy, that restriction is sticky for
+the context: a later `undefined` policy is denied before an ordinary client can
+be constructed. The owner must mint a fresh context for a different step rather
+than changing one context back to ordinary transport during preflight.
 
 The same opt-in path requires `claimModelRequest(context, intent)` in a private
 fetch wrapper, after the installed SDK has chosen its actual URL, method,
@@ -82,8 +86,9 @@ after owner I/O and at the local SDK entry. Other exported native adapters do
 not constitute a universal direct-call physical fence; protected adoption must
 use the qualified ModelHandler route.
 
-A branded context whose owner returns no `modelAttemptPolicy` deliberately uses
-ordinary transport. FACTORY must return v1 or deny every protected model step.
+A branded context whose owner has never returned `modelAttemptPolicy`
+deliberately uses ordinary transport. FACTORY must return v1 or deny every
+protected model step.
 The direct `/v1/chat/completions` model-service route has no execution context;
 FACTORY must fence protected credentials and models at ingress or isolate them
 before adoption.
@@ -144,7 +149,8 @@ installed OpenAI SDK with default client retries and an unpaid loopback HTTP
 server. Physical POST counts are independent of the SDK observer. It exercises
 HTTP503, lost responses after POST arrival, HTTP307/308 redirects, stream startup failures, cache-option
 rejection, forged/copied authority, policy replacement/revocation and owner
-cancellation. It also checks the SDK-final URL/body/header claim, subclass
+cancellation, including policy downgrade between ModelHandler preflight and
+adapter entry. It also checks the SDK-final URL/body/header claim, subclass
 rerouting, ambient URL/header overrides and an owner abort during a pending
 claim. ModelHandler tests retain the ordinary seven-attempt empty-stop
 behavior while verifying one attempt for restricted empty/rate-limit failures.

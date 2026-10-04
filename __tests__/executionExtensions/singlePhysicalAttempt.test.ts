@@ -506,6 +506,82 @@ describe('authenticated single physical OpenAI attempt', () => {
     expect(physicalRequests).toBe(0);
   });
 
+  it.each(['response', 'stream'] as const)('rejects a %s policy downgrade between flow preflight and adapter entry', async mode => {
+    respond = (_request, response) => success(response);
+    let restricted = true;
+    const claimModelRequest = jest.fn(async () => undefined);
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => restricted ? { version: 1, maxPhysicalAttempts: 1 } : undefined,
+      claimModelRequest,
+    });
+    restore = registerExecutionExtension(adapter);
+    const request = input(mintFixture(adapter));
+    // ModelHandler observes v1 before asynchronous request preparation.
+    expect(await executionExtensionSinglePhysicalAttempt(request.executionExtensionContext, request.model)).toBe(true);
+    restricted = false;
+    const completionAdapter = getCompletionAdapter(request.model, 'openai');
+    await expect(mode === 'stream'
+      ? completionAdapter.createStreamCompletion!(request)
+      : completionAdapter.createCompletion(request))
+      .rejects.toMatchObject({ code: 'execution_model_attempt_policy_changed' });
+    expect(claimModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('latches v1 before a pending owner recheck so a concurrent downgrade cannot send', async () => {
+    respond = (_request, response) => success(response);
+    let enterOwnerCheck!: () => void;
+    const ownerCheckEntered = new Promise<void>(resolve => { enterOwnerCheck = () => resolve(); });
+    let releaseOwnerCheck!: () => void;
+    const ownerCheckGate = new Promise<void>(resolve => { releaseOwnerCheck = () => resolve(); });
+    let checks = 0;
+    let policies = 0;
+    const adapter = fixtureAdapter({
+      assertRun: async () => {
+        if (++checks === 2) { enterOwnerCheck(); await ownerCheckGate; }
+      },
+      modelAttemptPolicy: () => ++policies === 1 ? { version: 1, maxPhysicalAttempts: 1 } : undefined,
+    });
+    restore = registerExecutionExtension(adapter);
+    const request = input(mintFixture(adapter));
+    const first = executionExtensionSinglePhysicalAttempt(request.executionExtensionContext, request.model);
+    await ownerCheckEntered;
+    try {
+      await expect(new OpenAiAdapter().createCompletion(request))
+        .rejects.toMatchObject({ code: 'execution_model_attempt_policy_changed' });
+      expect(physicalRequests).toBe(0);
+    } finally {
+      releaseOwnerCheck();
+    }
+    expect(await first).toBe(true);
+  });
+
+  it('keeps v1 sticky after an unsupported-route rejection', async () => {
+    let restricted = true;
+    const adapter = fixtureAdapter({
+      modelAttemptPolicy: () => restricted ? { version: 1, maxPhysicalAttempts: 1 } : undefined,
+    });
+    restore = registerExecutionExtension(adapter);
+    const request = input(mintFixture(adapter));
+    await expect(executionExtensionSinglePhysicalAttempt(request.executionExtensionContext,
+      { ...request.model, adapter: 'openai-responses' }))
+      .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+    restricted = false;
+    await expect(new OpenAiAdapter().createCompletion(request))
+      .rejects.toMatchObject({ code: 'execution_model_attempt_policy_changed' });
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('keeps a branded context ordinary when its owner never opts in to the protected policy', async () => {
+    respond = (_request, response) => success(response);
+    const adapter = fixtureAdapter();
+    restore = registerExecutionExtension(adapter);
+    const request = input(mintFixture(adapter));
+    expect(await executionExtensionSinglePhysicalAttempt(request.executionExtensionContext, request.model)).toBe(false);
+    expect((await new OpenAiAdapter().createCompletion(request)).completion.choices[0].message.content).toBe('OK');
+    expect(physicalRequests).toBe(1);
+  });
+
   it('gives the owner only model/endpoint identity, excluding provider credentials', async () => {
     const policy = jest.fn((_context: object, _model: ExecutionModelIdentity) => ({ version: 1 as const, maxPhysicalAttempts: 1 as const }));
     const adapter = fixtureAdapter({ modelAttemptPolicy: policy, claimModelRequest: async () => undefined });

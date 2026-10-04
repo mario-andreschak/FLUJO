@@ -80,7 +80,7 @@ export interface ExecutionExtensionAdapter {
    * this exact model/body under its own run and budget before any POST starts. */
   claimModelRequest?(context: object, intent: ExecutionModelRequestIntent): Promise<void>;
 }
-type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object; modelRequestConsumed?: boolean };
+type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object; modelRequestConsumed?: boolean; singlePhysicalAttemptRequired?: boolean };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
 type Registry = { adapter?: ExecutionExtensionAdapter; configuredAdapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
 const root = globalThis as typeof globalThis & { __flujoExecutionExtensions?: Registry };
@@ -206,9 +206,19 @@ export async function executionExtensionSinglePhysicalAttempt(
   const policy = await item.adapter.modelAttemptPolicy?.(item.value, {
     id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl,
   });
+  const validPolicy = Boolean(policy && Object.keys(policy).length === 2
+    && policy.version === 1 && policy.maxPhysicalAttempts === 1);
+  // Latch before the awaited second owner check so a concurrent policy query
+  // cannot slip into ordinary transport after this context has observed v1.
+  if (validPolicy) record(context).singlePhysicalAttemptRequired = true;
   await assertExecutionExtensionCurrent(context);
-  if (policy === undefined) return false;
-  if (!policy || Object.keys(policy).length !== 2 || policy.version !== 1 || policy.maxPhysicalAttempts !== 1) {
+  // A protected policy observed earlier in this trusted context must not be
+  // downgraded across ModelHandler preflight and the adapter's later check.
+  if (policy === undefined) {
+    if (record(context).singlePhysicalAttemptRequired) throw new ExecutionExtensionError('execution_model_attempt_policy_changed');
+    return false;
+  }
+  if (!validPolicy) {
     throw new ExecutionExtensionError('execution_model_attempt_policy_invalid');
   }
   // Only this adapter's physical request boundary is qualified by this contract.
