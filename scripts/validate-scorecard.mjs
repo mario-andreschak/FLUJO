@@ -127,18 +127,22 @@ function satisfies(value, budget) {
 }
 
 /** This checks records and declared evidence correspondence, never awards a grade. */
-export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON.parse(readFileSync(defaultSchema, 'utf8')), verifyFiles = true, now = Date.now() } = {}) {
+export function validateScorecard(ledger, options = {}) {
+  const { root = repositoryRoot, schema = JSON.parse(readFileSync(defaultSchema, 'utf8')), verifyFiles = true } = options;
+  const overriddenClock = Object.hasOwn(options, 'now');
+  const now = overriddenClock ? options.now : Date.now();
+  const validationClock = { source: overriddenClock ? 'override' : 'wall-clock', epochMilliseconds: Number.isFinite(now) ? now : null };
   const errors = validateShape(ledger, schema);
-  if (errors.length) return { errors, blockers: [] };
+  if (errors.length) return { errors, blockers: [], validationClock };
   const fail = message => errors.push(message);
   if (!Number.isFinite(now)) {
     fail('Invalid validation clock');
-    return { errors, blockers: [] };
+    return { errors, blockers: [], validationClock };
   }
   const contract = schema.$defs?.acceptanceContract?.const;
   if (!contract || contract.contractVersion !== ledger.schemaVersion) {
     fail('Missing or mismatched reviewed acceptance contract version');
-    return { errors, blockers: [] };
+    return { errors, blockers: [], validationClock };
   }
   const indexed = {};
   for (const collection of ['owners', 'profiles', 'rubric', 'budgets', 'artifacts', 'evidence', 'gates', 'claims']) {
@@ -198,7 +202,8 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   for (const [id, target] of Object.entries(contract.humanTargets)) {
     const budget = indexed.budgets.get(id);
     if (!budget || budget.operator !== target.operator || budget.limit !== target.limit || budget.unit !== target.unit) fail(id + ': published human target changed or omitted; requires a separately reviewed contract version');
-    if (!budget || budget.observation.clock !== target.observation.clock || budget.observation.minimumSeconds < target.observation.minimumSeconds || budget.observation.minimumDenominator < target.observation.minimumDenominator) fail(id + ': published human observation contract weakened or omitted');
+    if (!budget || ['denominator', 'window', 'basis'].some(field => budget[field] !== target[field])) fail(id + ': published human sampling contract changed or omitted; requires a separately reviewed contract version');
+    if (!budget || budget.observation.clock !== target.observation.clock || budget.observation.minimumSeconds < target.observation.minimumSeconds || budget.observation.minimumSimulatedDays < target.observation.minimumSimulatedDays || budget.observation.minimumDenominator < target.observation.minimumDenominator) fail(id + ': published human observation contract weakened or omitted');
   }
   for (const [role, agreement] of Object.entries(ledger.agreements)) {
     if (role === 'disagreements') continue;
@@ -450,7 +455,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   if (ledger.claims.some(c => c.status === 'pending' || c.status === 'source-supported')) blockers.push('Release-bound claims are incomplete');
   if (ledger.claims.some(c => c.status === 'experimental' && !assessment.acceptedExperimentalClaimIds.includes(c.id))) blockers.push('Experimental exclusions not explicitly accepted by independent reviewer');
   if (assessment.status !== 'completed' || !assessment.independent || assessment.grades.length !== 9 || assessment.grades.some(g => !['A-', 'A', 'A+'].includes(g.grade))) blockers.push('All nine independent A- or better reassessments pending');
-  return { errors, blockers };
+  return { errors, blockers, validationClock };
 }
 
 export function runCli(args) {
@@ -462,7 +467,8 @@ export function runCli(args) {
   }
   try {
     const ledger = JSON.parse(readFileSync(positional[0] ? resolve(positional[0]) : defaultLedger, 'utf8'));
-    const { errors, blockers } = validateScorecard(ledger);
+    const { errors, blockers, validationClock } = validateScorecard(ledger);
+    console.log('Validation clock: ' + validationClock.epochMilliseconds + ' (' + validationClock.source + ')');
     if (errors.length) { console.error(errors.join('\n')); return 1; }
     console.log('Scorecard structure, references and retained checksums valid. This is not grade acceptance.');
     if (blockers.length) console.log('Closure blockers:\n- ' + blockers.join('\n- '));

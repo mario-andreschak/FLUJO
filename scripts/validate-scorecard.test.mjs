@@ -244,6 +244,82 @@ test('live duration and success ratios reconcile with actual windows and integer
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
 });
+
+test('review P2: recovery and security metrics cannot ride static source records', () => {
+  for (const budgetId of ['recovery-rto', 'backup-rpo', 'duplicate-effects', 'unauthorized-access', 'high-findings']) {
+    rejects(ledger => {
+      const { study, budget } = observedBudget(ledger, budgetId, 0, 20);
+      study.kind = 'source-check';
+      study.window = { kind: 'instant', start: '2026-10-05T00:00:00Z', end: null, simulatedDays: null };
+      study.metrics[0].denominator = Math.max(20, budget.observation.minimumDenominator);
+    }, /requires evidence kind/);
+  }
+});
+
+test('review P2: static records cannot supply elapsed runtime metrics', () => {
+  for (const budgetId of ['runtime-peak-rss', 'runtime-rss-growth', 'runtime-concurrency']) {
+    rejects(ledger => {
+      const { study, budget } = observedBudget(ledger, budgetId, 0, 24);
+      study.kind = 'source-check';
+      study.metrics[0].denominator = Math.max(24, budget.observation.minimumDenominator);
+    }, /requires evidence kind/);
+  }
+  const sourceDuration = validate(ledger => {
+    const evidence = entry(ledger, 'evidence', 'baseline-2026-10-03');
+    evidence.kind = 'source-check';
+    evidence.window = { kind: 'elapsed', start: '2026-10-03T00:00:00Z', end: '2026-10-03T01:00:00Z', simulatedDays: null };
+  });
+  assert.deepEqual(sourceDuration.errors, []);
+  assert.ok(sourceDuration.blockers.length > 0);
+});
+
+test('review P2: human sampling descriptions cannot silently change', () => {
+  for (const id of ['pilot-users', 'novice-success', 'novice-time', 'human-contributors', 'backup-maintainers']) {
+    for (const field of ['denominator', 'window', 'basis']) {
+      rejects(ledger => { entry(ledger, 'budgets', id)[field] = 'Any favorable subset or convenient observation window'; }, /published human sampling contract changed/);
+    }
+  }
+});
+
+test('review P2: results and CLI identify default versus injected validation clocks', () => {
+  const before = Date.now();
+  const wall = validateScorecard(structuredClone(baseline), { root });
+  const after = Date.now();
+  assert.equal(wall.validationClock?.source, 'wall-clock');
+  assert.ok(wall.validationClock.epochMilliseconds >= before && wall.validationClock.epochMilliseconds <= after);
+  assert.deepEqual(validate().validationClock, { source: 'override', epochMilliseconds: fixtureNow });
+  const malformed = validateScorecard({}, { root, now: fixtureNow });
+  assert.ok(malformed.errors.length > 0);
+  assert.deepEqual(malformed.validationClock, { source: 'override', epochMilliseconds: fixtureNow });
+  const invalid = validateScorecard(structuredClone(baseline), { root, now: NaN });
+  assert.deepEqual(invalid.validationClock, { source: 'override', epochMilliseconds: null });
+  const cli = spawnSync(process.execPath, ['scripts/validate-scorecard.mjs'], { cwd: root, encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.match(cli.stdout, /Validation clock: \d+ \(wall-clock\)/);
+});
+
+test('permitted installed, live and security metric carriers validate without awarding closure', () => {
+  for (const budgetId of ['runtime-peak-rss', 'runtime-rss-growth', 'runtime-concurrency', 'recovery-rto', 'backup-rpo', 'duplicate-effects']) {
+    const result = artifactReportFixture(({ ledger, evidence }) => {
+      const { study, budget } = observedBudget(ledger, budgetId, 0, 24);
+      study.metrics[0].denominator = Math.max(24, budget.observation.minimumDenominator);
+      for (const field of ['budgetIds', 'metrics', 'window', 'observedAt']) evidence[field] = study[field];
+      ledger.evidence = ledger.evidence.filter(record => record.id !== study.id);
+    });
+    assert.deepEqual(result.errors, [], budgetId);
+    assert.ok(result.blockers.length > 0);
+  }
+  for (const kind of ['security-review', 'independent-assessment']) {
+    for (const budgetId of ['unauthorized-access', 'high-findings']) {
+      const result = validate(ledger => { observedBudget(ledger, budgetId, 0, 20).study.kind = kind; });
+      assert.deepEqual(result.errors, [], kind + '/' + budgetId);
+      assert.ok(result.blockers.length > 0);
+    }
+  }
+  const live = validate(ledger => { observedBudget(ledger, 'duplicate-effects', 0, 20).study.kind = 'live-provider'; });
+  assert.deepEqual(live.errors, []);
+  assert.ok(live.blockers.length > 0);
+});
 function artifactReportFixture(edit = () => {}) {
   const fixture = mkdtempSync(join(tmpdir(), 'flujo-scorecard-'));
   const ledger = structuredClone(baseline);
