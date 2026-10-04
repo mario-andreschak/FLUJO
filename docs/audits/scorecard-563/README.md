@@ -184,6 +184,11 @@ capturing a contract today does not retroactively predeclare it for an older run
 Passing acceptance must reconcile these bounds and retained agreement must predate
 measurement. Success-rate metrics retain an integer numerator and denominator;
 timeless labels or rounded percentages cannot stand in for counts.
+Metric denominators and count-valued metrics must be whole numbers. Existing Persona
+units stay bound to their original numeric limits; relabeling milliseconds as seconds
+cannot weaken a contract. Any retained end on an instant/simulated window must be
+valid UTC, no later than observation and no earlier than a known start. It does not
+turn virtual days into elapsed days.
 
 Passing checksummed metrics against agreed or existing contracts require an actual
 UTC measurement start, no earlier than declaration and no later than observation.
@@ -257,6 +262,8 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    A source-check recall measurement must retain an actual elapsed window; an instant
    source observation cannot qualify. New budgets may be recorded as proposals, but
    passing checksummed measurements need an explicit reviewed carrier contract.
+   Recall has no new minimum wall duration: its original controlled corpus/search
+   coverage and p95 ceiling still need actual runner evidence and topic-owned validation.
    A source observation declaring 28 virtual days cannot supply a Persona soak metric.
    Published human targets and observation floors remain protected, and duration
    measurements cannot exceed the actual elapsed evidence window. Review schema,

@@ -823,3 +823,29 @@ test('source-run recall milliseconds cannot exceed the actual elapsed benchmark 
     witness.metrics[0].value = 100;
   }, /duration metric exceeds actual elapsed time/);
 });
+
+test('original Persona units cannot reinterpret the unchanged numeric limits', () => {
+  for (const budget of baseline.budgets.filter(budget => budget.id.startsWith('persona-'))) {
+    rejects(ledger => { entry(ledger, 'budgets', budget.id).unit = budget.unit === 'ms' ? 'seconds' : 'ms'; }, /existing numeric contract changed/);
+  }
+});
+
+test('sample denominators and human counts must be whole numbers', () => {
+  rejects(ledger => personaMetricFixture(ledger, 'persona-recall-p95', 20.5), /expected integer|positive integer denominator/);
+  rejects(ledger => observedBudget(ledger, 'pilot-users', 10.5, 10), /count metric must be a whole number/);
+});
+
+test('virtual and instant windows cannot retain an unvalidated end timestamp', () => {
+  rejects(ledger => {
+    personaMetricFixture(ledger, 'persona-append-p95', 28);
+    entry(ledger, 'evidence', 'synthetic-sample-count-persona-append-p95').window.end = '1999-01-01T00:00:00Z';
+  }, /non-elapsed end precedes/);
+  rejects(ledger => { entry(ledger, 'evidence', 'baseline-2026-10-03').window.end = 'whenever'; }, /invalid non-elapsed end timestamp/);
+});
+
+test('elapsed source policy ids must refer to known budgets', () => {
+  const schema = structuredClone(baselineSchema);
+  schema.$defs.acceptanceContract.const.sourceMetricElapsedBudgets.push('unknown-source-timing');
+  const result = validateScorecard(structuredClone(baseline), { root, schema, now: fixtureNow });
+  assert.ok(result.errors.some(error => /unknown budgets ID unknown-source-timing/.test(error)), result.errors.join('\n'));
+});

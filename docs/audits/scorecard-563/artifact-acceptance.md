@@ -66,6 +66,14 @@ qualify that measurement. Offline-simulation retains its separate virtual clock.
 A simulated window on a static source observation cannot qualify a soak measurement.
 New budgets may remain proposals without carrier rules, but passing checksummed
 measurements fail closed until their reviewed `metricEvidenceKinds` entry exists.
+Every source elapsed-policy ID must resolve to a ledger budget. Metric denominators
+and count-valued measurements are integers. Any retained instant/simulated end must
+be valid UTC, no later than observation and ordered after a known start; an unknown
+historical start may remain null. A recorded physical end does not turn virtual days
+into elapsed days. The original Persona units remain pinned with their limits and sample floors.
+The recall contract imposes no new minimum wall duration. Actual controlled corpus,
+full-candidate/ranking coverage and 20-search samples still need the performance
+owner's runner evidence; a declared duration cannot establish those facts.
 
 API validation results include `validationClock.source` (`wall-clock` or `override`)
 and `validationClock.epochMilliseconds`; invalid clocks report a null value and fail.
