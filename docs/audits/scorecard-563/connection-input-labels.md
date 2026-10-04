@@ -22,6 +22,14 @@ This is DOM evidence, not a screen-reader speech session or linguistic review.
 An initial test-equipment attempt used an absent user-event package and did not
 collect tests; that failure is retained separately and is not a negative control.
 
+The first hosted typecheck rejected an unsupported `exact` option on five RTL
+role queries. The follow-up removes that option; string role names already use
+exact comparison in the installed DOM Testing Library implementation. The
+visible-text queries retain their supported `exact` option. Assertions and
+selected cases are unchanged. The first hosted lint job failed during npm
+installation with `ECONNRESET`, before running lint; it is retained as an
+installation failure. Fresh exact-head typecheck and lint remain required.
+
 The first-use browser suite supplies the missing UI connection steps instead
 of relying on seeded fixture entries. A new `initialConnections: 'ui'` mode
 joins initialization, disables defaults using the existing typed updates and

@@ -35,7 +35,7 @@ it('associates the remote connection URL label and editing does not connect or s
   const onClose = jest.fn();
   const onHandoff = jest.fn();
   render(<RemoteTab onAdd={onAdd} onClose={onClose} onHandoff={onHandoff} />);
-  const input = screen.getByRole('textbox', { name: 'Server URL', exact: true });
+  const input = screen.getByRole('textbox', { name: 'Server URL' });
   const label = screen.getByText('Server URL', { exact: true });
   expect((label as HTMLLabelElement).control).toBe(input);
   fireEvent.change(input, { target: { value: 'https://example.invalid/owned-label' } });
@@ -51,7 +51,7 @@ it.each([
 ] as const)('associates the visible %s label with its control', (label, _property, setter) => {
   const props = localProps();
   render(<LocalServerForm {...props} />);
-  const input = screen.getByRole('textbox', { name: label, exact: true });
+  const input = screen.getByRole('textbox', { name: label });
   const visibleLabel = screen.getByText(label, { exact: true });
   expect(visibleLabel).toBeInstanceOf(HTMLLabelElement);
   expect((visibleLabel as HTMLLabelElement).control).toBe(input);
@@ -67,7 +67,7 @@ it.each([
 ] as const)('names the %s connection input and editing does not Test run', (transport, label, setter) => {
   const props = runProps(transport);
   render(<RunTools {...props} />);
-  const input = screen.getByRole('textbox', { name: label, exact: true });
+  const input = screen.getByRole('textbox', { name: label });
   const visibleLabel = screen.getByText(label, { exact: true });
   expect(visibleLabel).toBeInstanceOf(HTMLLabelElement);
   expect((visibleLabel as HTMLLabelElement).control).toBe(input);
@@ -78,7 +78,7 @@ it.each([
 
 it('repeated local forms associate each visible name with its own input', () => {
   render(<><LocalServerForm {...localProps()} /><LocalServerForm {...localProps()} /></>);
-  const inputs = screen.getAllByRole('textbox', { name: 'Server name', exact: true });
+  const inputs = screen.getAllByRole('textbox', { name: 'Server name' });
   expect(inputs).toHaveLength(2);
   expect(inputs[0].id).not.toBe(inputs[1].id);
   const label = screen.getAllByText('Server name', { exact: true })[1];
@@ -100,7 +100,7 @@ it.each([
     'mcp.local.run.websocketUrl', 'mcp.local.run.serverUrl',
   ] as const) {
     const name = mcpMessageRows[key][index];
-    const input = screen.getByRole('textbox', { name, exact: true });
+    const input = screen.getByRole('textbox', { name });
     const label = screen.getByText(name, { exact: true });
     expect((label as HTMLLabelElement).control).toBe(input);
   }
