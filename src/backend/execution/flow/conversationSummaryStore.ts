@@ -307,20 +307,28 @@ export async function listConversationSummaries(): Promise<ConversationSummary[]
       try {
         assertSafeCollectionId(fallbackId);
         const filePath = path.join(conversationsDir(), file);
-        const stats = await fs.stat(filePath);
-        const cached = indexed.get(fallbackId);
-        if (
-          cached &&
-          cached.snapshotMtimeMs === stats.mtimeMs &&
-          cached.snapshotSize === stats.size
-        ) {
-          results[index] = withoutIndexFields(cached);
-          continue;
-        }
+        // Atomic snapshot replacement can happen while a list is rebuilding.
+        // Read and index the same opened file, never a later pathname occupant.
+        const snapshot = await fs.open(filePath, 'r');
+        try {
+          const stats = await snapshot.stat();
+          if (!stats.isFile()) throw new Error('Invalid conversation snapshot.');
+          const cached = indexed.get(fallbackId);
+          if (
+            cached &&
+            cached.snapshotMtimeMs === stats.mtimeMs &&
+            cached.snapshotSize === stats.size
+          ) {
+            results[index] = withoutIndexFields(cached);
+            continue;
+          }
 
-        const state = JSON.parse(await fs.readFile(filePath, 'utf8')) as SharedState;
-        results[index] = summarizeConversation(state, fallbackId);
-        await writeSummary(fallbackId, state, stats);
+          const state = JSON.parse(await snapshot.readFile('utf8')) as SharedState;
+          results[index] = summarizeConversation(state, fallbackId);
+          await writeSummary(fallbackId, state, stats);
+        } finally {
+          await snapshot.close();
+        }
       } catch (error) {
         log.warn(`Skipping unreadable conversation snapshot ${file}.`, error);
       }

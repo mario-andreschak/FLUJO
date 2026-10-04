@@ -426,7 +426,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
-      { nodeId }
+      { nodeId },
+      sharedState,
     );
 
     // Resolve configuration globals at execution time. The prompt-safe resolver
@@ -818,6 +819,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
           { nodeId },
+          sharedState,
         );
         content = await resolvePromptDynamicReferences(content, {
           conversationId: sharedState.conversationId,
@@ -847,7 +849,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
             sharedState.emit,
-            { nodeId }
+            { nodeId },
+            sharedState,
           )
         : isolatedPrompt;
       if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
