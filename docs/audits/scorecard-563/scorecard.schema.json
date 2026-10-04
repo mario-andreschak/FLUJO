@@ -725,6 +725,40 @@
           "high-findings": [
             "security-review",
             "independent-assessment"
+          ],
+          "persona-append-p95": [
+            "offline-simulation"
+          ],
+          "persona-peak-rss": [
+            "offline-simulation"
+          ],
+          "persona-rss-growth": [
+            "offline-simulation"
+          ],
+          "persona-append-flatness": [
+            "offline-simulation"
+          ],
+          "persona-total-collection": [
+            "offline-simulation"
+          ],
+          "persona-mailbox": [
+            "offline-simulation"
+          ],
+          "persona-activities": [
+            "offline-simulation"
+          ],
+          "persona-dispatches": [
+            "offline-simulation"
+          ],
+          "persona-pins": [
+            "offline-simulation"
+          ],
+          "persona-leases": [
+            "offline-simulation"
+          ],
+          "persona-recall-p95": [
+            "offline-simulation",
+            "source-check"
           ]
         }
       }
