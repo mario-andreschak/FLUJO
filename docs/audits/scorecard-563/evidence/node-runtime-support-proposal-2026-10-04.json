@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed; implementation and qualification pending",
+  "sourceBase": "80733be511d939e50b3dd1d6f832a100d20a1283",
+  "officialObservation": {
+    "observedAt": "2026-10-04T04:37:18.948Z",
+    "url": "https://nodejs.org/dist/index.json",
+    "indexSha256": "700401a06eb352ec19100649afbf767f76db33f194b22a9b903b3ff48e3bc482",
+    "selected": [
+      {
+        "version": "v22.23.3",
+        "date": "2026-09-23",
+        "files": [
+          "aix-ppc64",
+          "headers",
+          "linux-arm64",
+          "linux-armv7l",
+          "linux-ppc64le",
+          "linux-s390x",
+          "linux-x64",
+          "linux-x64-musl",
+          "osx-arm64-tar",
+          "osx-x64-pkg",
+          "osx-x64-tar",
+          "src",
+          "win-arm64-7z",
+          "win-arm64-zip",
+          "win-x64-7z",
+          "win-x64-exe",
+          "win-x64-msi",
+          "win-x64-zip",
+          "win-x86-7z",
+          "win-x86-exe",
+          "win-x86-msi",
+          "win-x86-zip"
+        ],
+        "npm": "10.9.9",
+        "v8": "12.4.254.21",
+        "uv": "1.51.0",
+        "zlib": "1.3.1",
+        "openssl": "3.5.8",
+        "modules": "127",
+        "lts": "Jod",
+        "security": false
+      },
+      {
+        "version": "v24.21.0",
+        "date": "2026-09-07",
+        "files": [
+          "aix-ppc64",
+          "headers",
+          "linux-arm64",
+          "linux-ppc64le",
+          "linux-s390x",
+          "linux-x64",
+          "linux-x64-musl",
+          "osx-arm64-tar",
+          "osx-x64-pkg",
+          "osx-x64-tar",
+          "src",
+          "win-arm64-7z",
+          "win-arm64-zip",
+          "win-x64-7z",
+          "win-x64-exe",
+          "win-x64-msi",
+          "win-x64-zip"
+        ],
+        "npm": "11.19.0",
+        "v8": "13.6.233.17",
+        "uv": "1.52.1",
+        "zlib": "1.3.2.1-motley",
+        "openssl": "3.5.8",
+        "modules": "137",
+        "lts": "Krypton",
+        "security": false
+      },
+      {
+        "version": "v26.10.0",
+        "date": "2026-09-21",
+        "files": [
+          "aix-ppc64",
+          "headers",
+          "linux-arm64",
+          "linux-ppc64le",
+          "linux-s390x",
+          "linux-x64",
+          "linux-x64-musl",
+          "osx-arm64-tar",
+          "osx-x64-pkg",
+          "osx-x64-tar",
+          "src",
+          "win-arm64-7z",
+          "win-arm64-zip",
+          "win-x64-7z",
+          "win-x64-exe",
+          "win-x64-msi",
+          "win-x64-zip"
+        ],
+        "npm": "11.19.1",
+        "v8": "14.6.202.34",
+        "uv": "1.52.1",
+        "zlib": "1.3.2.1-motley",
+        "openssl": "3.5.8",
+        "modules": "147",
+        "lts": false,
+        "security": false
+      }
+    ]
+  },
+  "engineDeclarationCount": 6,
+  "currentEngines": [
+    {
+      "file": "package.json",
+      "name": "flujo-ai",
+      "nodeEngine": ">=22.0.0"
+    },
+    {
+      "file": "mcp-servers/bash/package.json",
+      "name": "@mario.andreschak/mcp-bash",
+      "nodeEngine": ">=20"
+    },
+    {
+      "file": "mcp-servers/browser/package.json",
+      "name": "@mario.andreschak/mcp-browser",
+      "nodeEngine": ">=20"
+    },
+    {
+      "file": "mcp-servers/filesystem/package.json",
+      "name": "@mario.andreschak/mcp-filesystem",
+      "nodeEngine": ">=20"
+    },
+    {
+      "file": "mcp-servers/flujo/package.json",
+      "name": "@mario.andreschak/mcp-flujo",
+      "nodeEngine": ">=20"
+    },
+    {
+      "file": "mcp-servers/shared/package.json",
+      "name": "@flujo-ai/mcp-shared",
+      "nodeEngine": ">=20"
+    }
+  ],
+  "proposedEngineRange": "^22.17.0 || ^24.2.0",
+  "recommendedProductionRuntime": "22.23.3",
+  "npmPublicationRuntime": "24.21.0",
+  "minimumLibuv": "1.51.0",
+  "knownCompatibilityChange": "Root minimum >=22.0.0 and five MCP/shared declarations >=20 become closed Node 22/24 compatibility families. EOL majors, Node 26 Current, prereleases and unknown future majors are refused explicitly; current patched LTS is required for default installation/image/production qualification.",
+  "requiredAcceptance": [
+    "Current official patched Node native Windows Server 2025 probe",
+    "Default-heap Ubuntu/Windows build and installed app/MCP startup",
+    "All 13 required exact-main-SHA checks and configured findings/review protection",
+    "Refusal before application/workspace/provider initialization on unsupported runtime",
+    "Full-patch installer comparison and post-install PATH revalidation",
+    "All six package engine declarations, lock metadata, bootstrap/entrypoints, CI, containers and documentation agree"
+  ],
+  "qualification": "The Node 22.17.0 diagnostic does not qualify the proposed current patched runtime or any installed release.",
+  "compatibilityFloors": {
+    "22": "22.17.0",
+    "24": "24.2.0"
+  },
+  "currentPatchedTargets": {
+    "22": "22.23.3",
+    "24": "24.21.0"
+  },
+  "minimumEdgeAcceptance": "Node 22.17.0 native temporary-file diagnostic passed; Node 24.2.0 minimum edge and current patched LTS installed profiles still require retained qualification.",
+  "minimumEdgeOfficialReleases": [
+    {
+      "version": "v22.17.0",
+      "date": "2025-06-24",
+      "files": [
+        "aix-ppc64",
+        "headers",
+        "linux-arm64",
+        "linux-armv7l",
+        "linux-ppc64le",
+        "linux-s390x",
+        "linux-x64",
+        "osx-arm64-tar",
+        "osx-x64-pkg",
+        "osx-x64-tar",
+        "src",
+        "win-arm64-7z",
+        "win-arm64-zip",
+        "win-x64-7z",
+        "win-x64-exe",
+        "win-x64-msi",
+        "win-x64-zip",
+        "win-x86-7z",
+        "win-x86-exe",
+        "win-x86-msi",
+        "win-x86-zip"
+      ],
+      "npm": "10.9.2",
+      "v8": "12.4.254.21",
+      "uv": "1.51.0",
+      "zlib": "1.3.0.1-motley",
+      "openssl": "3.0.16",
+      "modules": "127",
+      "lts": "Jod",
+      "security": false
+    },
+    {
+      "version": "v24.2.0",
+      "date": "2025-06-09",
+      "files": [
+        "aix-ppc64",
+        "headers",
+        "linux-arm64",
+        "linux-ppc64le",
+        "linux-s390x",
+        "linux-x64",
+        "osx-arm64-tar",
+        "osx-x64-pkg",
+        "osx-x64-tar",
+        "src",
+        "win-arm64-7z",
+        "win-arm64-zip",
+        "win-x64-7z",
+        "win-x64-exe",
+        "win-x64-msi",
+        "win-x64-zip"
+      ],
+      "npm": "11.3.0",
+      "v8": "13.6.233.10",
+      "uv": "1.51.0",
+      "zlib": "1.3.0.1-motley",
+      "openssl": "3.0.16",
+      "modules": "137",
+      "lts": false,
+      "security": false
+    }
+  ]
+}
