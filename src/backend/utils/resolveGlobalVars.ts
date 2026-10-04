@@ -61,19 +61,21 @@ export async function resolveGlobalVars(
   log.debug(`Loaded ${Object.keys(rawEnvVars).length} global environment variables (${isNewFormatData ? 'new' : 'old'} format)`);
   
   // Extract values from the environment variables
-  let globalEnvVars: Record<string, string> = {};
+  const globalEnvVars = new Map<string, string>();
   const secretGlobalVars = new Set<string>();
   
   if (isNewFormatData) {
     // New format with metadata
     const typedEnvVars = rawEnvVars as Record<string, EnvVarWithMetadata>;
     for (const [key, data] of Object.entries(typedEnvVars)) {
-      globalEnvVars[key] = data.value;
+      globalEnvVars.set(key, data.value);
       if (data.metadata.isSecret) secretGlobalVars.add(key);
     }
   } else {
     // Old format (simple key-value pairs)
-    globalEnvVars = { ...rawEnvVars as Record<string, string> };
+    for (const [key, value] of Object.entries(rawEnvVars as Record<string, string>)) {
+      globalEnvVars.set(key, value);
+    }
   }
   
   // Helper function to resolve a single string
@@ -91,8 +93,9 @@ export async function resolveGlobalVars(
       // Extract the variable key from the match
       const globalVarKey = match.substring(9, match.length - 1);
       
-      if (globalEnvVars[globalVarKey] !== undefined) {
-        let value = globalEnvVars[globalVarKey];
+      const storedValue = globalEnvVars.get(globalVarKey);
+      if (storedValue !== undefined) {
+        let value = storedValue;
 
         // Prompt interpolation may resolve configuration globals, but must never
         // expose secrets to the model. Old-format encrypted values are treated
@@ -153,22 +156,18 @@ export async function resolveGlobalVars(
     } else if (Array.isArray(val)) {
       return await Promise.all(val.map(item => processValue(item)));
     } else if (val !== null && typeof val === 'object') {
-      const result: Record<string, unknown> = {};
+      const result = new Map<string, unknown>();
       for (const [k, v] of Object.entries(val)) {
-        result[k] = await processValue(v);
+        result.set(k, await processValue(v));
       }
-      return result;
+      return Object.fromEntries(result);
     }
     return val;
   };
 
   const result = await processValue(value);
   
-  // Log the entire resolved object for debugging
-  if (typeof value === 'object' && value !== null) {
-    log.debug('Resolved global variables result:', JSON.stringify(result, null, 2));
-  }
-  
+  // Resolved values may contain decrypted credentials; log metadata only.
   log.debug('Completed global variable resolution');
   return result;
 }
@@ -205,7 +204,7 @@ export async function resolveAndDecryptApiKey(
   
   // Add depth limit to prevent infinite recursion
   if (depth >= 10) {
-    log.warn(`Maximum resolution depth reached (10) for value: ${value}`);
+    log.warn('Maximum resolution depth reached (10)');
     return value;
   }
   
@@ -220,7 +219,6 @@ export async function resolveAndDecryptApiKey(
       
       if (decrypted) {
         log.debug(`Successfully decrypted value at depth ${depth}`);
-        log.verbose(decrypted)
         currentValue = decrypted;
       } else {
         log.warn(`Failed to decrypt value at depth ${depth}`);
@@ -240,7 +238,6 @@ export async function resolveAndDecryptApiKey(
     log.debug(`Resolving global variables at depth ${depth}`);
     try {
       const resolved = await resolveGlobalVars(currentValue) as string;
-      log.verbose(resolved)
       // If the value changed after resolution, process it again recursively
       if (resolved !== currentValue) {
         log.debug(`Value changed after resolving globals at depth ${depth}, processing recursively`);

@@ -148,37 +148,38 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     
     try {
       // Ensure parameters are correctly typed according to the schema before sending
-      const typedParams: Record<string, unknown> = {};
+      const typedParams = new Map<string, unknown>();
       const selectedToolData = toolsArray.find((t) => t.name === selectedTool);
       
       if (selectedToolData?.inputSchema?.properties) {
         const schemaProperties = asRecord(selectedToolData.inputSchema.properties) ?? {};
         // Process each parameter according to its schema type
         Object.entries(params).forEach(([key, value]) => {
-          const schema = asRecord(schemaProperties[key]);
+          const schema = Object.hasOwn(schemaProperties, key) ? asRecord(schemaProperties[key]) : undefined;
           if (!schema) {
-            typedParams[key] = value;
+            typedParams.set(key, value);
             return;
           }
           
           if (schema.type === 'number' || schema.type === 'integer') {
             // Ensure number parameters are actually numbers, not strings
             const numValue = typeof value === 'string' ? parseFloat(value) : value;
-            typedParams[key] = isNaN(numValue as number) ? 0 : numValue;
+            typedParams.set(key, isNaN(numValue as number) ? 0 : numValue);
           } else if (schema.type === 'boolean') {
             // Ensure boolean parameters are actually booleans
-            typedParams[key] = Boolean(value);
+            typedParams.set(key, Boolean(value));
           } else {
-            typedParams[key] = value;
+            typedParams.set(key, value);
           }
         });
       } else {
         // If no schema is available, use params as is
-        Object.assign(typedParams, params);
+        for (const [key, value] of Object.entries(params)) typedParams.set(key, value);
       }
       
-      log.debug(`Sending typed params:`, JSON.stringify(typedParams));
-      const result = await onTestTool(selectedTool, typedParams, timeoutValue);
+      const argumentData = Object.fromEntries(typedParams);
+      log.debug(`Sending typed params:`, JSON.stringify(argumentData));
+      const result = await onTestTool(selectedTool, argumentData, timeoutValue);
       log.debug(`Test result:`, JSON.stringify(result));
       
       // Store the progress token if available
