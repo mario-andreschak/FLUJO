@@ -1,8 +1,9 @@
 # Run-resource index cache proposal
 
 This source proposal addresses the process-wide resource metadata cache in #569.
-It has not yet been executed or accepted. It does not establish the application's
-runtime memory envelope, close the original #520 workload, or satisfy A- gates.
+Qualification receipts accompany the exact tested revision; source preparation
+alone is not acceptance. It does not establish the application's runtime memory
+envelope, close the original #520 workload, or satisfy A- gates.
 
 The former map retains every loaded conversation index. A cold read can also
 finish after a writer publishes a newer index and overwrite the cached metadata
@@ -51,12 +52,13 @@ initialization; mixed old/new route bundles require a process restart. The test
 directory-reset seam detaches pending reads without cancelling their admission
 slots and must be used after owned operations drain.
 
-Prepared qualification includes the unchanged resource store, concurrent lineage,
+Qualification includes the unchanged resource store, concurrent lineage,
 bounded payload and copy suites, plus new source fixtures for count/byte/LRU/idle
 bounds, coalescing, overload before IO, fixed retry count, old cold reads versus
 committed writes, cache eviction/reload, public metadata mutation, deletion and
 corrupt/permission-denied history. The deterministic storage race holds a writer
 after its index load, evicts that cache entry, captures the old disk snapshot,
 publishes the writer's new history, then finishes the old read. It uses barriers
-without sleeps or relaxed assertions. Positive/type/lint qualification and
-behavioral negative controls are pending; no test pass is claimed by this file.
+without sleeps or relaxed assertions. Positive/type/lint checks and behavioral
+negative controls must be recorded against the frozen source; this design note
+does not itself assert their execution or a test pass.
