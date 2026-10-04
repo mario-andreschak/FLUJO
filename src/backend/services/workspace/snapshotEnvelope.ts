@@ -1,7 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { encryptedSnapshotSizeLimit } from './snapshotLimits';
 
 const FORMAT = 'flujo-workspace-encrypted';
 const PURPOSE = Buffer.from('flujo:workspace-snapshot:v2', 'utf8');
+export const SNAPSHOT_ENCRYPTION_CAPABILITY = Object.freeze({
+  format: FORMAT, cipher: 'aes-256-gcm', writeVersion: 2,
+  readVersions: Object.freeze([1, 2] as const), legacyPlaintextRead: true,
+  recipientKeyRequired: true, recipientKeyBytes: 32, recipientKeyEncoding: 'base64',
+  v2Aad: 'flujo:workspace-snapshot:v2', v2Digest: 'sha256-encrypted-wire', v1Digest: 'sha256-plaintext-zip',
+} as const);
 const failure = () => new Error('Worker snapshot decryption failed. Check the encrypted archive and its recipient key.');
 
 function decode(value: unknown): Buffer {
@@ -35,8 +42,7 @@ export function encryptSnapshotEnvelope(archive: Buffer, recipientKey: Buffer): 
 export function decryptSnapshotEnvelope(input: Buffer, recipientKey: unknown, maxBytes: number): { bytes: Buffer; version: 1 | 2 } {
   let key: Buffer | undefined;
   try {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0
-      || input.length > Math.ceil(maxBytes * 4 / 3) + 4096) throw failure();
+    if (input.length > encryptedSnapshotSizeLimit(maxBytes)) throw failure();
     const envelope: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(input));
     if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw failure();
     const fields = envelope as Record<string, unknown>;

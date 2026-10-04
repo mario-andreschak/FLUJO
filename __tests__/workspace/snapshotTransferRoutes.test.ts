@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createDecipheriv, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { NextRequest } from 'next/server';
 import JSZip from 'jszip';
@@ -12,6 +12,7 @@ jest.mock('@/backend/services/workspace/snapshotArchive', () => ({
 }));
 
 import { POST as begin } from '@/app/api/snapshot/begin/route';
+import { GET as info } from '@/app/api/snapshot/info/route';
 import { GET as download } from '@/app/api/snapshot/download/route';
 import { snapshotCoordinator } from '@/backend/services/workspace/snapshotCoordinator';
 import { decryptSnapshotEnvelope } from '@/backend/services/workspace/snapshotEnvelope';
@@ -57,6 +58,14 @@ test('actual begin, encrypted persistence, download headers and recipient decryp
   zip.file('db/worker-bootstrap-secrets.json', 'synthetic-private-bootstrap');
   mockCapture.mockResolvedValue({ zip, files: 1, bytes: 27 } as CapturedWorkspaceSnapshot);
   const key = randomBytes(32).toString('base64');
+  const advertisement = await info(new NextRequest('http://127.0.0.1:4200/api/snapshot/info', {
+    headers: { host: '127.0.0.1:4200', authorization: `Bearer ${token}` },
+  }));
+  expect(advertisement.status).toBe(200);
+  const capability = (await advertisement.json()).workerCompatibility;
+  expect(capability.snapshotEncryption).toMatchObject({ writeVersion: 2, recipientKeyRequired: true,
+    recipientKeyBytes: 32, cipher: 'aes-256-gcm', v2Digest: 'sha256-encrypted-wire' });
+  expect(mockCapture).not.toHaveBeenCalled();
   const response = await begin(request({ recipientKey: key, flowIds: ['selected-flow'] }));
   expect(response.status).toBe(202);
   const initial = await response.json();
@@ -78,8 +87,15 @@ test('actual begin, encrypted persistence, download headers and recipient decryp
   expect(result.headers.get('content-type')).toBe('application/vnd.flujo.workspace-snapshot+json');
   expect(result.headers.get('content-disposition')).toContain('.encrypted.json');
   const wire = Buffer.from(await result.arrayBuffer());
+  expect(wire.length).toBeLessThanOrEqual(capability.snapshotLimits.maxEncryptedBytes);
+  const fields = JSON.parse(wire.toString());
+  const decipher = createDecipheriv('aes-256-gcm', Buffer.from(key, 'base64'), Buffer.from(fields.iv, 'base64'));
+  decipher.setAAD(Buffer.from(capability.snapshotEncryption.v2Aad));
+  decipher.setAuthTag(Buffer.from(fields.tag, 'base64'));
+  const independent = Buffer.concat([decipher.update(Buffer.from(fields.data, 'base64')), decipher.final()]);
   expect(wire.toString()).not.toContain('synthetic-private-bootstrap');
   const restored = await JSZip.loadAsync(decryptSnapshotEnvelope(wire, key, 1024 * 1024).bytes);
+  expect(independent).toEqual(decryptSnapshotEnvelope(wire, key, 1024 * 1024).bytes);
   expect(await restored.file('db/worker-bootstrap-secrets.json')!.async('string')).toBe('synthetic-private-bootstrap');
   await snapshotCoordinator.finalize(initial.sessionId);
   await expect(fs.lstat(stagingDir!)).rejects.toMatchObject({ code: 'ENOENT' });

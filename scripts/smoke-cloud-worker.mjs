@@ -231,10 +231,17 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   });
   assert.equal(infoResponse.status, 200);
   const info = await infoResponse.json();
-  assert.deepEqual(info.workerCompatibility, {
+  const { snapshotEncryption, snapshotLimits, ...compatibility } = info.workerCompatibility;
+  assert.deepEqual(compatibility, {
     applicationVersion: packageJson.version, snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1,
     ...(production && /^[a-f0-9]{40}$/.test(process.env.FLUJO_BUILD_REVISION ?? '') ? { revision: process.env.FLUJO_BUILD_REVISION } : {}),
   });
+  assert.deepEqual(snapshotEncryption, {
+    format: 'flujo-workspace-encrypted', cipher: 'aes-256-gcm', writeVersion: 2, readVersions: [1, 2],
+    legacyPlaintextRead: true, recipientKeyRequired: true, recipientKeyBytes: 32, recipientKeyEncoding: 'base64',
+    v2Aad: 'flujo:workspace-snapshot:v2', v2Digest: 'sha256-encrypted-wire', v1Digest: 'sha256-plaintext-zip',
+  });
+  assert.ok(wire.length <= snapshotLimits.maxEncryptedBytes);
   const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
   try {
     await filesystem.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${workerPort}/mcp-proxy/filesystem?workspace=${workspace}`), {

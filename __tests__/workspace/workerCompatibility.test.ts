@@ -16,6 +16,17 @@ describe('worker image compatibility metadata', () => {
       snapshotFormatVersion: 2,
       layoutVersion: 2,
       workerProtocolVersion: 1,
+      snapshotEncryption: {
+        format: 'flujo-workspace-encrypted', cipher: 'aes-256-gcm', writeVersion: 2,
+        readVersions: [1, 2], legacyPlaintextRead: true,
+        recipientKeyRequired: true, recipientKeyBytes: 32, recipientKeyEncoding: 'base64',
+        v2Aad: 'flujo:workspace-snapshot:v2', v2Digest: 'sha256-encrypted-wire', v1Digest: 'sha256-plaintext-zip',
+      },
+      snapshotLimits: {
+        maxFileBytes: 256 * 1024 * 1024, maxUncompressedBytes: 1024 * 1024 * 1024,
+        maxManifestBytes: 8 * 1024 * 1024, maxArchiveBytes: 1032 * 1024 * 1024,
+        maxEncryptedBytes: 4 * Math.ceil(1032 * 1024 * 1024 / 3) + 4096, maxMembers: 65_534,
+      },
     });
   });
 

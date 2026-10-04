@@ -18,11 +18,11 @@ import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { isWorkerMode, setWorkerBootstrapStatus } from './workerMode';
 import { decryptSnapshotEnvelope } from './snapshotEnvelope';
+import { getSnapshotLimits, SNAPSHOT_MAX_MANIFEST_BYTES as MAX_MANIFEST_BYTES,
+  SNAPSHOT_MAX_MEMBERS as MAX_MEMBERS } from './snapshotLimits';
 
 const MANIFEST_PATH = 'snapshot-manifest.json';
 const RESTORE_MARKER = '.flujo-worker-snapshot.json';
-const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
-const MAX_MEMBERS = 100_000;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export interface WorkerSnapshotRestoreResult {
@@ -47,11 +47,6 @@ interface WorkerManifest {
 declare global {
   var __flujo_worker_snapshot_restore:
     { key: string; promise: Promise<WorkerSnapshotRestoreResult> } | undefined;
-}
-
-function limit(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -255,11 +250,12 @@ export async function unlockWorkerSnapshot(result: WorkerSnapshotRestoreResult):
 
 async function restoreArchive(archivePath: string, digest: string): Promise<WorkerSnapshotRestoreResult> {
   setWorkerBootstrapStatus({ state: 'restoring', archiveSha256: digest, error: undefined });
-  const maxFileBytes = limit('FLUJO_SNAPSHOT_MAX_FILE_BYTES', 256 * 1024 * 1024);
-  const maxBytes = limit('FLUJO_SNAPSHOT_MAX_BYTES', 1024 * 1024 * 1024);
+  const limits = getSnapshotLimits();
+  const maxFileBytes = limits.maxFileBytes;
+  const maxBytes = limits.maxUncompressedBytes;
   const encrypted = Boolean(process.env.FLUJO_WORKER_SNAPSHOT_KEY);
-  const maxArchiveBytes = maxBytes + MAX_MANIFEST_BYTES;
-  const maxInputBytes = encrypted ? Math.ceil(maxArchiveBytes * 4 / 3) + 4096 : maxArchiveBytes;
+  const maxArchiveBytes = limits.maxArchiveBytes;
+  const maxInputBytes = encrypted ? limits.maxEncryptedBytes : maxArchiveBytes;
   const stat = await fs.lstat(archivePath, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > BigInt(maxInputBytes)) {
     throw new Error('Worker snapshot must be an ordinary archive file within the size limit.');

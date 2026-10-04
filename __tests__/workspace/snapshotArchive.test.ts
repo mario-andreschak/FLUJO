@@ -22,6 +22,7 @@ jest.mock('@/utils/encryption/session', () => ({ getServerDek: () => mockDek() }
 import { captureWorkspaceSnapshot, writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
 import { CODEX_AUTH_SOURCE_FILE } from '@/backend/services/model/adapters/codexAuth';
 import { decryptSnapshotEnvelope } from '@/backend/services/workspace/snapshotEnvelope';
+import { getSnapshotLimits } from '@/backend/services/workspace/snapshotLimits';
 
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
@@ -101,6 +102,34 @@ describe('portable workspace capture', () => {
     const create = jest.spyOn(fs, 'mkdtemp');
     await expect(writeWorkspaceSnapshotArchive(captured, undefined as never)).rejects.toMatchObject({ code: 'RECIPIENT_KEY_REQUIRED' });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a generated ZIP beyond the receiver bound before persisting and clears its owned plaintext', async () => {
+    process.env.FLUJO_SNAPSHOT_MAX_BYTES = '1';
+    const plaintext = Buffer.alloc(getSnapshotLimits().maxArchiveBytes + 1, 0x61);
+    const zip = new JSZip();
+    jest.spyOn(zip, 'generateAsync').mockResolvedValue(plaintext as never);
+    const write = jest.spyOn(fs, 'writeFile');
+    const candidate = { zip, files: 0, bytes: 0 } as Awaited<ReturnType<typeof captureWorkspaceSnapshot>>;
+    await expect(writeWorkspaceSnapshotArchive(candidate, { recipientKey: randomBytes(32) })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+    expect(write).not.toHaveBeenCalled();
+    expect(plaintext.equals(Buffer.alloc(plaintext.length))).toBe(true);
+  });
+
+  it('counts ZIP directories and refuses ZIP32 overflow before staging or compression', async () => {
+    const zip = new JSZip();
+    zip.files = Object.fromEntries(Array.from({ length: 65_535 }, (_, index) => [`directory-${index}/`, {}])) as JSZip['files'];
+    const generate = jest.spyOn(zip, 'generateAsync');
+    const create = jest.spyOn(fs, 'mkdtemp');
+    const candidate = { zip, files: 0, bytes: 0 } as Awaited<ReturnType<typeof captureWorkspaceSnapshot>>;
+    await expect(writeWorkspaceSnapshotArchive(candidate, { recipientKey: randomBytes(32) })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+    expect(generate).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a captured manifest beyond the receiver limit', async () => {
+    mockBuildPlan.mockReturnValueOnce({ formatVersion: 1, sourceWorkspaceRoot: 'x'.repeat(8 * 1024 * 1024), servers: [] });
+    await expect(captureWorkspaceSnapshot('research', 1)).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
   });
 
   it('seeds subscription auth from the active host without copying Codex runtime databases', async () => {

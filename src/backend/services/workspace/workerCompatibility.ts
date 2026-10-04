@@ -1,7 +1,9 @@
 import applicationPackage from '../../../../package.json';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
+import { SNAPSHOT_ENCRYPTION_CAPABILITY } from './snapshotEnvelope';
+import { getSnapshotLimits, type SnapshotLimits } from './snapshotLimits';
 
-/** Change the protocol when the worker control/restore contract becomes incompatible. */
+/** Worker ingress protocol; snapshot envelope support is negotiated separately. */
 export const WORKER_PROTOCOL_VERSION = 1;
 export const WORKER_SNAPSHOT_FORMAT_VERSION = 2;
 
@@ -10,6 +12,8 @@ export interface WorkerCompatibility {
   snapshotFormatVersion: typeof WORKER_SNAPSHOT_FORMAT_VERSION;
   layoutVersion: typeof WORKSPACE_LAYOUT_VERSION;
   workerProtocolVersion: typeof WORKER_PROTOCOL_VERSION;
+  snapshotEncryption: typeof SNAPSHOT_ENCRYPTION_CAPABILITY;
+  snapshotLimits: SnapshotLimits;
   revision?: string;
 }
 
@@ -23,6 +27,8 @@ export function getWorkerCompatibility(): WorkerCompatibility {
     snapshotFormatVersion: WORKER_SNAPSHOT_FORMAT_VERSION,
     layoutVersion: WORKSPACE_LAYOUT_VERSION,
     workerProtocolVersion: WORKER_PROTOCOL_VERSION,
+    snapshotEncryption: SNAPSHOT_ENCRYPTION_CAPABILITY,
+    snapshotLimits: getSnapshotLimits(),
     ...(/^[a-f0-9]{40}$/.test(revision ?? '') ? { revision } : {}),
   };
 }

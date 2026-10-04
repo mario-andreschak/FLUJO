@@ -16,9 +16,8 @@ import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import appPackage from '../../../../package.json';
 import { encryptSnapshotEnvelope } from './snapshotEnvelope';
+import { getSnapshotLimits } from './snapshotLimits';
 
-const DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024;
-const DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
 const WORKSPACE_METADATA_FILE = '.workspace.json';
 
 export interface SnapshotManifestFile {
@@ -73,11 +72,6 @@ export class SnapshotArchiveError extends Error {
     super(message);
     this.name = 'SnapshotArchiveError';
   }
-}
-
-function configuredLimit(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function isInside(root: string, candidate: string, allowRoot = false): boolean {
@@ -166,20 +160,16 @@ export async function captureWorkspaceSnapshot(
     );
   }
 
-  const maxFileBytes = configuredLimit(
-    'FLUJO_SNAPSHOT_MAX_FILE_BYTES',
-    DEFAULT_MAX_FILE_BYTES,
-  );
-  const maxSnapshotBytes = configuredLimit(
-    'FLUJO_SNAPSHOT_MAX_BYTES',
-    DEFAULT_MAX_SNAPSHOT_BYTES,
-  );
+  const limits = getSnapshotLimits();
+  const maxFileBytes = limits.maxFileBytes;
+  const maxSnapshotBytes = limits.maxUncompressedBytes;
   const files: SnapshotManifestFile[] = [];
   let totalBytes = 0;
   const zip = new JSZip();
 
   const recordFile = (archivePath: string, content: Buffer, stats?: BigIntStats): void => {
     signal?.throwIfAborted();
+    if (files.length >= limits.maxMembers - 1) throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot contains too many members.');
     if (content.byteLength > maxFileBytes) throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot member exceeds the configured file limit.');
     // FLUJO's JSON state is portable. Opaque live databases in user data need
     // their owner's online-backup contract; do not silently produce a bad copy.
@@ -348,7 +338,11 @@ export async function captureWorkspaceSnapshot(
     runtime: { mcpTransfer, codexAuth, encryption, ...(selectedFlowIds ? { selectedFlowIds } : {}) },
     excludedRuntimePaths,
   };
-  zip.file('snapshot-manifest.json', JSON.stringify(manifest, null, 2));
+  const manifestJson = JSON.stringify(manifest, null, 2);
+  if (Buffer.byteLength(manifestJson) > limits.maxManifestBytes) {
+    throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot manifest exceeds the size limit.');
+  }
+  zip.file('snapshot-manifest.json', manifestJson);
 
   return {
     zip,
@@ -370,6 +364,10 @@ export async function writeWorkspaceSnapshotArchive(
   let stagingDir: string | undefined;
   try {
     signal?.throwIfAborted();
+    const limits = getSnapshotLimits();
+    if (Object.keys(captured.zip.files).length > limits.maxMembers) {
+      throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot contains too many members.');
+    }
     stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
     await fs.chmod(stagingDir, 0o700).catch(() => undefined);
     const archivePath = path.join(stagingDir, 'workspace.snapshot.encrypted.json');
@@ -382,8 +380,14 @@ export async function writeWorkspaceSnapshotArchive(
     let archive: Buffer;
     try {
       signal?.throwIfAborted();
+      if (plaintext.byteLength > limits.maxArchiveBytes) {
+        throw new SnapshotArchiveError('SIZE_LIMIT', 'Snapshot ZIP exceeds the archive size limit.');
+      }
       archive = encryptSnapshotEnvelope(plaintext, recipientKey);
     } finally { plaintext.fill(0); }
+    if (archive.byteLength > limits.maxEncryptedBytes) {
+      throw new SnapshotArchiveError('SIZE_LIMIT', 'Encrypted snapshot exceeds the wire size limit.');
+    }
     await fs.writeFile(archivePath, archive, { mode: 0o600 });
     await fs.chmod(archivePath, 0o600).catch(() => undefined);
     signal?.throwIfAborted();
