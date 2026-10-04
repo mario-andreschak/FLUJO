@@ -51,6 +51,39 @@ const complexTool = () => ({
 });
 
 describe('ToolTester complex parameter lifecycle', () => {
+  it('edits and clears own prototype-like JSON keys from empty values while preserving validity', async () => {
+    const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
+    const keys = ['__proto__', 'constructor', 'toString'];
+    render(<ToolTester serverName="data-boundary" tools={[{
+      name: 'data_tool', description: 'Data boundary tool',
+      inputSchema: { type: 'object', properties: Object.fromEntries(keys.map(key => [key, { type: 'object' }])) },
+    }]} prefill={{ toolName: 'data_tool', arguments: {} }} onTestTool={onTestTool} />);
+    const proto = await screen.findByRole('textbox', { name: '__proto__ (JSON object)' });
+    expect(proto).toHaveValue('');
+    expect(screen.getByRole('textbox', { name: 'constructor (JSON object)' })).toHaveValue('');
+    expect(screen.getByRole('textbox', { name: 'toString (JSON object)' })).toHaveValue('');
+    fireEvent.change(proto, { target: { value: '{"marker":"proto-data"}' } });
+    const constructor = screen.getByRole('textbox', { name: 'constructor (JSON object)' });
+    fireEvent.change(constructor, { target: { value: '{' } });
+    expect(screen.getByRole('button', { name: 'mcp.tester.test' })).toBeDisabled();
+    expect(onTestTool).not.toHaveBeenCalled();
+    fireEvent.change(constructor, { target: { value: '{"marker":"constructor-data"}' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'toString (JSON object)' }), { target: { value: '{"marker":"string-data"}' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'mcp.tester.test' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'mcp.tester.test' }));
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledTimes(1));
+    const sent = onTestTool.mock.calls[0][1];
+    expect(Object.getPrototypeOf(sent)).toBe(Object.prototype);
+    for (const key of keys) expect(Object.hasOwn(sent, key)).toBe(true);
+    expect(sent['__proto__']).toEqual({ marker: 'proto-data' });
+    expect(sent.constructor).toEqual({ marker: 'constructor-data' });
+    expect(sent.toString).toEqual({ marker: 'string-data' });
+    fireEvent.change(proto, { target: { value: '' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'mcp.tester.test' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'mcp.tester.test' }));
+    await waitFor(() => expect(onTestTool).toHaveBeenCalledTimes(2));
+    expect(Object.hasOwn(onTestTool.mock.calls[1][1], '__proto__')).toBe(false);
+  });
   it.each([true, false])('preserves prototype-like argument keys when schema coercion is %s', async withSchema => {
     const onTestTool = jest.fn().mockResolvedValue({ success: true, output: 'ok' });
     const argumentsData = JSON.parse('{"__proto__":{"marker":true},"constructor":"7","toString":"literal"}');
