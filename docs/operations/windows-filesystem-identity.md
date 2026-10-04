@@ -28,7 +28,10 @@ node scripts/probe-filesystem-identity.mjs > filesystem-identity.json
 
 The probe creates six regular files in its own fresh temporary directory. It
 records bigint metadata from the writable descriptor, pathname before and
-after writer close, and a read-only descriptor/path pair. It prints Node,
+after writer close, and a read-only descriptor/path pair. Both descriptors
+open before pathname observations, and exact descriptor identity is checked
+before collecting them. The read-only descriptor is measured again after the
+writer closes; it never reads bytes. It prints Node,
 libuv and OS versions without a hostname, path, environment or file contents.
 It exits nonzero when exact device/inode or other required metadata differs.
 Only freshly rechecked, known probe leaves are deleted; no recursive cleanup

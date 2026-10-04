@@ -26,25 +26,34 @@ try {
     await assertOwnedRoot();
     const leaf = path.join(root, `owned-${index}.json`);
     const writer = await fs.open(leaf, 'wx', 0o600);
-    let writable, namedWhileOpen;
+    let writable, namedWhileOpen, closedNamed, readerDescriptor, readerNamed;
+    let writerClosed = false;
     try {
       await writer.writeFile('{"probe":true}\n', 'utf8');
       await writer.sync();
-      writable = await writer.stat({ bigint: true });
-      namedWhileOpen = await fs.lstat(leaf, { bigint: true });
+      // Bind both handles before pathname observations. No reopen relies on a
+      // previous path check; all later observations refer to this created inode.
+      const reader = await fs.open(leaf, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      try {
+        writable = await writer.stat({ bigint: true });
+        const openedReader = await reader.stat({ bigint: true });
+        if (!openedReader.isFile() || openedReader.isSymbolicLink() || openedReader.nlink !== BigInt(1)
+            || differences(writable, openedReader, ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size']).length) {
+          throw new Error('Owned probe descriptor binding refused');
+        }
+        namedWhileOpen = await fs.lstat(leaf, { bigint: true });
+        await writer.close();
+        writerClosed = true;
+        closedNamed = await fs.lstat(leaf, { bigint: true });
+        created.push({ leaf, namedIdentity: closedNamed });
+        readerDescriptor = await reader.stat({ bigint: true });
+        readerNamed = await fs.lstat(leaf, { bigint: true });
+        // Deliberately do not read bytes or treat mismatched metadata as safe.
+      } finally {
+        await reader.close();
+      }
     } finally {
-      await writer.close();
-    }
-    const closedNamed = await fs.lstat(leaf, { bigint: true });
-    created.push({ leaf, namedIdentity: closedNamed });
-    const reader = await fs.open(leaf, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-    let readerDescriptor, readerNamed;
-    try {
-      readerDescriptor = await reader.stat({ bigint: true });
-      readerNamed = await fs.lstat(leaf, { bigint: true });
-      // Deliberately do not read any bytes or treat mismatched metadata as safe.
-    } finally {
-      await reader.close();
+      if (!writerClosed) await writer.close();
     }
     const closedBindingDifferences = differences(writable, closedNamed, ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size']);
     const readerDifferences = differences(readerDescriptor, readerNamed);
