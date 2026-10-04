@@ -1,3 +1,10 @@
+// This unit fixture models an already unlocked workspace; fresh-profile denial
+// and real enrollment are covered by the dedicated encryption suites.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'),
+  isEncryptionLocked: async () => false,
+}));
+
 /**
  * Tests for renaming a conversation via PATCH /v1/chat/conversations/:id
  * (issue #134, item 2).

@@ -1,3 +1,10 @@
+// This unit fixture models an already unlocked workspace; fresh-profile denial
+// and real enrollment are covered by the dedicated encryption suites.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'),
+  isEncryptionLocked: async () => false,
+}));
+
 import { NextRequest } from 'next/server';
 
 import { DELETE as deletePersona, GET as getPersona } from '@/app/v1/personas/[personaId]/route';

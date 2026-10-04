@@ -1,3 +1,10 @@
+// This unit fixture models an already unlocked workspace; fresh-profile denial
+// and real enrollment are covered by the dedicated encryption suites.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'),
+  isEncryptionLocked: async () => false,
+}));
+
 /** Real FlowSpec/engine/scheduler -> production MCP service -> built Bash stdio
  * server -> harmless OS process. Only app storage/flow/model lookup are fixtures.
  * This fixture completes the real nonzero-process reproduction requested in #538. */

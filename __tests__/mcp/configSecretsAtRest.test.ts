@@ -6,6 +6,7 @@ import { MASKED_API_KEY, MASKED_STRING } from '@/shared/types/constants';
 import { StorageKey } from '@/shared/types/storage';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { enrollPrivateEncryptionFixture } from '../utils/privateEncryptionFixture';
 
 jest.mock('@/backend/services/model/encryption', () => {
   const actual = jest.requireActual('@/backend/services/model/encryption');
@@ -26,6 +27,7 @@ async function stored(): Promise<Record<string, MCPServerConfig>> {
 }
 
 beforeEach(async () => {
+  await enrollPrivateEncryptionFixture();
   encryptedMock.mockReset().mockImplementation(
     jest.requireActual<typeof import('@/backend/services/model/encryption')>('@/backend/services/model/encryption').encryptApiKey,
   );

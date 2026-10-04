@@ -1,3 +1,10 @@
+// This unit fixture models an already unlocked workspace; fresh-profile denial
+// and real enrollment are covered by the dedicated encryption suites.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'),
+  isEncryptionLocked: async () => false,
+}));
+
 const submitMock = jest.fn();
 const dispatches = new Map<string, import('@/backend/services/enduringAgents/personaDispatcher').PersonaFlowDispatchRecord>();
 const dispatchIdentity = (_personaId: string, key: string) => `dispatch_${key.slice(-40)}`;
