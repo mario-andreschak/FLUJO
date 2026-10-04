@@ -126,14 +126,54 @@ they cover every required installed scenario:
 
 ## A second maintainer's exercise
 
-On a disposable checkout, independently locate the unattended classification
-and explain why API runs are interactive. Change a fixture, run its regression,
-and show the failing then passing behavior. Separately locate `beginConnect` /
-`beginTeardown`, explain workspace and generation ownership, and modify a
-reconnection fixture so that a stale close cannot remove the new client. Record
-the human reviewer, revision, commands, observation and review. An AI-generated
-guide or passing CI does not satisfy #571's second-human acceptance; Community
-owns arranging/recording that exercise through #576.
+Use a consenting second human and an observer on a disposable checkout of an
+identified, reviewed source. The operator must locate, explain and change a
+production execution behavior and a production MCP lifecycle behavior. Changing
+only a test fixture, running an author-prepared script, or checking out the
+original file does not demonstrate that ability. Community owns arranging and
+recording the independent exercise through #576.
+
+The observer records the clean base revision, then supplies a small seeded
+production regression for each task. Record each faulty revision separately.
+The original author must not operate the checkout or write the repair for the
+operator; retain any hints or intervention instead of hiding coaching.
+
+- **Execution:** start with `src/shared/types/execution/invocation.ts` and its
+  `runFlow` caller. Diagnose a regression that incorrectly classifies direct API
+  execution as unattended. Explain why explicit invocation context governs
+  drive-forward rather than the legacy Flow flag; repair the production decision
+  and preserve the other source classifications. Keep the existing expectations
+  in `flow/invocationSource.test.ts` and `flow/unattendedDriveForward.test.ts`.
+  The latter executes real orchestration with a controlled graph engine; it
+  does not invoke a provider or external tool.
+- **MCP:** start with `src/backend/services/mcp/index.ts` and
+  `lifecycleCoordinator.ts`. Diagnose a regression where a late close from a
+  replaced transport removes the healthy client or schedules another connection.
+  Repair the production ownership decision in the `transport.onclose` path.
+  Explain its relationship to the workspace-scoped active transport, lifecycle
+  generation, and `beginConnect`/`beginTeardown`; retain unexpected-live-close
+  reconnect behavior. Keep the existing expectations in
+  `mcp/mcpRestartLoop.test.ts`. It controls connection/configuration collaborators
+  and fake timers; it is not an installed process-shutdown observation.
+
+With checkout-local locked dependencies, retain the full focused result rather
+than a test-name filter that silently leaves the other classifications pending:
+
+```sh
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts --json --outputFile=maintainer-core-results.json
+node scripts/check-import-boundaries.cjs
+```
+
+The observer retains the faulty-source diff, failing named behavior assertions,
+operator-authored repair diff and revision, successful guarded result, raw logs,
+OS/Node/npm, source/artifact hashes, elapsed time, and all assistance. The operator
+explains the affected owner and why the repair preserves the other behavior;
+the observer reviews that explanation and the actual production diff using the
+[maintainership evidence form](../contributing/maintainership.md#evidence-record).
+Fixture expectations must remain intact: do not skip cases or weaken assertions
+to make the faulty source pass. Record failure or incomplete understanding as
+such. An AI rehearsal can qualify this recipe's sensitivity, but cannot supply
+the human identity, independent operation or review required by #571.
 
 ## Size inventory and evidence limits
 
