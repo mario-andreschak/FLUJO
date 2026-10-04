@@ -64,13 +64,24 @@ A source-check recall measurement must retain an actual elapsed start/end window
 as specified by `sourceMetricElapsedBudgets`; an instant source observation cannot
 qualify that measurement. Offline-simulation retains its separate virtual clock.
 A simulated window on a static source observation cannot qualify a soak measurement.
-New budgets may remain proposals without carrier rules, but passing checksummed
-measurements fail closed until their reviewed `metricEvidenceKinds` entry exists.
+`metricUnits` binds each current budget to its recorded unit. `unitKinds` declares
+integer, continuous, ratio and duration semantics, including conversion to milliseconds.
+Byte and intervention measurements are integral; ratios and durations may be fractional.
+New unmeasured budgets may remain proposals without these rules, but agreement and
+passing checksummed measurements require reviewed unit semantics and a
+`metricEvidenceKinds` entry. Missing unit semantics fail closed for acceptance.
+These unit bindings do not ratify still-proposed numeric targets or spending limits;
+owners must agree on those before measuring. Changes to reviewed unit meanings need
+a separately reviewed contract version.
 Every source elapsed-policy ID must resolve to a ledger budget. Metric denominators
-and count-valued measurements are integers. Any retained instant/simulated end must
+and count-valued measurements are integers. Every non-null start must be valid UTC.
+Any retained instant/simulated end must
 be valid UTC, no later than observation and ordered after a known start; an unknown
 historical start may remain null. A recorded physical end does not turn virtual days
-into elapsed days. The original Persona units remain pinned with their limits and sample floors.
+into elapsed days. Virtual days measure duration rather than completed checkpoints:
+28.5 may exceed the original 28-day minimum, while the daily append and recall-search
+denominators remain integral and their runner coverage requires separate verification.
+The original Persona limits and sample floors remain pinned.
 The recall contract imposes no new minimum wall duration. Actual controlled corpus,
 full-candidate/ranking coverage and 20-search samples still need the performance
 owner's runner evidence; a declared duration cannot establish those facts.
