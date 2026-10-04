@@ -1034,7 +1034,8 @@
       "status": "pending",
       "identity": "Automated source reviewer: maintainer-selected FLUJO Claude_Opus_Agent; final release rubric agreement pending",
       "evidenceIds": [
-        "docs-automated-review-46af3225"
+        "docs-automated-review-46af3225",
+        "docs-automated-rereview-61d212c4"
       ]
     },
     "disagreements": [
@@ -1903,6 +1904,119 @@
       "kind": "source-check",
       "result": "passed",
       "integrity": "checksummed"
+    },
+    {
+      "artifactId": null,
+      "ownerId": "docs",
+      "observedAt": "2026-10-04T00:19:32.407Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "Claude Opus alias opus via claude-subscription/claude-cli; maintainer-selected FLUJO flow",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [],
+      "id": "docs-automated-rereview-61d212c4",
+      "kind": "independent-assessment",
+      "result": "not-evaluated",
+      "integrity": "checksummed",
+      "sourceSha": "61d212c47e6f613ef075be9764466844752804b2",
+      "commands": [
+        "POST selected review flow once with approval-gated source reads and dependency-free validator/tests; observe completion via same-conversation GET after POST timeout"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-automated-rereview-61d212c4.txt",
+          "sha256": "22dc0c4afe0be58a0a4ae0f2457eaa5ceafd9ff9aded9890b377a4e216cccd19",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-rereview-protocol-61d212c4.json",
+          "sha256": "dbe2fbd330e97af1f147b1fe731c21e542c941cccc626fad6e4d6e296bebe045",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-rereview-command-receipts-61d212c4.json",
+          "sha256": "00a345f9e0ce53a058eceb4c63693c29882032ddc65aefb06175fe606e57de46",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/docs-rereview-triage-61d212c4.json",
+          "sha256": "d4ec8b53974325087fa521014d5e51fb7a5dca52b48c33e5f6e78e394fdd6838",
+          "verification": "local"
+        }
+      ],
+      "scope": "Automated re-review reports conditional source-only Docs A- at 61d212c4; final release/all-nine acceptance remains ungradable. Actual command coverage and author corrections retained.",
+      "limits": [
+        "No human/installed/live observations or final rubric agreement.",
+        "Report preserved unchanged; factual/coverage inaccuracies are documented in author triage.",
+        "Later source edits and race fix are outside the reviewed SHA; no grade or gate is promoted."
+      ]
+    },
+    {
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-04T00:28:06.787Z",
+      "environment": {
+        "platform": "Windows x64 local source capture",
+        "node": "v22.13.1",
+        "provider": "none unless explicitly identified in scope",
+        "tools": "git, gh, Node; selected FLUJO Claude flow for automated review"
+      },
+      "metrics": [],
+      "budgetIds": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "profileIds": [
+        "local-owner",
+        "persistent-worker",
+        "shared-public"
+      ],
+      "artifactProof": null,
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37163060833"
+      ],
+      "id": "ci-verification-61d212c4",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "fd15eba837dc5aebbbbbe5bb8f1f69510297978f",
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37163060833",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37163060833/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/commits/fd15eba"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/ci-verification-61d212c4.json",
+          "sha256": "a1a631afc4e95d009e7d7c016ab8e637bb6d31896871bc51c25e4c38a83c6739",
+          "verification": "local"
+        }
+      ],
+      "scope": "Terminal failed combined-source verification at the recorded synthetic PR #623 merge. Passing builds and scanners do not qualify release acceptance.",
+      "limits": [
+        "API metadata captured; no job replay or installation performed.",
+        "Actual synthetic merge is distinct from the PR head and later integrated candidate.",
+        "The unchanged review describes the run as live at its initial packet observation. Terminal state is retained separately."
+      ]
     }
   ],
   "gates": [
@@ -2068,7 +2182,8 @@
       "status": "failed",
       "description": "Selected candidate source must pass required typecheck, lint, ordinary/isolated tests, builds, release-safety and verification prerequisites; failed/cancelled/skipped required jobs remain non-acceptance.",
       "evidenceIds": [
-        "ci-verification-46af3225"
+        "ci-verification-46af3225",
+        "ci-verification-61d212c4"
       ]
     }
   ],

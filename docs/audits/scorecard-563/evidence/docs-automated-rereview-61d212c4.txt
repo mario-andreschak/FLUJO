@@ -1,0 +1,119 @@
+```
+```
+{
+  "reviewedSourceSha": "61d212c47e6f613ef075be9764466844752804b2",
+  "headVerified": "git rev-parse HEAD == 61d212c47e6f613ef075be9764466844752804b2 (confirmed)",
+  "reviewer": {
+    "identity": "Automated Docs reviewer executed through the maintainer-selected local FLUJO flow; invoked inside the maintainer's own instance",
+    "model": "Claude Opus class agent (alias/exact build string not independently attestable from inside this run)",
+    "limits": [
+      "Model alias/version is self-reported; it is not a cryptographically attested reviewer identity.",
+      "Not a human reviewer, not an installed-release inspection, not a live-runtime or elapsed-duration observation, not an owner agreement.",
+      "This output is NOT the 'independent-assessment' evidence contemplated by gate independent-reassessment: agreements.independentReviewer.status is 'pending', assessment.sourceSha is null, and no verified-content artifact exists.",
+      "Scope limited to read-only git object reads at the reviewed SHA plus the two explicitly permitted dependency-free Node commands."
+    ]
+  },
+  "commandsRun": [
+    {"cmd": "git rev-parse HEAD", "result": "61d212c47e6f613ef075be9764466844752804b2"},
+    {"cmd": "git show 61d212c4:docs/audits/scorecard-563/{README.md,publication-reconciliation.md,artifact-acceptance.md,scorecard.json,scorecard.schema.json}", "result": "read in full"},
+    {"cmd": "git show 61d212c4:scripts/{validate-scorecard.mjs,validate-scorecard.test.mjs}", "result": "read in full"},
+    {"cmd": "git show 61d212c4:docs/audits/scorecard-563/evidence/{publication-source-46af3225.json,docs-automated-review-46af3225.json}", "result": "read"},
+    {"cmd": "git ls-tree -l 61d212c4 / 46af3225 -- SECURITY.md README.md docs/security/* docs/api-reference/README.md docs/architecture/README.md docs/project-status.md", "result": "blob ids + sizes compared against the retained inventory"},
+    {"cmd": "git cat-file blob <4 blobs> | sha256sum", "result": "SECURITY.md d2d402f6…, owner-access-v1.md 70518a8a…, mcp-isolation-v1-evidence.md 406b9b4e…, isolatedMcp.ts da41fb7e… — all four byte-identical to publication-source-46af3225.json"},
+    {"cmd": "git diff --stat 46af3225 61d212c4", "result": "103 files changed; README.md 2 lines, docs/architecture/README.md 3 lines, docs/project-status.md 2 lines"},
+    {"cmd": "node scripts/validate-scorecard.mjs", "result": "exit 0 — 'structure, references and retained checksums valid. This is not grade acceptance.' + 20 closure blockers printed"},
+    {"cmd": "node scripts/validate-scorecard.mjs --closure", "result": "exit 2 — 20 blockers including dependency-audit: failed, build-verification: failed, all nine A- pending"},
+    {"cmd": "node --test scripts/validate-scorecard.test.mjs", "result": "26/26 pass, 0 fail (tests 23–26 cover source-gate kinds, mandatory per-profile production claims, unset envelopes, source-build runtime checks)"}
+  ],
+  "docsSourceCorrectness": {
+    "grade": "A-",
+    "label": "CONDITIONAL SOURCE-ONLY GRADE — applies to the Docs source artifact at 61d212c4 only; it may not populate the nine-row assessment, any claim promotion, or agreements.independentReviewer",
+    "acceptedCriteria": [
+      "Factual/structural correctness: ledger validates clean and every scoped boundary test passes, and I independently reproduced blob-level correspondence for all 8 files in publication-source-46af3225.json (exact gitBlob, byteLength and SHA-256 agreement for the four I hashed).",
+      "Correct tree attribution: SECURITY.md absence is attributed to historical baseline 3511ba4 ('the captured main tree'), while presence at 46af3225 (blob c87fd9bd, 2384 bytes) is recorded as a separate later observation. No conflation found.",
+      "Preservation: validator hard-codes all nine dimensions with original grades and all three profiles via exact-set checks (validate-scorecard.mjs:9-19, 109-110); 11 protected Persona numeric contracts plus 28-day simulated workload enforced (lines 36-47, 174-180); the September 16 failure is pinned by SHA and payload digest (line ~287).",
+      "Gate-kind integrity: sourceGateEvidenceKinds pins dependency-audit/build-verification to source-check and persona-current-soak to offline-simulation, and gate.kind cannot be mutated to evade it (lines 23-27, 311). Test 23 confirms.",
+      "Honest qualification: CI failure at synthetic merge 4d8fe9f is retained as failed source-check and explicitly not a rerun at a later candidate; PR #600's clean audit and the rejected independent replay binding are retained as separate records; neither is relabelled acceptance; the live PR-#623 run is not claimed anywhere.",
+      "Self-limitation: the retained prior assessment keeps its own cautions verbatim (it is 'NOT the independent-assessment evidence kind'), is stored with result 'not-evaluated', and acceptedEvidence requires result 'passed' — so it structurally cannot pass a gate or promote a claim.",
+      "Per-profile production claims and candidate verification are mandatory (lines ~360-370): production claims exist for local-owner, persistent-worker and shared-public; engineering/docs/maturity each carry the build-verification gate.",
+      "Unset envelope: live-spend has limit null with status 'proposed'; null blocks agreed status (line ~165), blocks any metric use, and satisfies() returns false for non-finite limits. The zero-dollar misstatement is corrected in prose.",
+      "Retained-failure ratchet: because acceptedEvidence rejects a set containing any non-passing record, the failed October audit inside dependency-audit.evidenceIds makes that gate unflippable while the failure is retained."
+    ],
+    "rationale": "Every one of the twelve author dispositions was re-tested against source rather than accepted. The four rejections are correct: all 17 anyOf uses in the schema are leaf type|null unions, so discarded branch errors are a usability matter only; parent object properties are checked after anyOf; acceptedEvidence is a hoisted function declaration; artifact.kind 'source' is excluded from installed-artifact evidence (line 203) and 'pinned source' maps to 'source-build' (line 29), so the source-only report branch at line 248 cannot certify an install row; and closure iterates every gate including persona-current-soak, with only persona-live exempt under an explicitly accepted experimental claim (lines 377-378). The eight accepted items are materially implemented, not merely promised. I found no factual overclaim, no mis-attributed tree, and no accepted-invalid-record example. Grade is A- rather than A because residual hardening remains (findings below) and because the artifact's own publication qualification is pinned to a parent SHA rather than its own head."
+  },
+  "docsReleaseAcceptanceVerdict": {
+    "verdict": "ungradable / not granted",
+    "reason": "Final Docs release acceptance requires release-bound claims, installed-artifact acceptance and human agreement. All 23 claims are pending or experimental; all 11 non-CI gates are pending; dependency-audit and build-verification are failed; every OS/install row is documented-unverified or pending; agreements.maintainer is unset and agreements.independentReviewer.status is pending with three retained disagreements; assessment.status is pending with zero grades. No installed, human, live-provider or external-agreement evidence exists in the ledger (only baseline-observation, source-check, offline-simulation and one not-evaluated independent-assessment).",
+    "allNineAcceptance": "ungradable. My source-only A- cannot be written into assessment.grades, and nothing here supplies human adoption, installation, elapsed runtime or final rubric agreement."
+  },
+  "findings": [
+    {
+      "priority": "P2-hardening",
+      "file": "docs/audits/scorecard-563/evidence/publication-source-46af3225.json",
+      "line": "files[].gitBlob for README.md / docs/architecture/README.md / docs/project-status.md",
+      "title": "Newest publication inventory is pinned to the parent SHA and is already stale at the reviewed head",
+      "proof": "At 46af3225 the inventory records README.md blob a4fa74fa094e5b1cfcb75417181170a1c4553c31, architecture f5d7cd83be03…, project-status 654f0986… . At reviewed head 61d212c4 git ls-tree reports d989f1c00ea3dc680ac0f4cb0daeebc7853047a4 (31553 B), 3e7c8575afe3f2… (4507 B) and 56b40cb7b33e… (6151 B); git diff --stat 46af3225 61d212c4 shows README.md 2 lines, architecture 3, project-status 2. So three of the four qualified publication documents have no inventory entry at the SHA under review.",
+      "remediation": "Not a false claim — README.md and publication-reconciliation.md both state the slice qualifies those guides 'at its own source pin' and that 'the actual release still needs a fresh inventory after final integration'. Capture a head-pinned inventory (or an explicit no-material-change witness) at the integration SHA so the qualification and the reviewed tree coincide.",
+      "classification": "optional hardening / disclosed staleness, not a current violation"
+    },
+    {
+      "priority": "P2-hardening",
+      "file": "scripts/validate-scorecard.mjs",
+      "line": "269",
+      "title": "Budget-predeclaration check is skipped when a window has no start timestamp",
+      "proof": "`if (window.start && timestamp(budget.declaredAt) > timestamp(window.start)) fail(... 'budget declared after measurement began')`. For a simulated or instant window with start null (schema $defs.evidence.window.start permits null), a passing checksummed record measuring an 'existing-contract' budget bypasses the predeclaration rule. The 'agreed' branch at line ~276 does require a finite start, so only existing-contract budgets are exposed.",
+      "remediation": "Require a finite window.start whenever a passing checksummed record carries metrics for a non-proposed budget, or add an explicit note that existing-contract predeclaration is established by the published contract date. No such record exists today — the only offline-simulation present is the retained September 16 failure — so I can supply no accepted-invalid example.",
+      "classification": "optional hardening, no current violation"
+    },
+    {
+      "priority": "P3-hardening",
+      "file": "docs/audits/scorecard-563/scorecard.schema.json",
+      "line": "properties.assessment.properties.independent",
+      "title": "Reviewer independence remains a self-declared boolean",
+      "proof": "assessment.independent is a plain boolean; validate-scorecard.mjs:~330 only checks reviewer === agreements.independentReviewer.identity. A completed assessment could therefore name an automated agent. This is materially mitigated: closure (lines 377-378) still requires every gate including rubric-agreement, whose 'external' kind demands external-agreement evidence that no automated flow can mint, and README states a checksum 'proves file correspondence, not that an author is independent'.",
+      "remediation": "Optionally refuse assessment.status 'completed' unless gate rubric-agreement is passed and agreements.independentReviewer.status is 'agreed'.",
+      "classification": "optional hardening, honestly disclosed, mitigated by closure"
+    },
+    {
+      "priority": "P3-usability",
+      "file": "scripts/validate-scorecard.mjs",
+      "line": "77",
+      "title": "anyOf failure discards branch-level errors",
+      "proof": "`if (schema.anyOf && !schema.anyOf.some(option => validateShape(...).length === 0)) fail('does not match any allowed shape')`. I enumerated every anyOf in the schema: all 17 are leaf `{type:X}|{type:'null'}` unions, so no containment or additionalProperties check is lost. Author rejection of this as a correctness defect is confirmed correct.",
+      "remediation": "Optionally surface sub-branch messages for diagnostics.",
+      "classification": "usability only, not a defect"
+    }
+  ],
+  "dispositionOfPreviousContestedFindings": {
+    "failing-CI-absent-from-ledger": "Confirmed fixed. ci-verification-46af3225 retained as source-check/failed at synthetic merge 4d8fe9f with four raw job logs; build-verification gate status is 'failed' and surfaces in --closure.",
+    "README-links-missing-SECURITY.md": "Author rejection upheld on outcome, but its rationale answered presence rather than linkage. At the reviewed head README.md:278 links '[security policy](SECURITY.md)' and README.md:71-72 carry the candidate local-first / default-password wording; SECURITY.md itself declines to claim a private intake channel or SLA. No defect remains.",
+    "wrong-source-evidence-passing-audit/soak-gates": "Confirmed fixed and enforced at lines 23-27 and 311; test 23 passes.",
+    "anyOf-containment-and-hoisting": "Author rejection upheld by my own enumeration of all anyOf sites and the hoisting semantics. My prior finding was overbroad.",
+    "source-build-skips-installed-runtime": "Author rejection upheld. Line 203 bars kind 'source' from installed-artifact; line 29 maps 'pinned source' to 'source-build'; test 26 passes. My prior finding was incorrect.",
+    "production-acceptance-only-shared-public": "Confirmed fixed. production-local-a-minus and production-worker-a-minus added; per-profile requirement enforced and covered by test 24.",
+    "new-security-contracts-absent-from-ledger": "Confirmed fixed with exact blob correspondence I reproduced for four of eight files; claims were not promoted.",
+    "unset-monetary-envelope-as-zero": "Confirmed fixed. live-spend limit null / status proposed; null blocked from agreed status and from metrics; satisfies() rejects non-finite limits; test 25 passes.",
+    "persona-experimental-exclusion-bypass": "Author rejection upheld. Only persona-live is exempt, and only when assessment is completed and persona-unattended is explicitly accepted.",
+    "positional-boundary-fixtures": "Confirmed largely fixed. Tests now mutate by stable id (entry(...)/find(b => b.id === ...)); residual index use at test lines 41, 48 and 247 is where the position itself is under test.",
+    "duplicated-historical-counts": "Deferral accepted. The 'twelve-document' inventory is the immutable 3511ba4 capture; the later eight-file inventory is a separate record. I verified 11 publication-* claims exist, matching the stated count."
+  },
+  "remainingEvidenceRequiredForAMinus": {
+    "docsRelease": [
+      "Head-pinned document inventory at the integrated release SHA with resolving local links.",
+      "Each of the 11 publication claims bound to that candidate's source/artifact/profile with the passing evidence kinds it declares (installed-artifact and security-review for the security set).",
+      "Passing build-verification and dependency-audit at the actual release head — PR #623 run 37163060833 is live and is not acceptance; 59b65de8 and the rejected replay binding remain non-qualifying.",
+      "Named topic-owner sign-off on README/project-status/CHANGELOG/SECURITY.md wording."
+    ],
+    "allNine": [
+      "Identified human maintainer and a genuinely independent human reviewer, each with external-agreement evidence, closing the three retained disagreements.",
+      "Accountable humanName + accepted for all nine owners.",
+      "Agreed (not proposed) numeric budgets with agreement predating measurement, including a declared live-spend limit.",
+      "Verified-content artifacts with producer reports carrying passed installed-runtime rows for every declared OS/install method across all three profiles.",
+      "Human-study evidence over the published elapsed windows (8-week pilot, 90-day continuity, novice cohorts) and live-provider evidence over 1-hour/7-day/28-day stages.",
+      "A fresh current-release Persona soak as offline-simulation at full 28-day workload.",
+      "A completed independent reassessment at the selected release SHA with nine A- or better grades and explicitly accepted experimental exclusions.",
+      "I observed none of the above; I supply no human, installation, live-runtime or owner-agreement observation."
+    ]
+  }
+}
+```

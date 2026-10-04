@@ -1,0 +1,70 @@
+{
+  "reviewedSourceSha": "61d212c47e6f613ef075be9764466844752804b2",
+  "reviewer": {
+    "selection": "Maintainer supplied local FLUJO flow URL in response to reviewer question",
+    "flowId": "6b0b98fd-aa5a-4d8a-bdf5-510bb70a7e03",
+    "flowName": "Claude_Opus_Agent",
+    "flowSnapshotSha256": "cfd1e910f587d06f96a421698feca21766ab0e465bbce0a6f8c4d345889f08bd",
+    "modelName": "opus",
+    "modelDisplayName": "Claude Opus",
+    "provider": "claude-subscription",
+    "adapter": "claude-cli",
+    "toolApprovalRequired": true,
+    "scope": "Maintainer-selected automated flow, same selected flow as the first review. Exact resolved model build remains unattested."
+  },
+  "transport": {
+    "startedAt": "2026-10-03T23:56:18.501Z",
+    "completedAtReportedByConversation": "2026-10-04T00:19:23.428Z",
+    "terminalStateCapturedAt": "2026-10-04T00:19:32.407Z",
+    "requestSha256": "9812f7d6acb0876ff3474fb82ff671baf6e758a1b013675d5510da0e3a774850",
+    "originalPostObservation": "fetch failed after the local HTTP observation timed out; not treated as review failure or restarted",
+    "terminalObservation": "HTTP 200 GET of the same existing conversation returned completed; event stream also returned run:done completed",
+    "terminalStateSha256": "8a20da7f78690c313f6d2486559cfb0ba2fa3b4747210777c1062ad87d2c640a",
+    "flowId": "6b0b98fd-aa5a-4d8a-bdf5-510bb70a7e03",
+    "status": "completed"
+  },
+  "actualToolCallCount": 20,
+  "actualToolResultCount": 20,
+  "returnedTranscriptMessageCount": 47,
+  "usageReportedByFlow": {
+    "promptTokens": 686427,
+    "completionTokens": 19775,
+    "totalTokens": 706202,
+    "costUsd": 0,
+    "byNode": {
+      "8b50ed0b-9936-463c-8e8c-141e0d7927a7": {
+        "promptTokens": 686427,
+        "completionTokens": 19775,
+        "totalTokens": 706202,
+        "costUsd": 0,
+        "cacheReadTokens": 616545,
+        "cacheWriteTokens": 67036
+      }
+    },
+    "cacheReadTokens": 616545,
+    "cacheWriteTokens": 67036
+  },
+  "extractedAssessment": {
+    "location": "docs/audits/scorecard-563/evidence/docs-automated-rereview-61d212c4.txt",
+    "sha256": "22dc0c4afe0be58a0a4ae0f2457eaa5ceafd9ff9aded9890b377a4e216cccd19",
+    "verification": "local"
+  },
+  "commandReceipts": {
+    "location": "docs/audits/scorecard-563/evidence/docs-rereview-command-receipts-61d212c4.json",
+    "sha256": "00a345f9e0ce53a058eceb4c63693c29882032ddc65aefb06175fe606e57de46",
+    "verification": "local"
+  },
+  "authorTriage": {
+    "location": "docs/audits/scorecard-563/evidence/docs-rereview-triage-61d212c4.json",
+    "sha256": "d4ec8b53974325087fa521014d5e51fb7a5dca52b48c33e5f6e78e394fdd6838",
+    "verification": "local"
+  },
+  "limitations": [
+    "No authenticated reviewer signature or resolved model-version pin was captured. Flow usage/cost counters are reported metadata, not billing evidence.",
+    "Actual tool receipts establish bounded source reads and 26 passing local boundary tests, not installed artifact, human adoption or live-runtime observation.",
+    "The report contains author-triaged inaccuracies about read coverage, anyOf shapes and a stale zero-cap sentence; its conditional judgment is retained as returned.",
+    "The pinned report covers 61d212c4 only. Subsequent source edits, final integration and filesystem-race remediation require candidate verification and reassessment.",
+    "Private request/flow configuration, full conversation state and thought events are kept outside the public repository; only digests and scoped command receipts are published.",
+    "No release claim, gate status, agreement status or assessment grade is promoted."
+  ]
+}

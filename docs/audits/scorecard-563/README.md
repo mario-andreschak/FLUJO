@@ -47,6 +47,12 @@ experimental only with explicit independent acceptance and visible limits.
   protected Persona contracts and truthful claim promotion.
 - [boundary tests](../../../scripts/validate-scorecard.test.mjs) exercise rejected
   claims, altered evidence, missing profiles, simulated live evidence and closure semantics.
+- [selected flow re-review](evidence/docs-automated-rereview-61d212c4.txt) retains
+  its conditional source-only Docs A- at `61d212c4`, with release/all-nine acceptance
+  ungradable. [Actual command receipts](evidence/docs-rereview-command-receipts-61d212c4.json)
+  and [author triage](evidence/docs-rereview-triage-61d212c4.json) distinguish executed
+  checks from report inaccuracies. Later edits and integration need fresh verification;
+  this record does not populate assessment grades or pass acceptance gates.
 
 Run from the repository root with Node >=22; no dependency installation is needed:
 
@@ -191,8 +197,8 @@ spending, migration capture, account adoption, replay or cleanup.
 
 Autonomy is separately gated: an offline simulation, short genuine-model test or
 successful process restart cannot establish useful public-world work or multi-week
-unattended success. The proposed live spend cap is zero because no numeric paid-run
-envelope or concrete model/account scope is declared here. Development/push/deployment
+unattended success. The live spend envelope is undeclared: no numeric paid-run
+limit or concrete model/account scope is recorded here. Development/push/deployment
 authorization is separate; the coordinator owns the deployment candidate. A dollar
 CLI argument is not monetary enforcement.
 
