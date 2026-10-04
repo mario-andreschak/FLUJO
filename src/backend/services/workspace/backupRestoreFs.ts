@@ -300,6 +300,11 @@ export async function atomicWriteWithoutLinks(
   }
 }
 
+/** Read-only containment recheck for descriptor-based workspace readers. */
+export async function assertLinkFreeFileParent(boundaryPath: string, file: string): Promise<void> {
+  await ensureLinkFreeDirectory(boundaryPath, path.dirname(file), false);
+}
+
 /** Restore ordinary files only, never following a link in any target component. */
 export async function restoreFolderFromZipLinkSafe(
   zip: JSZip,

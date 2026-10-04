@@ -1,4 +1,5 @@
-import { constants as fsConstants, promises as fs, type Stats } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
+import { readPlainFile, PlainFileReadError } from '@/utils/readPlainFile';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import JSZip from 'jszip';
 import { WORKSPACE_SUBTREES, getWorkspaceDataDir } from '@/utils/workspace';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
-import { addFolderToZipLinkSafe } from './backupRestoreFs';
+import { addFolderToZipLinkSafe, assertLinkFreeFileParent } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { getServerDek } from '@/utils/encryption/session';
@@ -78,13 +79,6 @@ function configuredLimit(name: string, fallback: number): number {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
-function sameFileIdentity(first: Stats, second: Stats): boolean {
-  return first.dev === second.dev
-    && first.ino === second.ino
-    && first.size === second.size
-    && first.mtimeMs === second.mtimeMs;
-}
-
 function isInside(root: string, candidate: string, allowRoot = false): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   if (relative === '') return allowRoot;
@@ -125,29 +119,23 @@ async function addWorkspaceMetadata(
     );
   }
 
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-    handle = await fs.open(metadataPath, fsConstants.O_RDONLY | noFollow);
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.nlink > 1 || !sameFileIdentity(before, opened)) {
-      throw new SnapshotArchiveError(
-        'UNSAFE_ENTRY',
-        'Workspace metadata changed while it was opened.',
-      );
-    }
-    const content = await handle.readFile({ signal });
-    const after = await handle.stat();
-    if (!sameFileIdentity(opened, after) || content.byteLength !== opened.size) {
-      throw new SnapshotArchiveError(
-        'UNSAFE_ENTRY',
-        'Workspace metadata changed while it was read.',
-      );
-    }
+    const content = await readPlainFile(metadataPath, {
+      expected: before, maxBytes: maxFileBytes, signal,
+      verifyPath: async () => {
+        await assertLinkFreeFileParent(root, metadataPath);
+        if (!isInside(canonicalRoot, await fs.realpath(metadataPath))) {
+          throw new SnapshotArchiveError('UNSAFE_ENTRY', 'Workspace metadata resolves outside the workspace.');
+        }
+      },
+    });
     recordFile(WORKSPACE_METADATA_FILE, content);
     zip.file(WORKSPACE_METADATA_FILE, content);
-  } finally {
-    await handle?.close().catch(() => undefined);
+  } catch (error) {
+    if (error instanceof PlainFileReadError) {
+      throw new SnapshotArchiveError(error.code === 'SIZE_LIMIT' ? 'SIZE_LIMIT' : 'UNSAFE_ENTRY', 'Workspace metadata changed or is unsafe.');
+    }
+    throw error;
   }
 }
 

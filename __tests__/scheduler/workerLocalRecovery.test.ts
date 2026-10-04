@@ -36,6 +36,7 @@ beforeEach(() => {
     trigger: { type: 'schedule', cron: '* * * * *', catchUp: true } };
 });
 afterEach(() => {
+  jest.restoreAllMocks();
   for (const key of envKeys) {
     if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
   }
@@ -140,4 +141,46 @@ it('does not erase an old generation pending admission during same-ID recreation
   await claimWorkerOccurrence(execution, occurrence, 'run-a');
   execution = { ...execution, generationId: randomUUID(), createdAt: '2026-10-03T12:30:00.000Z' };
   await expect(recordWorkerLocalCreation(execution)).rejects.toThrow('unresolved admission');
+});
+
+it('refuses even a valid signed record swapped after private-path inspection', async () => {
+  await recordWorkerLocalCreation(execution); await enroll();
+  const file = pathFor(execution);
+  const original = await fs.readFile(file);
+  const open = fs.open.bind(fs);
+  let swapped = false;
+  jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+    if (String(args[0]) === file && !swapped) {
+      swapped = true;
+      await fs.rename(file, `${file}.original`);
+      await fs.writeFile(file, original, { mode: 0o600 });
+    }
+    return open(...args);
+  });
+  expect(await inspectWorkerRecovery(execution, false)).toMatchObject({ eligible: false, reason: 'invalid-provenance' });
+  expect(await fs.readFile(`${file}.original`)).toEqual(original);
+});
+
+it('refuses a recovery parent replaced by a link after inspection with the same file inode', async () => {
+  await recordWorkerLocalCreation(execution); await enroll();
+  const file = pathFor(execution);
+  const directory = path.dirname(file);
+  const moved = `${directory}.original-${randomUUID()}`;
+  const open = fs.open.bind(fs);
+  let swapped = false;
+  jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+    if (String(args[0]) === file && !swapped) {
+      swapped = true;
+      await fs.rename(directory, moved);
+      await fs.symlink(moved, directory, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    return open(...args);
+  });
+  try {
+    expect(await inspectWorkerRecovery(execution, false)).toMatchObject({ eligible: false, reason: 'invalid-provenance' });
+  } finally {
+    jest.restoreAllMocks();
+    await fs.unlink(directory);
+    await fs.rename(moved, directory);
+  }
 });
