@@ -225,6 +225,12 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    supported claims and passed source/runtime gates to its selected release SHA.
    External rubric/consumer agreements may predate a release; their policy applicability
    and current consumer pins still need explicit review.
+   Version 1 retains the primary claim IDs, original dimension/profile subjects, and
+   minimum budget bindings. Removing or replacing a claim cannot detach novice,
+   adoption, maintainer, recovery, runtime or Persona measurement requirements.
+   Additional criteria remain allowed; replacing these minimum contracts needs a
+   separately reviewed contract version. Experimental Persona status keeps its
+   declared future acceptance requirements visible without claiming measurements.
 5. Keep paid/live account work, independent humans, manual accessibility/recovery,
    cross-stream contracts and independent reassessment pending until their owners
    provide actual evidence. No bot/test count can satisfy those gates.
