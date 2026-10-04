@@ -245,7 +245,7 @@ export class OpenAiAdapter implements CompletionAdapter {
             await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
             return openai.chat.completions.create(
               body as OpenAI.Chat.ChatCompletionCreateParams,
-              { ...(signal ? { signal } : {}), ...(singlePhysicalAttempt ? { maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : {}) },
+              singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             );
           },
         ),
@@ -372,7 +372,7 @@ export class OpenAiAdapter implements CompletionAdapter {
           await assertModelRequestPolicy(executionExtensionContext, model, singlePhysicalAttempt);
           return openai.chat.completions.create(
             body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-            { ...(signal ? { signal } : {}), ...(singlePhysicalAttempt ? { maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : {}) },
+            singlePhysicalAttempt ? { ...(signal ? { signal } : {}), maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
           );
         },
       );
