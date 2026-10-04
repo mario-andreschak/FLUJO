@@ -79,6 +79,15 @@ The protected v1 path qualifies the resolved concrete route, using the same
 selector as `getCompletionAdapter`: only OpenAI Chat Completions is supported.
 Gateway profiles that resolve to Responses and OpenRouter's image/video-only
 routes fail before their native sends, including their direct adapter entries.
+ProcessNode also checks owner policy before its legacy OpenRouter tool-capability
+catalogue lookup, which reloads the saved model, decrypts its credential and
+can fetch provider metadata before ModelHandler runs. Branded contexts skip
+this optional lookup entirely, since the reloaded model might differ from the
+one just checked. A protected, unsupported route denies at that preflight;
+execution-extension denials propagate out of ProcessNode.
+For an ordinary branded context with unknown tool support, skipping the lookup
+can mean one failed tool-bearing call followed by the existing tool-free
+fallback. Unbranded ordinary runs keep the catalogue optimization.
 ModelHandler requires the qualified route again when it constructs the adapter
 after asynchronous request preparation; the OpenAI adapter rechecks before its
 SDK call. The claim also checks that its registered adapter is still current

@@ -1,5 +1,7 @@
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { modelService } from '@/backend/services/model';
+import { registerExecutionExtension } from '@/backend/execution/extensions';
+import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import type {
   ProcessNodeParams,
@@ -122,6 +124,96 @@ describe('ProcessNode unsupported-tool fallback', () => {
     expect(callModel.mock.calls[0][0].tools).toBeUndefined();
     expect(exec.usedToolFreeFallback).toBe(true);
     await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
+  });
+
+  it('denies a protected OpenRouter route before credential-bearing catalogue discovery', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:protected',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
+    const restore = registerExecutionExtension(adapter);
+    try {
+      await expect(nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params()))
+        .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('skips catalogue discovery for a branded owner with no model-attempt policy', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const adapter = fixtureAdapter();
+    const restore = registerExecutionExtension(adapter);
+    try {
+      const exec = await nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params());
+      expect(exec.success).toBe(true);
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('uses the existing tool-free fallback when a branded ordinary run skips catalogue discovery', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel')
+      .mockResolvedValueOnce(unsupportedTools as any)
+      .mockResolvedValueOnce(successfulCompletion as any);
+    const adapter = fixtureAdapter();
+    const restore = registerExecutionExtension(adapter);
+    try {
+      const exec = await nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params());
+      expect(exec.success).toBe(true);
+      expect(fetchProviderModels).not.toHaveBeenCalled();
+      expect(callModel).toHaveBeenCalledTimes(2);
+      expect(callModel.mock.calls[0][0].tools).toHaveLength(1);
+      expect(callModel.mock.calls[1][0].tools).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('retains catalogue discovery for an unbranded ordinary run', async () => {
+    jest.spyOn(modelService, 'getModel').mockResolvedValue({
+      id: 'image-model',
+      name: 'legacy-openrouter-model',
+      ApiKey: 'encrypted:ordinary',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      provider: 'openrouter',
+      adapter: 'openai',
+    });
+    const fetchProviderModels = jest.spyOn(modelService, 'fetchProviderModels').mockResolvedValue([]);
+    const callModel = jest.spyOn(ModelHandler, 'callModel').mockResolvedValue(successfulCompletion as any);
+    const exec = await nodeWithFinish().execCore(prep(), params());
+    expect(exec.success).toBe(true);
+    expect(fetchProviderModels).toHaveBeenCalledTimes(1);
+    expect(callModel).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a provider response that arrives after Persona authority is lost', async () => {

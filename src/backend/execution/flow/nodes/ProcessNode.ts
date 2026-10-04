@@ -51,7 +51,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { executionExtensionSignal } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -1338,8 +1338,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       await prepResult.executionAuthority?.assertCurrent();
       // For critical tool errors or model errors, we want to rethrow them
       // to abort the flow execution
-      if (error && typeof error === 'object' &&
-          ('isCriticalToolError' in error || 'isModelError' in error)) {
+      if (error instanceof ExecutionExtensionError ||
+          (error && typeof error === 'object' &&
+          ('isCriticalToolError' in error || 'isModelError' in error))) {
         const errorMessage = error instanceof Error ? error.message : String(error);
 
         log.error('Critical error detected - propagating to abort flow:', {
@@ -1509,6 +1510,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       if (model.supportsTools !== undefined) return model.supportsTools;
       if (model.provider !== 'openrouter' || !model.baseUrl) return undefined;
 
+      // Legacy provider discovery reloads the saved model and may decrypt a
+      // different credential after this policy check. Branded runs must skip
+      // this optional catalogue path; ModelHandler checks the actual model
+      // again before its own credential access and provider dispatch.
+      if (prepResult.executionExtensionContext) {
+        await executionExtensionSinglePhysicalAttempt(prepResult.executionExtensionContext, model);
+        return undefined;
+      }
+
       const discovered = await modelService.fetchProviderModels(
         model.baseUrl,
         model.id,
@@ -1516,6 +1526,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       );
       return discovered.find(candidate => candidate.id === model.name)?.supportsTools;
     } catch (error) {
+      if (error instanceof ExecutionExtensionError) throw error;
       log.warn('Could not discover bound-model tool capability; using provider fallback', {
         modelId: prepResult.boundModel,
         error,
