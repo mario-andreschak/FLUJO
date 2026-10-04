@@ -22,6 +22,11 @@ test('live journey observer native controls execute without missing or skipped c
     'rejects tool result absent from later model input',
     'rejects approval for another call',
     'rejects missing debugger observation',
+    'rejects same call ID with wrong archived content',
+    'rejects missing full runtime content binding',
+    'full UTF-8 result binding matches archived content despite a truncated event preview',
+    'equal event previews cannot hide different full archived tails',
+    'one correctly bound call cannot hide another call with wrong content',
     'one fixture receipt cannot satisfy two equal runtime calls',
     'archive projection removes raw tool results and rejects another conversation',
     'SSE rejects reordered sequences and truncated runs',
@@ -29,7 +34,7 @@ test('live journey observer native controls execute without missing or skipped c
   ]) expect(result.stdout).toContain(name);
   const tests = Number(result.stdout.match(/^# tests (\d+)\s*$/m)?.[1]);
   const passed = Number(result.stdout.match(/^# pass (\d+)\s*$/m)?.[1]);
-  expect(tests).toBeGreaterThanOrEqual(22);
+  expect(tests).toBeGreaterThanOrEqual(34);
   expect(passed).toBe(tests);
   for (const counter of ['fail', 'cancelled', 'skipped', 'todo']) {
     expect(result.stdout).toMatch(new RegExp(`^# ${counter} 0\\s*$`, 'm'));

@@ -7,6 +7,25 @@ profile, seed a model/flow/server, copy credentials, approve tools, or substitut
 a model double. Security retains credential transfer, owner pairing and profile
 isolation. The source is prepared; execution and installed acceptance are pending.
 
+The observer successor requires a candidate whose generic MCP tool-result
+producer emits `resultContentBinding` with `serialization: "utf8-string-v1"`,
+the SHA-256 and byte count of the exact full tool-message string **after**
+capture/bounding rewrites. The execution event's `result` can be a 500-character
+display preview; its preview hash cannot establish the full result's identity.
+The model-turn projection independently hashes its actual `genericWire` tool
+message string. Both full bindings and the call ID must match. Every selected
+call needs one unambiguous runtime result and one matching result in a successful
+later dispatch; one correct call cannot cover another wrong result.
+
+Product fit's preserved pure-source counterexample showed that frozen #729
+accepted unrelated archived content under the same call ID. That is a classifier
+gap, not evidence of an actual model incident. This successor corrects that join
+and changes the observation schema to version 2. Old candidates without the
+producer field remain incomplete. Non-string wire representations and content
+changed by compaction/redaction remain incomplete; the observer neither repairs
+them nor assumes semantic equivalence. A content match establishes the exact
+runtime/archive string binding, not provider identity or semantic consumption.
+
 ## Owner preparation and UI actions
 
 1. Select the combined candidate with the required Security/Production fixes,
@@ -42,7 +61,7 @@ node scripts/feature-surface-acceptance/observe-live-journey.mjs --base-url=http
 The observer uses the existing execution SSE and model-turn archive endpoints.
 It correlates actual call IDs and argument hashes with accepted fixture receipts,
 requires a successful later model dispatch whose archived input contains that
-tool result, and observes subsequent assistant text and a completed top-level
+same full serialized tool result, and observes subsequent assistant text and a completed top-level
 run. Missing approval/debugger boundaries, errors, capped runs, uncorrelated
 calls and truncated streams remain incomplete. Partial event projections and
 failure receipts are retained. Model text, raw arguments/results, prompts and
@@ -76,9 +95,19 @@ always has `fullFeatureAcceptance: false` and `gradeAwarded: false`.
 
 ```powershell
 node --test scripts/feature-surface-acceptance/live-journey-observer.test.mjs
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts __tests__/flow/processToolCallsConcurrency.test.ts __tests__/flow/processToolCallsCapture.test.ts
 ```
 
-These are synthetic negative controls for correlation, redaction, SSE framing,
+The authored native suite contains 34 synthetic controls, including same-ID
+wrong-content, missing bindings, duplicate matches, byte/serialization mismatch,
+long UTF-8 results and identical previews with different tails. The two existing
+Jest caller suites additionally check the actual `ModelHandler` event producer
+with mocked MCP data, including the captured/rewritten tool-message content.
+No new control or caller execution is claimed until a fresh serial source slot
+or exact-source hosted result records it. The previous 22-check pass belongs to
+the frozen source and does not establish this corrected binding.
+
+These are synthetic controls for correlation, redaction, SSE framing,
 sequence ordering and incomplete/false-positive observations. They do not call a
 model, start an app or validate an installed artifact. Runtime and test execution
 must follow the coordinator's current resource allocation; no queued command is
