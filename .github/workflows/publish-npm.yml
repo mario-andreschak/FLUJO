@@ -42,8 +42,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,8 +70,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -102,8 +106,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: node scripts/npm-release.mjs check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,8 +135,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
@@ -171,8 +179,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - run: npm install --global npm@11.21.0 --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -205,8 +215,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.17.0
+          node-version: '24.21.0'
           package-manager-cache: false
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.prepare.outputs.artifact_id }}

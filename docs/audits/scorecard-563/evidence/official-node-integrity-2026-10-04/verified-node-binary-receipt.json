@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-04T05:31:58.453Z",
+  "keySource": {
+    "repository": "https://github.com/nodejs/release-keys",
+    "commit": "481637f813e912c4aa3622d7964ab426c97b8e8d"
+  },
+  "gpgVersion": [
+    "gpg (GnuPG) 2.4.5-unknown",
+    "libgcrypt 1.9.4-unknown"
+  ],
+  "operator": "AI assistant; read-only official artifact verification",
+  "executableExecution": false,
+  "versions": [
+    {
+      "version": "22.13.1",
+      "signedChecksumsSha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f",
+      "signatureExitCode": 0,
+      "signingFingerprint": "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4 2025-01-21 1737478581 0 4 0 1 8 00 890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+      "linux": {
+        "archive": "node-v22.13.1-linux-x64.tar.gz",
+        "archiveSha256": "666148b9fe0c7e1301cc1b029e33a45e9e4a893f68d2d2bb1cc88a931a88a004",
+        "member": "node-v22.13.1-linux-x64/bin/node",
+        "bytes": 120083512,
+        "sha256": "a3627568bc920247f5edecc025a040bfa3c3f76bf3456ac424f6ac76aa5e6a47"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "sha256": "8f6945c55a51c893691534e7163372e4cedb62c8ad80a2a975df3f14a19fba16"
+      }
+    },
+    {
+      "version": "22.17.0",
+      "signedChecksumsSha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4",
+      "signatureExitCode": 0,
+      "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG C0D6248439F1D5604AAFFB4021D900FFDB233756 2025-06-25 1750810360 0 4 0 1 8 00 C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "linux": {
+        "archive": "node-v22.17.0-linux-x64.tar.gz",
+        "archiveSha256": "0fa01328a0f3d10800623f7107fbcd654a60ec178fab1ef5b9779e94e0419e1a",
+        "member": "node-v22.17.0-linux-x64/bin/node",
+        "bytes": 121609656,
+        "sha256": "8071ae0fca095a272ad698a90c7061801a86fb6392ddb81e922b68a91a4374b9"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "sha256": "39d45b5933f339d3ebdebd76474893dab5d7da1038920f65cf5bbcf0f20f3636"
+      }
+    },
+    {
+      "version": "22.23.3",
+      "signedChecksumsSha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+      "signatureExitCode": 0,
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 2026-09-23 1790183910 0 4 0 22 8 00 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linux": {
+        "archive": "node-v22.23.3-linux-x64.tar.gz",
+        "archiveSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+        "member": "node-v22.23.3-linux-x64/bin/node",
+        "bytes": 124827920,
+        "sha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "sha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e"
+      }
+    },
+    {
+      "version": "24.2.0",
+      "signedChecksumsSha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c",
+      "signatureExitCode": 0,
+      "signingFingerprint": "C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG C0D6248439F1D5604AAFFB4021D900FFDB233756 2025-06-09 1749505686 0 4 0 1 8 00 C0D6248439F1D5604AAFFB4021D900FFDB233756",
+      "linux": {
+        "archive": "node-v24.2.0-linux-x64.tar.gz",
+        "archiveSha256": "074e93576f2b0f0f689d12b5d71314c5cdc384b6efc315e264120f6a9dd348af",
+        "member": "node-v24.2.0-linux-x64/bin/node",
+        "bytes": 127308784,
+        "sha256": "3fe8fd0442065d39c6a875e0672c8aa198c96983bf099c0d3b0ffee70622ddd2"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "sha256": "4f4c2bbda03106699e49ef2e7914c03d597c355a99a6b9a1b63dca19fe092c01"
+      }
+    },
+    {
+      "version": "24.21.0",
+      "signedChecksumsSha256": "f410428039e2c922a14058df067a4482691c9304a5c01a75847f9f3f2d3307f6",
+      "signatureExitCode": 0,
+      "signingFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "validSignatureStatus": "[GNUPG:] VALIDSIG 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356 2026-09-08 1788904155 0 4 0 22 8 00 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+      "linux": {
+        "archive": "node-v24.21.0-linux-x64.tar.gz",
+        "archiveSha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+        "member": "node-v24.21.0-linux-x64/bin/node",
+        "bytes": 126595440,
+        "sha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+      },
+      "windows": {
+        "member": "win-x64/node.exe",
+        "sha256": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32"
+      }
+    }
+  ],
+  "inventory": [
+    {
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/gpg/pubring.kbx",
+      "file": "isolated-public-keyring/pubring.kbx",
+      "bytes": 95960,
+      "sha256": "610b8d249da3d5733f5a128def2dd0294dbbf5b5713e6ca2529db8db419dee00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/gpg/trustdb.gpg",
+      "file": "isolated-public-keyring/trustdb.gpg",
+      "bytes": 1200,
+      "sha256": "d611b6af6ecd8699bb060c686fa5eed529ebfc14f6ab352c6b204fa5db21ab7d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/README.md",
+      "file": "release-keys-README.md",
+      "bytes": 6069,
+      "sha256": "caee8c460eee4240f17e11290032b71ee1a5ba06fdbc106db4b77d097b5cca49"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/481637f813e912c4aa3622d7964ab426c97b8e8d/LICENSE.md",
+      "file": "release-keys-LICENSE.md",
+      "bytes": 1058,
+      "sha256": "596beb1080a8b35a36e6d20ec3a461f603eee71839cd8cd1646f85e32979a9c2"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.13.1/SHASUMS256.txt",
+      "file": "v22.13.1/SHASUMS256.txt",
+      "bytes": 3777,
+      "sha256": "308707f67db68e671979d8849f997f1bd9c7111b5d78ec1e49957dedb44d450f"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.13.1/SHASUMS256.txt.sig",
+      "file": "v22.13.1/SHASUMS256.txt.sig",
+      "bytes": 438,
+      "sha256": "b8d42d3cf5a4337a011eba18ee6100153a990f227adf3396cb7c5d54a4732692"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.13.1/node-v22.13.1-linux-x64.tar.gz",
+      "file": "v22.13.1/node-v22.13.1-linux-x64.tar.gz",
+      "bytes": 54119881,
+      "sha256": "666148b9fe0c7e1301cc1b029e33a45e9e4a893f68d2d2bb1cc88a931a88a004"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.17.0/SHASUMS256.txt",
+      "file": "v22.17.0/SHASUMS256.txt",
+      "bytes": 3777,
+      "sha256": "7519fede70def5e5afa6f723762341a6a7832a6459226f7a1619c683ff1155c4"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.17.0/SHASUMS256.txt.sig",
+      "file": "v22.17.0/SHASUMS256.txt.sig",
+      "bytes": 566,
+      "sha256": "bbf582c073e219021269ed2d23f245861d1916747c71442f16722dc461e66d49"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.17.0/node-v22.17.0-linux-x64.tar.gz",
+      "file": "v22.17.0/node-v22.17.0-linux-x64.tar.gz",
+      "bytes": 54926669,
+      "sha256": "0fa01328a0f3d10800623f7107fbcd654a60ec178fab1ef5b9779e94e0419e1a"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.23.3/SHASUMS256.txt",
+      "file": "v22.23.3/SHASUMS256.txt",
+      "bytes": 3981,
+      "sha256": "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.23.3/SHASUMS256.txt.sig",
+      "file": "v22.23.3/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "0aafa311177794108f9f15cf7baebc747ba21983e999b20eee94738c651469e0"
+    },
+    {
+      "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.gz",
+      "file": "v22.23.3/node-v22.23.3-linux-x64.tar.gz",
+      "bytes": 56792076,
+      "sha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.2.0/SHASUMS256.txt",
+      "file": "v24.2.0/SHASUMS256.txt",
+      "bytes": 2943,
+      "sha256": "860e1b963a33add39ad3d259159fb6194ca8433d8ca1f5eaf0d3e384f28ddd6c"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.2.0/SHASUMS256.txt.sig",
+      "file": "v24.2.0/SHASUMS256.txt.sig",
+      "bytes": 566,
+      "sha256": "ee0d11584e6bf2204ec7089e7fe0fa5d7a6421b732570a6ba3187a0b28947e46"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.2.0/node-v24.2.0-linux-x64.tar.gz",
+      "file": "v24.2.0/node-v24.2.0-linux-x64.tar.gz",
+      "bytes": 56866930,
+      "sha256": "074e93576f2b0f0f689d12b5d71314c5cdc384b6efc315e264120f6a9dd348af"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt",
+      "file": "v24.21.0/SHASUMS256.txt",
+      "bytes": 3171,
+      "sha256": "f410428039e2c922a14058df067a4482691c9304a5c01a75847f9f3f2d3307f6"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt.sig",
+      "file": "v24.21.0/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "865f22b026e4080554e10d247553fd770573893dac8fc7affc7d58b72de35a89"
+    },
+    {
+      "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+      "file": "v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+      "bytes": 58088022,
+      "sha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+    },
+    {
+      "file": "v22.13.1/signature-status.txt",
+      "bytes": 452,
+      "sha256": "ea774cbd32d63427254ab70405f9eb3ac31105c1af280f01e6eb7fcd3c873113",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.13.1/signature-stderr.txt",
+      "bytes": 417,
+      "sha256": "49cadcff7eef1c3e57e1d9aded5ad1acabea9edb8dba1b6c4715216bee9212bd",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.17.0/signature-status.txt",
+      "bytes": 464,
+      "sha256": "3920fa4fc1b73cc837878207b81d2b8e0441a875fcd8d8c6c03ff0156061232c",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.17.0/signature-stderr.txt",
+      "bytes": 429,
+      "sha256": "7ea4dc9b06c8839242ab8ab2d97163c87e98b278aa88d53e9fc53a7fda5617ad",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.23.3/signature-status.txt",
+      "bytes": 469,
+      "sha256": "7bebda5554d930c7ad6cb35e888a0852eae709ac611eafa5320c2ac60a246eb5",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v22.23.3/signature-stderr.txt",
+      "bytes": 520,
+      "sha256": "7345412774d833bbbcb10155448212d32dc51c7a108256f3264b74b9830d1a70",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v24.2.0/signature-status.txt",
+      "bytes": 464,
+      "sha256": "f8d1a94bfb8f8926e242f5a05ae254064d9f2aa9c053e29ea8880877725e9cd3",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v24.2.0/signature-stderr.txt",
+      "bytes": 429,
+      "sha256": "d1b77abd9685cf4760d275acb328a060bc91d834f9bae3019a8b12329505e263",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v24.21.0/signature-status.txt",
+      "bytes": 469,
+      "sha256": "d9237a1d3f8df376281d920217f88bf66bf406a27ca4f85fd5fe6a7588553ac9",
+      "source": "actual GnuPG output"
+    },
+    {
+      "file": "v24.21.0/signature-stderr.txt",
+      "bytes": 520,
+      "sha256": "e15c0b57e235036d095ab46c29db0de503abef577253a86fd4e4245a22acf175",
+      "source": "actual GnuPG output"
+    }
+  ]
+}
