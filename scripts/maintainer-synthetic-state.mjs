@@ -151,4 +151,3 @@ export async function invalidSyntheticStateArchives(bytes, JSZip) {
     { name: 'forbidden-ownership.zip', bytes: await marked.generateAsync({ type: 'nodebuffer' }) }];
 }
 import { createHash } from 'node:crypto';
-
