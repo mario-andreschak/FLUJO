@@ -24,7 +24,7 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
 
 const jsonDraftsValid = (properties: Record<string, unknown>, drafts: Record<string, string>): boolean => (
   Object.entries(drafts).every(([key, text]) => {
-    const type = asRecord(properties[key])?.type;
+    const type = Object.hasOwn(properties, key) ? asRecord(properties[key])?.type : undefined;
     if ((type !== 'object' && type !== 'array') || !text.trim()) return true;
     try { JSON.parse(text); return true; }
     catch { return false; }
@@ -79,19 +79,20 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
   }
 
   const setValue = (key: string, value: unknown) => {
-    const next = { ...values };
+    const next = new Map(Object.entries(values));
     if (value === undefined) {
-      delete next[key];
+      next.delete(key);
     } else {
-      next[key] = value;
+      next.set(key, value);
     }
-    onChange(next);
+    onChange(Object.fromEntries(next));
   };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {keys.map(key => {
         const prop = asRecord(properties[key]) ?? {};
+        const currentValue = Object.hasOwn(values, key) ? values[key] : undefined;
         const label = required.includes(key) ? `${key} *` : key;
         const description = typeof prop.description === 'string' ? prop.description : '';
         const enumOptions = Array.isArray(prop.enum)
@@ -107,7 +108,7 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
               control={
                 <Switch
                   size={size}
-                  checked={values[key] === true}
+                  checked={currentValue === true}
                   onChange={(e) => setValue(key, e.target.checked)}
                 />
               }
@@ -126,7 +127,7 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
         }
 
         if (enumOptions.length > 0) {
-          const current = values[key];
+          const current = currentValue;
           return (
             <FormControl key={key} size={size} fullWidth>
               <InputLabel id={`schema-param-${key}`}>{label}</InputLabel>
@@ -159,7 +160,7 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
               size={size}
               type="number"
               label={label}
-              value={values[key] !== undefined ? String(values[key]) : ''}
+              value={currentValue !== undefined ? String(currentValue) : ''}
               onChange={(e) => {
                 const raw = e.target.value;
                 if (raw === '') {
@@ -175,9 +176,9 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
         }
 
         if (prop.type === 'object' || prop.type === 'array') {
-          const draft =
-            drafts[key] ??
-            (values[key] !== undefined ? JSON.stringify(values[key], null, 2) : '');
+          const draft = Object.hasOwn(drafts, key)
+            ? drafts[key]
+            : (currentValue !== undefined ? JSON.stringify(currentValue, null, 2) : '');
           let parseError: string | null = null;
           if (draft.trim()) {
             try {
@@ -223,7 +224,7 @@ const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = '
               {label}
             </Typography>
             <GlobalReferenceEditor
-              value={values[key] !== undefined ? String(values[key]) : ''}
+              value={currentValue !== undefined ? String(currentValue) : ''}
               onChange={(nextValue) => setValue(key, nextValue === '' ? undefined : nextValue)}
               globalNames={globalNames}
               placeholder={description || key}
