@@ -3,6 +3,12 @@ import { createHash } from 'node:crypto';
 export const digest = value => createHash('sha256').update(value).digest('hex');
 const argumentDigest = text => digest(JSON.stringify(JSON.parse(text)));
 const identity = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
+const contentBindingValid = value => value?.serialization === 'utf8-string-v1'
+  && typeof value.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256)
+  && Number.isSafeInteger(value.bytes) && value.bytes >= 0;
+const contentBinding = text => ({ serialization: 'utf8-string-v1', sha256: digest(text), bytes: Buffer.byteLength(text) });
+const contentBindingsEqual = (left, right) => contentBindingValid(left) && contentBindingValid(right)
+  && left.serialization === right.serialization && left.sha256 === right.sha256 && left.bytes === right.bytes;
 
 export function loopbackOrigin(value) {
   const url = new URL(value);
@@ -69,7 +75,14 @@ export function projectEvent(event, conversationId) {
     row.toolCallId = event.toolCallId; row.name = event.name;
     if (event.type === 'tool:call') row.argumentsSha256 = argumentDigest(event.args ?? '{}');
     else { row.isError = event.isError === true; row.resultSha256 = digest(event.result ?? '');
-      row.resultBytes = Buffer.byteLength(event.result ?? ''); }
+      row.resultBytes = Buffer.byteLength(event.result ?? '');
+      // This hash is emitted over the full tool-message string, not its display preview.
+      if (event.resultContentBinding !== undefined) {
+        if (!contentBindingValid(event.resultContentBinding)) throw new Error('Invalid runtime tool-result content binding.');
+        const { serialization, sha256, bytes } = event.resultContentBinding;
+        row.resultContentBinding = { serialization, sha256, bytes };
+      }
+    }
   }
   if (event.type === 'message') {
     row.messageId = event.message?.id; row.role = event.message?.role;
@@ -129,8 +142,11 @@ export function projectModelInput(snapshot, conversationId, dispatchId) {
     || !Array.isArray(snapshot.genericWire)) throw new Error('Model input archive identity mismatch.');
   return { dispatchId, modelId: snapshot.entry.modelId, adapter: snapshot.entry.adapter,
     wireToolResults: snapshot.genericWire.filter(message => message.role === 'tool').map(message => ({
-      toolCallId: message.tool_call_id, contentSha256: digest(typeof message.content === 'string'
-        ? message.content : JSON.stringify(message.content)),
+      toolCallId: message.tool_call_id,
+      // No JSON reparsing, object serialization or text-array concatenation: the
+      // producer contract is the exact UTF-8 string actually stored in the message.
+      ...(typeof message.content === 'string' ? { contentBinding: contentBinding(message.content) }
+        : { unsupportedContentRepresentation: true }),
     })) };
 }
 
@@ -152,12 +168,19 @@ export function evaluateLiveJourney({ events, modelInputs, fixtureBefore, fixtur
     unmatchedReceipts.splice(index, 1); return true;
   });
   const consumed = matched.filter(call => {
-    const result = top.find(event => event.type === 'tool:result' && event.toolCallId === call.toolCallId
-      && event.name === call.name && !event.isError && event.resultBytes > 0 && event.seq > call.seq);
-    return result && dispatches.some(dispatch => dispatch.seq > result.seq && completed.has(dispatch.dispatchId)
-      && modelInputs.some(input => input.dispatchId === dispatch.dispatchId && input.modelId === modelId
-        && input.adapter === dispatch.adapter
-        && input.wireToolResults.some(tool => tool.toolCallId === call.toolCallId))
+    const results = top.filter(event => event.type === 'tool:result' && event.toolCallId === call.toolCallId
+      && event.name === call.name && event.seq > call.seq);
+    if (results.length !== 1) return false;
+    const result = results[0];
+    return !result.isError && result.resultBytes > 0 && contentBindingValid(result.resultContentBinding)
+      && result.resultContentBinding.bytes > 0
+      && dispatches.some(dispatch => dispatch.seq > result.seq && completed.has(dispatch.dispatchId)
+      && modelInputs.some(input => {
+        const tools = input.wireToolResults.filter(tool => tool.toolCallId === call.toolCallId);
+        return input.dispatchId === dispatch.dispatchId && input.modelId === modelId
+          && input.adapter === dispatch.adapter && tools.length === 1
+          && contentBindingsEqual(result.resultContentBinding, tools[0].contentBinding);
+      })
       && top.some(event => event.type === 'message' && event.role === 'assistant' && !event.hasToolCalls
         && event.textBytes > 0 && event.seq > dispatch.seq));
   });
@@ -172,7 +195,7 @@ export function evaluateLiveJourney({ events, modelInputs, fixtureBefore, fixtur
     fixtureSequenceContinuous: receipts.every((receipt, index) => receipt.sequence === fixtureBefore.toolCalls + index + 1),
     runtimeCallIdsUnique: new Set(calls.map(call => call.toolCallId)).size === calls.length,
     allExpectedCallsCorrelated: calls.length > 0 && matched.length === calls.length && receipts.length === calls.length,
-    toolResultInLaterModelInput: consumed.length > 0,
+    toolResultInLaterModelInput: calls.length > 0 && consumed.length === calls.length,
     approvalBoundaryObserved: matched.some(call => top.some(event => event.type === 'run:awaiting_approval'
       && event.seq < call.seq && event.pendingToolCallIds.includes(call.toolCallId))),
     debuggerBoundaryObserved: top.some(event => event.type === 'run:paused'
@@ -180,7 +203,8 @@ export function evaluateLiveJourney({ events, modelInputs, fixtureBefore, fixtur
   };
   return { checks, componentPassed: Object.values(checks).every(Boolean),
     correlatedToolCallIds: matched.map(call => call.toolCallId), modelInputToolCallIds: consumed.map(call => call.toolCallId),
-    limits: ['Model archive and tool consumption observations do not authenticate a real provider identity.',
+    limits: ['Exact runtime/archive UTF-8 content binding does not authenticate a real provider or prove semantic consumption.',
+      'Missing producer bindings, changed/compacted/redacted content and unsupported wire representations remain incomplete.',
       'Approval/debugger runtime boundaries do not prove UI interaction, approving human identity or accessibility.',
       'Artifact/source binding, fresh UI setup, model test, upgrades, other profiles/features and human reassessment remain separate.'],
     fullFeatureAcceptance: false, gradeAwarded: false };

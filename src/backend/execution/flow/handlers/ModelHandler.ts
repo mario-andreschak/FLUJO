@@ -1,4 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { createHash } from 'node:crypto';
 import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
@@ -4130,6 +4131,11 @@ export class ModelHandler {
               toolCallId: id,
               name,
               result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              resultContentBinding: {
+                serialization: 'utf8-string-v1',
+                sha256: createHash('sha256').update(resultContent, 'utf8').digest('hex'),
+                bytes: Buffer.byteLength(resultContent, 'utf8'),
+              },
               isError: !result.success
             });
           });

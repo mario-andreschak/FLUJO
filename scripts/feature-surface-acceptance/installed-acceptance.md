@@ -21,7 +21,8 @@ one. Retain the receipt's raw bytes and SHA-256 in the acceptance packet.
 
 The combined candidate needs the product connection labels from #714, the
 browser descriptor/nonblocking-read changes from #672/#680, the #693 first-use
-equipment and #729 observer/client, plus the release owners' security and
+equipment and #729 client with the separate observer content-binding successor,
+plus the release owners' security and
 lifecycle corrections. Check their actual presence on the selected source;
 listing PR numbers does not prove inclusion. Source CI must be terminal and
 qualified. Successful CodeQL execution does not accept an open finding or a
@@ -137,8 +138,13 @@ the UI. Observe a genuine selected-model dispatch, actual MCP call/result,
 successful later model dispatch with that result in its archived input, a useful
 assistant answer and completed run. Authenticate provider identity through the
 owner's actual evidence and check the answer against the task. The observer's
-`componentPassed` flag establishes correlations, not semantic correctness or
-provider identity. Keep failures/capped runs/partial streams as incomplete.
+`componentPassed` flag establishes exact full UTF-8 runtime/archive content
+bindings and correlations, not semantic correctness or provider identity. The
+successor requires the producer's full `resultContentBinding`; preview hashes,
+same-ID wrong content, missing/duplicate bindings and unsupported wire content
+remain incomplete. A previously qualified release without that producer field
+does not validate the unpublished successor. Keep failures/capped runs/partial
+streams as incomplete.
 
 For the approved run, inspect the pending tool name, call ID and arguments;
 approve through the UI, observe debugger pause at the actual tool boundary,
@@ -219,7 +225,7 @@ actual receipts are missing.
 
 ## Queued source verification
 
-The ordinary Jest bridge for the 22 native observer controls is at
+The ordinary Jest bridge for the 34 authored native observer controls is at
 `__tests__/featureSurface/liveJourneyObserver.test.ts`, within the node project's
 existing discovery glob. It requires the named
 positive/negative cases, matching pass/test counts, no failures/skips/cancellations
@@ -228,5 +234,5 @@ allowlist to the pure suite. Its own execution is queued under the coordinator's
 resource allocation; do not describe the earlier native pass as a bridge pass.
 
 ```powershell
-node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts
+node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts __tests__/flow/processToolCallsConcurrency.test.ts __tests__/flow/processToolCallsCapture.test.ts
 ```

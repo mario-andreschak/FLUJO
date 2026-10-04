@@ -24,7 +24,7 @@ await fs.mkdir(output, { recursive: false });
 const eventsFile = path.join(output, 'execution-projection.jsonl');
 const stream = createWriteStream(eventsFile, { flags: 'wx' });
 const report = {
-  schemaVersion: 1, scope: 'Attached technical observation of an owner-provisioned local first-use run',
+  schemaVersion: 2, scope: 'Attached technical observation of an owner-provisioned local first-use run',
   startedAtUtc: new Date().toISOString(), completedAtUtc: null, status: 'incomplete',
   candidateReceiptSha256: values['candidate-receipt-sha256'], sourceArtifactCorrespondence: 'not_verified_by_observer',
   realProviderIdentity: 'not_verified_by_observer', humanPilot: 'not_evaluated', fullFeatureAcceptance: false,

@@ -30,6 +30,7 @@ jest.mock('@/backend/services/runResources/capture', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { createHash } from 'node:crypto';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import OpenAI from 'openai';
 
@@ -100,6 +101,13 @@ describe('processToolCalls auto-capture', () => {
     });
 
     expect(result.success).toBe(true);
+    const toolMessage = (result as { value: { toolCallMessages: Array<{ content: string }> } }).value.toolCallMessages[0];
+    const resultEvent = emit.mock.calls.map(([row]) => row).find(row => row.type === 'tool:result');
+    expect(resultEvent.resultContentBinding).toEqual({ serialization: 'utf8-string-v1',
+      sha256: createHash('sha256').update(toolMessage.content, 'utf8').digest('hex'),
+      bytes: Buffer.byteLength(toolMessage.content, 'utf8') });
+    expect(resultEvent.resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(JSON.stringify(imageResult), 'utf8').digest('hex'));
     expect(captureToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: 'conv-1',
       server: 'srv',

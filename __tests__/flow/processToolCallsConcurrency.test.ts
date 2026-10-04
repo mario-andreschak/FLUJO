@@ -33,6 +33,7 @@ jest.mock('@/backend/services/runResources', () => {
 });
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 
@@ -172,6 +173,26 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     expect(value.processedToolCalls[0]).toMatchObject({ id: 'call1', name: 'mcp_a_1' });
     // event order for a lone call is exactly tool:call then tool:result
     expect(emit.mock.calls.map(([e]) => e.type)).toEqual(['tool:call', 'tool:result']);
+  });
+
+  it.each(['short', 'café🙂'.repeat(150)])('binds the full MCP tool-message string independently of the event preview (%#)', async (text) => {
+    const data = { content: [{ type: 'text', text }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValueOnce({ success: true, data });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('bound-call', 'mcp_a_1', {})], toolNameMap, emit,
+    });
+    expect(result.success).toBe(true);
+    const value = (result as { value: { toolCallMessages: Array<{ tool_call_id: string; content: string }> } }).value;
+    expect(value.toolCallMessages[0]).toMatchObject({ tool_call_id: 'bound-call', content: full });
+    const event = emit.mock.calls.map(([row]) => row).find(row => row.type === 'tool:result');
+    expect(event).toMatchObject({ toolCallId: 'bound-call',
+      result: full.length > 500 ? `${full.slice(0, 500)}…` : full,
+      resultContentBinding: { serialization: 'utf8-string-v1',
+        sha256: createHash('sha256').update(full, 'utf8').digest('hex'), bytes: Buffer.byteLength(full, 'utf8') } });
+    if (full.length > 500) expect(event.resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(event.result, 'utf8').digest('hex'));
   });
 
   it('stops mid-batch on Stop: every tool_call id is answered, not-started calls carry the cancelled text', async () => {
