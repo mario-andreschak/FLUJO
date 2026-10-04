@@ -160,7 +160,7 @@ export async function resolveConfigHeaders(
   // the saved config, so rotating the global had no effect and package re-export
   // could no longer see the binding.
   if (config.env && typeof config.env === "object") {
-    const resolvedEnv: Record<string, string> = {};
+    const resolvedEnv: Record<string, string> = Object.create(null);
     for (const [key, raw] of Object.entries(config.env)) {
       if (!key) continue;
       const value =
@@ -181,7 +181,7 @@ export async function resolveConfigHeaders(
   if (!c.headers || typeof c.headers !== "object") {
     return resolvedConfig;
   }
-  const resolved: Record<string, string> = {};
+  const resolved: Record<string, string> = Object.create(null);
   for (const [key, raw] of Object.entries(c.headers)) {
     if (!key) continue;
     const { value } = normalizeHeaderValue(raw, key);
@@ -212,7 +212,7 @@ export async function resolveConfigHeaders(
 export function flattenCustomHeaders(
   headers: Record<string, MCPHeaderValue>,
 ): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
   for (const [key, raw] of Object.entries(headers)) {
     if (!key) continue;
     const { value } = normalizeHeaderValue(raw, key);
@@ -224,7 +224,7 @@ export function flattenCustomHeaders(
 }
 
 function transformEnv(env?: Record<string, unknown>): Record<string, string> {
-  const transformed: Record<string, string> = {};
+  const transformed: Record<string, string> = Object.create(null);
   if (env) {
     for (const [key, envVar] of Object.entries(env)) {
       if (envVar && typeof envVar === "object" && "value" in envVar) {

@@ -64,11 +64,11 @@ function normalizeToolArguments(
 ): Record<string, unknown> {
   if (!args) return {};
 
-  const normalizedArgs: Record<string, unknown> = {};
-
-  // Process each argument
-  for (const key in args) {
-    const value = args[key];
+  // Only own parameters cross the tool boundary. fromEntries defines data
+  // properties, including __proto__, without invoking prototype setters.
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(args)) {
+    let normalized: unknown = value;
 
     // Handle undefined or null values
     if (value === undefined || value === null) {
@@ -83,7 +83,7 @@ function normalizeToolArguments(
         key.endsWith("Id") ||
         key.endsWith("Limit")
       ) {
-        normalizedArgs[key] = 0;
+        normalized = 0;
         log.debug(`Using default value 0 for likely number parameter: ${key}`);
       } else if (
         key.includes("bool") ||
@@ -91,7 +91,7 @@ function normalizeToolArguments(
         key.startsWith("has") ||
         key.startsWith("should")
       ) {
-        normalizedArgs[key] = false;
+        normalized = false;
         log.debug(
           `Using default value false for likely boolean parameter: ${key}`,
         );
@@ -101,7 +101,7 @@ function normalizeToolArguments(
         key.endsWith("List") ||
         key.endsWith("Items")
       ) {
-        normalizedArgs[key] = [];
+        normalized = [];
         log.debug(`Using empty array for likely array parameter: ${key}`);
       } else if (
         key.includes("object") ||
@@ -109,20 +109,18 @@ function normalizeToolArguments(
         key.endsWith("Config") ||
         key.endsWith("Settings")
       ) {
-        normalizedArgs[key] = {};
+        normalized = {};
         log.debug(`Using empty object for likely object parameter: ${key}`);
       } else {
         // Default to empty string for unknown types
-        normalizedArgs[key] = "";
+        normalized = "";
         log.debug(`Using empty string for parameter with unknown type: ${key}`);
       }
-    } else {
-      // For non-undefined/null values, keep the original value
-      normalizedArgs[key] = value;
     }
+    entries.push([key, normalized]);
   }
 
-  return normalizedArgs;
+  return Object.fromEntries(entries);
 }
 
 /**
