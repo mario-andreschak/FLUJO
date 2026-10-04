@@ -190,7 +190,8 @@ describe('snapshot lease publication and generation ownership', () => {
       if (String(args[0]).startsWith(`${lock}.candidate-`) && args[1] === 'wx') {
         const stat = handle.stat.bind(handle);
         jest.spyOn(handle, 'stat').mockImplementation(async (...options) => {
-          const value = await stat(...options);
+          expect(options).toEqual([{ bigint: true }]);
+          const value = await stat({ bigint: true });
           return Object.assign(Object.create(Object.getPrototypeOf(value)), value, {
             mtimeNs: value.mtimeNs - BigInt(100), ctimeNs: value.ctimeNs - BigInt(100),
           });
