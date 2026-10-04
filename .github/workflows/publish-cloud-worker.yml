@@ -79,6 +79,7 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
+          import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from './scripts/snapshot-image-contract.mjs';
           const [image] = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/cloud-worker-image.json`, 'utf8'));
           assert.equal(image.Os, 'linux');
           assert.equal(image.Architecture, 'amd64');
@@ -86,6 +87,8 @@ jobs:
           for (const [key, value] of Object.entries({
             'io.flujo.application.version': process.env.APPLICATION_VERSION,
             'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+            'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+            'io.flujo.worker.snapshot.restore.limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL,
             'org.opencontainers.image.revision': process.env.GITHUB_SHA,
             'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
           })) assert.equal(image.Config.Labels[key], value, `Incorrect ${key}`);
@@ -122,6 +125,9 @@ jobs:
             IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$revision_tag")"
             test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_ID")" = "$GITHUB_SHA"
             test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.application.version"}}' "$IMAGE_ID")" = "$APPLICATION_VERSION"
+            test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.worker.snapshot-envelope-read-versions"}}' "$IMAGE_ID")" = "1,2"
+            restore_limits="$(node --input-type=module -e 'import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from "./scripts/snapshot-image-contract.mjs"; process.stdout.write(WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);')"
+            test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.worker.snapshot.restore.limits"}}' "$IMAGE_ID")" = "$restore_limits"
             docker run --rm --network none --read-only --no-healthcheck \
               --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
               --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \

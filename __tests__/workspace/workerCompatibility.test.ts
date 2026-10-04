@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import applicationPackage from '../../package.json';
 import { getWorkerCompatibility } from '@/backend/services/workspace/workerCompatibility';
 
@@ -33,6 +35,13 @@ describe('worker image compatibility metadata', () => {
   it('includes an explicit full build revision', () => {
     process.env.FLUJO_BUILD_REVISION = 'a'.repeat(40);
     expect(getWorkerCompatibility()).toMatchObject({ revision: 'a'.repeat(40) });
+  });
+
+  it('official image envelope versions match the actual source restore capability', () => {
+    const dockerfile = readFileSync(path.join(process.cwd(), 'Dockerfile'), 'utf8');
+    const label = dockerfile.match(/io\.flujo\.worker\.snapshot-envelope-read-versions="([^"]+)"/);
+    expect(label).not.toBeNull();
+    expect(label![1]).toBe(getWorkerCompatibility().snapshotEncryption.readVersions.join(','));
   });
 
   it.each(['abc1234', 'main', 'a'.repeat(39), 'a'.repeat(41), '../private', 'sensitive invalid value']) (

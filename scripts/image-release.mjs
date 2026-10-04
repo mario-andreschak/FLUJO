@@ -4,6 +4,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertCurrentMain } from './npm-release.mjs';
+import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from './snapshot-image-contract.mjs';
 
 export const IMAGE = 'ghcr.io/mario-andreschak/flujo';
 export const IMAGE_EVIDENCE = 'image-evidence.json';
@@ -34,7 +35,9 @@ export function inspectTestedImage(run, imageId, sha, version) {
   }
   const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
     'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
-    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1' };
+    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+    'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+    'io.flujo.worker.snapshot.restore.limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
   for (const [key, value] of Object.entries(labels)) {
     if (image.Config.Labels?.[key] !== value) throw new Error(`Tested image has an incorrect ${key} label.`);
   }
@@ -131,6 +134,8 @@ export function validateImageEvidence({ directory, sha, version, sourceLock, exp
   if (!SHA.test(sha) || !VERSION.test(version) || evidence.schemaVersion !== 1 || evidence.repository !== REPOSITORY
       || evidence.source !== sha || evidence.version !== version || evidence.image !== IMAGE || !DIGEST.test(evidence.digest)
       || !DIGEST.test(evidence.imageId) || evidence.platform !== 'linux/amd64' || evidence.user !== 'node'
+      || evidence.labels?.['io.flujo.worker.snapshot-envelope-read-versions'] !== '1,2'
+      || evidence.labels?.['io.flujo.worker.snapshot.restore.limits'] !== WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL
       || (expectedDigest && evidence.digest !== expectedDigest)
       || evidence.sourceLockSha256 !== hash(sourceLock) || evidence.sbom?.filename !== IMAGE_SBOM || evidence.sbom.sha256 !== hash(sbomBytes)
       || (evidence.workflow?.ref && (evidence.workflow.ref !== `${WORKFLOW}@refs/heads/main` || evidence.workflow.sha !== sha))) {
