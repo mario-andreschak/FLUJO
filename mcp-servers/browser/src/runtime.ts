@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { chromium, type Browser, type BrowserContext, type Page } from 'patchright';
+import { readBoundedRegularFile } from './boundedFileRead.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 60_000;
@@ -1135,9 +1136,9 @@ export async function browserDiagnostics(session?: BrowserSession): Promise<Reco
 async function installedProfileExtensions(): Promise<Array<Record<string, unknown>>> {
   const preferencesPath = path.join(trustedProfileDir(), 'Default', 'Preferences');
   try {
-    const stat = await fs.stat(preferencesPath);
-    if (!stat.isFile() || stat.size > 50_000_000) return [];
-    const preferences = JSON.parse(await fs.readFile(preferencesPath, 'utf8')) as {
+    const file = await readBoundedRegularFile(preferencesPath, 50_000_000);
+    if (file.status !== 'read') return [];
+    const preferences = JSON.parse(file.bytes.toString('utf8')) as {
       extensions?: { settings?: Record<string, Record<string, unknown>> };
     };
     const settings = preferences.extensions?.settings ?? {};

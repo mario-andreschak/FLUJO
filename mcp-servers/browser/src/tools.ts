@@ -1,6 +1,5 @@
 import type { CallToolResult, Tool, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { Page } from 'patchright';
 import {
@@ -40,6 +39,7 @@ import {
 } from './capture.js';
 import { recordingStatus, releaseRecordingsForOwner, startRecording, stopRecording } from './recording.js';
 import { prepareBrowserAudioStream } from './gateway.js';
+import { readBoundedRegularFile } from './boundedFileRead.js';
 
 const MAX_TEXT_CHARS = 50_000;
 const MAX_SELECTOR_CHARS = 2_000;
@@ -421,19 +421,19 @@ async function recordingResult(data: Record<string, unknown>): Promise<CallToolR
   }
   const outputPath = typeof data.outputPath === 'string' ? data.outputPath : undefined;
   if (!outputPath || data.status !== 'stopped') return success(data);
-  const stat = await fs.stat(outputPath).catch(() => undefined);
   const maxBytesRaw = Number(process.env.FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES);
   const maxBytes = Number.isFinite(maxBytesRaw) && maxBytesRaw > 0 ? Math.trunc(maxBytesRaw) : 16 * 1024 * 1024;
-  if (!stat?.isFile() || stat.size <= 0) return success(data);
-  if (stat.size > maxBytes) {
+  const file = await readBoundedRegularFile(outputPath, maxBytes);
+  if (file.status === 'unavailable') return success(data);
+  if (file.status === 'too-large') {
     const warnings = Array.isArray(data.warnings) ? [...data.warnings] : [];
-    warnings.push(`The ${stat.size}-byte video is available at outputPath but was not inlined into MCP because it exceeds the ${maxBytes}-byte transport limit.`);
+    warnings.push(`The video has at least ${file.size} bytes and is available at outputPath but was not inlined into MCP because it exceeds the ${maxBytes}-byte transport limit.`);
     return success({ ...data, warnings });
   }
   const mimeType = pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mp4')
     ? 'video/mp4'
     : (pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/webm');
-  const blob = (await fs.readFile(outputPath)).toString('base64');
+  const blob = file.bytes.toString('base64');
   return success(data, [{
     type: 'resource',
     resource: {
