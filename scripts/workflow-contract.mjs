@@ -1,6 +1,61 @@
 import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
+import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
+
+export function assertNodeRuntimeWorkflowContract(workflows) {
+  const profiles = Object.values(CI_NODE_PROFILES);
+  for (const [file, workflow] of Object.entries(workflows)) {
+    for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
+      const steps = job.steps ?? [];
+      const setups = steps.flatMap((step, index) => step.uses?.startsWith('actions/setup-node@') ? [index] : []);
+      if (steps.some((step) => /(?:^|\s)(?:node|npm|npx)(?:\s|$)/m.test(step.run ?? '')) && !setups.length) {
+        throw new Error(`${file}/${id} executes Node commands without an exact verified runtime.`);
+      }
+      const versions = setups.map((index) => steps[index].with?.['node-version']);
+      const expected = file === 'verify.yml' && id === 'production-build' ? profiles
+        : setups.map(() => file === 'publish-npm.yml' ? CI_NODE_PROFILES.current24 : CI_NODE_PROFILES.current22);
+      if (JSON.stringify(versions) !== JSON.stringify(expected)) throw new Error(`${file}/${id} has a missing or unpinned CI runtime profile.`);
+      for (const [position, index] of setups.entries()) {
+        const version = versions[position];
+        const historical = file === 'verify.yml' && id === 'production-build' && position === 0;
+        const guard = steps[index + 1];
+        const command = `node scripts/verify-ci-node.mjs ${version}${historical ? ' --historical-build' : ''} --record`;
+        if (steps[index].if || steps[index]['continue-on-error'] || guard?.run !== command || guard.if || guard['continue-on-error']) {
+          throw new Error(`${file}/${id} must verify official binary identity immediately after every runtime selection.`);
+        }
+      }
+      if (setups.length && steps.slice(0, setups[0]).some((step) => /(?:^|\s)(?:node|npm|npx)(?:\s|$)/m.test(step.run ?? ''))) {
+        throw new Error(`${file}/${id} executes Node commands before runtime verification.`);
+      }
+    }
+  }
+  const build = workflows['verify.yml']?.jobs?.['production-build'];
+  if (build?.env?.NODE_OPTIONS || build?.env?.NODE_V8_OPTIONS || workflows['verify.yml']?.env?.NODE_OPTIONS) {
+    throw new Error('Production qualification must use the ordinary default Node heap.');
+  }
+  const steps = build?.steps ?? [];
+  if (steps.some((step) => step.env?.NODE_OPTIONS || step.env?.NODE_V8_OPTIONS || /--max-old-space-size|NODE_OPTIONS=/i.test(step.run ?? ''))) {
+    throw new Error('Production qualification commands must preserve ordinary Node options and default heap.');
+  }
+  if (!steps.some((step) => step.name === 'Build with the ordinary command and default Node heap' && step.run === 'npm run build')) {
+    throw new Error('The historical ordinary default-heap build must remain mandatory.');
+  }
+  const command = 'set -euo pipefail\nnpm ci --include=dev\nnpm run build\nnpm run typecheck:mcp\nnpm run validate:mcp-release\nnpm run smoke:mcp-artifacts\n';
+  for (const version of profiles.slice(1)) {
+    const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record`);
+    const qualification = steps[index + 1];
+    if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
+        || qualification.if || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
+      throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
+    }
+  }
+  if (!steps.some((step) => step.uses?.startsWith('actions/upload-artifact@') && step.if === 'always()'
+      && step.with?.path === 'ci-node-runtime/' && step.with['if-no-files-found'] === 'error')) {
+    throw new Error('Production runtime measurement evidence must be retained even after a failure.');
+  }
+}
 
 export function assertWorkflowContract(workflows) {
+  assertNodeRuntimeWorkflowContract(workflows);
   for (const [file, workflow] of Object.entries(workflows)) {
     if (!workflow?.permissions || typeof workflow.permissions !== 'object'
         || Object.values(workflow.permissions).some((value) => value !== 'read' && value !== 'none')) {
