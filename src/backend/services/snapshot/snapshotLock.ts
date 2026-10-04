@@ -2,10 +2,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as fs, type BigIntStats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { readPlainFile } from '@/utils/readPlainFile';
+import { PlainFileReadError, readPlainFile } from '@/utils/readPlainFile';
 import type { RuntimeProcessIdentity } from '../enduringAgents/runtimeLock';
 
 export type SnapshotOperationKind = 'capture' | 'read' | 'revert' | 'cleanup' | 'migration';
+type ClosedOwnerField = 'shape' | 'dev' | 'ino' | 'mode' | 'uid' | 'gid' | 'nlink' | 'size';
+export type SnapshotLeaseFailure = `closed-owner:${ClosedOwnerField}`
+  | 'candidate-directory' | 'authored-owner-bytes' | 'published-owner' | 'release-owner'
+  | 'retirement-owner' | 'retirement-directory' | 'retirement-record' | 'contended' | 'queued'
+  | 'owner-directory' | 'owner-schema' | 'owner-unavailable'
+  | `owner-read:${PlainFileReadError['code']}` | `owner-read:${NonNullable<PlainFileReadError['detail']>}`;
 
 interface SnapshotLeaseContext {
   heldKeys: Set<string>;
@@ -41,7 +47,7 @@ const activity = globalThis.__flujoSnapshotOperationActivity
 export class SnapshotLeaseBusyError extends Error {
   readonly code = 'SNAPSHOT_STORE_BUSY';
 
-  constructor() {
+  constructor(readonly detail?: SnapshotLeaseFailure) {
     super('Snapshot storage is temporarily busy');
     this.name = 'SnapshotLeaseBusyError';
   }
@@ -71,13 +77,17 @@ function sameDirectory(first: BigIntStats, second: BigIntStats): boolean {
     && first.mode === second.mode && first.uid === second.uid && first.gid === second.gid;
 }
 
-async function readOwner(root: string): Promise<ObservedOwner | undefined> {
+async function readOwner(root: string, diagnoseRefusal = false): Promise<ObservedOwner | undefined> {
+  const refuse = (detail: SnapshotLeaseFailure): undefined => {
+    if (diagnoseRefusal) throw new SnapshotLeaseBusyError(detail);
+    return undefined;
+  };
   try {
     const lock = lockDirectory(root);
     const directory = await fs.lstat(lock, { bigint: true });
-    if (!directory.isDirectory() || directory.isSymbolicLink()) return undefined;
+    if (!directory.isDirectory() || directory.isSymbolicLink()) return refuse('owner-directory');
     const bytes = await readPlainFile(path.join(lock, 'owner.json'), { maxBytes: 4096, ownerOnly: true });
-    if (!sameDirectory(directory, await fs.lstat(lock, { bigint: true }))) return undefined;
+    if (!sameDirectory(directory, await fs.lstat(lock, { bigint: true }))) return refuse('owner-directory');
     const value = JSON.parse(bytes.toString('utf8')) as Partial<SnapshotLeaseOwner>;
     if (
       Number.isSafeInteger(value.pid)
@@ -92,8 +102,14 @@ async function readOwner(root: string): Promise<ObservedOwner | undefined> {
     ) {
       return { owner: value as SnapshotLeaseOwner, digest: createHash('sha256').update(bytes).digest('hex'), directory };
     }
-  } catch {
+    return refuse('owner-schema');
+  } catch (error) {
     // Missing/partial/unreadable ownership is uncertainty, never proof of death.
+    if (diagnoseRefusal) {
+      if (error instanceof SnapshotLeaseBusyError) throw error;
+      if (error instanceof PlainFileReadError) throw new SnapshotLeaseBusyError(`owner-read:${error.detail ?? error.code}`);
+      throw new SnapshotLeaseBusyError('owner-unavailable');
+    }
   }
   return undefined;
 }
@@ -142,11 +158,11 @@ async function retireOwner(root: string, observed: ObservedOwner, requireDead = 
     await assertOwned();
     await fs.rename(lock, retired);
     const moved = await fs.lstat(retired, { bigint: true });
-    if (!sameDirectory(observed.directory, moved)) throw new SnapshotLeaseBusyError();
+    if (!sameDirectory(observed.directory, moved)) throw new SnapshotLeaseBusyError('retirement-directory');
     const ownerBytes = await readPlainFile(path.join(retired, 'owner.json'), { maxBytes: 4096, ownerOnly: true });
     const retirement = JSON.parse((await readPlainFile(path.join(retired, 'retire.json'), { maxBytes: 4096, ownerOnly: true })).toString('utf8'));
     if (createHash('sha256').update(ownerBytes).digest('hex') !== observed.digest || retirement.nonce !== nonce) {
-      throw new SnapshotLeaseBusyError();
+      throw new SnapshotLeaseBusyError('retirement-record');
     }
     // Never recursively delete a raced pathname or unexpected entries.
     await assertOwned();
@@ -168,6 +184,8 @@ async function acquireFilesystemLease(
     pid: process.pid, startedAt: new Date().toISOString(), operation,
     ownerId: randomUUID(), identity: await getRuntimeProcessIdentity(),
   };
+  const ownerBytes = Buffer.from(JSON.stringify(owner), 'utf8');
+  const ownerDigest = createHash('sha256').update(ownerBytes).digest('hex');
   // Publish a complete private directory atomically. No process observes a
   // directory before its owner record exists, or executes shared temp contents.
   const candidate = await fs.mkdtemp(`${lock}.candidate-`);
@@ -180,11 +198,27 @@ async function acquireFilesystemLease(
     const ownerHandle = await fs.open(candidateOwnerPath, 'wx', 0o600);
     try {
       candidateOwner = await ownerHandle.stat({ bigint: true });
-      await ownerHandle.writeFile(JSON.stringify(owner));
+      await ownerHandle.writeFile(ownerBytes);
       await ownerHandle.sync();
       candidateOwner = await ownerHandle.stat({ bigint: true });
     }
     finally { await ownerHandle.close(); }
+    // Windows may finalize write timestamps when the last writable handle
+    // closes. Bind the closed snapshot to our descriptor's exact stable identity
+    // before using its timestamps for subsequent read admission. The authored
+    // bytes are checked separately; a fresh pathname stat alone grants nothing.
+    const closedOwner = await fs.lstat(candidateOwnerPath, { bigint: true });
+    if (!candidateOwner || !closedOwner.isFile() || closedOwner.isSymbolicLink()
+        || closedOwner.dev !== candidateOwner.dev || closedOwner.ino !== candidateOwner.ino
+        || closedOwner.mode !== candidateOwner.mode || closedOwner.uid !== candidateOwner.uid || closedOwner.gid !== candidateOwner.gid
+        || closedOwner.nlink !== BigInt(1) || closedOwner.nlink !== candidateOwner.nlink
+        || closedOwner.size !== BigInt(ownerBytes.byteLength)) {
+      const field: ClosedOwnerField = !candidateOwner || !closedOwner.isFile() || closedOwner.isSymbolicLink() ? 'shape'
+        : closedOwner.nlink !== BigInt(1) ? 'nlink'
+        : (['dev', 'ino', 'mode', 'uid', 'gid', 'nlink'] as const).find(key => closedOwner[key] !== candidateOwner![key]) ?? 'size';
+      throw new SnapshotLeaseBusyError(`closed-owner:${field}`);
+    }
+    candidateOwner = closedOwner;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       let exists = false;
       try { await fs.lstat(lock); exists = true; }
@@ -195,17 +229,20 @@ async function acquireFilesystemLease(
             try { await fs.lstat(lock); return undefined; }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
             await assertOwned();
-            if (!sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) throw new SnapshotLeaseBusyError();
-            await readPlainFile(candidateOwnerPath, { expected: candidateOwner, maxBytes: 4096, ownerOnly: true });
+            if (!sameDirectory(candidateDirectory, await fs.lstat(candidate, { bigint: true }))) throw new SnapshotLeaseBusyError('candidate-directory');
+            const written = await readPlainFile(candidateOwnerPath, { expected: candidateOwner, maxBytes: 4096, ownerOnly: true });
+            if (!written.equals(ownerBytes)) throw new SnapshotLeaseBusyError('authored-owner-bytes');
+            await assertOwned();
             await fs.rename(candidate, lock);
             published = true;
-            const admitted = await readOwner(root);
-            if (!admitted || admitted.owner.ownerId !== owner.ownerId || !sameDirectory(candidateDirectory, admitted.directory)) throw new SnapshotLeaseBusyError();
+            const admitted = await readOwner(root, true);
+            if (!admitted || admitted.owner.ownerId !== owner.ownerId || admitted.digest !== ownerDigest
+                || !sameDirectory(candidateDirectory, admitted.directory)) throw new SnapshotLeaseBusyError('published-owner');
             return async () => {
               const current = await readOwner(root);
               if (!current || current.owner.ownerId !== owner.ownerId || current.digest !== admitted.digest
-                  || !sameDirectory(admitted.directory, current.directory)) throw new SnapshotLeaseBusyError();
-              if (!await retireOwner(root, current)) throw new SnapshotLeaseBusyError();
+                  || !sameDirectory(admitted.directory, current.directory)) throw new SnapshotLeaseBusyError('release-owner');
+              if (!await retireOwner(root, current)) throw new SnapshotLeaseBusyError('retirement-owner');
             };
           });
           if (release) return release;
@@ -224,7 +261,7 @@ async function acquireFilesystemLease(
         timer.unref?.();
       });
     }
-    throw new SnapshotLeaseBusyError();
+    throw new SnapshotLeaseBusyError('contended');
   } finally {
     if (!published) {
       try {
@@ -284,7 +321,7 @@ export async function withSnapshotStoreLease<T>(
     }
   }
 
-  if (options.failIfBusy && tails.has(key)) throw new SnapshotLeaseBusyError();
+  if (options.failIfBusy && tails.has(key)) throw new SnapshotLeaseBusyError('queued');
 
   const predecessor = tails.get(key) ?? Promise.resolve();
   let releaseQueue!: () => void;

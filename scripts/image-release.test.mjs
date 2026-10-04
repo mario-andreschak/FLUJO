@@ -17,7 +17,8 @@ const env = { GITHUB_REPOSITORY: 'mario-andreschak/FLUJO', GITHUB_REF: 'refs/hea
   GITHUB_WORKFLOW_REF: 'mario-andreschak/FLUJO/.github/workflows/publish-image.yml@refs/heads/main', GITHUB_WORKFLOW_SHA: sha };
 const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
   'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
-  'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1' };
+  'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+  'io.flujo.worker.snapshot-source': '1' };
 
 function runner(options = {}) {
   const calls = [];
@@ -85,6 +86,17 @@ test('a missing revision selects one new build; a retry pulls and validates the 
   assert.equal(existing.calls.filter(({ args }) => args[0] === 'pull').length, 1);
   assert.equal(existing.calls.filter(({ command, args }) => command === 'gh' && args[0] === 'attestation').length, 1);
   assert.throws(() => selectImageCandidate({ ...runner({ remote: [[`${IMAGE}:sha-${sha}`, imageId]], selectedId: otherId }), sha, version }), /changed/);
+});
+
+test('same-version images without the snapshot-source capability cannot acquire the new profile by configuration', () => {
+  for (const marker of [undefined, '0', 'unknown']) {
+    const oldLabels = { ...labels };
+    if (marker === undefined) delete oldLabels['io.flujo.worker.snapshot-source'];
+    else oldLabels['io.flujo.worker.snapshot-source'] = marker;
+    const old = runner({ image: { Config: { User: 'node', Labels: oldLabels } } });
+    assert.throws(() => inspectTestedImage(old.run, imageId, sha, version), /snapshot-source/);
+    assert.equal(old.calls.some(({ args }) => args[0] === 'push'), false);
+  }
 });
 
 test('an unsigned or ambiguous existing revision cannot acquire provenance through reuse', () => {

@@ -119,6 +119,18 @@ jobs:
       - run: node --test tests/installer-repository.test.mjs
       - run: node --test scripts/run-local-jest.test.mjs
       - run: node --test scripts/release-evidence.test.mjs
+      - name: Verify maintainer evidence boundaries
+        run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs
+      - name: Exercise disposable ownership prototype
+        timeout-minutes: 3
+        run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"
+      - name: Retain ownership prototype fixture report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ownership-prototype-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ownership-prototype.json
+          if-no-files-found: error
+          retention-days: 30
       - run: npm run test:dependency-glob
       - name: Verify native private storage before building release artifacts
         run: node --test scripts/local-instance.test.mjs

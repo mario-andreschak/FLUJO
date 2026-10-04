@@ -35,8 +35,8 @@ let snapshotRootForTests: string | null = null;
 let lastCleanupAt: string | undefined;
 
 export class SnapshotStoreBusyError extends SnapshotLeaseBusyError {
-  constructor() {
-    super();
+  constructor(detail?: SnapshotLeaseBusyError['detail']) {
+    super(detail);
     this.name = 'SnapshotStoreBusyError';
   }
 }
@@ -210,7 +210,7 @@ export class SnapshotStore {
         ? await access()
         : await withWorkspaceMutation(access);
     } catch (error) {
-      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
+      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError(error.detail);
       throw error;
     }
   }
@@ -229,7 +229,7 @@ export class SnapshotStore {
         () => withSnapshotMigrationLeases(roots, operation),
       );
     } catch (error) {
-      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError();
+      if (error instanceof SnapshotLeaseBusyError) throw new SnapshotStoreBusyError(error.detail);
       throw error;
     }
   }

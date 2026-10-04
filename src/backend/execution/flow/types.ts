@@ -1607,6 +1607,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+    /** Runtime-only run cancellation forwarded to the in-flight model call. */
+    abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
     personaAttribution?: PersonaAttribution;
     /** One logical model-turn override armed by the repeated-tool guard. */
