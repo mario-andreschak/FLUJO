@@ -13,6 +13,7 @@ import JSZip from 'jszip';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
+import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from './snapshot-image-contract.mjs';
 
 const application = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const production = process.argv.includes('--production');
@@ -241,6 +242,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
     legacyPlaintextRead: true, recipientKeyRequired: true, recipientKeyBytes: 32, recipientKeyEncoding: 'base64',
     v2Aad: 'flujo:workspace-snapshot:v2', v2Digest: 'sha256-encrypted-wire', v1Digest: 'sha256-plaintext-zip',
   });
+  assert.deepEqual(snapshotLimits, JSON.parse(WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL), 'Worker must use its labelled default restore bounds.');
   assert.ok(wire.length <= snapshotLimits.maxEncryptedBytes);
   const filesystem = new Client({ name: 'flujo-worker-smoke', version: '1.0.0' }, { capabilities: {} });
   try {

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { encryptedSnapshotSizeLimit, getSnapshotLimits } from '@/backend/services/workspace/snapshotLimits';
 
 const names = ['FLUJO_SNAPSHOT_MAX_FILE_BYTES', 'FLUJO_SNAPSHOT_MAX_BYTES'] as const;
@@ -18,6 +20,17 @@ test('configured limits describe plaintext, ZIP and padded encrypted wire separa
   for (const bytes of [0, 1, 2, 3, 4, 101]) {
     expect(encryptedSnapshotSizeLimit(bytes)).toBe(Buffer.alloc(bytes).toString('base64').length + 4096);
   }
+});
+
+test('official worker image labels carry the actual native default restore bounds', () => {
+  const dockerfile = readFileSync(path.join(process.cwd(), 'Dockerfile'), 'utf8');
+  const label = dockerfile.match(/io\.flujo\.worker\.snapshot\.restore\.limits='([^']+)'/);
+  expect(label).not.toBeNull();
+  expect(JSON.parse(label![1])).toEqual(getSnapshotLimits());
+  Object.values(JSON.parse(label![1])).forEach(value => {
+    expect(Number.isSafeInteger(value)).toBe(true);
+    expect(value).toBeGreaterThan(0);
+  });
 });
 
 test.each(['0', '-1', '4.5', '16KiB', 'NaN', 'Infinity'])('uses the same defaults for invalid configured limit %s', value => {

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
+import { WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL } from './snapshot-image-contract.mjs';
 import { IMAGE, IMAGE_EVIDENCE, IMAGE_SBOM, assertImageContext, inspectTestedImage, remoteImageConfig,
   selectImageCandidate, prepareImageEvidence, validateImageEvidence, promoteTestedImage } from './image-release.mjs';
 
@@ -18,7 +20,9 @@ const env = { GITHUB_REPOSITORY: 'mario-andreschak/FLUJO', GITHUB_REF: 'refs/hea
 const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
   'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': 'https://github.com/mario-andreschak/FLUJO',
   'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
-  'io.flujo.worker.snapshot-source': '1' };
+  'io.flujo.worker.snapshot-source': '1',
+  'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
+  'io.flujo.worker.snapshot.restore.limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
 
 function runner(options = {}) {
   const calls = [];
@@ -74,6 +78,30 @@ test('tested configuration requires non-root Linux/amd64 source and compatibilit
   for (const image of [{ Id: otherId }, { Os: 'windows' }, { Architecture: 'arm64' },
     { Config: { User: 'root', Labels: labels } }, { Config: { User: 'node', Labels: { ...labels, 'io.flujo.worker.protocol': '2' } } }]) {
     assert.throws(() => inspectTestedImage(runner({ image }).run, imageId, sha, version));
+  }
+});
+
+test('old worker images cannot be reused or published without explicit v2 restore support', (t) => {
+  for (const value of [undefined, '1', 'true', '2', '1, 2']) {
+    const oldLabels = { ...labels, 'io.flujo.worker.snapshot-envelope-read-versions': value };
+    if (value === undefined) delete oldLabels['io.flujo.worker.snapshot-envelope-read-versions'];
+    const options = { image: { Config: { User: 'node', Labels: oldLabels } }, remote: [[`${IMAGE}:sha-${sha}`, imageId]] };
+    const existing = runner(options);
+    assert.throws(() => selectImageCandidate({ ...existing, sha, version }), /incorrect io.flujo.worker.snapshot-envelope-read-versions label/);
+    assert.equal(existing.calls.some(({ command }) => command === 'gh'), false);
+    const candidate = fixture(t, options);
+    assert.throws(() => prepareImageEvidence(candidate), /incorrect io.flujo.worker.snapshot-envelope-read-versions label/);
+    assert.equal(candidate.calls.some(({ args }) => ['tag', 'push'].includes(args[0])), false);
+  }
+});
+
+test('missing or different default restore bounds refuse an image before candidate mutation', (t) => {
+  for (const value of [undefined, '{}', WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL.replace('65534', '100000')]) {
+    const oldLabels = { ...labels, 'io.flujo.worker.snapshot.restore.limits': value };
+    if (value === undefined) delete oldLabels['io.flujo.worker.snapshot.restore.limits'];
+    const f = fixture(t, { image: { Config: { User: 'node', Labels: oldLabels } } });
+    assert.throws(() => prepareImageEvidence(f), /incorrect io.flujo.worker.snapshot.restore.limits label/);
+    assert.equal(f.calls.some(({ args }) => ['tag', 'push'].includes(args[0])), false);
   }
 });
 
@@ -154,6 +182,18 @@ test('source-lock and inventory tampering are refused', (t) => {
   assert.throws(() => validateImageEvidence({ ...f, sourceLock: Buffer.from('changed') }));
   writeFileSync(path.join(f.directory, IMAGE_SBOM), '{}');
   assert.throws(() => validateImageEvidence(f));
+});
+
+test('old evidence without restore capability or bounds stops promotion before signatures or registry access', (t) => {
+  for (const key of ['io.flujo.worker.snapshot-envelope-read-versions', 'io.flujo.worker.snapshot.restore.limits']) {
+    const f = fixture(t);
+    const evidence = prepareImageEvidence(f);
+    delete evidence.labels[key];
+    writeFileSync(path.join(f.directory, IMAGE_EVIDENCE), JSON.stringify(evidence));
+    f.calls.length = 0;
+    assert.throws(() => promoteTestedImage(f), /tested inventory/);
+    assert.deepEqual(f.calls, []);
+  }
 });
 
 test('promotion verifies every signature before mutation and every alias retains the signed digest', (t) => {
@@ -266,4 +306,43 @@ test('image workflow builds once, signs separately and promotes its original art
   const imageBudget = candidate['timeout-minutes'] + attest['timeout-minutes'] + publish['timeout-minutes'];
   assert.ok(npm.jobs.finalize['timeout-minutes'] > imageBudget + 10,
     'npm finalization must accommodate the awaited image workflow and its own setup/registry checks');
+});
+
+test('worker publication validates the explicit restore label before fresh and reused image smoke', (t) => {
+  const workflow = YAML.parse(readFileSync(new URL('../.github/workflows/publish-cloud-worker.yml', import.meta.url), 'utf8'));
+  const steps = workflow.jobs.publish.steps;
+  const smoke = steps.find(({ id }) => id === 'smoke').run;
+  const code = smoke.match(/node --input-type=module <<'NODE'\n([\s\S]*?)\nNODE\n/)[1];
+  const f = fixture(t);
+  for (const [key, value] of [
+    ['io.flujo.worker.snapshot-envelope-read-versions', '1,2'],
+    ['io.flujo.worker.snapshot-envelope-read-versions', undefined],
+    ['io.flujo.worker.snapshot-envelope-read-versions', '1'],
+    ['io.flujo.worker.snapshot-envelope-read-versions', '2'],
+    ['io.flujo.worker.snapshot.restore.limits', undefined],
+    ['io.flujo.worker.snapshot.restore.limits', '{}'],
+  ]) {
+    const imageLabels = { ...labels, [key]: value };
+    if (value === undefined) delete imageLabels[key];
+    writeFileSync(path.join(f.directory, 'cloud-worker-image.json'), JSON.stringify([
+      { Os: 'linux', Architecture: 'amd64', Config: { User: 'node', Labels: imageLabels } },
+    ]));
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+      env: { ...process.env, RUNNER_TEMP: f.directory, APPLICATION_VERSION: version, GITHUB_SHA: sha },
+      encoding: 'utf8', timeout: 10_000, windowsHide: true,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status === 0, value === '1,2', result.stderr);
+    if (value !== '1,2') assert.ok(result.stderr.includes(`Incorrect ${key}`), result.stderr);
+  }
+  assert.ok(smoke.indexOf("'io.flujo.worker.snapshot-envelope-read-versions'") < smoke.indexOf('docker run --rm'));
+  const publish = steps.find(({ name }) => name === 'Publish the tested image without rebuilding').run;
+  const checks = publish.slice(publish.indexOf('if docker manifest inspect'), publish.indexOf('docker run --rm'));
+  assert.match(checks, /org\.opencontainers\.image\.revision/);
+  assert.match(checks, /io\.flujo\.application\.version/);
+  assert.match(checks, /test "\$\(docker image inspect --format '\{\{index \.Config\.Labels "io\.flujo\.worker\.snapshot-envelope-read-versions"\}\}' "\$IMAGE_ID"\)" = "1,2"/);
+  assert.match(checks, /test "\$\(docker image inspect --format '\{\{index \.Config\.Labels "io\.flujo\.worker\.snapshot\.restore\.limits"\}\}' "\$IMAGE_ID"\)" = "\$restore_limits"/);
+  const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+  assert.match(dockerfile.slice(dockerfile.indexOf('AS runtime')), /io\.flujo\.worker\.snapshot-envelope-read-versions="1,2"/);
+  assert.equal(dockerfile.match(/io\.flujo\.worker\.snapshot\.restore\.limits='([^']+)'/)[1], WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);
 });
