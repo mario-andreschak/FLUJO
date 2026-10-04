@@ -34,7 +34,8 @@ export function inspectTestedImage(run, imageId, sha, version) {
   }
   const labels = { 'io.flujo.application.version': version, 'org.opencontainers.image.version': version,
     'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
-    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1' };
+    'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
+    'io.flujo.worker.snapshot-source': '1' };
   for (const [key, value] of Object.entries(labels)) {
     if (image.Config.Labels?.[key] !== value) throw new Error(`Tested image has an incorrect ${key} label.`);
   }
