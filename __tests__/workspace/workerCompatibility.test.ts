@@ -27,6 +27,7 @@ describe('worker image compatibility metadata', () => {
         maxManifestBytes: 8 * 1024 * 1024, maxArchiveBytes: 1032 * 1024 * 1024,
         maxEncryptedBytes: 4 * Math.ceil(1032 * 1024 * 1024 / 3) + 4096, maxMembers: 65_534,
       },
+      workerSnapshotSourceVersion: 1,
     });
   });
 

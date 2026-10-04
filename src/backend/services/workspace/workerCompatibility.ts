@@ -6,6 +6,8 @@ import { getSnapshotLimits, type SnapshotLimits } from './snapshotLimits';
 /** Worker ingress protocol; snapshot envelope support is negotiated separately. */
 export const WORKER_PROTOCOL_VERSION = 1;
 export const WORKER_SNAPSHOT_FORMAT_VERSION = 2;
+/** Capability marker; it does not assert configuration or deployed acceptance. */
+export const WORKER_SNAPSHOT_SOURCE_VERSION = 1;
 
 export interface WorkerCompatibility {
   applicationVersion: string;
@@ -14,6 +16,7 @@ export interface WorkerCompatibility {
   workerProtocolVersion: typeof WORKER_PROTOCOL_VERSION;
   snapshotEncryption: typeof SNAPSHOT_ENCRYPTION_CAPABILITY;
   snapshotLimits: SnapshotLimits;
+  workerSnapshotSourceVersion: typeof WORKER_SNAPSHOT_SOURCE_VERSION;
   revision?: string;
 }
 
@@ -29,6 +32,7 @@ export function getWorkerCompatibility(): WorkerCompatibility {
     workerProtocolVersion: WORKER_PROTOCOL_VERSION,
     snapshotEncryption: SNAPSHOT_ENCRYPTION_CAPABILITY,
     snapshotLimits: getSnapshotLimits(),
+    workerSnapshotSourceVersion: WORKER_SNAPSHOT_SOURCE_VERSION,
     ...(/^[a-f0-9]{40}$/.test(revision ?? '') ? { revision } : {}),
   };
 }
