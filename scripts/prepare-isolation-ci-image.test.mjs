@@ -79,3 +79,10 @@ test('context cleanup refuses the temp root and an unrelated directory', () => {
   assert.throws(() => api.ownedContext(os.tmpdir()), /Unsafe isolation CI context/);
   assert.throws(() => api.ownedContext(path.join(os.tmpdir(), 'unrelated')), /Unsafe isolation CI context/);
 });
+
+test('ownership and absence queries include untagged/intermediate images', () => {
+  const image = `sha256:${'a'.repeat(64)}`;
+  const listing = args => args.includes('--all') ? `${image}\n` : '';
+  assert.deepEqual(api.ownedImages(listing, 'fixture-generation'), [image]);
+  assert.equal(listing(['image', 'ls', '--no-trunc']), '');
+});

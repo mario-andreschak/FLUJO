@@ -99,12 +99,17 @@ function writeState(state) {
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
 }
 
+function ownedImages(runDocker, generation) {
+  // The fixture is untagged. Default image ls may hide it as an intermediate image.
+  return runDocker(['image', 'ls', '--all', '--no-trunc', '--filter', `label=${label}=${generation}`, '--format', '{{.ID}}'])
+    .split('\n').filter(Boolean);
+}
+
 function cleanup(state) {
   if (state.schemaVersion !== 1 || !generationPattern.test(state.generation)
       || (state.image !== null && !imagePattern.test(state.image))) throw new Error('Invalid isolation CI receipt');
   ownedContext(state.context);
-  const rows = docker(state, ['image', 'ls', '--no-trunc', '--filter', `label=${label}=${state.generation}`, '--format', '{{.ID}}'])
-    .split('\n').filter(Boolean);
+  const rows = ownedImages(args => docker(state, args), state.generation);
   if (rows.length > 1 || (rows.length === 1 && (!imagePattern.test(rows[0]) || (state.image && rows[0] !== state.image)))) {
     throw new Error('Isolation CI image ownership is unavailable');
   }
@@ -114,7 +119,7 @@ function cleanup(state) {
     if (labels?.[label] !== state.generation) throw new Error('Isolation CI image ownership is unavailable');
     // Do not force removal over a container whose cleanup remains unknown.
     docker(state, ['image', 'rm', state.image]);
-    if (docker(state, ['image', 'ls', '--no-trunc', '--filter', `label=${label}=${state.generation}`, '--format', '{{.ID}}'])) {
+    if (ownedImages(args => docker(state, args), state.generation).length !== 0) {
       throw new Error('Isolation CI image cleanup is unavailable');
     }
   }
@@ -193,4 +198,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { linkedLibraries, copyRuntimeFile, ownedContext, assembleRuntime };
+module.exports = { linkedLibraries, copyRuntimeFile, ownedContext, assembleRuntime, ownedImages };

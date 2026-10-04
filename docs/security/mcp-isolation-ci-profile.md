@@ -53,7 +53,7 @@ borrowed for this composed graph.
 
 Windows Node 22.13.1 with locked Next 16.3.8 passed 120 assertions across eight
 focused isolation, lifecycle, receipt and transport-admission suites. The final
-script/workflow controls passed 38 Node tests without skips. Primitive/test
+script/workflow controls passed 39 Node tests without skips. Primitive/test
 TypeScript with Next ambient declarations, all changed/replayed source ESLint
 and diff checks pass. Full application graph type/build remains with root.
 
@@ -89,6 +89,13 @@ earlier control image
 `sha256:e88f19e2e6411e87b5d5a1b02f7e71e788c9859eff6e775ab87d3f6a8b47f6c0`
 are retained. This does not change the separately observed managed SDK container
 removal. No cleanup success is claimed for the local image/context resources.
+
+A read-only check exposed that Docker's default image listing hid the untagged
+scratch image even though image inspection found it. Both ownership and final
+absence queries now use `image ls --all`. A controlled regression and direct
+read-only queries of both real image generations return the expected full IDs.
+The assembler/image receipts above precede this listing-only correction; its
+full cleanup execution still requires hosted CI qualification.
 
 Default isolation, install/build-command isolation, stable private policy reads,
 stream/task lifetime revocation, durable orphan recovery, installed-artifact
