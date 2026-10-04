@@ -10,6 +10,7 @@ import type { Flow, FlowNode } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import type { SharedState } from '@/backend/execution/flow/types';
+import type { StorageKey } from '@/shared/types/storage';
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 
@@ -279,7 +280,7 @@ describe('execution ordering with real graph and loopback SDK dispatch', () => {
       'event:recovery:completed', 'snapshot:node:after:completed', 'event:run:done',
     ]);
     expect(operations(conversationId).filter(operation => operation === 'http:process')).toHaveLength(1);
-    const snapshot = await loadItem<SharedState | undefined>(`conversations/${conversationId}`, undefined);
+    const snapshot = await loadItem<SharedState | undefined>(`conversations/${conversationId}` as StorageKey, undefined);
     expect(snapshot?.status).toBe('completed');
     expect(snapshot?.recovery?.classification).toBe('completed');
     expect(snapshot?.executionAuthority).toBeUndefined();
@@ -469,7 +470,7 @@ describe('execution ordering with real graph and loopback SDK dispatch', () => {
     const childRequests = observations.filter(entry => entry.operation === 'http:process' && entry.conversationId !== conversationId);
     expect(childRequests).toHaveLength(1);
     const childId = childRequests[0].conversationId;
-    const childSnapshot = await loadItem<SharedState | undefined>(`conversations/${childId}`, undefined);
+    const childSnapshot = await loadItem<SharedState | undefined>(`conversations/${childId}` as StorageKey, undefined);
     expect(childSnapshot?.parentRunId).toBe(conversationId);
     expect(childSnapshot?.recovery?.classification).toBe('completed');
     // Subflow's custom emitter translates run events onto the parent channel;
