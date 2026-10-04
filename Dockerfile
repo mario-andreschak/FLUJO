@@ -42,6 +42,7 @@ LABEL io.flujo.application.version="${FLUJO_APPLICATION_VERSION}" \
       io.flujo.snapshot.format="2" \
       io.flujo.workspace.layout="2" \
       io.flujo.worker.protocol="1" \
+      io.flujo.worker.snapshot-source="1" \
       org.opencontainers.image.version="${FLUJO_APPLICATION_VERSION}" \
       org.opencontainers.image.revision="${FLUJO_BUILD_REVISION}" \
       org.opencontainers.image.source="https://github.com/mario-andreschak/FLUJO"
