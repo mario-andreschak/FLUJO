@@ -551,8 +551,8 @@ export async function copyRunResourceToConversation(
     let initial;
     try {
       handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-      initial = await handle.stat();
-      if (!initial.isFile() || !Number.isSafeInteger(initial.size) || initial.size < 0) {
+      initial = await handle.stat({ bigint: true });
+      if (!initial.isFile() || initial.size < BigInt(0) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('Invalid run-resource copy source.');
       }
     } catch (error) {
@@ -564,7 +564,7 @@ export async function copyRunResourceToConversation(
       if (source.conversationId === input.conversationId) return source;
       const settings = await getRunResourceSettings();
       return await storePreparedRunResource(destination, settings, {
-        size: initial.size, encoding: source.encoding,
+        size: Number(initial.size), encoding: source.encoding,
         persist: filename => copyPayloadSnapshot(handle, initial, filename),
       });
     } finally {
