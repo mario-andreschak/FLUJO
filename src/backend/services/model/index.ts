@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
-import { Model, normalizeMaxTokens } from '@/shared/types/model';
+import { Model, isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
@@ -37,8 +37,9 @@ import { modelCache, filterModels } from './cache';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
+import { resolveCompletionAdapterRoute } from './adapters/completionRoute';
 import type { ModelMediaPart } from '@/shared/types/model/media';
-import { materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
+import { hasOwnerBoundFallbackMember, materializeFallbackPolicy, validateFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { FallbackRoutingError } from './adapters/fallbackAdapter';
 
 /**
@@ -94,6 +95,10 @@ class ModelService {
       
       if (model) {
         log.debug(`getModel: Model ${modelId} found`);
+        if (hasOwnerBoundFallbackMember(model, models)) {
+          log.warn(`getModel: Owner-bound fallback member refused for ${modelId}`);
+          return null;
+        }
         return materializeFallbackPolicy(model, models);
       }
       
@@ -114,6 +119,11 @@ class ModelService {
       const configurationError = validateModelConfiguration(model);
       if (configurationError) {
         return { success: false, error: configurationError };
+      }
+      const ownerBindingError = validateOwnerCredentialBinding(model);
+      if (ownerBindingError) return { success: false, error: ownerBindingError };
+      if (isOwnerCredentialBoundModel(model) && resolveCompletionAdapterRoute(model) !== 'openai') {
+        return { success: false, error: 'Owner-bound models require the OpenAI-compatible completion route' };
       }
 
       // Load current models
@@ -281,6 +291,11 @@ class ModelService {
       // placeholder coming from the frontend means "unchanged" and must preserve the
       // existing key rather than be encrypted on top of it.
       updatedModel.ApiKey = await this.resolveApiKeyForSave(model.ApiKey, existingModel.ApiKey);
+      const ownerBindingError = validateOwnerCredentialBinding(updatedModel);
+      if (ownerBindingError) return { success: false, error: ownerBindingError };
+      if (isOwnerCredentialBoundModel(updatedModel) && resolveCompletionAdapterRoute(updatedModel) !== 'openai') {
+        return { success: false, error: 'Owner-bound models require the OpenAI-compatible completion route' };
+      }
 
       // Update all the models
       const updatedModels = models.map(m => 
@@ -438,6 +453,12 @@ class ModelService {
       if (modelId) {
         const models = await this.loadModels();
         storedModel = models.find(model => model.id === modelId);
+        if (storedModel && hasOwnerBoundFallbackMember(storedModel, models)) {
+          throw new Error('Owner-bound models require an authorized model-step transport.');
+        }
+      }
+      if (storedModel && isOwnerCredentialBoundModel(storedModel)) {
+        throw new Error('Owner-bound models require an authorized model-step transport.');
       }
 
       const provider: ModelProvider =
@@ -540,6 +561,13 @@ class ModelService {
     adapter?: ModelAdapter;
   }): Promise<ModelTestResult> {
     const { modelId, apiKey } = params;
+    if (modelId) {
+      const models = await this.loadModels();
+      const selected = models.find(model => model.id === modelId);
+      if (selected && (isOwnerCredentialBoundModel(selected) || hasOwnerBoundFallbackMember(selected, models))) {
+        throw new Error('Owner-bound models require an authorized model-step transport.');
+      }
+    }
 
     let modelName = params.name;
     let baseUrl = params.baseUrl;
@@ -557,6 +585,9 @@ class ModelService {
     if (modelId) {
       storedModel = await this.getModel(modelId);
       if (storedModel) {
+        if (isOwnerCredentialBoundModel(storedModel)) {
+          throw new Error('Owner-bound models require an authorized model-step transport.');
+        }
         if (storedModel.fallbackPolicy) {
           const started = Date.now();
           const result = await this.generateChatCompletion({
@@ -696,6 +727,18 @@ class ModelService {
         };
       }
       const model = materializeFallbackPolicy(candidates[0], models);
+      if (isOwnerCredentialBoundModel(model) || hasOwnerBoundFallbackMember(model, models)) {
+        return {
+          success: false,
+          error: {
+            message: 'Owner-bound models require an authorized model-step transport.',
+            type: 'permission_error',
+            code: 'owner_model_step_required',
+            param: 'model',
+          },
+          statusCode: 403,
+        };
+      }
 
       // The self-orchestrating adapters (Claude subscription / Codex) run an
       // agentic loop when given tools, which diverges from standard OpenAI tool

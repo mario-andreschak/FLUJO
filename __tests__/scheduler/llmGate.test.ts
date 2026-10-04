@@ -143,6 +143,19 @@ describe('evaluateLlmGate', () => {
     expect(result.error).toMatch(/no longer exists/);
   });
 
+  it('denies an owner-bound model without resolving a key or advancing the result hash', async () => {
+    getModelMock.mockResolvedValueOnce({
+      id: 'model-1', name: 'bound', ApiKey: '', ownerCredentialBinding: null,
+    });
+    const state: PlannedExecutionState = { lastHash: hashResult({ v: 1 }) };
+    const result = await evaluateAiGate({ v: 2 }, gateConfig(), state);
+
+    expect(result.fire).toBe(false);
+    expect(result.error).toMatch(/authorized model-step transport/i);
+    expect(result.newState.lastHash).toBe(hashResult({ v: 2 }));
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('keeps the change pending (lastHash unmoved) when the completion call throws', async () => {
     createCompletionMock.mockRejectedValue(new Error('provider 500'));
     const oldHash = hashResult({ v: 1 });

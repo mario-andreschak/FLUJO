@@ -9,8 +9,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
-import type { Model } from '@/shared/types/model';
-import { assertExecutionExtensionAdapterCurrent, assertExecutionExtensionCurrent, claimExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
+import { isOwnerCredentialBoundModel, type Model } from '@/shared/types/model';
+import { assertExecutionExtensionAdapterCurrent, assertExecutionExtensionCurrent, claimExecutionModelRequest, dispatchExecutionModelRequest, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionBoundModelIdentity, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
   buildProviderToolNameTranslation,
   translateCompletionFromProvider,
@@ -19,6 +19,9 @@ import {
 } from './providerToolNames';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
+// Required by the SDK constructor only. It is never sent by FLUJO for a model
+// whose real credential stays with the original owner.
+const OWNER_AUTH_PLACEHOLDER = 'owner-credential-not-present-in-flujo';
 
 /**
  * Providers known to accept OpenAI's `prompt_cache_key` cache-routing parameter.
@@ -88,6 +91,12 @@ function prepareProtectedOpenAiRequest<T extends object>(
   apiKey: string,
   body: T,
 ): { client: OpenAI; body: T } {
+  const ownerBound = isOwnerCredentialBoundModel(model);
+  const ownerBinding = ownerBound ? { ...model.ownerCredentialBinding! } : undefined;
+  if (ownerBound && (apiKey !== '' || model.ApiKey !== '')) {
+    throw new ExecutionExtensionError('execution_owner_model_local_credential_forbidden');
+  }
+  const sdkApiKey = ownerBound ? OWNER_AUTH_PLACEHOLDER : apiKey;
   // Detach nested caller data before the SDK receives it. The later fetch guard
   // compares this digest to the SDK's actual serialized UTF-8 JSON bytes.
   const serialized = JSON.stringify(body);
@@ -105,7 +114,7 @@ function prepareProtectedOpenAiRequest<T extends object>(
     const headers = new Headers(init.headers);
     const authorization = headers.get('authorization');
     if ([...headers.keys()].some(name => !protectedHeaderNames.has(name)) ||
-        headers.get('content-type') !== 'application/json' || authorization !== `Bearer ${apiKey}`) {
+        headers.get('content-type') !== 'application/json' || authorization !== `Bearer ${sdkApiKey}`) {
       throw new ExecutionExtensionError('execution_model_wire_mismatch');
     }
     const headerPairs = [...headers.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
@@ -117,6 +126,35 @@ function prepareProtectedOpenAiRequest<T extends object>(
     const bodyBytes = Buffer.from(init.body, 'utf8');
     const bodySha256 = createHash('sha256').update(bodyBytes).digest('hex');
     if (bodySha256 !== expectedBodySha256) throw new ExecutionExtensionError('execution_model_wire_mismatch');
+
+    if (ownerBound) {
+      // Authorization above is the SDK's inert construction placeholder. It
+      // never leaves this process. Pass the owner the exact remaining SDK-final
+      // header/body snapshot; only that owner can insert the real credential
+      // and open a physical connection after its durable claim.
+      const ownerHeaders = headerPairs.filter(([name]) => name !== 'authorization');
+      return dispatchExecutionModelRequest(context, {
+        version: 2,
+        operation,
+        model: {
+          ...modelIdentity,
+          ownerCredentialBinding: ownerBinding!,
+        } as ExecutionBoundModelIdentity,
+        method: 'POST',
+        url: input,
+        headers: ownerHeaders,
+        body: Uint8Array.from(bodyBytes),
+        bodySha256,
+        headersSha256: createHash('sha256').update(JSON.stringify(ownerHeaders), 'utf8').digest('hex'),
+        routingHeaderSha256: {
+          openaiOrganization: routingHeaderDigest('openai-organization'),
+          openaiProject: routingHeaderDigest('openai-project'),
+          httpReferer: routingHeaderDigest('http-referer'),
+          xTitle: routingHeaderDigest('x-title'),
+        },
+        signal: init.signal ?? undefined,
+      });
+    }
 
     // The original owner must compare URL, method, body, credential and routing
     // projection with its current task, lease and budget, then durably consume
@@ -154,7 +192,7 @@ function prepareProtectedOpenAiRequest<T extends object>(
   };
   return {
     client: createProtectedOpenAIClient({
-      apiKey,
+      apiKey: sdkApiKey,
       baseURL,
       defaultHeaders: getProviderDefaultHeaders(modelIdentity.provider),
     }, guardedFetch),

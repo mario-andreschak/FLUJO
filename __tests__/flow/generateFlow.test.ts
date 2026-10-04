@@ -290,6 +290,15 @@ describe('generateFlow — repair loop', () => {
 // ---------------------------------------------------------------------------
 
 describe('generateFlow — hard failures', () => {
+  it('denies an owner-bound generator before key resolution or provider traffic', async () => {
+    getModelMock.mockResolvedValueOnce({ ...generatorModel, ownerCredentialBinding: null });
+
+    const result = await generateFlow({ description: 'Build me a research flow', modelId: 'model-gen' });
+
+    expect(result).toMatchObject({ success: false, statusCode: 403, error: expect.stringMatching(/authorized model-step transport/i) });
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
   it('400 on missing description or modelId', async () => {
     expect(await generateFlow({ description: '  ', modelId: 'model-gen' })).toEqual(
       expect.objectContaining({ success: false, statusCode: 400 })

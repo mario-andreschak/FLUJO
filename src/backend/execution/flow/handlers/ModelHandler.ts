@@ -1,5 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -49,7 +49,7 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { normalizeMaxTokens, type Model } from '@/shared/types/model';
+import { isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
 import { normalizeModelTemperature } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
@@ -1988,8 +1988,22 @@ export class ModelHandler {
           )
         };
       }
-
-      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(opts?.executionExtensionContext, model);
+      const ownerBound = isOwnerCredentialBoundModel(model);
+      if (ownerBound && validateOwnerCredentialBinding(model)) {
+        throw new ExecutionExtensionError('owner_credential_binding_invalid');
+      }
+      if (ownerBound && !opts?.executionExtensionContext) {
+        throw new ExecutionExtensionError('execution_model_step_context_required');
+      }
+      if (model.fallbackPolicy && opts?.executionExtensionContext) {
+        throw new ExecutionExtensionError('execution_model_fallback_forbidden');
+      }
+      // The parent run context covers tools and durable state. Every bound
+      // provider call gets a separate owner-issued child that can dispatch once.
+      const modelStepContext = ownerBound
+        ? await issueExecutionModelStepContext(opts!.executionExtensionContext!, model)
+        : opts?.executionExtensionContext;
+      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(modelStepContext, model);
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
@@ -2004,8 +2018,8 @@ export class ModelHandler {
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
       // adapter then omits the apiKey and the CLI falls back to its own auth).
-      const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
-      const decryptedApiKey =
+      const resolvedKey = ownerBound ? '' : await modelService.resolveAndDecryptApiKey(model.ApiKey);
+      const decryptedApiKey = ownerBound ? '' :
         resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
@@ -2448,7 +2462,7 @@ export class ModelHandler {
       // --- Auto-unload Ollama: resolve setting and root URL once, before the
       // attempt closure captures them.  The lock is per root URL so parallel
       // fan-out lanes that target DIFFERENT servers are not serialised. ---
-      const autoUnloadOllama = (model.provider === 'ollama' && Boolean(model.baseUrl))
+      const autoUnloadOllama = (!ownerBound && model.provider === 'ollama' && Boolean(model.baseUrl))
         ? await ModelHandler.isAutoUnloadOllamaEnabled()
         : false;
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
@@ -2667,7 +2681,7 @@ export class ModelHandler {
               model,
               apiKey: decryptedApiKey,
               beforeModelDispatch: async () => {
-                if (opts?.executionExtensionContext) await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+                if (modelStepContext) await assertExecutionExtensionCurrent(modelStepContext);
                 await opts?.beforeModelDispatch?.();
               },
               temperatureOverride: opts?.temperatureOverride !== undefined
@@ -2761,7 +2775,7 @@ export class ModelHandler {
               onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: opts?.beforeToolDispatch,
-              executionExtensionContext: opts?.executionExtensionContext,
+              executionExtensionContext: modelStepContext,
               authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
               afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: <T>(task: () => Promise<T>) =>
@@ -2787,8 +2801,8 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
-              if (opts?.executionExtensionContext) {
-                await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+              if (modelStepContext) {
+                await assertExecutionExtensionCurrent(modelStepContext);
               }
               if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion

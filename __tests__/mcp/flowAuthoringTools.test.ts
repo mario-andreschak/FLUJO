@@ -198,6 +198,34 @@ describe('list_flow_building_blocks', () => {
   });
 });
 
+describe('owner-bound assisted MCP selection', () => {
+  it.each([
+    ['find_best_mcp_server', 'owner-model'],
+    ['install_best_mcp_server', 'owner-model'],
+    ['find_best_mcp_server', 'policy-model'],
+    ['install_best_mcp_server', 'policy-model'],
+  ])('denies %s with %s before Registry or install traffic', async (toolName, modelId) => {
+      loadModelsMock.mockResolvedValueOnce([
+        { id: 'owner-model', name: 'bound', ApiKey: '', ownerCredentialBinding: null },
+        { id: 'ordinary', name: 'backup', ApiKey: 'local' },
+        { id: 'policy-model', name: 'policy/test', ApiKey: '',
+          fallbackPolicy: { modelIds: ['owner-model', 'ordinary'] } },
+      ]);
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      try {
+        const result = await authoringCallTool(toolName, {
+          capability: 'search documents', modelId,
+        });
+
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain('authorized model-step transport');
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+});
+
 describe('validate_flow_spec', () => {
   it('returns a clean validation without saving', async () => {
     const result = await authoringCallTool('validate_flow_spec', { spec: goodSpec });

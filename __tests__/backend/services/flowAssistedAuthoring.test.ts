@@ -30,6 +30,7 @@ import {
   suggestAgentsForFlowStep,
   suggestToolsForFlowStep,
 } from '@/backend/services/flow/assistedAuthoring';
+import { modelService } from '@/backend/services/model';
 
 const processFlow = (id: string, prompt: string): Flow => ({
   id,
@@ -75,6 +76,19 @@ beforeEach(() => {
 });
 
 describe('assisted flow authoring service', () => {
+  it('does not resolve credentials or call the provider for an owner-bound authoring model', async () => {
+    jest.mocked(modelService.getModel).mockResolvedValueOnce({
+      id: 'model-1', name: 'Helper', ApiKey: '', ownerCredentialBinding: null,
+    } as unknown as Awaited<ReturnType<typeof modelService.getModel>>);
+
+    const result = await generateFlowName({
+      flow: processFlow('root', 'Summarize my notes'), modelId: 'model-1',
+    });
+
+    expect(result.name).toBeTruthy();
+    expect(modelService.resolveAndDecryptApiKey).not.toHaveBeenCalled();
+    expect(completionMock).not.toHaveBeenCalled();
+  });
   it('generates a valid, unique name from the first workflow goal', async () => {
     completionMock.mockResolvedValueOnce({
       completion: { choices: [{ message: { content: '{"name":"Notes Helper!"}' } }] },

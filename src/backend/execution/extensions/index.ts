@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
 import type { RestrictedCodexProfile } from '@/backend/services/model/adapters/codexRestrictedProfile';
-import type { Model } from '@/shared/types/model';
+import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
 import { configuredExecutionAdapter } from '@/backend/execution/extensions/configuredAdapter';
 import { resolveCompletionAdapterRoute, type CompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
 
@@ -12,6 +13,26 @@ export interface ExecutionExtensionContext { readonly [contextBrand]: true }
 /** Retry restriction only; never a grant of inference, spend or replay authority. */
 export interface ExecutionModelAttemptPolicy { version: 1; maxPhysicalAttempts: 1 }
 export type ExecutionModelIdentity = Pick<Model, 'id' | 'name' | 'adapter' | 'provider' | 'baseUrl'>;
+export interface ExecutionOwnerCredentialBinding { ownerId: string; credentialId: string }
+export interface ExecutionBoundModelIdentity extends ExecutionModelIdentity {
+  ownerCredentialBinding: ExecutionOwnerCredentialBinding;
+}
+/** The SDK-final request, without an upstream credential. The owner compares
+ * the exact recipient, headers and body with its authenticated step, inserts
+ * its held credential, and performs the physical send. */
+export interface ExecutionOwnerModelDispatchRequest {
+  version: 2;
+  operation: 'chat.completions.create' | 'chat.completions.create(stream)';
+  model: ExecutionBoundModelIdentity;
+  method: 'POST';
+  url: string;
+  headers: ReadonlyArray<readonly [string, string]>;
+  body: Uint8Array;
+  bodySha256: string;
+  headersSha256: string;
+  routingHeaderSha256: ExecutionModelRequestIntent['routingHeaderSha256'];
+  signal?: AbortSignal;
+}
 /** The SDK-final request is observed at its fetch seam. The owner must compare
  * URL, method, body, credential and routing projection with original authority. */
 export interface ExecutionModelRequestIntent {
@@ -79,10 +100,16 @@ export interface ExecutionExtensionAdapter {
   /** Required for the one-attempt path. The original owner must durably claim
    * this exact model/body under its own run and budget before any POST starts. */
   claimModelRequest?(context: object, intent: ExecutionModelRequestIntent): Promise<void>;
+  /** Return a fresh private child authority for exactly one bound model step.
+   * The returned value must be recognized by assertRun and dispatchModelRequest. */
+  issueModelStep?(parent: object, model: ExecutionBoundModelIdentity): Promise<object>;
+  /** Must validate/claim the exact child and physically send once using the
+   * owner-held credential. FLUJO never opens a socket for this path. */
+  dispatchModelRequest?(step: object, request: ExecutionOwnerModelDispatchRequest): Promise<Response>;
 }
-type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object; modelRequestConsumed?: boolean; singlePhysicalAttemptRequired?: boolean };
+type ContextRecord = { adapter: ExecutionExtensionAdapter; value: object; modelRequestConsumed?: boolean; singlePhysicalAttemptRequired?: boolean; modelStep?: { parent: ExecutionExtensionContext; model: ExecutionBoundModelIdentity } };
 type Access = { conversationId: string; assertCurrent: () => Promise<void> };
-type Registry = { adapter?: ExecutionExtensionAdapter; configuredAdapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
+type Registry = { adapter?: ExecutionExtensionAdapter; configuredAdapter?: ExecutionExtensionAdapter; contexts: WeakMap<object, ContextRecord>; modelStepValues?: WeakSet<object>; input: AsyncLocalStorage<Partial<FlowRunInput>>; access: AsyncLocalStorage<Access>; committing: AsyncLocalStorage<ExecutionExtensionContext> };
 const root = globalThis as typeof globalThis & { __flujoExecutionExtensions?: Registry };
 const registry = root.__flujoExecutionExtensions ??= { contexts: new WeakMap(), input: new AsyncLocalStorage(), access: new AsyncLocalStorage(), committing: new AsyncLocalStorage() };
 
@@ -111,6 +138,52 @@ export function createExecutionExtensionContext(adapter: ExecutionExtensionAdapt
   registry.contexts.set(context, { adapter: canonicalAdapter(adapter), value });
   return context;
 }
+function boundModelIdentity(model: Model): ExecutionBoundModelIdentity | undefined {
+  if (!isOwnerCredentialBoundModel(model)) return undefined;
+  if (validateOwnerCredentialBinding(model) || resolveCompletionAdapterRoute(model) !== 'openai') {
+    throw new ExecutionExtensionError('execution_owner_model_binding_invalid');
+  }
+  const binding = model.ownerCredentialBinding!;
+  return { id: model.id, name: model.name, adapter: model.adapter, provider: model.provider,
+    baseUrl: model.baseUrl, ownerCredentialBinding: { ownerId: binding.ownerId, credentialId: binding.credentialId } };
+}
+function sameBoundModel(a: ExecutionBoundModelIdentity, candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== 'object') return false;
+  const b = candidate as Partial<ExecutionBoundModelIdentity>;
+  if (!b.ownerCredentialBinding || typeof b.ownerCredentialBinding !== 'object') return false;
+  return a.id === b.id && a.name === b.name && a.adapter === b.adapter &&
+    a.provider === b.provider && a.baseUrl === b.baseUrl &&
+    a.ownerCredentialBinding.ownerId === b.ownerCredentialBinding.ownerId &&
+    a.ownerCredentialBinding.credentialId === b.ownerCredentialBinding.credentialId;
+}
+/** A trusted parent can request a fresh child only for a bound model. The
+ * owner still authenticates the original step and accounts for its budget. */
+export async function issueExecutionModelStepContext(parent: ExecutionExtensionContext, model: Model): Promise<ExecutionExtensionContext> {
+  const identity = boundModelIdentity(model);
+  if (!identity) throw new ExecutionExtensionError('execution_owner_model_binding_required');
+  const item = record(parent);
+  if (item.modelStep) throw new ExecutionExtensionError('execution_model_step_parent_required');
+  if (!item.adapter.issueModelStep) throw new ExecutionExtensionError('execution_model_step_issuer_required');
+  try {
+    await item.adapter.assertRun(item.value);
+    const value = await item.adapter.issueModelStep(item.value, identity);
+    if (!value || typeof value !== 'object' || value === item.value) throw new ExecutionExtensionError('execution_model_step_invalid');
+    const issued = registry.modelStepValues ??= new WeakSet<object>();
+    if (issued.has(value)) throw new ExecutionExtensionError('execution_model_step_reused');
+    // Reserve before awaiting either owner check. A second concurrent issuer
+    // must not mint another branded wrapper around the same private value.
+    issued.add(value);
+    await item.adapter.assertRun(item.value);
+    await item.adapter.assertRun(value);
+    record(parent);
+    const child = Object.freeze({}) as ExecutionExtensionContext;
+    registry.contexts.set(child, { adapter: item.adapter, value, modelStep: { parent, model: identity } });
+    return child;
+  } catch (error) {
+    if (error instanceof ExecutionExtensionError) throw error;
+    throw new ExecutionExtensionError('execution_model_step_denied');
+  }
+}
 function record(context: ExecutionExtensionContext | undefined): ContextRecord {
   const value = context && registry.contexts.get(context);
   if (!value || value.adapter !== executionExtensionAdapter()) throw new ExecutionExtensionError('trusted_execution_context_required');
@@ -129,10 +202,15 @@ export function authorizeExecutionTransport(request: Request): Response | null |
 export function isProtectedExecutionServer(server: string): boolean { return executionExtensionAdapter()?.isProtectedServer(server) ?? false; }
 export function assertExecutionServerConfig(config: MCPServerConfig): void { executionExtensionAdapter()?.assertServerConfig(config); }
 export async function assertExecutionExtensionCurrent(context: ExecutionExtensionContext | undefined, expected?: { conversationId?: string; runId?: string; graphHash?: string }): Promise<void> {
-  const item = record(context); await item.adapter.assertRun(item.value, expected);
+  const item = record(context);
+  if (item.modelStep) await assertExecutionExtensionCurrent(item.modelStep.parent, expected);
+  await item.adapter.assertRun(item.value, expected);
 }
 /** Synchronous registry check for the last local SDK call site. */
-export function assertExecutionExtensionAdapterCurrent(context: ExecutionExtensionContext): void { record(context); }
+export function assertExecutionExtensionAdapterCurrent(context: ExecutionExtensionContext): void {
+  const item = record(context);
+  if (item.modelStep) record(item.modelStep.parent);
+}
 export function runWithExecutionConversationAccess<T>(conversationId: string, assertCurrent: () => Promise<void>, task: () => T): T {
   return registry.access.run({ conversationId, assertCurrent }, task);
 }
@@ -172,7 +250,13 @@ export function installExecutionExtensionContext(state: { executionExtensionCont
   state.executionExtensionOwned = true;
 }
 export async function bindExecutionExtensionRun(context: ExecutionExtensionContext, conversation: string, run: string): Promise<void> { const item = record(context); await item.adapter.bindRun(item.value, conversation, run); }
-export function executionExtensionSignal(context: ExecutionExtensionContext): AbortSignal | undefined { const item = record(context); return item.adapter.signal(item.value); }
+export function executionExtensionSignal(context: ExecutionExtensionContext): AbortSignal | undefined {
+  const item = record(context);
+  const signal = item.adapter.signal(item.value);
+  if (!item.modelStep) return signal;
+  const parent = executionExtensionSignal(item.modelStep.parent);
+  return parent && signal && parent !== signal ? AbortSignal.any([parent, signal]) : parent ?? signal;
+}
 export async function commitExecutionExtensionMutation<T>(context: ExecutionExtensionContext, task: () => Promise<T>): Promise<T> {
   const item = record(context);
   if (registry.committing.getStore() === context) {
@@ -200,8 +284,24 @@ export async function executionExtensionCodexProfile(context: ExecutionExtension
 export async function executionExtensionSinglePhysicalAttempt(
   context: ExecutionExtensionContext | undefined, model: Model,
 ): Promise<boolean> {
+  const bound = boundModelIdentity(model);
+  if (bound) {
+    const item = record(context);
+    if (!item.modelStep || !sameBoundModel(item.modelStep.model, bound)) {
+      throw new ExecutionExtensionError('execution_model_step_context_required');
+    }
+    if (!item.adapter.dispatchModelRequest) throw new ExecutionExtensionError('execution_model_dispatch_required');
+    await assertExecutionExtensionCurrent(context);
+    return true;
+  }
   if (!context) return false;
   const item = record(context);
+  if (item.modelStep) throw new ExecutionExtensionError('execution_model_step_mismatch');
+  // An owner transport cannot silently downgrade when a saved bound model is
+  // replaced under the same ID by an unbound record before dispatch.
+  if (item.adapter.issueModelStep || item.adapter.dispatchModelRequest) {
+    throw new ExecutionExtensionError('execution_owner_model_binding_required');
+  }
   await item.adapter.assertRun(item.value);
   const policy = await item.adapter.modelAttemptPolicy?.(item.value, {
     id: model.id, name: model.name, adapter: model.adapter, provider: model.provider, baseUrl: model.baseUrl,
@@ -259,5 +359,108 @@ export async function claimExecutionModelRequest(
   } catch (error) {
     if (error instanceof ExecutionExtensionError) throw error;
     throw new ExecutionExtensionError('execution_model_request_claim_denied');
+  }
+}
+
+const ownerModelHeaderNames = new Set([
+  'accept', 'content-type', 'user-agent',
+  'http-referer', 'x-title', 'openai-organization', 'openai-project',
+  'x-stainless-arch', 'x-stainless-lang', 'x-stainless-os',
+  'x-stainless-package-version', 'x-stainless-retry-count',
+  'x-stainless-runtime', 'x-stainless-runtime-version', 'x-stainless-timeout',
+]);
+const modelDigest = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
+function boundChatUrl(model: ExecutionBoundModelIdentity): string {
+  const baseUrl = model.baseUrl ?? 'https://api.openai.com/v1';
+  try {
+    const base = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(base.protocol) ||
+        (base.protocol === 'http:' && !['127.0.0.1', '[::1]'].includes(base.hostname)) ||
+        base.username || base.password || base.search || base.hash) throw new Error('invalid');
+    return new URL(`${baseUrl}${baseUrl.endsWith('/') ? '' : '/'}chat/completions`).toString();
+  } catch {
+    throw new ExecutionExtensionError('execution_model_endpoint_invalid');
+  }
+}
+function snapshotOwnerRequest(request: ExecutionOwnerModelDispatchRequest, model: ExecutionBoundModelIdentity): ExecutionOwnerModelDispatchRequest {
+  if (!Array.isArray(request.headers) || !(request.body instanceof Uint8Array)) {
+    throw new ExecutionExtensionError('execution_model_wire_mismatch');
+  }
+  const headers: Array<readonly [string, string]> = [];
+  for (const pair of request.headers) {
+    if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== 'string' || typeof pair[1] !== 'string') {
+      throw new ExecutionExtensionError('execution_model_wire_mismatch');
+    }
+    headers.push([pair[0], pair[1]]);
+  }
+  if (headers.some((pair, index) =>
+      !ownerModelHeaderNames.has(pair[0]) || (index > 0 && headers[index - 1][0] >= pair[0]))) {
+    throw new ExecutionExtensionError('execution_model_wire_mismatch');
+  }
+  const body = Uint8Array.from(request.body);
+  const headerValue = (name: string): string | null => headers.find(([key]) => key === name)?.[1] ?? null;
+  const routingDigest = (name: string): string | null => {
+    const value = headerValue(name);
+    return value === null ? null : modelDigest(value);
+  };
+  const projection = request.routingHeaderSha256;
+  if (request.version !== 2 ||
+      !['chat.completions.create', 'chat.completions.create(stream)'].includes(request.operation) ||
+      request.method !== 'POST' || request.url !== boundChatUrl(model) ||
+      headerValue('content-type') !== 'application/json' ||
+      request.bodySha256 !== modelDigest(body) ||
+      request.headersSha256 !== modelDigest(JSON.stringify(headers)) ||
+      !projection || projection.openaiOrganization !== routingDigest('openai-organization') ||
+      projection.openaiProject !== routingDigest('openai-project') ||
+      projection.httpReferer !== routingDigest('http-referer') ||
+      projection.xTitle !== routingDigest('x-title')) {
+    throw new ExecutionExtensionError('execution_model_wire_mismatch');
+  }
+  return {
+    version: 2,
+    operation: request.operation,
+    model: { id: model.id, name: model.name, adapter: model.adapter, provider: model.provider,
+      baseUrl: model.baseUrl, ownerCredentialBinding: { ...model.ownerCredentialBinding } },
+    method: 'POST',
+    url: request.url,
+    headers,
+    body,
+    bodySha256: request.bodySha256,
+    headersSha256: request.headersSha256,
+    routingHeaderSha256: {
+      openaiOrganization: projection.openaiOrganization,
+      openaiProject: projection.openaiProject,
+      httpReferer: projection.httpReferer,
+      xTitle: projection.xTitle,
+    },
+    ...(request.signal ? { signal: request.signal } : {}),
+  };
+}
+
+/** Consumes the freshly issued child before owner I/O. An owner callback is the
+ * only physical sender for bound models; a denied or ambiguous send stays spent. */
+export async function dispatchExecutionModelRequest(
+  context: ExecutionExtensionContext,
+  request: ExecutionOwnerModelDispatchRequest,
+): Promise<Response> {
+  const item = record(context);
+  if (!item.modelStep || !request || typeof request !== 'object' || !sameBoundModel(item.modelStep.model, request.model)) {
+    throw new ExecutionExtensionError('execution_model_step_mismatch');
+  }
+  if (item.modelRequestConsumed) throw new ExecutionExtensionError('execution_model_request_already_claimed');
+  item.modelRequestConsumed = true;
+  if (!item.adapter.dispatchModelRequest) throw new ExecutionExtensionError('execution_model_dispatch_required');
+  const snapshot = snapshotOwnerRequest(request, item.modelStep.model);
+  try {
+    await assertExecutionExtensionCurrent(context);
+    if (snapshot.signal?.aborted || executionExtensionSignal(context)?.aborted) {
+      throw new ExecutionExtensionError('execution_model_request_aborted');
+    }
+    const response = await item.adapter.dispatchModelRequest(item.value, snapshot);
+    if (!(response instanceof Response)) throw new ExecutionExtensionError('execution_model_dispatch_response_invalid');
+    return response;
+  } catch (error) {
+    if (error instanceof ExecutionExtensionError) throw error;
+    throw new ExecutionExtensionError('execution_model_dispatch_denied');
   }
 }

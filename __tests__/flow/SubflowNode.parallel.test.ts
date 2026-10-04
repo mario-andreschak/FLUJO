@@ -63,6 +63,20 @@ beforeEach(() => {
 });
 
 describe('SubflowNode fan-out (issue #102)', () => {
+  it.each([
+    { subflowId: 'child' },
+    { parallelSubflowIds: ['child-a', 'child-b'] },
+  ])('refuses protected parent child admission before either run path', async properties => {
+    const shared = makeShared({
+      executionExtensionContext: {} as never,
+      handoffInput: { targetNodeId: 'sub-1', prompt: 'private parent input' },
+    });
+    await expect(makeNode().prep(shared, makeParams(properties)))
+      .rejects.toMatchObject({ code: 'execution_subflow_child_authority_required' });
+    expect(shared.handoffInput).toMatchObject({ prompt: 'private parent input' });
+    expect(runFlowMock).not.toHaveBeenCalled();
+  });
+
   it('falls back to the configured prompt when a parallel handoff omits prompt', async () => {
     const node = makeNode();
     const shared = makeShared({

@@ -28,6 +28,9 @@ export class EmbeddingProvider {
    * @throws Error if the embedding API call fails
    */
   async embed(model: Model, input: EmbeddingInput): Promise<EmbeddingOutput> {
+    if (model.ownerCredentialBinding !== undefined) {
+      throw new Error('Owner-bound models require an authorized model-step transport.');
+    }
     // Validate that the model supports embeddings
     if (!supportsEmbeddings(model.adapter)) {
       throw new EmbeddingCapabilityError(

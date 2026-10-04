@@ -89,6 +89,9 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
 async function aiCompletion(modelId: string, messages: OpenAI.ChatCompletionMessageParam[]): Promise<string> {
   const model = await modelService.getModel(modelId);
   if (!model) throw new Error(`AI model not found: ${modelId}`);
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');
@@ -490,6 +493,11 @@ export async function researchMcpServers(input: {
   const query = input.query.trim().slice(0, MAX_QUERY_LENGTH);
   if (!query) throw new Error('Describe what you want to connect.');
   if (!input.modelId) throw new Error('Choose an AI model for the research.');
+  const researchModel = await modelService.getModel(input.modelId);
+  if (!researchModel) throw new Error(`AI model not found or unavailable: ${input.modelId}`);
+  if (researchModel?.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const progress = async (stage: Extract<McpAssistantResearchEvent, { type: 'progress' }>['stage'], message: string) => {
     await input.onProgress?.({ type: 'progress', stage, message });
   };
@@ -812,6 +820,11 @@ async function troubleshootingResearch(config: McpTroubleshootContext['config'])
 
 export async function troubleshootMcpInstall(input: McpTroubleshootContext): Promise<McpTroubleshootResult> {
   if (!input.modelId) throw new Error('Choose an AI model for troubleshooting.');
+  const troubleshootModel = await modelService.getModel(input.modelId);
+  if (!troubleshootModel) throw new Error(`AI model not found or unavailable: ${input.modelId}`);
+  if (troubleshootModel?.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const context = {
     ...input.config,
     args: input.config.args?.slice(0, 40).map((arg) => arg.slice(0, 500)),

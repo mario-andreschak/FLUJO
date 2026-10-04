@@ -33,6 +33,13 @@ export function normalizeMaxTokens(value: unknown): number | undefined {
 export interface Model {
     /** A reusable ordered routing alias backed by existing workspace models. */
     fallbackPolicy?: import('./fallbackPolicy').ModelFallbackPolicy;
+    /**
+     * Opaque reference to an upstream credential held by the execution owner.
+     * This is not a credential or a grant to send: an owner-issued model-step
+     * context and owner transport are required for every provider request.
+     * Bound models must persist with an empty ApiKey.
+     */
+    ownerCredentialBinding?: { ownerId: string; credentialId: string };
     id: string;
     name: string;
     displayName?: string;
@@ -119,3 +126,26 @@ export interface Model {
      */
     favorite?: boolean;
   }
+
+/** Treat even a malformed loaded binding as protected so it cannot fall back
+ * to a local key, native adapter, or ordinary provider transport. */
+export function isOwnerCredentialBoundModel(model: Model): boolean {
+    return model.ownerCredentialBinding !== undefined;
+}
+
+export function validateOwnerCredentialBinding(model: Model): string | undefined {
+    if (!isOwnerCredentialBoundModel(model)) return undefined;
+    const binding = model.ownerCredentialBinding as unknown;
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
+        Object.keys(binding).length !== 2 ||
+        typeof (binding as { ownerId?: unknown }).ownerId !== 'string' ||
+        !(binding as { ownerId: string }).ownerId.trim() ||
+        typeof (binding as { credentialId?: unknown }).credentialId !== 'string' ||
+        !(binding as { credentialId: string }).credentialId.trim()) {
+        return 'Owner credential binding is invalid';
+    }
+    if (model.ApiKey !== '') return 'Owner-bound models must have an empty API key';
+    if (model.fallbackPolicy) return 'Owner-bound models cannot use fallback policies';
+    if (model.adapter && model.adapter !== 'openai') return 'Owner-bound models require the OpenAI-compatible adapter';
+    return undefined;
+}

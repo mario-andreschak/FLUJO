@@ -112,6 +112,9 @@ export function createSamplingHandler(
     if (!model) {
       throw new McpError(ErrorCode.InternalError, `Sampling model not found: ${policy.modelId}`);
     }
+    if (model.ownerCredentialBinding !== undefined) {
+      throw new McpError(ErrorCode.InvalidRequest, 'Owner-bound models require an authorized model-step transport.');
+    }
     const apiKey = await modelService.resolveAndDecryptApiKey(model.ApiKey) ?? (model.fallbackPolicy ? '' : null);
     if (apiKey === null) {
       throw new McpError(ErrorCode.InternalError, 'Could not resolve the sampling model API key');

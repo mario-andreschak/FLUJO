@@ -58,6 +58,7 @@ import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallC
 import { isVerifiedStatus } from '@/utils/mcp/registry';
 import { mcpValueRecord } from '@/utils/mcp/values';
 import { modelService } from '@/backend/services/model';
+import { hasOwnerBoundFallbackMember } from '@/shared/types/model/fallbackPolicy';
 import {
   assertAllowedArguments,
   listInputSchema,
@@ -522,6 +523,10 @@ export async function authoringCallTool(
       const configuredModel = requestedModelId
         ? models.find((model) => model.id === requestedModelId)
         : models[0];
+      if (configuredModel && (configuredModel.ownerCredentialBinding !== undefined ||
+        hasOwnerBoundFallbackMember(configuredModel, models))) {
+        return textResult({ error: 'Owner-bound models require an authorized model-step transport.' }, true);
+      }
       if (configuredModel) {
         try {
           const research = await researchMcpServers({ query: capability, modelId: configuredModel.id });
@@ -649,11 +654,15 @@ export async function authoringCallTool(
         return textResult({ error: 'Describe what you want to connect in "capability".' }, true);
       }
 
-      const settings = await loadAutoInstallSettings();
       const models = await modelService.loadModels();
       const configuredModel = requestedModelId
         ? models.find((model) => model.id === requestedModelId)
         : models[0];
+      if (configuredModel && (configuredModel.ownerCredentialBinding !== undefined ||
+        hasOwnerBoundFallbackMember(configuredModel, models))) {
+        return textResult({ error: 'Owner-bound models require an authorized model-step transport.' }, true);
+      }
+      const settings = await loadAutoInstallSettings();
       let researchWarning: string | undefined;
       let research: Awaited<ReturnType<typeof researchMcpServers>> | undefined;
 

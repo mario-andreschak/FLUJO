@@ -35,6 +35,19 @@ it('falls back in order and uses each member’s credential and settings', async
   expect(JSON.stringify(receipt.routing)).not.toMatch(/key-|secret/);
 });
 
+it('refuses owner-bound members and protected-run routing before decrypting a key', async () => {
+  const call = jest.fn().mockResolvedValue(result);
+  const adapter = new FallbackAdapter(() => ({ createCompletion: call }));
+  (loadItem as jest.Mock).mockResolvedValue([
+    { ...a, ApiKey: '', ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' } },
+    b, policy,
+  ]);
+  await expect(adapter.createCompletion(input())).rejects.toThrow('Owner-bound models cannot be fallback policy members');
+  await expect(adapter.createCompletion(input({ executionExtensionContext: {} as never })))
+    .rejects.toBeDefined();
+  expect(call).not.toHaveBeenCalled();
+});
+
 it('preserves explicit token/temperature overrides', async () => {
   const call = jest.fn().mockResolvedValue(result);
   await new FallbackAdapter(() => ({ createCompletion: call })).createCompletion(input({ maxTokens: 42, temperatureOverride: 0.9 }));

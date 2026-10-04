@@ -430,6 +430,9 @@ export async function generateFlow(input: GenerateFlowInput): Promise<GenerateFl
   if (!model) {
     return { success: false, error: `Generator model not found: ${input.modelId}`, statusCode: 404 };
   }
+  if (model.ownerCredentialBinding !== undefined) {
+    return { success: false, error: 'Owner-bound models require an authorized model-step transport.', statusCode: 403 };
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   // Codex supports a keyless ChatGPT subscription login.  In that case the
   // SDK deliberately receives an empty key and the CLI uses `codex login`.
@@ -716,6 +719,9 @@ export async function improveFlow(input: ImproveFlowInput): Promise<GenerateFlow
   const model = await modelService.getModel(input.modelId);
   if (!model) {
     return { success: false, error: `Generator model not found: ${input.modelId}`, statusCode: 404 };
+  }
+  if (model.ownerCredentialBinding !== undefined) {
+    return { success: false, error: 'Owner-bound models require an authorized model-step transport.', statusCode: 403 };
   }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   // An empty Codex key means use the local ChatGPT-plan session from

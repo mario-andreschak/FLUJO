@@ -1,4 +1,9 @@
 const installRegistryServerMock = jest.fn();
+const getModelMock = jest.fn();
+
+jest.mock('@/backend/services/model', () => ({
+  modelService: { getModel: (...args: unknown[]) => getModelMock(...args) },
+}));
 
 jest.mock('@/backend/services/mcp/registryInstall', () => ({
   installRegistryServer: (...args: unknown[]) => installRegistryServerMock(...args),
@@ -10,6 +15,7 @@ import {
   assistantRequiredInputs,
   installAssistedMcpServer,
   normalizeMcpAssistantServerName,
+  researchMcpServers,
 } from '@/backend/services/mcp/assistedInstall';
 
 const plan = {
@@ -136,6 +142,36 @@ describe('installAssistedMcpServer', () => {
         headerOverrides: {},
       }),
     );
+  });
+});
+
+describe('owner-bound assisted research', () => {
+  it('stops before web discovery when a saved policy has become unavailable', async () => {
+    getModelMock.mockResolvedValueOnce(null);
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    try {
+      await expect(researchMcpServers({ query: 'search documents', modelId: 'policy-model' }))
+        .rejects.toThrow(/not found or unavailable/i);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('stops before web discovery and key resolution', async () => {
+    installRegistryServerMock.mockClear();
+    getModelMock.mockResolvedValueOnce({
+      id: 'owner-model', name: 'bound', ApiKey: '', ownerCredentialBinding: null,
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    try {
+      await expect(researchMcpServers({ query: 'search documents', modelId: 'owner-model' }))
+        .rejects.toThrow(/authorized model-step transport/i);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(installRegistryServerMock).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 

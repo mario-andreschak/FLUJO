@@ -124,6 +124,38 @@ describe('profile-aware provider model service', () => {
     );
   });
 
+  it('refuses catalogue and connectivity probes for an owner-bound saved model', async () => {
+    storageMock.loadItem.mockResolvedValue([{
+      id: 'owner-model', name: 'gpt-test', ApiKey: '', provider: 'openai', adapter: 'openai',
+      baseUrl: 'https://owner.example/v1',
+      ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' },
+    }]);
+    await expect(modelService.fetchProviderModels(
+      'https://owner.example/v1', 'owner-model', undefined, 'override-key',
+    )).rejects.toThrow('authorized model-step transport');
+    await expect(modelService.testModel({
+      modelId: 'owner-model', apiKey: 'override-key',
+    })).rejects.toThrow('authorized model-step transport');
+    expect(providerMock.fetchModelsFromProvider).not.toHaveBeenCalled();
+    expect(cacheMock.modelCache.get).not.toHaveBeenCalled();
+  });
+
+  it('refuses old policies with an owner-bound member before any catalogue or test traffic', async () => {
+    storageMock.loadItem.mockResolvedValue([
+      { id: 'bound', name: 'gpt-test', ApiKey: '', provider: 'openai',
+        ownerCredentialBinding: { ownerId: 'factory', credentialId: 'slot' } },
+      { id: 'backup', name: 'backup', ApiKey: 'encrypted:key', provider: 'openai' },
+      { id: 'policy', name: 'policy/prod', ApiKey: '',
+        fallbackPolicy: { modelIds: ['bound', 'backup'] } },
+    ]);
+    await expect(modelService.fetchProviderModels('https://owner.example/v1', 'policy'))
+      .rejects.toThrow('authorized model-step transport');
+    await expect(modelService.testModel({ modelId: 'policy', apiKey: 'override-key' }))
+      .rejects.toThrow('authorized model-step transport');
+    expect(await modelService.getModel('policy')).toBeNull();
+    expect(providerMock.fetchModelsFromProvider).not.toHaveBeenCalled();
+  });
+
   it('does not cache an empty provider response', async () => {
     encryptionMock.resolveAndDecryptApiKey.mockResolvedValue('resolved-key');
     providerMock.fetchModelsFromProvider.mockResolvedValue([]);

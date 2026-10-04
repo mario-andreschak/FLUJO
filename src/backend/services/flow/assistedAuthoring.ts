@@ -79,6 +79,9 @@ async function authoringCompletion(
 ): Promise<string> {
   const model = await modelService.getModel(modelId);
   if (!model) throw new Error(`AI model not found: ${modelId}`);
+  if (model.ownerCredentialBinding !== undefined) {
+    throw new Error('Owner-bound models require an authorized model-step transport.');
+  }
   const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
   const apiKey = resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
   if (apiKey === null) throw new Error('Could not resolve the selected AI model credentials.');

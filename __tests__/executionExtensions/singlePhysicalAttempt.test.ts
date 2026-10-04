@@ -7,7 +7,7 @@ import { OpenRouterMediaAdapter } from '@/backend/services/model/adapters/openro
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { createOpenAIClient } from '@/backend/services/model/openaiClient';
 import { FallbackAdapter } from '@/backend/services/model/adapters/fallbackAdapter';
-import { ExecutionExtensionError, executionExtensionSinglePhysicalAttempt, registerExecutionExtension, type ExecutionExtensionContext, type ExecutionModelIdentity, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
+import { dispatchExecutionModelRequest, ExecutionExtensionError, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, registerExecutionExtension, type ExecutionExtensionContext, type ExecutionModelIdentity, type ExecutionModelRequestIntent, type ExecutionOwnerModelDispatchRequest } from '@/backend/execution/extensions';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { Model } from '@/shared/types/model';
 import { fixtureAdapter, fixtureRun, mintFixture } from './fixtureAdapter';
@@ -683,6 +683,216 @@ describe('authenticated single physical OpenAI attempt', () => {
       await expect(new OpenAiAdapter().createCompletion(input(mintFixture(adapter))))
         .rejects.toMatchObject({ code: 'trusted_execution_context_required' });
     } finally { restoreReplacement?.(); }
+    expect(physicalRequests).toBe(0);
+  });
+
+  const boundModel = (): Model => ({ ...model(), ownerCredentialBinding: { ownerId: 'owner-fixture', credentialId: 'credential-fixture' } });
+  const boundInput = (context: ExecutionExtensionContext, bound = boundModel()): CompletionInput =>
+    ({ ...input(context), model: bound, apiKey: '' });
+
+  it.each(['response', 'stream'] as const)('sends a bound %s step only through the owner with no FLUJO credential', async mode => {
+    const dispatchModelRequest = jest.fn(async (_step: object, request: ExecutionOwnerModelDispatchRequest) => {
+      expect(request.version).toBe(2);
+      expect(request.operation).toBe(mode === 'stream' ? 'chat.completions.create(stream)' : 'chat.completions.create');
+      expect(request.model.ownerCredentialBinding).toEqual({ ownerId: 'owner-fixture', credentialId: 'credential-fixture' });
+      expect(request.url).toBe(`${baseUrl}/chat/completions`);
+      expect(request.headers.some(([name]) => name === 'authorization')).toBe(false);
+      expect(JSON.stringify(request)).not.toContain('owner-credential-not-present-in-flujo');
+      expect(request.bodySha256).toBe(createHash('sha256').update(request.body).digest('hex'));
+      expect(request.headersSha256).toBe(createHash('sha256').update(JSON.stringify(request.headers)).digest('hex'));
+      const ownerHeaders = new Headers(request.headers.map(([name, value]): [string, string] => [name, value]));
+      ownerHeaders.set('authorization', 'Bearer owner-fixture-secret');
+      const response = await fetch(request.url, {
+        method: request.method,
+        headers: ownerHeaders,
+        body: Buffer.from(request.body),
+        redirect: 'error',
+      });
+      return response;
+    });
+    const owner = fixtureAdapter({
+      issueModelStep: async parent => ({ ...parent, step: Symbol('fresh-child') }),
+      dispatchModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    respond = (request, response) => {
+      expect(request.headers.authorization).toBe('Bearer owner-fixture-secret');
+      if (mode === 'response') return success(response);
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end('data: {"id":"fixture-stream","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    };
+    const bound = boundModel();
+    const parent = mintFixture(owner);
+    const child = await issueExecutionModelStepContext(parent, bound);
+    const adapter = new OpenAiAdapter();
+    const result = mode === 'stream' ? await adapter.createStreamCompletion(boundInput(child, bound)) : await adapter.createCompletion(boundInput(child, bound));
+    expect(result.completion.choices[0].message.content).toBe('OK');
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(1);
+    expect(physicalRequests).toBe(1);
+    await expect(adapter.createCompletion(boundInput(child, bound)))
+      .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(1);
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('requires a fresh bound child, an owner sender and an empty local key before any POST', async () => {
+    const bound = boundModel();
+    const noIssuer = fixtureAdapter({ dispatchModelRequest: async () => new Response('{}') });
+    restore = registerExecutionExtension(noIssuer);
+    const parent = mintFixture(noIssuer);
+    await expect(issueExecutionModelStepContext(parent, bound))
+      .rejects.toMatchObject({ code: 'execution_model_step_issuer_required' });
+    await expect(new OpenAiAdapter().createCompletion(boundInput(parent, bound)))
+      .rejects.toMatchObject({ code: 'execution_model_step_context_required' });
+    restore();
+
+    const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }) });
+    restore = registerExecutionExtension(owner);
+    const child = await issueExecutionModelStepContext(mintFixture(owner), bound);
+    await expect(new OpenAiAdapter().createCompletion(boundInput(child, bound)))
+      .rejects.toMatchObject({ code: 'execution_model_dispatch_required' });
+    expect(physicalRequests).toBe(0);
+    restore();
+
+    const dispatchModelRequest = jest.fn(async () => new Response('{}'));
+    const complete = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
+    restore = registerExecutionExtension(complete);
+    const cleanChild = await issueExecutionModelStepContext(mintFixture(complete), bound);
+    await expect(new OpenAiAdapter().createCompletion({ ...boundInput(cleanChild, bound), apiKey: 'local-secret' }))
+      .rejects.toMatchObject({ code: 'execution_owner_model_local_credential_forbidden' });
+    expect(dispatchModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('does not downgrade an owner-transport context when a saved model loses its binding', async () => {
+    const dispatchModelRequest = jest.fn(async () => new Response('{}'));
+    const owner = fixtureAdapter({
+      issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }),
+      dispatchModelRequest,
+    });
+    restore = registerExecutionExtension(owner);
+    const parent = mintFixture(owner);
+    const swapped = { ...model(), id: boundModel().id };
+    await expect(new OpenAiAdapter().createCompletion({ ...input(parent), model: swapped }))
+      .rejects.toMatchObject({ code: 'execution_owner_model_binding_required' });
+    expect(dispatchModelRequest).not.toHaveBeenCalled();
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('binds each child to its exact model and requires a new owner child for the next step', async () => {
+    respond = (_request, response) => success(response);
+    const dispatchModelRequest = jest.fn(async (_step: object, request: ExecutionOwnerModelDispatchRequest) => {
+      const ownerHeaders = new Headers(request.headers.map(([name, value]): [string, string] => [name, value]));
+      ownerHeaders.set('authorization', 'Bearer owner-fixture-secret');
+      return fetch(request.url, { method: request.method, headers: ownerHeaders, body: Buffer.from(request.body), redirect: 'error' });
+    });
+    const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
+    restore = registerExecutionExtension(owner);
+    const bound = boundModel();
+    const parent = mintFixture(owner);
+    const first = await issueExecutionModelStepContext(parent, bound);
+    await expect(new OpenAiAdapter().createCompletion(boundInput(first, { ...bound, id: 'different-model' })))
+      .rejects.toMatchObject({ code: 'execution_model_step_context_required' });
+    expect(dispatchModelRequest).not.toHaveBeenCalled();
+    await new OpenAiAdapter().createCompletion(boundInput(first, bound));
+    const second = await issueExecutionModelStepContext(parent, bound);
+    await new OpenAiAdapter().createCompletion(boundInput(second, bound));
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(2);
+    expect(physicalRequests).toBe(2);
+  });
+
+  it('consumes a bound child before awaiting a slow owner sender', async () => {
+    respond = (_request, response) => success(response);
+    let entered!: () => void;
+    let release!: () => void;
+    const ownerEntered = new Promise<void>(resolve => { entered = resolve; });
+    const ownerGate = new Promise<void>(resolve => { release = resolve; });
+    const dispatchModelRequest = jest.fn(async (_step: object, request: ExecutionOwnerModelDispatchRequest) => {
+      entered();
+      await ownerGate;
+      const headers = new Headers(request.headers.map(([name, value]): [string, string] => [name, value]));
+      headers.set('authorization', 'Bearer owner-fixture-secret');
+      return fetch(request.url, { method: request.method, headers, body: Buffer.from(request.body), redirect: 'error' });
+    });
+    const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
+    restore = registerExecutionExtension(owner);
+    const bound = boundModel();
+    const child = await issueExecutionModelStepContext(mintFixture(owner), bound);
+    const adapter = new OpenAiAdapter();
+    const first = adapter.createCompletion(boundInput(child, bound));
+    await ownerEntered;
+    try {
+      await expect(adapter.createCompletion(boundInput(child, bound)))
+        .rejects.toMatchObject({ code: 'execution_model_request_already_claimed' });
+      expect(dispatchModelRequest).toHaveBeenCalledTimes(1);
+      expect(physicalRequests).toBe(0);
+    } finally {
+      release();
+    }
+    await first;
+    expect(physicalRequests).toBe(1);
+  });
+
+  it('does not mint two children when concurrent issuers return one private step object', async () => {
+    const baseline = fixtureAdapter();
+    const privateRun = fixtureRun();
+    const sharedStep = { ...privateRun, step: 'same-owner-value' };
+    let entered!: () => void;
+    let release!: () => void;
+    const childCheckEntered = new Promise<void>(resolve => { entered = resolve; });
+    const childCheckGate = new Promise<void>(resolve => { release = resolve; });
+    const owner = fixtureAdapter({
+      issueModelStep: async () => sharedStep,
+      assertRun: async (value, expected) => {
+        if (value === sharedStep) { entered(); await childCheckGate; }
+        await baseline.assertRun(value, expected);
+      },
+    });
+    restore = registerExecutionExtension(owner);
+    const parent = mintFixture(owner, privateRun);
+    const first = issueExecutionModelStepContext(parent, boundModel());
+    await childCheckEntered;
+    try {
+      await expect(issueExecutionModelStepContext(parent, boundModel()))
+        .rejects.toMatchObject({ code: 'execution_model_step_reused' });
+    } finally {
+      release();
+    }
+    await first;
+    expect(physicalRequests).toBe(0);
+  });
+
+  it('passes only validated v2 fields to the owner sender', async () => {
+    let sdkFinal!: ExecutionOwnerModelDispatchRequest;
+    const dispatchModelRequest = jest.fn(async (_step: object, request: ExecutionOwnerModelDispatchRequest) => {
+      sdkFinal = request;
+      return new Response(JSON.stringify({ id: 'fixture-completion', object: 'chat.completion', created: 1,
+        model: 'fixture', choices: [{ index: 0, finish_reason: 'stop', logprobs: null,
+          message: { role: 'assistant', content: 'OK', refusal: null } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    const owner = fixtureAdapter({ issueModelStep: async value => ({ ...value, step: Symbol('fresh-child') }), dispatchModelRequest });
+    restore = registerExecutionExtension(owner);
+    const bound = boundModel();
+    const parent = mintFixture(owner);
+    await new OpenAiAdapter().createCompletion(boundInput(await issueExecutionModelStepContext(parent, bound), bound));
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(1);
+
+    const child = await issueExecutionModelStepContext(parent, bound);
+    await dispatchExecutionModelRequest(child, { ...sdkFinal, extraAuthority: 'forged' } as ExecutionOwnerModelDispatchRequest);
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(2);
+    expect(dispatchModelRequest.mock.calls[1][1]).not.toHaveProperty('extraAuthority');
+
+    for (const forged of [
+      { ...sdkFinal, url: `${baseUrl}/different` },
+      { ...sdkFinal, body: Uint8Array.from([1, 2, 3]) },
+      { ...sdkFinal, headers: [...sdkFinal.headers, ['authorization', 'Bearer smuggled']] },
+    ]) {
+      const fresh = await issueExecutionModelStepContext(parent, bound);
+      await expect(dispatchExecutionModelRequest(fresh, forged as ExecutionOwnerModelDispatchRequest))
+        .rejects.toMatchObject({ code: 'execution_model_wire_mismatch' });
+    }
+    expect(dispatchModelRequest).toHaveBeenCalledTimes(2);
     expect(physicalRequests).toBe(0);
   });
 });

@@ -92,6 +92,15 @@ describe('sampling handler', () => {
     await expect(handler(sampleRequest)).rejects.toThrow(/not enabled/i);
   });
 
+  it('rejects owner-bound sampling before key resolution or completion', async () => {
+    getModelMock.mockResolvedValueOnce({ name: 'bound', ApiKey: '', ownerCredentialBinding: null });
+    const handler = captureHandler(cfg({ enabled: true, modelId: 'm1' }));
+
+    await expect(handler(sampleRequest)).rejects.toThrow(/authorized model-step transport/i);
+    expect(resolveKeyMock).not.toHaveBeenCalled();
+    expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
   it('enforces the rolling rate limit', async () => {
     const handler = captureHandler(cfg({ enabled: true, modelId: 'm1', maxCallsPerMinute: 2 }));
     await handler(sampleRequest);

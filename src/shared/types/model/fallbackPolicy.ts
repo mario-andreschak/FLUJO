@@ -1,4 +1,4 @@
-import type { Model } from './model';
+import { isOwnerCredentialBoundModel, type Model } from './model';
 
 export type FallbackTrigger = 'rate_limit' | 'unavailable' | 'timeout';
 export const DEFAULT_FALLBACK_TRIGGERS: FallbackTrigger[] = ['rate_limit', 'unavailable', 'timeout'];
@@ -19,6 +19,12 @@ export interface ModelRouteReceipt {
     outcome: 'completed' | 'failed' | 'cooldown' | 'incompatible';
     reason?: FallbackTrigger;
   }>;
+}
+
+/** Also reject old or hand-authored policies that reference an owner credential. */
+export function hasOwnerBoundFallbackMember(model: Model, models: Model[]): boolean {
+  return Boolean(model.fallbackPolicy?.modelIds.some(id =>
+    models.some(member => member.id === id && isOwnerCredentialBoundModel(member))));
 }
 
 export function validateFallbackPolicy(model: Model, models: Model[]): string | undefined {
@@ -48,6 +54,10 @@ export function validateFallbackPolicy(model: Model, models: Model[]): string | 
   if (policy.cooldownSeconds !== undefined && (!Number.isInteger(policy.cooldownSeconds) ||
       policy.cooldownSeconds < 0 || policy.cooldownSeconds > 3600)) return 'Cooldown must be between 0 and 3600 seconds';
   if (model.ApiKey?.trim()) return 'Policies use their members’ credentials; leave ApiKey empty';
+  if (isOwnerCredentialBoundModel(model)) return 'Owner-bound models cannot be fallback policies';
+  if (hasOwnerBoundFallbackMember(model, models)) {
+    return 'Owner-bound models cannot be fallback policy members';
+  }
   return undefined;
 }
 
