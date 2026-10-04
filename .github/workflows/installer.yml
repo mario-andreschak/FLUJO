@@ -90,9 +90,9 @@ jobs:
     name: Compile flujo-setup.exe
     needs: [powershell-tests, artifact-smoke, unix-installer-tests]
     runs-on: windows-latest
-    permissions:
-      contents: write
-      actions: read
+    outputs:
+      artifact_id: ${{ steps.installer-artifact.outputs.artifact-id }}
+      sha256: ${{ steps.installer-digest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -145,25 +145,104 @@ jobs:
             throw "Installer artifact is empty: $artifact"
           }
 
+      - name: Bind release installer bytes to the exact source tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/installer-release.mjs prepare
+
+      - name: Retain the original executable digest
+        id: installer-digest
+        run: node scripts/installer-release.mjs digest
+
       - name: Upload validation artifact
+        id: installer-artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flujo-setup
-          path: installer/Output/flujo-setup.exe
+          path: |
+            installer/Output/flujo-setup.exe
+            installer/Output/installer-release-evidence.json
+            installer/Output/installer-SHA256SUMS
           if-no-files-found: error
           retention-days: 14
 
-      - name: Require exact-commit main verification before release publication
-        if: startsWith(github.ref, 'refs/tags/v')
+  installer-attest:
+    if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: installer-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      INSTALLER_RELEASE_DIR: ${{ runner.temp }}/flujo-installer-release
+      EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
+          path: ${{ env.INSTALLER_RELEASE_DIR }}
+          merge-multiple: true
+      - name: Recheck exact main verification before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/require-release-verification.mjs installer
+      - name: Verify original installer bytes and source inventory
+        run: node scripts/installer-release.mjs validate
+      - name: Attest original executable and source evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: ${{ env.INSTALLER_RELEASE_DIR }}/installer-SHA256SUMS
+
+  installer-publish:
+    if: ${{ github.repository == 'mario-andreschak/FLUJO' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [installer-build, installer-attest]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      INSTALLER_RELEASE_DIR: ${{ runner.temp }}/flujo-installer-release
+      EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.installer-build.outputs.artifact_id }}
+          path: ${{ env.INSTALLER_RELEASE_DIR }}
+          merge-multiple: true
+      - name: Verify official signatures for the original installer and evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/installer-release.mjs verify-signatures
+      - name: Recheck exact main verification before attaching release files
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/require-release-verification.mjs installer
 
       - name: Attach installer to version release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: installer/Output/flujo-setup.exe
+          files: |
+            ${{ env.INSTALLER_RELEASE_DIR }}/flujo-setup.exe
+            ${{ env.INSTALLER_RELEASE_DIR }}/installer-release-evidence.json
+            ${{ env.INSTALLER_RELEASE_DIR }}/installer-SHA256SUMS
+          fail_on_unmatched_files: true
           generate_release_notes: true
 
   unix-installer-tests:
