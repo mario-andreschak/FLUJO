@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import api from './prepare-isolation-ci-image.cjs';
 
 test('linked runtime dependencies are exact paths and duplicate entries collapse', () => {
@@ -85,4 +87,53 @@ test('ownership and absence queries include untagged/intermediate images', () =>
   const listing = args => args.includes('--all') ? `${image}\n` : '';
   assert.deepEqual(api.ownedImages(listing, 'fixture-generation'), [image]);
   assert.equal(listing(['image', 'ls', '--no-trunc']), '');
+});
+
+test('failure receipt retains stage and fixed codes while excluding command output and arbitrary error text', () => {
+  const sentinel = 'synthetic-private-output';
+  const commandError = Object.assign(new Error(sentinel), { code: 'ETIMEDOUT', status: null,
+    stdout: sentinel, stderr: sentinel, env: { TOKEN: sentinel } });
+  assert.deepEqual(api.preparationFailure('inspect-local-daemon', commandError), {
+    stage: 'inspect-local-daemon', reason: 'system-error', code: 'ETIMEDOUT',
+  });
+  const failed = api.preparationFailure('build-runtime-image', Object.assign(new Error(sentinel), {
+    code: sentinel, status: 1, stdout: sentinel, stderr: sentinel,
+  }));
+  assert.deepEqual(failed, { stage: 'build-runtime-image', reason: 'operation-failed', exitCode: 1 });
+  assert.equal(JSON.stringify(failed).includes(sentinel), false);
+  assert.deepEqual(api.preparationFailure('copy-runner-node', new Error('Invalid runtime file')), {
+    stage: 'copy-runner-node', reason: 'invalid-runtime-file',
+  });
+});
+
+test('actual CLI failure writes redacted diagnostics and observed owned-context cleanup', t => {
+  const directory = fixture(t);
+  const cliModule = { exports: {} };
+  const nativeRequire = createRequire(import.meta.url);
+  const commands = [];
+  const sentinel = 'synthetic-private-command-output';
+  const requireCli = name => name === 'node:child_process' ? {
+    execFileSync: (executable, args) => {
+      assert.equal(executable, '/usr/bin/docker');
+      commands.push(args);
+      if (args.includes('info')) throw Object.assign(new Error(sentinel), { code: 'ETIMEDOUT', stderr: sentinel });
+      assert.deepEqual(Array.from(args.slice(4, 7)), ['image', 'ls', '--all']);
+      return '';
+    },
+  } : name === 'node:os' ? { ...os, tmpdir: () => directory } : nativeRequire(name);
+  requireCli.main = cliModule;
+  const cliProcess = { platform: 'linux', version: process.version, arch: process.arch, argv: [], env: {} };
+  const output = [];
+  vm.runInNewContext(fs.readFileSync(new URL('./prepare-isolation-ci-image.cjs', import.meta.url), 'utf8'), {
+    require: requireCli, module: cliModule, __dirname: path.join(directory, 'scripts'), process: cliProcess,
+    console: { error: value => output.push(value), log: value => output.push(value) }, Buffer,
+  });
+  assert.equal(cliProcess.exitCode, 1);
+  const receipt = JSON.parse(fs.readFileSync(path.join(directory, '.tmp/mcp-isolation-ci-image.json'), 'utf8'));
+  assert.deepEqual(receipt.failure, { stage: 'inspect-local-daemon', reason: 'system-error', code: 'ETIMEDOUT' });
+  assert.equal(receipt.cleanup, 'absent');
+  assert.equal(receipt.contextRemoved, true);
+  assert.equal(fs.existsSync(receipt.context), false);
+  assert.equal(commands.length, 2);
+  assert.equal(JSON.stringify([receipt, output]).includes(sentinel), false);
 });

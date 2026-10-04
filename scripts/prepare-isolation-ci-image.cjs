@@ -99,6 +99,25 @@ function writeState(state) {
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
 }
 
+// Keep diagnostics useful without retaining command output, environment or arbitrary error text.
+function preparationFailure(stage, error) {
+  const known = new Map([
+    ['Linux Docker is unavailable', 'unsupported-daemon'],
+    ['Invalid runtime dependency list', 'invalid-dependencies'],
+    ['Invalid runtime file', 'invalid-runtime-file'],
+    ['Runtime file changed', 'changed-runtime-file'],
+    ['Runtime file copy did not progress', 'copy-did-not-progress'],
+    ['Runtime image exceeds its size limit', 'runtime-size-limit'],
+    ['Invalid isolation CI image identity', 'invalid-image-identity'],
+    ['Invalid CI environment file', 'invalid-ci-environment-file'],
+  ]);
+  const code = ['ENOENT', 'EACCES', 'EPERM', 'EEXIST', 'ELOOP', 'ETIMEDOUT', 'ENOSPC'].includes(error?.code)
+    ? error.code : undefined;
+  const exitCode = Number.isInteger(error?.status) && error.status >= 0 && error.status <= 255 ? error.status : undefined;
+  return { stage, reason: known.get(error?.message) || (code ? 'system-error' : 'operation-failed'),
+    ...(code ? { code } : {}), ...(exitCode !== undefined ? { exitCode } : {}) };
+}
+
 function ownedImages(runDocker, generation) {
   // The fixture is untagged. Default image ls may hide it as an intermediate image.
   return runDocker(['image', 'ls', '--all', '--no-trunc', '--filter', `label=${label}=${generation}`, '--format', '{{.ID}}'])
@@ -132,7 +151,9 @@ function cleanup(state) {
 
 function assembleRuntime(context, state) {
   ownedContext(context);
+  state.stage = 'resolve-runner-node';
   const executable = fs.realpathSync.native(process.execPath);
+  state.stage = 'list-runtime-dependencies';
   const dependencies = linkedLibraries(execFileSync('/usr/bin/ldd', [executable], {
     env: { PATH: '/usr/bin:/bin', LANG: 'C' }, encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024,
   }));
@@ -140,12 +161,14 @@ function assembleRuntime(context, state) {
     ...dependencies.map(source => ({ source, destination: source }))];
   let totalBytes = 0;
   for (const file of files) {
+    state.stage = file.source === executable ? 'copy-runner-node' : 'copy-runtime-library';
     const destination = path.join(context, 'rootfs', file.destination.slice(1));
     const copied = copyRuntimeFile(fs.realpathSync.native(file.source), destination);
     totalBytes += copied.size;
     if (totalBytes > 384 * 1024 * 1024) throw new Error('Runtime image exceeds its size limit');
     state.runtimeFiles.push({ source: file.source, destination: file.destination, ...copied });
   }
+  state.stage = 'write-build-context';
   fs.mkdirSync(path.join(context, 'rootfs/tmp'), { mode: 0o1777 });
   fs.writeFileSync(path.join(context, '.dockerignore'), 'control\nimage.id\n');
   fs.writeFileSync(path.join(context, 'Dockerfile'), `FROM scratch\nCOPY rootfs/ /\nENV PATH=/usr/local/bin\nLABEL ${label}="${state.generation}"\n`);
@@ -158,13 +181,17 @@ function prepare() {
   fs.closeSync(receipt);
   const context = fs.mkdtempSync(path.join(path.resolve(os.tmpdir()), 'flujo-isolation-ci-'));
   const state = { schemaVersion: 1, generation: randomUUID(), context, image: null,
-    node: process.version, architecture: process.arch, platform: process.platform, runtimeFiles: [], cleanup: 'pending' };
+    node: process.version, architecture: process.arch, platform: process.platform, runtimeFiles: [], cleanup: 'pending',
+    stage: 'create-control-directory' };
   writeState(state);
   try {
     fs.mkdirSync(path.join(context, 'control'));
+    state.stage = 'inspect-local-daemon';
     if (docker(state, ['info', '--format', '{{.OSType}}']) !== 'linux') throw new Error('Linux Docker is unavailable');
     assembleRuntime(context, state);
+    state.stage = 'build-runtime-image';
     docker(state, ['build', '--network=none', '--pull=false', '--quiet', '--iidfile', path.join(context, 'image.id'), context], 90_000);
+    state.stage = 'read-image-identity';
     state.image = readBoundedFileSync(path.join(context, 'image.id'), 128).toString('utf8').trim();
     if (!imagePattern.test(state.image)) throw new Error('Invalid isolation CI image identity');
     const environment = { FLUJO_RUN_ISOLATION_SOURCE_PROBE: '1', FLUJO_TEST_ISOLATION_DOCKER: dockerExecutable,
@@ -172,6 +199,7 @@ function prepare() {
     state.environment = environment;
     writeState(state);
     if (process.env.GITHUB_ENV) {
+      state.stage = 'write-ci-environment';
       if (!path.isAbsolute(process.env.GITHUB_ENV)) throw new Error('Invalid CI environment file');
       const fd = fs.openSync(process.env.GITHUB_ENV, fs.constants.O_WRONLY | fs.constants.O_APPEND
         | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
@@ -180,8 +208,11 @@ function prepare() {
         fs.writeFileSync(fd, Object.entries(environment).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
       } finally { fs.closeSync(fd); }
     }
+    state.stage = 'ready';
+    writeState(state);
     return state;
-  } catch {
+  } catch (error) {
+    state.failure = preparationFailure(state.stage, error);
     try { cleanup(state); } catch { state.cleanup = 'unknown'; writeState(state); }
     throw new Error('Isolation CI image preparation failed; inspect its receipt');
   }
@@ -198,4 +229,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { linkedLibraries, copyRuntimeFile, ownedContext, assembleRuntime, ownedImages };
+module.exports = { linkedLibraries, copyRuntimeFile, ownedContext, assembleRuntime, ownedImages, preparationFailure };
