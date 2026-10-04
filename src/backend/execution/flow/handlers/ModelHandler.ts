@@ -3806,6 +3806,10 @@ export class ModelHandler {
           // Fixed server/node arguments are resolved only at dispatch time and
           // win over anything the model attempted to provide. They were removed
           // from the advertised schema, so the model never sees or controls them.
+          if (input.executionExtensionContext && decoded.presetArgs
+            && Object.keys(decoded.presetArgs).length > 0) {
+            throw new ExecutionExtensionError('execution_tool_presets_forbidden');
+          }
           args = await applyPresetArguments(args, decoded.presetArgs, decoded.context);
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });

@@ -14,7 +14,7 @@ import {
 } from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
-import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
+import { assertExecutionExtensionCurrent, assertExecutionServerConfig, assertExecutionToolDispatch, executionExtensionProtectedServer, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import { shippedDescriptorForConfig } from './shippedServers';
 
@@ -222,6 +222,8 @@ import {
   resolveConfigHeaders,
   shouldRecreateClient,
   safelyCloseClient,
+  protectedConfigFingerprint,
+  clientProtectedConfigFingerprint,
 } from "./connection";
 import { registerResourceNotificationHandlers } from "./resourceNotifications";
 import {
@@ -821,12 +823,12 @@ export class MCPService {
   /**
    * Connect to an MCP server by name
    */
-  async connectServer(serverName: string): Promise<MCPServiceResponse>;
+  async connectServer(serverName: string, executionExtensionContext?: ExecutionExtensionContext): Promise<MCPServiceResponse>;
 
   /**
    * Connect to an MCP server using a configuration object
    */
-  async connectServer(config: MCPServerConfig): Promise<MCPServiceResponse>;
+  async connectServer(config: MCPServerConfig, executionExtensionContext?: ExecutionExtensionContext): Promise<MCPServiceResponse>;
 
   /**
    * Implementation of connectServer that handles both parameter types.
@@ -841,9 +843,24 @@ export class MCPService {
    */
   async connectServer(
     configOrName: MCPServerConfig | string,
+    executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<MCPServiceResponse> {
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
+
+    try {
+      if (executionExtensionContext) {
+        await assertExecutionExtensionCurrent(executionExtensionContext);
+        if (serverName !== executionExtensionProtectedServer(executionExtensionContext)) {
+          throw new ExecutionExtensionError('execution_mcp_server_forbidden');
+        }
+      } else if (isProtectedExecutionServer(serverName)) {
+        throw new ExecutionExtensionError('trusted_execution_context_required');
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_authorization_unavailable',
+        statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-authorization' };
+    }
 
     // Issue #413: de-duplication and teardown ordering now live in the
     // process-wide lifecycle coordinator rather than in this instance's map.
@@ -855,7 +872,7 @@ export class MCPService {
     return beginConnect(serverName, async () => {
       // Keep the legacy instance-local map populated: existing tests and
       // status/diagnostic call sites still read it.
-      const attempt = this.connectServerInternal(configOrName).finally(() => {
+      const attempt = this.connectServerInternal(configOrName, executionExtensionContext).finally(() => {
         this.inFlightConnects.delete(serverName);
       });
       this.inFlightConnects.set(serverName, attempt);
@@ -905,8 +922,28 @@ export class MCPService {
     ].join("\0");
   }
 
+  private async assertProtectedConnectionIntent(
+    context: ExecutionExtensionContext,
+    resolvedConfig: MCPServerConfig,
+  ): Promise<void> {
+    await assertExecutionExtensionCurrent(context);
+    if (resolvedConfig.name !== executionExtensionProtectedServer(context)) {
+      throw new ExecutionExtensionError('execution_mcp_server_forbidden');
+    }
+    const storedConfig = await this.getServerConfig(resolvedConfig.name);
+    if (!storedConfig) throw new ExecutionExtensionError('execution_mcp_server_config_missing');
+    assertExecutionServerConfig(storedConfig);
+    const currentConfig = await resolveConfigHeaders(storedConfig);
+    assertExecutionServerConfig(currentConfig);
+    await assertExecutionExtensionCurrent(context);
+    if (protectedConfigFingerprint(currentConfig) !== protectedConfigFingerprint(resolvedConfig)) {
+      throw new ExecutionExtensionError('execution_mcp_server_config_changed');
+    }
+  }
+
   private async connectServerInternal(
     configOrName: MCPServerConfig | string,
+    executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<MCPServiceResponse> {
     // Determine if we're connecting by name or by config
     let config: MCPServerConfig;
@@ -969,6 +1006,7 @@ export class MCPService {
     // while the attempt is running. Cleared in the finally below.
     this.connectingServers.add(config.name);
 
+    let pendingProtectedClient: Client | undefined;
     try {
       // Clear any previous stderr logs for this server
       this.stderrLogs.set(config.name, []);
@@ -978,14 +1016,19 @@ export class MCPService {
       // httpConfigKey they compute agrees (a bound-global header would otherwise force a
       // rebuild on every connect). A rotated bound-global still rebuilds, since the resolved
       // header material — and thus the key — changes.
+      if (executionExtensionContext) await assertExecutionExtensionCurrent(executionExtensionContext);
       config = await resolveConfigHeaders(config);
+      const protectedServer = isProtectedExecutionServer(config.name);
+      if (protectedServer) assertExecutionServerConfig(config);
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
 
       // Experimental v2-beta protocol (betaClient.ts). Resolved once per attempt so
       // shouldRecreateClient and the factories below agree; websocket configs always
       // stay on the v1 SDK (the v2 SDK has no websocket transport).
       const useBeta =
-        !isProtectedExecutionServer(config.name) && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
+        !protectedServer && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
       const isolateRuntimeHome = await resolveRuntimeHomeIsolation(config);
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       const transportOptions = {
         enableRuntimeBroker: true,
         isolateRuntimeHome,
@@ -1012,7 +1055,10 @@ export class MCPService {
           useBeta,
           transportOptions,
         );
-        if (!needsNewClient) {
+        const protectedIdentityChanged = protectedServer
+          && clientProtectedConfigFingerprint(client) !== protectedConfigFingerprint(config);
+        if (!needsNewClient && !protectedIdentityChanged) {
+          if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
           log.info(`connectServer: Server ${config.name} is already connected`);
           this.lastConnectionError.delete(config.name);
           // The connection is established - a pending retry (e.g. scheduled by a
@@ -1024,7 +1070,7 @@ export class MCPService {
         }
 
         log.info(
-          `connectServer: Existing client for ${config.name} is stale (${reason}), recreating`,
+          `connectServer: Existing client for ${config.name} is stale (${protectedIdentityChanged ? 'protected config identity changed' : reason}), recreating`,
         );
         // Deregister BEFORE closing so the transport's own close event is recognized
         // as FLUJO-initiated and does not schedule a reconnect (see deregisterClient).
@@ -1039,10 +1085,12 @@ export class MCPService {
         client = undefined;
       }
 
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       // Create a new client (v2-beta when the experimental toggle is on — the beta
       // client negotiates per server and falls back to the classic handshake, so
       // existing servers keep working either way).
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
+      if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
         ? createBetaTransport(config, transportOptions)
         : createTransport(config, transportOptions);
@@ -1281,7 +1329,9 @@ export class MCPService {
       // Handshake. Both handlers above are inert until the transport is registered as
       // the CURRENT one below (their stale guard sees activeTransports unset), so a
       // failure during connect surfaces only through this call's catch.
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       await client.connect(transport);
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       if (config.transport === "stdio" && useBeta) {
         activateStdioOAuthMrtrController(transport);
       }
@@ -1303,6 +1353,7 @@ export class MCPService {
       // can show required account setup before any foreground or scheduled flow runs.
       // A malformed extension must not tear down an otherwise valid MCP connection;
       // point-of-use checks below still fail closed before dispatching a tool.
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       if (serverSupportsExternalAuthorization(client)) {
         try {
           await getExternalAuthorizationStatus(client, config.name, {
@@ -1316,6 +1367,8 @@ export class MCPService {
         }
       }
 
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
+
       // Connected successfully - clear any persisted failure from previous attempts,
       // and cancel any pending retry so an old timer can't fire against the fresh
       // connection later (the retry state is orphaned once we're connected).
@@ -1323,6 +1376,7 @@ export class MCPService {
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
       await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
+      if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
 
       const negotiated = negotiatedProtocolVersion(client);
       log.info(
@@ -1333,6 +1387,13 @@ export class MCPService {
       );
       return { success: true };
     } catch (error) {
+      if (executionExtensionContext && pendingProtectedClient) {
+        if (this.clients.get(config.name) === pendingProtectedClient) this.deregisterClient(config.name);
+        try { await safelyCloseClient(pendingProtectedClient, config.name, config); } catch { /* best-effort cleanup */ }
+      }
+      if (executionExtensionContext && error instanceof ExecutionExtensionError) {
+        return { success: false, error: error.code, statusCode: error.status, errorType: 'execution-authorization' };
+      }
       // A child may have registered its sidecar before the MCP handshake
       // failed. Never leave that browser route pointing at a dead/reused port.
       if (config.transport === 'stdio') {
@@ -1356,6 +1417,7 @@ export class MCPService {
       // endpoint advertises OAuth capability. Provider-originated errors are already
       // conclusive because this server was connected with a configured OAuth provider.
       if (
+        !executionExtensionContext &&
         requiresAuthentication &&
         !usesStaticAuthorization &&
         (config.transport === "streamable" || config.transport === "sse")
@@ -1871,8 +1933,10 @@ export class MCPService {
    * `lease.isStale()` reports a config-generation replacement so a caller can
    * never keep using a client that is being torn down.
    */
-  acquireServerLease(serverName: string): Promise<AcquireResult> {
-    return acquireLease(this, serverName);
+  acquireServerLease(serverName: string, executionExtensionContext?: ExecutionExtensionContext): Promise<AcquireResult> {
+    return acquireLease(this, serverName, executionExtensionContext
+      ? (name) => this.connectServer(name, executionExtensionContext)
+      : undefined);
   }
 
   /** Pin a server against idle/LRU closure (subscriptions, MCP App sessions, tasks). */
@@ -1928,27 +1992,65 @@ export class MCPService {
   async listServerTools(
     serverName: string,
     audience: ToolListAudience = "model",
+    executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<{ tools: ToolResponse[]; error?: string }> {
     log.debug(
       `listServerTools: Entering method for server ${serverName}, audience ${audience}`,
     );
 
+    if (!executionExtensionContext && isProtectedExecutionServer(serverName)) {
+      throw new ExecutionExtensionError('trusted_execution_context_required');
+    }
+
+    // A protected discovery must use the client built from the currently
+    // owner-approved effective config. A name match alone can select a stale
+    // transport, including a websocket whose URL changed after connection.
+    let protectedClient: Client | undefined;
+    let protectedDisabled = false;
+    if (executionExtensionContext) {
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      if (serverName !== executionExtensionProtectedServer(executionExtensionContext)) {
+        throw new ExecutionExtensionError('execution_mcp_server_forbidden');
+      }
+      const storedConfig = await this.getServerConfig(serverName);
+      if (!storedConfig) throw new ExecutionExtensionError('execution_mcp_server_config_missing');
+      protectedDisabled = storedConfig.disabled === true;
+      const effectiveConfig = await resolveConfigHeaders(storedConfig);
+      assertExecutionServerConfig(effectiveConfig);
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      protectedClient = this.getClient(serverName);
+      if (!protectedClient || clientProtectedConfigFingerprint(protectedClient) !== protectedConfigFingerprint(effectiveConfig)) {
+        throw new ExecutionExtensionError('execution_mcp_client_identity_changed');
+      }
+    }
+
     // Point-of-use guard on top of the connect-time hard gate (issue #54): fail
     // loudly instead of attempting a pointless reconnect against a disabled server.
-    if (await this.isServerDisabled(serverName)) {
+    if (executionExtensionContext ? protectedDisabled : await this.isServerDisabled(serverName)) {
       const error = `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`;
       log.warn(`listServerTools: ${error}`);
       return { tools: [], error };
     }
 
-    let client = this.getClient(serverName);
+    if (executionExtensionContext && this.getClient(serverName) !== protectedClient) {
+      throw new ExecutionExtensionError('execution_mcp_client_identity_changed');
+    }
+
+    let client = protectedClient ?? this.getClient(serverName);
     if (!client) {
       log.warn(`listServerTools: Client not found for ${serverName}`);
     }
 
     let result = await listTools(client, serverName, audience);
+    if (executionExtensionContext) {
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      if (this.getClient(serverName) !== protectedClient) {
+        throw new ExecutionExtensionError('execution_mcp_client_identity_changed');
+      }
+    }
 
     if (result.error) {
+      if (executionExtensionContext) return result;
       // The connection is likely stale/dead - reconnect from scratch and try once more
       // before giving up, so a recoverable blip does not silently strip a node's tools.
       log.warn(
@@ -2054,10 +2156,11 @@ export class MCPService {
     trustedContext?: TrustedMcpToolInvocationContext,
     executionExtensionContext?: ExecutionExtensionContext,
   ): Promise<MCPServiceResponse> {
+    const protectedDispatch = Boolean(executionExtensionContext) || isProtectedExecutionServer(serverName);
     // Customer authority is checked before config side effects, connections or leases.
     // Testers, Apps, proxy, scheduler and missing-context resumes cannot mint assertions.
     try {
-      if (executionExtensionContext || isProtectedExecutionServer(serverName)) {
+      if (protectedDispatch) {
         await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
         const config = await this.getServerConfig(serverName);
         if (!config) throw new ExecutionExtensionError('execution_server_policy_mismatch');
@@ -2097,7 +2200,7 @@ export class MCPService {
     // call is demand, so while it runs neither the idle sweep nor LRU eviction may
     // close the server underneath it. Acquiring also connects a cold server on
     // demand, which is what makes lazy pooling transparent here.
-    const acquired = await this.acquireServerLease(serverName);
+    const acquired = await this.acquireServerLease(serverName, executionExtensionContext);
     const lease = acquired.lease;
     if (lease) {
       client = lease.client;
@@ -2111,7 +2214,22 @@ export class MCPService {
     // ONE `finally` covering every exit path (including the authorization gate's
     // early returns). An early return that skipped the release would leave a
     // phantom lease pinning the server warm for the process lifetime.
+    const verifyProtectedRecipient = async (): Promise<void> => {
+      if (!protectedDispatch) return;
+      await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
+      const storedConfig = await this.getServerConfig(serverName);
+      if (!storedConfig) throw new ExecutionExtensionError('execution_mcp_server_config_missing');
+      assertExecutionServerConfig(storedConfig);
+      const effectiveConfig = await resolveConfigHeaders(storedConfig);
+      assertExecutionServerConfig(effectiveConfig);
+      await assertExecutionToolDispatch(executionExtensionContext, serverName, source);
+      if (!lease || !client || lease.isStale() || this.getClient(serverName) !== client
+        || clientProtectedConfigFingerprint(client) !== protectedConfigFingerprint(effectiveConfig)) {
+        throw new ExecutionExtensionError('execution_mcp_client_identity_changed');
+      }
+    };
     try {
+      await verifyProtectedRecipient();
       // Fail closed before invoking a side-effecting tool. This gate is shared by
       // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
       // execution can never discover account setup by opening UI after the fact.
@@ -2173,6 +2291,7 @@ export class MCPService {
             trustedContext,
           )
         : args;
+      await verifyProtectedRecipient();
       const result = await callToolFunction(
         client,
         serverName,
@@ -2185,6 +2304,7 @@ export class MCPService {
         callerNodeId,
         ownerScope,
         executionExtensionContext,
+        protectedDispatch ? verifyProtectedRecipient : undefined,
       );
       if (result.success && trustedTicketConversationId) {
         const ticketId = createdTicketIdFromMcpResult(result.data);
@@ -2205,6 +2325,12 @@ export class MCPService {
       }
       log.info(`callTool: Called tool ${toolName} on ${serverName}`);
       return result;
+    } catch (error) {
+      if (protectedDispatch) {
+        return { success: false, error: error instanceof ExecutionExtensionError ? error.code : 'execution_tool_unavailable',
+          statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-call' };
+      }
+      throw error;
     } finally {
       // Idempotent release: safe even when acquisition failed and this is undefined.
       lease?.release();

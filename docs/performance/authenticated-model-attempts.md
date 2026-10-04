@@ -88,6 +88,37 @@ execution-extension denials propagate out of ProcessNode.
 For an ordinary branded context with unknown tool support, skipping the lookup
 can mean one failed tool-bearing call followed by the existing tool-free
 fallback. Unbranded ordinary runs keep the catalogue optimization.
+Before protected Process preparation renders a prompt or discovers tools, it
+rejects MCP nodes bound to any server other than the owner-selected server and
+consume-role resource nodes that read an external MCP server. Protected prompt
+rendering rejects resource pills before they can connect or read, while
+run-scoped resource nodes carry the execution context into their authority
+checks. Discovery for an allowed protected server skips node-root updates:
+rebinding a node ID could otherwise notify its previously bound foreign server.
+Selected MCP Skills are denied because their loader can connect to its server
+before checking conversation approval; native resource discovery is skipped.
+The admitted MCP/resource bindings are frozen copies of node parameters, and
+discovery rechecks the owner and selected server at connection. Direct protected
+model dispatch requires the admitted bindings. Protected prompt composition
+also leaves mutable cross-run KV references unresolved. Protected handoff
+descriptions use local target labels without querying another node's MCP server
+status. Protected tool presets are denied before their shared-global,
+conversation or file references can be resolved. Protected MCP connections
+carry the run context through setup, recheck it and the stored recipient before
+the handshake, and close a new client if post-handshake validation fails.
+Contextless managed `connectServer` calls and tool inventory for the protected
+server are denied. Listing and tool dispatch require a client stamped for the exact
+resolved config; dispatch rechecks the owner and recipient before readiness,
+tool listing and the final SDK tool call. A changed recipient fails closed
+instead of retrying a side-effecting call. These are process-local checks:
+in-flight handshakes cannot be undone, and concurrent config/authority changes
+need an owner-controlled transport or lease for a physical guarantee. The
+separate host `testConnection` probe, Static MCP node roots updates and
+separately running host processes still require
+process/config isolation for a whole-host confidentiality claim. A mutable
+OAuth token stored in the server config can also change the exact fingerprint
+during a handshake and make a protected connection fail closed; the owner must
+pin an approved credential/recipient identity before adopting that transport.
 ModelHandler requires the qualified route again when it constructs the adapter
 after asynchronous request preparation; the OpenAI adapter rechecks before its
 SDK call. The claim also checks that its registered adapter is still current

@@ -82,6 +82,7 @@ export class ResourceHandler {
 
     const sections: string[] = [];
     for (const ref of consumed) {
+      await assertFlowExecutionCurrent(input);
       const props = ref.properties ?? {};
       const label = props.name || props.runName || props.uri || ref.id;
       try {
@@ -160,6 +161,7 @@ export class ResourceHandler {
           });
         }
       } catch (error) {
+        if (input.executionExtensionContext) throw error;
         rethrowFlowExecutionAuthorityError(error);
         log.error(`Failed to read resource node ${ref.id}; injecting a note`, error);
         sections.push(`### ${label}\n(resource is currently unavailable)\n`);

@@ -84,6 +84,16 @@ import {
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
 interface ClientWithCapKey {
   __flujoCapKey?: string;
+  __flujoProtectedConfigFingerprint?: string;
+}
+
+/** Bind a protected client to the exact resolved config that created it. */
+export function protectedConfigFingerprint(config: MCPServerConfig): string {
+  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+}
+
+export function clientProtectedConfigFingerprint(client: Client): string | undefined {
+  return (client as ClientWithCapKey).__flujoProtectedConfigFingerprint;
 }
 
 /** Key of config that drives connect-time client capabilities. */
@@ -363,6 +373,9 @@ export function createNewClient(config: MCPServerConfig): Client {
     // The configured private integration accepts only synchronous tool calls.
     const client = new Client({ name: `flujo-${config.name}-client`, version: '3.46.2' }, { capabilities: {} });
     (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
+      value: protectedConfigFingerprint(config), enumerable: false,
+    });
     return client;
   }
 

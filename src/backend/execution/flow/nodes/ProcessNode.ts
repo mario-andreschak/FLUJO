@@ -51,7 +51,7 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt } from '@/backend/execution/extensions';
+import { ExecutionExtensionError, assertExecutionExtensionCurrent, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -59,6 +59,19 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
+
+/** Keep checked graph bindings stable across awaits and shared-state aliases. */
+function freezePreparedBindings<T>(value: T): T {
+  const seen = new WeakSet<object>();
+  const freeze = (item: unknown): void => {
+    if (!item || typeof item !== 'object' || seen.has(item)) return;
+    seen.add(item);
+    for (const child of Object.values(item)) freeze(child);
+    Object.freeze(item);
+  };
+  freeze(value);
+  return value;
+}
 
 /**
  * Providers report unsupported tool use through several shapes: an OpenAI SDK
@@ -106,7 +119,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
   /**
    * Generate handoff tools for each connected non-MCP node
    */
-  private async generateHandoffTools(sharedState: SharedState): Promise<ToolDefinition[]> {
+  private async generateHandoffTools(sharedState: SharedState, protectedPreparation = false): Promise<ToolDefinition[]> {
     log.info('Generating handoff tools');
 
     // Get all actions (edge IDs)
@@ -185,7 +198,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       if (target.type === 'subflow') {
         const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
         sharedState.subflowDetachedToolNameMap[toolName] = target.id;
-        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined) : `Start ${target.label} as a detached subflow`;
+        const description = !protectedPreparation && flowNodeForTarget
+          ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
+          : `Start ${target.label} as a detached subflow`;
         const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
       }
@@ -194,7 +209,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         // Inline calls return structured results without changing graph nodes.
         const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
         sharedState.subflowToolNameMap[toolName] = target.id;
-        const description = flowNodeForTarget
+        const description = !protectedPreparation && flowNodeForTarget
           ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
           : `Run ${target.label} as a callable subflow tool`;
         const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
@@ -210,7 +225,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       sharedState.handoffTargetTypes[target.id] = target.type;
 
       const flowNode = flowNodesById?.get(target.id);
-      const description = flowNode
+      const description = !protectedPreparation && flowNode
         ? await buildHandoffDescription(flowNode, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
         : `Hand off execution to ${target.label} (${target.type})`;
 
@@ -359,13 +374,23 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
-    const currentAppId = node_params?.properties?.mcpNodes?.[0]?.properties?.boundServer;
+    const executionExtensionContext = sharedState.executionExtensionContext;
+    // The protected graph may be mutated while this async preparation awaits.
+    // Detach the inputs used by every MCP/resource side effect before checking
+    // them, then keep using these exact admitted values through model dispatch.
+    const mcpNodes = executionExtensionContext
+      ? freezePreparedBindings(structuredClone(node_params?.properties?.mcpNodes ?? []))
+      : node_params?.properties?.mcpNodes ?? [];
+    const resourceNodes = executionExtensionContext
+      ? freezePreparedBindings(structuredClone(node_params?.properties?.resourceNodes ?? []))
+      : node_params?.properties?.resourceNodes ?? [];
+    const currentAppId = mcpNodes[0]?.properties?.boundServer;
 
     log.debug('Extracted properties', {
       nodeId,
       flowId,
       boundModel,
-      excludeModelPrompt: sharedState.executionExtensionContext ? true : excludeModelPrompt,
+      excludeModelPrompt: executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt
     });
@@ -380,6 +405,25 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       throw new Error("Process node requires a bound model");
     }
 
+    // Tool definitions are collected by connecting to every bound MCP server.
+    // A protected run must reject foreign bindings before prompt rendering or
+    // tool discovery can connect to one; filtering the advertised tools later
+    // does not undo a transport handshake or a resource read.
+    if (executionExtensionContext) {
+      await assertExecutionExtensionCurrent(executionExtensionContext);
+      const protectedServer = executionExtensionProtectedServer(executionExtensionContext);
+      if (mcpNodes.some(node => node.properties?.boundServer !== protectedServer)) {
+        throw new ExecutionExtensionError('execution_mcp_server_forbidden');
+      }
+      if (resourceNodes.some(node =>
+        node.role === 'consume' && node.properties?.scope !== 'run')) {
+        throw new ExecutionExtensionError('execution_external_resource_forbidden');
+      }
+      if (sharedState.mcpSkillSelections?.length) {
+        throw new ExecutionExtensionError('execution_mcp_skills_forbidden');
+      }
+    }
+
     // Immutable Persona behavior snapshots own the native-ability boundary.
     if (sharedState.flowSnapshot) {
       sharedState.behaviorRules = structuredClone(sharedState.flowSnapshot.behaviorRules ?? []);
@@ -390,9 +434,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
       renderMode: 'rendered',
       includeConversationHistory: false,
-      excludeModelPrompt,
+      excludeModelPrompt: executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
+      rejectResourceBindings: Boolean(executionExtensionContext),
       // A Persona execution is pinned to this immutable snapshot. Never fall
       // back to the mutable Flow record while one is present.
       ...(sharedState.flowSnapshot ? { flowSnapshot: sharedState.flowSnapshot } : {}),
@@ -422,7 +467,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ? personaContext!.instruction + '\n\n' + renderedPrompt
       : renderedPrompt;
 
-    let completePrompt = sharedState.executionExtensionContext ? trustedPrompt : await resolveRunResourceRefs(
+    let completePrompt = executionExtensionContext ? trustedPrompt : await resolveRunResourceRefs(
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
@@ -432,7 +477,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = sharedState.executionExtensionContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
+    completePrompt = executionExtensionContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
       conversationId: sharedState.conversationId,
       flowId,
       nodeId,
@@ -457,19 +502,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       };
       return kvCtx;
     };
-    if (completePrompt.includes('${kv:')) {
+    if (!executionExtensionContext && completePrompt.includes('${kv:')) {
       completePrompt = await resolveKvNodeRefs(completePrompt, await kvContext());
     }
 
     // Tier 3: resource NODES wired to this step (consume role) inject their
     // contents as a "## Resources" block — the graph-visible sibling of
     // resource pills. Reads never break the run (failures render as notes).
-    const resourceNodes = node_params?.properties?.resourceNodes || [];
     if (resourceNodes.length > 0) {
       const resourceBlock = await ResourceHandler.processResourceNodes({
         resourceNodes,
         conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
         emit: sharedState.emit,
+        executionExtensionContext,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
       });
       completePrompt += resourceBlock;
     }
@@ -500,8 +547,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // regardless of whether the tool DEFINITIONS came from shared state or from a
     // fresh processMCPNodes call. (Previously this only ran on the fresh path, so
     // a step served from sharedState.mcpContext lost its server routing context.)
-    const mcpNodes = node_params?.properties?.mcpNodes || [];
-
     // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
     sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
 
@@ -517,7 +562,10 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           mcpNodesCount: mcpNodes.length
         });
 
-        const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
+        const mcpResult = await ToolHandler.processMCPNodes({
+          mcpNodes,
+          executionExtensionContext,
+        });
 
         if (!mcpResult.success) {
           log.error('Failed to process MCP nodes', { error: mcpResult.error });
@@ -531,7 +579,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Generate handoff tools for each connected non-MCP node (also emits
     // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
     // targets — issue #385 — and populates sharedState.subflowToolNameMap).
-    const handoffTools = await this.generateHandoffTools(sharedState);
+    const handoffTools = await this.generateHandoffTools(sharedState, Boolean(executionExtensionContext));
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
@@ -567,7 +615,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // added when such a node is wired, so resource-free steps keep byte-identical
     // tools (preserving #89 prefix-cache stability). Dispatch is handled by name
     // in ModelHandler (OpenAI path) / localToolExecutors (subscription path).
-    const runResourceTools = buildRunResourceTools(node_params?.properties?.resourceNodes);
+    const runResourceTools = buildRunResourceTools(resourceNodes);
     if (runResourceTools.length > 0) {
       availableTools = [...availableTools, ...runResourceTools];
     }
@@ -612,13 +660,13 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
-    if (sharedState.executionExtensionContext) {
+    if (executionExtensionContext) {
       const { executionExtensionProtectedServer, authorizeExecutionExtensionHandoffs } = await import('@/backend/execution/extensions');
-      const server = executionExtensionProtectedServer(sharedState.executionExtensionContext);
+      const server = executionExtensionProtectedServer(executionExtensionContext);
       availableTools = availableTools.filter(tool =>
         tool.server === server || handoffTools.some(handoff => handoff.name === tool.name));
       sharedState.toolNameMap = {};
-      authorizeExecutionExtensionHandoffs(sharedState.executionExtensionContext, handoffTools.map(tool => tool.name));
+      authorizeExecutionExtensionHandoffs(executionExtensionContext, handoffTools.map(tool => tool.name));
     }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
@@ -653,6 +701,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     nodeType: 'process',
     currentPrompt: completePrompt,
     boundModel,
+    mcpNodesForDispatch: mcpNodes,
     availableTools: availableTools,
     messages: [], // Will be populated after reordering
     // Forwarded so self-orchestrating adapters can surface mid-run tool-approval
@@ -676,7 +725,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     unattended: sharedState.unattended,
     behaviorRules: structuredClone(sharedState.behaviorRules ?? []),
     executionAuthority: sharedState.executionAuthority,
-    executionExtensionContext: sharedState.executionExtensionContext,
+    executionExtensionContext,
     personaAttribution: sharedState.personaAttribution,
     ...(sharedState.temperatureOverrideOnce !== undefined
       ? { temperatureOverride: sharedState.temperatureOverrideOnce }
@@ -796,7 +845,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
     // this ProcessNode and non-secret globals before the model sees them.
-    if (!sharedState.executionExtensionContext && wireBase.some((message) =>
+    if (!executionExtensionContext && wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
@@ -842,7 +891,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         log.info('Using caller-supplied prompt for isolated process node', { nodeId });
       }
       const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
-      resolvedIsolatedPrompt = sharedState.executionExtensionContext ? isolatedPrompt : isolatedPrompt !== undefined
+      resolvedIsolatedPrompt = executionExtensionContext ? isolatedPrompt : isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -850,7 +899,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             { nodeId }
           )
         : isolatedPrompt;
-      if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
+      if (!executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
         resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
           conversationId: sharedState.conversationId,
           flowId,
@@ -859,12 +908,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           appId: currentAppId,
         }) as string;
       }
-      if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
+      if (!executionExtensionContext
+        && typeof resolvedIsolatedPrompt === 'string'
+        && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
       }
     }
 
-    const approvedMcpSkills = await loadApprovedMcpSkillSelections(
+    const approvedMcpSkills = executionExtensionContext ? undefined : await loadApprovedMcpSkillSelections(
       sharedState.conversationId,
       sharedState.mcpSkillSelections,
     );
@@ -920,12 +971,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     });
     const hasMcpTools = availableTools.some((t) => !!t.server);
     const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
-    const hasResourceNodes = (node_params?.properties?.resourceNodes?.length ?? 0) > 0;
+    const hasResourceNodes = resourceNodes.length > 0;
     const hasNativeResources = availableTools.some(
       (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
     );
     const shouldArmReadResource =
-      !sharedState.executionExtensionContext && (
+      !executionExtensionContext && (
         hasMcpTools ||
         hasWriteResource ||
         hasResourceNodes ||
@@ -939,7 +990,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // which would otherwise drop the tool and rewrite the block.
     // A private execution's approved tool set cannot acquire local capabilities
     // after the earlier filter, including sticky tools from a prior failed turn.
-    const armed = new Set(sharedState.executionExtensionContext ? [] : sharedState.armedSyntheticTools ?? []);
+    const armed = new Set(executionExtensionContext ? [] : sharedState.armedSyntheticTools ?? []);
     if (shouldArmReadResource) {
       armed.add(READ_RESOURCE_TOOL_NAME);
       // Any step that can mint a run resource must also be able to enumerate
@@ -1063,6 +1114,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     log.debug('execCore() prepResult', prepResult);
 
     try {
+      if (prepResult.executionExtensionContext && !prepResult.mcpNodesForDispatch) {
+        throw new ExecutionExtensionError('execution_mcp_admission_required');
+      }
       // Prepare tools if available
       let tools: OpenAI.ChatCompletionFunctionTool[] | undefined = undefined; // Initialize tools
 
@@ -1185,7 +1239,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             onApprovalRequired: prepResult.onApprovalRequired,
-            mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
+            mcpNodes: prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes,
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
             beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
             beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
@@ -1483,7 +1537,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
   ): boolean {
     if (!tools?.length) return false;
-    if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
+    if (((prepResult.mcpNodesForDispatch ?? node_params?.properties?.mcpNodes)?.length ?? 0) > 0) return false;
     if (!this.hasAutomaticToolFreeRoute(node_params)) return false;
 
     const definitions = prepResult.availableTools ?? [];

@@ -198,6 +198,7 @@ export async function callTool(
   callerNodeId?: string,
   ownerScope?: string,
   executionExtensionContext?: ExecutionExtensionContext,
+  verifyProtectedRecipient?: () => Promise<void>,
 ): Promise<MCPServiceResponse> {
   log.debug("Entering callTool method");
   if (!client) {
@@ -222,6 +223,7 @@ export async function callTool(
     // the exact client belonging to the frame's server; listing and dispatch
     // both happen on that same client object, so authorization cannot be
     // borrowed from another server connection.
+    if (privateExecution) await verifyProtectedRecipient?.();
     if (source === "app" || source === "model") {
       const listed = await listServerTools(client, serverName, "all");
       if (listed.error) {
@@ -318,6 +320,7 @@ export async function callTool(
           }
         : {}),
     };
+    if (privateExecution) await verifyProtectedRecipient?.();
     const response = isBetaClient(client)
       ? await (
           client.callTool as unknown as (

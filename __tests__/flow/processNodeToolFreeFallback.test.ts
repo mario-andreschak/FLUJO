@@ -140,7 +140,7 @@ describe('ProcessNode unsupported-tool fallback', () => {
     const adapter = fixtureAdapter({ modelAttemptPolicy: () => ({ version: 1, maxPhysicalAttempts: 1 }) });
     const restore = registerExecutionExtension(adapter);
     try {
-      await expect(nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params()))
+      await expect(nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params()))
         .rejects.toMatchObject({ code: 'execution_single_attempt_adapter_unsupported' });
       expect(fetchProviderModels).not.toHaveBeenCalled();
       expect(callModel).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ describe('ProcessNode unsupported-tool fallback', () => {
     const adapter = fixtureAdapter();
     const restore = registerExecutionExtension(adapter);
     try {
-      const exec = await nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params());
+      const exec = await nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params());
       expect(exec.success).toBe(true);
       expect(fetchProviderModels).not.toHaveBeenCalled();
       expect(callModel).toHaveBeenCalledTimes(1);
@@ -188,7 +188,7 @@ describe('ProcessNode unsupported-tool fallback', () => {
     const adapter = fixtureAdapter();
     const restore = registerExecutionExtension(adapter);
     try {
-      const exec = await nodeWithFinish().execCore({ ...prep(), executionExtensionContext: mintFixture(adapter) }, params());
+      const exec = await nodeWithFinish().execCore({ ...prep(), mcpNodesForDispatch: [], executionExtensionContext: mintFixture(adapter) }, params());
       expect(exec.success).toBe(true);
       expect(fetchProviderModels).not.toHaveBeenCalled();
       expect(callModel).toHaveBeenCalledTimes(2);

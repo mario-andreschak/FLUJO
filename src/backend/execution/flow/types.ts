@@ -1576,6 +1576,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     nodeType: 'process';
     currentPrompt: string;
     boundModel: string;
+    /** MCP bindings admitted during prep; model dispatch must not reread mutable node params. */
+    mcpNodesForDispatch?: MCPNodeReference[];
     modelDisplayName?: string;
     availableTools?: ToolDefinition[];
     mcpContext?: MCPContext;

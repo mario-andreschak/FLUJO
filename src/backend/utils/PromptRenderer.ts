@@ -4,6 +4,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { findBindings } from '@/utils/shared';
 import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import type { MCPNodeReference } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
@@ -31,6 +32,8 @@ export interface PromptRenderOptions {
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
   excludeSystemPrompt?: boolean; // Override node's excludeSystemPrompt setting (hardcoded # GENERAL INFORMATION block)
+  /** Reject resource pills before any MCP connection in protected execution. */
+  rejectResourceBindings?: boolean;
   /**
    * Immutable Flow definition supplied by a trusted execution boundary. Runtime
    * prompt composition must read authored prompts and model bindings from the
@@ -202,7 +205,7 @@ export class PromptRenderer {
     }
 
     // 4. Resolve binding pills: tool pills per renderMode, resource pills always inlined
-    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema, options?.onResourceRead);
+    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema, options?.onResourceRead, options?.rejectResourceBindings);
 
     // 5. Add placeholder for conversation history if requested
     if (includeConversationHistory) {
@@ -388,11 +391,15 @@ export class PromptRenderer {
     prompt: string,
     renderMode: 'raw' | 'rendered',
     functionCallingSchema?: string | null,
-    onResourceRead?: PromptRenderOptions['onResourceRead']
+    onResourceRead?: PromptRenderOptions['onResourceRead'],
+    rejectResourceBindings = false,
   ): Promise<string> {
     renderMode = 'raw'; // for now, keep tool pills raw (resources still always resolve)
 
     const matches = findBindings(prompt);
+    if (rejectResourceBindings && matches.some(match => match.kind === 'resource')) {
+      throw new ExecutionExtensionError('execution_resource_binding_forbidden');
+    }
     if (matches.length === 0) {
       return prompt;
     }
