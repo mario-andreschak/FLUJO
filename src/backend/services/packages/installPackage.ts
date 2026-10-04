@@ -266,11 +266,8 @@ function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>)
   }
   if (Array.isArray(value)) return value.map((v) => resolveSecretPlaceholders(v, secrets)) as unknown as T;
   if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = resolveSecretPlaceholders(v, secrets);
-    }
-    return out as unknown as T;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, resolveSecretPlaceholders(item, secrets)])) as T;
   }
   return value;
 }
@@ -296,8 +293,8 @@ async function computeMissingGlobals(manifest: Pick<FlujoPackage, 'requiredGloba
 
 /** Keep only well-formed string entries so a hostile body cannot smuggle values in. */
 function sanitizeRenameRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (typeof entry === 'string') out[key] = entry.trim();
   }
@@ -629,10 +626,12 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   const resolvedModels = (manifest.models ?? []).map((m) => resolveSecretPlaceholders(m, secrets));
   const resolvedFlows = (manifest.flows ?? []).map((f) => resolveSecretPlaceholders(f, secrets));
   const resolvedPlannedExecutions = (manifest.plannedExecutions ?? []).map((p) => resolveSecretPlaceholders(p, secrets));
+  // Addressable identity comes from public manifest data, never resolved credentials.
+  const publicFlows = (manifest.flows ?? []).map(({ flow }) => ({ id: flow.id, name: flow.name }));
 
   const ledgerEntities: PackageInstallRecord['entities'] = {
-    flows: {},
-    models: {},
+    flows: Object.create(null),
+    models: Object.create(null),
     servers: [],
     plannedExecutions: [],
   };
@@ -680,9 +679,10 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   //    so flow nodes' `properties.boundModel` (which binds by id) can be
   //    remapped in step 6 — otherwise every process node bound to a packaged
   //    model comes out "unbound" after install (the model gets a fresh id).
-  const modelIdMap: Record<string, { id: string; name: string }> = {};
+  const modelIdMap: Record<string, { id: string; name: string }> = Object.create(null);
   for (const model of resolvedModels) {
-    const mappedModelId = input.modelMappings?.[model.id];
+    const mappedModelId = input.modelMappings && Object.prototype.hasOwnProperty.call(input.modelMappings, model.id)
+      ? input.modelMappings[model.id] : undefined;
     if (mappedModelId) {
       const mappedModel = installedModelsById.get(mappedModelId)!;
       modelIdMap[model.id] = { id: mappedModel.id, name: mappedModel.name };
@@ -709,11 +709,12 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
+  const flowIdMap = await installFlows(manifest.name, resolvedFlows, publicFlows, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
-  for (const pe of resolvedPlannedExecutions) {
-    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated, executionRenames);
+  for (const [index, pe] of resolvedPlannedExecutions.entries()) {
+    await installPlannedExecution(pe, manifest.name, manifest.plannedExecutions[index].name,
+      flowIdMap, summary, ledgerEntities, ledgerCreated, executionRenames);
   }
 
   // 7b. Ordered, per-entity outcomes for the install wizard.
@@ -724,7 +725,8 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 
   // 8. Persist the ledger (idempotency + last-summary for the status endpoint).
   try {
-    const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const file: PackageInstallsFile = Object.assign(Object.create(null),
+      await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {}));
     file[manifest.name] = {
       packageName: manifest.name,
       version: manifest.version,
@@ -744,7 +746,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
 /** Read the last recorded install summary for a package (status endpoint). */
 export async function getLastInstallSummary(packageName: string): Promise<InstallSummary | null> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  return file[packageName]?.summary ?? null;
+  return Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName]?.summary ?? null : null;
 }
 
 /** List every installed package recorded in the ledger (for the UI list). */
@@ -802,7 +804,7 @@ export async function inspectPackageUninstall(
   packageName: string,
 ): Promise<PackageUninstallInspection> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  const record = file[packageName];
+  const record = Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName] : undefined;
   if (!record) return { exists: false, requiresPersonaControl: false };
   return {
     exists: true,
@@ -836,7 +838,7 @@ export async function uninstallPackage(
   };
 
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-  const record = file[packageName];
+  const record = Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName] : undefined;
   if (!record) {
     // Unknown package / already uninstalled: clean no-op.
     return summary;
@@ -1846,6 +1848,7 @@ async function installModel(
 async function installFlows(
   packageName: string,
   flows: PackagedFlow[],
+  publicFlows: readonly Pick<PackagedFlow['flow'], 'id' | 'name'>[],
   modelIdMap: Record<string, { id: string; name: string }>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
@@ -1855,21 +1858,21 @@ async function installFlows(
 ): Promise<Record<string, string>> {
   // Build the manifest-local-id -> installed-id map first, so cross-flow
   // (subflow) references can be remapped regardless of flow order.
-  const idMap: Record<string, string> = {};
-  for (const f of flows) {
-    idMap[f.flow.id] = deterministicFlowId(packageName, f.flow.id);
+  const idMap: Record<string, string> = Object.create(null);
+  for (const flow of publicFlows) {
+    idMap[flow.id] = deterministicFlowId(packageName, flow.id);
   }
 
   const existingIds = new Set((await flowService.loadFlows()).map((f) => f.id));
 
-  for (const packagedFlow of flows) {
-    const localId = packagedFlow.flow.id;
+  for (const [index, packagedFlow] of flows.entries()) {
+    const { id: localId, name: publicName } = publicFlows[index];
     const newId = idMap[localId];
     const flow = remapFlow(packagedFlow, newId, idMap, modelIdMap);
     flow.folder = packageName;
     // Display-name-only rename: the deterministic id above is derived from the
     // manifest-local id, so renaming never breaks reinstall / uninstall.
-    const displayName = effectiveName(flowRenames, localId, packagedFlow.flow.name);
+    const displayName = effectiveName(flowRenames, localId, publicName);
     flow.name = displayName;
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
@@ -1929,6 +1932,7 @@ function remapFlow(
 async function installPlannedExecution(
   pe: PackagedPlannedExecution,
   packageName: string,
+  publicName: string,
   flowIdMap: Record<string, string>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
@@ -1940,8 +1944,8 @@ async function installPlannedExecution(
   // The deterministic id stays derived from the ORIGINAL manifest name so a
   // renamed execution still updates in place on re-install and is still found
   // by uninstall. Only the display name changes.
-  const id = deterministicExecutionId(packageName, pe.name);
-  const displayName = effectiveName(executionRenames, pe.name, pe.name);
+  const id = deterministicExecutionId(packageName, publicName);
+  const displayName = effectiveName(executionRenames, publicName, publicName);
   const mappedFlowId = flowIdMap[pe.flowId] ?? pe.flowId;
 
   // Re-check at the mutation boundary to close a concurrent retarget between

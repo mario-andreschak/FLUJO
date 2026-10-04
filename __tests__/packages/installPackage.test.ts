@@ -75,7 +75,8 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(async (key: string, value: unknown) => { store.set(key, value); }),
 }));
 
-import { installPackage } from '@/backend/services/packages/installPackage';
+import { installPackage, deterministicFlowId, getLastInstallSummary, inspectPackageUninstall,
+  uninstallPackage } from '@/backend/services/packages/installPackage';
 
 const manifest = () => ({
   schemaVersion: 1,
@@ -978,5 +979,118 @@ describe('installPackage — requiredGlobals / missingGlobals', () => {
       { name: 'OPTIONAL_LABEL', required: false, isSecret: false },
     ]);
     expect(preview.preview!.missingGlobals).toEqual(['REPOSITORY_URL']);
+  });
+});
+
+describe('installPackage — public identity and credential boundary', () => {
+  it.each(['package name', 'flow id', 'flow name', 'model displayName', 'plan name', 'server name'])(
+    'rejects placeholder-bearing %s before accessing supplied secrets or host services', async field => {
+      const pkg = manifest();
+      const value = 'public-prefix-{{secret.API_KEY}}';
+      if (field === 'package name') pkg.name = value;
+      if (field === 'flow id') pkg.flows[0].flow.id = value;
+      if (field === 'flow name') pkg.flows[0].flow.name = value;
+      if (field === 'model displayName') pkg.models[0].displayName = value;
+      if (field === 'plan name') pkg.plannedExecutions[0].name = value;
+      if (field === 'server name') pkg.mcpServers[0].name = value;
+      fetchPackageManifestMock.mockResolvedValue(pkg);
+      const secretAccess = jest.fn(() => { throw new Error('synthetic secret access must not happen'); });
+      const input = { source: 'registry' as const, packageId: 'fixture', consentGranted: true,
+        get secrets(): Record<string, string> { return secretAccess(); } };
+      const summary = await installPackage(input);
+      expect(summary.ok).toBe(false);
+      expect(summary.errors.join(' ')).toContain('Package identities and public labels cannot contain secret placeholders');
+      expect(secretAccess).not.toHaveBeenCalled();
+      for (const boundary of [loadModelsMock, loadFlowsMock, saveFlowMock, addModelMock, updateModelMock,
+        schedulerGetMock, schedulerCreateMock, schedulerUpdateMock, loadServerConfigsMock,
+        installRegistryServerMock, installGithubServerMock]) expect(boundary).not.toHaveBeenCalled();
+      expect(store.size).toBe(0);
+    },
+  );
+
+  it('keeps long public flow ids stable across different credentials without publishing the credentials in identities or ledger', async () => {
+    const pkg = manifest();
+    const localId = `public-local-${'A'.repeat(100)}`;
+    pkg.mcpServers = [];
+    pkg.flows = [{ flow: { id: localId, name: 'Public Flow',
+      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { prompt: '{{secret.API_KEY}}' } } }],
+      edges: [] } }];
+    pkg.plannedExecutions[0].flowId = localId;
+    pkg.plannedExecutions[0].prompt = '{{secret.API_KEY}}';
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    const savedFlows = new Map<string, unknown>();
+    loadFlowsMock.mockImplementation(async () => [...savedFlows.values()]);
+    saveFlowMock.mockImplementation(async flow => { savedFlows.set(flow.id, flow); return { success: true }; });
+    const first = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-credential-first' } });
+    const second = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-credential-second' } });
+    expect(first.ok && second.ok).toBe(true);
+    // Frozen pre-correction public-id fixture: preserve reinstall/uninstall addressing.
+    const expected = 'pkg-my-pkg-public-local-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-41b92396';
+    expect(deterministicFlowId('my-pkg', localId)).toBe(expected);
+    expect(expected).toHaveLength(64);
+    expect(saveFlowMock.mock.calls.map(([flow]) => flow.id)).toEqual([expected, expected]);
+    expect(second.updated).toContainEqual({ type: 'flow', name: 'Public Flow', id: expected });
+    expect(saveFlowMock.mock.calls[1][0].nodes[0].data.properties.prompt).toBe('synthetic-credential-second');
+    expect(addModelMock.mock.calls[1][0].ApiKey).toBe('synthetic-credential-second');
+    expect(schedulerCreateMock.mock.calls[1][0].prompt).toBe('synthetic-credential-second');
+    expect(schedulerCreateMock.mock.calls[1][0].flowId).toBe(expected);
+    const published = JSON.stringify({ first, second, ledger: store.get('package_installs') });
+    expect(published).not.toContain('synthetic-credential-');
+    expect(published).not.toContain('{{secret.');
+  });
+
+  it.each(['__proto__', 'constructor', 'toString'])('preserves own public key %s through references, renames and ledger round-trip', async key => {
+    const pkg = manifest();
+    pkg.name = key;
+    pkg.mcpServers = [];
+    pkg.models[0].id = key;
+    pkg.models[0].displayName = key;
+    pkg.flows = [{ flow: { id: key, name: 'Public Flow',
+      nodes: [{ id: 'n1', data: { type: 'process', label: 'Public Node', properties: { boundModel: key } } }], edges: [] } }];
+    pkg.plannedExecutions[0].flowId = key;
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    const renamed = Object.fromEntries([[key, 'Renamed Public Flow']]);
+    const summary = await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      modelMappings: {}, renames: { flows: renamed }, secrets: { API_KEY: 'synthetic-key-value' } });
+    expect(summary.ok).toBe(true);
+    const modelId = addModelMock.mock.calls[0][0].id;
+    expect(saveFlowMock.mock.calls[0][0].nodes[0].data.properties.boundModel).toBe(modelId);
+    expect(saveFlowMock.mock.calls[0][0].name).toBe('Renamed Public Flow');
+    const ledger = store.get('package_installs') as Record<string, any>;
+    expect(Object.getPrototypeOf(ledger)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(ledger, key)).toBe(true);
+    expect(ledger[key].entities.flows[key]).toBe(saveFlowMock.mock.calls[0][0].id);
+    expect(ledger[key].entities.models[key]).toBe(modelId);
+    store.set('package_installs', JSON.parse(JSON.stringify(ledger)));
+    expect(await getLastInstallSummary(key)).toEqual(summary);
+    expect((await inspectPackageUninstall(key)).exists).toBe(true);
+  });
+
+  it('keeps an own __proto__ property as data while resolving runtime content', async () => {
+    const pkg = manifest();
+    pkg.mcpServers = [];
+    pkg.flows[0].flow.nodes[0].data.properties = JSON.parse('{"__proto__":{"fixture":"{{secret.API_KEY}}"}}');
+    fetchPackageManifestMock.mockResolvedValue(pkg);
+    await installPackage({ source: 'registry', packageId: 'fixture', consentGranted: true,
+      secrets: { API_KEY: 'synthetic-prototype-content' } });
+    const properties = saveFlowMock.mock.calls[0][0].nodes[0].data.properties;
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(properties, '__proto__')).toBe(true);
+    expect(properties.__proto__).toEqual({ fixture: 'synthetic-prototype-content' });
+    expect(properties.fixture).toBeUndefined();
+    expect((Object.prototype as Record<string, unknown>).fixture).toBeUndefined();
+  });
+
+  it('ignores inherited package ledger entries for status, inspection and uninstall', async () => {
+    const inherited = Object.create({ inherited: { summary: { fixture: 'untrusted' },
+      entities: { flows: { f: 'unowned-flow' }, models: {}, servers: [], plannedExecutions: [] } } });
+    store.set('package_installs', inherited);
+    expect(await getLastInstallSummary('inherited')).toBeNull();
+    expect(await inspectPackageUninstall('inherited')).toEqual({ exists: false, requiresPersonaControl: false });
+    expect(await uninstallPackage('inherited')).toMatchObject({ ok: true, removed: [], skipped: [], errors: [] });
+    expect(schedulerGetMock).not.toHaveBeenCalled();
+    expect(store.get('package_installs')).toBe(inherited);
   });
 });
