@@ -3,11 +3,17 @@ import { SchedulerService } from '@/backend/services/scheduler';
 import { setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
 import { workerRecoveryDefinitionSha256, claimWorkerOccurrence, inspectWorkerRecovery, recordWorkerTerminalObservation } from '@/backend/services/scheduler/workerLocalRecovery';
 import * as recoveryFs from '@/backend/services/workspace/backupRestoreFs';
+import * as secure from '@/utils/encryption/secure';
 import { loadRunRecords } from '@/backend/services/scheduler/runHistory';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import type { PlannedExecution, RunRecord } from '@/shared/types/plannedExecution';
+
+// Business/recovery cases model an already unlocked workspace. A locked control remains below.
+jest.mock('@/utils/encryption/secure', () => ({
+  ...jest.requireActual('@/utils/encryption/secure'), isEncryptionLocked: jest.fn(async () => false),
+}));
 
 const callbacks: Array<{ fire: (occurrence: Date) => Promise<void>; dispose: jest.Mock }> = [];
 const runFlowMock = jest.fn();
@@ -40,6 +46,7 @@ async function enroll(plan: PlannedExecution, enabled = true) {
 const nextOccurrence = () => new Date(Date.now() + 60_000);
 
 beforeEach(async () => {
+  jest.mocked(secure.isEncryptionLocked).mockResolvedValue(false);
   Object.assign(process.env, { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_RECOVERY_ID: 'scheduler-worker-a',
     FLUJO_WORKER_RECOVERY_EPOCH: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'test-only-scheduler-control',
     FLUJO_WORKER_SNAPSHOT_SHA256: 'a'.repeat(64) });
@@ -87,6 +94,15 @@ it('records actual successful effects separately from arming and deduplicates a 
   const history = await loadRunRecords(plan.id);
   expect(history.filter(record => record.status === 'completed')).toHaveLength(1);
   expect(history[0].executionGenerationId).toBe(plan.generationId);
+});
+
+it('denies an enrolled occurrence when private encryption is locked', async () => {
+  const plan = (await scheduler.create(input())).execution!;
+  await enroll(plan);
+  jest.mocked(secure.isEncryptionLocked).mockResolvedValue(true);
+  await callbacks[0].fire(nextOccurrence());
+  expect(runFlowMock).not.toHaveBeenCalled();
+  expect((await loadRunRecords(plan.id))[0]).toMatchObject({ status: 'skipped', error: 'encryption locked' });
 });
 
 it('recovers one local generation in a fresh scheduler instance and keeps a sibling copied row suppressed', async () => {
