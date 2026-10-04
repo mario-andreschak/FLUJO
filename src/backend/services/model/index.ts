@@ -34,6 +34,7 @@ import {
   getProviderFromBaseUrl
 } from './provider';
 import { modelCache, filterModels } from './cache';
+import { sameCatalogueEndpoint } from './catalogueDestination';
 import { testModelConnection } from './testConnection';
 import { ModelTestResult } from '@/shared/types/model/response';
 import { getCompletionAdapter } from './adapters';
@@ -418,11 +419,10 @@ class ModelService {
     profileId?: string,
   ): Promise<NormalizedModel[]> {
     log.debug('fetchProviderModels: Fetching provider catalogue', {
-      baseUrl,
-      modelId,
-      profileId,
+      hasModelId: Boolean(modelId),
+      hasProfile: Boolean(profileId),
       hasApiKey: Boolean(apiKey),
-      searchTerm: searchTerm ? `"${searchTerm}"` : 'none',
+      hasSearch: Boolean(searchTerm),
     });
 
     try {
@@ -462,6 +462,16 @@ class ModelService {
         resolvedApiKey = await resolveAndDecryptApiKey(apiKey);
         log.debug('Using directly supplied API key for provider fetch');
       } else if (storedModel) {
+        const storedProvider = storedModel.provider ?? getProviderFromBaseUrl(storedModel.baseUrl ?? '');
+        const storedNativeGemini = storedProvider === 'gemini' && storedModel.adapter === 'gemini';
+        // A masked/missing key cannot authorize sending the stored credential to
+        // an unsaved URL or another native provider. Native Gemini's SDK has a
+        // fixed destination; HTTP-compatible adapters share the saved endpoint.
+        if (provider !== storedProvider || usesNativeGemini !== storedNativeGemini
+          || (!usesNativeGemini && !sameCatalogueEndpoint(storedModel.baseUrl, baseUrl))) {
+          log.warn('Stored catalogue credential cannot be reused for a changed destination or provider');
+          return [];
+        }
         resolvedApiKey = await resolveAndDecryptApiKey(storedModel.ApiKey);
         log.debug('Resolved stored API key for provider fetch');
       } else if (modelId) {
@@ -511,14 +521,9 @@ class ModelService {
       }
 
       return allModels;
-    } catch (error) {
-      log.error('fetchProviderModels: Provider catalogue fetch failed', {
-        baseUrl,
-        modelId,
-        profileId,
-        message: error instanceof Error ? error.message : 'Unknown provider error',
-      });
-      throw error;
+    } catch {
+      log.error('fetchProviderModels: Provider catalogue fetch failed');
+      throw new Error('Provider catalogue request failed');
     }
   }
 
