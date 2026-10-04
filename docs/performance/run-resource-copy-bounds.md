@@ -10,10 +10,20 @@ during promotion.
 Copies now open the source once and stream its initial snapshot through one
 reusable **64 KiB** buffer into a new exclusive destination file. The complete
 SHA-256 is calculated over the copied bytes. Partial reads and writes are handled;
-short EOF, changed size/mtime, and I/O failures prevent publication and remove
-the partial destination. Atomic source pathname replacements leave the opened
-descriptor's original bytes and digest coherent. Deliberately restored timestamps
-on an in-place rewrite are outside this snapshot guarantee.
+short EOF, changed exact size/mtimeNs/ctimeNs, and I/O failures prevent publication.
+Source admission and final descriptor checks use BigIntStats; only the already
+safe, quota-admitted size becomes a numeric read offset. A pathname replacement
+cannot substitute unchecked source bytes. A rename that changes descriptor ctime
+(including on Linux) refuses publication; if descriptor metadata stays identical,
+the original opened bytes remain coherent. Deliberately restoring every checked
+timestamp on an in-place rewrite remains outside this snapshot guarantee.
+
+The destination is created exclusively, and its named identity is checked before
+publication. On failure, cleanup compares the created descriptor's exact device
+and inode with a regular, single-link, non-symlink named file before unlinking.
+An observed foreign replacement is preserved, following the atomic writer's
+existing best-effort cleanup pattern. Node's separate lstat/unlink calls are not
+an OS-atomic conditional unlink; unknown identity leaves the file for recovery.
 
 The actual source descriptor size is charged against the existing settings:
 **50 MiB per resource and 256 MiB per conversation by default**. Both checks
@@ -51,12 +61,15 @@ Source qualification uses default quotas and a real 32 MiB file with misleading
 small source-index metadata. Additional fixtures cover quota refusal before
 copy I/O, concurrent conversation checks, partial I/O, text/archive lineage,
 source replacement/growth/truncation, named overwrite/hard links, destination
-failure, index failures before/after rename, empty/missing/nonregular files,
+failure and foreign replacements during write/close, nanosecond changes hidden
+by numeric rounding, index failures before/after rename, empty/missing/nonregular files,
 overload/draining, and recovery snapshot ordering. Destination occupancy fixtures
 explicitly populate the index's accounting values; they are not a runtime memory
 workload. Whole-file promotion, stale source-size accounting, excess admission,
 incorrect snapshot ordering and premature index-cache publication are behavioral
-negative controls to retain with exact-head qualification.
+negative controls to retain with exact-head qualification. Rounded timestamp
+checks, blind failed-copy unlinking, and omitted destination identity checks are
+additional negative controls for the precision/cleanup follow-up.
 
 The copy-buffer envelope is at most **256 KiB per process**; this does not include
 index/metadata objects, filesystem/kernel buffers, ordinary reads/writes, media

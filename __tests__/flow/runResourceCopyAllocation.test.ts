@@ -80,8 +80,8 @@ function instrument(hooks: {
       counts.sourceOpened++;
       counts.peakOpenSources = Math.max(counts.peakOpenSources, counts.sourceOpened - counts.sourceClosed);
       const stat = handle.stat.bind(handle);
-      jest.spyOn(handle, 'stat').mockImplementation(async () => {
-        const result = await stat();
+      jest.spyOn(handle, 'stat').mockImplementation(async options => {
+        const result = await stat(options);
         await hooks.afterStat?.();
         return result;
       });
@@ -217,17 +217,31 @@ it('preserves complete text, archive lineage and encoding with a new parent-owne
   expect((await listRunResources(entry.conversationId)).find(item => item.id === entry.id)?.readBy).toEqual([]);
 });
 
-it('copies the checked source descriptor after a pathname replacement', async () => {
+it('keeps source pathname replacement bound to the descriptor and refuses exact timestamp drift', async () => {
   let replaced = false;
+  let changedMetadata = false;
   const counts = instrument({ afterStat: async () => {
     if (replaced) return;
     replaced = true;
+    const before = await fs.stat(filename, { bigint: true });
     await fs.rename(filename, path.join(root, 'opened-original.dat'));
+    const after = await fs.stat(path.join(root, 'opened-original.dat'), { bigint: true });
+    changedMetadata = before.ctimeNs !== after.ctimeNs || before.mtimeNs !== after.mtimeNs;
     await fs.writeFile(filename, 'Unchecked replacement');
   } });
-  const copied = resource(await copy());
-  expect(await fs.readFile(payload(copied))).toEqual(Buffer.from('head'));
-  expect(copied.sha256).toBe(sha256('head'));
+  const pending = copy();
+  // Rename updates ctime on POSIX; Windows can preserve descriptor timestamps.
+  // Either outcome must use the opened source and enforce exact metadata.
+  const result = await pending.then(value => ({ value }), error => ({ error }));
+  if (changedMetadata) {
+    expect(result).toHaveProperty('error', expect.objectContaining({ message: expect.stringContaining('changed') }));
+    expect(await listRunResources(destination)).toEqual([]);
+  } else {
+    if (!('value' in result)) throw result.error;
+    const copied = resource(result.value);
+    expect(await fs.readFile(payload(copied))).toEqual(Buffer.from('head'));
+    expect(copied.sha256).toBe(sha256('head'));
+  }
   expect(counts.sourceClosed).toBe(1);
 });
 
