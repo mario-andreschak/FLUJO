@@ -41,6 +41,15 @@ authority; a contextless child may not silently use ordinary transport. These
 guards are admission checks, not a substitute for the owner's broker and
 original-task accounting.
 
+The Process preflight reads the saved model before asynchronous prompt,
+resource, and MCP preparation. The model handler reads it again before the
+provider request. A concurrent catalog edit can make an initially ordinary
+model owner-bound between those reads: the later check blocks the model send,
+but preparation effects may already have happened. This repository does not
+yet pin one admitted model snapshot for the whole Process turn or serialize
+catalog edits across workers. Do not treat the preflight as an atomic
+no-side-effect guarantee under concurrent model changes.
+
 The generic `configuredExecutionAdapter` is **undefined**. There is no
 configured FACTORY credential broker, durable claim and physical sender, or
 qualified TEE path in this repository. FACTORY integration, paid inference,
