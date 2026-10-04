@@ -6,6 +6,7 @@ import { loadServerConfigs, saveConfig } from './config';
 import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { assertOAuthCredentialsAvailable, readOAuthClientInformation, readOAuthCodeVerifier, readOAuthTokens, sealOAuthCredential } from './oauthCredentialStorage';
 
 const log = createLogger('backend/services/mcp/oauth');
 
@@ -81,13 +82,14 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     if (this.config.oauthClientInformation) {
       log.debug(`Returning stored client information for ${this.config.name}`);
-      return this.config.oauthClientInformation;
+      return readOAuthClientInformation(this.config);
     }
 
     // Manually pre-registered client (e.g. Asana V2, which disables dynamic registration).
     // The stored secret may be encrypted ("encrypted:...") or a "${global:VAR}" binding, so
     // resolve+decrypt it here — the plaintext only ever exists in the backend, at use time.
     if (this.config.oauthClientId) {
+      if (this.config.oauthClientSecret) await assertOAuthCredentialsAvailable();
       const clientSecret = this.config.oauthClientSecret
         ? (await resolveAndDecryptApiKey(this.config.oauthClientSecret)) ?? undefined
         : undefined;
@@ -163,48 +165,27 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     log.info(`Saving client information for ${this.config.name}`);
     log.verbose('Client information to save', { hasClientSecret: Boolean(clientInformation.client_secret) });
     
-    // Store in config (this will need to be persisted to storage)
-    const oauthClientInformation = {
-      client_id: clientInformation.client_id,
-      client_secret: clientInformation.client_secret,
-      client_id_issued_at: clientInformation.client_id_issued_at,
-      client_secret_expires_at: clientInformation.client_secret_expires_at,
-    };
-    
-    // Also store the full metadata
-    const oauthClientMetadata = {
-      redirect_uris: clientInformation.redirect_uris,
-      client_name: clientInformation.client_name,
-      client_uri: clientInformation.client_uri,
-      grant_types: clientInformation.grant_types,
-      response_types: clientInformation.response_types,
-      token_endpoint_auth_method: clientInformation.token_endpoint_auth_method,
-      scope: clientInformation.scope,
-      contacts: clientInformation.contacts,
-      tos_uri: clientInformation.tos_uri,
-      policy_uri: clientInformation.policy_uri,
-      jwks_uri: clientInformation.jwks_uri,
-      jwks: clientInformation.jwks,
-      software_id: clientInformation.software_id,
-      software_version: clientInformation.software_version,
-    };
-
-    await this.persist({ oauthClientInformation, oauthClientMetadata });
+    // Full registration metadata may contain private JWKS or provider extensions.
+    // Retain it inside the encrypted value instead of copying it to public fields.
+    const oauthClientInformation = await sealOAuthCredential('client', clientInformation);
+    await this.persist({ oauthClientInformation, oauthClientMetadata: undefined });
     log.info(`Client information saved for ${this.config.name}`);
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
     if (this.config.oauthTokens) {
       log.debug(`Returning stored tokens for ${this.config.name}`);
+      const tokens = await readOAuthTokens(this.config);
+      if (!tokens) return undefined;
 
       // An expired access token must still be returned WITH its refresh_token intact:
       // the SDK's auth() only attempts the silent refresh_token grant when tokens()
       // yields one. Clearing the token set here (as this method once did) destroys the
       // refresh token and forces a full interactive re-auth after every access-token
       // lifetime (~1h for Asana), even though the grant is still perfectly valid.
-      const issuedAt = (this.config.oauthTokens as OAuthTokens & { issued_at?: number }).issued_at;
-      if (this.config.oauthTokens.expires_in && issuedAt) {
-        const expiresIn = this.config.oauthTokens.expires_in;
+      const issuedAt = (tokens as OAuthTokens & { issued_at?: number }).issued_at;
+      if (tokens.expires_in && issuedAt) {
+        const expiresIn = tokens.expires_in;
         const currentTime = Math.floor(Date.now() / 1000);
         const expirationTime = issuedAt + expiresIn;
 
@@ -215,7 +196,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
         }
       }
 
-      return this.config.oauthTokens;
+      return tokens;
     }
 
     log.debug(`No tokens available for ${this.config.name}`);
@@ -236,7 +217,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       issued_at: Math.floor(Date.now() / 1000), // Unix timestamp
     };
     
-    await this.persist({ oauthTokens: tokensWithTimestamp });
+    await this.persist({ oauthTokens: await sealOAuthCredential('tokens', tokensWithTimestamp) });
     log.info(`OAuth tokens saved for ${this.config.name}`);
   }
 
@@ -255,7 +236,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     log.debug(`Saving code verifier for ${this.config.name}`);
-    await this.persist({ oauthCodeVerifier: codeVerifier });
+    await this.persist({ oauthCodeVerifier: await sealOAuthCredential('verifier', codeVerifier) });
     log.debug(`Code verifier saved for ${this.config.name}`);
   }
 
@@ -267,7 +248,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     }
     
     log.debug(`Returning code verifier for ${this.config.name}`);
-    return this.config.oauthCodeVerifier;
+    return readOAuthCodeVerifier(this.config);
   }
 }
 

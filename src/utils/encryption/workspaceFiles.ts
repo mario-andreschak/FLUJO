@@ -21,7 +21,7 @@ export async function readCredentialJson(file: string, limit: number): Promise<u
   }
 }
 
-const CREDENTIAL_FIELDS = new Set(['apiKey', 'accessToken', 'refreshToken', 'access_token', 'refresh_token',
+const CREDENTIAL_FIELDS = new Set(['apiKey', 'ApiKey', 'accessToken', 'refreshToken', 'access_token', 'refresh_token',
   'client_secret', 'oauthClientSecret', 'oauthCodeVerifier', 'authorization', 'Authorization', 'password']);
 
 function hasCredentials(value: unknown): boolean {

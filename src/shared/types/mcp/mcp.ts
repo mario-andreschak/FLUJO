@@ -33,6 +33,12 @@ export type EnvVarValue = string | {
  */
 export type MCPHeaderValue = EnvVarValue;
 
+/** A complete OAuth SDK value encrypted by the owning workspace. */
+export type MCPEncryptedOAuthValue = {
+  format: 'flujo-oauth-v1';
+  ciphertext: string;
+};
+
 /**
  * Parameters fixed by the user before an MCP tool is advertised to a model.
  * The outer key is the server tool name and the inner key is a top-level input
@@ -248,9 +254,10 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthScopes?: string[];
   // Stored OAuth data
   oauthClientMetadata?: OAuthClientMetadata;
-  oauthClientInformation?: OAuthClientInformation;
-  oauthTokens?: OAuthTokens;
-  oauthCodeVerifier?: string;
+  /** Plain SDK objects remain read-only compatibility for historical records. */
+  oauthClientInformation?: OAuthClientInformation | MCPEncryptedOAuthValue;
+  oauthTokens?: OAuthTokens | MCPEncryptedOAuthValue;
+  oauthCodeVerifier?: string | MCPEncryptedOAuthValue;
   /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
   oauthState?: string;
   /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */

@@ -305,3 +305,14 @@ test('missing key metadata beside credentials requires matching recovery and nev
   expect(await secure.authenticate(password)).toBeTruthy();
   expect(await secure.decryptWithPassword(ciphertext)).toBe('synthetic-recovery-credential');
 });
+
+test('a historical model ApiKey without metadata requires recovery and is retained unchanged', async () => {
+  const { secure, storage, keys } = await modules();
+  await storage.saveItem(keys.MODELS, [{ Id: 'legacy-model', ApiKey: 'synthetic-legacy-private-key' }]);
+  const file = path.join(process.env.FLUJO_DATA_DIR!, 'workspaces', 'default-workspace', 'db', 'models.json');
+  const before = await fs.readFile(file, 'utf8');
+  expect(await secure.initializeEncryption(password)).toBe(false);
+  expect(await secure.isEncryptionInitialized()).toBe(false);
+  expect(await fs.readFile(file, 'utf8')).toBe(before);
+  expect((await secure.getEncryptionStatus()).recoveryRequired).toBe(true);
+});

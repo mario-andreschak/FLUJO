@@ -49,6 +49,7 @@ import { MCPService } from '@/backend/services/mcp';
 import { MCPOAuthClientProvider } from '@/backend/services/mcp/oauth';
 import { saveConfig } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
+import { enrollPrivateEncryptionFixture } from '../utils/privateEncryptionFixture';
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -65,7 +66,8 @@ function streamableServer(name: string, oauthTokens: Record<string, unknown> | u
   } as unknown as MCPStreamableConfig;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await enrollPrivateEncryptionFixture();
   serverConfigs.length = 0;
   global.__mcp_clients?.clear();
   global.__mcp_connecting?.clear();
