@@ -17,6 +17,7 @@ import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import { shippedDescriptorForConfig } from './shippedServers';
+import { isMcpTransport, MCP_TRANSPORT_INVALID } from './transportAdmission';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -845,6 +846,9 @@ export class MCPService {
   async connectServer(
     configOrName: MCPServerConfig | string,
   ): Promise<MCPServiceResponse> {
+    if (typeof configOrName !== 'string' && !isMcpTransport(configOrName.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
 
@@ -949,6 +953,9 @@ export class MCPService {
     // Keep the storage-shaped config separate from the resolved connection clone below.
     // Auth-mode decisions and cleanup must never operate on decrypted header material.
     const persistedConfig = storedConfig ?? config;
+    if (!isMcpTransport(config.transport) || !isMcpTransport(persistedConfig.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     if ((storedConfig ?? config).disabled) {
       log.info(
         `connectServer: Server ${config.name} is disabled — refusing to create a client/transport`,
@@ -1464,6 +1471,9 @@ export class MCPService {
     onOutput?: (event: TestConnectionEvent) => void,
     options?: { storedName?: string },
   ): Promise<MCPServiceResponse> {
+    if (!isMcpTransport(config.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     log.info(
       `testConnection: Testing connection to ${config.name || "(unnamed)"} via ${config.transport} transport`,
     );
@@ -2895,6 +2905,9 @@ export class MCPService {
     serverName: string,
     updates: Partial<MCPServerConfig>,
   ): Promise<MCPServerConfig | MCPServiceResponse> {
+    if (Object.prototype.hasOwnProperty.call(updates, 'transport') && !isMcpTransport(updates.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
 
     // Load all configs from storage

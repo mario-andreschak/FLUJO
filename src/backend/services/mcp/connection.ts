@@ -21,6 +21,7 @@ import * as path from "path";
 import * as os from "os";
 import { createHash } from "crypto";
 import { createLogger } from "@/utils/logger";
+import { assertMcpTransport, McpTransportError } from './transportAdmission';
 import {
   MCPServerConfig,
   MCPStdioConfig,
@@ -455,6 +456,7 @@ export function createTransport(
   | WebSocketClientTransport
   | StreamableHTTPClientTransport
   | SSEClientTransport {
+  assertMcpTransport(config);
   log.debug("Entering createTransport method");
 
   if (config.transport === "streamable") {
@@ -782,6 +784,7 @@ export function resolveStdioLaunch(
   config: MCPStdioConfig,
   options?: Pick<TransportCreationOptions, 'isolateRuntimeHome'>,
 ): StdioLaunch {
+  if (config.transport !== 'stdio') throw new McpTransportError();
   // For Windows .bat files, we need to use cmd.exe to execute them
   const shippedDescriptor = shippedDescriptorForConfig(config);
   const isShipped = Boolean(shippedDescriptor);
