@@ -26,6 +26,10 @@ function assertInstallerProvenance(workflow) {
   }
   for (const job of [attest, publish]) {
     const download = job.steps.find((step) => step.uses?.startsWith('actions/download-artifact@'));
+    if (job.env?.INSTALLER_RELEASE_DIR !== 'installer/Output'
+        || download?.with?.path !== '${{ env.INSTALLER_RELEASE_DIR }}') {
+      throw new Error('Installer signing/publication must download into the declared workspace artifact directory.');
+    }
     if (job['continue-on-error'] || download?.with?.['artifact-ids'] !== '${{ needs.installer-build.outputs.artifact_id }}'
         || job.env?.EXPECTED_INSTALLER_SHA256 !== '${{ needs.installer-build.outputs.sha256 }}'
         || job.steps.some((step) => /choco install|ISCC\.exe|npm run build/.test(step.run ?? ''))) {

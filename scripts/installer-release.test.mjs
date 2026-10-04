@@ -126,6 +126,21 @@ test('installer workflow reuses immutable build bytes with tag-only signing/publ
   assertWorkflowContract(workflows());
 });
 
+for (const job of ['installer-attest', 'installer-publish']) {
+  test(`${job} refuses an unavailable runner context in its job environment`, () => {
+    const files = workflows();
+    files['installer.yml'].jobs[job].env.INSTALLER_RELEASE_DIR = '${{ runner.temp }}/flujo-installer-release';
+    assert.throws(() => assertWorkflowContract(files), /declared workspace artifact directory/);
+  });
+
+  test(`${job} refuses downloading outside the directory used for byte validation`, () => {
+    const files = workflows();
+    files['installer.yml'].jobs[job].steps.find((step) => step.uses?.startsWith('actions/download-artifact@'))
+      .with.path = 'other-directory';
+    assert.throws(() => assertWorkflowContract(files), /declared workspace artifact directory/);
+  });
+}
+
 for (const [name, change] of [
   ['build publication authority', (jobs) => { jobs['installer-build'].permissions = { contents: 'write' }; }],
   ['signing on a pull request', (jobs) => { delete jobs['installer-attest'].if; }],

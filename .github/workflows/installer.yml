@@ -177,7 +177,7 @@ jobs:
       attestations: write
       artifact-metadata: write
     env:
-      INSTALLER_RELEASE_DIR: ${{ runner.temp }}/flujo-installer-release
+      INSTALLER_RELEASE_DIR: installer/Output
       EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -212,7 +212,7 @@ jobs:
       actions: read
       attestations: read
     env:
-      INSTALLER_RELEASE_DIR: ${{ runner.temp }}/flujo-installer-release
+      INSTALLER_RELEASE_DIR: installer/Output
       EXPECTED_INSTALLER_SHA256: ${{ needs.installer-build.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
