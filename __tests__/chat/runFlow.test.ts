@@ -868,6 +868,21 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 });
 
 describe('Persona execution authority', () => {
+  it.each(['hot', 'cold'] as const)('cannot resume an attributed %s snapshot by omitting request attribution', async cache => {
+    const conversationId = `persona-omitted-attribution-${cache}`;
+    const state = {
+      trackingInfo: { executionId: 'old-execution', startTime: 1, nodeExecutionTracker: [] },
+      messages: [], flowId: FLOW_ID, conversationId, title: 'Persona run',
+      status: 'completed', createdAt: 1, updatedAt: 1,
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    } as SharedState;
+    if (cache === 'hot') conversationStates.set(conversationId, state);
+    else mockLoadItem.mockResolvedValueOnce(state);
+    await expect(runFlow({ flowId: FLOW_ID, prompt: 'ordinary request', mode: 'conversation', conversationId }))
+      .rejects.toThrow('Persona-owned and must be resumed through the Persona dispatcher');
+    expect(persistedStates).toEqual([]);
+  });
+
   it('treats a Persona draft marker as immutable intent, then replaces it with trusted attribution', async () => {
     const conversationId = 'persona-draft-target';
     conversationStates.set(conversationId, {
