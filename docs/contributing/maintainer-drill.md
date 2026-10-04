@@ -246,3 +246,54 @@ measurements. Supported releases, response targets and actual private channel ar
 defined by Security #565. Human access verification needs the consenting owner;
 90-day continuity needs actual elapsed observations; external reassessment stays
 with the independent reviewer. These pending gates are listed in every receipt.
+
+## Upgrade and recover between pinned versions
+
+`scripts/maintainer-installed-upgrade.mjs` adds the two-version path. It requires
+a greater candidate version, both public npm package pins, and an absolute path
+to the candidate's complete official release distribution (manifest, tarballs,
+release evidence, CycloneDX source inventory and checksums). Keep this directory
+private and controlled throughout the run, as required by the release verifier.
+
+Before any registry download, npm install or application launch, the command
+checks distribution consistency and the candidate pin, exact-source official
+`main` verification including every required current-attempt job, completed
+JavaScript/Actions analyses and absence of open main CodeQL findings. It verifies
+all distribution attestations with the existing signer workflow, source/ref and
+self-hosted-runner restrictions. It rechecks verification/alerts after signatures,
+and repeats admission before declaring the whole drill passed. A live, missing,
+failed or partial gate stops the operation; a local mock or source fixture does
+not qualify a candidate. Existing reviewed/dismissed findings may still be present
+in analysis results; the receipt reports those counts separately from open alerts.
+
+Use values obtained from the pinned baseline and qualified published candidate;
+the variables below are placeholders, not an assertion that a candidate exists:
+
+```powershell
+node scripts/maintainer-installed-upgrade.mjs `
+  "--baseline-version=$BaselineVersion" "--baseline-integrity=$BaselineIntegrity" `
+  "--baseline-source-revision=$BaselineSourceRevision" `
+  "--candidate-version=$CandidateVersion" "--candidate-integrity=$CandidateIntegrity" `
+  "--candidate-source-revision=$CandidateSourceRevision" `
+  "--candidate-evidence=$CandidateEvidenceDirectory"
+```
+
+Supply `--npm-cli=ABSOLUTE_NPM_CLI_JS` when npm is not adjacent to Node. The CLI
+validates all pins and uses separate disposable consumers, stripped child
+environments and explicit empty npm configuration, as in the baseline probe.
+
+After both consumer probes pass and stop, the candidate first opens the baseline's
+existing disposable data root. It must read the old synthetic flow before any
+successful restore, reject the invalid backup without changing that flow, export
+the preserved data and retain it through restart. It then restores the original
+baseline backup into a different, empty candidate data root and checks re-export
+and restart persistence. The in-place probe never successfully restores the old
+backup, so restoration cannot mask data lost during upgrade.
+
+The top receipt hashes every completed operation receipt and qualification log,
+including failed operations. Retain all referenced roots together. These probes
+cover an empty synthetic flow only. Baseline provenance signatures, broader
+conversation/configuration/Persona/schedule continuity, every-descendant cleanup,
+independent human operation, access and the 90-day observation remain separate
+gates. Neither a source fixture nor a passed automated version transition is an
+independent maintainer assignment or an A- assessment.
