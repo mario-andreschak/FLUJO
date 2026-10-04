@@ -84,6 +84,10 @@ starts runtimes, performs releases or changes repository settings.
 The separate [scorecard source workflow](../../../.github/workflows/scorecard-source.yml)
 runs the three dedicated Node suites, ordinary/closure validation and committed
 file-target inventory on Windows and Ubuntu without installing app dependencies.
+It selects exact Node 22.23.3 and immediately runs Engineering's
+[official binary verifier](../../operations/ci-node-runtime-verification.md).
+Its separate runtime artifact retains the measured binary/libuv and source
+identity. That measurement does not qualify installed application behavior.
 Its [capture runner](../../../scripts/check-scorecard-ci.mjs) requires a clean
 committed checkout and records before/after SHA/tree correspondence, direct exits,
 actual validation clocks, test counts and raw output hashes. Run it locally with

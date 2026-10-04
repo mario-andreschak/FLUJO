@@ -16,6 +16,7 @@
  * Flags: --port <n> / FLUJO_PORT (default 4200); --no-open to suppress the
  * browser auto-open.
  */
+import './node-runtime-preflight.mjs';
 import process from 'node:process';
 import path from 'node:path';
 import os from 'node:os';

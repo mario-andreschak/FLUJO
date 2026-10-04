@@ -106,7 +106,7 @@
         }
       ],
       "prerequisites": [
-        "Node >=22 for source/npm; provider credential/subscription/quota or compatible local model; network as selected.",
+        "Candidate canonical source/npm guard requires ^22.17.0 || ^24.2.0; release qualification remains pending. Provider credential/subscription/quota or compatible local model; network as selected.",
         "MCP-dependent git/Python/uv/browser/system prerequisites and operator consent; custom encryption protection and migration acceptance."
       ],
       "exclusions": [
