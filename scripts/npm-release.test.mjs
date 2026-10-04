@@ -69,7 +69,9 @@ function registryRunner(manifest, initial = new Map()) {
   const run = (command, args) => {
     commands.push({ command, args });
     assert.equal(command, 'npm', 'the publishing primitive must not execute git or shell commands');
-    assert.ok(args.includes(REGISTRY), 'registry reads and writes must target the public npm registry');
+    const registryIndex = args.indexOf('--registry');
+    assert.ok(registryIndex >= 0, 'registry reads and writes must specify the registry');
+    assert.equal(args[registryIndex + 1], REGISTRY, 'registry reads and writes must target the exact public npm registry');
     if (args[0] === 'view') {
       const key = args.find((argument) => argument.includes(`@${VERSION}`));
       assert.ok(key, 'registry lookups must use the exact release version');
@@ -157,6 +159,8 @@ test('OIDC diagnostics exchange fresh package-specific identities without publis
   assert.equal(report.results.every(result => result.authenticated), true);
   assert.deepEqual(report.results.map(result => result.name), PUBLIC_PACKAGES);
   assert.ok(requests.filter(item => item.method === 'GET').every(item => new URL(item.url).searchParams.get('audience') === 'npm:registry.npmjs.org'));
+  assert.deepEqual(requests.filter(item => item.method === 'POST').map(item => item.url),
+    PUBLIC_PACKAGES.map(name => `${REGISTRY}/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(name)}`));
   assert.equal(JSON.stringify(report).includes(identity), false);
   assert.equal(JSON.stringify(report).includes('npm_sensitiveExchangeToken'), false);
 });
