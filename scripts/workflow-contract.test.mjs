@@ -24,8 +24,16 @@ for (const [label, change] of [
   ['missing Windows', (files) => { files['verify.yml'].jobs['production-build'].strategy.matrix.os.pop(); }],
   ['optional matrix', (files) => { files['verify.yml'].jobs['production-build']['continue-on-error'] = true; }],
   ['conditional tests', (files) => { files['verify.yml'].jobs.test.if = 'false'; }],
-  ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter((step) => step.run !== 'npm run smoke:mcp-artifacts'); }],
-  ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.run === 'npm run smoke:mcp-artifacts').if = 'false'; }],
+  ['omitted packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter((step) => !step.run?.split('\n').includes('npm run smoke:mcp-artifacts')); }],
+  ['skipped packed smoke', (files) => { files['verify.yml'].jobs['production-build'].steps.find((step) => step.run?.split('\n').includes('npm run smoke:mcp-artifacts')).if = 'false'; }],
+  ['omitted installed private-profile checks', (files) => {
+    const step = files['verify.yml'].jobs['production-build'].steps.find((entry) => entry.run?.split('\n').includes('npm run smoke:mcp-artifacts'));
+    step.run = step.run.split('\n').filter((line) => line !== 'node --test scripts/installed-private-profile.test.mjs').join('\n');
+  }],
+  ['late installed private-profile checks', (files) => {
+    const step = files['verify.yml'].jobs['production-build'].steps.find((entry) => entry.run?.split('\n').includes('npm run smoke:mcp-artifacts'));
+    step.run = 'npm run smoke:mcp-artifacts\nnode --test scripts/installed-private-profile.test.mjs';
+  }],
   ['optional assertion baseline', (files) => { files['verify.yml'].jobs.test.steps.find((step) => step.run?.startsWith('npm run verify:test-baseline'))['continue-on-error'] = true; }],
   ['omitted final dependency', (files) => { files['verify.yml'].jobs.verification.needs.pop(); }],
   ['conditionally skipped final gate', (files) => { delete files['verify.yml'].jobs.verification.if; }],

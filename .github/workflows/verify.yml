@@ -55,7 +55,9 @@ jobs:
           npm run typecheck:mcp
           npm run validate:mcp-release
       - name: Exercise installed app and packed MCP process boundaries
-        run: npm run smoke:mcp-artifacts
+        run: |
+          node --test scripts/installed-private-profile.test.mjs
+          npm run smoke:mcp-artifacts
 
   persona-memory-profile:
     if: github.event_name == 'workflow_dispatch' && inputs.persona_memory_profile

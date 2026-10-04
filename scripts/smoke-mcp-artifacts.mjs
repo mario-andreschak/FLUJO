@@ -24,6 +24,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { validateCandidate } from './npm-release.mjs';
+import { establishInstalledPrivateProfile } from './installed-private-profile.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -64,16 +65,19 @@ function run(command, args, options = {}) {
 async function waitFor(operation, accept, description, limit = timeoutMs) {
   const deadline = Date.now() + limit;
   let lastError;
+  let lastStatus;
   while (Date.now() < deadline) {
     try {
       const value = await operation();
+      lastError = undefined;
+      lastStatus = Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
       if (accept(value)) return value;
     } catch (error) {
       lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for ${description}.${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
+  throw new Error(`Timed out waiting for ${description}.${lastStatus !== undefined ? ` Last HTTP status: ${lastStatus}.` : ''}${lastError instanceof Error ? ` Last error: ${lastError.message}` : ''}`);
 }
 
 async function reservePort() {
@@ -449,26 +453,39 @@ async function smokePackedArtifacts(candidateDirectory) {
     let sandboxPort = await reservePort();
     while (sandboxPort === port) sandboxPort = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
-    appChild = spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
+    const appEnvironment = cleanEnv({
+      FLUJO_DATA_DIR: dataDir,
+      FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'instances'),
+      FLUJO_FS_ROOTS: rootsDir,
+      FLUJO_BASH_ROOTS: rootsDir,
+      FLUJO_PORT: String(port),
+      FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
+      FLUJO_EXPOSURE_MODE: 'localhost',
+      FLUJO_WORKER_MODE: '0',
+    });
+    // This owned empty fixture exercises interactive enrollment, never a host operator key.
+    delete appEnvironment.FLUJO_ENCRYPTION_PASSPHRASE_FILE;
+    const startInstalledApp = () => spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
       cwd: appRoot,
-      env: cleanEnv({
-        FLUJO_DATA_DIR: dataDir,
-        FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'instances'),
-        FLUJO_FS_ROOTS: rootsDir,
-        FLUJO_BASH_ROOTS: rootsDir,
-        FLUJO_PORT: String(port),
-        FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
-      }),
+      env: appEnvironment,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    appChild.stdout.on('data', (chunk) => appLogs.push(String(chunk)));
-    appChild.stderr.on('data', (chunk) => appLogs.push(String(chunk)));
-    appChild.once('error', (error) => appLogs.push(`Installed FLUJO spawn error: ${error.stack ?? error.message}\n`));
-    await waitFor(
-      async () => (await fetch(new URL('/api/cwd', baseUrl))).status,
-      (status) => status === 200,
-      `installed FLUJO readiness at ${baseUrl}`,
-    );
+    const captureLogs = child => {
+      child.stdout.on('data', chunk => appLogs.push(String(chunk)));
+      child.stderr.on('data', chunk => appLogs.push(String(chunk)));
+      child.once('error', error => appLogs.push(`Installed FLUJO spawn error: ${error.stack ?? error.message}\n`));
+    };
+    appChild = startInstalledApp();
+    captureLogs(appChild);
+    const privateProfile = await establishInstalledPrivateProfile(baseUrl, { sandbox, dataDir, waitFor });
+    await stopChild(appChild, 'installed flujo private-profile first process');
+    appChild = undefined;
+    appChild = startInstalledApp();
+    captureLogs(appChild);
+    await privateProfile.reauthenticateAfterRestart();
+    console.log(JSON.stringify({ installedPrivateProfile: privateProfile.profile, freshLock: 'observed',
+      publicSetup: 'denied', enrollment: 'passed', keyMetadata: 'USER-v2', authenticatedEncryption: 'v2',
+      restartLock: 'observed', reauthentication: 'passed', keyMetadataAfterRestart: 'unchanged' }));
     await probeProxy(baseUrl, rootsDir);
     await stopChild(appChild, 'installed flujo CLI');
     appChild = undefined;
