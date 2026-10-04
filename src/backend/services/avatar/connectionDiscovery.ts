@@ -5,6 +5,7 @@ import type { Model } from '@/shared/types/model';
 import { getProviderProfileById } from '@/shared/types/model/provider';
 import type { AvatarConnectionDiscovery, AvatarConnectionCandidate } from '@/shared/types/avatar';
 import { inspectCodexLogin, userCodexHome } from '@/backend/services/model/adapters/codexAuth';
+import { readStableFile } from '@/utils/readStableFile';
 
 type Runtime = AvatarConnectionCandidate['runtime'];
 
@@ -57,12 +58,7 @@ export function codexModelHints(value: unknown, now = Date.now()): AvatarConnect
 export async function inspectCodexModelHints(): Promise<AvatarConnectionCandidate['modelChoices']> {
   try {
     const file = path.join(userCodexHome(), 'models_cache.json');
-    const stat = await fs.lstat(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) return [];
-    const handle = await fs.open(file, 'r');
-    let bytes: Buffer;
-    try { bytes = Buffer.alloc(8 * 1024 * 1024 + 1); const read = await handle.read(bytes, 0, bytes.length, 0); if (read.bytesRead > 8 * 1024 * 1024) return []; bytes = bytes.subarray(0, read.bytesRead); }
-    finally { await handle.close(); }
+    const bytes = await readStableFile(file, 8 * 1024 * 1024);
     const value: unknown = JSON.parse(bytes.toString('utf8'));
     return codexModelHints(value);
   } catch { return []; }
