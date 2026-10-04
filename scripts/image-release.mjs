@@ -37,7 +37,7 @@ export function inspectTestedImage(run, imageId, sha, version) {
     'org.opencontainers.image.revision': sha, 'org.opencontainers.image.source': `https://github.com/${REPOSITORY}`,
     'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
     'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
-    'io.flujo.worker.snapshot.restore.limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
+    'io.flujo.worker.snapshot-default-limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
   for (const [key, value] of Object.entries(labels)) {
     if (image.Config.Labels?.[key] !== value) throw new Error(`Tested image has an incorrect ${key} label.`);
   }
@@ -135,7 +135,7 @@ export function validateImageEvidence({ directory, sha, version, sourceLock, exp
       || evidence.source !== sha || evidence.version !== version || evidence.image !== IMAGE || !DIGEST.test(evidence.digest)
       || !DIGEST.test(evidence.imageId) || evidence.platform !== 'linux/amd64' || evidence.user !== 'node'
       || evidence.labels?.['io.flujo.worker.snapshot-envelope-read-versions'] !== '1,2'
-      || evidence.labels?.['io.flujo.worker.snapshot.restore.limits'] !== WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL
+      || evidence.labels?.['io.flujo.worker.snapshot-default-limits'] !== WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL
       || (expectedDigest && evidence.digest !== expectedDigest)
       || evidence.sourceLockSha256 !== hash(sourceLock) || evidence.sbom?.filename !== IMAGE_SBOM || evidence.sbom.sha256 !== hash(sbomBytes)
       || (evidence.workflow?.ref && (evidence.workflow.ref !== `${WORKFLOW}@refs/heads/main` || evidence.workflow.sha !== sha))) {
