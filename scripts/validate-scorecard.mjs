@@ -51,33 +51,20 @@ const protectedBudgets = new Map([
   ['persona-pins', ['<=', 200, 1]], ['persona-leases', ['<=', 50, 1]],
   ['persona-recall-p95', ['<', 150, 20]],
 ]);
-const recoveryBudgetIds = ['recovery-rto', 'backup-rpo', 'duplicate-effects'];
-const primaryBudgetBindings = {
-  'product-fit': ['pilot-users'],
-  'feature-surface': ['novice-success', 'novice-time'],
-  security: ['unauthorized-access', 'high-findings'],
-  maturity: [...protectedBudgets.keys(), 'runtime-peak-rss', 'runtime-rss-growth', 'runtime-concurrency',
-    'live-smoke', 'live-seven-days', 'live-28-days', 'live-success-rate', 'live-interventions', 'live-spend'],
-  community: ['backup-maintainers', 'human-contributors'],
-  production: recoveryBudgetIds,
-};
-const requiredClaimContracts = [...dimensions.keys()].map(dimensionId => ({
-  id: dimensionId + '-a-minus', dimensionId,
-  profileId: dimensionId === 'production' ? 'shared-public' : 'local-owner',
-  budgetIds: primaryBudgetBindings[dimensionId] ?? [],
-}));
-requiredClaimContracts.push(
-  { id: 'production-local-a-minus', dimensionId: 'production', profileId: 'local-owner', budgetIds: recoveryBudgetIds },
-  { id: 'production-worker-a-minus', dimensionId: 'production', profileId: 'persistent-worker', budgetIds: recoveryBudgetIds },
-  { id: 'persona-unattended', dimensionId: 'maturity', profileId: 'persistent-worker',
-    budgetIds: ['persona-append-p95', 'persona-peak-rss', 'persona-rss-growth', 'live-seven-days', 'live-28-days',
-      'live-success-rate', 'live-interventions', 'duplicate-effects', 'live-spend'] },
-);
 const supportedKeywords = new Set([
   '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
   'enum', 'anyOf', 'properties', 'required', 'additionalProperties', 'items',
   'minItems', 'maxItems', 'minLength', 'pattern', 'minimum', 'maximum', 'uniqueItems',
 ]);
+
+function equalJson(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left)) return left.length === right.length && left.every((item, index) => equalJson(item, right[index]));
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && equalJson(left[key], right[key]));
+}
 
 /** Deliberately small JSON Schema vocabulary; unsupported keywords fail closed. */
 export function validateShape(value, schema, root = schema, path = '$') {
@@ -93,7 +80,7 @@ export function validateShape(value, schema, root = schema, path = '$') {
   const errors = [];
   const fail = message => errors.push(path + ': ' + message);
   if (schema.anyOf && !schema.anyOf.some(option => validateShape(value, option, root, path).length === 0)) fail('does not match any allowed shape');
-  if ('const' in schema && JSON.stringify(value) !== JSON.stringify(schema.const)) fail('unexpected constant');
+  if ('const' in schema && !equalJson(value, schema.const)) fail('unexpected constant');
   if (schema.enum && !schema.enum.includes(value)) fail('unknown enum value');
   const types = {
     object: value !== null && typeof value === 'object' && !Array.isArray(value),
@@ -144,6 +131,11 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
   const errors = validateShape(ledger, schema);
   if (errors.length) return { errors, blockers: [] };
   const fail = message => errors.push(message);
+  const contract = schema.$defs?.acceptanceContract?.const;
+  if (!contract || contract.contractVersion !== ledger.schemaVersion) {
+    fail('Missing or mismatched reviewed acceptance contract version');
+    return { errors, blockers: [] };
+  }
   const indexed = {};
   for (const collection of ['owners', 'profiles', 'rubric', 'budgets', 'artifacts', 'evidence', 'gates', 'claims']) {
     indexed[collection] = new Map();
@@ -169,6 +161,9 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     const original = dimensions.get(row.id);
     if (original && (row.dimension !== original[0] || row.originalGrade !== original[1])) fail(row.id + ': original dimension/grade changed');
     refs([row.ownerId], 'owners', row.id);
+    for (const kind of contract.rubricEvidenceKinds[row.id] ?? []) {
+      if (!row.evidenceRequired.includes(kind)) fail(row.id + ': published rubric evidence kind omitted: ' + kind);
+    }
   }
   for (const profile of ledger.profiles) {
     refs(profile.gateIds, 'gates', profile.id);
@@ -196,9 +191,10 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
     if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
     if (actual && actual.observation.minimumDenominator !== denominator) fail(id + ': existing observation denominator contract changed; requires a separately reviewed contract version');
   }
-  for (const [id, seconds, denominator] of [['pilot-users', 4838400, 10], ['human-contributors', 7776000, 3], ['novice-success', 0, 10], ['novice-time', 0, 10]]) {
+  for (const [id, target] of Object.entries(contract.humanTargets)) {
     const budget = indexed.budgets.get(id);
-    if (!budget || budget.observation.clock !== 'elapsed' || budget.observation.minimumSeconds < seconds || budget.observation.minimumDenominator < denominator) fail(id + ': published human observation contract weakened or omitted');
+    if (!budget || budget.operator !== target.operator || budget.limit !== target.limit || budget.unit !== target.unit) fail(id + ': published human target changed or omitted; requires a separately reviewed contract version');
+    if (!budget || budget.observation.clock !== target.observation.clock || budget.observation.minimumSeconds < target.observation.minimumSeconds || budget.observation.minimumDenominator < target.observation.minimumDenominator) fail(id + ': published human observation contract weakened or omitted');
   }
   for (const [role, agreement] of Object.entries(ledger.agreements)) {
     if (role === 'disagreements') continue;
@@ -291,6 +287,8 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
       if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
+        const metricKinds = contract.metricEvidenceKinds[metric.budgetId];
+        if (metricKinds && !metricKinds.includes(evidence.kind)) fail(evidence.id + ': metric ' + metric.budgetId + ' requires evidence kind ' + metricKinds.join(', '));
         if (budget.status === 'proposed') fail(evidence.id + ': proposed budget cannot establish acceptance');
         const measurementStart = timestamp(window.start);
         if (budget.status !== 'proposed' && !Number.isFinite(measurementStart)) fail(evidence.id + ': acceptance under declared budget needs actual measurement start');
@@ -298,7 +296,7 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
           if (timestamp(budget.declaredAt) > measurementStart) fail(evidence.id + ': budget declared after measurement began');
           if (measurementStart > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before measurement began');
         }
-        if (evidence.kind === 'live-provider' && budget.unit === 'seconds' && metric.value > (timestamp(window.end) - timestamp(window.start)) / 1000) fail(evidence.id + ': duration metric exceeds actual elapsed time');
+        if (window.kind === 'elapsed' && budget.unit === 'seconds' && metric.value > (timestamp(window.end) - timestamp(window.start)) / 1000) fail(evidence.id + ': duration metric exceeds actual elapsed time');
         const observation = budget.observation;
         if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
         if (observation.minimumSeconds > 0 && (window.kind !== 'elapsed' || (timestamp(window.end) - timestamp(window.start)) / 1000 < observation.minimumSeconds)) fail(evidence.id + ': observation window too short for ' + metric.budgetId);
@@ -391,12 +389,20 @@ export function validateScorecard(ledger, { root = repositoryRoot, schema = JSON
       for (const record of records.filter(e => e.kind === 'installed-artifact')) if (indexed.artifacts.get(record.artifactId)?.provenance !== 'verified-content') fail(claim.id + ': installed artifact content/provenance is unverified');
     }
   }
-  for (const required of requiredClaimContracts) {
+  for (const required of contract.claims) {
     const claim = indexed.claims.get(required.id);
     if (!claim) { fail('Required primary claim omitted: ' + required.id); continue; }
     if (claim.dimensionId !== required.dimensionId || claim.profileId !== required.profileId) fail(required.id + ': primary claim subject changed; requires a separately reviewed contract version');
+    if (claim.status === 'experimental' && !required.allowExperimental) fail(required.id + ': primary claim cannot be experimental');
     for (const budgetId of required.budgetIds) {
       if (!claim.budgetIds.includes(budgetId)) fail(required.id + ': required budget binding omitted: ' + budgetId);
+    }
+    const rubricKinds = required.rubricBound ? indexed.rubric.get(required.dimensionId)?.evidenceRequired ?? [] : [];
+    for (const kind of new Set([...required.requiredKinds, ...rubricKinds])) {
+      if (!claim.requiredKinds.includes(kind)) fail(required.id + ': required evidence kind binding omitted: ' + kind);
+    }
+    for (const gateId of required.gateIds) {
+      if (!claim.gateIds.includes(gateId)) fail(required.id + ': required gate binding omitted: ' + gateId);
     }
   }
   for (const issue of ledger.issueReconciliation) refs(issue.evidenceIds, 'evidence', '#' + issue.issue);

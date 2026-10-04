@@ -10,6 +10,7 @@ import { validateScorecard, validateShape } from './validate-scorecard.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const baseline = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.json'), 'utf8'));
+const baselineSchema = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.schema.json'), 'utf8'));
 function entry(ledger, collection, id) {
   const found = ledger[collection].find(item => item.id === id);
   assert.ok(found, `Fixture entry missing: ${collection}/${id}`);
@@ -35,6 +36,26 @@ test('unknown fields and future versions fail closed', () => {
   rejects(l => { l.selfAwardedGrade = 'A'; }, /unknown field/);
   rejects(l => { l.schemaVersion = 2; }, /unexpected constant/);
   assert.throws(() => validateShape('x', { format: 'date' }), /Unsupported schema keyword/);
+});
+
+test('JSON const compares object values independent of key order while preserving array order', () => {
+  const schema = { const: { version: 1, rows: [{ id: 'a', value: 2 }, null] } };
+  assert.deepEqual(validateShape({ rows: [{ value: 2, id: 'a' }, null], version: 1 }, schema), []);
+  assert.match(validateShape({ version: 1, rows: [null, { id: 'a', value: 2 }] }, schema).join('\n'), /unexpected constant/);
+  assert.match(validateShape({ version: 1, rows: [{ id: 'a', value: 3 }, null] }, schema).join('\n'), /unexpected constant/);
+  assert.match(validateShape({ version: 1, rows: [{ id: 'a', value: 2 }, null], extra: true }, schema).join('\n'), /unexpected constant/);
+});
+
+test('missing or mismatched acceptance policy versions fail closed', () => {
+  for (const edit of [
+    schema => { delete schema.$defs.acceptanceContract; },
+    schema => { schema.$defs.acceptanceContract.const.contractVersion = 2; },
+  ]) {
+    const schema = structuredClone(baselineSchema);
+    edit(schema);
+    const result = validateScorecard(structuredClone(baseline), { root, schema });
+    assert.ok(result.errors.some(error => /acceptance contract version/.test(error)), result.errors.join('\n'));
+  }
 });
 test('missing/duplicated scorecard rows and silent profile reduction are rejected', () => {
   rejects(l => { l.rubric.pop(); }, /too few|required complete set/);
@@ -335,18 +356,106 @@ test('primary claim identity and subject cannot be replaced to hide budget bindi
   }
 });
 
-test('original novice measurements qualify the feature fixture and additional criteria remain allowed', () => {
-  const result = featureAcceptanceFixture(({ ledger, agreement, study }) => {
-    study.budgetIds = ['novice-success', 'novice-time'];
-    study.metrics = [['novice-success', 8], ['novice-time', 900]].map(([budgetId, value]) => {
-      Object.assign(entry(ledger, 'budgets', budgetId), { status: 'agreed', agreementEvidenceIds: [agreement.id] });
-      return { budgetId, value, denominator: 10, numerator: null };
-    });
+function supplyNoviceMeasurements({ ledger, agreement, study }, target = study) {
+  Object.assign(target, { budgetIds: ['novice-success', 'novice-time'], observedAt: study.observedAt, window: study.window });
+  target.metrics = [['novice-success', 8], ['novice-time', 900]].map(([budgetId, value]) => {
+    Object.assign(entry(ledger, 'budgets', budgetId), { status: 'agreed', agreementEvidenceIds: [agreement.id] });
+    return { budgetId, value, denominator: 10, numerator: null };
   });
+}
+
+test('original novice measurements qualify the feature fixture and additional criteria remain allowed', () => {
+  const result = featureAcceptanceFixture(supplyNoviceMeasurements);
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
   const extended = validate(l => { entry(l, 'claims', 'feature-surface-a-minus').budgetIds.push('pilot-users'); });
   assert.deepEqual(extended.errors, []);
+});
+
+test('review P1: an experimental primary and weaker release sibling cannot replace the contract', () => {
+  const result = featureAcceptanceFixture(({ ledger, claim, evidence }) => {
+    ledger.claims.push({ ...claim, id: 'synthetic-weaker-feature', budgetIds: [],
+      requiredKinds: ['installed-artifact'], gateIds: ['release-acceptance'], evidenceIds: [evidence.id] });
+    claim.status = 'experimental';
+    ledger.assessment.acceptedExperimentalClaimIds.push(claim.id);
+  });
+  assert.ok(result.errors.some(error => /primary claim.*experimental/.test(error)), result.errors.join('\n'));
+});
+
+test('review P1: installed/source metrics cannot substitute for human measurements', () => {
+  for (const kind of ['installed-artifact', 'source-check']) {
+    const result = featureAcceptanceFixture(context => {
+      if (kind === 'installed-artifact') supplyNoviceMeasurements(context, context.evidence);
+      else {
+        const source = structuredClone(context.study);
+        Object.assign(source, { id: 'synthetic-source-novices', kind });
+        supplyNoviceMeasurements(context, source);
+        context.ledger.evidence.push(source);
+        context.claim.evidenceIds.push(source.id);
+      }
+    });
+    assert.ok(result.errors.some(error => /metric.*evidence kind/.test(error)), result.errors.join('\n'));
+  }
+});
+
+test('review P1: published human targets cannot be weakened while retaining their budgets', () => {
+  for (const [id, limit] of [['pilot-users', 1], ['novice-success', 1], ['novice-time', 86400], ['human-contributors', 1], ['backup-maintainers', 1]]) {
+    rejects(l => { entry(l, 'budgets', id).limit = limit; }, /published human target/);
+  }
+  rejects(l => { entry(l, 'budgets', 'backup-maintainers').observation.minimumDenominator = 1; }, /published human observation contract weakened/);
+  rejects(l => { entry(l, 'budgets', 'pilot-users').operator = '<='; }, /published human target/);
+  rejects(l => { entry(l, 'budgets', 'novice-time').unit = 'minutes'; }, /published human target/);
+});
+
+test('primary claim gates and evidence kinds cannot be removed independently of their budgets', () => {
+  for (const contract of baselineSchema.$defs.acceptanceContract.const.claims) {
+    rejects(l => { entry(l, 'claims', contract.id).gateIds = ['rubric-agreement']; }, /required gate binding omitted/);
+    rejects(l => { entry(l, 'claims', contract.id).requiredKinds = ['baseline-observation']; }, /required evidence kind binding omitted/);
+  }
+});
+
+test('published rubric kinds remain mandatory and added kinds bind primary claims', () => {
+  for (const row of baseline.rubric) {
+    rejects(l => { entry(l, 'rubric', row.id).evidenceRequired = ['live-provider']; }, /published rubric evidence kind omitted/);
+  }
+  rejects(l => { entry(l, 'rubric', 'feature-surface').evidenceRequired.push('security-review'); }, /required evidence kind binding omitted/);
+  const stronger = validate(l => {
+    entry(l, 'rubric', 'feature-surface').evidenceRequired.push('security-review');
+    entry(l, 'claims', 'feature-surface-a-minus').requiredKinds.push('security-review');
+    entry(l, 'claims', 'feature-surface-a-minus').gateIds.push('human-evidence');
+    entry(l, 'budgets', 'backup-maintainers').observation.minimumDenominator = 3;
+  });
+  assert.deepEqual(stronger.errors, []);
+  assert.ok(stronger.blockers.length > 0);
+});
+
+test('live metrics must be carried by live-provider evidence', () => {
+  for (const kind of ['source-check', 'human-study']) {
+    rejects(l => {
+      const { study } = observedBudget(l, 'live-success-rate', 0.99, 100);
+      study.metrics[0].numerator = 99;
+      study.kind = kind;
+    }, /metric.*evidence kind/);
+  }
+});
+
+test('human duration measurements cannot exceed the actual elapsed window', () => {
+  const result = featureAcceptanceFixture(context => {
+    supplyNoviceMeasurements(context);
+    context.study.window.end = '2026-10-05T00:00:05Z';
+  });
+  assert.ok(result.errors.some(error => /duration metric exceeds actual elapsed time/.test(error)), result.errors.join('\n'));
+});
+
+test('a narrower release sibling leaves its primary pending and Persona experimental status visible', () => {
+  const result = featureAcceptanceFixture(({ ledger, claim, evidence }) => {
+    ledger.claims.push({ ...claim, id: 'synthetic-weaker-feature', budgetIds: [],
+      requiredKinds: ['installed-artifact'], gateIds: ['release-acceptance'], evidenceIds: [evidence.id] });
+    claim.status = 'pending';
+    ledger.assessment.acceptedExperimentalClaimIds.push('persona-unattended');
+  });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.includes('Release-bound claims are incomplete'));
 });
 
 test('completed assessment binds passed gates to the selected release source', () => {

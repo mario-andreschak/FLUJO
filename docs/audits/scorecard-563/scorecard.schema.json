@@ -264,6 +264,429 @@
     }
   },
   "$defs": {
+    "acceptanceContract": {
+      "title": "Reviewed version 1 acceptance minimums",
+      "description": "Normative policy data consumed by validate-scorecard.mjs for cross-record checks. Change with the schema and ledger contract version under explicit review; proposed targets still require human agreement before measurement.",
+      "type": "object",
+      "const": {
+        "contractVersion": 1,
+        "claims": [
+          {
+            "id": "product-fit-a-minus",
+            "dimensionId": "product-fit",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "pilot-users"
+            ],
+            "requiredKinds": [
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "human-evidence"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "feature-surface-a-minus",
+            "dimensionId": "feature-surface",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "novice-success",
+              "novice-time"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "engineering-a-minus",
+            "dimensionId": "engineering",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "source-check",
+              "installed-artifact",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "code-health-a-minus",
+            "dimensionId": "code-health",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "source-check",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "security-a-minus",
+            "dimensionId": "security",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "unauthorized-access",
+              "high-findings"
+            ],
+            "requiredKinds": [
+              "security-review",
+              "installed-artifact"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "maturity-a-minus",
+            "dimensionId": "maturity",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "persona-append-p95",
+              "persona-peak-rss",
+              "persona-rss-growth",
+              "persona-append-flatness",
+              "persona-total-collection",
+              "persona-mailbox",
+              "persona-activities",
+              "persona-dispatches",
+              "persona-pins",
+              "persona-leases",
+              "persona-recall-p95",
+              "runtime-peak-rss",
+              "runtime-rss-growth",
+              "runtime-concurrency",
+              "live-smoke",
+              "live-seven-days",
+              "live-28-days",
+              "live-success-rate",
+              "live-interventions",
+              "live-spend"
+            ],
+            "requiredKinds": [
+              "source-check",
+              "offline-simulation",
+              "installed-artifact"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "persona-current-soak",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "community-a-minus",
+            "dimensionId": "community",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "backup-maintainers",
+              "human-contributors"
+            ],
+            "requiredKinds": [
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "human-evidence"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "docs-a-minus",
+            "dimensionId": "docs",
+            "profileId": "local-owner",
+            "budgetIds": [],
+            "requiredKinds": [
+              "baseline-observation",
+              "independent-assessment"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-a-minus",
+            "dimensionId": "production",
+            "profileId": "shared-public",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "worker-operations",
+              "shared-profile",
+              "cross-stream-contracts",
+              "dependency-audit"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-local-a-minus",
+            "dimensionId": "production",
+            "profileId": "local-owner",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "local-security",
+              "worker-operations",
+              "dependency-audit",
+              "build-verification"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "production-worker-a-minus",
+            "dimensionId": "production",
+            "profileId": "persistent-worker",
+            "budgetIds": [
+              "recovery-rto",
+              "backup-rpo",
+              "duplicate-effects"
+            ],
+            "requiredKinds": [
+              "installed-artifact",
+              "security-review",
+              "human-study"
+            ],
+            "gateIds": [
+              "rubric-agreement",
+              "independent-reassessment",
+              "release-acceptance",
+              "local-security",
+              "worker-operations",
+              "dependency-audit",
+              "build-verification",
+              "cross-stream-contracts"
+            ],
+            "rubricBound": true,
+            "allowExperimental": false
+          },
+          {
+            "id": "persona-unattended",
+            "dimensionId": "maturity",
+            "profileId": "persistent-worker",
+            "budgetIds": [
+              "persona-append-p95",
+              "persona-peak-rss",
+              "persona-rss-growth",
+              "live-seven-days",
+              "live-28-days",
+              "live-success-rate",
+              "live-interventions",
+              "duplicate-effects",
+              "live-spend"
+            ],
+            "requiredKinds": [
+              "offline-simulation",
+              "live-provider",
+              "human-study"
+            ],
+            "gateIds": [
+              "persona-current-soak",
+              "persona-manual",
+              "persona-live",
+              "dependency-audit"
+            ],
+            "rubricBound": false,
+            "allowExperimental": true
+          }
+        ],
+        "rubricEvidenceKinds": {
+          "product-fit": [
+            "human-study"
+          ],
+          "feature-surface": [
+            "installed-artifact",
+            "human-study"
+          ],
+          "engineering": [
+            "source-check",
+            "installed-artifact",
+            "human-study"
+          ],
+          "code-health": [
+            "source-check",
+            "human-study"
+          ],
+          "security": [
+            "security-review",
+            "installed-artifact"
+          ],
+          "maturity": [
+            "source-check",
+            "offline-simulation",
+            "installed-artifact"
+          ],
+          "community": [
+            "human-study"
+          ],
+          "docs": [
+            "baseline-observation",
+            "independent-assessment"
+          ],
+          "production": [
+            "installed-artifact",
+            "security-review",
+            "human-study"
+          ]
+        },
+        "humanTargets": {
+          "pilot-users": {
+            "operator": ">=",
+            "limit": 10,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 4838400,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            }
+          },
+          "novice-success": {
+            "operator": ">=",
+            "limit": 8,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            }
+          },
+          "novice-time": {
+            "operator": "<=",
+            "limit": 900,
+            "unit": "seconds",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 10
+            }
+          },
+          "human-contributors": {
+            "operator": ">=",
+            "limit": 3,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 7776000,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 3
+            }
+          },
+          "backup-maintainers": {
+            "operator": ">=",
+            "limit": 2,
+            "unit": "humans",
+            "observation": {
+              "clock": "elapsed",
+              "minimumSeconds": 0,
+              "minimumSimulatedDays": 0,
+              "minimumDenominator": 2
+            }
+          }
+        },
+        "metricEvidenceKinds": {
+          "pilot-users": [
+            "human-study"
+          ],
+          "novice-success": [
+            "human-study"
+          ],
+          "novice-time": [
+            "human-study"
+          ],
+          "human-contributors": [
+            "human-study"
+          ],
+          "backup-maintainers": [
+            "human-study"
+          ],
+          "live-smoke": [
+            "live-provider"
+          ],
+          "live-seven-days": [
+            "live-provider"
+          ],
+          "live-28-days": [
+            "live-provider"
+          ],
+          "live-success-rate": [
+            "live-provider"
+          ],
+          "live-interventions": [
+            "live-provider"
+          ],
+          "live-spend": [
+            "live-provider"
+          ]
+        }
+      }
+    },
     "owner": {
       "type": "object",
       "additionalProperties": false,
@@ -535,8 +958,13 @@
         },
         "limit": {
           "anyOf": [
-            { "type": "number", "minimum": 0 },
-            { "type": "null" }
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "unit": {
