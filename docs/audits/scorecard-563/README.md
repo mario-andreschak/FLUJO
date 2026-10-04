@@ -67,6 +67,7 @@ API results retain `validationClock` with epoch milliseconds and `wall-clock` or
 `override` provenance; CLI output prints its effective wall clock. Retained validation
 receipts should include these fields. A historical receipt without them cannot be
 retroactively described as having reported clock provenance.
+File-read or JSON-parse failures precede API validation and emit no clock line.
 The validator never downloads remote artifacts, calls models, changes accounts,
 starts runtimes, performs releases or changes repository settings.
 Its small documented schema vocabulary fails closed on unsupported keywords.
@@ -253,6 +254,9 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    cannot supply these protected installed/runtime metrics.
    The ten existing Persona soak metrics require offline-simulation carriers;
    the separately controlled recall benchmark permits offline-simulation or source-check.
+   A source-check recall measurement must retain an actual elapsed window; an instant
+   source observation cannot qualify. New budgets may be recorded as proposals, but
+   passing checksummed measurements need an explicit reviewed carrier contract.
    A source observation declaring 28 virtual days cannot supply a Persona soak metric.
    Published human targets and observation floors remain protected, and duration
    measurements cannot exceed the actual elapsed evidence window. Review schema,

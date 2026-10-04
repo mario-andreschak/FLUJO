@@ -725,7 +725,7 @@ function personaMetricFixture(ledger, budgetId, denominator) {
     kind: simulated ? 'offline-simulation' : 'source-check',
     observedAt: '2026-10-04T01:00:00Z', scope: 'Synthetic sample-count admission fixture; no real measurement.',
     budgetIds: [budgetId], metrics: [{budgetId, value: 1, denominator, numerator: null}],
-    window: {kind: simulated ? 'simulated' : 'instant', start: budget.declaredAt, end: null, simulatedDays: simulated ? 28 : null},
+    window: {kind: simulated ? 'simulated' : 'elapsed', start: budget.declaredAt, end: simulated ? null : '2026-10-04T00:59:00Z', simulatedDays: simulated ? 28 : null},
   });
   ledger.evidence.push(witness);
 }
@@ -770,7 +770,7 @@ test('review residual: recall benchmark keeps its source and simulation carriers
       personaMetricFixture(ledger, 'persona-recall-p95', 20);
       const witness = entry(ledger, 'evidence', 'synthetic-sample-count-persona-recall-p95');
       witness.kind = kind;
-      if (kind === 'offline-simulation') { witness.window.kind = 'simulated'; witness.window.simulatedDays = 28; }
+      if (kind === 'offline-simulation') { witness.window.kind = 'simulated'; witness.window.end = null; witness.window.simulatedDays = 28; }
     });
     assert.deepEqual(result.errors, []);
     assert.ok(result.blockers.length > 0);
@@ -784,9 +784,42 @@ test('all original Persona soak metrics admit their simulation carrier without s
       const witness = entry(ledger, 'evidence', 'synthetic-sample-count-' + budget.id);
       witness.kind = 'offline-simulation';
       witness.window.kind = 'simulated';
+      witness.window.end = null;
       witness.window.simulatedDays = 28;
     }
   });
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
+});
+
+test('new proposals may be recorded, but passing measurements need a reviewed carrier contract', () => {
+  const addBudget = ledger => {
+    ledger.budgets.push({ ...structuredClone(entry(ledger, 'budgets', 'persona-recall-p95')), id: 'synthetic-added-budget', status: 'proposed' });
+  };
+  const proposal = validate(addBudget);
+  assert.deepEqual(proposal.errors, []);
+  assert.ok(proposal.blockers.length > 0);
+  rejects(ledger => {
+    addBudget(ledger);
+    observedBudget(ledger, 'synthetic-added-budget', 1, 20).study.kind = 'source-check';
+  }, /no reviewed evidence carrier contract/);
+});
+
+test('instant source observations cannot qualify the measured recall benchmark', () => {
+  rejects(ledger => {
+    personaMetricFixture(ledger, 'persona-recall-p95', 20);
+    const witness = entry(ledger, 'evidence', 'synthetic-sample-count-persona-recall-p95');
+    witness.window.kind = 'instant';
+    witness.window.end = null;
+  }, /requires an elapsed source measurement window/);
+});
+
+test('source-run recall milliseconds cannot exceed the actual elapsed benchmark window', () => {
+  rejects(ledger => {
+    personaMetricFixture(ledger, 'persona-recall-p95', 20);
+    const witness = entry(ledger, 'evidence', 'synthetic-sample-count-persona-recall-p95');
+    witness.window.start = '2026-10-04T00:58:59.999Z';
+    witness.window.end = '2026-10-04T00:59:00.000Z';
+    witness.metrics[0].value = 100;
+  }, /duration metric exceeds actual elapsed time/);
 });

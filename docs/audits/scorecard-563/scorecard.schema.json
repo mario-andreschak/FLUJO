@@ -665,6 +665,9 @@
             "basis": "#563 published plan; #576 agreement pending"
           }
         },
+        "sourceMetricElapsedBudgets": [
+          "persona-recall-p95"
+        ],
         "metricEvidenceKinds": {
           "pilot-users": [
             "human-study"
