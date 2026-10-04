@@ -15,6 +15,7 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import appPackage from '../../../../package.json';
+import { encryptSnapshotEnvelope } from './snapshotEnvelope';
 
 const DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
@@ -66,7 +67,7 @@ export interface WorkspaceArchiveResult {
 
 export class SnapshotArchiveError extends Error {
   constructor(
-    readonly code: 'UNSAFE_ENTRY' | 'SIZE_LIMIT' | 'WORKSPACE_UNAVAILABLE' | 'CREDENTIALS_UNAVAILABLE' | 'MCP_UNSUPPORTED',
+    readonly code: 'UNSAFE_ENTRY' | 'SIZE_LIMIT' | 'WORKSPACE_UNAVAILABLE' | 'CREDENTIALS_UNAVAILABLE' | 'MCP_UNSUPPORTED' | 'RECIPIENT_KEY_REQUIRED',
     message: string,
   ) {
     super(message);
@@ -359,22 +360,30 @@ export async function captureWorkspaceSnapshot(
 
 export async function writeWorkspaceSnapshotArchive(
   captured: CapturedWorkspaceSnapshot,
-  options: { signal?: AbortSignal } = {},
+  options: { recipientKey: Buffer; signal?: AbortSignal },
 ): Promise<WorkspaceArchiveResult> {
+  if (!Buffer.isBuffer(options?.recipientKey) || options.recipientKey.length !== 32) {
+    throw new SnapshotArchiveError('RECIPIENT_KEY_REQUIRED', 'A separately retained recipient key is required before snapshot creation.');
+  }
+  const recipientKey = Buffer.from(options.recipientKey);
   const { signal } = options;
-  signal?.throwIfAborted();
-  const stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
-  await fs.chmod(stagingDir, 0o700).catch(() => undefined);
-  const archivePath = path.join(stagingDir, 'workspace.snapshot.zip');
-
+  let stagingDir: string | undefined;
   try {
-    const archive = await captured.zip.generateAsync({
+    signal?.throwIfAborted();
+    stagingDir = await fs.mkdtemp(path.join(tmpdir(), 'flujo-hot-clone-'));
+    await fs.chmod(stagingDir, 0o700).catch(() => undefined);
+    const archivePath = path.join(stagingDir, 'workspace.snapshot.encrypted.json');
+    const plaintext = await captured.zip.generateAsync({
       type: 'nodebuffer',
       compression: 'DEFLATE',
       compressionOptions: { level: 6 },
       platform: 'UNIX',
     }, () => signal?.throwIfAborted());
-    signal?.throwIfAborted();
+    let archive: Buffer;
+    try {
+      signal?.throwIfAborted();
+      archive = encryptSnapshotEnvelope(plaintext, recipientKey);
+    } finally { plaintext.fill(0); }
     await fs.writeFile(archivePath, archive, { mode: 0o600 });
     await fs.chmod(archivePath, 0o600).catch(() => undefined);
     signal?.throwIfAborted();
@@ -388,7 +397,9 @@ export async function writeWorkspaceSnapshotArchive(
       bytes: captured.bytes,
     };
   } catch (error) {
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    if (stagingDir) await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    recipientKey.fill(0);
   }
 }

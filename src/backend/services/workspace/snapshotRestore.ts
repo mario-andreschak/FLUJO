@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { readPlainFile } from '@/utils/readPlainFile';
-import { createDecipheriv, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import JSZip from 'jszip';
 import applicationPackage from '../../../../package.json';
@@ -17,6 +17,7 @@ import { atomicWriteWithoutLinks, assertLinkFreeFileParent } from './backupResto
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { isWorkerMode, setWorkerBootstrapStatus } from './workerMode';
+import { decryptSnapshotEnvelope } from './snapshotEnvelope';
 
 const MANIFEST_PATH = 'snapshot-manifest.json';
 const RESTORE_MARKER = '.flujo-worker-snapshot.json';
@@ -261,12 +262,21 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
   const maxInputBytes = encrypted ? Math.ceil(maxArchiveBytes * 4 / 3) + 4096 : maxArchiveBytes;
   const stat = await fs.lstat(archivePath, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > BigInt(maxInputBytes)) {
-    throw new Error('Worker snapshot must be an ordinary ZIP file within the size limit.');
+    throw new Error('Worker snapshot must be an ordinary archive file within the size limit.');
   }
   let bytes = await readPlainFile(archivePath, { expected: stat, maxBytes: maxInputBytes });
   if (bytes.length > maxInputBytes) throw new Error('Worker snapshot exceeds the size limit.');
-  if (encrypted) bytes = decryptEnvelope(bytes, maxArchiveBytes);
-  if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Worker snapshot SHA-256 mismatch.');
+  const inputDigest = createHash('sha256').update(bytes).digest('hex');
+  let envelopeVersion: 1 | 2 | undefined;
+  if (encrypted || bytes[0] === 0x7b) {
+    const decrypted = decryptSnapshotEnvelope(bytes, process.env.FLUJO_WORKER_SNAPSHOT_KEY, maxArchiveBytes);
+    bytes = decrypted.bytes;
+    envelopeVersion = decrypted.version;
+  }
+  // New reports bind the encrypted wire bytes. Legacy v1 bridge archives used
+  // the plaintext ZIP digest, which remains a read-only compatibility contract.
+  const actualDigest = envelopeVersion === 2 ? inputDigest : createHash('sha256').update(bytes).digest('hex');
+  if (actualDigest !== digest) throw new Error('Worker snapshot SHA-256 mismatch.');
   const members = inspectArchive(bytes, maxFileBytes, maxBytes);
   const zip = await JSZip.loadAsync(bytes);
   const manifestEntry = zip.file(MANIFEST_PATH);
@@ -361,29 +371,6 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
   } finally {
     // This path was allocated by this invocation and never contains an existing workspace.
     if (!published) await fs.rm(staging, { recursive: true, force: true });
-  }
-}
-
-function decryptEnvelope(input: Buffer, maxBytes: number): Buffer {
-  try {
-    const envelope: unknown = JSON.parse(input.toString('utf8'));
-    if (!record(envelope) || envelope.format !== 'flujo-workspace-encrypted' || envelope.version !== 1) throw new Error();
-    const decode = (value: unknown): Buffer => {
-      if (typeof value !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error();
-      const decoded = Buffer.from(value, 'base64');
-      if (decoded.toString('base64') !== value) throw new Error();
-      return decoded;
-    };
-    const key = decode(process.env.FLUJO_WORKER_SNAPSHOT_KEY);
-    const iv = decode(envelope.iv);
-    const tag = decode(envelope.tag);
-    const data = decode(envelope.data);
-    if (key.length !== 32 || iv.length !== 12 || tag.length !== 16 || data.length > maxBytes) throw new Error();
-    const decipher = createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(data), decipher.final()]);
-  } catch {
-    throw new Error('Worker snapshot decryption failed. Check the encrypted archive and its key.');
   }
 }
 

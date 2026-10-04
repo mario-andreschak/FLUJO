@@ -197,10 +197,13 @@ try {
   const plaintext = await zip.generateAsync({ type: 'nodebuffer' });
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from('flujo:workspace-snapshot:v2'));
   const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const archivePath = path.join(root, 'worker.snapshot');
-  await fs.writeFile(archivePath, JSON.stringify({ format: 'flujo-workspace-encrypted', version: 1, iv: iv.toString('base64'),
-    tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') }), { mode: 0o600 });
+  const wire = Buffer.from(JSON.stringify({ format: 'flujo-workspace-encrypted', version: 2, iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') }));
+  await fs.writeFile(archivePath, wire, { mode: 0o600 });
+  plaintext.fill(0);
   const harness = path.join(root, 'next-harness.mjs');
   if (!production) await fs.writeFile(harness, `import {createRequire} from 'node:module';
 import http from 'node:http';
@@ -213,7 +216,7 @@ const server=http.createServer((req,res)=>handler(req,res));
 server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
 `);
   console.log(`Starting ${production ? 'packaged production' : 'isolated development'} worker with an encrypted synthetic snapshot...`);
-  const ready = await startWorker(workerPort, archivePath, sha256(plaintext), harness);
+  const ready = await startWorker(workerPort, archivePath, sha256(wire), harness);
   assert.equal(ready.workspace, workspace);
   assert.deepEqual(ready.servers, [{ name: 'filesystem', status: 'ready' }]);
   assert.equal(await checkHealth({ env: { FLUJO_WORKER_MODE: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_PORT: String(workerPort) } }), true);
@@ -268,7 +271,7 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   const callsBeforeRestart = providerCalls;
   console.log('HTTP auth, real flow execution, and conversation persistence passed; restarting worker...');
   await stopChild();
-  await startWorker(workerPort, archivePath, sha256(plaintext), harness);
+  await startWorker(workerPort, archivePath, sha256(wire), harness);
   assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
   assert.equal(await fs.readFile(path.join(root, 'data', 'workspaces', workspace, 'userdata', 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
   assert.equal(providerCalls, callsBeforeRestart, 'Restart must not replay the completed flow.');

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import JSZip from 'jszip';
 import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
@@ -21,6 +21,7 @@ jest.mock('@/utils/encryption/session', () => ({ getServerDek: () => mockDek() }
 
 import { captureWorkspaceSnapshot, writeWorkspaceSnapshotArchive } from '@/backend/services/workspace/snapshotArchive';
 import { CODEX_AUTH_SOURCE_FILE } from '@/backend/services/model/adapters/codexAuth';
+import { decryptSnapshotEnvelope } from '@/backend/services/workspace/snapshotEnvelope';
 
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'CODEX_HOME', 'FLUJO_SNAPSHOT_MAX_BYTES', 'FLUJO_SNAPSHOT_MAX_FILE_BYTES'] as const;
 
@@ -81,15 +82,25 @@ describe('portable workspace capture', () => {
     expect(captured.manifest.runtime.codexAuth).toBe('none');
     expect(mockBuildPlan).toHaveBeenCalledWith([expect.objectContaining({ name: 'test-server', env: { API_KEY: 'encrypted:synthetic' } })], workspace);
     expect(captured.zip.file('db/codex-runtime/state_5.sqlite')).toBeNull();
-    const archive = await writeWorkspaceSnapshotArchive(captured);
+    const recipientKey = randomBytes(32);
+    const archive = await writeWorkspaceSnapshotArchive(captured, { recipientKey });
     try {
       const bytes = await fs.readFile(archive.archivePath);
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(archive.sha256);
-      const unpacked = await JSZip.loadAsync(bytes);
+      expect(JSON.parse(bytes.toString())).toMatchObject({ format: 'flujo-workspace-encrypted', version: 2 });
+      await expect(JSZip.loadAsync(bytes)).rejects.toThrow();
+      const unpacked = await JSZip.loadAsync(decryptSnapshotEnvelope(bytes, recipientKey.toString('base64'), 1024 * 1024).bytes);
       expect(JSON.parse(await unpacked.file('snapshot-manifest.json')!.async('string'))).toEqual(captured.manifest);
     } finally {
       await fs.rm(archive.stagingDir, { recursive: true, force: true });
     }
+  });
+
+  it('refuses an absent recipient key before creating any archive or staging directory', async () => {
+    const captured = await captureWorkspaceSnapshot('research', 1);
+    const create = jest.spyOn(fs, 'mkdtemp');
+    await expect(writeWorkspaceSnapshotArchive(captured, undefined as never)).rejects.toMatchObject({ code: 'RECIPIENT_KEY_REQUIRED' });
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('seeds subscription auth from the active host without copying Codex runtime databases', async () => {

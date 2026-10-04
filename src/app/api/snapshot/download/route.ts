@@ -27,9 +27,9 @@ async function GET_handler(request: NextRequest): Promise<Response> {
     return new NextResponse(new Uint8Array(archive.content), {
       headers: {
         'Cache-Control': 'no-store',
-        'Content-Disposition': 'attachment; filename="flujo-workspace.snapshot.zip"',
+        'Content-Disposition': 'attachment; filename="flujo-workspace.snapshot.encrypted.json"',
         'Content-Length': String(archive.size),
-        'Content-Type': 'application/zip',
+        'Content-Type': 'application/vnd.flujo.workspace-snapshot+json',
         'X-Content-Type-Options': 'nosniff',
         'X-Flujo-Snapshot-Sha256': archive.sha256,
       },

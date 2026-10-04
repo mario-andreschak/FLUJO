@@ -11,6 +11,7 @@ import { WORKSPACE_SUBTREES, runWithWorkspace } from '@/utils/workspace';
 import { getServerDek } from '@/utils/encryption/session';
 import { newKeyring, seal, serializeKeyring, wrapKeyring } from '@/utils/encryption/format';
 import { decryptWithPassword } from '@/utils/encryption/secure';
+import { encryptSnapshotEnvelope } from '@/backend/services/workspace/snapshotEnvelope';
 
 const digest = (content: Buffer | string) => createHash('sha256').update(content).digest('hex');
 const environmentKeys = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_WORKER_MODE',
@@ -162,6 +163,36 @@ describe('worker snapshot restore', () => {
     global.__flujo_worker_snapshot_restore = undefined;
     process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
     await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow('decryption failed');
+  });
+
+  it('restores a v2 encrypted archive using the encrypted-wire digest', async () => {
+    const plaintext = await archive();
+    const key = randomBytes(32);
+    const wire = encryptSnapshotEnvelope(plaintext, key);
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = key.toString('base64');
+    process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = digest(wire);
+    await fs.writeFile(process.env.FLUJO_WORKER_SNAPSHOT!, wire);
+    await expect(restoreConfiguredWorkerSnapshot()).resolves.toMatchObject({ archiveSha256: digest(wire) });
+    expect(await fs.readFile(path.join(destination, 'db', 'models.json'), 'utf8')).toBe('[{"id":"model-one"}]');
+  });
+
+  it.each(['wrong-key', 'missing-key', 'tamper', 'wrong-digest'] as const)('refuses v2 %s before creating or changing a workspace', async kind => {
+    const plaintext = await archive();
+    const key = randomBytes(32);
+    let wire = encryptSnapshotEnvelope(plaintext, key);
+    process.env.FLUJO_WORKER_SNAPSHOT_KEY = key.toString('base64');
+    process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = digest(wire);
+    if (kind === 'wrong-key') process.env.FLUJO_WORKER_SNAPSHOT_KEY = randomBytes(32).toString('base64');
+    if (kind === 'missing-key') delete process.env.FLUJO_WORKER_SNAPSHOT_KEY;
+    if (kind === 'tamper') {
+      const fields = JSON.parse(wire.toString());
+      const tag = Buffer.from(fields.tag, 'base64'); tag[0] ^= 1; fields.tag = tag.toString('base64');
+      wire = Buffer.from(JSON.stringify(fields));
+    }
+    if (kind === 'wrong-digest') process.env.FLUJO_WORKER_SNAPSHOT_SHA256 = digest(plaintext);
+    await fs.writeFile(process.env.FLUJO_WORKER_SNAPSHOT!, wire);
+    await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow(kind === 'wrong-digest' ? 'SHA-256 mismatch' : 'decryption failed');
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each(['legacy', 'v2'])('unlocks USER encryption using a validated %s scoped bootstrap key', async (format) => {

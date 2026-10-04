@@ -16,7 +16,7 @@ async function POST_handler(request: NextRequest): Promise<Response> {
   try {
     const text = await request.text();
     if (text.length > 16 * 1024) return noStoreJson({ error: 'Snapshot selection is too large.' }, 400);
-    let selection: { flowIds?: string[] } = {};
+    let selection: { flowIds?: string[]; recipientKey?: string } = {};
     if (text.trim()) {
       let body: unknown;
       try { body = JSON.parse(text); }
@@ -32,6 +32,11 @@ async function POST_handler(request: NextRequest): Promise<Response> {
         }
         selection = { flowIds: [...new Set(flowIds)] };
       }
+      const recipientKey = (body as { recipientKey?: unknown }).recipientKey;
+      if (recipientKey !== undefined && typeof recipientKey !== 'string') {
+        return noStoreJson({ error: 'A recipient snapshot key in canonical base64 is required.' }, 400);
+      }
+      selection.recipientKey = recipientKey;
     }
     return noStoreJson(
       await snapshotCoordinator.begin(getCurrentWorkspace(), selection),

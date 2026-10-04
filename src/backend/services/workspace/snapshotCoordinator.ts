@@ -17,6 +17,7 @@ import {
 } from './workspaceMutationGate';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { getWorkerCompatibility, type WorkerCompatibility } from './workerCompatibility';
+import { parseSnapshotRecipientKey } from './snapshotEnvelope';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -34,6 +35,7 @@ export type SnapshotState =
   | 'failed';
 
 export interface SnapshotInfo {
+  encryptionVersion: 2;
   sessionId: string;
   workspace: string;
   generation: number;
@@ -49,6 +51,8 @@ export interface SnapshotInfo {
 }
 
 interface SnapshotSessionRecord {
+  recipientKey: Buffer;
+  encryptionVersion: 2;
   sessionId: string;
   workspace: string;
   generation: number;
@@ -76,7 +80,8 @@ export class SnapshotCoordinatorError extends Error {
       | 'SNAPSHOT_NOT_FOUND'
       | 'SNAPSHOT_NOT_READY'
       | 'SNAPSHOT_EXPIRED'
-      | 'SNAPSHOT_INTEGRITY',
+      | 'SNAPSHOT_INTEGRITY'
+      | 'SNAPSHOT_RECIPIENT_REQUIRED',
     readonly status: number,
     message: string,
   ) {
@@ -108,6 +113,7 @@ function captureTimeoutMs(): number {
 
 function publicInfo(session: SnapshotSessionRecord): SnapshotInfo {
   return {
+    encryptionVersion: session.encryptionVersion,
     sessionId: session.sessionId,
     workspace: session.workspace,
     generation: session.generation,
@@ -219,7 +225,7 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
     boundary = undefined;
     clearTimeout(captureTimer);
 
-    const archive = await writeWorkspaceSnapshotArchive(captured, { signal });
+    const archive = await writeWorkspaceSnapshotArchive(captured, { signal, recipientKey: session.recipientKey });
     session.archivePath = archive.archivePath;
     session.stagingDir = archive.stagingDir;
     session.archiveBytes = archive.size;
@@ -252,6 +258,7 @@ async function prepareSession(session: SnapshotSessionRecord): Promise<void> {
   } finally {
     clearTimeout(captureTimer);
     boundary?.release();
+    session.recipientKey.fill(0);
   }
 }
 
@@ -280,13 +287,20 @@ export const snapshotCoordinator = {
     };
   },
 
-  async begin(workspace = getCurrentWorkspace(), options: { flowIds?: string[] } = {}): Promise<SnapshotInfo> {
+  async begin(workspace = getCurrentWorkspace(), options: { flowIds?: string[]; recipientKey?: string } = {}): Promise<SnapshotInfo> {
     const normalizedWorkspace = normalizeWorkspaceName(workspace);
+    let recipientKey: Buffer;
+    try { recipientKey = parseSnapshotRecipientKey(options.recipientKey); }
+    catch {
+      throw new SnapshotCoordinatorError('SNAPSHOT_RECIPIENT_REQUIRED', 400,
+        'A separately retained recipient snapshot key is required. Upgrade the transfer client before capturing credentials.');
+    }
     // Admission must be synchronous through sessions.set(). An await while
     // checking or cleaning the old record lets two callers reserve the same
     // workspace and makes one operation's archive inaccessible.
     const existing = sessions.get(normalizedWorkspace);
     if (existing && !isTerminal(existing.state) && Date.now() <= existing.expiresAtMs) {
+      recipientKey.fill(0);
       throw new SnapshotCoordinatorError(
         'SNAPSHOT_BUSY',
         409,
@@ -306,6 +320,8 @@ export const snapshotCoordinator = {
     const now = Date.now();
     const ttlMs = sessionTtlMs();
     const session: SnapshotSessionRecord = {
+      recipientKey,
+      encryptionVersion: 2,
       sessionId: randomUUID(),
       workspace: normalizedWorkspace,
       generation: workspaceMutationStatus(normalizedWorkspace).generation,
@@ -353,6 +369,10 @@ export const snapshotCoordinator = {
         410,
         'Snapshot session has expired.',
       );
+    }
+    if (session.encryptionVersion !== 2) {
+      throw new SnapshotCoordinatorError('SNAPSHOT_RECIPIENT_REQUIRED', 409,
+        'Start a new encrypted snapshot with a separately retained recipient key.');
     }
     if (
       session.state !== 'ready'

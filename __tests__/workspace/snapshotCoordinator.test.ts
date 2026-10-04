@@ -1,11 +1,12 @@
 import { promises as fs } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type {
   CapturedWorkspaceSnapshot,
   WorkspaceArchiveResult,
 } from '@/backend/services/workspace/snapshotArchive';
 
 const mockCapture = jest.fn<Promise<CapturedWorkspaceSnapshot>, [string, number, { signal?: AbortSignal }?]>();
-const mockWriteArchive = jest.fn<Promise<WorkspaceArchiveResult>, [CapturedWorkspaceSnapshot, { signal?: AbortSignal }?]>();
+const mockWriteArchive = jest.fn<Promise<WorkspaceArchiveResult>, [CapturedWorkspaceSnapshot, { signal?: AbortSignal; recipientKey: Buffer }]>();
 
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
   withWorkspaceProcessMutation: (task: () => Promise<unknown>) => task(),
@@ -23,6 +24,9 @@ import {
   workspaceMutationStatus,
 } from '@/backend/services/workspace/workspaceMutationGate';
 
+const recipientKey = randomBytes(32).toString('base64');
+const begin = (workspace: string) => snapshotCoordinator.begin(workspace, { recipientKey });
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -35,7 +39,7 @@ async function flushMicrotasks(): Promise<void> {
 
 const captured = { files: 1, bytes: 7 } as CapturedWorkspaceSnapshot;
 const archive = (name: string): WorkspaceArchiveResult => ({
-  archivePath: `/snapshot-test/${name}/workspace.snapshot.zip`,
+  archivePath: `/snapshot-test/${name}/workspace.snapshot.encrypted.json`,
   stagingDir: `/snapshot-test/${name}`,
   sha256: 'test-sha256',
   size: 10,
@@ -75,12 +79,51 @@ describe('snapshot coordinator cancellation and ownership', () => {
     expect(info.capability).toBe('available');
   });
 
+  it.each([undefined, 'FLUJO~', 'synthetic-invalid-key'])('rejects recipient key #%# before capture or session reservation', async key => {
+    await expect(snapshotCoordinator.begin('invalid-key', { recipientKey: key })).rejects.toMatchObject({
+      code: 'SNAPSHOT_RECIPIENT_REQUIRED', status: 400,
+    });
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockWriteArchive).not.toHaveBeenCalled();
+    expect(global.__flujoWorkspaceSnapshotSessions?.has('invalid-key')).toBe(false);
+  });
+
+  it('keeps the recipient key out of reports and clears the owned buffer after preparation settles', async () => {
+    let received: Buffer | undefined;
+    mockWriteArchive.mockImplementationOnce(async (_captured, options) => {
+      received = Buffer.from(options.recipientKey);
+      return archive('encrypted');
+    });
+    const session = await begin('private-key');
+    await flushMicrotasks();
+    expect(received?.toString('base64')).toBe(recipientKey);
+    const report = await snapshotCoordinator.status(session.sessionId, 'private-key');
+    expect(report).toMatchObject({ encryptionVersion: 2, state: 'ready' });
+    expect(JSON.stringify(report)).not.toContain(recipientKey);
+    expect(global.__flujoWorkspaceSnapshotSessions?.get('private-key')?.recipientKey).toEqual(Buffer.alloc(32));
+  });
+
+  it('refuses a pre-upgrade live session before reading its raw archive', async () => {
+    const initial = await begin('pre-upgrade-session');
+    await flushMicrotasks();
+    const old = global.__flujoWorkspaceSnapshotSessions?.get('pre-upgrade-session');
+    if (!old) throw new Error('Missing session fixture');
+    Reflect.deleteProperty(old, 'encryptionVersion');
+    const read = jest.spyOn(fs, 'readFile');
+    try {
+      await expect(snapshotCoordinator.readDownload(initial.sessionId, 'pre-upgrade-session')).rejects.toMatchObject({
+        code: 'SNAPSHOT_RECIPIENT_REQUIRED', status: 409,
+      });
+      expect(read).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
+  });
+
   it('reserves a workspace atomically for concurrent begin requests', async () => {
     const pendingCapture = deferred<CapturedWorkspaceSnapshot>();
     mockCapture.mockReturnValue(pendingCapture.promise);
     const results = await Promise.allSettled([
-      snapshotCoordinator.begin('concurrent-begin'),
-      snapshotCoordinator.begin('concurrent-begin'),
+      begin('concurrent-begin'),
+      begin('concurrent-begin'),
     ]);
     expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
     expect(results[1]).toMatchObject({ reason: { code: 'SNAPSHOT_BUSY', status: 409 } });
@@ -95,7 +138,7 @@ describe('snapshot coordinator cancellation and ownership', () => {
   it('aborts a pending capture and unblocks writers before the capture resolves', async () => {
     const pendingCapture = deferred<CapturedWorkspaceSnapshot>();
     mockCapture.mockReturnValueOnce(pendingCapture.promise);
-    const session = await snapshotCoordinator.begin('abort-capture');
+    const session = await begin('abort-capture');
     const writer = jest.fn(async () => undefined);
     const queued = withWorkspaceMutation(writer, 'abort-capture');
     expect(workspaceMutationStatus('abort-capture').blocked).toBe(true);
@@ -112,10 +155,10 @@ describe('snapshot coordinator cancellation and ownership', () => {
   it('cleans a late archive after its aborted session has been replaced', async () => {
     const pendingArchive = deferred<WorkspaceArchiveResult>();
     mockWriteArchive.mockReturnValueOnce(pendingArchive.promise);
-    const first = await snapshotCoordinator.begin('replace-aborted');
+    const first = await begin('replace-aborted');
     await flushMicrotasks();
     await snapshotCoordinator.abort(first.sessionId, 'replace-aborted');
-    const second = await snapshotCoordinator.begin('replace-aborted');
+    const second = await begin('replace-aborted');
     await flushMicrotasks();
     pendingArchive.resolve(archive('old-late-result'));
     await flushMicrotasks();
@@ -129,13 +172,13 @@ describe('snapshot coordinator cancellation and ownership', () => {
     process.env.FLUJO_SNAPSHOT_SESSION_TTL_MS = '100';
     const pendingArchive = deferred<WorkspaceArchiveResult>();
     mockWriteArchive.mockReturnValueOnce(pendingArchive.promise);
-    const first = await snapshotCoordinator.begin('expiry-cleanup');
+    const first = await begin('expiry-cleanup');
     await flushMicrotasks();
     await jest.advanceTimersByTimeAsync(101);
     expect(await snapshotCoordinator.status(first.sessionId, 'expiry-cleanup')).toMatchObject({
       state: 'aborted', errorCode: 'SNAPSHOT_EXPIRED',
     });
-    const second = await snapshotCoordinator.begin('expiry-cleanup');
+    const second = await begin('expiry-cleanup');
     pendingArchive.resolve(archive('expired-late-result'));
     await flushMicrotasks();
 
@@ -147,7 +190,7 @@ describe('snapshot coordinator cancellation and ownership', () => {
     process.env.FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS = '25';
     const pendingCapture = deferred<CapturedWorkspaceSnapshot>();
     mockCapture.mockReturnValueOnce(pendingCapture.promise);
-    const session = await snapshotCoordinator.begin('capture-deadline');
+    const session = await begin('capture-deadline');
     const writer = withWorkspaceMutation(async () => undefined, 'capture-deadline');
     await jest.advanceTimersByTimeAsync(25);
     await writer;
@@ -166,7 +209,7 @@ describe('snapshot coordinator cancellation and ownership', () => {
     process.env.FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS = '120000';
     const finishWriter = deferred<void>();
     const writer = withWorkspaceMutation(() => finishWriter.promise, 'drain-deadline');
-    const session = await snapshotCoordinator.begin('drain-deadline');
+    const session = await begin('drain-deadline');
     await jest.advanceTimersByTimeAsync(59_999);
     expect(workspaceMutationStatus('drain-deadline').blocked).toBe(true);
     await jest.advanceTimersByTimeAsync(1);
@@ -183,7 +226,7 @@ describe('snapshot coordinator cancellation and ownership', () => {
     process.env.FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS = '25';
     const pendingArchive = deferred<WorkspaceArchiveResult>();
     mockWriteArchive.mockReturnValueOnce(pendingArchive.promise);
-    const session = await snapshotCoordinator.begin('compression-unblocked');
+    const session = await begin('compression-unblocked');
     await flushMicrotasks();
     expect(workspaceMutationStatus('compression-unblocked').blocked).toBe(false);
     await jest.advanceTimersByTimeAsync(30);
