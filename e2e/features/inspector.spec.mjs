@@ -176,7 +176,7 @@ test('128 tools and real draft/result/App retention with explicit execution', as
       await page.getByRole('combobox', { name: labelName('Select tool') }).click();
       await expect(page.getByRole('option')).toHaveCount(129);
       await page.getByRole('option', { name: 'fixture_tool_128', exact: true }).click();
-      await expect(page.getByRole('textbox', { name: 'ref *', exact: true })).toHaveText('');
+      await expect.poll(async () => (await page.getByRole('textbox', { name: 'ref *', exact: true }).locator('[data-slate-string]').allTextContents()).join('')).toBe('');
       expect(environment.fixture.state.snapshot().toolCalls).toBe(2);
     });
     await page.screenshot({ path: testInfo.outputPath('final-inspector.png'), fullPage: true });
