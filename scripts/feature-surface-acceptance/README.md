@@ -115,6 +115,11 @@ FLUJO authentication, authorization, process isolation or resource budgets.
 
 ## First MCP agent and the remaining feature matrix
 
+The [live first-use observer and external MCP client](live-journey.md) provide
+prepared commands for the genuine model/tool/assistant, approval/debugger and
+connection-reuse observations below. Their execution remains pending; component
+reports do not establish full installed, provider or human acceptance.
+
 Follow the #589 guide from a disposable fresh profile: save a model, actually
 test its answer, connect/save the fixture and explicitly test tool 128, then
 create an Easy agent with that tested model and only the chosen tool. Try it
