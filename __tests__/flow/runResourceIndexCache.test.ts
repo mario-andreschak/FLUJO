@@ -149,12 +149,22 @@ it('admits four active and sixty queued distinct reads, then refuses before load
     finally { active--; }
   }));
   const overflow = jest.fn(async () => '[]');
+  let overflowSettled = false, overflowError: unknown;
+  const overflowDone = loadRunResourceIndex('overflow-private-key', overflow).then(
+    () => { overflowSettled = true; },
+    error => { overflowSettled = true; overflowError = error; },
+  );
   let joined: Promise<unknown> | undefined;
   try {
     await firstFour.promise;
     expect(started).toEqual([0, 1, 2, 3]);
-    expect(getRunResourceIndexPressure()).toMatchObject({ activeReads: 4, queuedReads: 60, maxActiveReads: 4, maxQueuedReads: 60 });
-    await expect(loadRunResourceIndex('overflow-private-key', overflow)).rejects.toMatchObject({ code: 'RUN_RESOURCE_INDEX_PRESSURE', retryable: true });
+    expect(getRunResourceIndexPressure()).toMatchObject({ activeReads: 4, queuedReads: 60 });
+    // The refusal must settle while all admitted loaders are still held. Drain
+    // its immediate promise reaction, rather than await an accidentally queued
+    // overflow until the test times out. The control then fails on admission.
+    await Promise.resolve();
+    expect(overflowSettled).toBe(true);
+    expect(overflowError).toMatchObject({ code: 'RUN_RESOURCE_INDEX_PRESSURE', retryable: true });
     joined = loadRunResourceIndex('private-key-0', overflow);
     expect(overflow).not.toHaveBeenCalled();
     const pressure = JSON.stringify(getRunResourceIndexPressure());
@@ -162,10 +172,12 @@ it('admits four active and sixty queued distinct reads, then refuses before load
   } finally {
     gate.resolve();
     await Promise.all(reads);
+    await overflowDone;
     await joined;
   }
   expect(peak).toBe(4);
   expect(started).toEqual(Array.from({ length: 64 }, (_, i) => i));
+  expect(getRunResourceIndexPressure()).toMatchObject({ maxActiveReads: 4, maxQueuedReads: 60 });
 });
 
 it('owns a frozen snapshot of the exact encoded metadata', async () => {
