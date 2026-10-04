@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
+import { readStableFile } from '@/utils/readStableFile';
 
 /** Evidence supplied by the trusted integration after exercising this exact binary. */
 export interface RestrictedCodexProfile {
@@ -100,15 +101,13 @@ async function readVerifiedModelCatalog(profile: RestrictedCodexProfile): Promis
     || !/^[a-f0-9]{64}$/.test(profile.verifiedModelCatalogSha256 ?? '')) {
     throw new Error('Restricted Codex requires a verified model catalog.');
   }
-  const before = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (!before.isFile() || before.isSymbolicLink() || before.size > 16 * 1024 * 1024) {
+  let bytes: Buffer;
+  try {
+    bytes = await readStableFile(profile.verifiedModelCatalogPath, 16 * 1024 * 1024);
+  } catch {
     throw new Error('Restricted Codex model catalog is invalid.');
   }
-  const bytes = await fs.readFile(profile.verifiedModelCatalogPath);
-  const after = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-    || bytes.length !== before.size
-    || createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
+  if (createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
     throw new Error('Restricted Codex model catalog differs from its verified profile.');
   }
   return bytes;
