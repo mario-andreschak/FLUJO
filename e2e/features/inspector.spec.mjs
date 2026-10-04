@@ -21,8 +21,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async ({}, testInfo) => {
   if (!environment) return;
-  try { await environment.close(); }
-  finally { await testInfo.attach('final-owned-environment', { body: JSON.stringify(environment.snapshot(), null, 2), contentType: 'application/json' }); }
+  try { await environment.verifyServerSelection(); }
+  finally {
+    try { await environment.close(); }
+    finally { await testInfo.attach('final-owned-environment', { body: JSON.stringify(environment.snapshot(), null, 2), contentType: 'application/json' }); }
+  }
 });
 
 async function openInspector(page, serverName, labels = locales[0], navigate = true) {

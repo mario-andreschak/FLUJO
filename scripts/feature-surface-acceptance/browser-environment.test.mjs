@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { inspectCandidateRoot, fixtureRuntimeEnvironment, createFeatureBrowserEnvironment,
-  observeOwnedCandidate, stopOwnedCandidate } from './browser-environment.mjs';
+  observeOwnedCandidate, stopOwnedCandidate, configureFeatureServers,
+  verifyFeatureServerSelection } from './browser-environment.mjs';
 
 async function metadataRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'feature-candidate-metadata-'));
@@ -57,6 +58,72 @@ test('missing candidate and invalid ports fail before process/profile creation',
   await assert.rejects(createFeatureBrowserEnvironment(), /FEATURE_BROWSER_APP_DIR/);
   for (const port of [-1, 1, 65536, 1.5, '4317']) {
     await assert.rejects(createFeatureBrowserEnvironment({ applicationRoot: 'unused', port }), /Invalid feature browser port/);
+  }
+});
+
+test('server selection waits for startup, uses typed disable updates and retains disabled configurations', async () => {
+  let release;
+  const initialization = new Promise(resolve => { release = resolve; });
+  let configs = {};
+  const mutations = [];
+  const liveClients = new Set();
+  const request = async (route, body, _timeout, method) => {
+    if (route === '/api/init') {
+      await initialization;
+      configs.builtin = { name: 'builtin', disabled: false, transport: 'stdio', marker: 'preserve' };
+      liveClients.add('builtin');
+      return { success: true };
+    }
+    if (route === '/api/mcp/servers') return Object.values(configs);
+    if (method === 'PUT') {
+      const name = decodeURIComponent(route.split('/').at(-1));
+      mutations.push({ name, method });
+      configs[name] = { ...configs[name], ...body };
+      liveClients.delete(name);
+      return { success: true };
+    }
+    if (route.startsWith('/api/storage?')) return { value: configs };
+    if (route === '/api/storage') {
+      mutations.push({ method: 'POST' });
+      configs = body.value;
+      return { success: true };
+    }
+    throw new Error('Unexpected candidate route.');
+  };
+  const pending = configureFeatureServers(request, { fixture: { name: 'fixture', disabled: false } });
+  await Promise.resolve();
+  assert.deepEqual(mutations, []);
+  release();
+  const observed = await pending;
+  assert.deepEqual(observed.observedEnabledNames, ['fixture']);
+  assert.equal(observed.initializationJoined, true);
+  assert.deepEqual(mutations, [{ name: 'builtin', method: 'PUT' }, { method: 'POST' }]);
+  assert.equal(configs.builtin.marker, 'preserve');
+  assert.equal(configs.builtin.disabled, true);
+  assert.equal(liveClients.size, 0);
+});
+
+test('failed initialization stops server selection before mutations', async () => {
+  const calls = [];
+  await assert.rejects(configureFeatureServers(async route => {
+    calls.push(route);
+    return { success: false };
+  }, {}), /initialization did not complete/);
+  assert.deepEqual(calls, ['/api/init']);
+});
+
+test('unexpected enabled defaults are a failed selection, including after a rendered journey', async () => {
+  const configs = [{ name: 'fixture', disabled: false }, { name: 'new default', disabled: false }];
+  await assert.rejects(verifyFeatureServerSelection(async () => configs, ['fixture']), /Unexpected enabled server selection/);
+  configs[1].disabled = true;
+  assert.deepEqual((await verifyFeatureServerSelection(async () => configs, ['fixture'])).observedEnabledNames, ['fixture']);
+  configs[1].disabled = false;
+  await assert.rejects(verifyFeatureServerSelection(async () => configs, ['fixture']), /Unexpected enabled server selection/);
+});
+
+test('malformed configuration responses cannot count as isolated selections', async () => {
+  for (const configs of [{ success: true }, [null], [{}]]) {
+    await assert.rejects(verifyFeatureServerSelection(async () => configs, []), /did not return server configurations/);
   }
 });
 

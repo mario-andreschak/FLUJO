@@ -74,7 +74,12 @@ or `.env.production.local`. The runner refuses those files before starting a
 process. It allocates separate loopback ports for Next and its MCP Apps sandbox,
 then starts its own Next process and synthetic fixture with a
 new temporary `FLUJO_DATA_DIR`, strips inherited provider/owner/worker settings,
-and seeds only the two fixture server entries. Existing listeners and profiles
+and joins `/api/init` before selecting servers. It disables all existing entries
+through typed updates (which also disconnect clients and clear retries), then
+seeds only the two fixture entries as enabled. It verifies the configured enabled
+names after setup and after the rendered journey, failing on unexpected defaults.
+Normal startup may initially provision/start built-ins; this selection check
+does not prove native process confinement. Existing listeners and profiles
 are never attached. Its private IPC handshake must establish child ownership
 before any candidate API request. Apps are explicitly enabled on the seeded
 servers; the profile uses the default visible launch behavior.

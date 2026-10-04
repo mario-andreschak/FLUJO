@@ -94,6 +94,44 @@ export async function stopOwnedCandidate(record, { graceMs = 30000, forceMs = 50
   throw new Error(`Disposable candidate required forced shutdown; exit and pipe closure ${observed ? 'observed' : 'not observed'}.`);
 }
 
+export async function verifyFeatureServerSelection(request, expectedNames) {
+  const configs = await request('/api/mcp/servers');
+  if (!Array.isArray(configs) || configs.some(config => !config || typeof config.name !== 'string')) {
+    throw new Error('Candidate did not return server configurations.');
+  }
+  const observed = configs.filter(config => config.disabled !== true).map(config => config.name).sort();
+  const expected = [...expectedNames].sort();
+  if (JSON.stringify(observed) !== JSON.stringify(expected)) {
+    throw new Error(`Unexpected enabled server selection: ${JSON.stringify(observed)}; expected ${JSON.stringify(expected)}.`);
+  }
+  return { observedAtUtc: new Date().toISOString(), expectedEnabledNames: expected,
+    observedEnabledNames: observed, scope: 'configured enabled entries; not a native process confinement proof' };
+}
+
+export async function configureFeatureServers(request, selected) {
+  // API-ready is earlier than backend-ready. Join startup/migrations before
+  // selecting servers, so subsequent initialization cannot add defaults.
+  const initialized = await request('/api/init', undefined, 60000);
+  if (initialized.success !== true) throw new Error('Candidate backend initialization did not complete.');
+  const existing = await request('/api/mcp/servers');
+  if (!Array.isArray(existing) || existing.some(config => !config || typeof config.name !== 'string')) {
+    throw new Error('Candidate did not return initialized server configurations.');
+  }
+  for (const config of existing) {
+    // Typed updates also disconnect existing clients and clear retries.
+    await request(`/api/mcp/servers/${encodeURIComponent(config.name)}`, { disabled: true }, 15000, 'PUT');
+  }
+  const saved = await request('/api/storage?key=mcp_servers');
+  const configs = Object.fromEntries([
+    ...Object.entries(saved.value ?? {}).map(([name, config]) => [name, { ...config, disabled: true }]),
+    ...Object.entries(selected),
+  ]);
+  await request('/api/storage', { key: 'mcp_servers', value: configs });
+  const expectedNames = Object.entries(selected).filter(([, config]) => config.disabled !== true).map(([name]) => name);
+  return { initializationJoined: true, disabledExistingNames: existing.map(config => config.name),
+    ...await verifyFeatureServerSelection(request, expectedNames) };
+}
+
 export async function createFeatureBrowserEnvironment({ applicationRoot, port = 0 } = {}) {
   if (!applicationRoot) throw new Error('Set FEATURE_BROWSER_APP_DIR to the coordinator-selected compiled candidate.');
   if (!Number.isInteger(port) || (port !== 0 && (port < 1024 || port > 65535))) throw new Error('Invalid feature browser port.');
@@ -105,19 +143,29 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
   let appLog;
   let child;
   let owned;
+  let serverSelection;
   let closed = false;
   const snapshot = () => ({ scope: 'automated browser observations in disposable anonymous loopback profile',
     ...candidate, dataDir, baseURL, sandboxPort, epoch: owned ? { ...owned.epoch } : null, fixture: fixture?.state.snapshot() ?? null,
+    serverSelection,
     limitations: ['Artifact/source correspondence not verified by this runner.', 'Not human, real-provider, private/shared-profile or full feature-matrix acceptance.'] });
-  const request = async (route, body, timeoutMs = 15000) => {
+  const request = async (route, body, timeoutMs = 15000, method = body === undefined ? 'GET' : 'POST') => {
     if (!route.startsWith('/') || route.startsWith('//')) throw new Error('Expected a same-instance route.');
     const url = new URL(route, baseURL);
     url.searchParams.set('workspace', 'default-workspace');
-    const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST',
+    const response = await fetch(url, { method,
       headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) throw new Error(`Disposable candidate request failed: ${url.pathname} (${response.status}).`);
     return response.json();
+  };
+  const configureServers = async selected => {
+    serverSelection = await configureFeatureServers(request, selected);
+    return serverSelection;
+  };
+  const verifyServerSelection = async () => {
+    serverSelection = { ...serverSelection, ...await verifyFeatureServerSelection(request, serverSelection.expectedEnabledNames) };
+    return serverSelection;
   };
   async function close() {
     if (closed) return;
@@ -161,15 +209,14 @@ export async function createFeatureBrowserEnvironment({ applicationRoot, port = 
       catch { await pause(250); }
     }
     if (!ready) throw new Error('Owned disposable candidate did not become API-ready.');
-    const existing = await request('/api/storage?key=mcp_servers');
-    const configs = Object.fromEntries(Object.entries(existing.value ?? {}).map(([name, value]) => [name, { ...value, disabled: true }]));
+    const configs = {};
     for (const [name, transport, endpoint] of [['Feature HTTP fixture', 'streamable', '/mcp'], ['Feature SSE fixture', 'sse', '/sse']]) {
       configs[name] = { name, transport, serverUrl: `${fixture.url}${endpoint}`, headers: {}, env: {}, disabled: false,
         enableMcpApps: true, rootPath: '', _buildCommand: '', _installCommand: '' };
     }
-    await request('/api/storage', { key: 'mcp_servers', value: configs });
+    await configureServers(configs);
     await fs.writeFile(path.join(dataDir, 'environment-start.json'), JSON.stringify(snapshot(), null, 2));
-    return { ...candidate, dataDir, baseURL, fixture, request, snapshot, close };
+    return { ...candidate, dataDir, baseURL, fixture, request, configureServers, verifyServerSelection, snapshot, close };
   } catch (error) {
     await close().catch(() => undefined);
     throw new Error(`${error.message} Retained disposable logs: ${dataDir}`, { cause: error });

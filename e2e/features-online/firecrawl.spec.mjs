@@ -11,11 +11,8 @@ let tools;
 
 test.beforeAll(async () => {
   environment = await createFeatureBrowserEnvironment({ applicationRoot: process.env.FEATURE_BROWSER_APP_DIR });
-  const saved = await environment.request('/api/storage?key=mcp_servers');
-  const configs = Object.fromEntries(Object.entries(saved.value ?? {}).map(([name, config]) => [name, { ...config, disabled: true }]));
-  configs[serverName] = { name: serverName, transport: 'streamable', serverUrl: endpoint,
-    headers: {}, env: {}, disabled: false, enableMcpApps: false, rootPath: '', _buildCommand: '', _installCommand: '' };
-  await environment.request('/api/storage', { key: 'mcp_servers', value: configs });
+  await environment.configureServers({ [serverName]: { name: serverName, transport: 'streamable', serverUrl: endpoint,
+    headers: {}, env: {}, disabled: false, enableMcpApps: false, rootPath: '', _buildCommand: '', _installCommand: '' } });
   const discovered = await environment.request(`/api/mcp/servers/${encodeURIComponent(serverName)}/tools`);
   if (discovered.error || !Array.isArray(discovered.tools)) throw new Error('Candidate could not discover the public Firecrawl tools.');
   tools = discovered.tools;
@@ -24,9 +21,12 @@ test.beforeAll(async () => {
 
 test.afterAll(async ({}, testInfo) => {
   if (!environment) return;
-  try { await environment.close(); }
+  try { await environment.verifyServerSelection(); }
   finally {
-    await testInfo.attach('final-owned-environment', { body: JSON.stringify(environment.snapshot(), null, 2), contentType: 'application/json' });
+    try { await environment.close(); }
+    finally {
+      await testInfo.attach('final-owned-environment', { body: JSON.stringify(environment.snapshot(), null, 2), contentType: 'application/json' });
+    }
   }
 });
 
