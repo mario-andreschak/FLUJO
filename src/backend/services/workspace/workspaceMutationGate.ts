@@ -9,8 +9,15 @@ interface WorkspaceGateState {
   drainWaiters: Set<() => void>;
 }
 
+interface WorkspaceMutationLease {
+  active: boolean;
+  participants: number;
+  drained: Promise<void>;
+  resolveDrained(): void;
+}
+
 interface WorkspaceMutationContext {
-  workspaces: Set<string>;
+  leases: Map<string, WorkspaceMutationLease>;
 }
 
 export interface WorkspaceSnapshotBoundary {
@@ -60,10 +67,31 @@ function unblock(state: WorkspaceGateState): void {
   for (const resolve of waiters) resolve();
 }
 
+function createMutationLease(): WorkspaceMutationLease {
+  let resolveDrained!: () => void;
+  const drained = new Promise<void>(resolve => { resolveDrained = resolve; });
+  return { active: true, participants: 0, drained, resolveDrained };
+}
+
+/** Retain the owning process registration until every started nested call settles. */
+async function participate<T>(lease: WorkspaceMutationLease, task: () => Promise<T>): Promise<T> {
+  lease.participants += 1;
+  try {
+    return await task();
+  } finally {
+    lease.participants -= 1;
+    if (lease.participants === 0) {
+      lease.active = false;
+      lease.resolveDrained();
+    }
+  }
+}
+
 /**
  * Admit one FLUJO-managed workspace mutation. Calls nested inside the same
- * workspace mutation are re-entrant, so existing per-key queues can compose
- * with the workspace-wide snapshot boundary without deadlocking.
+ * workspace mutation borrow its live admission. The owner retains both gates
+ * until started nested calls settle. An inherited async context alone grants
+ * no admission after that lease retires.
  */
 export async function withWorkspaceMutation<T>(
   task: () => Promise<T>,
@@ -71,8 +99,11 @@ export async function withWorkspaceMutation<T>(
 ): Promise<T> {
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
-  if (current?.workspaces.has(normalizedWorkspace)) {
-    return task();
+  // Optional lookup also refuses privilege inherited from a pre-upgrade HMR
+  // context, which has workspace names but no live lease.
+  const inherited = current?.leases?.get(normalizedWorkspace);
+  if (inherited?.active) {
+    return participate(inherited, () => runWithWorkspace(normalizedWorkspace, task));
   }
 
   const state = stateFor(normalizedWorkspace);
@@ -86,19 +117,24 @@ export async function withWorkspaceMutation<T>(
   }
   state.activeMutations += 1;
 
-  const nextContext: WorkspaceMutationContext = {
-    workspaces: new Set(current?.workspaces ?? []),
-  };
-  nextContext.workspaces.add(normalizedWorkspace);
+  const lease = createMutationLease();
+  const nextContext: WorkspaceMutationContext = { leases: new Map(current?.leases ?? []) };
+  nextContext.leases.set(normalizedWorkspace, lease);
 
   try {
     // Import lazily: the filesystem lock primitive itself uses storage helpers
     // that import this gate. Its admission path deliberately avoids write queues.
     const { withWorkspaceProcessMutation } = await import('../enduringAgents/runtimeLock');
     return await runWithWorkspace(normalizedWorkspace, () => withWorkspaceProcessMutation(
-      () => mutationContext.run(nextContext, task),
+      () => mutationContext.run(nextContext, async () => {
+        try { return await participate(lease, task); }
+        finally { await lease.drained; }
+      }),
     ));
   } finally {
+    // A registration failure never publishes this context, but still retires
+    // its owned lease. Inherited contexts can never reuse a finished owner.
+    lease.active = false;
     state.activeMutations -= 1;
     notifyDrain(state);
   }
@@ -136,7 +172,7 @@ export async function beginWorkspaceSnapshotBoundary(
   signal?.throwIfAborted();
   const normalizedWorkspace = normalizeWorkspaceName(workspace);
   const current = mutationContext.getStore();
-  if (current?.workspaces.has(normalizedWorkspace)) {
+  if (current?.leases?.get(normalizedWorkspace)?.active) {
     throw new Error('A workspace snapshot cannot begin inside a workspace mutation.');
   }
 
