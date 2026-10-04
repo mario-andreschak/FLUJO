@@ -62,7 +62,8 @@ execution-policy changes or prerequisite installation. Install and activate a
 current patched 22.x or 24.x release, then re-run. It deliberately requires the
 operator to choose that migration instead of silently switching an existing
 runtime. Missing Node uses the `OpenJS.NodeJS.LTS` winget package. The Unix
-installer also refuses an unsupported existing runtime; when Node is absent,
+installer also refuses an unsupported existing runtime before network setup,
+Homebrew bootstrap or any prerequisite installation; when Node is absent,
 it uses its package-manager path (including Arch's `nodejs-lts-krypton` and
 Homebrew's `node@24`, explicitly linked onto Homebrew's PATH). It refuses to
 proceed if the resulting runtime is outside the same closed range. Both recheck the

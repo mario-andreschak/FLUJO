@@ -83,8 +83,6 @@ update_existing_repository() {
 INSTALL_LOG="${FLUJO_INSTALL_LOG:-$MANIFEST_DIR/install.log}"
 INSTALL_STAGE_FILE="${FLUJO_INSTALL_STAGE_FILE:-$MANIFEST_DIR/install-stage.txt}"
 BROWSER_RESULT_FILE="$MANIFEST_DIR/browser-install-result.json"
-mkdir -p "$MANIFEST_DIR"
-: > "$INSTALL_LOG"
 
 sanitize_diagnostic() {
   local safe="${1:-}" secret
@@ -221,6 +219,20 @@ EOF
   [ "$major" -eq 24 ] 2>/dev/null && [ "$minor" -ge 2 ] 2>/dev/null && return 0
   return 1
 }
+
+refuse_unsupported_existing_node() {
+  if have node && ! node_version_ok; then
+    die "The active Node.js runtime is outside ${SUPPORTED_NODE_DESCRIPTION}, or its version probe failed. Install and activate a current patched 22.x or 24.x release, then re-run. The installer will not switch an existing Node installation automatically."
+  fi
+}
+
+# This must precede network setup, Homebrew bootstrap and every prerequisite.
+# Missing Node can still use the managed LTS installation path below.
+refuse_unsupported_existing_node
+
+# Initialize diagnostics only after the existing runtime has passed preflight.
+mkdir -p "$MANIFEST_DIR"
+: > "$INSTALL_LOG"
 
 printf '%sFLUJO Installer%s\n' "$C_TITLE" "$C_END" >&2
 printf '%s===============%s\n' "$C_TITLE" "$C_END" >&2
