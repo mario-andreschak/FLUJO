@@ -27,7 +27,8 @@ export async function readStableFile(
     throw new Error('File read unavailable');
   }
   const resolved = await fs.realpath(file);
-  const handle = await fs.open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // A path replaced with a FIFO must not block before descriptor type checks.
+  const handle = await fs.open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || opened.size > BigInt(maxBytes)

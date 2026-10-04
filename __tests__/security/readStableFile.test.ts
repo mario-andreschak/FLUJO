@@ -27,7 +27,7 @@ beforeEach(() => {
 test('short reads complete on one descriptor and close it after checking identity', async () => {
   expect((await readStableFile('/fixture/file', 10)).toString()).toBe('abc');
   expect(mockFs.open).toHaveBeenCalledTimes(1);
-  expect(mockFs.open).toHaveBeenCalledWith('/fixture/file', constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  expect(mockFs.open).toHaveBeenCalledWith('/fixture/file', constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   expect(handle.read).toHaveBeenCalledTimes(3);
   expect(handle.stat).toHaveBeenCalledTimes(2);
   expect(handle.close).toHaveBeenCalledTimes(1);
