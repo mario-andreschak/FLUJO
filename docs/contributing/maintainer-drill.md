@@ -143,8 +143,12 @@ creates an empty flow, a conversation with two prescribed inert text messages,
 a theme preference and one non-secret environment label. The conversation starts
 through its create route; the two messages are imported through the restore route.
 They are synthetic records, not output from a provider or a workflow execution.
-The probe selects `flows`, `chatHistory`, `settings` and `globalEnvVars`, checks
-every record in the backup, changes the flow/title/theme/label, and rejects both
+The probe selects `flows`, `chatHistory`, `settings` and `globalEnvVars`, retains
+the complete API export, and creates a separate restore archive containing the
+prescribed synthetic records. FLUJO seeds its public `default-agent-flujo` on
+startup; that agent is excluded from this archive and from the comparison scope.
+Unexpected flows are refused. The probe checks every synthetic record, changes
+the flow/title/theme/label, and rejects both
 a missing-metadata archive and a conversation with a forbidden ownership marker.
 Every selected record must remain unchanged after rejection. The valid archive
 must restore the flow, conversation metadata and both messages, theme and label.
@@ -184,7 +188,10 @@ Readiness checks the responding install and new data root before mutation.
 The fresh root must return 404 for the flow and conversation and have no stored
 theme or synthetic environment label. Both invalid archives must return 400 and
 leave all four kinds of state absent. The valid backup must restore every expected
-record; a second backup must contain the same stable content. Expected JSON ZIP
+record; a second raw API backup is retained and its synthetic projection must
+contain the same stable content. The seeded default agent is not compared or
+restored. Input restore archives must already contain only the prescribed state;
+projection never relaxes their validation. Expected JSON ZIP
 members are read with a 1 MiB limit on emitted bytes, and unrelated/private entries
 or aliased paths are refused. The whole compressed archive is capped at 16 MiB.
 The command stops its owned launcher, records closed loopback port, restarts with

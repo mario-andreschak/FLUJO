@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
 import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline } from './maintainer-installed-baseline.mjs';
 import { stateSelections, readSyntheticState, assertSyntheticState, assertFreshSyntheticState,
-  validateSyntheticStateReceipt, verifySyntheticStateArchive, restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
+  validateSyntheticStateReceipt, verifySyntheticStateArchive, projectSyntheticStateArchive,
+  restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { readBoundedFileSync } = createRequire(import.meta.url)('./read-bounded-file.cjs');
@@ -291,7 +292,11 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       body: JSON.stringify({ selections: broaderState ? stateSelections : ['flows'] }) });
     if (exported.status !== 200) throw new Error('Recovered data could not be backed up again.');
     capture('recovered-backup.zip', exported.bytes);
-    if (broaderState) receipt.syntheticState.archiveVerified = await verifySyntheticStateArchive(exported.bytes, JSZip, expectedState);
+    if (broaderState) {
+      const projected = await projectSyntheticStateArchive(exported.bytes, JSZip, expectedState);
+      capture('verified-synthetic-backup.zip', projected.bytes);
+      receipt.syntheticState.archiveVerified = projected.verification;
+    }
     else {
       const zip = await JSZip.loadAsync(exported.bytes);
       if (!zip.file('backup-info.json') || !zip.file('storage/flows.json')) throw new Error('Recovered backup omitted expected metadata/content.');

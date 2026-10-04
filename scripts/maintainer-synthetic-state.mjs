@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export const stateSelections = Object.freeze(['flows', 'chatHistory', 'settings', 'globalEnvVars']);
 const conversationId = 'maintainer_drill_conversation';
 const flowId = 'maintainer_drill_flow';
@@ -83,7 +85,7 @@ export function readStateZipJson(zip, name) {
   });
 }
 
-export async function verifySyntheticStateArchive(bytes, JSZip, expected = syntheticState()) {
+async function loadStateArchive(bytes, JSZip) {
   if (bytes.length > 16 * 1024 * 1024) throw new Error('Synthetic backup exceeds 16 MiB.');
   const zip = await JSZip.loadAsync(bytes);
   const allowed = new Set(['backup-info.json', 'storage/flows.json', 'storage/theme.json', 'storage/global_env_vars.json', conversationPath, 'storage/history.json']);
@@ -91,6 +93,26 @@ export async function verifySyntheticStateArchive(bytes, JSZip, expected = synth
     if (file.unsafeOriginalName && file.unsafeOriginalName !== name) throw new Error('Synthetic backup has an aliased entry.');
     if (!file.dir && !allowed.has(name)) throw new Error('Synthetic backup contains an unrelated or private entry.');
   }
+  return zip;
+}
+
+/** Keep the seeded public default agent out of the disposable restore fixture. */
+export async function projectSyntheticStateArchive(bytes, JSZip, expected = syntheticState()) {
+  const zip = await loadStateArchive(bytes, JSZip);
+  const flows = await readStateZipJson(zip, 'storage/flows.json');
+  if (!Array.isArray(flows)) throw new Error('Synthetic backup flow collection is not an array.');
+  const seeded = flows.filter(flow => flow?.id === 'default-agent-flujo');
+  if (seeded.length > 1) throw new Error('Synthetic backup repeats the seeded default agent.');
+  const selected = flows.filter(flow => flow?.id !== 'default-agent-flujo');
+  if (seeded.length) zip.file('storage/flows.json', JSON.stringify(selected));
+  const projected = seeded.length ? await zip.generateAsync({ type: 'nodebuffer' }) : bytes;
+  const verification = await verifySyntheticStateArchive(projected, JSZip, expected);
+  return { bytes: projected, verification: { ...verification, excludedSeededFlows: seeded.map(flow => flow.id),
+    scope: 'Prescribed synthetic records only; seeded default agent is neither restored nor compared.' } };
+}
+
+export async function verifySyntheticStateArchive(bytes, JSZip, expected = syntheticState()) {
+  const zip = await loadStateArchive(bytes, JSZip);
   const metadata = await readStateZipJson(zip, 'backup-info.json');
   if (stable(metadata.selections?.slice().sort()) !== stable([...stateSelections].sort())) throw new Error('Synthetic backup selections are incomplete.');
   const flows = await readStateZipJson(zip, 'storage/flows.json');
@@ -150,4 +172,3 @@ export async function invalidSyntheticStateArchives(bytes, JSZip) {
   return [{ name: 'missing-metadata.zip', bytes: await missing.generateAsync({ type: 'nodebuffer' }) },
     { name: 'forbidden-ownership.zip', bytes: await marked.generateAsync({ type: 'nodebuffer' }) }];
 }
-import { createHash } from 'node:crypto';

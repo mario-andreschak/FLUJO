@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { stateSelections, syntheticState, assertSyntheticState, validateSyntheticStateReceipt,
-  readStateZipJson, verifySyntheticStateArchive, seedSyntheticState, mutateSyntheticState, readSyntheticState,
+  readStateZipJson, verifySyntheticStateArchive, projectSyntheticStateArchive, seedSyntheticState, mutateSyntheticState, readSyntheticState,
   assertFreshSyntheticState, restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
 
 const JSZip = createRequire(import.meta.url)('jszip');
@@ -67,6 +67,24 @@ test('compressed oversized members are bounded by emitted bytes and malformed JS
   }
   await assert.rejects(verifySyntheticStateArchive(Buffer.alloc(16 * 1024 * 1024 + 1), JSZip), /16 MiB/);
   assert.throws(() => readStateZipJson(new JSZip(), 'missing.json'), /omitted/);
+});
+
+test('raw exports retain their bytes while only the seeded default agent is excluded from the restore fixture', async () => {
+  const zip = archive(); const flows = await readStateZipJson(zip, 'storage/flows.json');
+  const seeded = { id: 'default-agent-flujo', name: 'Public seeded agent', nodes: [{ id: 'not-executed' }], edges: [] };
+  zip.file('storage/flows.json', JSON.stringify([seeded, ...flows]));
+  const raw = await zip.generateAsync({ type: 'nodebuffer' }); const before = Buffer.from(raw);
+  await assert.rejects(verifySyntheticStateArchive(raw, JSZip), /flow differs/);
+  const projected = await projectSyntheticStateArchive(raw, JSZip);
+  assert.deepEqual(raw, before); assert.equal(projected.verification.passed, true);
+  assert.deepEqual(projected.verification.excludedSeededFlows, ['default-agent-flujo']);
+  assert.deepEqual(await readStateZipJson(await JSZip.loadAsync(projected.bytes), 'storage/flows.json'), flows);
+  for (const extra of [{ ...seeded, id: 'unrelated-private-flow' }, seeded]) {
+    const changed = archive(); changed.file('storage/flows.json', JSON.stringify([seeded, extra, ...flows]));
+    await assert.rejects(projectSyntheticStateArchive(await changed.generateAsync({ type: 'nodebuffer' }), JSZip));
+  }
+  const aliased = archive(); aliased.file('storage/flows.json', JSON.stringify([seeded, ...flows])); aliased.file('../storage/theme.json', '"dark"');
+  await assert.rejects(projectSyntheticStateArchive(await aliased.generateAsync({ type: 'nodebuffer' }), JSZip), /aliased/);
 });
 
 function protocol() {
