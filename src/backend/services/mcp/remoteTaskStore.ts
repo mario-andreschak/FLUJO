@@ -15,7 +15,8 @@
  *  - terminal states are immutable, which makes cancel-vs-complete races
  *    deterministic (first terminal write wins);
  *  - no arguments, credentials, headers, elicited input or result payloads are
- *    persisted — only a truncated argument fingerprint and bounded error text.
+ *    persisted — new request tags contain independent randomness, with bounded
+ *    error text. Existing argument digests are not rewritten by this module.
  */
 
 import { createHash, randomUUID } from 'crypto';
@@ -113,11 +114,11 @@ function sha256Hex(input: string, chars = 32): string {
 }
 
 /**
- * Canonical fingerprint of the server's connection/auth identity. Only
- * NON-SECRET structure is hashed (transport, command/args/url, and the *names*
- * of env vars / headers) — never a secret value — so the fingerprint can be
- * persisted and compared safely while still changing whenever the connection
- * identity changes.
+ * Legacy connection identity used by restart matching. Env/header values are
+ * omitted, but command arguments and URLs can themselves contain credentials.
+ * This fast, unkeyed hash does not establish their confidentiality. Replacing
+ * it requires a separate persisted-identity migration; retain current restart
+ * behavior here while removing argument-derived request tags below.
  */
 export function serverIdentityFingerprint(config: MCPServerConfig | undefined): string {
   if (!config) return 'unknown';
@@ -135,9 +136,9 @@ export function serverIdentityFingerprint(config: MCPServerConfig | undefined): 
   return sha256Hex(stableStringify(material), 32);
 }
 
-/** Non-reversible, bounded fingerprint of the request arguments. */
-export function requestFingerprint(args: Record<string, unknown> | undefined): string {
-  return sha256Hex(stableStringify(args ?? {}), 16);
+/** Opaque request tag; the legacy record field name is retained for readers. */
+export function requestFingerprint(): string {
+  return `request:${randomUUID()}`;
 }
 
 /**
@@ -168,6 +169,7 @@ export interface CreateRemoteTaskInput {
   serverName: string;
   serverIdentity: string;
   toolName: string;
+  /** Accepted for source compatibility only; never read or fingerprinted. */
   args?: Record<string, unknown>;
   ownership: McpRemoteTaskOwnership;
   status: McpTaskStatus;
@@ -191,7 +193,7 @@ export async function createRemoteTaskRecord(
       serverName: input.serverName,
       serverIdentity: input.serverIdentity,
       toolName: input.toolName,
-      requestFingerprint: requestFingerprint(input.args),
+      requestFingerprint: requestFingerprint(),
       ownership: input.ownership,
       status: input.status,
       ...(boundStatusMessage(input.statusMessage)
