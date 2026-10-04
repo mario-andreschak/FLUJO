@@ -66,6 +66,7 @@ describe('assertUnlocked / isLocked', () => {
 
   it('never gates DEFAULT mode', async () => {
     const { secure, gate } = await load();
+    await (await import('./fixtures')).seedExistingDefaultProfile();
     await secure.initializeDefaultEncryption();
     expect(await gate.isLocked()).toBe(false);
     expect(await gate.assertUnlocked()).toBeNull();
@@ -108,6 +109,7 @@ describe('a representative gated /api route (env)', () => {
 
   it('is never gated in DEFAULT mode', async () => {
     const { secure } = await load();
+    await (await import('./fixtures')).seedExistingDefaultProfile();
     await secure.initializeDefaultEncryption();
     const { GET } = await import('@/app/api/env/route');
     const res = await GET(req());

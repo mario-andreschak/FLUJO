@@ -61,6 +61,7 @@ function legacyFixture(password?: string) {
 
 it('keeps the data key stable through default-to-user migration and password changes', async () => {
   const { secure, session, storage, format } = await modules();
+  await (await import('./fixtures')).seedExistingDefaultProfile();
   expect(await secure.initializeDefaultEncryption()).toBe(true);
   const before = (await storage.loadItem<EncryptionMetadata | null>(StorageKey.ENCRYPTION_KEY, null))!;
   const ring = await format.unwrapKeyring(before, 'FLUJO~');
@@ -155,11 +156,14 @@ it('does not rotate an initialized USER key when initialization is called again'
   expect(await secure.authenticate('second')).toBeNull();
 });
 
-it('serializes competing first writes so all ciphertext uses the committed key', async () => {
+it('serializes competing writes under the committed private key', async () => {
   const { secure } = await modules();
+  await secure.initializeEncryption('concurrent-private-key');
+  await secure.authenticate('concurrent-private-key');
   const values = ['first', 'second', 'third'];
   const ciphertexts = await Promise.all(values.map(value => secure.encryptWithPassword(value)));
   restart();
+  await secure.authenticate('concurrent-private-key');
   for (let index = 0; index < values.length; index++) {
     expect(await secure.decryptWithPassword(ciphertexts[index]!)).toBe(values[index]);
   }

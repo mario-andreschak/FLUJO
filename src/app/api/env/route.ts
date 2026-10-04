@@ -156,7 +156,8 @@ async function GET_handler(req: NextRequest) {
       
       // Return the value as-is if it's not encrypted
       return NextResponse.json({ 
-        value,
+        // A historical plaintext secret still needs a masked browser view.
+        value: isSecret && !includeSecrets ? '********' : value,
         metadata: { isSecret }
       });
     }
@@ -196,7 +197,7 @@ async function GET_handler(req: NextRequest) {
         } else {
           // Not encrypted, return as-is
           processedEnvVars[varKey] = {
-            value,
+            value: isSecret && !includeSecrets ? '********' : value,
             metadata: { isSecret }
           };
         }

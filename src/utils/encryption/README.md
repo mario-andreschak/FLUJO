@@ -8,7 +8,11 @@ New data-encryption keys contain 32 cryptographically random bytes from Node's `
 
 The password wraps a versioned keyring using AES-256-GCM. PBKDF2-HMAC-SHA256 derives a 32-byte wrapping key using a fresh 16-byte salt and 600,000 iterations. Authenticated associated data binds the envelope to its purpose, format version, encryption mode and key identity. Metadata is atomically replaced only after the wrapped keyring is complete; concurrent initialization and metadata changes are serialized per workspace.
 
-**Default mode is storage obfuscation, not protection from someone who can read the workspace files.** It intentionally uses a published compatibility password so FLUJO works without asking for a password. Set a strong user password for meaningful protection of secrets at rest. Neither mode protects secrets from code already running as the same OS user while the workspace is unlocked.
+Fresh workspaces require private setup before credential operations. Interactive installs use an explicit passphrase; the browser setup dialog confirms it, waits for durable initialization, then authenticates. The server rejects the public compatibility password for initialization and rotation. No missing key file silently creates a public-password profile. Missing key metadata beside recognized credential data requires matching recovery or explicit migration and cannot mint a replacement key.
+
+For headless installs, set `FLUJO_ENCRYPTION_PASSPHRASE_FILE` to an absolute regular file outside the entire FLUJO data tree. Supply 32–1024 UTF-8 bytes, optionally followed by one newline; use a generated high-entropy secret. Keep it in an independently protected secret-manager mount or equivalent boundary, with POSIX owner-only permissions or an operator-managed Windows ACL. A different pathname alone is not independent protection. Linked files, short/oversized/multiline/invalid input, and files inside the data tree are rejected. The file is re-read for operations; loss or a mismatched replacement clears the server unlock and denies tokenless access. Rotation requires updating both wrapped metadata and the operator file; matching recovery retains the data keys. The browser never asks for the operator file's secret.
+
+**Existing default mode is storage obfuscation, not protection from someone who can read the workspace files.** Its published compatibility password remains for legacy reads and existing-profile behavior until explicit migration. Selecting operator protection for that existing profile denies access until its metadata has been explicitly rewrapped. Rewrapping alone does not authenticate old CBC records or encrypt historical plaintext. Neither profile protects secrets from code already running as the same OS user while the workspace is unlocked.
 
 ## Legacy data and upgrades
 
@@ -33,9 +37,14 @@ Upgrade worker hosts before transferring a migrated workspace. Older worker buil
 - `format.ts`: authenticated envelopes, password key derivation, strict format validation and v1 read compatibility.
 - `secure.ts`: workspace metadata lifecycle, atomic upgrade, password transitions and encryption/decryption API.
 - `session.ts`: workspace-scoped sessions and server unlock state.
-- `lockGate.ts`: HTTP 423 while a password-protected workspace is locked.
+- `privateProfile.ts`: bounded operator-file admission and public-password rejection.
+- `workspaceFiles.ts`: strict credential-file reads and missing-metadata recovery guard; this is not a complete migration inventory.
+- `lockGate.ts`: HTTP 423 while setup is required or private protection is locked/unavailable.
+- `__tests__/encryption/privateProfile.test.ts`: real workspace and two fresh OS-process source probes for private setup, restart, file loss/replacement, rotation and recovery.
 - `__tests__/encryption/dekInvariant.test.ts`: real temp-directory crypto tests for legacy/new reads, upgrade interruption, backup/restore, restart, password changes, tamper rejection and concurrent initialization.
 - `__tests__/encryption/credentialFailure.test.ts`: failure-path tests ensuring model and registry saves preserve previous credentials.
 - `__tests__/encryption/envCredentialFailure.test.ts`: single and batch environment-variable writes preserve all old values when encryption or initialization fails.
 
 Decryption returns `null` for invalid ciphertext or credentials; a locked workspace throws `EncryptionLockedError`. Credential-writing helpers throw when encryption cannot complete. Callers must propagate that failure and leave their existing persisted record intact.
+
+The profile follow-up does not complete #567: resumable bulk migration, ordinary credential-free exports, encrypted recipient transfer, worker/bootstrap qualification and installed/human/independent evidence remain open. See `docs/security/private-key-profile-v1.md` for its source evidence and limits.
