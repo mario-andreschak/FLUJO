@@ -86,21 +86,29 @@ function discoverProviderMetadata(model: ProviderModelRecord): Partial<Normalize
  * Maps each URL pattern to its corresponding provider
  */
 export function getProviderFromBaseUrl(baseUrl: string): ModelProvider {
-  if (/\.openai\.azure\.(?:com|us)(?:[/:]|$)|\.cognitiveservices\.azure\.(?:com|us)(?:[/:]|$)/i.test(baseUrl)) {
+  let hostname: string;
+  try {
+    const url = new URL(baseUrl);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return 'ollama';
+    hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+  } catch { return 'ollama'; }
+  const belongsTo = (domain: string) => hostname === domain || hostname.endsWith(`.${domain}`);
+  if (['openai.azure.com', 'openai.azure.us', 'cognitiveservices.azure.com', 'cognitiveservices.azure.us']
+    .some(domain => hostname.endsWith(`.${domain}`))) {
     return 'azure';
-  } else if (baseUrl.includes('openrouter.ai')) {
+  } else if (belongsTo('openrouter.ai')) {
     return 'openrouter';
-  } else if (baseUrl.includes('requesty.ai')) {
+  } else if (belongsTo('requesty.ai')) {
     return 'requesty';
-  } else if (baseUrl.includes('api.x.ai')) {
+  } else if (hostname === 'api.x.ai') {
     return 'xai';
-  } else if (baseUrl.includes('generativelanguage.googleapis.com')) {
+  } else if (hostname === 'generativelanguage.googleapis.com') {
     return 'gemini';
-  } else if (baseUrl.includes('api.anthropic.com')) {
+  } else if (hostname === 'api.anthropic.com') {
     return 'anthropic';
-  } else if (baseUrl.includes('api.mistral.ai')) {
+  } else if (hostname === 'api.mistral.ai') {
     return 'mistral';
-  } else if (baseUrl.includes('api.openai.com')) {
+  } else if (hostname === 'api.openai.com') {
     return 'openai';
   } else if (isLitellmUrl(baseUrl)) {
     return 'litellm';
@@ -233,6 +241,7 @@ export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
  */
 export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string): Promise<NormalizedModel[]> {
   log.debug('fetchOpenAIModels: Entering method');
+  const provider = getProviderFromBaseUrl(baseUrl);
   
   // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
   let modelsUrl = baseUrl;
@@ -246,7 +255,7 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   // Remove trailing slash if present before adding /models
   modelsUrl = modelsUrl.endsWith('/') ? `${modelsUrl}models` : `${modelsUrl}/models`;
   
-  log.debug(`Fetching models from: ${modelsUrl}`);
+  log.debug('Fetching configured provider model catalogue');
   
   // Prepare headers
   const headers: Record<string, string> = {
@@ -255,7 +264,7 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   
   // Add Authorization header if API key is provided (OpenRouter doesn't require it for listing models)
   if (apiKey) {
-    if (baseUrl.includes('anthropic')){
+    if (provider === 'anthropic'){
     headers['x-api-key'] = `${apiKey}`;
     headers['anthropic-version'] = `2023-06-01`; // TODO make dynamic? e.g. fetch models with anthropic sdk
 
@@ -266,20 +275,14 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
   }
   
   try {
-    // Never include provider credentials in logs.
-    const sanitizedHeaders = { ...headers };
-    if (sanitizedHeaders.Authorization) {
-      sanitizedHeaders.Authorization = 'Bearer ********';
-    }
-    if (sanitizedHeaders['x-api-key']) {
-      sanitizedHeaders['x-api-key'] = '********';
-    }
-    log.verbose(`fetching models @${modelsUrl} with ${JSON.stringify(sanitizedHeaders)}`);
-    const response = await fetch(modelsUrl, { headers });
+    log.verbose('Requesting provider model catalogue', { provider, credentialProvided: Boolean(apiKey) });
+    // A redirect must not forward x-api-key or other configured credentials to
+    // another endpoint. Operators can enter the final catalogue base URL.
+    const response = await fetch(modelsUrl, { headers, redirect: 'error' });
     
     if (!response.ok) {
-      log.verbose('model list response', response)
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      log.verbose('Provider model catalogue rejected', { status: response.status });
+      throw new Error('Provider model catalogue request failed');
     }
     
     const data = await response.json();
@@ -289,7 +292,7 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
       log.debug('Successfully parsed response in standard OpenAI format');
       
       // For OpenAI, filter to only include chat models
-      if (baseUrl.includes('api.openai.com')) {
+      if (provider === 'openai') {
         return (data.data as unknown[])
           .filter(isProviderModelRecord)
           .filter((model) => model.id.includes('gpt'))
@@ -321,14 +324,11 @@ export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string):
     }
     
     // If we can't parse the response in any known format, return an empty array
-    log.warn('Could not parse API response in any known format', { data });
+    log.warn('Could not parse provider model catalogue');
     return [];
-  } catch (error) {
-    log.error('OpenAI-compatible model catalogue request failed', {
-      modelsUrl,
-      message: error instanceof Error ? error.message : 'Unknown provider error',
-    });
-    throw error;
+  } catch {
+    log.error('OpenAI-compatible model catalogue request failed');
+    throw new Error('Provider model catalogue request failed');
   }
 }
 
