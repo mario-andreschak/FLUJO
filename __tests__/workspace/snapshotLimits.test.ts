@@ -24,7 +24,7 @@ test('configured limits describe plaintext, ZIP and padded encrypted wire separa
 
 test('official worker image labels carry the actual native default restore bounds', () => {
   const dockerfile = readFileSync(path.join(process.cwd(), 'Dockerfile'), 'utf8');
-  const label = dockerfile.match(/io\.flujo\.worker\.snapshot\.restore\.limits='([^']+)'/);
+  const label = dockerfile.match(/io\.flujo\.worker\.snapshot-default-limits='([^']+)'/);
   expect(label).not.toBeNull();
   expect(JSON.parse(label![1])).toEqual(getSnapshotLimits());
   Object.values(JSON.parse(label![1])).forEach(value => {

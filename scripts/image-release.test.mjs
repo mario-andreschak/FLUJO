@@ -22,7 +22,7 @@ const labels = { 'io.flujo.application.version': version, 'org.opencontainers.im
   'io.flujo.snapshot.format': '2', 'io.flujo.workspace.layout': '2', 'io.flujo.worker.protocol': '1',
   'io.flujo.worker.snapshot-source': '1',
   'io.flujo.worker.snapshot-envelope-read-versions': '1,2',
-  'io.flujo.worker.snapshot.restore.limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
+  'io.flujo.worker.snapshot-default-limits': WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL };
 
 function runner(options = {}) {
   const calls = [];
@@ -97,10 +97,10 @@ test('old worker images cannot be reused or published without explicit v2 restor
 
 test('missing or different default restore bounds refuse an image before candidate mutation', (t) => {
   for (const value of [undefined, '{}', WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL.replace('65534', '100000')]) {
-    const oldLabels = { ...labels, 'io.flujo.worker.snapshot.restore.limits': value };
-    if (value === undefined) delete oldLabels['io.flujo.worker.snapshot.restore.limits'];
+    const oldLabels = { ...labels, 'io.flujo.worker.snapshot-default-limits': value };
+    if (value === undefined) delete oldLabels['io.flujo.worker.snapshot-default-limits'];
     const f = fixture(t, { image: { Config: { User: 'node', Labels: oldLabels } } });
-    assert.throws(() => prepareImageEvidence(f), /incorrect io.flujo.worker.snapshot.restore.limits label/);
+    assert.throws(() => prepareImageEvidence(f), /incorrect io.flujo.worker.snapshot-default-limits label/);
     assert.equal(f.calls.some(({ args }) => ['tag', 'push'].includes(args[0])), false);
   }
 });
@@ -185,7 +185,7 @@ test('source-lock and inventory tampering are refused', (t) => {
 });
 
 test('old evidence without restore capability or bounds stops promotion before signatures or registry access', (t) => {
-  for (const key of ['io.flujo.worker.snapshot-envelope-read-versions', 'io.flujo.worker.snapshot.restore.limits']) {
+  for (const key of ['io.flujo.worker.snapshot-envelope-read-versions', 'io.flujo.worker.snapshot-default-limits']) {
     const f = fixture(t);
     const evidence = prepareImageEvidence(f);
     delete evidence.labels[key];
@@ -319,8 +319,8 @@ test('worker publication validates the explicit restore label before fresh and r
     ['io.flujo.worker.snapshot-envelope-read-versions', undefined],
     ['io.flujo.worker.snapshot-envelope-read-versions', '1'],
     ['io.flujo.worker.snapshot-envelope-read-versions', '2'],
-    ['io.flujo.worker.snapshot.restore.limits', undefined],
-    ['io.flujo.worker.snapshot.restore.limits', '{}'],
+    ['io.flujo.worker.snapshot-default-limits', undefined],
+    ['io.flujo.worker.snapshot-default-limits', '{}'],
   ]) {
     const imageLabels = { ...labels, [key]: value };
     if (value === undefined) delete imageLabels[key];
@@ -341,8 +341,8 @@ test('worker publication validates the explicit restore label before fresh and r
   assert.match(checks, /org\.opencontainers\.image\.revision/);
   assert.match(checks, /io\.flujo\.application\.version/);
   assert.match(checks, /test "\$\(docker image inspect --format '\{\{index \.Config\.Labels "io\.flujo\.worker\.snapshot-envelope-read-versions"\}\}' "\$IMAGE_ID"\)" = "1,2"/);
-  assert.match(checks, /test "\$\(docker image inspect --format '\{\{index \.Config\.Labels "io\.flujo\.worker\.snapshot\.restore\.limits"\}\}' "\$IMAGE_ID"\)" = "\$restore_limits"/);
+  assert.match(checks, /test "\$\(docker image inspect --format '\{\{index \.Config\.Labels "io\.flujo\.worker\.snapshot-default-limits"\}\}' "\$IMAGE_ID"\)" = "\$restore_limits"/);
   const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
   assert.match(dockerfile.slice(dockerfile.indexOf('AS runtime')), /io\.flujo\.worker\.snapshot-envelope-read-versions="1,2"/);
-  assert.equal(dockerfile.match(/io\.flujo\.worker\.snapshot\.restore\.limits='([^']+)'/)[1], WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);
+  assert.equal(dockerfile.match(/io\.flujo\.worker\.snapshot-default-limits='([^']+)'/)[1], WORKER_SNAPSHOT_RESTORE_LIMITS_LABEL);
 });
