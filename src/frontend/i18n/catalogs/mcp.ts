@@ -2868,6 +2868,18 @@ export const mcpMessageRows = {
     "URL do servidor",
     "服务器 URL",
   ],
+  "mcp.remote.discoveryLimits": [
+    "Automatic OAuth preview supports public HTTPS servers on port 443. For local servers, other ports, or your own OAuth client details, choose Configure manually, then test the connection in Configure.",
+    "La vista previa automática de OAuth admite servidores HTTPS públicos en el puerto 443. Para servidores locales, otros puertos o tus propios datos de cliente OAuth, elige Configurar manualmente y prueba la conexión en Configurar.",
+    "Die automatische OAuth-Vorschau unterstützt öffentliche HTTPS-Server auf Port 443. Wähle für lokale Server, andere Ports oder eigene OAuth-Clientdaten Manuell konfigurieren und teste die Verbindung unter Konfigurieren.",
+    "L’aperçu OAuth automatique prend en charge les serveurs HTTPS publics sur le port 443. Pour les serveurs locaux, les autres ports ou vos propres données client OAuth, choisissez Configurer manuellement, puis testez la connexion dans Configurer.",
+    "L’anteprima OAuth automatica supporta server HTTPS pubblici sulla porta 443. Per server locali, altre porte o i tuoi dati client OAuth, scegli Configura manualmente, poi prova la connessione in Configura.",
+    "A prévia automática de OAuth aceita servidores HTTPS públicos na porta 443. Para servidores locais, outras portas ou seus próprios dados de cliente OAuth, escolha Configurar manualmente e teste a conexão em Configurar.",
+    "自动 OAuth 预览支持端口 443 上的公共 HTTPS 服务器。对于本地服务器、其他端口或自有 OAuth 客户端信息，请选择手动配置，然后在配置页面测试连接。",
+  ],
+  "mcp.remote.manualSetup": [
+    "Configure manually", "Configurar manualmente", "Manuell konfigurieren", "Configurer manuellement", "Configura manualmente", "Configurar manualmente", "手动配置",
+  ],
   "mcp.remote.urlHelp": [
     "Enter the full URL of the MCP server endpoint",
     "Introduce la URL completa del endpoint del servidor MCP",
