@@ -47,8 +47,12 @@ describe('descriptor-bound plain file reads', () => {
     let allocation = 0;
     jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
       const handle = await open(...args);
-      const read = handle.read.bind(handle);
-      jest.spyOn(handle, 'read').mockImplementation(async (buffer, offset, length, position) => {
+      type PositionalRead = (buffer: Buffer, offset: number, length: number, position: number) => Promise<{ bytesRead: number; buffer: Buffer }>;
+      // This helper uses Node's positional-buffer overload. Give the spy that
+      // contract explicitly rather than Jest inferring the object overload.
+      const positional: { read: PositionalRead } = handle;
+      const read = positional.read.bind(handle);
+      jest.spyOn(positional, 'read').mockImplementation(async (buffer, offset, length, position) => {
         allocation = Math.max(allocation, buffer.byteLength);
         await fs.appendFile(file, Buffer.alloc(1024 * 1024));
         return read(buffer, offset, length, position);

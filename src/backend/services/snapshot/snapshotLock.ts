@@ -192,7 +192,7 @@ async function acquireFilesystemLease(
             if (!admitted || admitted.owner.ownerId !== owner.ownerId) throw new SnapshotLeaseBusyError();
             return async () => {
               const current = await readOwner(root);
-              if (current?.owner.ownerId !== owner.ownerId || current.digest !== admitted.digest) throw new SnapshotLeaseBusyError();
+              if (!current || current.owner.ownerId !== owner.ownerId || current.digest !== admitted.digest) throw new SnapshotLeaseBusyError();
               if (!await retireOwner(root, current)) throw new SnapshotLeaseBusyError();
             };
           });
