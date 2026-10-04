@@ -1,6 +1,7 @@
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { modelService } from '@/backend/services/model';
 import { MAX_EXECUTION_MODEL_STEP_ORDINAL, registerExecutionExtension } from '@/backend/execution/extensions';
+import { bindExecutionModelStepOrdinals, takeExecutionModelStepOrdinal } from '@/backend/execution/flow/modelStepOrdinals';
 import { fixtureAdapter, mintFixture } from '../executionExtensions/fixtureAdapter';
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import type {
@@ -23,7 +24,7 @@ const message = (
   id: string
 ): FlujoChatMessage => ({ role, content, id, timestamp: 1 } as FlujoChatMessage);
 
-function prep(availableTools: ToolDefinition[] = [handoffTool()]): ProcessNodePrepResult {
+function prep(availableTools: ToolDefinition[] = [handoffTool()], runState = ordinalState()): ProcessNodePrepResult {
   return {
     nodeId: 'proc',
     nodeType: 'process',
@@ -31,6 +32,8 @@ function prep(availableTools: ToolDefinition[] = [handoffTool()]): ProcessNodePr
     boundModel: 'image-model',
     availableTools,
     messages: [message('user', 'Generate a banana ice cream image', 'u1')],
+    runId: runState.logicalRunId,
+    takeModelStepOrdinal: () => takeExecutionModelStepOrdinal(runState, 'proc', runState.logicalRunId),
   };
 }
 
@@ -55,6 +58,13 @@ function state(): SharedState {
     createdAt: 1,
     updatedAt: 1,
   } as SharedState;
+}
+
+function ordinalState(): SharedState {
+  const runState = state();
+  runState.logicalRunId = 'logical-run';
+  bindExecutionModelStepOrdinals(runState, undefined);
+  return runState;
 }
 
 function nodeWithFinish(): ProcessNode {
@@ -257,6 +267,7 @@ describe('ProcessNode unsupported-tool fallback', () => {
   });
 
   it('keeps the actual Process node and one ordinal source across the fallback', async () => {
+    const runState = ordinalState();
     const slots: Array<{ nodeId: string; ordinal: number }> = [];
     const callModel = jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
       slots.push({ nodeId: input.nodeId, ordinal: input.takeModelStepOrdinal!() });
@@ -265,13 +276,47 @@ describe('ProcessNode unsupported-tool fallback', () => {
     const node = nodeWithFinish();
     const nodeParams = params();
 
-    const result = await node.execCore(prep(), nodeParams);
+    const result = await node.execCore(prep([handoffTool()], runState), nodeParams);
 
     expect(result.success).toBe(true);
     expect(callModel).toHaveBeenCalledTimes(2);
     expect(slots).toEqual([{ nodeId: 'proc', ordinal: 0 }, { nodeId: 'proc', ordinal: 1 }]);
     expect(callModel.mock.calls[0][0].takeModelStepOrdinal)
       .toBe(callModel.mock.calls[1][0].takeModelStepOrdinal);
+    await node.execCore(prep([], runState), nodeParams);
+    expect(slots).toEqual([
+      { nodeId: 'proc', ordinal: 0 },
+      { nodeId: 'proc', ordinal: 1 },
+      { nodeId: 'proc', ordinal: 2 },
+    ]);
+  });
+
+  it('continues the same Process slot sequence on a later visit', async () => {
+    const runState = ordinalState();
+    const slots: Array<{ nodeId: string; ordinal: number }> = [];
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push({ nodeId: input.nodeId, ordinal: input.takeModelStepOrdinal!() });
+      return successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    await node.execCore(prep([], runState), params());
+    await node.execCore(prep([], runState), params());
+    expect(slots).toEqual([{ nodeId: 'proc', ordinal: 0 }, { nodeId: 'proc', ordinal: 1 }]);
+  });
+
+  it('continues the same Process slot after a saved-state resume', async () => {
+    const runState = ordinalState();
+    const slots: number[] = [];
+    jest.spyOn(ModelHandler, 'callModel').mockImplementation(async input => {
+      slots.push(input.takeModelStepOrdinal!());
+      return successfulCompletion as any;
+    });
+    const node = nodeWithFinish();
+    await node.execCore(prep([], runState), params());
+    const reloaded = JSON.parse(JSON.stringify(runState)) as SharedState;
+    bindExecutionModelStepOrdinals(reloaded, reloaded.logicalRunId);
+    await node.execCore(prep([], reloaded), params());
+    expect(slots).toEqual([0, 1]);
   });
 
   it('refuses a changed Process node identity before taking an owner ordinal', async () => {

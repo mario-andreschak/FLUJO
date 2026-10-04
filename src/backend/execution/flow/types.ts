@@ -995,6 +995,12 @@ export interface SharedState {
     /** Stable logical execution id used only for metadata-only statistics. It is
      * preserved while approval/debug is paused, then replaced for a new turn. */
     logicalRunId?: string;
+    /** Persisted call-site ordinal cursor for owner-bound Process model steps.
+     * The owner still durably deduplicates slots under its private run identity. */
+    executionModelStepOrdinals?: {
+        logicalRunId: string;
+        nextByNode: Record<string, number>;
+    };
     /**
      * Additive durable recovery metadata (issue #355). Legacy status values stay
      * authoritative for compatibility; this versioned record supplies the more
@@ -1629,6 +1635,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+    /** Runtime-only reservation against SharedState's run-bound ordinal cursor. */
+    takeModelStepOrdinal?: () => number;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
     personaAttribution?: PersonaAttribution;
     /** One logical model-turn override armed by the repeated-tool guard. */

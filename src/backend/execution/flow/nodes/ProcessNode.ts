@@ -53,7 +53,8 @@ import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { ExecutionExtensionError, MAX_EXECUTION_MODEL_STEP_ORDINAL, assertExecutionExtensionCurrent, assertExecutionModelStepNodeId, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
+import { takeExecutionModelStepOrdinal } from '../modelStepOrdinals';
+import { ExecutionExtensionError, assertExecutionExtensionCurrent, assertExecutionModelStepNodeId, executionExtensionProtectedServer, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, isExecutionProtectedState } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -784,6 +785,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     writable: false,
     configurable: false,
   });
+  // The cursor lives on SharedState so another visit to this Process node and
+  // a saved-state resume continue the same run-wide sequence. Keep this live
+  // reference out of debugger snapshots and persisted prep results.
+  Object.defineProperty(prepResult, 'takeModelStepOrdinal', {
+    value: () => takeExecutionModelStepOrdinal(sharedState, nodeId, prepResult.runId),
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
@@ -1226,18 +1236,15 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
       let modelResult;
       let usedToolFreeFallback = false;
-      // One counter belongs to this Process execution, including its possible
-      // tool-free fallback. Only an owner-bound completion consumes an ordinal.
+      // Only owner-bound completions call this reservation. The first request
+      // and optional tool-free fallback consume consecutive run-wide slots.
       const processNodeId = node_params?.id;
-      let modelStepOrdinal = 0;
       const takeModelStepOrdinal = (): number => {
         if (!processNodeId || node_params?.id !== processNodeId || prepResult.nodeId !== processNodeId) {
           throw new ExecutionExtensionError('execution_model_step_slot_required');
         }
-        if (modelStepOrdinal > MAX_EXECUTION_MODEL_STEP_ORDINAL) {
-          throw new ExecutionExtensionError('execution_model_step_slot_exhausted');
-        }
-        return modelStepOrdinal++;
+        if (!prepResult.takeModelStepOrdinal) throw new ExecutionExtensionError('execution_model_step_run_state_invalid');
+        return prepResult.takeModelStepOrdinal();
       };
       try {
         const callModelWithTools = async (

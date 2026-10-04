@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import {
   forget as forgetConversationCacheEntry,
   markTerminal as markConversationTerminal,
@@ -1240,6 +1241,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   // 'pause' run keeps re-pausing (not failing) on later tool calls.
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
 
+  const previousLogicalRunId = sharedState.logicalRunId;
   if (!resumingPausedLogicalRun) {
     // Subflow sessions are scoped to one logical parent run. Old handles stay in
     // their saved child conversations but must not leak into a later user turn.
@@ -1257,6 +1259,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
   if (input.executionExtensionContext) {
+    bindExecutionModelStepOrdinals(sharedState, previousLogicalRunId);
     const { bindExecutionExtensionRun } = await import('@/backend/execution/extensions');
     await bindExecutionExtensionRun(input.executionExtensionContext, effectiveConvId, logicalRunId);
   }

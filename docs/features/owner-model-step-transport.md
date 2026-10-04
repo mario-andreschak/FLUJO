@@ -11,14 +11,17 @@ after a denial, failure, or uncertain outcome. Tool loops and later Process
 turns need new children and new owner budget decisions.
 
 The owner issuer receives a closed `{ nodeId, ordinal }` slot with each child.
-`nodeId` comes from the active Process node; `ordinal` starts at zero for that
-Process execution and advances for each owner-bound model call, including an
-error-driven tool-free fallback. The counter is bounded and a missing, changed,
-or malformed slot fails before the owner callback. Ordinary models do not
-consume it. This slot is only a call-site hint: the owner must match it to its
-independently frozen graph and original call plan, then durably refuse a reused
-slot. A later visit to the same Process node starts a new local counter, so
-multi-visit plans need separately qualified run-wide issuance before use.
+`nodeId` comes from the active Process node; `ordinal` starts at zero per node
+and logical run, then advances for each owner-bound model call across later
+visits to that node. An error-driven tool-free fallback takes the next slot;
+denied and uncertain attempts never roll back. The run-bound cursor is saved
+with conversation state for approval/debug resume, and a missing or malformed
+same-run cursor fails closed. Ordinary models do not consume it. This slot is
+only a call-site hint: the owner must match it to its independently frozen
+graph and original call plan, then durably refuse a reused slot under its own
+original run identity before minting a child. A crash or concurrent worker can
+replay a cursor from an older state snapshot; FLUJO's metadata-only logical
+run id and saved cursor are not the owner's physical authority or dedupe ledger.
 
 At the OpenAI SDK's final `fetch` seam, FLUJO checks the resolved recipient,
 method, JSON body, and headers, then passes their snapshot and digests to
