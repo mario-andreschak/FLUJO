@@ -84,15 +84,25 @@ export function writeInstallerDigest({ directory, outputFile }) {
 }
 
 function main() {
+  const run = (command, args, options = {}) => execFileSync(command, args, {
+    encoding: 'utf8', windowsHide: true, timeout: 90_000, ...options,
+  });
+  if (process.argv[2] === 'verify-download') {
+    const inputs = process.argv.slice(3);
+    if (inputs.length !== 4 || inputs.some((value) => value.length === 0)) {
+      throw new Error('verify-download requires <directory> <source-SHA> <version> <executable-SHA256>.');
+    }
+    const [directory, revision, version, expectedDigest] = inputs;
+    const evidence = verifyInstallerAttestations({ directory, revision, version, expectedDigest, run });
+    console.log(`Downloaded installer verified for ${evidence.revision} (${evidence.ref}), SHA-256 ${evidence.artifact.sha256}.`);
+    return;
+  }
   const directory = process.env.INSTALLER_RELEASE_DIR ?? 'installer/Output';
   if (process.argv[2] === 'digest') {
     writeInstallerDigest({ directory, outputFile: process.env.GITHUB_OUTPUT });
     console.log('Original installer byte digest retained in the GitHub output file.');
     return;
   }
-  const run = (command, args, options = {}) => execFileSync(command, args, {
-    encoding: 'utf8', windowsHide: true, timeout: 90_000, ...options,
-  });
   const context = installerSourceContext({
     repository: process.env.GITHUB_REPOSITORY, revision: process.env.GITHUB_SHA,
     checkout: run('git', ['rev-parse', 'HEAD']).trim(), ref: process.env.GITHUB_REF,
@@ -105,7 +115,7 @@ function main() {
     case 'prepare': writeInstallerEvidence({ directory: options.directory, context }); break;
     case 'validate': validateInstallerEvidence(options); break;
     case 'verify-signatures': verifyInstallerAttestations({ ...options, run }); break;
-    default: throw new Error('Use digest, prepare, validate or verify-signatures.');
+    default: throw new Error('Use digest, prepare, validate, verify-signatures or verify-download.');
   }
   console.log(`Installer ${process.argv[2]} succeeded for ${context.revision} (${context.ref}).`);
 }

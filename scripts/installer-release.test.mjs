@@ -58,6 +58,33 @@ test('actual digest CLI emits a complete UTF-8 GitHub file command for ordinary 
   assert.throws(() => writeInstallerDigest({ directory: f.directory, outputFile }), /nonempty/);
 });
 
+test('download verification CLI checks explicit release inputs without a checkout or CI environment', (t) => {
+  const f = fixture(t);
+  const execute = (inputs) => {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./installer-release.mjs', import.meta.url)), 'verify-download', ...inputs], {
+      cwd: f.directory, env: { ...process.env, GITHUB_SHA: '', GITHUB_REF: '', GITHUB_REPOSITORY: '',
+        GITHUB_WORKFLOW_REF: '', GITHUB_WORKFLOW_SHA: '', INSTALLER_RELEASE_DIR: 'unused-directory',
+        EXPECTED_INSTALLER_SHA256: 'unused-digest' },
+      encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(result.stdout, /Downloaded installer verified/);
+    return result.stderr;
+  };
+  const inputs = [f.directory, revision, version, f.expectedDigest];
+  for (const invalid of [inputs.slice(0, 3), [...inputs, 'extra']]) {
+    assert.match(execute(invalid), /verify-download requires/);
+  }
+  for (const mismatched of [[f.directory, 'b'.repeat(40), version, f.expectedDigest],
+    [f.directory, revision, '3.46.4', f.expectedDigest],
+    [f.directory, revision, version, 'b'.repeat(64)]]) {
+    assert.match(execute(mismatched), /does not match the original executable/);
+  }
+  writeFileSync(path.join(f.directory, INSTALLER_FILE), 'tampered synthetic installer');
+  assert.match(execute(inputs), /does not match the original executable/);
+});
+
 for (const [name, change] of [
   ['another repository', { repository: 'other/project' }],
   ['another checkout', { checkout: 'b'.repeat(40) }],
