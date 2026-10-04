@@ -17,6 +17,7 @@ import {
 import type { MCPReadResourceResult } from '@/shared/types/mcp';
 import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { readPayloadProjection } from './readPayloadProjection';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -590,21 +591,24 @@ export async function readRunResourceBounded(
   const entries = await loadIndex(parsed.conversationId);
   const entry = entries.find((candidate) => candidate.id === parsed.id);
   if (!entry || entry.kind === 'link') return null;
-  let payload: Buffer;
+  const requestedMax = typeof options.maxChars === 'number' && !Number.isNaN(options.maxChars)
+    ? options.maxChars : 50_000;
+  const maxChars = Math.max(1, Math.min(200_000, Math.floor(requestedMax)));
+  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
+  let projection: Awaited<ReturnType<typeof readPayloadProjection>>;
   try {
-    payload = await fs.readFile(payloadPath(parsed.conversationId, parsed.id));
+    projection = await readPayloadProjection(payloadPath(parsed.conversationId, parsed.id), {
+      text: entry.encoding === 'utf8', maxChars, hash: Boolean(expectedSha256),
+    });
   } catch (error) {
     log.error(`Run-resource payload missing for ${uri}`, error);
     return null;
   }
-  const actualSha256 = createHash('sha256').update(payload).digest('hex');
-  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
   const verification = expectedSha256
-    ? { expectedSha256, actualSha256, ok: expectedSha256 === actualSha256 }
+    ? { expectedSha256, actualSha256: projection.sha256!, ok: expectedSha256 === projection.sha256 }
     : undefined;
-  const maxChars = Math.max(1, Math.min(200_000, Math.floor(options.maxChars ?? 50_000)));
   const raw = entry.encoding === 'utf8'
-    ? payload.toString('utf8')
+    ? projection.text
     : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
   const content = raw.slice(0, maxChars);
   try {
@@ -630,7 +634,7 @@ export async function readRunResourceBounded(
   } catch (error) {
     log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
   }
-  return { entry, content, truncated: raw.length > content.length, verification };
+  return { entry, content, truncated: projection.truncated || raw.length > content.length, verification };
 }
 
 /** Remove a conversation's resources (called from conversation DELETE). */
