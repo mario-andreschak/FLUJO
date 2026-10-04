@@ -20,7 +20,9 @@ import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMut
 import { readPayloadProjection } from './readPayloadProjection';
 import { copyPayloadSnapshot } from './copyPayloadSnapshot';
 import { withRunResourceCopyAdmission } from './copyAdmission';
+import { clearRunResourceIndexCache, invalidateRunResourceIndex, loadRunResourceIndex, publishRunResourceIndex } from './indexCache';
 export { getRunResourceCopyPressure } from './copyAdmission';
+export { getRunResourceIndexPressure, RunResourceIndexPressureError } from './indexCache';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -156,32 +158,19 @@ export function _clearRunResourceSettingsCache(): void {
 
 // --- Index cache -------------------------------------------------------------
 
-// Global-backed like __mcp_clients: Next.js can instantiate this module more
-// than once (route bundles, hot reload) and all instances must share the cache.
-// Disk is the cold-start source of truth.
-declare global {
-  var __flujo_run_resources: Map<string, RunResourceEntry[]> | undefined;
-}
-const indexCache: Map<string, RunResourceEntry[]> =
-  global.__flujo_run_resources ?? (global.__flujo_run_resources = new Map());
-
 async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
-  const cached = indexCache.get(cacheKey(conversationId));
-  if (cached) return cached;
-  let entries: RunResourceEntry[] = [];
-  try {
-    const content = await fs.readFile(indexPath(conversationId), 'utf-8');
-    if (content.trim().length > 0) {
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) entries = parsed as RunResourceEntry[];
+  const filename = indexPath(conversationId);
+  return loadRunResourceIndex(cacheKey(conversationId), async () => {
+    try {
+      return await fs.readFile(filename, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '[]';
+      // A failed/corrupt read must not masquerade as an empty history that the
+      // next write overwrites. Capture callers retain inline content on errors.
+      log.error(`Failed to read run-resource index for ${conversationId}`, error);
+      throw error;
     }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.error(`Failed to read run-resource index for ${conversationId}; treating as empty`, error);
-    }
-  }
-  indexCache.set(cacheKey(conversationId), entries);
-  return entries;
+  });
 }
 
 /**
@@ -203,12 +192,13 @@ async function mutateIndex<T>(
     const { next, result } = await mutator(entries);
     if (next !== entries) {
       try {
-        await writeFileAtomic(indexPath(conversationId), JSON.stringify(next, null, 2));
-        indexCache.set(cacheKey(conversationId), next);
+        const content = JSON.stringify(next, null, 2);
+        await writeFileAtomic(indexPath(conversationId), content);
+        publishRunResourceIndex(cacheKey(conversationId), content);
       } catch (error) {
         // A failed/ambiguous publication must reload disk rather than expose an
         // uncommitted new entry or retain stale metadata after a rename.
-        indexCache.delete(cacheKey(conversationId));
+        invalidateRunResourceIndex(cacheKey(conversationId));
         throw error;
       }
     }
@@ -348,12 +338,12 @@ async function storePreparedRunResource(
     });
   }
 
-  return result;
+  return structuredClone(result);
 }
 
 export async function listRunResources(conversationId: string): Promise<RunResourceEntry[]> {
   assertSafeId(conversationId, 'conversationId');
-  return (await loadIndex(conversationId)).slice();
+  return structuredClone(await loadIndex(conversationId));
 }
 
 /**
@@ -375,7 +365,7 @@ export async function listAllRunResources(limit = 200, offset = 0): Promise<RunR
     all.push(...await loadIndex(conversationId));
   }
   all.sort((a, b) => b.createdAt - a.createdAt);
-  return all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit));
+  return structuredClone(all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit)));
 }
 
 export async function findRunResourceByName(
@@ -384,7 +374,8 @@ export async function findRunResourceByName(
 ): Promise<RunResourceEntry | null> {
   assertSafeId(conversationId, 'conversationId');
   const entries = await loadIndex(conversationId);
-  return entries.find(e => e.name === name) ?? null;
+  const entry = entries.find(e => e.name === name);
+  return entry ? structuredClone(entry) : null;
 }
 
 /**
@@ -401,8 +392,9 @@ export async function readRunResource(
   const parsed = parseRunResourceUri(uri);
   if (!parsed) return null;
   const entries = await loadIndex(parsed.conversationId);
-  const entry = entries.find(e => e.id === parsed.id);
-  if (!entry) return null;
+  const snapshot = entries.find(e => e.id === parsed.id);
+  if (!snapshot) return null;
+  const entry = structuredClone(snapshot);
 
   let contents: MCPReadResourceResult;
   if (entry.kind === 'link') {
@@ -467,8 +459,9 @@ export async function readRunResourceRange(
   const parsed = parseRunResourceUri(uri);
   if (!parsed) return null;
   const entries = await loadIndex(parsed.conversationId);
-  const entry = entries.find((candidate) => candidate.id === parsed.id);
-  if (!entry || entry.kind === 'link') return null;
+  const snapshot = entries.find((candidate) => candidate.id === parsed.id);
+  if (!snapshot || snapshot.kind === 'link') return null;
+  const entry = structuredClone(snapshot);
 
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
@@ -545,7 +538,7 @@ export async function copyRunResourceToConversation(
       origin: source.kind === 'link' ? source.origin : { server: 'flujo', uri: source.uri },
     };
     if (source.kind === 'link') {
-      return source.conversationId === input.conversationId ? source : writeRunResource(destination);
+      return source.conversationId === input.conversationId ? structuredClone(source) : writeRunResource(destination);
     }
     let handle;
     let initial;
@@ -561,7 +554,7 @@ export async function copyRunResourceToConversation(
       return null;
     }
     try {
-      if (source.conversationId === input.conversationId) return source;
+      if (source.conversationId === input.conversationId) return structuredClone(source);
       const settings = await getRunResourceSettings();
       return await storePreparedRunResource(destination, settings, {
         size: Number(initial.size), encoding: source.encoding,
@@ -672,19 +665,23 @@ export async function readRunResourceBounded(
   } catch (error) {
     log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
   }
-  return { entry, content, truncated: projection.truncated || raw.length > content.length, verification };
+  return { entry: structuredClone(entry), content, truncated: projection.truncated || raw.length > content.length, verification };
 }
 
 /** Remove a conversation's resources (called from conversation DELETE). */
 export async function deleteRunResources(conversationId: string): Promise<void> {
   assertSafeId(conversationId, 'conversationId');
-  indexCache.delete(cacheKey(conversationId));
+  invalidateRunResourceIndex(cacheKey(conversationId));
   await runInWriteChain(chainKey(conversationId), async () => {
     try {
       await fs.rm(conversationDir(conversationId), { recursive: true, force: true });
       log.debug(`Deleted run resources for conversation ${conversationId}`);
     } catch (error) {
       log.warn(`Failed to delete run resources for ${conversationId}`, error);
+    } finally {
+      // A writer ahead of this deletion may have published after the initial
+      // invalidation; a cold read during removal must not retain that snapshot.
+      invalidateRunResourceIndex(cacheKey(conversationId));
     }
   });
 }
@@ -750,6 +747,6 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
 export function _setRunResourcesDirForTests(dir: string): string {
   const previous = runResourcesDir();
   runResourcesDirOverride = dir;
-  indexCache.clear();
+  clearRunResourceIndexCache();
   return previous;
 }
