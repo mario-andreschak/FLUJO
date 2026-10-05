@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type OpenAI from 'openai';
 import type { CompletionInput, CompletionResult } from '@/backend/services/model/adapters/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -19,10 +20,12 @@ jest.mock('@/backend/services/model/adapters', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { _setNativeToolJournalRootForTests } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { _setModelTurnArchiveDirForTests } from '@/backend/execution/flow/modelTurnArchive';
-import { createNativeBrokerAuthority } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { createNativeBrokerAuthority, nativeDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { createNativeLineageRootBinding } from '@/backend/execution/flow/handlers/nativeOriginLineage';
 import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
 import { _setNativeSessionPayloadRootForTests, readNativeSessionPayload } from '@/backend/execution/flow/handlers/nativeSessionPayload';
+import { _setNativeSavedOriginRootForTests, assertSavedNativePublishable,
+  readSavedNativeOrigin, readSavedNativeTerminal, saveNativeSessionOrigin } from '@/backend/execution/flow/handlers/nativeSavedOrigin';
 import { saveCollectionItem } from '@/utils/storage/backend';
 
 const message: FlujoChatMessage = { id: 'user-1', role: 'user', content: 'hello', timestamp: 1 };
@@ -56,6 +59,7 @@ describe('ModelHandler native SDK receipt boundary', () => {
     process.env.FLUJO_DATA_DIR = directory;
     _setNativeToolJournalRootForTests(path.join(directory, 'journal'));
     _setNativeSessionPayloadRootForTests(path.join(directory, 'session-payloads'));
+    _setNativeSavedOriginRootForTests(path.join(directory, 'session-origins'));
     priorArchiveDir = _setModelTurnArchiveDirForTests(path.join(directory, 'archive'));
     getModelMock.mockReset().mockResolvedValue({
       id: 'model-native', name: 'fixture-native', displayName: 'Fixture native',
@@ -68,6 +72,7 @@ describe('ModelHandler native SDK receipt boundary', () => {
   afterEach(async () => {
     _setNativeToolJournalRootForTests(undefined);
     _setNativeSessionPayloadRootForTests(undefined);
+    _setNativeSavedOriginRootForTests(undefined);
     _setModelTurnArchiveDirForTests(priorArchiveDir);
     if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
     else process.env.FLUJO_DATA_DIR = priorDataDir;
@@ -138,6 +143,127 @@ describe('ModelHandler native SDK receipt boundary', () => {
     const ref = published!.descriptor.payloadRef;
     await fs.writeFile(path.join(directory, 'session-payloads', ref.invocationId, `${ref.sha256}.json`), 'changed');
     await expect(readNativeSessionPayload(ref)).rejects.toThrow();
+  });
+
+  it('rereads the exact saved origin at both preissue gates and the released terminal after completion', async () => {
+    const conversationId = 'saved-origin';
+    await saveRoot(conversationId);
+    const authority = createNativeBrokerAuthority('lease-1', async () => undefined);
+    const root = binding(conversationId);
+    let published: NativeInvocationSession | undefined;
+    const hook = createNativeInvocationSessionHook({
+      root,
+      publish: async session => {
+        published = session;
+        const descriptor = await readSavedNativeOrigin({ invocationId: session.descriptor.receipt.invocationId,
+          authority, root, signal: session.signal });
+        expect(descriptor).toEqual(session.descriptor);
+        const actor = { workerId: 'worker-1', goalId: 'goal-1', fleetRunId: `fleet-${conversationId}`,
+          rootConversationId: conversationId, workspace: 'default-workspace' };
+        for (const stage of ['grant', 'invoke'] as const) {
+          await expect(assertSavedNativePublishable({ session, actor, descriptor,
+            invocationId: descriptor.receipt.invocationId, stage, signal: session.signal,
+            deadlineAt: Date.now() + 10_000, authority, root })).resolves.toBe(true);
+        }
+      },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: { saved: true } });
+      expect(id).toBe(published?.descriptor.receipt.invocationId);
+      await input.onNativeSdkLive!();
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      return completion(true);
+    });
+    expect((await invoke(conversationId, { nativeBrokerAuthority: authority,
+      nativeInvocationSessionHook: hook })).success).toBe(true);
+    const descriptor = published!.descriptor;
+    expect(descriptor.receipt.invocationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    await expect(saveNativeSessionOrigin(descriptor)).rejects.toThrow();
+    await expect(readSavedNativeTerminal({ invocationId: descriptor.receipt.invocationId,
+      expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+      expectedDescriptorDigest: '0'.repeat(64), expectedWorkspace: 'default-workspace',
+      assertReadAuthorized: async () => undefined })).rejects.toThrow();
+    const terminal = await readSavedNativeTerminal({ invocationId: descriptor.receipt.invocationId,
+      expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+      expectedDescriptorDigest: nativeDigest(descriptor),
+      expectedWorkspace: 'default-workspace',
+      assertReadAuthorized: async () => undefined });
+    expect(terminal).toEqual({ receipt: expect.objectContaining({ state: 'terminal', outcome: 'completed' }),
+      holdAbsent: true, effectsResolved: true });
+    const holdName = createHash('sha256').update(JSON.stringify(conversationId)).digest('hex');
+    const holdFile = path.join(directory, 'journal', 'holds', `${holdName}.json`);
+    await fs.writeFile(holdFile, JSON.stringify(descriptor.receipt));
+    await expect(readSavedNativeTerminal({ invocationId: descriptor.receipt.invocationId,
+      expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+      expectedDescriptorDigest: nativeDigest(descriptor),
+      expectedWorkspace: 'default-workspace',
+      assertReadAuthorized: async () => undefined })).rejects.toThrow();
+    await fs.unlink(holdFile);
+    await fs.writeFile(path.join(directory, 'session-origins', `${descriptor.receipt.invocationId}.json`), 'changed');
+    await expect(readSavedNativeTerminal({ invocationId: descriptor.receipt.invocationId,
+      expectedOwner: descriptor.receipt.owner, expectedLineageDigest: descriptor.lineage.digest,
+      expectedDescriptorDigest: nativeDigest(descriptor),
+      expectedWorkspace: 'default-workspace',
+      assertReadAuthorized: async () => undefined })).rejects.toThrow();
+  });
+
+  it('holds the original before SDK issue when exclusive saved-origin publication fails', async () => {
+    await saveRoot('origin-write-failure');
+    const blocked = path.join(directory, 'blocked-origin-root');
+    await fs.writeFile(blocked, 'not a directory');
+    _setNativeSavedOriginRootForTests(blocked);
+    let sdkIssued = false;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('origin-write-failure'),
+      publish: async () => { sdkIssued = true; },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      sdkIssued = true;
+      return completion(true);
+    });
+    expect((await invoke('origin-write-failure', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(sdkIssued).toBe(false);
+    const calls = await fs.readdir(path.join(directory, 'journal', 'calls'));
+    const receipt = JSON.parse(await fs.readFile(path.join(directory, 'journal', 'calls', calls[0]), 'utf8'));
+    expect(receipt.state).toBe('unknown');
+  });
+
+  it('rereads a frozen synthetic-tool inventory without copying its executor', async () => {
+    await saveRoot('saved-inventory');
+    const authority = createNativeBrokerAuthority('lease-1', async () => undefined);
+    const root = binding('saved-inventory');
+    const tool: OpenAI.ChatCompletionFunctionTool = { type: 'function', function: {
+      name: 'local_note', description: 'Save a note', parameters: { type: 'object', properties: {} },
+    } };
+    const hook = createNativeInvocationSessionHook({
+      root,
+      publish: async session => {
+        const saved = await readSavedNativeOrigin({ invocationId: session.descriptor.receipt.invocationId,
+          authority, root, signal: session.signal });
+        expect(saved.inventory.toolCount).toBe(1);
+        const payload = await readNativeSessionPayload(saved.payloadRef);
+        expect(payload.inventory.syntheticNames).toEqual(['local_note']);
+        expect(JSON.stringify(payload)).not.toContain('executor');
+      },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      return completion(true);
+    });
+    expect((await invoke('saved-inventory', { nativeBrokerAuthority: authority,
+      nativeInvocationSessionHook: hook, localToolExecutors: { local_note: async () => 'saved' } },
+    [tool])).success).toBe(true);
   });
 
   it('holds the original ID and prevents SDK issue when publication or its lease fails', async () => {

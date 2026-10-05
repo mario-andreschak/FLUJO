@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { gzip, gunzip } from 'zlib';
@@ -25,8 +25,8 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 let archiveDirOverride: string | undefined;
 
-const archiveRoot = () =>
-  archiveDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'model-turns');
+const archiveRoot = (workspace?: string) =>
+  archiveDirOverride ?? path.join(getWorkspaceDataDir(workspace), 'db', 'model-turns');
 
 export function _setModelTurnArchiveDirForTests(dir: string | undefined): string | undefined {
   const previous = archiveDirOverride;
@@ -38,14 +38,14 @@ function assertSafeId(value: string, label: string): void {
   if (!SAFE_ID.test(value)) throw new Error(`Unsafe ${label}`);
 }
 
-function conversationDir(conversationId: string): string {
+function conversationDir(conversationId: string, workspace?: string): string {
   assertSafeId(conversationId, 'conversation id');
-  return path.join(archiveRoot(), conversationId);
+  return path.join(archiveRoot(workspace), conversationId);
 }
 
-function snapshotPath(conversationId: string, dispatchId: string): string {
+function snapshotPath(conversationId: string, dispatchId: string, workspace?: string): string {
   assertSafeId(dispatchId, 'dispatch id');
-  return path.join(conversationDir(conversationId), `${dispatchId}.json.gz`);
+  return path.join(conversationDir(conversationId, workspace), `${dispatchId}.json.gz`);
 }
 
 function mediaPath(conversationId: string, sha256: string): string {
@@ -413,14 +413,54 @@ async function updateModelDispatchOutcomeWithinMutation(
 export async function readModelTurnSnapshot(
   conversationId: string,
   dispatchId: string,
+  workspace?: string,
 ): Promise<ModelTurnSnapshot | undefined> {
   try {
-    const compressed = await fs.readFile(snapshotPath(conversationId, dispatchId));
+    const compressed = await fs.readFile(snapshotPath(conversationId, dispatchId, workspace));
     return JSON.parse((await gunzipAsync(compressed)).toString('utf8')) as ModelTurnSnapshot;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+/** Bounded private read for native original/terminal reconciliation. */
+export async function readNativeModelTurnSnapshot(
+  conversationId: string, dispatchId: string, workspace: string,
+): Promise<ModelTurnSnapshot> {
+  for (const directory of [archiveRoot(workspace), conversationDir(conversationId, workspace)]) {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error('Native model-turn archive directory is unsafe.');
+    }
+  }
+  const file = snapshotPath(conversationId, dispatchId, workspace);
+  const entry = await fs.lstat(file, { bigint: true });
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
+    || entry.size < BigInt(1) || entry.size > BigInt(8 * 1024 * 1024)) {
+    throw new Error('Native model-turn archive is missing or unsafe.');
+  }
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const current = await fs.lstat(file, { bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
+      || stat.dev !== entry.dev || stat.ino !== entry.ino
+      || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
+      || current.dev !== entry.dev || current.ino !== entry.ino) {
+      throw new Error('Native model-turn archive changed.');
+    }
+    const bytes = Buffer.alloc(Number(stat.size) + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const result = await handle.read(bytes, read, bytes.length - read, read);
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    if (BigInt(read) !== stat.size) throw new Error('Native model-turn archive changed.');
+    return JSON.parse((await gunzipAsync(bytes.subarray(0, read),
+      { maxOutputLength: 32 * 1024 * 1024 })).toString('utf8')) as ModelTurnSnapshot;
+  } finally { await handle.close(); }
 }
 
 export async function readModelTurnMedia(

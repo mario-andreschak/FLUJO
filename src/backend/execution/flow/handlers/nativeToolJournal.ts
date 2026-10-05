@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
@@ -47,22 +47,23 @@ export function _setNativeToolJournalRootForTests(root: string | undefined): voi
   rootOverride = root;
 }
 
-const root = () => rootOverride ?? path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal');
+const root = (workspace?: string) => rootOverride ?? path.join(getWorkspaceDataDir(workspace), 'db', 'native-tool-journal');
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // A later Process node, model or lease in the same conversation must not evade
 // an uncertain native call. Product transport adds its stricter fleet-run scope.
-const scopeFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>) =>
-  path.join(root(), 'scopes', `${digest(owner.conversationId)}.json`);
-const holdFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>) =>
-  path.join(root(), 'holds', `${digest(owner.conversationId)}.json`);
-const callFile = (id: string) => path.join(root(), 'calls', `${id}.json`);
+const scopeFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>, workspace?: string) =>
+  path.join(root(workspace), 'scopes', `${digest(owner.conversationId)}.json`);
+const holdFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>, workspace?: string) =>
+  path.join(root(workspace), 'holds', `${digest(owner.conversationId)}.json`);
+const callFile = (id: string, workspace?: string) => path.join(root(workspace), 'calls', `${id}.json`);
 const toolFile = (invocationId: string, toolInvocationId: string) =>
   path.join(root(), 'tools', invocationId, `${digest(toolInvocationId)}.json`);
-const withNativeScopeMutation = <T>(conversationId: string, task: (assertOwned: () => Promise<void>) => Promise<T>) =>
+const withNativeScopeMutation = <T>(conversationId: string, task: (assertOwned: () => Promise<void>) => Promise<T>,
+  workspace?: string) =>
   withWorkspaceMutation(() => withWorkspaceRuntimeLock(`native-tool-${digest(conversationId).slice(0, 40)}`, async lock => {
     await lock.assertOwned();
     return task(() => lock.assertOwned());
-  }));
+  }), workspace);
 
 async function readJson<T>(file: string): Promise<T | undefined> {
   try { return JSON.parse(await fs.readFile(file, 'utf8')) as T; }
@@ -70,6 +71,48 @@ async function readJson<T>(file: string): Promise<T | undefined> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+async function readTerminalJson<T>(file: string): Promise<T | undefined> {
+  let entry;
+  try { entry = await fs.lstat(file, { bigint: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== BigInt(1)
+    || entry.size < BigInt(1) || entry.size > BigInt(64 * 1024)) throw new Error('Native terminal source file is unsafe.');
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  try {
+    const stat = await handle.stat({ bigint: true });
+    const current = await fs.lstat(file, { bigint: true });
+    if (!stat.isFile() || stat.nlink !== BigInt(1) || stat.size !== entry.size
+      || stat.dev !== entry.dev || stat.ino !== entry.ino
+      || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
+      || current.dev !== entry.dev || current.ino !== entry.ino) {
+      throw new Error('Native terminal source file changed.');
+    }
+    const bytes = Buffer.alloc(Number(stat.size) + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const result = await handle.read(bytes, read, bytes.length - read, read);
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    if (BigInt(read) !== stat.size) throw new Error('Native terminal source file changed.');
+    return JSON.parse(bytes.subarray(0, read).toString('utf8')) as T;
+  } finally { await handle.close(); }
+}
+
+async function assertTerminalDirectory(directory: string, optional = false): Promise<boolean> {
+  let entry;
+  try { entry = await fs.lstat(directory); }
+  catch (error) {
+    if (optional && (error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('Native terminal source directory is unsafe.');
+  return true;
 }
 
 async function unresolvedCallForConversation(conversationId: string): Promise<NativeInvocationReceipt | undefined> {
@@ -146,6 +189,48 @@ export async function nativeInvocationStatus(id: string, owner: NativeInvocation
     if (hold?.invocationId === id) return { ...receipt, state: 'unknown', outcome: undefined };
   }
   return receipt;
+}
+
+/** Trusted exact-ID reconciliation. A terminal call file is not release proof:
+ * the matching scope must be terminal and its authoritative hold must be gone. */
+export async function readNativeInvocationTerminalEvidence(
+  id: string, owner: NativeInvocationOwner, workspace: string,
+  verifySaved?: (receipt: NativeInvocationReceipt) => Promise<void>,
+): Promise<{ receipt: NativeInvocationReceipt; holdAbsent: boolean; effectsResolved: boolean }> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error('Invalid native invocation identity.');
+  }
+  return withNativeScopeMutation(owner.conversationId, async () => {
+    for (const part of ['', 'calls', 'scopes', 'holds']) {
+      await assertTerminalDirectory(path.join(root(workspace), part));
+    }
+    const call = await readTerminalJson<NativeInvocationReceipt>(callFile(id, workspace));
+    const scope = await readTerminalJson<NativeInvocationReceipt>(scopeFile(owner, workspace));
+    const hold = await readTerminalJson<NativeInvocationReceipt>(holdFile(owner, workspace));
+    if (!call || !scope || call.invocationId !== id || scope.invocationId !== id
+      || JSON.stringify(call.owner) !== JSON.stringify(owner)
+      || JSON.stringify(scope.owner) !== JSON.stringify(owner)
+      || (hold && (hold.invocationId !== id || JSON.stringify(hold.owner) !== JSON.stringify(owner)))) {
+      throw new Error('Native terminal source identity changed.');
+    }
+    const directory = path.join(root(workspace), 'tools', id);
+    const hasTools = await assertTerminalDirectory(path.join(root(workspace), 'tools'), true);
+    const names = hasTools && await assertTerminalDirectory(directory, true) ? await fs.readdir(directory) : [];
+    if (names.length > 512 || names.some(name => !/^[a-f0-9]{64}\.json$/.test(name))) {
+      throw new Error('Native terminal tool receipts are incomplete.');
+    }
+    let effectsResolved = true;
+    for (const name of names) {
+      const tool = await readTerminalJson<ToolReceipt>(path.join(directory, name));
+      if (!tool || tool.invocationId !== id || tool.conversationId !== owner.conversationId
+        || tool.state !== 'terminal') effectsResolved = false;
+    }
+    await verifySaved?.(call);
+    return { receipt: structuredClone(call),
+      holdAbsent: !hold && call.state === 'terminal' && scope.state === 'terminal'
+        && JSON.stringify(scope) === JSON.stringify(call),
+      effectsResolved };
+  }, workspace);
 }
 
 async function updateInvocation(

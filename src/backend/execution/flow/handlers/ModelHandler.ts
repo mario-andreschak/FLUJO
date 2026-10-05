@@ -20,7 +20,8 @@ import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation
 import { readNativeOriginLineage } from './nativeOriginLineage';
 import { assertNativeInvocationSessionHook, createNativeInvocationSession,
   type NativeInvocationSessionPayload, type NativeInvocationSessionHook } from './nativeInvocationSession';
-import { saveNativeSessionPayload } from './nativeSessionPayload';
+import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
+import { readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -2822,6 +2823,16 @@ export class ModelHandler {
                             inventory: { tools: nativeInventory.tools, bindings: nativeInventory.bindings,
                               syntheticNames: nativeInventory.syntheticNames },
                           });
+                          const savedPayload = await readNativeSessionPayload(payloadRef);
+                          if (savedPayload.invocationId !== nativeReceipt.invocationId
+                            || nativeDigest(savedPayload.archive.sdkRequest) !== nativeDigest(archived.sdkRequest)
+                            || nativeDigest(savedPayload.archive.genericWire) !== nativeDigest(archived.genericWire)
+                            || nativeDigest(savedPayload.archive.media) !== nativeDigest(archived.media)
+                            || nativeDigest(savedPayload.inventory.tools) !== nativeDigest(nativeInventory.tools)
+                            || nativeDigest(savedPayload.inventory.bindings) !== nativeDigest(nativeInventory.bindings)
+                            || nativeDigest(savedPayload.inventory.syntheticNames) !== nativeDigest(nativeInventory.syntheticNames)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
                           nativeSession = createNativeInvocationSession({
                             receipt: nativeReceipt, lineage,
                             archive: {
@@ -2837,6 +2848,13 @@ export class ModelHandler {
                             abortController.abort();
                             nativeToolPort?.cancel();
                           });
+                          await saveNativeSessionOrigin(nativeSession.session.descriptor);
+                          const savedOrigin = await readSavedNativeOrigin({ invocationId: nativeReceipt.invocationId,
+                            authority: opts.nativeBrokerAuthority!, root: opts.nativeInvocationSessionHook.root,
+                            signal: abortController.signal });
+                          if (nativeDigest(savedOrigin) !== nativeDigest(nativeSession.session.descriptor)) {
+                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                          }
                           await opts.nativeInvocationSessionHook.publish(nativeSession.session);
                           abortController.signal.throwIfAborted();
                           const publishedLineage = await readNativeOriginLineage({

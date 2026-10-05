@@ -217,6 +217,10 @@ export async function captureWorkspaceSnapshot(
   const excludedRuntimePaths = [
     'mcp-servers', 'db/codex-runtime', 'userdata/mcp-runtime',
     'browser-profile', 'bash-utils', 'db/worker-bootstrap-secrets.json',
+    // Original native receipts, sanitized SDK requests and host-binding
+    // records are runtime authority, never portable workspace contents.
+    'db/native-tool-journal', 'db/native-session-payloads',
+    'db/native-session-origins', 'db/model-turns',
   ];
   const skipRuntimePath = (entryPath: string): boolean =>
     excludedRuntimePaths.some(prefix => entryPath === prefix || entryPath.startsWith(`${prefix}/`));

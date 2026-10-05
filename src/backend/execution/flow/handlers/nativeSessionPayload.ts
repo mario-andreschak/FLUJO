@@ -8,11 +8,11 @@ import type { NativeInvocationSessionPayload, NativeInvocationSessionPayloadRef 
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 let rootOverride: string | undefined;
 export function _setNativeSessionPayloadRootForTests(root: string | undefined): void { rootOverride = root; }
-const root = () => rootOverride ?? path.join(getWorkspaceDataDir(), 'db', 'native-session-payloads');
-const fileFor = (invocationId: string, sha256: string) => {
+const root = (workspace?: string) => rootOverride ?? path.join(getWorkspaceDataDir(workspace), 'db', 'native-session-payloads');
+const fileFor = (invocationId: string, sha256: string, workspace?: string) => {
   assertSafeCollectionId(invocationId);
   if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error('Invalid native session payload hash.');
-  return path.join(root(), invocationId, `${sha256}.json`);
+  return path.join(root(workspace), invocationId, `${sha256}.json`);
 };
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
@@ -42,10 +42,14 @@ export async function saveNativeSessionPayload(payload: NativeInvocationSessionP
     sha256, byteLength: bytes.length };
 }
 
-export async function readNativeSessionPayload(ref: NativeInvocationSessionPayloadRef): Promise<NativeInvocationSessionPayload> {
+export async function readNativeSessionPayload(ref: NativeInvocationSessionPayloadRef, workspace?: string): Promise<NativeInvocationSessionPayload> {
   if (ref.kind !== 'private-native-session-payload' || !Number.isSafeInteger(ref.byteLength)
     || ref.byteLength < 1 || ref.byteLength > MAX_PAYLOAD_BYTES) throw new Error('Invalid native session payload reference.');
-  const file = fileFor(ref.invocationId, ref.sha256);
+  const file = fileFor(ref.invocationId, ref.sha256, workspace);
+  for (const directory of [root(workspace), path.dirname(file)]) {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Native session payload directory changed.');
+  }
   const entry = await fs.lstat(file);
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1
     || entry.size !== ref.byteLength) throw new Error('Native session payload reference changed.');
