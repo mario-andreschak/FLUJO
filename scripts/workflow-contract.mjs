@@ -20,7 +20,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
         const historical = file === 'verify.yml' && id === 'production-build' && position === 0;
         const guard = steps[index + 1];
         const command = `node scripts/verify-ci-node.mjs ${version}${historical ? ' --historical-build' : ''} --record`;
-        if (steps[index].if || steps[index]['continue-on-error'] || guard?.run !== command || guard.if || guard['continue-on-error']) {
+        if (steps[index].if !== undefined || steps[index]['continue-on-error'] || guard?.run !== command || guard.if !== undefined || guard['continue-on-error']) {
           throw new Error(`${file}/${id} must verify official binary identity immediately after every runtime selection.`);
         }
       }
@@ -37,7 +37,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     return words[0] === 'node' && words[1] === '--test'
       && contractTests.every((file) => words.includes(file))
       && words.slice(2).every((file) => /^scripts\/[\w.-]+\.test\.mjs$/.test(file))
-      && !step.if && !step['continue-on-error'];
+      && step.if === undefined && !step['continue-on-error'];
   })) {
     throw new Error('The guarded workflow-contract job must enforce all canonical runtime and verification fixtures without filters or tolerated failures.');
   }
@@ -57,7 +57,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
     const index = steps.findIndex((step) => step.run === `node scripts/verify-ci-node.mjs ${version} --record`);
     const qualification = steps[index + 1];
     if (index < 0 || qualification?.shell !== 'bash' || qualification.run !== command
-        || qualification.if || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
+        || qualification.if !== undefined || qualification['continue-on-error'] || qualification.env?.NODE_OPTIONS) {
       throw new Error(`Node ${version} must enforce build, types and actual packed-process acceptance with shell failure propagation.`);
     }
   }
@@ -75,10 +75,10 @@ export function assertWorkflowContract(workflows) {
   const docsSteps = docs?.steps ?? [];
   const capture = docsSteps.findIndex(step => step.run === 'node scripts/check-scorecard-ci.mjs "${{ runner.temp }}/scorecard-source-checks"');
   if (!docsWorkflow?.on || !Object.hasOwn(docsWorkflow.on, 'pull_request') || docsWorkflow.on.pull_request?.paths || docsWorkflow.on.pull_request?.['paths-ignore']
-      || docs?.if || docs?.['continue-on-error'] || docs?.strategy?.['fail-fast'] !== false
+      || docs?.if !== undefined || docs?.['continue-on-error'] || docs?.strategy?.['fail-fast'] !== false
       || JSON.stringify(docs?.strategy?.matrix?.os) !== JSON.stringify(['ubuntu-latest', 'windows-latest'])
       || docsWorkflow.env?.NODE_OPTIONS || docs.env?.NODE_OPTIONS
-      || capture < 0 || docsSteps[capture].if || docsSteps[capture]['continue-on-error']
+      || capture < 0 || docsSteps[capture].if !== undefined || docsSteps[capture]['continue-on-error']
       || docsSteps[capture - 1]?.run !== `node scripts/verify-ci-node.mjs ${CI_NODE_PROFILES.current22} --record`
       || !docsSteps.some(step => step.uses?.startsWith('actions/checkout@') && step.with?.['fetch-depth'] === 0)) {
     throw new Error('Dedicated Docs CI must retain both OSes, full Git history and mandatory direct capture after the verified runtime.');
@@ -116,7 +116,7 @@ export function assertWorkflowContract(workflows) {
   if (checkout < 0 || trust <= checkout || install <= trust
       || journeySteps[checkout].with?.ref !== '${{ github.sha }}'
       || guard?.env?.WORKFLOW_SHA !== '${{ github.sha }}'
-      || guard.if || guard['continue-on-error'] || ancestry < 0 || detach <= ancestry
+      || guard.if !== undefined || guard['continue-on-error'] || ancestry < 0 || detach <= ancestry
       || !guard.run.startsWith('test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"\n')
       || !guard.run.includes('test "$(git rev-parse HEAD)" = "$PERSONA_JOURNEY_COMMIT"')
       || journeySteps.some((step) => step.with?.cache || step.uses?.startsWith('actions/cache'))) {
@@ -130,10 +130,10 @@ export function assertWorkflowContract(workflows) {
   }
   for (const id of REQUIRED_JOB_IDS) {
     const job = workflow.jobs[id];
-    if (!job || job.if || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
+    if (!job || job.if !== undefined || job['continue-on-error']) throw new Error(`Required job ${id} cannot be conditional or optional.`);
     for (const step of job.steps ?? []) {
       if (!step.run) continue;
-      if (step.if) throw new Error(`Required command in ${id} cannot be conditional.`);
+      if (step.if !== undefined) throw new Error(`Required command in ${id} cannot be conditional.`);
       if (step['continue-on-error'] && !['npm run test:ci', 'npm run test:isolated'].includes(step.run)) {
         throw new Error(`Unapproved optional command in ${id}.`);
       }
@@ -168,7 +168,7 @@ export function assertWorkflowContract(workflows) {
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
-      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertDependencyResults') && !step.if && !step['continue-on-error'])) {
+      || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
     throw new Error('The required verification check must evaluate every prerequisite even after failures.');
   }
 }
