@@ -934,7 +934,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
 
   // Whole-file overwrite (default, backward-compatible).
   if (mode === 'overwrite' && !hasRange) {
-    // Creation permissions must not depend on the host umask. Node's mode option
+    // A permissive host umask must not make new files public. Node's mode option
     // applies only to a new file, preserving permissions on an existing target.
     await fs.writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 });
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(content, 'utf8'), mode: 'overwrite' });
