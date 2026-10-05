@@ -31,10 +31,17 @@ test('live journey observer native controls execute without missing or skipped c
     'archive projection removes raw tool results and rejects another conversation',
     'SSE rejects reordered sequences and truncated runs',
     'bounded JSON counts UTF-8 bytes and rejects overflow',
+    'fixture receipt projection omits unexpected fields before report retention',
+    'invalid fixture receipts never enter partial failure reports',
+    'SSE refuses the preserved nested pause marker before its output callback',
+    'archive metadata rejects the preserved nested marker before report retention',
+    'aggregate projection budget refuses accumulation before append',
+    'evidence report output budget counts final UTF-8 serialization',
+    'fixture discovery refuses extra or private metadata before accumulation',
   ]) expect(result.stdout).toContain(name);
   const tests = Number(result.stdout.match(/^# tests (\d+)\s*$/m)?.[1]);
   const passed = Number(result.stdout.match(/^# pass (\d+)\s*$/m)?.[1]);
-  expect(tests).toBeGreaterThanOrEqual(34);
+  expect(tests).toBeGreaterThanOrEqual(46);
   expect(passed).toBe(tests);
   for (const counter of ['fail', 'cancelled', 'skipped', 'todo']) {
     expect(result.stdout).toMatch(new RegExp(`^# ${counter} 0\\s*$`, 'm'));

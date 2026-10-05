@@ -4,8 +4,9 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { DEFINITION_SHA256 } from './fixture-server.mjs';
-import { boundedJson, digest, loopbackOrigin, ownerRequest } from './live-journey-observer.mjs';
+import { DEFINITION_SHA256, FIXTURE_VERSION } from './fixture-server.mjs';
+import { boundedJson, digest, loopbackOrigin, ownerRequest, projectFixtureReceipt, projectFixtureToolPage,
+  serializeEvidenceReport } from './live-journey-observer.mjs';
 
 const { values } = parseArgs({ options: Object.fromEntries(['base-url', 'workspace', 'server-name',
   'fixture-url', 'candidate-receipt-sha256', 'output-dir'].map(name => [name, { type: 'string' }])) });
@@ -28,7 +29,7 @@ const report = { schemaVersion: 1, startedAtUtc: new Date().toISOString(), statu
 const fixtureReceipt = async () => {
   const response = await fetch(`${fixtureOrigin}/receipt`, { redirect: 'error', signal });
   if (!response.ok) throw new Error('Fixture receipt unavailable.');
-  return boundedJson(response, 256 * 1024);
+  return projectFixtureReceipt(await boundedJson(response, 256 * 1024), DEFINITION_SHA256, FIXTURE_VERSION);
 };
 const client = new Client({ name: 'flujo-feature-external-reuse', version: '1.0.0' }, { capabilities: {} });
 let failed;
@@ -51,8 +52,8 @@ try {
   const seenCursors = new Set();
   let cursor;
   do {
-    const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 15000, signal });
-    tools.push(...page.tools.map(tool => tool.name));
+    const page = projectFixtureToolPage(await client.listTools(cursor ? { cursor } : {}, { timeout: 15000, signal }), tools.length);
+    tools.push(...page.tools);
     cursor = page.nextCursor;
     if (cursor && (seenCursors.has(cursor) || seenCursors.size >= 8)) throw new Error('Proxy pagination did not terminate.');
     if (cursor) seenCursors.add(cursor);
@@ -83,13 +84,13 @@ try {
   report.status = 'component_passed';
 } catch (error) {
   failed = error;
-  report.failure = { name: error instanceof Error ? error.name : 'Error',
+  report.failure = { name: 'ExternalReuseError',
     message: 'External reuse incomplete; inspect the selected owner runtime separately.' };
 } finally {
   try { await client.close(); report.clientClosed = true; }
   catch { failed ??= new Error('External client did not close.'); report.clientClosed = false; report.status = 'incomplete'; }
   report.completedAtUtc = new Date().toISOString();
-  await fs.writeFile(path.join(output, 'external-mcp-reuse.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  await fs.writeFile(path.join(output, 'external-mcp-reuse.json'), serializeEvidenceReport(report), { flag: 'wx' });
 }
 console.log(JSON.stringify({ status: report.status, report: path.join(output, 'external-mcp-reuse.json'),
   fullFeatureAcceptance: false, gradeAwarded: false }));
