@@ -3361,9 +3361,12 @@ export class ModelHandler {
       return result;
     } catch (error) {
       // Setup (model fetch / key decrypt / compaction) threw — attempts shape
-      // their own errors and never throw out. stopCancelWatch is idempotent.
-      stopCancelWatch();
+      // their own errors and never throw out.
       return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
+    } finally {
+      // A native attempt keeps Stop polling through terminal persistence. Every
+      // outer return path, including a held invocation, must then release it.
+      stopCancelWatch();
     }
   }
 

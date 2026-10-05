@@ -160,6 +160,28 @@ describe('ModelHandler native SDK receipt boundary', () => {
     await expect(fs.readdir(path.join(directory, 'journal', 'calls'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it.each(['completed', 'held', 'preflight'] as const)(
+    'stops cancellation polling after a %s native return', async outcome => {
+      let polls = 0;
+      const shouldAbort = () => { polls += 1; return false; };
+      createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+        const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+        await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+        return completion(outcome === 'completed');
+      });
+      const handoff: OpenAI.ChatCompletionFunctionTool = { type: 'function', function: {
+        name: 'handoff_to_worker', description: 'Spawn worker',
+        parameters: { type: 'object', properties: { task: { type: 'string' } } },
+      } };
+      const result = await invoke(`watch-${outcome}`, { shouldAbort }, outcome === 'preflight' ? [handoff] : []);
+      expect(result.success).toBe(outcome === 'completed');
+      expect(createCompletionMock).toHaveBeenCalledTimes(outcome === 'preflight' ? 0 : 1);
+      const pollsAtReturn = polls;
+      await new Promise(resolve => setTimeout(resolve, 550));
+      expect(polls).toBe(pollsAtReturn);
+    },
+  );
+
   it('keeps admission held when Stop lands during the terminal scope write', async () => {
     let stop = false;
     let rename: jest.SpyInstance | undefined;
