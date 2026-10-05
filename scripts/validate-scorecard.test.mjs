@@ -11,6 +11,9 @@ import { validateScorecard, validateShape } from './validate-scorecard.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const baseline = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.json'), 'utf8'));
 const baselineSchema = JSON.parse(readFileSync(join(root, 'docs/audits/scorecard-563/scorecard.schema.json'), 'utf8'));
+// Synthetic observations in this file are assessed under a controlled test clock,
+// not offered as elapsed human/live evidence at the actual CLI wall clock.
+const fixtureNow = Date.parse('2027-01-01T00:00:00Z');
 function entry(ledger, collection, id) {
   const found = ledger[collection].find(item => item.id === id);
   assert.ok(found, `Fixture entry missing: ${collection}/${id}`);
@@ -19,7 +22,7 @@ function entry(ledger, collection, id) {
 function validate(edit = () => {}) {
   const ledger = structuredClone(baseline);
   edit(ledger);
-  return validateScorecard(ledger, { root });
+  return validateScorecard(ledger, { root, now: fixtureNow });
 }
 function rejects(edit, pattern) {
   const result = validate(edit);
@@ -53,7 +56,7 @@ test('missing or mismatched acceptance policy versions fail closed', () => {
   ]) {
     const schema = structuredClone(baselineSchema);
     edit(schema);
-    const result = validateScorecard(structuredClone(baseline), { root, schema });
+    const result = validateScorecard(structuredClone(baseline), { root, schema, now: fixtureNow });
     assert.ok(result.errors.some(error => /acceptance contract version/.test(error)), result.errors.join('\n'));
   }
 });
@@ -93,7 +96,7 @@ test('realpath containment prevents symlink escape without reading foreign conte
   try {
     const ledger = structuredClone(baseline);
     entry(ledger, 'evidence', 'baseline-2026-10-03').raw[0].location = 'link/witness.json';
-    const result = validateScorecard(ledger, { root: repo });
+    const result = validateScorecard(ledger, { root: repo, now: fixtureNow });
     assert.ok(result.errors.some(e => e.includes('symlink escapes repository')));
   } finally {
     const cleanupPath = realpathSync(fixture);
@@ -180,6 +183,49 @@ test('a complete predeclared eight-week observation validates without satisfying
   assert.deepEqual(result.errors, []);
   assert.ok(result.blockers.length > 0);
 });
+
+test('future human/live observations cannot qualify under the current wall clock', () => {
+  for (const [budgetId, value, denominator] of [['pilot-users', 10, 10], ['live-smoke', 3600, 1]]) {
+    const ledger = structuredClone(baseline);
+    const { study, budget } = observedBudget(ledger, budgetId, value, denominator);
+    const start = Date.now() + 86400000;
+    const end = start + Math.max(3600, budget.observation.minimumSeconds) * 1000;
+    study.window.start = new Date(start).toISOString();
+    study.window.end = new Date(end).toISOString();
+    study.observedAt = new Date(end + 1000).toISOString();
+    const result = validateScorecard(ledger, { root });
+    assert.ok(result.errors.some(error => /observation is in the future/.test(error)), result.errors.join('\n'));
+  }
+});
+
+test('observations at the validation clock are allowed, later observations and invalid clocks fail closed', () => {
+  const atClock = validate(ledger => { entry(ledger, 'evidence', 'baseline-2026-10-03').observedAt = new Date(fixtureNow).toISOString(); });
+  assert.deepEqual(atClock.errors, []);
+  assert.ok(atClock.blockers.length > 0);
+  rejects(ledger => { entry(ledger, 'evidence', 'baseline-2026-10-03').observedAt = new Date(fixtureNow + 1).toISOString(); }, /observation is in the future/);
+  for (const now of [NaN, Infinity]) {
+    const result = validateScorecard(structuredClone(baseline), { root, now });
+    assert.ok(result.errors.some(error => /Invalid validation clock/.test(error)), result.errors.join('\n'));
+  }
+});
+
+test('CLI cannot qualify a future observation using the synthetic test clock', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'flujo-scorecard-'));
+  try {
+    const ledger = structuredClone(baseline);
+    entry(ledger, 'evidence', 'baseline-2026-10-03').observedAt = new Date(Date.now() + 86400000).toISOString();
+    const path = join(fixture, 'future-ledger.json');
+    writeFileSync(path, JSON.stringify(ledger));
+    const result = spawnSync(process.execPath, ['scripts/validate-scorecard.mjs', path, '--closure'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /observation is in the future/);
+  } finally {
+    const cleanupPath = realpathSync(fixture);
+    assert.equal(realpathSync(dirname(cleanupPath)), realpathSync(tmpdir()));
+    assert.ok(basename(cleanupPath).startsWith('flujo-scorecard-'));
+    rmSync(cleanupPath, { recursive: true, force: true });
+  }
+});
 test('elapsed windows and cohort denominators cannot be silently reduced', () => {
   rejects(l => { observedBudget(l, 'pilot-users', 10, 10).study.window.end = '2026-10-05T01:00:00Z'; }, /window too short/);
   rejects(l => { observedBudget(l, 'novice-success', 8, 8); }, /denominator below declared minimum/);
@@ -225,7 +271,7 @@ function artifactReportFixture(edit = () => {}) {
     const bytes = JSON.stringify(report) + '\n';
     writeFileSync(join(fixture, location), bytes);
     evidence.raw = [{ location, sha256: createHash('sha256').update(bytes).digest('hex'), verification: 'local' }];
-    return validateScorecard(ledger, { root: fixture });
+    return validateScorecard(ledger, { root: fixture, now: fixtureNow });
   } finally {
     const cleanupPath = realpathSync(fixture);
     assert.equal(realpathSync(dirname(cleanupPath)), realpathSync(tmpdir()));
