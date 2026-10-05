@@ -226,11 +226,19 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    External rubric/consumer agreements may predate a release; their policy applicability
    and current consumer pins still need explicit review.
    Version 1 retains the primary claim IDs, original dimension/profile subjects, and
-   minimum budget bindings. Removing or replacing a claim cannot detach novice,
-   adoption, maintainer, recovery, runtime or Persona measurement requirements.
+   minimum budget/kind/gate bindings in the schema's `acceptanceContract` data.
+   Original A- primary claims cannot become experimental exclusions. Removing or
+   replacing a claim cannot detach novice, adoption, maintainer, recovery, runtime
+   or Persona measurement requirements.
    Additional criteria remain allowed; replacing these minimum contracts needs a
    separately reviewed contract version. Experimental Persona status keeps its
    declared future acceptance requirements visible without claiming measurements.
+   Human and live metrics require human-study and live-provider carriers respectively;
+   required kinds elsewhere in the claim do not qualify measurements on other records.
+   Published human targets and observation floors remain protected, and duration
+   measurements cannot exceed the actual elapsed evidence window. Review schema,
+   ledger and validator together as described in the
+   [contract versioning rules](artifact-acceptance.md#acceptance-contract-versioning).
 5. Keep paid/live account work, independent humans, manual accessibility/recovery,
    cross-stream contracts and independent reassessment pending until their owners
    provide actual evidence. No bot/test count can satisfy those gates.

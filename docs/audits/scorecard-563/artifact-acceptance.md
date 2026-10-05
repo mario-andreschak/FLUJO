@@ -14,6 +14,30 @@ not a runtime authority, dispatch permission, snapshot format or account-adoptio
 contract. Engineering owns the actual provenance/distribution validators, and
 profile owners own installed security, browser/operator and operations matrices.
 
+## Acceptance contract versioning
+
+The same schema retains `acceptanceContract` as normative versioned policy data.
+The scorecard validator uses it for cross-record checks: primary claim subjects,
+minimum budget/kind/gate bindings, rubric evidence requirements, published human
+targets and the evidence kinds allowed to carry human/live measurements. A general
+JSON Schema validator checks shape; these cross-record requirements need the
+scorecard validator too.
+
+Review the schema, ledger and validator together. The contract stamp must match
+the ledger's `schemaVersion`; changing a published minimum requires a separately
+reviewed contract version and corresponding schema/validator changes. Extra criteria
+may strengthen the minimums. Keeping these proposed targets in version 1 does not
+record human agreement, a completed study or an accepted grade.
+
+Original A- primary claims cannot become experimental exclusions or be replaced by
+a weaker sibling claim. The separate Persona unattended claim may retain its
+explicit experimental status, with its future budgets, kinds and gates intact.
+Human metrics must be carried by human-study records, and live-stage metrics by
+live-provider records; a decoy record of the right kind cannot qualify measurements
+stored on a source or installed record. Duration measurements cannot exceed their
+actual elapsed window. The validator checks correspondence, while actual human
+identity, cohort selection and execution remain responsibilities of external review.
+
 ## Producer requirements
 
 A report contains:
