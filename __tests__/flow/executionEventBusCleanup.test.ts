@@ -167,8 +167,7 @@ it('preserves a run resumed synchronously by a terminal listener', () => {
 });
 
 it('keeps a terminal cleanup armed when an earlier event listener finishes the run', () => {
-  let unsubscribe: () => void;
-  unsubscribe = bus.subscribe('nested-done', event => {
+  const unsubscribe = bus.subscribe('nested-done', event => {
     if (event.type !== 'run:start') return;
     bus.emit('nested-done', done);
     unsubscribe();
