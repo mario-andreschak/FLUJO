@@ -60,7 +60,12 @@ rewording those sampling rules requires contract review.
 The ten existing Persona soak contracts require offline-simulation carriers.
 The separately controlled full-recall benchmark permits offline-simulation or
 source-check carriers; its existing 20-search denominator remains mandatory.
+A source-check recall measurement must retain an actual elapsed start/end window,
+as specified by `sourceMetricElapsedBudgets`; an instant source observation cannot
+qualify that measurement. Offline-simulation retains its separate virtual clock.
 A simulated window on a static source observation cannot qualify a soak measurement.
+New budgets may remain proposals without carrier rules, but passing checksummed
+measurements fail closed until their reviewed `metricEvidenceKinds` entry exists.
 
 API validation results include `validationClock.source` (`wall-clock` or `override`)
 and `validationClock.epochMilliseconds`; invalid clocks report a null value and fail.

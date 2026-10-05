@@ -140,7 +140,7 @@ export function validateScorecard(ledger, options = {}) {
     return { errors, blockers: [], validationClock };
   }
   const contract = schema.$defs?.acceptanceContract?.const;
-  if (!contract || contract.contractVersion !== ledger.schemaVersion) {
+  if (!contract || contract.contractVersion !== ledger.schemaVersion || !Array.isArray(contract.sourceMetricElapsedBudgets)) {
     fail('Missing or mismatched reviewed acceptance contract version');
     return { errors, blockers: [], validationClock };
   }
@@ -299,7 +299,9 @@ export function validateScorecard(ledger, options = {}) {
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
       if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
         const metricKinds = contract.metricEvidenceKinds[metric.budgetId];
-        if (metricKinds && !metricKinds.includes(evidence.kind)) fail(evidence.id + ': metric ' + metric.budgetId + ' requires evidence kind ' + metricKinds.join(', '));
+        if (!Array.isArray(metricKinds) || !metricKinds.length) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed evidence carrier contract');
+        else if (!metricKinds.includes(evidence.kind)) fail(evidence.id + ': metric ' + metric.budgetId + ' requires evidence kind ' + metricKinds.join(', '));
+        if (evidence.kind === 'source-check' && contract.sourceMetricElapsedBudgets.includes(metric.budgetId) && window.kind !== 'elapsed') fail(evidence.id + ': metric ' + metric.budgetId + ' requires an elapsed source measurement window');
         if (budget.status === 'proposed') fail(evidence.id + ': proposed budget cannot establish acceptance');
         const measurementStart = timestamp(window.start);
         if (budget.status !== 'proposed' && !Number.isFinite(measurementStart)) fail(evidence.id + ': acceptance under declared budget needs actual measurement start');
@@ -307,7 +309,8 @@ export function validateScorecard(ledger, options = {}) {
           if (timestamp(budget.declaredAt) > measurementStart) fail(evidence.id + ': budget declared after measurement began');
           if (measurementStart > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before measurement began');
         }
-        if (window.kind === 'elapsed' && budget.unit === 'seconds' && metric.value > (timestamp(window.end) - timestamp(window.start)) / 1000) fail(evidence.id + ': duration metric exceeds actual elapsed time');
+        const elapsedMilliseconds = timestamp(window.end) - timestamp(window.start);
+        if (window.kind === 'elapsed' && ((budget.unit === 'seconds' && metric.value * 1000 > elapsedMilliseconds) || (budget.unit === 'ms' && metric.value > elapsedMilliseconds))) fail(evidence.id + ': duration metric exceeds actual elapsed time');
         const observation = budget.observation;
         if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
         if (observation.minimumSeconds > 0 && (window.kind !== 'elapsed' || (timestamp(window.end) - timestamp(window.start)) / 1000 < observation.minimumSeconds)) fail(evidence.id + ': observation window too short for ' + metric.budgetId);
