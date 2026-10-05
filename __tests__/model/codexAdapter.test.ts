@@ -302,11 +302,13 @@ it('routes a native Codex callback through the durable Worker port without host 
     await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
       onSdkRequest: async () => receipt.invocationId,
       onSdkRequestResult: async () => undefined }));
-    const result = await capturedBridgeTools[0].handler({ q: 'test' }, 'number:42');
+    const result = await capturedBridgeTools[0].handler({ q: 'test' }, 'model-call-1');
     expect(result.isError).not.toBe(true);
     expect(executor).toHaveBeenCalledTimes(1);
     expect(callToolMock).not.toHaveBeenCalled();
     expect(startThreadMock).toHaveBeenCalledTimes(1);
+    await expect(capturedBridgeTools[0].handler({ q: 'without-id' })).rejects.toThrow(/identity/);
+    expect(executor).toHaveBeenCalledTimes(1);
   } finally {
     _setNativeToolJournalRootForTests(undefined);
     await fs.rm(directory, { recursive: true, force: true });

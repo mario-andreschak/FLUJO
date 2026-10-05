@@ -157,6 +157,10 @@ it('routes a native Claude tool-use ID through the durable Worker port without h
     expect(result).toMatchObject({ content: [{ type: 'text' }] });
     expect(executor).toHaveBeenCalledTimes(1);
     expect(callToolMock).not.toHaveBeenCalled();
+    await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-2' });
+    await permission('mcp__flujo__worker_search', { q: 'same' }, { toolUseID: 'sdk-claude-3' });
+    await expect(sdkToolsMock[0].handler({ q: 'same' })).rejects.toThrow(/ambiguous/);
+    expect(executor).toHaveBeenCalledTimes(1);
   } finally {
     _setNativeToolJournalRootForTests(undefined);
     await fs.rm(directory, { recursive: true, force: true });

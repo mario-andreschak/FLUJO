@@ -446,7 +446,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // them ALL (in call order) instead of only the first; the message loop ends
     // the run when the model produces a turn WITHOUT another handoff call (or
     // the SDK loop ends), so a model can keep queueing spawn lanes.
-    const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const handoffCalls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
     // Local mirror of MAX_DYNAMIC_FANOUT_LANES (SubflowNode) — prep re-caps the
     // briefs anyway; this only stops a runaway spawn loop from burning turns.
     const MAX_SPAWN_CALLS = 32;
@@ -514,6 +514,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // starts. Record the call there, then let the handler append only its result.
     const queuedToolCalls = new Map<string, Array<{ id: string; argsJson: string }>>();
     const recordedToolCallIds = new Set<string>();
+    const nativePermissionBindings = new Map<string, { name: string; argsJson: string }>();
     const recordedNativeToolResults = new Set<string>();
     const partialToolMessageIds = new Map<string, string>();
     const enqueueToolCall = (name: string, callId: string, argsJson: string): void => {
@@ -540,8 +541,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const takeNativeToolCall = (name: string, args: Record<string, unknown>): string => {
       const queue = queuedToolCalls.get(name);
       const argsJson = JSON.stringify(args ?? {});
-      const index = queue?.findIndex(entry => entry.argsJson === argsJson) ?? -1;
-      if (index < 0) throw new Error('Native Claude tool lacks a matching SDK tool-use identity.');
+      const matches = queue?.filter(entry => entry.argsJson === argsJson) ?? [];
+      if (matches.length !== 1) throw new Error('Native Claude tool-use identity is missing or ambiguous.');
+      const index = queue!.findIndex(entry => entry.id === matches[0].id);
       const [matching] = queue!.splice(index, 1);
       if (queue!.length === 0) queuedToolCalls.delete(name);
       return matching.id;
@@ -810,15 +812,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           return tool(advertised.name,
             embedSchemaInDescription(advertised.description, fallbackSchema), shape,
             async (args: Record<string, unknown>): Promise<CallToolResult> => {
-              const callId = takeNativeToolCall(advertised.name, args);
               try {
+                const callId = takeNativeToolCall(advertised.name, args);
                 const dispatched = await nativeToolPort.dispatch({
                   toolInvocationId: callId, name: advertised.name, args,
                   signal: abortController.signal,
                 });
                 if (!recordedNativeToolResults.has(callId)) {
                   if (dispatched.kind === 'handoff') {
-                    handoffCalls.push({ name: advertised.name, args });
+                    handoffCalls.push({ id: callId, name: advertised.name, args });
                     if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                       endSpawning = true;
                     }
@@ -955,11 +957,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (!nativeToolPort.advertised.some(tool => tool.name === readableName) || !opts.toolUseID) {
               return { behavior: 'deny', message: 'Tool is outside the native broker inventory.' };
             }
-            if (!recordedToolCallIds.has(opts.toolUseID)) {
-              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson: JSON.stringify(args) });
-              recordedToolCallIds.add(opts.toolUseID);
+            const argsJson = JSON.stringify(args);
+            const priorBinding = nativePermissionBindings.get(opts.toolUseID);
+            if (priorBinding && (priorBinding.name !== readableName || priorBinding.argsJson !== argsJson)) {
+              return { behavior: 'deny', message: 'Conflicting native SDK tool-use identity.' };
             }
-            enqueueToolCall(readableName, opts.toolUseID, JSON.stringify(args));
+            if (!recordedToolCallIds.has(opts.toolUseID)) {
+              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson });
+              recordedToolCallIds.add(opts.toolUseID);
+              nativePermissionBindings.set(opts.toolUseID, { name: readableName, argsJson });
+              enqueueToolCall(readableName, opts.toolUseID, argsJson);
+            }
             return { behavior: 'allow', updatedInput: input };
           }
           if (shouldEndAgenticTurn?.()) {
@@ -1088,6 +1096,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     });
 
     let resultText = '';
+    let nativeSdkTerminal = false;
     let accumulatedText = '';
     // Result totals and per-request stream usage have different scopes. Track
     // them separately and deduplicate assistant frames by their API message id.
@@ -1303,6 +1312,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         } else if (message.type === 'result') {
           if (message.subtype === 'success') {
             resultText = (message as { result?: string }).result ?? '';
+            nativeSdkTerminal = true;
           } else if (handoffCalls.length === 0) {
             const errs = (message as { errors?: string[] }).errors;
             const detail = Array.isArray(errs) && errs.length ? errs.join('; ') : message.subtype;
@@ -1360,6 +1370,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      if (nativeToolPort && abortController.signal.aborted) dispatchOutcome = 'cancelled';
       closeInput();
       await watcher.stop();
       queuedDelivery?.requeue();
@@ -1404,7 +1415,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       // run loop's capture turns repeated spawn calls into parallel lanes and
       // answers each id with its own tool result.
       finalToolCalls = handoffCalls.map((h) => ({
-        id: `call_${uuidv4()}`,
+        id: h.id ?? `call_${uuidv4()}`,
         type: 'function' as const,
         function: { name: h.name, arguments: JSON.stringify(h.args) },
       }));
@@ -1494,6 +1505,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       },
     };
 
-    return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow) };
+    return { completion, transcript, contextUsage: usageTracker.getContextUsage(model.contextWindow),
+      ...(nativeToolPort ? { nativeSdkTerminal: nativeSdkTerminal && !abortController.signal.aborted
+        && !signal?.aborted } : {}) };
   }
 }

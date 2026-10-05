@@ -1,5 +1,4 @@
 import http from 'http';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -52,7 +51,7 @@ export async function startCodexToolBridge(
 ): Promise<CodexToolBridge> {
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
-  const requestIdentity = new AsyncLocalStorage<string>();
+  let boundNativeThreadId: string | undefined;
 
   const buildServer = (): Server => {
     const server = new Server(
@@ -74,7 +73,20 @@ export async function startCodexToolBridge(
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true };
       }
       try {
-        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>, requestIdentity.getStore());
+        const meta = req.params._meta as { callId?: unknown; threadId?: unknown } | undefined;
+        // The pinned Codex CLI sends the model's original callId in MCP
+        // params._meta. JSON-RPC id is a transport sequence and must never
+        // identify an effect. Thread ID prevents reuse across SDK threads.
+        let semanticId = typeof meta?.callId === 'string' && meta.callId.trim()
+          && typeof meta.threadId === 'string' && meta.threadId.trim()
+          ? meta.callId
+          : undefined;
+        if (requireStableToolIds && semanticId) {
+          if (boundNativeThreadId && boundNativeThreadId !== meta!.threadId) semanticId = undefined;
+          else boundNativeThreadId = meta!.threadId as string;
+        }
+        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>,
+          requireStableToolIds ? semanticId : undefined);
       } catch (err) {
         // Surface handler failures as tool errors instead of a JSON-RPC fault,
         // so the model can react to them like any other failed call.
@@ -113,12 +125,7 @@ export async function startCodexToolBridge(
         }
         const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid native tool request.');
-        const id = (body as { id?: unknown }).id;
-        if (typeof id === 'string' || typeof id === 'number') {
-          await requestIdentity.run(`${typeof id}:${String(id)}`, () => transport.handleRequest(req, res, body));
-        } else {
-          await transport.handleRequest(req, res, body);
-        }
+        await transport.handleRequest(req, res, body);
       } else {
         await transport.handleRequest(req, res);
       }

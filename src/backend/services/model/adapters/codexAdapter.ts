@@ -336,7 +336,7 @@ export class CodexAdapter implements CompletionAdapter {
     };
 
     // Spawn-with-brief bookkeeping (issue #156), mirroring the Claude adapter.
-    const handoffCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const handoffCalls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
     let endSpawning = false;
 
     // Approval gate, applied inside every bridge handler before dispatch. The
@@ -651,19 +651,19 @@ export class CodexAdapter implements CompletionAdapter {
           inputSchema: advertised.inputSchema,
           annotations: advertised.annotations,
           handler: async (args, requestIdentity) => {
-            if (!requestIdentity) throw new Error('Native Codex tool lacks a stable SDK callback identity.');
-            if (!recordedNativeCalls.has(requestIdentity)) {
-              recordToolCall({ id: requestIdentity, name: advertised.name, argsJson: JSON.stringify(args) });
-              recordedNativeCalls.add(requestIdentity);
-            }
             try {
+              if (!requestIdentity) throw new Error('Native Codex tool lacks a stable model callback identity.');
+              if (!recordedNativeCalls.has(requestIdentity)) {
+                recordToolCall({ id: requestIdentity, name: advertised.name, argsJson: JSON.stringify(args) });
+                recordedNativeCalls.add(requestIdentity);
+              }
               const dispatched = await nativeToolPort.dispatch({
                 toolInvocationId: requestIdentity, name: advertised.name, args,
                 signal: abortController.signal,
               });
               if (!recordedNativeResults.has(requestIdentity)) {
                 if (dispatched.kind === 'handoff') {
-                  handoffCalls.push({ name: advertised.name, args });
+                  handoffCalls.push({ id: requestIdentity, name: advertised.name, args });
                   if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
                     endSpawning = true;
                   }
@@ -1096,7 +1096,9 @@ export class CodexAdapter implements CompletionAdapter {
           await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
-            const outcome = endedByCaller || handoffCalls.length > 0
+            const outcome = nativeToolPort && (attemptFailure || abortController.signal.aborted)
+              ? (signal?.aborted || abortController.signal.aborted ? 'cancelled' : 'error')
+              : endedByCaller || handoffCalls.length > 0
               ? 'completed'
               : turnSteering || signal?.aborted
                 ? 'cancelled'
@@ -1218,7 +1220,7 @@ export class CodexAdapter implements CompletionAdapter {
     let finalToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined;
     if (handoffCalls.length > 0) {
       finalToolCalls = handoffCalls.map((h) => ({
-        id: `call_${uuidv4()}`,
+        id: h.id ?? `call_${uuidv4()}`,
         type: 'function' as const,
         function: { name: h.name, arguments: JSON.stringify(h.args) },
       }));
@@ -1306,6 +1308,8 @@ export class CodexAdapter implements CompletionAdapter {
       },
     };
 
-    return { completion, transcript, contextUsage };
+    return { completion, transcript, contextUsage,
+      ...(nativeToolPort ? { nativeSdkTerminal: completedTurn && !abortController.signal.aborted
+        && !signal?.aborted && !failure } : {}) };
   }
 }

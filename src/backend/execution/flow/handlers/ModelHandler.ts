@@ -2598,6 +2598,7 @@ export class ModelHandler {
         let nativeReceipt: NativeInvocationReceipt | undefined;
         let nativeTerminal = false;
         let nativeSdkRequestStarted = false;
+        let nativeSdkOutcome: 'completed' | 'error' | 'cancelled' | undefined;
         if (opts?.nativeBrokerAuthority) attemptProducedOutput = true;
         let attemptOutcome: 'completed' | 'error' | 'cancelled' = 'error';
         let attemptError: unknown;
@@ -2688,7 +2689,8 @@ export class ModelHandler {
               const nativeToolPort = opts?.nativeBrokerAuthority
                 ? await (async () => {
                     await opts.nativeBrokerAuthority!.assertCurrent();
-                    const inventoryDigest = nativeToolInventoryDigest(attemptTools ?? [], opts.toolNameMap, localToolExecutors);
+                    const nativeExecutors = Object.freeze({ ...localToolExecutors });
+                    const inventoryDigest = nativeToolInventoryDigest(attemptTools ?? [], opts.toolNameMap, nativeExecutors);
                     nativeReceipt = await prepareNativeInvocation({
                       conversationId: opts.conversationId!, runId: opts.runId!, nodeId: opts.nodeId!,
                       modelId, leaseEpoch: opts.nativeBrokerAuthority!.leaseEpoch, inventoryDigest,
@@ -2698,7 +2700,7 @@ export class ModelHandler {
                     });
                     return createNativeToolPort({
                       receipt: nativeReceipt, tools: attemptTools ?? [], toolNameMap: opts.toolNameMap,
-                      localToolExecutors, service: mcpService, requestToolApproval: opts.requestToolApproval,
+                      localToolExecutors: nativeExecutors, service: mcpService, requestToolApproval: opts.requestToolApproval,
                       beforeToolDispatch: opts.beforeToolDispatch,
                       afterToolDispatch: () => assertFlowExecutionCurrent(opts.durableContext ?? {}),
                       authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
@@ -2784,6 +2786,7 @@ export class ModelHandler {
                   }): Promise<void> => {
                     try {
                       await updateModelDispatchOutcome(opts!.conversationId!, dispatchId, outcome, opts?.durableContext);
+                      if (nativeReceipt) nativeSdkOutcome = outcome;
                       executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch-result',
                         dispatchId,
@@ -2852,8 +2855,9 @@ export class ModelHandler {
               if (nativeReceipt) {
                 if (!nativeSdkRequestStarted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
                 if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-                await finishNativeInvocation(nativeReceipt, 'completed');
-                nativeTerminal = true;
+                if (nativeSdkOutcome !== 'completed') throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (!nativeResult.nativeSdkTerminal) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                await opts!.nativeBrokerAuthority!.assertCurrent();
               }
               return nativeResult;
             };
@@ -3020,13 +3024,19 @@ export class ModelHandler {
             }
           };
 
+          if (nativeReceipt) {
+            await opts!.nativeBrokerAuthority!.assertCurrent();
+            if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+            await finishNativeInvocation(nativeReceipt, 'completed');
+            nativeTerminal = true;
+            await opts!.nativeBrokerAuthority!.assertCurrent();
+            if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+          }
+
           attemptOutcome = 'completed';
 
           return result;
         } catch (error) {
-          if (nativeReceipt && !nativeTerminal) {
-            await holdNativeInvocation(nativeReceipt).catch(() => undefined);
-          }
           attemptError = error;
           attemptOutcome = abortController.signal.aborted ? 'cancelled' : 'error';
           // A genuine Claude subscription failure can follow streamed prose. Do
@@ -3039,6 +3049,9 @@ export class ModelHandler {
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
         } finally {
+          if (nativeReceipt && !nativeTerminal) {
+            await holdNativeInvocation(nativeReceipt).catch(() => undefined);
+          }
           // Request/response adapters report each transport retry themselves.
           // Other adapters have one authoritative outer invocation here.
           if (!providerAttemptObserved) {
@@ -3094,6 +3107,7 @@ export class ModelHandler {
           if (attemptResult.success) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
+          if (opts?.nativeBrokerAuthority) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
           // The policy has already applied its trigger and replay boundaries.
           // An outer rate-limit replay must not restart that decision (including
@@ -3166,7 +3180,7 @@ export class ModelHandler {
       // make one final attempt with an explicit user nudge so models that became
       // stuck at an assistant boundary can recover. If that is empty too, return
       // the original normalized error shape.
-      if (!result.success && isEmptyStoppedCompletionError(result.error)) {
+      if (!opts?.nativeBrokerAuthority && !result.success && isEmptyStoppedCompletionError(result.error)) {
         for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
           if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
           const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
@@ -3220,6 +3234,7 @@ export class ModelHandler {
       // proactive budgeting. This path is adapter-neutral.
       if (
         !opts?.executionExtensionContext &&
+        !opts?.nativeBrokerAuthority &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {

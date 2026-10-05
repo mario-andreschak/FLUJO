@@ -114,12 +114,13 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     annotations: input.toolNameMap?.[tool.function.name]?.annotations,
   })));
   const bound = structuredClone(input.toolNameMap ?? {});
+  const executors = Object.freeze({ ...input.localToolExecutors });
   const names = new Set<string>();
   const kinds = new Map<string, 'mcp' | 'synthetic' | 'handoff'>();
   for (const tool of advertised) {
     if (!tool.name || names.has(tool.name)) throw new Error('Native tool inventory has duplicate or empty names.');
     names.add(tool.name);
-    const kindsForName = [Boolean(bound[tool.name]), Boolean(input.localToolExecutors?.[tool.name]), isHandoff(tool.name)]
+    const kindsForName = [Boolean(bound[tool.name]), Boolean(executors[tool.name]), isHandoff(tool.name)]
       .filter(Boolean).length;
     if (kindsForName !== 1) throw new Error(`Native tool ${tool.name} has no unique Worker-owned executor.`);
     if (bound[tool.name] && (bound[tool.name].clientGeneration === undefined || !bound[tool.name].schemaHash)) {
@@ -127,7 +128,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
     }
     kinds.set(tool.name, bound[tool.name] ? 'mcp' : isHandoff(tool.name) ? 'handoff' : 'synthetic');
   }
-  const inventoryDigest = nativeToolInventoryDigest(input.tools, bound, input.localToolExecutors);
+  const inventoryDigest = nativeToolInventoryDigest(input.tools, bound, executors);
   if (inventoryDigest !== input.receipt.owner.inventoryDigest
     || input.authority.leaseEpoch !== input.receipt.owner.leaseEpoch) {
     throw new Error('Native tool inventory or lease differs from the durable invocation.');
@@ -149,11 +150,15 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       }
       const fingerprint = nativeToolFingerprint(name, args, inventoryDigest);
       const { entry, fresh } = await beginNativeTool(input.receipt, toolInvocationId, fingerprint);
+      const combined = combineAbortSignals(input.signal, controller.signal, signal)!;
       if (!fresh) {
-        if (entry.state === 'terminal' && entry.result) return entry.result;
+        if (entry.state === 'terminal' && entry.result) {
+          combined.throwIfAborted();
+          await input.authority.assertCurrent();
+          return entry.result;
+        }
         throw new Error('Native tool effect is unresolved; the original call cannot be replayed.');
       }
-      const combined = combineAbortSignals(input.signal, controller.signal, signal)!;
       const assertCurrent = async () => {
         combined.throwIfAborted();
         await input.authority.assertCurrent();
@@ -176,7 +181,8 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       } else if (kind === 'synthetic') {
         await assertCurrent();
         await markNativeToolEffectMayHaveStarted(entry);
-        const output = await input.localToolExecutors![name](args);
+        await assertCurrent();
+        const output = await executors[name](args);
         await input.authority.assertCurrent();
         await input.afterToolDispatch?.();
         result = { content: [{ type: 'text', text: JSON.stringify(output) }] };
@@ -193,6 +199,12 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
           result = { content: [{ type: 'text', text: freshness.ok ? 'Native tool identity changed after advertisement.' : freshness.reason }], isError: true };
         } else {
           await markNativeToolEffectMayHaveStarted(entry);
+          await assertCurrent();
+          const finalIdentity = Boolean(input.service.getClient(decoded.server))
+            && input.service.getClientGeneration(decoded.server) === decoded.clientGeneration
+            && input.service.getToolSchemaHash(decoded.server, decoded.tool) === decoded.schemaHash;
+          combined.throwIfAborted();
+          if (!finalIdentity) throw new Error('Native MCP identity changed at the effect boundary.');
           const called = await input.service.callTool(
             decoded.server, decoded.tool, effectiveArgs,
             decoded.timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
@@ -233,6 +245,9 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       await input.authority.assertCurrent();
       const terminal = { result, transcriptText, kind };
       await finishNativeTool(entry, terminal);
+      combined.throwIfAborted();
+      await input.authority.assertCurrent();
+      combined.throwIfAborted();
       return terminal;
     },
   });

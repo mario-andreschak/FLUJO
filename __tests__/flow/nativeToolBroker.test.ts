@@ -4,7 +4,7 @@ import path from 'node:path';
 import type OpenAI from 'openai';
 import {
   _setNativeToolJournalRootForTests, beginNativeTool, finishNativeInvocation,
-  finishNativeTool, markNativeToolEffectMayHaveStarted, nativeInvocationStatus,
+  finishNativeTool, holdNativeInvocation, markNativeToolEffectMayHaveStarted, nativeInvocationStatus,
   prepareNativeInvocation, submitNativeInvocation, type NativeInvocationOwner,
 } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import {
@@ -40,6 +40,14 @@ describe('native broker journal', () => {
     expect((await nativeInvocationStatus(first.invocationId, first.owner)).state).toBe('begin-may-have-been-sent');
   });
 
+  it('serializes concurrent allocations for the same origin conversation', async () => {
+    const [first, second] = await Promise.allSettled([
+      prepareNativeInvocation(owner('concurrent')),
+      prepareNativeInvocation({ ...owner('concurrent'), leaseEpoch: 'other-lease' }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual(['fulfilled', 'rejected']);
+  });
+
   it('does not advance admission or release the scope when a journal write fails', async () => {
     const receipt = await prepareNativeInvocation(owner('write-failure'));
     const originalRename = fs.rename.bind(fs);
@@ -58,6 +66,34 @@ describe('native broker journal', () => {
       .rejects.toThrow(/unresolved/);
   });
 
+  it('holds after prepare second-write failure and after loss of a scope pointer', async () => {
+    const originalRename = fs.rename.bind(fs);
+    const rename = jest.spyOn(fs, 'rename').mockImplementation((from, to) => {
+      if (String(to).startsWith(path.join(directory, 'calls'))) {
+        return Promise.reject(new Error('second write failed'));
+      }
+      return originalRename(from, to);
+    });
+    try {
+      await expect(prepareNativeInvocation(owner('second-write'))).rejects.toThrow(/second write failed/);
+    } finally { rename.mockRestore(); }
+    _setNativeToolJournalRootForTests(undefined);
+    _setNativeToolJournalRootForTests(directory); // fresh module-facing root, same durable files
+    await expect(prepareNativeInvocation({ ...owner('second-write'), leaseEpoch: 'successor' }))
+      .rejects.toThrow(/unresolved/);
+
+    const indexed = await prepareNativeInvocation(owner('missing-pointer'));
+    await submitNativeInvocation(indexed);
+    const scopes = await fs.readdir(path.join(directory, 'scopes'));
+    for (const scope of scopes) {
+      const file = path.join(directory, 'scopes', scope);
+      const value = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (value.invocationId === indexed.invocationId) await fs.unlink(file);
+    }
+    await expect(prepareNativeInvocation({ ...owner('missing-pointer'), leaseEpoch: 'successor' }))
+      .rejects.toThrow(/unresolved/);
+  });
+
   it('deduplicates SDK callback identity and refuses changed arguments or an unresolved effect', async () => {
     const receipt = await prepareNativeInvocation(owner('dedupe'));
     await submitNativeInvocation(receipt);
@@ -73,6 +109,19 @@ describe('native broker journal', () => {
     expect((await beginNativeTool(receipt, 'sdk-tool-1', 'fingerprint-a')).entry.state).toBe('terminal');
     await finishNativeInvocation(receipt, 'completed');
     await expect(beginNativeTool(receipt, 'sdk-tool-2', 'fingerprint-b')).rejects.toThrow(/unresolved/);
+  });
+
+  it('preserves an exact terminal tool result for original-ID reconciliation under a parent hold', async () => {
+    const receipt = await prepareNativeInvocation(owner('reconcile'));
+    await submitNativeInvocation(receipt);
+    const first = await beginNativeTool(receipt, 'sdk-original', 'same-fingerprint');
+    await finishNativeTool(first.entry, { kind: 'synthetic', transcriptText: 'done',
+      result: { content: [{ type: 'text', text: 'done' }] } });
+    await holdNativeInvocation(receipt);
+    const replay = await beginNativeTool(receipt, 'sdk-original', 'same-fingerprint');
+    expect(replay.fresh).toBe(false);
+    expect(replay.entry.state).toBe('terminal');
+    await expect(beginNativeTool(receipt, 'sdk-new', 'new-fingerprint')).rejects.toThrow(/unresolved/);
   });
 
   it('dispatches one Worker-owned effect, returns the durable result on duplicate delivery, and rejects JSON ports', async () => {
@@ -98,6 +147,33 @@ describe('native broker journal', () => {
     expect(executor).toHaveBeenCalledTimes(1);
     expect(approval).toHaveBeenCalledTimes(1);
     await expect(port.dispatch({ ...call, args: { q: 'changed' } })).rejects.toThrow(/Conflicting/);
+  });
+
+  it('pins executor references and serializes concurrent duplicate callbacks', async () => {
+    const tools = [tool('worker_search')];
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = jest.fn(async () => { entered(); await gate; return { original: true }; });
+    const replacement = jest.fn(async () => ({ original: false }));
+    const executors = { worker_search: original };
+    const receipt = await prepareNativeInvocation(owner('concurrent-tool', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined),
+      signal: new AbortController().signal });
+    executors.worker_search = replacement;
+    const call = { toolInvocationId: 'sdk-concurrent', name: 'worker_search', args: {},
+      signal: new AbortController().signal };
+    const first = port.dispatch(call);
+    await started;
+    await expect(port.dispatch(call)).rejects.toThrow(/unresolved/);
+    release();
+    expect((await first).result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('original') });
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(replacement).not.toHaveBeenCalled();
   });
 
   it('fails before effect when the lease is stale or cancellation arrives', async () => {
@@ -127,6 +203,62 @@ describe('native broker journal', () => {
     expect(executors.worker_search).not.toHaveBeenCalled();
   });
 
+  it('rechecks Stop after the durable effect marker and before a synthetic executor', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async () => ({ unsafe: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation(owner('marker-stop', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    const stop = new AbortController();
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined), signal: stop.signal });
+    const originalRename = fs.rename.bind(fs);
+    let toolWrites = 0;
+    const rename = jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      await originalRename(from, to);
+      if (String(to).startsWith(path.join(directory, 'tools', receipt.invocationId))) {
+        toolWrites += 1;
+        if (toolWrites === 2) stop.abort();
+      }
+    });
+    try {
+      await expect(port.dispatch({ toolInvocationId: 'sdk-stop', name: 'worker_search', args: {},
+        signal: new AbortController().signal })).rejects.toThrow();
+    } finally { rename.mockRestore(); }
+    expect(toolWrites).toBe(2);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('keeps a terminal receipt but never returns success after Stop during its final write', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async () => ({ done: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation(owner('finish-stop', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    const stop = new AbortController();
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined), signal: stop.signal });
+    const originalRename = fs.rename.bind(fs);
+    let toolWrites = 0;
+    const rename = jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      await originalRename(from, to);
+      if (String(to).startsWith(path.join(directory, 'tools', receipt.invocationId))) {
+        toolWrites += 1;
+        if (toolWrites === 3) stop.abort();
+      }
+    });
+    const call = { toolInvocationId: 'sdk-finish-stop', name: 'worker_search', args: {},
+      signal: new AbortController().signal };
+    try { await expect(port.dispatch(call)).rejects.toThrow(); }
+    finally { rename.mockRestore(); }
+    expect(toolWrites).toBe(3);
+    expect(executor).toHaveBeenCalledTimes(1);
+    await expect(port.dispatch(call)).rejects.toThrow();
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
   it('checks live MCP client and schema identity after approval before the effect', async () => {
     const tools = [tool('worker_mcp')];
     const mapping = { worker_mcp: {
@@ -152,6 +284,36 @@ describe('native broker journal', () => {
     expect(result.result.isError).toBe(true);
     expect(service.callTool).not.toHaveBeenCalled();
     expect(approval).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks MCP identity after the marker write and before callTool', async () => {
+    const tools = [tool('worker_mcp')];
+    const mapping = { worker_mcp: { server: 'worker-server', tool: 'write',
+      clientGeneration: 7, schemaHash: 'schema-a' } };
+    const receipt = await prepareNativeInvocation(owner('marker-identity', nativeToolInventoryDigest(tools, mapping)));
+    await submitNativeInvocation(receipt);
+    let generation = 7;
+    const callTool = jest.fn(async () => ({ success: true, data: { content: [{ type: 'text', text: 'unsafe' }] } }));
+    const service = { getClient: () => ({}), getClientGeneration: () => generation,
+      getToolSchemaHash: () => 'schema-a', callTool } as unknown as Parameters<typeof createNativeToolPort>[0]['service'];
+    const port = createNativeToolPort({ receipt, tools, toolNameMap: mapping, service,
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined),
+      signal: new AbortController().signal });
+    const originalRename = fs.rename.bind(fs);
+    let toolWrites = 0;
+    const rename = jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      await originalRename(from, to);
+      if (String(to).startsWith(path.join(directory, 'tools', receipt.invocationId))) {
+        toolWrites += 1;
+        if (toolWrites === 2) generation = 8;
+      }
+    });
+    try {
+      await expect(port.dispatch({ toolInvocationId: 'sdk-identity', name: 'worker_mcp', args: {},
+        signal: new AbortController().signal })).rejects.toThrow(/effect boundary/);
+    } finally { rename.mockRestore(); }
+    expect(toolWrites).toBe(2);
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it('holds an oversized effect result instead of replaying the executor', async () => {
