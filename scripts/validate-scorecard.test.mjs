@@ -976,8 +976,16 @@ test('reviewed signed growth and derived Persona flatness retain their original 
 
 test('later source successes cannot erase or relabel retained verify and native CodeQL failures', () => {
   for (const retained of baselineSchema.$defs.acceptanceContract.const.retainedSourceFailures) {
+    const record=entry(baseline,'evidence',retained.id);
+    assert.deepEqual(record.profileIds,['local-owner']);
+    assert.ok(record.limits.some(limit=>limit.includes('It establishes no installed-profile coverage or scanner alert applicability')));
+    rejects(ledger => { entry(ledger,'evidence',retained.id).profileIds=[]; }, /profileIds: too few items/);
+    rejects(ledger => { entry(ledger,'evidence',retained.id).profileIds=['unknown-profile']; }, /unknown profiles ID/);
     rejects(ledger => { ledger.evidence=ledger.evidence.filter(e=>e.id!==retained.id); }, /historical source failure/);
     rejects(ledger => { entry(ledger,'evidence',retained.id).result='passed'; }, /historical source failure/);
     rejects(ledger => { entry(ledger,'evidence',retained.id).sourceSha='a'.repeat(40); }, /historical source failure/);
+  }
+  for (const gateId of ['build-verification','local-security']) {
+    rejects(ledger => { entry(ledger,'gates',gateId).status='passed'; }, /acceptance requires passing checksummed evidence/);
   }
 });
