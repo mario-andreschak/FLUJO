@@ -84,5 +84,5 @@ stream: Windows line-ending conversion can otherwise change the payload.
 Development/push/deployment authorization and empirical acceptance are separate
 records. The coordinator owns the integration and deployment candidate. No
 numeric paid-run envelope or concrete model/account scope is declared in this
-ledger; its proposed zero-dollar cap records that missing measurement contract,
+ledger; its proposed null paid-run limit records that missing measurement contract,
 without denying the user's development/deployment authorization.
