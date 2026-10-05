@@ -30,7 +30,10 @@ export const RESTRICTED_CODEX_CONFIG = Object.freeze({
   web_search: 'disabled',
   project_doc_max_bytes: 0,
   history: Object.freeze({ persistence: 'none' }),
-  tools: Object.freeze({ view_image: false }),
+  // The pinned 0.153.3 CLI advertises request_user_input unless this nested
+  // tool setting is disabled, even with default_mode_request_user_input=false.
+  tools: Object.freeze({ view_image: false,
+    experimental_request_user_input: Object.freeze({ enabled: false }) }),
   features: Object.freeze({
     shell_tool: false,
     unified_exec: false,
