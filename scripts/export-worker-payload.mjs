@@ -10,6 +10,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const SOURCE = '8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5';
 const TREE = '4f318966afccb7fc7b44f04b51b6fbaeb7ee94ae';
 const NODE = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e';
+export const packageFilePatterns = Object.freeze([
+  '.next/**/*', '!.next/cache/**', '!.next/dev/**', 'public/**/*',
+  'scripts/launch-next.mjs', 'scripts/local-instance.mjs', 'scripts/healthcheck.mjs',
+  'scripts/exclude-workspaces-from-next-glob.cjs', 'scripts/exposure-mode.mjs',
+  'scripts/migration-landscape-demo.mjs', 'scripts/local-test-dependencies.cjs', 'scripts/run-local-jest.cjs',
+  'bin/**/*', 'mcp-servers/README.md', 'mcp-servers/*/dist/**/*', 'mcp-servers/*/package.json',
+  'mcp-servers/browser/scripts/install-browser.mjs', 'next.config.mjs',
+]);
+const proposalOnlyFiles = new Set(['scripts/export-worker-payload.mjs', 'scripts/export-worker-payload.test.mjs',
+  'scripts/worker-payload-route.mjs']);
+
+export function assertPackageFilePatterns(packageJson) {
+  assert.deepEqual(packageJson.files, [...packageFilePatterns], 'Compiled source package selection differs from reviewed 8fe.');
+}
 const sourceOnlyRuntimeFiles = new Set(['package.json', 'README.md', 'LICENSE', 'LICENSE.md', 'next.config.mjs',
   'scripts/launch-next.mjs', 'scripts/local-instance.mjs', 'scripts/healthcheck.mjs',
   'scripts/exclude-workspaces-from-next-glob.cjs', 'scripts/exposure-mode.mjs', 'scripts/migration-landscape-demo.mjs',
@@ -27,6 +41,7 @@ export function safeRelative(file) {
 
 export function packPath(file) {
   safeRelative(file);
+  assert.ok(!proposalOnlyFiles.has(file), 'Exporter proposal modules cannot enter compiled payload.');
   assert.ok(sourceOnlyRuntimeFiles.has(file) || file.startsWith('.next/') || file.startsWith('public/')
     || file.startsWith('bin/') || /^mcp-servers\/[^/]+\/(dist\/.+|package\.json)$/.test(file),
   'Unexpected npm package payload file.');
@@ -77,6 +92,7 @@ async function exportPayload({ source, stage, output, packReport, workflowSha })
   await fs.mkdir(stage); // Must not replace a prior export or retained namespace.
   const files = []; const links = []; const nativeModules = [];
   const packageJson = JSON.parse(await fs.readFile(path.join(source, 'package.json'), 'utf8'));
+  assertPackageFilePatterns(packageJson);
   const workspaces = new Set(packageJson.workspaces.map(file => path.resolve(source, file).toLowerCase()));
   const copyFile = async (from, relative) => {
     safeRelative(relative);
@@ -177,6 +193,11 @@ async function exportPayload({ source, stage, output, packReport, workflowSha })
 }
 
 async function main(args) {
+  if (args.length === 2 && args[0] === '--validate-package') {
+    assert.ok(path.isAbsolute(args[1]));
+    assertPackageFilePatterns(JSON.parse(await fs.readFile(args[1], 'utf8')));
+    return;
+  }
   assert.equal(args.length, 10);
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
