@@ -289,21 +289,22 @@ describe('saved execution definitions', () => {
   });
 
   it.each(['memory', 'storage'])('does not backfill an unpinned legacy %s conversation on read or resume', async (origin) => {
+    const conversationId = 'research-legacy';
     const legacy = {
       trackingInfo: { executionId: 'legacy-execution', startTime: 1, nodeExecutionTracker: [] },
-      conversationId: 'research-legacy', flowId: FLOW_ID, status: 'completed',
+      conversationId, flowId: FLOW_ID, status: 'completed',
       currentNodeId: PROCESS, messages: [], createdAt: 1, updatedAt: 1,
     } as unknown as SharedState;
-    if (origin === 'memory') conversationStates.set(legacy.conversationId, legacy);
+    if (origin === 'memory') conversationStates.set(conversationId, legacy);
     else mockLoadItem.mockResolvedValue(legacy);
     const stepsBeforeRead = (FlowExecutor.executeStep as jest.Mock).mock.calls.length;
-    const read = await loadConversationStateReadOnly(legacy.conversationId);
+    const read = await loadConversationStateReadOnly(conversationId);
     expect(read?.status).toBe('completed');
     expect(read).not.toHaveProperty('flowSnapshot');
     expect(persistedStates).toHaveLength(0);
     expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(stepsBeforeRead);
     const result = await runFlow({
-      flowId: FLOW_ID, conversationId: legacy.conversationId,
+      flowId: FLOW_ID, conversationId,
       prompt: 'Continue', userTurn: true, mode: 'conversation',
     });
     expect(result.status).toBe('completed');
