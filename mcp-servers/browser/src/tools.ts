@@ -1,6 +1,6 @@
 import type { CallToolResult, Tool, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { Page } from 'patchright';
 import {
@@ -411,6 +411,54 @@ function failure(
   };
 }
 
+function sameRecordingFile(opened: BigIntStats, observed: BigIntStats): boolean {
+  return observed.isFile() && !observed.isSymbolicLink()
+    && observed.ino !== BigInt(0) && observed.nlink === BigInt(1)
+    && opened.dev === observed.dev && opened.ino === observed.ino
+    && opened.size === observed.size && opened.mtimeNs === observed.mtimeNs
+    && opened.ctimeNs === observed.ctimeNs && opened.mode === observed.mode
+    && opened.uid === observed.uid && opened.gid === observed.gid;
+}
+
+async function readInlineRecording(outputPath: string, maxBytes: number): Promise<{ bytes?: Buffer; warning?: string }> {
+  const unavailable = {
+    warning: 'The video is available at outputPath but was not inlined into MCP because it could not be read as a stable regular file.',
+  };
+  try {
+    const handle = await fs.open(outputPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    try {
+      const opened = await handle.stat({ bigint: true });
+      const named = await fs.lstat(outputPath, { bigint: true });
+      if (!opened.isFile() || opened.size <= BigInt(0)) return {};
+      if (!sameRecordingFile(opened, opened) || !sameRecordingFile(opened, named)) return unavailable;
+      if (opened.size > BigInt(maxBytes)) {
+        return {
+          warning: `The ${opened.size}-byte video is available at outputPath but was not inlined into MCP because it exceeds the ${maxBytes}-byte transport limit.`,
+        };
+      }
+      const size = Number(opened.size);
+      if (!Number.isSafeInteger(size)) return unavailable;
+      // One sentinel byte detects growth without an unbounded pathname read.
+      const bytes = Buffer.alloc(size + 1);
+      let consumed = 0;
+      while (consumed < bytes.length) {
+        const read = await handle.read(bytes, consumed, bytes.length - consumed, consumed);
+        if (read.bytesRead === 0) break;
+        consumed += read.bytesRead;
+      }
+      const after = await handle.stat({ bigint: true });
+      const namedAfter = await fs.lstat(outputPath, { bigint: true });
+      if (consumed !== size || !sameRecordingFile(opened, after) || !sameRecordingFile(opened, namedAfter)) return unavailable;
+      return { bytes: bytes.subarray(0, consumed) };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return {};
+    return unavailable;
+  }
+}
+
 async function recordingResult(data: Record<string, unknown>): Promise<CallToolResult> {
   if (data.success === false) {
     return {
@@ -421,19 +469,19 @@ async function recordingResult(data: Record<string, unknown>): Promise<CallToolR
   }
   const outputPath = typeof data.outputPath === 'string' ? data.outputPath : undefined;
   if (!outputPath || data.status !== 'stopped') return success(data);
-  const stat = await fs.stat(outputPath).catch(() => undefined);
   const maxBytesRaw = Number(process.env.FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES);
   const maxBytes = Number.isFinite(maxBytesRaw) && maxBytesRaw > 0 ? Math.trunc(maxBytesRaw) : 16 * 1024 * 1024;
-  if (!stat?.isFile() || stat.size <= 0) return success(data);
-  if (stat.size > maxBytes) {
+  const inline = await readInlineRecording(outputPath, maxBytes);
+  if (inline.warning) {
     const warnings = Array.isArray(data.warnings) ? [...data.warnings] : [];
-    warnings.push(`The ${stat.size}-byte video is available at outputPath but was not inlined into MCP because it exceeds the ${maxBytes}-byte transport limit.`);
+    warnings.push(inline.warning);
     return success({ ...data, warnings });
   }
+  if (!inline.bytes) return success(data);
   const mimeType = pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mp4')
     ? 'video/mp4'
     : (pathToFileURL(outputPath).pathname.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/webm');
-  const blob = (await fs.readFile(outputPath)).toString('base64');
+  const blob = inline.bytes.toString('base64');
   return success(data, [{
     type: 'resource',
     resource: {
