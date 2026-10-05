@@ -6,7 +6,9 @@ import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline } from './maintainer-installed-baseline.mjs';
+import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline,
+  readInitializedFlowInventory } from './maintainer-installed-baseline.mjs';
+import { assertFlowInventory } from './maintainer-synthetic-state.mjs';
 
 const pin = ['--version=3.46.2', `--integrity=sha512-${Buffer.alloc(64, 7).toString('base64')}`,
   `--source-revision=${'a'.repeat(40)}`];
@@ -36,6 +38,71 @@ test('compares all stable synthetic flow fields and rejects partial recovery', (
   assertRestoredFlow({ ...expected, updatedAt: 'later' }, expected);
   for (const field of ['id', 'name', 'nodes', 'edges']) {
     assert.throws(() => assertRestoredFlow({ ...expected, [field]: null }, expected), new RegExp(`Restored ${field}`));
+  }
+});
+
+const seededAgent = () => ({ id: 'default-agent-flujo', name: 'FLUJO', favorite: true,
+  nodes: [{ id: 'start', type: 'start', data: { label: 'Start Node' } },
+    { id: 'finish', type: 'finish', data: { label: 'Finish Node' } }],
+  edges: [{ id: 'start-finish', source: 'start', target: 'finish' }] });
+
+test('waits for empty-to-seeded initialization before observing the baseline inventory', async () => {
+  const requests = []; let flows = []; let completeInitialization;
+  const pendingInitialization = new Promise(resolve => { completeInitialization = resolve; });
+  const request = async route => {
+    requests.push(route);
+    if (route === '/api/init') {
+      await pendingInitialization;
+      flows = [seededAgent()];
+      return { status: 200, bytes: Buffer.from('{"success":true}') };
+    }
+    assert.equal(route, '/api/flow');
+    return { status: 200, bytes: Buffer.from(JSON.stringify(flows)) };
+  };
+  const pending = readInitializedFlowInventory(request);
+  assert.deepEqual(requests, ['/api/init']);
+  assert.deepEqual(flows, []);
+  completeInitialization();
+  const observed = await pending;
+  assert.deepEqual(requests, ['/api/init', '/api/flow']);
+  assert.deepEqual(observed.flows, [seededAgent()]);
+  assert.equal(observed.initialization.requiredSeedId, 'default-agent-flujo');
+  // Later corruption must still fail against the independently captured seed.
+  for (const change of [seed => { seed.favorite = false; },
+    seed => { seed.nodes[0].data.label = 'Changed seeded node'; },
+    seed => { seed.edges[0].target = 'start'; }]) {
+    const changed = seededAgent(); change(changed);
+    assert.throws(() => assertFlowInventory([changed], observed.flows, false), /complete observed baseline/);
+  }
+});
+
+test('refuses missing or corrupt seeded inventory after successful initialization', async () => {
+  const corrupt = mutation => { const seed = seededAgent(); mutation(seed); return [seed]; };
+  for (const flows of [[], corrupt(seed => { seed.nodes = []; }),
+    corrupt(seed => { seed.edges = []; }), corrupt(seed => { seed.nodes[1].id = 'start'; }),
+    corrupt(seed => { seed.edges[0].target = 'missing-node'; }),
+    corrupt(seed => { seed.edges.push({ ...seed.edges[0] }); }),
+    corrupt(seed => { seed.nodes[0].id = null; })]) {
+    const requests = [];
+    await assert.rejects(readInitializedFlowInventory(async route => {
+      requests.push(route);
+      assert.ok(['/api/init', '/api/flow'].includes(route));
+      return { status: 200, bytes: Buffer.from(JSON.stringify(route === '/api/init' ? { success: true } : flows)) };
+    }), /seeded agent graph.*no mutation allowed/);
+    assert.deepEqual(requests, ['/api/init', '/api/flow']);
+  }
+});
+
+test('refuses unsuccessful or malformed initialization before reading any flow inventory', async () => {
+  for (const response of [{ status: 500, bytes: Buffer.from('{"success":true}') },
+    { status: 200, bytes: Buffer.from('{"success":false}') },
+    { status: 200, bytes: Buffer.from('{"success":"true"}') },
+    { status: 200, bytes: Buffer.from('{}') }, { status: 200, bytes: Buffer.from('invalid') }]) {
+    const requests = [];
+    await assert.rejects(readInitializedFlowInventory(async route => {
+      requests.push(route); return response;
+    }), /initialization.*no mutation allowed/);
+    assert.deepEqual(requests, ['/api/init']);
   }
 });
 
