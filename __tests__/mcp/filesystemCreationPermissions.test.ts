@@ -72,8 +72,13 @@ describe('filesystem creation permissions', () => {
   ];
 
   posixIt.each(operations)('preserves an existing executable mode during %s', async (_name, tool, args) => {
-    await fs.writeFile(file, 'first\nsecond\n', { mode: 0o755 });
-    await fs.chmod(file, 0o755);
+    const target = await fs.open(file, 'wx', 0o755);
+    try {
+      await target.writeFile('first\nsecond\n', 'utf8');
+      await target.chmod(0o755);
+    } finally {
+      await target.close();
+    }
     const result = await filesystemCallTool(tool, { path: file, ...args });
     expect(result.isError).not.toBe(true);
     expect((await fs.stat(file)).mode & 0o777).toBe(0o755);
