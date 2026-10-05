@@ -1,5 +1,6 @@
 import { REQUIRED_JOB_IDS, REQUIRED_CHECK_NAMES } from './verification-contract.mjs';
 import { CI_NODE_PROFILES } from './verify-ci-node.mjs';
+import { assertScannerWorkflowContract } from './scanner-workflow-contract.mjs';
 
 export function assertNodeRuntimeWorkflowContract(workflows) {
   const profiles = Object.values(CI_NODE_PROFILES);
@@ -68,6 +69,7 @@ export function assertNodeRuntimeWorkflowContract(workflows) {
 
 export function assertWorkflowContract(workflows) {
   assertNodeRuntimeWorkflowContract(workflows);
+  assertScannerWorkflowContract(workflows['verify.yml']);
   for (const [file, workflow] of Object.entries(workflows)) {
     if (!workflow?.permissions || typeof workflow.permissions !== 'object'
         || Object.values(workflow.permissions).some((value) => value !== 'read' && value !== 'none')) {

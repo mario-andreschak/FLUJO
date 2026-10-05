@@ -242,7 +242,7 @@ jobs:
       - name: Verify exact official Node runtime
         run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs
 
   dependency-security:
     name: dependency-security
@@ -295,6 +295,9 @@ jobs:
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           category: /language:${{ matrix.language }}
+          upload: always
+          skip-queries: 'false'
+          wait-for-processing: 'true'
 
   lint:
     name: lint
