@@ -13,10 +13,7 @@ const relativeRoot = path.relative(tempParent, root);
 if (!relativeRoot || relativeRoot.startsWith('..') || path.isAbsolute(relativeRoot)) throw new Error('Allocated probe root is outside temporary parent');
 const rootIdentity = await fs.lstat(root, { bigint: true });
 const samples = [];
-const created = [];
-let cleaned = false;
 let probeFailure;
-let cleanupFailure;
 class ProbeRefusal extends Error {
   constructor(code) { super(code); this.code = code; }
 }
@@ -50,12 +47,6 @@ try {
         await writer.close();
         writerClosed = true;
         closedNamed = await fs.lstat(leaf, { bigint: true });
-        // Cleanup authority belongs to the inode this probe created. A replaced
-        // pathname remains diagnostic evidence and must not become a known leaf.
-        if (closedNamed.isFile() && !closedNamed.isSymbolicLink() && closedNamed.nlink === BigInt(1)
-            && !differences(writable, closedNamed, ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size']).length) {
-          created.push({ leaf, namedIdentity: closedNamed });
-        }
         readerDescriptor = await reader.stat({ bigint: true });
         readerNamed = await fs.lstat(leaf, { bigint: true });
         // Deliberately do not read bytes or treat mismatched metadata as safe.
@@ -77,35 +68,21 @@ try {
       diagnosticLow32DeviceRelation: BigInt.asUintN(32, closedNamed.dev) === writable.dev,
     });
   }
+  await assertOwnedRoot();
 } catch (error) {
   probeFailure = error instanceof ProbeRefusal ? error.code : 'probe-io-error';
-} finally {
-  // Remove only known allocated leaves after fresh path-to-path identity checks.
-  // No recursive deletion, masking, repair, or unknown-entry cleanup occurs.
-  try {
-    await assertOwnedRoot();
-    for (const { leaf, namedIdentity } of created) {
-      const now = await fs.lstat(leaf, { bigint: true });
-      if (!now.isFile() || now.isSymbolicLink() || now.nlink !== BigInt(1) || differences(namedIdentity, now).length) {
-        throw new ProbeRefusal('probe-leaf-changed');
-      }
-      await fs.unlink(leaf);
-    }
-    await assertOwnedRoot();
-    await fs.rmdir(root);
-    cleaned = true;
-  } catch (error) {
-    cleanupFailure = error instanceof ProbeRefusal ? error.code
-      : error?.code === 'ENOTEMPTY' ? 'probe-unknown-entry-preserved' : 'probe-cleanup-io-error';
-  }
 }
+// Retain this bounded diagnostic namespace. Separate pathname checks cannot
+// atomically bind unlink/rmdir to an admitted inode under namespace replacement.
 const identityContractSatisfied = !probeFailure && samples.length === 6 && samples.every(s => s.allRegularSingleLink
   && !s.closedBindingDifferences.length && !s.readerDifferences.length);
 console.log(JSON.stringify({
   schemaVersion: 1, kind: 'owned-temporary-file-identity-contract', createdAt: new Date().toISOString(),
   runtime: { node: process.version, libuv: process.versions.uv, platform: process.platform, architecture: process.arch,
     osRelease: os.release(), osVersion: os.version() },
-  samples, identityContractSatisfied, cleanupCompleted: cleaned, probeFailure, cleanupFailure, existingUserFilesRead: false,
+  samples, identityContractSatisfied, probeFailure,
+  cleanupPolicy: 'retain-probe-files', cleanupAttempted: false, cleanupCompleted: false, cleanupFailure: null,
+  existingUserFilesRead: false,
   productionAdmissionChanged: false, installedStartupQualified: false,
 }, null, 2));
-if (!identityContractSatisfied || !cleaned) process.exitCode = 1;
+if (!identityContractSatisfied) process.exitCode = 1;
