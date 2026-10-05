@@ -28,6 +28,9 @@ ID, including a legacy short ID or eight-digit suffix. Reinstall therefore
 preserves existing conversation, external subflow and schedule references;
 it does not rename files or infer replacements for persisted references.
 Display-name collision checks use that recorded ownership too.
+Failed saves and later manifest omissions retain those mappings and creation
+ownership. A later version can reuse an omitted flow's ID; uninstall can still
+remove an unambiguously owned definition that an earlier version installed.
 
 Before installing any server, model, flow or schedule, installation rejects
 duplicate local IDs, invalid recorded IDs, conflicting ledger claims and an

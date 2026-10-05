@@ -617,6 +617,33 @@ describe('installPackage — collision-resistant flow identity', () => {
     expect(installRegistryServerMock).not.toHaveBeenCalled();
     expect(schedulerCreateMock).not.toHaveBeenCalled();
   });
+
+  it('preserves legacy mappings and creation ownership after a failed flow save', async () => {
+    const ids = ['pkg-my-pkg-local-root', 'pkg-my-pkg-local-child'];
+    seedLegacyFlowInstall(ids);
+    loadFlowsMock.mockResolvedValue(ids.map((id) => ({ id })));
+    saveFlowMock.mockResolvedValueOnce({ success: false, error: 'controlled failure' });
+    const result = await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(result.skipped.some((step) => step.type === 'flow' && step.note === 'controlled failure')).toBe(true);
+    const ledger = store.get('package_installs') as Record<string, { entities: { flows: Record<string, string> }; created: { flows: string[] } }>;
+    expect(ledger['my-pkg'].entities.flows).toEqual({ 'local-root': ids[0], 'local-child': ids[1] });
+    expect(ledger['my-pkg'].created.flows).toEqual(ids);
+  });
+
+  it('keeps an omitted legacy flow recorded so a later version reuses its references', async () => {
+    const ids = ['pkg-my-pkg-local-root', 'pkg-my-pkg-local-child'];
+    seedLegacyFlowInstall(ids);
+    loadFlowsMock.mockResolvedValue(ids.map((id) => ({ id })));
+    const value = manifest();
+    value.flows = [value.flows[0]];
+    fetchPackageManifestMock.mockResolvedValue(value);
+    await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    fetchPackageManifestMock.mockResolvedValue(manifest());
+    await installPackage({ source: 'registry', packageId: 'my-pkg', consentGranted: true });
+    expect(saveFlowMock.mock.calls.at(-1)![0].id).toBe(ids[1]);
+    const ledger = store.get('package_installs') as Record<string, { created: { flows: string[] } }>;
+    expect(ledger['my-pkg'].created.flows).toEqual(ids);
+  });
 });
 
 describe('installPackage — ledger + status', () => {
