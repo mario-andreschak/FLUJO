@@ -1,0 +1,68 @@
+'use strict';
+// PREPARED ONLY. A reviewed assignment supplies authorization; path binding
+// never creates approval fields or turns an unassigned request into a grant.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const demand = (condition, message) => { if (!condition) throw new Error(message); };
+const expectedHead = 'f67f215d2c698f961d28efdb50267454b4b1faf6';
+const expectedTree = 'd09c5ccdd5a85d6e41061ecef683a0996d938c8e';
+const expectedNpmSha = '8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7';
+const raw = process.env.DECLARED_APPEND_ASSIGNMENT_JSON;
+demand(process.platform === 'linux' && process.arch === 'x64' && process.version === 'v22.23.3' && process.versions.uv === '1.51.0', 'Exact Linux official runtime profile required');
+demand(!process.env.NODE_OPTIONS && !process.env.CI_SKIP_PERF && process.execArgv.length === 0, 'Default heap/performance policy required');
+demand(sha(fs.readFileSync(process.execPath)) === 'fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48', 'Official executable bytes mismatch');
+demand(/^ID=ubuntu$/m.test(fs.readFileSync('/etc/os-release', 'utf8')) && /^VERSION_ID="24\.04"$/m.test(fs.readFileSync('/etc/os-release', 'utf8')), 'Ubuntu24.04 required');
+demand(raw && sha(Buffer.from(raw)) === process.env.DECLARED_APPEND_ASSIGNMENT_SHA256, 'Exact reviewed raw assignment UTF8 bytes required');
+const assigned = JSON.parse(raw);
+const count = Number(process.env.DECLARED_APPEND_COUNT);
+demand(assigned.schemaVersion === 2 && assigned.state === 'ASSIGNED' && [100, 250].includes(count) && assigned.count === count, 'Exact ASSIGNED count required');
+demand(assigned.authorizedByRoot === true && assigned.authorizedByQueue === true && assigned.separateAppendWitnessAuthorized === true && assigned.exclusiveWindowAssigned === true, 'Separate explicit Root+Queue assignment required');
+demand(assigned.installAuthorized === true && assigned.hostedRuntimeBindingsAuthorized === true && assigned.checkoutPurpose === 'append-phase-witness', 'Explicit fresh hosted installation and symbolic-path binding authorization required');
+demand(assigned.profile === 'linux-node22.23.3-uv1.51.0-default-heap' && assigned.head === expectedHead && assigned.tree === expectedTree, 'Exact source/profile required');
+demand(assigned.authorizedRepository === 'mario-andreschak/FLUJO' && process.env.GITHUB_REPOSITORY === assigned.authorizedRepository && process.env.GITHUB_EVENT_NAME === 'workflow_dispatch', 'Exact repository/manual event required');
+demand(/^[a-f0-9]{40}$/.test(assigned.authorizedWorkflowSha) && assigned.authorizedWorkflowSha === process.env.GITHUB_SHA && process.env.GITHUB_RUN_ATTEMPT === '1', 'Reviewed exact helper commit and first attempt required; rerun needs fresh review');
+demand(typeof assigned.dispatchNonce === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(assigned.dispatchNonce), 'Reviewed dispatch nonce required');
+demand(Date.parse(assigned.notBeforeUtc) <= Date.now() && Date.parse(assigned.expiresAtUtc) > Date.now() + 450_000, 'Valid grant with at least450s remaining required before installation');
+demand(assigned.checkout === '@github-workspace/append-target' && assigned.outputParent === '@runner-temp/append-phase-witness-output' && assigned.npmCli === '@official-runtime/npm-cli' && assigned.npmCliSha256 === expectedNpmSha, 'Only explicitly reviewed symbolic bindings are accepted');
+const workspace = fs.realpathSync(process.env.GITHUB_WORKSPACE);
+const runnerTemp = fs.realpathSync(process.env.RUNNER_TEMP);
+const root = fs.realpathSync(path.join(workspace, 'append-target'));
+const harness = fs.realpathSync(path.join(workspace, 'append-harness'));
+demand(root === path.join(workspace, 'append-target') && harness === path.join(workspace, 'append-harness'), 'Dedicated canonical target/helper checkouts required');
+const git = (checkout, args) => execFileSync('git', ['-C', checkout, ...args], { encoding: 'utf8', timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }).trim();
+demand(git(harness, ['rev-parse', 'HEAD']) === assigned.authorizedWorkflowSha && git(harness, ['status', '--porcelain=v1', '--untracked-files=all']) === '', 'Clean exact reviewed harness commit required');
+const workflow = path.join(harness, '.github/workflows/persona-memory-recall-benchmark.yml');
+demand(sha(fs.readFileSync(workflow)) === assigned.reviewedWorkflowSha256, 'Exact reviewed existing-workflow edit required');
+const manifestBytes = fs.readFileSync(path.join(__dirname, 'manifest.json'));
+demand(sha(manifestBytes) === assigned.packetManifestSha256, 'Exact reviewed helper packet required');
+const manifest = JSON.parse(manifestBytes);
+for (const member of manifest.members) {
+  demand(typeof member.file === 'string' && path.basename(member.file) === member.file, 'Packet has a non-flat member');
+  const bytes = fs.readFileSync(path.join(__dirname, member.file));
+  demand(bytes.length === member.bytes && sha(bytes) === member.sha256, 'Packet member changed: ' + member.file);
+}
+demand(git(root, ['rev-parse', 'HEAD']) === expectedHead && git(root, ['rev-parse', 'HEAD^{tree}']) === expectedTree && git(root, ['status', '--porcelain=v1', '--untracked-files=all']) === '', 'Clean exact failed actual merge required before installation');
+const pins = JSON.parse(fs.readFileSync(path.join(__dirname, 'current-source-pins.json'))).sourceComparison.pins.filter(pin => pin.role === 'traced append input');
+demand(pins.length === 19, 'Exactly19 traced inputs required');
+for (const pin of pins) demand(git(root, ['rev-parse', `HEAD:${pin.file}`]) === pin.gitBlob && git(root, ['hash-object', '--', pin.file]) === pin.gitBlob, 'Target traced input mismatch: ' + pin.file);
+const npmCli = fs.realpathSync(path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'));
+demand(sha(fs.readFileSync(npmCli)) === expectedNpmSha && JSON.parse(fs.readFileSync(path.resolve(path.dirname(npmCli), '../package.json'))).version === '10.9.9', 'Exact official bundled npm10.9.9 CLI required');
+const outputParent = path.join(runnerTemp, 'append-phase-witness-output');
+demand(!fs.existsSync(outputParent), 'Fresh owned output directory required; repeated attempt refused');
+const effective = { ...assigned, checkout: root, outputParent, npmCli };
+if (count === 250) {
+  demand(/^[0-9]+$/.test(String(assigned.previous100RunId)) && /^append-phase-witness-f67f215d2c698f961d28efdb50267454b4b1faf6-100-[0-9]+-1$/.test(assigned.previous100ArtifactName) && assigned.previous100ArtifactName.endsWith(`-${assigned.previous100RunId}-1`), 'Reviewed same-repository100 artifact/run identity required');
+  demand(assigned.previous100Receipt?.file === '@prior-100/receipt.json' && assigned.previous100Release?.file === '@prior-100/release.json' && /^[a-f0-9]{64}$/.test(assigned.previous100Receipt.sha256) && /^[a-f0-9]{64}$/.test(assigned.previous100Release.sha256), 'Reviewed prior100 receipt/release digests and symbolic paths required');
+  effective.previous100Receipt = { ...assigned.previous100Receipt, file: path.join(outputParent, 'prior-100', 'receipt.json') };
+  effective.previous100Release = { ...assigned.previous100Release, file: path.join(outputParent, 'prior-100', 'release.json') };
+} else demand(!assigned.previous100Receipt && !assigned.previous100Release && !assigned.previous100RunId && !assigned.previous100ArtifactName, '100 entry must have no predecessor artifact');
+fs.mkdirSync(outputParent, { mode: 0o700 });
+fs.writeFileSync(path.join(outputParent, 'grant.raw.json'), raw, { flag: 'wx', mode: 0o600 });
+const effectiveBytes = Buffer.from(JSON.stringify(effective, null, 2) + '\n');
+fs.writeFileSync(path.join(outputParent, 'grant.effective.json'), effectiveBytes, { flag: 'wx', mode: 0o600 });
+fs.writeFileSync(path.join(outputParent, 'binding.json'), JSON.stringify({ schemaVersion: 1, state: 'ASSIGNED_SYMBOLIC_PATHS_BOUND_NO_NEW_AUTHORIZATION', utc: new Date().toISOString(), rawAssignmentSha256: sha(Buffer.from(raw)), effectiveAssignmentSha256: sha(effectiveBytes), allowedBindings: ['checkout', 'outputParent', 'npmCli', ...(count === 250 ? ['previous100Receipt.file', 'previous100Release.file'] : [])], head: expectedHead, tree: expectedTree, workflowSha: assigned.authorizedWorkflowSha, workflowSha256: assigned.reviewedWorkflowSha256, packetManifestSha256: sha(manifestBytes), repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, dispatchNonce: assigned.dispatchNonce }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `output_parent=${outputParent}\ngrant_file=${path.join(outputParent, 'grant.effective.json')}\ncount=${count}\nprior_run=${assigned.previous100RunId ?? ''}\nprior_name=${assigned.previous100ArtifactName ?? ''}\n`);
+process.stdout.write(JSON.stringify({ state: 'BOUND_NOT_EXECUTED', outputParent, count }) + '\n');

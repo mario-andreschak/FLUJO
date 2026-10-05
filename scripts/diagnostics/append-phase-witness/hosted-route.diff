@@ -1,0 +1,130 @@
+diff --git a/.github/workflows/persona-memory-recall-benchmark.yml b/.github/workflows/persona-memory-recall-benchmark.yml
+index 2b62a826..d5fee7f9 100644
+--- a/.github/workflows/persona-memory-recall-benchmark.yml
++++ b/.github/workflows/persona-memory-recall-benchmark.yml
+@@ -2,18 +2,34 @@ name: persona-memory-recall-benchmark
+ 
+ on:
+   workflow_dispatch:
++    inputs:
++      append_phase_witness:
++        description: Reviewed diagnostic count; none retains the production recall gate
++        type: choice
++        options: ['none', '100', '250']
++        default: 'none'
++        required: true
++      append_assignment:
++        description: Exact Root and Queue ASSIGNED diagnostic JSON; empty for recall mode
++        type: string
++        default: ''
++      append_assignment_sha256:
++        description: Reviewed SHA256 of exact assignment UTF8 bytes; empty for recall mode
++        type: string
++        default: ''
+   schedule:
+     - cron: '37 4 * * 1'
+ 
+ concurrency:
+-  group: persona-memory-recall-benchmark-${{ github.ref }}
+-  cancel-in-progress: true
++  group: ${{ github.event_name == 'workflow_dispatch' && inputs.append_phase_witness != 'none' && format('append-phase-witness-{0}', github.ref) || format('persona-memory-recall-benchmark-{0}', github.ref) }}
++  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.append_phase_witness == 'none' }}
+ 
+ permissions:
+   contents: read
+ 
+ jobs:
+   controlled-recall-gate:
++    if: github.event_name != 'workflow_dispatch' || inputs.append_phase_witness == 'none'
+     name: controlled-50k-production-recall
+     runs-on: ubuntu-latest
+     timeout-minutes: 45
+@@ -61,3 +77,88 @@ jobs:
+           path: benchmark-artifacts/
+           if-no-files-found: error
+           retention-days: 30
++
++  append-phase-witness:
++    if: github.event_name == 'workflow_dispatch' && (inputs.append_phase_witness == '100' || inputs.append_phase_witness == '250')
++    name: append-phase-witness-${{ inputs.append_phase_witness }}
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++    permissions:
++      contents: read
++      actions: read
++    env:
++      FLUJO_SKIP_PATCHRIGHT_DOWNLOAD: '1'
++    steps:
++      - name: Checkout reviewed helper commit
++        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
++        with:
++          ref: ${{ github.sha }}
++          path: append-harness
++          persist-credentials: false
++      - name: Checkout exact failed actual merge separately
++        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
++        with:
++          ref: f67f215d2c698f961d28efdb50267454b4b1faf6
++          path: append-target
++          persist-credentials: false
++      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
++        with:
++          node-version: '22.23.3'
++      - name: Record official runtime before installation
++        working-directory: append-target
++        run: node scripts/verify-ci-node.mjs 22.23.3 > "$RUNNER_TEMP/append-node-runtime.json"
++      - name: Bind separately assigned paths and reviewed bytes
++        id: bind
++        env:
++          DECLARED_APPEND_ASSIGNMENT_JSON: ${{ inputs.append_assignment }}
++          DECLARED_APPEND_ASSIGNMENT_SHA256: ${{ inputs.append_assignment_sha256 }}
++          DECLARED_APPEND_COUNT: ${{ inputs.append_phase_witness }}
++        run: node append-harness/scripts/diagnostics/append-phase-witness/bind-hosted-grant.cjs
++      - name: Preserve runtime evidence
++        env:
++          OUTPUT_PARENT: ${{ steps.bind.outputs.output_parent }}
++        run: cp "$RUNNER_TEMP/append-node-runtime.json" "$OUTPUT_PARENT/official-runtime.json"
++      - name: Read reviewed previous100 artifact for250
++        if: inputs.append_phase_witness == '250'
++        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
++        with:
++          name: ${{ steps.bind.outputs.prior_name }}
++          run-id: ${{ steps.bind.outputs.prior_run }}
++          repository: mario-andreschak/FLUJO
++          github-token: ${{ github.token }}
++          path: ${{ steps.bind.outputs.output_parent }}/prior-100
++      - name: Verify natural100 and independent release before250 installation
++        if: inputs.append_phase_witness == '250'
++        env:
++          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
++        run: node append-harness/scripts/diagnostics/append-phase-witness/verify-predecessor.cjs "$GRANT_FILE"
++      - name: Install only the assigned fresh target graph under180s budget
++        env:
++          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
++        run: node append-harness/scripts/diagnostics/append-phase-witness/run-install.cjs "$GRANT_FILE"
++      - name: Run exact bounded witness under controller budget
++        env:
++          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
++          WITNESS_COUNT: ${{ steps.bind.outputs.count }}
++        run: node append-harness/scripts/diagnostics/append-phase-witness/run.cjs --grant "$GRANT_FILE" --count "$WITNESS_COUNT"
++      - name: Independently audit release after controller exit
++        if: always() && steps.bind.outcome == 'success'
++        env:
++          OUTPUT_PARENT: ${{ steps.bind.outputs.output_parent }}
++        run: node append-harness/scripts/diagnostics/append-phase-witness/release.cjs "$OUTPUT_PARENT"
++      - name: Preserve all partial evidence with file hashes
++        if: always() && steps.bind.outcome == 'success'
++        env:
++          OUTPUT_PARENT: ${{ steps.bind.outputs.output_parent }}
++        run: |
++          cd "$OUTPUT_PARENT"
++          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
++      - name: Upload diagnostic evidence including partial outcomes
++        if: always() && steps.bind.outcome == 'success'
++        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
++        with:
++          name: append-phase-witness-f67f215d2c698f961d28efdb50267454b4b1faf6-${{ inputs.append_phase_witness }}-${{ github.run_id }}-${{ github.run_attempt }}
++          path: ${{ steps.bind.outputs.output_parent }}/
++          include-hidden-files: true
++          if-no-files-found: error
++          retention-days: 30

@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "sourceComparison": {
+    "actualFailedMerge": "f67f215d2c698f961d28efdb50267454b4b1faf6",
+    "publishedAA": "aa924df542970b14b7b31ec0a893b849bde276aa",
+    "sharedTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+    "tracedInputs": 19,
+    "separateSelectors": 2,
+    "pins": [
+      {
+        "file": "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts",
+        "role": "traced append input",
+        "gitBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeEvents.ts",
+        "role": "traced append input",
+        "gitBlob": "129ae05ac0378fa196d9d44c4398e205db1436df",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+        "role": "traced append input",
+        "gitBlob": "a488112df8b24223ad879b99cd6bf02c722aad6b",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+        "role": "traced append input",
+        "gitBlob": "fd64cf9eb4eecae63123d605791c3484dad4e0ef",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/storage/backend.ts",
+        "role": "traced append input",
+        "gitBlob": "70827c696e98bf95d08e9cd713da59308e16cd03",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/workspace.ts",
+        "role": "traced append input",
+        "gitBlob": "564fdfd5e37616639367881d13ff7ff41130f61b",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/paths.ts",
+        "role": "traced append input",
+        "gitBlob": "3c141f50214839bf9b05a5ab17cef231902dcaf7",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeClock.ts",
+        "role": "traced append input",
+        "gitBlob": "02a1d328c308f5c2c9ace1d6c74b35ae6f45fe22",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/store.ts",
+        "role": "traced append input",
+        "gitBlob": "8f949f1889f48f319b3d29fdb1ec2fff32f57d33",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryOrigins.ts",
+        "role": "traced append input",
+        "gitBlob": "50b190e18207b7805162d2c1ae688790d8d82456",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryFiles.ts",
+        "role": "traced append input",
+        "gitBlob": "40864eff680b5fb308ce10e11786441d385c8669",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/config/features.ts",
+        "role": "traced append input",
+        "gitBlob": "4414c3c08b5aee9594cdf504d89b731438006bd5",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.setup.ts",
+        "role": "traced append input",
+        "gitBlob": "378314b1c3d3be8e41d7733485b50dfa73026840",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.config.mjs",
+        "role": "traced append input",
+        "gitBlob": "e8780411e449a1e1a817ac0c198cd60e61e00a00",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.testMatch.mjs",
+        "role": "traced append input",
+        "gitBlob": "cdd585a6f7e3734ce89a5402526edafc0a6eb605",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "scripts/run-local-jest.cjs",
+        "role": "traced append input",
+        "gitBlob": "7c40e9376068395610b72edb929a99d5f8680256",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "scripts/local-test-dependencies.cjs",
+        "role": "traced append input",
+        "gitBlob": "36b9fdcd4a80091167ae0f008b3daf2db41f059e",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "package.json",
+        "role": "traced append input",
+        "gitBlob": "622ea38eed0c2e7bbbb4a5af46e1c47208dbed92",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "package-lock.json",
+        "role": "traced append input",
+        "gitBlob": "873ffa0d1e5c4343e5978b8ca186004dc15ec588",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "__tests__/enduringAgents/runtimeEventsIncremental.test.ts",
+        "role": "existing separate selector",
+        "gitBlob": "800488c027b028566ee98177721e9cf84e10f3b9",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "__tests__/workspace/workspaceWriterAdmission.test.ts",
+        "role": "existing separate selector",
+        "gitBlob": "cd9ff7b00083ee1b8babc194849a0f2b24dcbec9",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      }
+    ]
+  },
+  "evidence": {
+    "run": 37299052402,
+    "job": 111727146019,
+    "reportSha256": "ce55131e2ff089e6f8c0600272b84a5e117135446affdb1754f319b55a286792",
+    "rawJobSha256": "a17f73fe09cc4f24025d3a48968209e4b6cd5f38a28be3b4e54b4b9c97f1fe05",
+    "cause": "UNRESOLVED",
+    "originalTestBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "state": "SOURCE_STRUCTURE_CHECK_ONLY_GITHUB_ENGINE_NOT_ENTERED",
+  "checkedAtUtc": "2026-10-05T12:26:54.2701977Z",
+  "editBaselineHead": "aa924df542970b14b7b31ec0a893b849bde276aa",
+  "editBaselineTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+  "editBaselineWorkflowBlob": "2b62a8262858e6a681f525bfb8ecfb3b74b841ee",
+  "defaultBranchMain": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "defaultBranchWorkflowBlob": "086fbd44b4cc1dacee0b137756e437d540febad2",
+  "mainAndAAWorkflowDifferent": true,
+  "existingAARecallJobStepsByteIdenticalAfterRemovingOnlyAddedJobCondition": true,
+  "scheduledTriggerRetained": true,
+  "diagnosticPredicate": "github.event_name == 'workflow_dispatch' && (inputs.append_phase_witness == '100' || inputs.append_phase_witness == '250')",
+  "sourceTruthTable": [
+    {
+      "event": "schedule",
+      "input": "none",
+      "appendDiagnosticSelected": false,
+      "normalRecallSelected": true
+    },
+    {
+      "event": "schedule",
+      "input": "100",
+      "appendDiagnosticSelected": false,
+      "normalRecallSelected": true
+    },
+    {
+      "event": "schedule",
+      "input": "250",
+      "appendDiagnosticSelected": false,
+      "normalRecallSelected": true
+    },
+    {
+      "event": "workflow_dispatch",
+      "input": "none",
+      "appendDiagnosticSelected": false,
+      "normalRecallSelected": true
+    },
+    {
+      "event": "workflow_dispatch",
+      "input": "100",
+      "appendDiagnosticSelected": true,
+      "normalRecallSelected": false
+    },
+    {
+      "event": "workflow_dispatch",
+      "input": "250",
+      "appendDiagnosticSelected": true,
+      "normalRecallSelected": false
+    }
+  ],
+  "defaultConcurrencyGroupPreserved": "persona-memory-recall-benchmark-<github.ref>",
+  "diagnosticConcurrency": "append-phase-witness-<github.ref>; cancel-in-progress false",
+  "newWorkflowFileAdded": false,
+  "verifyWorkflowEdited": false,
+  "original20kTestEdited": false,
+  "fullSuiteOrBuildInDiagnosticJob": false,
+  "nativeYamlOrActionsEngineValidated": false,
+  "semanticOrRuntimeTestExecuted": false
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-05T12:26:54.2962374Z",
+  "metadataCommands": [
+    "gh api repos/mario-andreschak/FLUJO/git/ref/heads/main",
+    "gh api repos/mario-andreschak/FLUJO/contents/.github/workflows/persona-memory-recall-benchmark.yml?ref=main"
+  ],
+  "main": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "path": ".github/workflows/persona-memory-recall-benchmark.yml",
+  "blob": "086fbd44b4cc1dacee0b137756e437d540febad2",
+  "bytes": 2000,
+  "existingManualAndScheduledWorkflow": true,
+  "fullMainSourceExportJoinedToBlob": true,
+  "usedAsEditBase": false,
+  "currentAAEditBaseBlob": "2b62a8262858e6a681f525bfb8ecfb3b74b841ee",
+  "endpointMutation": false,
+  "workflowDispatchEntered": false,
+  "workflowExistsOnDefaultBranchVerified": true
+}

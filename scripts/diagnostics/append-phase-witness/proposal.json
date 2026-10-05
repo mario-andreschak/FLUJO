@@ -1,0 +1,454 @@
+{
+  "schemaVersion": 2,
+  "state": "SEALED_PREPARATION_UNRUN_PENDING_ROOT_QUEUE_REVIEW_AND_SEPARATE_ASSIGNMENT",
+  "preparedAtUtc": "2026-10-05T12:30:08.3694909Z",
+  "objective": "Narrow the current AA timeout using one separately assigned100 sample, then250 only after reviewed natural100 and independent release. Observe real admission, acquire, append/tombstone/read/parse and retirement costs; leave runtime/adoption grade open.",
+  "source": {
+    "pr": 611,
+    "publishedAA": "aa924df542970b14b7b31ec0a893b849bde276aa",
+    "publishedTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+    "actualFailedMerge": "f67f215d2c698f961d28efdb50267454b4b1faf6",
+    "actualFailedMergeTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+    "actualMergeParents": [
+      "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "aa924df542970b14b7b31ec0a893b849bde276aa"
+    ],
+    "failedRun": 37299052402,
+    "failedJob": 111727146019,
+    "original20kTestBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+    "tracedInputs": [
+      {
+        "file": "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts",
+        "role": "traced append input",
+        "gitBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeEvents.ts",
+        "role": "traced append input",
+        "gitBlob": "129ae05ac0378fa196d9d44c4398e205db1436df",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+        "role": "traced append input",
+        "gitBlob": "a488112df8b24223ad879b99cd6bf02c722aad6b",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+        "role": "traced append input",
+        "gitBlob": "fd64cf9eb4eecae63123d605791c3484dad4e0ef",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/storage/backend.ts",
+        "role": "traced append input",
+        "gitBlob": "70827c696e98bf95d08e9cd713da59308e16cd03",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/workspace.ts",
+        "role": "traced append input",
+        "gitBlob": "564fdfd5e37616639367881d13ff7ff41130f61b",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/utils/paths.ts",
+        "role": "traced append input",
+        "gitBlob": "3c141f50214839bf9b05a5ab17cef231902dcaf7",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeClock.ts",
+        "role": "traced append input",
+        "gitBlob": "02a1d328c308f5c2c9ace1d6c74b35ae6f45fe22",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/store.ts",
+        "role": "traced append input",
+        "gitBlob": "8f949f1889f48f319b3d29fdb1ec2fff32f57d33",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryOrigins.ts",
+        "role": "traced append input",
+        "gitBlob": "50b190e18207b7805162d2c1ae688790d8d82456",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryFiles.ts",
+        "role": "traced append input",
+        "gitBlob": "40864eff680b5fb308ce10e11786441d385c8669",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "src/config/features.ts",
+        "role": "traced append input",
+        "gitBlob": "4414c3c08b5aee9594cdf504d89b731438006bd5",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.setup.ts",
+        "role": "traced append input",
+        "gitBlob": "378314b1c3d3be8e41d7733485b50dfa73026840",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.config.mjs",
+        "role": "traced append input",
+        "gitBlob": "e8780411e449a1e1a817ac0c198cd60e61e00a00",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "jest.testMatch.mjs",
+        "role": "traced append input",
+        "gitBlob": "cdd585a6f7e3734ce89a5402526edafc0a6eb605",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "scripts/run-local-jest.cjs",
+        "role": "traced append input",
+        "gitBlob": "7c40e9376068395610b72edb929a99d5f8680256",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "scripts/local-test-dependencies.cjs",
+        "role": "traced append input",
+        "gitBlob": "36b9fdcd4a80091167ae0f008b3daf2db41f059e",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "package.json",
+        "role": "traced append input",
+        "gitBlob": "622ea38eed0c2e7bbbb4a5af46e1c47208dbed92",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "package-lock.json",
+        "role": "traced append input",
+        "gitBlob": "873ffa0d1e5c4343e5978b8ca186004dc15ec588",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      }
+    ],
+    "separateUnselectedSelectors": [
+      {
+        "file": "__tests__/enduringAgents/runtimeEventsIncremental.test.ts",
+        "role": "existing separate selector",
+        "gitBlob": "800488c027b028566ee98177721e9cf84e10f3b9",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      },
+      {
+        "file": "__tests__/workspace/workspaceWriterAdmission.test.ts",
+        "role": "existing separate selector",
+        "gitBlob": "cd9ff7b00083ee1b8babc194849a0f2b24dcbec9",
+        "sameInEarlierF238": true,
+        "sameInPublishedAA": true,
+        "sameInActualF67": true
+      }
+    ],
+    "currentAndEarlier19InputIdentity": true,
+    "entireTransitiveGraphIdentityClaimed": false
+  },
+  "causeEvidence": {
+    "sourceReviewFile": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-source-review-v1\\source-review.json",
+    "sourceReviewSha256": "2c05b9cbffd0be1a8d319831afad6b889c8038d13a3279a3dda20f9f7f27d937",
+    "sourceReviewManifestSha256": "20d4637da522233a985666e77623363563435597a65c9e7c9729ffbfd92ef9c8",
+    "sourceReviewMatchedMembers": 9,
+    "sourceReviewMismatches": 0,
+    "sourceReviewExtras": 0,
+    "nativeCounts": "8674PASS/1FAIL/11SKIP;907PASS/1FAIL/5SKIP suites;2111.935s",
+    "soleFailure": "unchanged20k runtimeEventsAppendScaling.test.ts:49;1800000ms timeout",
+    "nativeCaseDurationMs": 1800021,
+    "nativeNumPassingAsserts": 0,
+    "invocations": 1,
+    "retries": [],
+    "postTimeoutImportErrorAfterMs": 72.3083,
+    "inference": "All original fixture Jest assertions follow the append loop. Native0 passing assertions and a late queuedappend->tombstone guard frame support unfinished append work, without a captured completed-count or stalled-await proof.",
+    "additionalSourceWork": "Three real lock lifecycles per append; steady successful acquisition checks12 existing directories and four whole-root scans. Each tombstone miss also probes recovered-origin/restore with a fresh PersonaRecoveryFileReader.",
+    "additionalSourceWorkObservedInFailedRun": false,
+    "lateGuardMeansDeletingTombstone": false,
+    "rootCauseResolved": false
+  },
+  "runtime": {
+    "platform": "Linux x64 Ubuntu24.04",
+    "node": "22.23.3",
+    "libuv": "1.51.0",
+    "officialNodeExecutableSha256": "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
+    "npm": "10.9.9",
+    "npmCliSha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+    "npmCliReferenceSource": "https://raw.githubusercontent.com/npm/cli/v10.9.9/bin/npm-cli.js",
+    "npmReferenceDownloadedAsPlainSourceOnly": true,
+    "next": "16.3.8",
+    "jestCircus": "30.4.2",
+    "typescript": "6.0.3",
+    "heap": "default; no NODE_OPTIONS or execArgv overrides",
+    "worker": "single Node Jest project;--runInBand",
+    "graph": "exact target owned node_modules verified by canonical dependency guard; no parent borrowing",
+    "windowsFallback": false
+  },
+  "environment": {
+    "exclusiveRunnerSyntheticDataRoot": true,
+    "existingJestOwnedDataHook": "__personaGoalEnduranceDataRoot",
+    "realGateAndFilesystemAdmissionDelegated": true,
+    "performanceFlagsRefused": [
+      "NODE_OPTIONS",
+      "CI_SKIP_PERF"
+    ],
+    "unreviewedTargetEnvFilesRefused": [
+      ".env",
+      ".env.local",
+      ".env.test",
+      ".env.test.local"
+    ],
+    "inheritedFixtureSelectorsAndDataOverridesRemoved": true,
+    "personaRuntimeFeatureOverridesRemoved": true,
+    "patchrightBrowserDownload": "FLUJO_SKIP_PATCHRIGHT_DOWNLOAD=1",
+    "fakeClockIntroduced": false,
+    "productionClockChanged": false,
+    "originalTimeoutSkipOracleOrBaselineChanged": false
+  },
+  "counts": [
+    100,
+    250
+  ],
+  "sequencing": "Two separate Root+Queue ASSIGNED exclusive-window grants.100 first.250 needs reviewed same-source/same-packet100 natural completion and independent post-controller release hashes, checked before hosted installation and again before witness entry.",
+  "deadlines": {
+    "localWitnessGrantRemainingBeforeFirstStageMs": 220000,
+    "hostedGrantRemainingBeforeBindingMs": 450000,
+    "hostedGrantRemainingBeforeInstallationMs": 410000,
+    "hostedOwnedInstallWatchdogMs": 180000,
+    "dependencyGuardWatchdogMs": 20000,
+    "fixtureCooperativeDeadlineBeforeNextAppendMs": 110000,
+    "separateDiagnosticJestTimeoutMs": 120000,
+    "witnessChildWatchdogMs": 180000,
+    "sigtermGraceMs": 5000,
+    "sigkillCloseWaitMs": 5000,
+    "pidScanIntervalMs": 250,
+    "gitEachCommandTimeoutMs": 10000,
+    "hostedJobTimeoutMinutes": 10,
+    "original20kTimeoutMs": 1800000,
+    "original20kGateUnchanged": true,
+    "kernelUninterruptibleOperationPromise": "No hard completion guarantee; survivor/missing-birth/outcome or source issue refuses release and preserves partial evidence."
+  },
+  "workBudgets": {
+    "logicalFilesystemCalls": 100000,
+    "successfulReadBytes": 8388608,
+    "parseLogLineInputUtf8Bytes": 8388608,
+    "aggregateKeys": 512,
+    "inflightTokens": 2048,
+    "liveFileHandles": 128,
+    "recordedNativeFailures": 16,
+    "recordedObserverErrors": 16,
+    "lockDirectoryEntriesPerCheckpoint": 4096,
+    "checkpointEveryCompletedAppends": 25,
+    "periodicCheckpointMs": 2000,
+    "enforcement": "Cooperative before each append and tail, after tail, and driver success-readback. In-flight native I/O is delegated unchanged; a single operation can exceed a cooperative cap before the next check. Overflow/error/work-budget overrun invalidates the short diagnostic.",
+    "proposedWriteBytes": "Observed for writeFile/appendFile logical APIs, without asserting physical bytes written",
+    "readBytes": "Successful readFile UTF8/buffer results and FileHandle.read bytesRead",
+    "parseCoverage": "parseLogLine only; no claim to count every JSON parser or system call",
+    "observerFileWritesAndRootScan": "Excluded from work budgets; checkpoint scan time/truncation recorded separately"
+  },
+  "observation": {
+    "sourceFiles": 6,
+    "functionCount": 20,
+    "functionTargets": {
+      "src/backend/services/workspace/workspaceMutationGate.ts": [
+        "withWorkspaceMutation"
+      ],
+      "src/backend/services/enduringAgents/runtimeLock.ts": [
+        "registerWorkspaceWriter",
+        "withWorkspaceProcessMutation",
+        "acquireFilesystemLock",
+        "ensureRuntimeLockRoot",
+        "retireOwnedCanonical"
+      ],
+      "src/backend/services/enduringAgents/runtimeEvents.ts": [
+        "appendPersonaRuntimeEvent",
+        "assertEventLogNotDeleting",
+        "enqueue",
+        "parseLogLine",
+        "scanLogLines",
+        "syncState",
+        "appendRecord",
+        "rotateIfNeeded",
+        "readPersonaRuntimeEvents"
+      ],
+      "src/backend/services/enduringAgents/store.ts": [
+        "getPersonaDeletionTombstone",
+        "getRecord"
+      ],
+      "src/backend/services/enduringAgents/personaRecoveryOrigins.ts": [
+        "getRecoveredPersonaDeletionTombstone"
+      ],
+      "src/utils/storage/backend.ts": [
+        "loadCollectionItem",
+        "runInWriteChain"
+      ]
+    },
+    "transform": "Owned locked TypeScript AST inspection delegates source transform to owned Next/SWC. Exact disk production source stays unchanged. Observe original returns after original finally blocks; return original values/promises.",
+    "taskObservation": "Delegated task begins recorded for workspace gate, process mutation, writer registration, event enqueue and storage write chain. taskWait fields mean elapsed before task start, including upstream work; they are not pure queue delay.",
+    "filesystem": "Original fs.promises/sync calls and FileHandle methods delegate; preserve function custom properties such as realpathSync.native. Direct native helper calls and callback APIs are outside observed logical calls.",
+    "timing": "Nested inclusive durations overlap and must not be summed as exclusive wall time; instrumentation and promise settlement continuations add cost.",
+    "snapshots": [
+      "begin",
+      "every25 append-progress",
+      "every2s periodic",
+      "before-tail",
+      "complete",
+      "finally"
+    ],
+    "snapshotsInclude": [
+      "completed,lastSeq,configuration and original runtime-event deterministic work stats",
+      "inflight phase ages",
+      "logical filesystem/read/parse/proposed-write counts and bytes",
+      "per-phase elapsed/max/return/task-start spans",
+      "lock-root canonical/candidate/recovery/abandoned cardinalities",
+      "active owner/deferred cleanup/writer admission/gate waiter counts",
+      "bounded native failure and observer-error records"
+    ],
+    "eventValuesOrTaskArgumentsSerialized": false,
+    "rawErrorsMayIncludeOwnedSyntheticPaths": true
+  },
+  "driver": {
+    "file": "run.cjs",
+    "sha256": "4245e8ae2aa63c1d2270bdf1c972e9953294da5616e9517b4d1202f8534d37f0",
+    "exactFutureLocalCommand": "node <reviewed-packet>/run.cjs --grant <absolute-separate-ASSIGNED.json> --count 100",
+    "future250Command": "node <same-reviewed-packet>/run.cjs --grant <new-ASSIGNED-with-100-receipt-release-hashes.json> --count 250",
+    "selection": "Exclusively-created appendPhaseWitness-<UUID>.test.ts in target/enduringAgents; exact single-suite/single-test native result required",
+    "original20kSelected": false,
+    "sourceBeforeAfter": "HEAD/tree/clean status and19 input hashes, exact fixture-only unlink in finally",
+    "cleanup": "No recursive deletion; synthetic event logs and installation retained outside repo",
+    "release": "Independent process checks all observed PID/start ticks including install controller. Authoritative stage outcomes are read even when stage() threw before receipt insertion. No unverified process is signaled; no release helper deletion.",
+    "releaseLimit": "Known observed births only; polling is not a complete historical process census.",
+    "partialEvidence": [
+      "native Jest JSON when emitted",
+      "stdout/stderr and outcomes",
+      "progress/transforms/source hashes",
+      "raw/effective assignment and binding receipt",
+      "installer process/outcomes and runtime record",
+      "preserved synthetic data",
+      "controller receipt/manifests/independent release"
+    ]
+  },
+  "ownedLinuxAvailability": {
+    "inventoryOnly": "wsl.exe --list --quiet;natural0;only docker-desktop",
+    "ownedUbuntuCheckoutOrCompleteGraphFound": false,
+    "distributionLaunched": false,
+    "provisioningEntered": false,
+    "ownPreviousWindowsCheckoutUnavailable": true,
+    "dirtySharedPrimaryEdited": false,
+    "frozen775And764Touched": false
+  },
+  "hostedRoute": {
+    "state": "REVIEWABLE_SOURCE_PROPOSAL_NOT_PUBLISHED_OR_DISPATCHED",
+    "reason": "No owned canonical Ubuntu24.04 context found",
+    "workflow": ".github/workflows/persona-memory-recall-benchmark.yml",
+    "newWorkflowFile": false,
+    "existingOnDefaultBranch": true,
+    "defaultMainAtReview": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+    "defaultMainFileBlob": "086fbd44b4cc1dacee0b137756e437d540febad2",
+    "editBaseAA": "aa924df542970b14b7b31ec0a893b849bde276aa",
+    "editBaseWorkflowBlob": "2b62a8262858e6a681f525bfb8ecfb3b74b841ee",
+    "mainFileUsedOnlyAsDefaultExistenceProof": true,
+    "preserveCurrentAAPinnedActions": true,
+    "existingRecallJobStepsByteIdenticalAfterRemovingAddedCondition": true,
+    "draftFile": "persona-memory-recall-benchmark.proposed.yml",
+    "draftSha256": "8cfba018d799b70e6644866601e9a14080907f6f6b1ca8407e5d1eca56544d4a",
+    "reviewDiff": "hosted-route.diff",
+    "input": "append_phase_witness choice none|100|250;default none",
+    "diagnosticJobPredicate": "github.event_name == 'workflow_dispatch' && (inputs.append_phase_witness == '100' || inputs.append_phase_witness == '250')",
+    "normalRecallJobPredicate": "github.event_name != 'workflow_dispatch' || inputs.append_phase_witness == 'none'",
+    "scheduledAndDefaultManualRecallPreserved": true,
+    "diagnosticConcurrency": "Separate group, cancellation false",
+    "job": "append-phase-witness;ubuntu-24.04;10min;contents/actions read",
+    "helperFilesDestination": "scripts/diagnostics/append-phase-witness/",
+    "helperBundle": "Copy sealed flat packet plus manifest into separately reviewed helper commit; exact reviewed workflow bytes to existing path. No checkout/install/publication is authorized by this packet.",
+    "target": "Separate fresh checkout of actualf67/tree d09; never modify frozen PR worktrees",
+    "helperCommit": "Separately published reviewed full40SHA; workflow github.sha and clean harness HEAD must equal authorizedWorkflowSha",
+    "dispatch": "Future one manual workflow dispatch of existing workflow at reviewed helper branch/ref only after Root review, concrete publication and new Queue exclusive heavy-window/install grant. Exact assignment JSON and SHA256 are inputs. First attempt only; a rerun/ref advance/driver change requires fresh review.",
+    "binding": "Only explicitly authorized symbolic checkout/output/npm and predecessor paths are substituted; raw/effective bytes/digests preserved; no approval booleans synthesized",
+    "installation": "Official binary verified before install; binder requires explicit installAuthorized. Fresh target npm ci --include=dev only under birth-aware180s controller, retaining raw logs/outcomes/source before-after.",
+    "before250": "Official cross-run artifact download at reviewed run/name; exact reviewed100 receipt/release hashes checked before installation",
+    "release": "Separate post-controller Node process includes installer and witness known births and source/manifest closure; install-only release is explicitly not a witness result",
+    "artifact": "Pinned official actions upload of raw/partial evidence and all file SHA256SUMS; later Queue+Root server archive digest/raw report readback required",
+    "buildBrowserFullSuite": "No build, application/browser launch, original20k or fullsuite command in diagnostic job",
+    "requiredVerifyWorkflowChanged": false,
+    "currentGrantExists": false,
+    "publicationEntered": false,
+    "dispatchEntered": false,
+    "githubActionsNativeEngineValidated": false
+  },
+  "preparation": {
+    "nineCjsParserChecksNaturalZero": true,
+    "parserReceipt": "parser-checks.json",
+    "parserNodeExecutableSha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e",
+    "typescriptFixtureCompiled": false,
+    "nextSwcOrJestLoaded": false,
+    "yamlSourceStructureAndPredicateTruthTableReviewed": true,
+    "yamlNativeValidatorEntered": false,
+    "linuxRuntimeApplicationOrWitnessEntered": false,
+    "installedOrProvisioned": false,
+    "sourceRepairAdded": false
+  },
+  "acceptanceBoundary": "A short result is phase/cost evidence only. No20k complexity/p95 acceptance, no endurance/rotation/whole-heap qualification, no installed/application/runtime/adoption grade. Current native security and mandatory ordinary verification failures remain open; no retry/timeout/skip/performance oracle/baseline adjustment.",
+  "officialWorkflowDocs": [
+    {
+      "url": "https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows",
+      "claim": "workflow_dispatch requires workflow existence on default branch; a ref can select a branch/tag for execution"
+    },
+    {
+      "url": "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax",
+      "claim": "workflow_dispatch inputs, job conditions, permissions and concurrency syntax"
+    }
+  ],
+  "retainedHistoricalEvidence": {
+    "sourceOnlyV1Manifest": "75192941c4208fd99baaa78c617751afd6ab5f25478009b846aa971c3e338998",
+    "sourceOnlyV1Executed": false,
+    "priorF238FailurePreserved": true,
+    "later4aPassDoesNotExplainFailure": true,
+    "own775DcdfTypesAnd27TestsUnchanged": true,
+    "own550Historical94NotRetargeted": true
+  }
+}
