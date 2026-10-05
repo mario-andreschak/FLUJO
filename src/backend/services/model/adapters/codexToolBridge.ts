@@ -1,4 +1,5 @@
 import http from 'http';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -20,7 +21,7 @@ export interface BridgeTool {
   inputSchema: Record<string, unknown> | undefined;
   /** Preserve real MCP hints when the caller has them; never invent safer hints. */
   annotations?: ToolAnnotations;
-  handler: (args: Record<string, unknown>) => Promise<CallToolResult>;
+  handler: (args: Record<string, unknown>, requestIdentity?: string) => Promise<CallToolResult>;
 }
 
 export interface CodexToolBridge {
@@ -47,9 +48,11 @@ export interface CodexToolBridge {
 export async function startCodexToolBridge(
   tools: BridgeTool[],
   instructions?: string,
+  requireStableToolIds = false,
 ): Promise<CodexToolBridge> {
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
+  const requestIdentity = new AsyncLocalStorage<string>();
 
   const buildServer = (): Server => {
     const server = new Server(
@@ -71,7 +74,7 @@ export async function startCodexToolBridge(
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true };
       }
       try {
-        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>);
+        return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>, requestIdentity.getStore());
       } catch (err) {
         // Surface handler failures as tool errors instead of a JSON-RPC fault,
         // so the model can react to them like any other failed call.
@@ -99,7 +102,26 @@ export async function startCodexToolBridge(
     });
     try {
       await server.connect(transport);
-      await transport.handleRequest(req, res);
+      if (requireStableToolIds && req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += buffer.byteLength;
+          if (size > 1024 * 1024) throw new Error('Native tool request exceeds the bridge bound.');
+          chunks.push(buffer);
+        }
+        const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid native tool request.');
+        const id = (body as { id?: unknown }).id;
+        if (typeof id === 'string' || typeof id === 'number') {
+          await requestIdentity.run(`${typeof id}:${String(id)}`, () => transport.handleRequest(req, res, body));
+        } else {
+          await transport.handleRequest(req, res, body);
+        }
+      } else {
+        await transport.handleRequest(req, res);
+      }
     } catch (err) {
       log.error('Codex tool-bridge request failed', err);
       if (!res.headersSent) {

@@ -115,6 +115,9 @@ export interface CompletionInput {
     dispatchId: string;
     outcome: 'completed' | 'error' | 'cancelled';
   }) => Promise<void>;
+  /** Runtime-only, origin-owned policy port. A JSON value cannot satisfy its
+   *  module-private capability check in either native adapter. */
+  nativeToolPort?: NativeToolPort;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -294,6 +297,31 @@ export interface CompletionInput {
    * `prompt_cache_key` and retries without it if an endpoint rejects it.
    */
   promptCacheMode?: 'explicit';
+}
+
+export interface NativeToolPortResult {
+  result: import('@modelcontextprotocol/sdk/types.js').CallToolResult;
+  transcriptText: string;
+  kind: 'mcp' | 'synthetic' | 'handoff';
+  ui?: NonNullable<FlujoChatMessage['ui']>;
+}
+
+export interface NativeToolPort {
+  readonly invocationId: string;
+  readonly inventoryDigest: string;
+  readonly advertised: ReadonlyArray<{
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+    annotations?: ToolAnnotations;
+  }>;
+  dispatch(input: {
+    toolInvocationId: string;
+    name: string;
+    args: Record<string, unknown>;
+    signal: AbortSignal;
+  }): Promise<NativeToolPortResult>;
+  cancel(): void;
 }
 
 /**

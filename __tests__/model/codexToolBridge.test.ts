@@ -63,4 +63,25 @@ describe('Codex tool bridge', () => {
       await bridge.close();
     }
   });
+
+  it('passes the JSON-RPC callback identity to native tool handlers', async () => {
+    const identities: Array<string | undefined> = [];
+    const bridge = await startCodexToolBridge([{
+      name: 'worker_search', description: 'Search', inputSchema: { type: 'object', properties: {} },
+      handler: async (_args, identity) => {
+        identities.push(identity);
+        return { content: [{ type: 'text', text: 'ok' }] };
+      },
+    }], undefined, true);
+    const client = new Client({ name: 'codex-native-bridge-test', version: '1.0.0' });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(bridge.url)));
+      await client.callTool({ name: 'worker_search', arguments: {} });
+      expect(identities).toHaveLength(1);
+      expect(identities[0]).toMatch(/^(number|string):/);
+    } finally {
+      await client.close().catch(() => undefined);
+      await bridge.close();
+    }
+  });
 });

@@ -14,6 +14,9 @@
  * relying on any live subscription (the SDK is mocked).
  */
 import type OpenAI from 'openai';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
@@ -91,6 +94,8 @@ jest.mock('@/backend/services/model/adapters/claudeRuntimeHome', () => ({
 }));
 
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
+import { _setNativeToolJournalRootForTests, prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
+import { createNativeBrokerAuthority, createNativeToolPort, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 
 // A single terminal success `result` message ends the adapter's message loop
 // cleanly with no tool calls.
@@ -118,6 +123,45 @@ const capturedOptions = () => {
   expect(queryMock).toHaveBeenCalledTimes(1);
   return queryMock.mock.calls[0][0].options as Record<string, unknown>;
 };
+
+it('routes a native Claude tool-use ID through the durable Worker port without host MCP fallback', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-claude-native-port-'));
+  _setNativeToolJournalRootForTests(directory);
+  try {
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [{
+      type: 'function', function: { name: 'worker_search', description: 'Search',
+        parameters: { type: 'object', properties: {} } },
+    }];
+    const executor = jest.fn(async () => ({ found: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation({
+      conversationId: 'native-claude', runId: 'run-1', nodeId: 'node-1', modelId: 'm1',
+      leaseEpoch: 'lease-1', inputDigest: 'input-1', attemptOrdinal: 1,
+      inventoryDigest: nativeToolInventoryDigest(tools, undefined, executors),
+    });
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-1', async () => undefined),
+      signal: new AbortController().signal });
+    callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+      onSdkRequest: async () => receipt.invocationId,
+      onSdkRequestResult: async () => undefined }));
+    const permission = capturedOptions().canUseTool as (
+      name: string, args: Record<string, unknown>, options: { toolUseID: string },
+    ) => Promise<{ behavior: string }>;
+    expect((await permission('mcp__flujo__worker_search', { q: 'test' }, { toolUseID: 'sdk-claude-1' })).behavior)
+      .toBe('allow');
+    const result = await sdkToolsMock[0].handler({ q: 'test' });
+    expect(result).toMatchObject({ content: [{ type: 'text' }] });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(callToolMock).not.toHaveBeenCalled();
+  } finally {
+    _setNativeToolJournalRootForTests(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 it('returns per-query totals independently from the latest root request context', async () => {
   queryMock.mockImplementation(() => (async function* () {

@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { assertNativeToolPort } from '@/backend/execution/flow/handlers/nativeToolBroker';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
@@ -333,6 +334,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     sessionResume,
     onSdkRequest,
     onSdkRequestResult,
+    nativeToolPort,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -343,13 +345,21 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // require SDK-managed sampling-control support that does not exist today; if
     // that is ever desired, revisit this seam (issues #173 and #191).
   }: CompletionInput): Promise<CompletionResult> {
+    if (nativeToolPort) {
+      assertNativeToolPort(nativeToolPort);
+      if (!onSdkRequest || !onSdkRequestResult) throw new Error('Native Claude broker requires a durable SDK dispatch receipt.');
+      if (executionExtensionContext || toolNameMap || localToolExecutors || requestToolApproval || sessionResume
+        || steering || consumeSteeringMessages) {
+        throw new Error('Native Claude broker cannot use host tool facilities, steering or session resume.');
+      }
+    }
     // Lazy-load the Agent SDK: it ships as ESM, so importing it at module scope
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
     const runtime = await prepareClaudeRuntimeEnvironment();
     let runResourceSettings: RunResourceSettings | undefined;
-    if (conversationId) {
+    if (conversationId && !nativeToolPort) {
       try {
         runResourceSettings = await getRunResourceSettings();
       } catch (error) {
@@ -504,6 +514,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // starts. Record the call there, then let the handler append only its result.
     const queuedToolCalls = new Map<string, Array<{ id: string; argsJson: string }>>();
     const recordedToolCallIds = new Set<string>();
+    const recordedNativeToolResults = new Set<string>();
     const partialToolMessageIds = new Map<string, string>();
     const enqueueToolCall = (name: string, callId: string, argsJson: string): void => {
       const queue = queuedToolCalls.get(name) ?? [];
@@ -525,6 +536,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         recordedToolCallIds.add(callId);
       }
       return callId;
+    };
+    const takeNativeToolCall = (name: string, args: Record<string, unknown>): string => {
+      const queue = queuedToolCalls.get(name);
+      const argsJson = JSON.stringify(args ?? {});
+      const index = queue?.findIndex(entry => entry.argsJson === argsJson) ?? -1;
+      if (index < 0) throw new Error('Native Claude tool lacks a matching SDK tool-use identity.');
+      const [matching] = queue!.splice(index, 1);
+      if (queue!.length === 0) queuedToolCalls.delete(name);
+      return matching.id;
     };
 
     // Build the in-process MCP server from the node's tools. MCP tools dispatch to
@@ -784,9 +804,40 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         });
       })
       .filter((t): t is NonNullable<typeof t> => t !== null);
+    const effectiveSdkTools = nativeToolPort
+      ? nativeToolPort.advertised.map(advertised => {
+          const { shape, fallbackSchema } = buildToolInputShape(advertised.inputSchema);
+          return tool(advertised.name,
+            embedSchemaInDescription(advertised.description, fallbackSchema), shape,
+            async (args: Record<string, unknown>): Promise<CallToolResult> => {
+              const callId = takeNativeToolCall(advertised.name, args);
+              try {
+                const dispatched = await nativeToolPort.dispatch({
+                  toolInvocationId: callId, name: advertised.name, args,
+                  signal: abortController.signal,
+                });
+                if (!recordedNativeToolResults.has(callId)) {
+                  if (dispatched.kind === 'handoff') {
+                    handoffCalls.push({ name: advertised.name, args });
+                    if (!(advertised.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties?.task) {
+                      endSpawning = true;
+                    }
+                  }
+                  recordToolResult({ id: callId, resultContent: dispatched.transcriptText });
+                  recordedNativeToolResults.add(callId);
+                }
+                return dispatched.result;
+              } catch (error) {
+                nativeToolPort.cancel();
+                abortController.abort();
+                throw error;
+              }
+            });
+        })
+      : sdkTools;
 
-    const mcpServers = sdkTools.length > 0
-      ? { [SDK_SERVER_NAME]: createSdkMcpServer({ name: SDK_SERVER_NAME, version: '1.0.0', tools: sdkTools }) }
+    const mcpServers = effectiveSdkTools.length > 0
+      ? { [SDK_SERVER_NAME]: createSdkMcpServer({ name: SDK_SERVER_NAME, version: '1.0.0', tools: effectiveSdkTools }) }
       : undefined;
 
     // Replace the subprocess env wholesale (per SDK contract): start with the
@@ -800,7 +851,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const hasImages = typeof userContent !== 'string';
     log.debug('createCompletion via Claude Agent SDK', {
       model: model.name,
-      toolCount: sdkTools.length,
+      toolCount: effectiveSdkTools.length,
       hasSystem: Boolean(systemPrompt),
       hasImages,
       maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
@@ -900,6 +951,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
           const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
           const args = (input ?? {}) as Record<string, unknown>;
+          if (nativeToolPort) {
+            if (!nativeToolPort.advertised.some(tool => tool.name === readableName) || !opts.toolUseID) {
+              return { behavior: 'deny', message: 'Tool is outside the native broker inventory.' };
+            }
+            if (!recordedToolCallIds.has(opts.toolUseID)) {
+              recordToolCall({ id: opts.toolUseID, name: readableName, argsJson: JSON.stringify(args) });
+              recordedToolCallIds.add(opts.toolUseID);
+            }
+            enqueueToolCall(readableName, opts.toolUseID, JSON.stringify(args));
+            return { behavior: 'allow', updatedInput: input };
+          }
           if (shouldEndAgenticTurn?.()) {
             return {
               behavior: 'deny',
@@ -977,7 +1039,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         operation: 'query',
         request: { prompt: sdkPromptMessage, options: queryOptions },
       });
+      if (nativeToolPort && dispatchId !== nativeToolPort.invocationId) {
+        throw new Error('Native Claude SDK dispatch receipt differs from its broker origin.');
+      }
     } catch (archiveError) {
+      if (nativeToolPort) {
+        closeInput();
+        signal?.removeEventListener('abort', onExternalAbort);
+        throw archiveError;
+      }
       try { rethrowFlowExecutionAuthorityError(archiveError); }
       catch (authorityError) {
         closeInput();
@@ -997,6 +1067,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         try {
           await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
         } catch (archiveError) {
+          if (nativeToolPort) throw archiveError;
           rethrowFlowExecutionAuthorityError(archiveError);
           log.warn('Could not update Claude Agent SDK request archive', archiveError);
         }
@@ -1298,6 +1369,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         try {
           await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
         } catch (archiveError) {
+          if (nativeToolPort) throw archiveError;
           rethrowFlowExecutionAuthorityError(archiveError);
           log.warn('Could not update Claude Agent SDK request archive', archiveError);
         }

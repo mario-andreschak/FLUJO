@@ -13,6 +13,10 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
+import { assertNativeBrokerAuthority, createNativeToolPort, nativeDigest, nativeToolInventoryDigest,
+  type NativeBrokerAuthority } from './nativeToolBroker';
+import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation, holdNativeInvocation,
+  NativeInvocationHeldError, type NativeInvocationReceipt } from './nativeToolJournal';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import {
@@ -1159,12 +1163,20 @@ export class ModelHandler {
     } catch (error) {
       log.warn(`Failed to fetch model information for prefix: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (input.nativeBrokerAuthority) {
+      assertNativeBrokerAuthority(input.nativeBrokerAuthority);
+      if (!conversationId || !runId || !nodeId || input.executionExtensionContext
+        || modelIsFallbackPolicy || (modelAdapter !== 'codex-cli' && modelAdapter !== 'claude-cli')) {
+        throw new Error('Native broker requires an owned native model run and cannot use a private extension or fallback route.');
+      }
+    }
 
     // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
     // `wireMessages` view can't be reconciled against a persisted message-count
     // watermark). Codex enables it by default; Claude subscription keeps its
     // existing experimental setting. Ineligible adapters always re-flatten.
     const sessionResume =
+      !input.nativeBrokerAuthority &&
       !wireMessages &&
       (modelAdapter === 'codex-cli' ||
         (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
@@ -1605,6 +1617,7 @@ export class ModelHandler {
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
+      nativeBrokerAuthority: input.nativeBrokerAuthority,
       toolNameMap,
       maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1924,6 +1937,7 @@ export class ModelHandler {
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
       executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
+      nativeBrokerAuthority?: NativeBrokerAuthority;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1986,6 +2000,13 @@ export class ModelHandler {
             modelId
           )
         };
+      }
+      if (opts?.nativeBrokerAuthority) {
+        assertNativeBrokerAuthority(opts.nativeBrokerAuthority);
+        if (!opts.conversationId || !opts.runId || !opts.nodeId || opts.executionExtensionContext
+          || model.fallbackPolicy || (model.adapter !== 'codex-cli' && model.adapter !== 'claude-cli')) {
+          throw new Error('Native broker requires a fully owned native model attempt.');
+        }
       }
 
       // Extract model settings. Malformed persisted values are omitted so NaN
@@ -2574,6 +2595,10 @@ export class ModelHandler {
 
         const attemptStartedAt = Date.now();
         let providerAttemptObserved = false;
+        let nativeReceipt: NativeInvocationReceipt | undefined;
+        let nativeTerminal = false;
+        let nativeSdkRequestStarted = false;
+        if (opts?.nativeBrokerAuthority) attemptProducedOutput = true;
         let attemptOutcome: 'completed' | 'error' | 'cancelled' = 'error';
         let attemptError: unknown;
         let attemptUsage: OpenAiUsageLike | undefined;
@@ -2660,6 +2685,27 @@ export class ModelHandler {
                     commitFlowDurableMutation(opts?.durableContext ?? {}, task),
                 },
               );
+              const nativeToolPort = opts?.nativeBrokerAuthority
+                ? await (async () => {
+                    await opts.nativeBrokerAuthority!.assertCurrent();
+                    const inventoryDigest = nativeToolInventoryDigest(attemptTools ?? [], opts.toolNameMap, localToolExecutors);
+                    nativeReceipt = await prepareNativeInvocation({
+                      conversationId: opts.conversationId!, runId: opts.runId!, nodeId: opts.nodeId!,
+                      modelId, leaseEpoch: opts.nativeBrokerAuthority!.leaseEpoch, inventoryDigest,
+                      attemptOrdinal: sdkDispatchOrdinal + 1,
+                      inputDigest: nativeDigest({ modelId, messages: hydratedMessages, tools: attemptTools,
+                        temperature: attemptTemperature, maxTokens: opts.maxTokens }),
+                    });
+                    return createNativeToolPort({
+                      receipt: nativeReceipt, tools: attemptTools ?? [], toolNameMap: opts.toolNameMap,
+                      localToolExecutors, service: mcpService, requestToolApproval: opts.requestToolApproval,
+                      beforeToolDispatch: opts.beforeToolDispatch,
+                      afterToolDispatch: () => assertFlowExecutionCurrent(opts.durableContext ?? {}),
+                      authorizePersonaCoreMcp: opts.authorizePersonaCoreMcp,
+                      authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
+                    });
+                  })()
+                : undefined;
               const input = {
               model,
               apiKey: decryptedApiKey,
@@ -2685,15 +2731,19 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
-              onSdkRequest: opts?.archiveModelTurns && opts.conversationId && opts.nodeId
+              onSdkRequest: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId && opts.nodeId))
                 ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
+                    if (nativeReceipt && nativeSdkRequestStarted) {
+                      throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                    }
                     try {
                       const entry = await archiveModelDispatch({
-                        durableContext: opts.durableContext,
-                        conversationId: opts.conversationId!,
-                        runId: opts.runId,
-                        nodeId: opts.nodeId!,
-                        nodeName: opts.nodeName,
+                        ...(nativeReceipt ? { id: nativeReceipt.invocationId } : {}),
+                        durableContext: opts?.durableContext,
+                        conversationId: opts!.conversationId!,
+                        runId: opts?.runId,
+                        nodeId: opts!.nodeId!,
+                        nodeName: opts?.nodeName,
                         modelId: routingModel.id,
                         modelName: routingModel.displayName || routingModel.name,
                         adapter: snapshot.adapter,
@@ -2701,7 +2751,7 @@ export class ModelHandler {
                         attempt: ++sdkDispatchOrdinal,
                         canonicalMessages: archiveCanonicalMessages
                           ? structuredClone(archiveCanonicalMessages)
-                          : opts.canonicalMessages ?? messages,
+                          : opts?.canonicalMessages ?? messages,
                         genericWire: snapshot.wireMessages !== undefined
                           ? structuredClone(snapshot.wireMessages)
                           : hydratedMessages,
@@ -2709,31 +2759,38 @@ export class ModelHandler {
                         modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
                       });
-                      executionEventBus.emit(opts.conversationId!, {
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch',
                         turn: entry,
                       });
+                      if (nativeReceipt) {
+                        await submitNativeInvocation(nativeReceipt);
+                        await opts!.nativeBrokerAuthority!.assertCurrent();
+                        nativeSdkRequestStarted = true;
+                      }
                       return entry.id;
                     } catch (error) {
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not archive model SDK dispatch; continuing request', { error });
                       return undefined;
                     }
                   }
                 : undefined,
-              onSdkRequestResult: opts?.archiveModelTurns && opts.conversationId
+              onSdkRequestResult: (nativeReceipt || (opts?.archiveModelTurns && opts.conversationId))
                 ? async ({ dispatchId, outcome }: {
                     dispatchId: string;
                     outcome: 'completed' | 'error' | 'cancelled';
                   }): Promise<void> => {
                     try {
-                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome, opts.durableContext);
-                      executionEventBus.emit(opts.conversationId!, {
+                      await updateModelDispatchOutcome(opts!.conversationId!, dispatchId, outcome, opts?.durableContext);
+                      executionEventBus.emit(opts!.conversationId!, {
                         type: 'model:dispatch-result',
                         dispatchId,
                         outcome,
                       });
                     } catch (error) {
+                      if (nativeReceipt) throw error;
                       rethrowFlowExecutionAuthorityError(error);
                       log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
                     }
@@ -2746,30 +2803,31 @@ export class ModelHandler {
               // (resolved in callModel, #189), falling back to the per-model value
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
-              toolNameMap: opts?.toolNameMap,
-              localToolExecutors,
+              toolNameMap: nativeToolPort ? undefined : opts?.toolNameMap,
+              localToolExecutors: nativeToolPort ? undefined : localToolExecutors,
+              nativeToolPort,
               shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
-              requestToolApproval: opts?.requestToolApproval,
+              requestToolApproval: nativeToolPort ? undefined : opts?.requestToolApproval,
               onTranscriptMessage,
-              consumeSteeringMessages: opts?.consumeSteeringMessages,
-              steering: opts?.steering,
+              consumeSteeringMessages: nativeToolPort ? undefined : opts?.consumeSteeringMessages,
+              steering: nativeToolPort ? undefined : opts?.steering,
               onModelDelta,
-              onToolProgress,
+              onToolProgress: nativeToolPort ? undefined : onToolProgress,
               signal: abortController.signal,
-              beforeToolDispatch: opts?.beforeToolDispatch,
+              beforeToolDispatch: nativeToolPort ? undefined : opts?.beforeToolDispatch,
               executionExtensionContext: opts?.executionExtensionContext,
-              authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
-              afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
-              commitDurableMutation: <T>(task: () => Promise<T>) =>
+              authorizePersonaCoreMcp: nativeToolPort ? undefined : opts?.authorizePersonaCoreMcp,
+              afterToolDispatch: nativeToolPort ? undefined : () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
+              commitDurableMutation: nativeToolPort ? undefined : <T>(task: () => Promise<T>) =>
                 commitFlowDurableMutation(opts?.durableContext ?? {}, task),
               conversationId: opts?.conversationId,
               runId: opts?.runId,
               nodeId: opts?.nodeId,
-              codexSession: opts?.codexSession,
-              onCodexSessionChange: opts?.onCodexSessionChange,
+              codexSession: nativeToolPort ? undefined : opts?.codexSession,
+              onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
-              sessionResume: opts?.sessionResume,
+              sessionResume: nativeToolPort ? false : opts?.sessionResume,
               // Derived from the tool-block hash, or from the conversation for a
               // no-tool history-first wire, so requests sharing the reusable
               // prefix route to one prompt-cache shard (see derivePromptCacheKey).
@@ -2788,9 +2846,16 @@ export class ModelHandler {
                 await assertExecutionExtensionCurrent(opts.executionExtensionContext);
               }
               if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
-              return opts?.onModelDelta && adapter.createStreamCompletion
+              const nativeResult = await (opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
-                : adapter.createCompletion(input);
+                : adapter.createCompletion(input));
+              if (nativeReceipt) {
+                if (!nativeSdkRequestStarted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
+                await finishNativeInvocation(nativeReceipt, 'completed');
+                nativeTerminal = true;
+              }
+              return nativeResult;
             };
 
             if (autoUnloadOllama && ollamaRootForUnload) {
@@ -2959,6 +3024,9 @@ export class ModelHandler {
 
           return result;
         } catch (error) {
+          if (nativeReceipt && !nativeTerminal) {
+            await holdNativeInvocation(nativeReceipt).catch(() => undefined);
+          }
           attemptError = error;
           attemptOutcome = abortController.signal.aborted ? 'cancelled' : 'error';
           // A genuine Claude subscription failure can follow streamed prose. Do

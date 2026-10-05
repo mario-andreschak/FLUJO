@@ -273,14 +273,29 @@ async function sanitizeValue(
   return out;
 }
 
-async function writeAtomic(file: string, data: Buffer): Promise<void> {
+async function writeAtomic(file: string, data: Buffer, durable = false): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await fs.writeFile(temp, data);
-  await fs.rename(temp, file);
+  if (durable) {
+    const handle = await fs.open(temp, 'wx', 0o600);
+    try { await handle.writeFile(data); await handle.sync(); }
+    finally { await handle.close(); }
+  } else {
+    await fs.writeFile(temp, data);
+  }
+  try { await fs.rename(temp, file); }
+  catch (error) { await fs.rm(temp, { force: true }).catch(() => undefined); throw error; }
+  if (durable) {
+    try {
+      const directory = await fs.open(path.dirname(file), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    } catch { /* directory fsync is unavailable on some Windows filesystems */ }
+  }
 }
 
 export interface ArchiveModelDispatchInput {
+  /** Mandatory preallocated origin ID for a journalled native dispatch. */
+  id?: string;
   durableContext?: FlowDurableMutationContext;
   conversationId: string;
   runId?: string;
@@ -307,7 +322,16 @@ export function archiveModelDispatch(input: ArchiveModelDispatchInput): Promise<
 async function archiveModelDispatchWithinMutation(
   input: ArchiveModelDispatchInput,
 ): Promise<ModelTurnIndexEntry> {
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
+  assertSafeId(id, 'dispatch id');
+  if (input.id) {
+    try {
+      await fs.access(snapshotPath(input.conversationId, id));
+      throw new Error('Native dispatch archive already exists; query the original invocation.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   const ctx: SanitizeContext = {
     conversationId: input.conversationId,
     media: [],
@@ -355,11 +379,11 @@ async function archiveModelDispatchWithinMutation(
     try {
       await fs.access(target);
     } catch {
-      await writeAtomic(target, bytes);
+      await writeAtomic(target, bytes, Boolean(input.id));
     }
   }));
   const compressed = await gzipAsync(Buffer.from(JSON.stringify(snapshot), 'utf8'));
-  await writeAtomic(snapshotPath(input.conversationId, id), compressed);
+  await writeAtomic(snapshotPath(input.conversationId, id), compressed, Boolean(input.id));
   return entry;
 }
 

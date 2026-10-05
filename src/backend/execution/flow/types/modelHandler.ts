@@ -90,6 +90,8 @@ export interface ModelCallInput {
   signal?: AbortSignal;
   /** Runtime-only fencing authority. It is never copied into provider input. */
   executionAuthority?: FlowExecutionAuthority;
+  /** Trusted in-process opt-in; never populated from HTTP JSON or a saved Flow. */
+  nativeBrokerAuthority?: import('../handlers/nativeToolBroker').NativeBrokerAuthority;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */

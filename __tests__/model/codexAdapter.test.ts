@@ -12,6 +12,9 @@
  *   - a plain handoff ends the run and surfaces as a routing tool_call.
  */
 import type OpenAI from 'openai';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { CompletionInput, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { BridgeTool } from '@/backend/services/model/adapters/codexToolBridge';
 import type { FlujoChatMessage } from '@/shared/types/chat';
@@ -110,6 +113,8 @@ import {
   CODEX_FLUJO_INSTRUCTIONS,
 } from '@/backend/services/model/adapters/codexAdapter';
 import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
+import { _setNativeToolJournalRootForTests, prepareNativeInvocation, submitNativeInvocation } from '@/backend/execution/flow/handlers/nativeToolJournal';
+import { createNativeBrokerAuthority, createNativeToolPort, nativeToolInventoryDigest } from '@/backend/execution/flow/handlers/nativeToolBroker';
 
 type AnyEvent = Record<string, unknown>;
 
@@ -271,6 +276,41 @@ describe('CodexAdapter — thread setup', () => {
       { type: 'text', text: expect.stringContaining('hi') },
     ]);
   });
+});
+
+it('routes a native Codex callback through the durable Worker port without host tool fallback', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-native-port-'));
+  _setNativeToolJournalRootForTests(directory);
+  try {
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [{
+      type: 'function', function: { name: 'worker_search', description: 'Search',
+        parameters: { type: 'object', properties: {} } },
+    }];
+    const executor = jest.fn(async () => ({ found: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation({
+      conversationId: 'native-codex', runId: 'run-1', nodeId: 'node-1', modelId: 'm1',
+      leaseEpoch: 'lease-1', inputDigest: 'input-1', attemptOrdinal: 1,
+      inventoryDigest: nativeToolInventoryDigest(tools, undefined, executors),
+    });
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-1', async () => undefined),
+      signal: new AbortController().signal });
+    callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
+    await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+      onSdkRequest: async () => receipt.invocationId,
+      onSdkRequestResult: async () => undefined }));
+    const result = await capturedBridgeTools[0].handler({ q: 'test' }, 'number:42');
+    expect(result.isError).not.toBe(true);
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(startThreadMock).toHaveBeenCalledTimes(1);
+  } finally {
+    _setNativeToolJournalRootForTests(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 describe('CodexAdapter — transcript & usage', () => {
