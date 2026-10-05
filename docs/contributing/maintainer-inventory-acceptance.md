@@ -54,6 +54,11 @@ comparison. Every other field, graph element, node payload, nested timestamp and
 array order must match. Raw timestamp values remain in evidence. The public seed
 is stored and restored but never run; no provider or model call is part of this plan.
 
+The separate [conversation acceptance contract](./maintainer-conversation-acceptance.md)
+requires complete API and archive observations. The flow timestamp exclusions above
+do not apply to conversations. Frozen #763's failure, #774's initialization correction
+and their own validation remain separate from this successor's source and outcomes.
+
 ## Source and offline controls after assignment
 
 Run the existing maintainer selector at the committed correction on an assigned,

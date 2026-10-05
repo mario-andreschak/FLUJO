@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
 import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline,
   readInitializedFlowInventory } from './maintainer-installed-baseline.mjs';
-import { stateSelections, readSyntheticState, assertSyntheticState, assertFreshSyntheticState,
+import { stateSelections, conversationComparisonProfile, readSyntheticState, assertSyntheticState, assertFreshSyntheticState,
   validateSyntheticStateReceipt, verifySyntheticStateArchive, validateFlowInventoryReceipt,
   readFlowInventory, canonicalFlowInventory, assertFlowInventory,
   restoreSyntheticState, invalidSyntheticStateArchives } from './maintainer-synthetic-state.mjs';
@@ -255,7 +255,8 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     capture('original-flow.json', original); capture('input-backup.zip', archive);
     if (broaderState) {
       capture('original-state.json', stateBytes);
-      receipt.syntheticState = { schemaVersion: 1, original: 'original-state.json', selections: [...stateSelections], verified: false };
+      receipt.syntheticState = { schemaVersion: 2, original: 'original-state.json', selections: [...stateSelections],
+        conversationComparison: conversationComparisonProfile, verified: false };
       capture('original-flows.json', flowBytes); capture('initial-flows.json', initialFlowBytes);
       receipt.flowInventory = { schemaVersion: 1, original: 'original-flows.json', initial: 'initial-flows.json',
         ids: canonicalFlowInventory(expectedFlows).map(flow => flow.id), ignoredFields: ['createdAt', 'updatedAt'],
@@ -268,7 +269,7 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       if (before.status !== 200) throw new Error('Candidate did not preserve the existing baseline flow before any restore.');
       assertRestoredFlow(JSON.parse(before.bytes), expected); capture('pre-upgrade-flow.json', before.bytes);
       if (broaderState) {
-        const existingState = await readSyntheticState(request); assertSyntheticState(existingState, expectedState);
+        const existingState = await readSyntheticState(request, JSZip); assertSyntheticState(existingState, expectedState);
         capture('pre-upgrade-state.json', JSON.stringify(existingState, null, 2) + '\n'); receipt.baselineStateFoundBeforeRestore = true;
         const existingFlows = await readFlowInventory(request); assertFlowInventory(existingFlows, expectedFlows);
         capture('pre-upgrade-flows.json', JSON.stringify(existingFlows, null, 2) + '\n'); receipt.baselineFlowsFoundBeforeRestore = true;
@@ -301,7 +302,7 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       if (mode === 'upgrade') {
         assertRestoredFlow(JSON.parse(unchanged.bytes), expected);
         if (broaderState) {
-          assertSyntheticState(await readSyntheticState(request), expectedState);
+          assertSyntheticState(await readSyntheticState(request, JSZip), expectedState);
           assertFlowInventory(await readFlowInventory(request), expectedFlows);
         }
       } else if (broaderState) {
@@ -316,7 +317,7 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (restored.status !== 200) throw new Error('Restored fresh-root flow was not readable.');
     assertRestoredFlow(JSON.parse(restored.bytes), expected); capture(mode === 'upgrade' ? 'upgraded-flow.json' : 'restored-flow.json', restored.bytes);
     if (broaderState) {
-      const state = await readSyntheticState(request); assertSyntheticState(state, expectedState);
+      const state = await readSyntheticState(request, JSZip); assertSyntheticState(state, expectedState);
       capture(mode === 'upgrade' ? 'upgraded-state.json' : 'restored-state.json', JSON.stringify(state, null, 2) + '\n');
       const flows = await readFlowInventory(request); assertFlowInventory(flows, expectedFlows);
       capture(mode === 'upgrade' ? 'upgraded-flows.json' : 'restored-flows.json', JSON.stringify(flows, null, 2) + '\n');
@@ -343,7 +344,7 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
     if (reopened.status !== 200) throw new Error('Recovered flow did not survive restart.');
     assertRestoredFlow(JSON.parse(reopened.bytes), expected); capture('restarted-flow.json', reopened.bytes);
     if (broaderState) {
-      const state = await readSyntheticState(request); assertSyntheticState(state, expectedState);
+      const state = await readSyntheticState(request, JSZip); assertSyntheticState(state, expectedState);
       capture('restarted-state.json', JSON.stringify(state, null, 2) + '\n'); receipt.syntheticState.verified = true;
       const flows = await readFlowInventory(request); assertFlowInventory(flows, expectedFlows);
       capture('restarted-flows.json', JSON.stringify(flows, null, 2) + '\n'); receipt.flowInventory.verified = true;

@@ -155,9 +155,21 @@ flows and Persona ownership markers are refused. The seeded agent is never execu
 The probe checks every synthetic record, changes
 the flow/title/theme/label, and rejects both
 a missing-metadata archive and a conversation with a forbidden ownership marker.
-Every selected record must remain unchanged after rejection. The valid archive
-must restore the entire flow inventory, conversation metadata and both messages,
-theme and label. A re-export must contain the same full flow inventory too.
+Every selected record must remain unchanged after rejection. Conversation evidence
+retains the complete GET response and the complete stored conversation from an
+independent `chatHistory` export in `original-state.json`. All fields in both
+observations, including unknown fields, tracking data, `updatedAt`, parent/root
+links and both full message arrays, must match their original observations after
+restore and restart. No conversation timestamp or metadata field is ignored.
+The explicit cross-view ID alias, null defaults and derived transcript window
+checks are documented in [the conversation acceptance contract](./maintainer-conversation-acceptance.md).
+The valid archive must restore the entire flow inventory, theme, label and full
+stored conversation; API readback checks the complete exposed response separately.
+A re-export must contain the same full flow inventory and stored conversation too.
+Synthetic-state receipt schema 2 binds this comparison profile and both raw JSON
+observations. Historical schema 1 receipts remain narrower evidence and are refused
+by this gate. This source correction still needs assigned validation and an actual
+installed run; the earlier native checks do not establish its behavior.
 Fixed fixture timestamps never count as elapsed human activity. Response
 bytes, archives, logs, lockfile and SHA-256 receipts remain in the printed
 `flujo-maintainer-installed-*` directory, including on failure. The receipt binds
