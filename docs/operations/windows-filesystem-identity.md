@@ -34,12 +34,23 @@ before collecting them. The read-only descriptor is measured again after the
 writer closes; it never reads bytes. It prints Node,
 libuv and OS versions without a hostname, path, environment or file contents.
 It exits nonzero when exact device/inode or other required metadata differs.
-Only freshly rechecked, known probe leaves are deleted; no recursive cleanup
-or existing workspace read occurs. The lower-32-bit relation is diagnostic
-metadata only and never admits a file or changes a comparison.
-Unexpected descriptor replacements refuse before samples are collected. If
-cleanup encounters an unrecorded or changed leaf, it preserves that entry and
-reports a separate bounded cleanup failure without hiding the original refusal.
+The lower-32-bit relation is diagnostic metadata only and never admits a file or
+changes a comparison. Unexpected descriptor replacements refuse before samples
+are collected. The probe checks its directory identity again after sampling.
+
+The probe retains its temporary directory and at most six constant-content files.
+It reports `cleanupPolicy: "retain-probe-files"`, `cleanupAttempted: false` and
+`cleanupCompleted: false`, including after a successful identity comparison.
+Separate pathname checks cannot make a later unlink or directory removal atomic
+with the checked identity, so the probe performs no namespace deletion. Use a
+caller-owned disposable temporary location and retain it with the diagnostic
+evidence; its owning environment handles disposal under its own authority.
+No existing workspace read occurs. Descriptor checks and retained files do not
+establish isolation from an actor who can change the temporary namespace.
+
+Exit 0 means all six identity samples and directory observations passed. Exit 1
+means an identity or IO refusal. Neither outcome reports cleanup as completed or
+qualifies installed startup.
 
 The local Windows 10 Pro 10.0.19045 probe with Node 22.13.1/libuv 1.49.2 passed
 all six samples. That does not qualify Windows Server 2025. Retain both runtime
