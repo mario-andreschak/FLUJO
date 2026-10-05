@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-05T16:49:40.353Z",
+  "sourceBase": "b078484c35b485c973c8a47f9640028f219281fb",
+  "provenance": "Bounded Docs reconciliation after Queue retained the complete exact-B078 originals. Docs rehashed 266 explicit original file pins and 19 unchanged Git input joins, without repeating producer workloads. The committed report is derived evidence, not a replacement for original archives.",
+  "progress": {
+    "version": 33,
+    "url": "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946",
+    "updatedAt": "2026-10-05T16:19:44Z",
+    "bodySha256": "0f2086b37b8803444d354d7e81b78d6162bc0bb1d9949947b82257681f4b3017",
+    "retainedReadbackSha256": "950da5b47b70641593d86f794da6db531932be8e3220be95414d60324e5d3932",
+    "statusIsHistoricalCut": true,
+    "currentTerminalEvidenceWasLater": "Queue sealed the complete B078 qualification at 2026-10-05T16:42:35.525Z; this later result is not attributed to the v33 publication cut."
+  },
+  "completeOriginalCondition": {
+    "met": true,
+    "queueQualificationSha256": "b620e73720928ee3bb05e6f0d0ca06707b42e5d1a59c1d388408be98cc18800a",
+    "queueCaptureSha256": "fca6a5fbebdf5ba631f6522f7bb174b8142d7952353379e68eec21bc55ebe6a4",
+    "originalArchives": 9,
+    "expandedMembers": 20,
+    "originalRunLogs": 110,
+    "docsInputAuditSha256": "75d325ffcad6bc517c54144512d81bf0f1c76c72ab33f1e335afd8386af45a15",
+    "originalPinsRehashed": 266,
+    "sourceInputGitJoins": 19,
+    "zipCrcRecomputedByDocs": false
+  },
+  "receiptPins": [
+    {
+      "receipt": "terminal-reports-profiles-independent-qualification-v1.json",
+      "bytes": 154060,
+      "sha256": "b620e73720928ee3bb05e6f0d0ca06707b42e5d1a59c1d388408be98cc18800a",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    },
+    {
+      "receipt": "capture.json",
+      "bytes": 171721,
+      "sha256": "fca6a5fbebdf5ba631f6522f7bb174b8142d7952353379e68eec21bc55ebe6a4",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    },
+    {
+      "receipt": "b078-full-native-original-source-flow-root-review-v1.json",
+      "bytes": 59190,
+      "sha256": "78410437289adafd5919a0cb10d4e9006c49b8d0ecfe969193646beec6867409",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    },
+    {
+      "receipt": "recording-ad0-complete-hosted-source-root-review-v1.json",
+      "bytes": 34351,
+      "sha256": "133baaaeb4c9a8ef468d1d70dd52f252df7148d55fbe61ee1de1f88ebc087a0d",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    },
+    {
+      "receipt": "db4-native-original-capture-and-b5-nine-fixtures-root-review-v1.json",
+      "bytes": 7962,
+      "sha256": "2558c805234e9c2f96e8f82f31157a38a7a2c04be02dc82edb826ff7b7bf5fa7",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    },
+    {
+      "receipt": "epic-563-progress-published-v33-readback.json",
+      "bytes": 13602,
+      "sha256": "950da5b47b70641593d86f794da6db531932be8e3220be95414d60324e5d3932",
+      "availability": "Original private producer/reviewer files remain with Queue/Root; independent reviewers require access. Public progress/run links establish the bounded published context, not access to those raw files."
+    }
+  ],
+  "observations": [
+    {
+      "id": "ordinary-ci-b078484c-passed",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "result": "passed",
+      "owner": "engineering",
+      "profile": "local-owner",
+      "scope": "B078 ordinary verification completed all 13 required jobs; original reports, both-OS source/runtime matrix and complete run logs were retained separately from the failing native findings gate.",
+      "facts": {
+        "tree": "cb1eb75089530809833d34a3cd3125fd0cb85d77",
+        "actualMerge": "445d59ae0eda515b0c85ec396a69682fa864eb6c",
+        "runId": 37333223553,
+        "attempt": 1,
+        "requiredJobsPassed": 13,
+        "ordinary": {
+          "passedTests": 8708,
+          "passedSuites": 910,
+          "failedTests": 0,
+          "failedSuites": 0,
+          "skippedTests": 11,
+          "skippedSuites": 5
+        },
+        "isolated": {
+          "passedTests": 105,
+          "passedSuites": 9,
+          "failedTests": 0,
+          "skippedTests": 0
+        },
+        "selectedBrowser": {
+          "new": 17,
+          "unchanged": 38,
+          "passed": 55,
+          "selectedSuites": 9,
+          "skips": 0
+        },
+        "markerAssertions": 16,
+        "unchangedTransferAssertions": 20,
+        "originalServerArchives": 9,
+        "expandedReportAndProfileMembers": 20,
+        "originalRunLogs": 110,
+        "signedRuntimeRecords": 10,
+        "supportedSourceRuntimeProfiles": 8,
+        "historicalBuildOnlyProfiles": 2,
+        "sourceRuntimeControlSteps": "Supported Ubuntu/Windows installed/packed MCP and proxy steps passed within the recorded CI matrix.",
+        "originalAppend": {
+          "durationMilliseconds": 1210662,
+          "unchangedInputs": 19,
+          "thresholdChanged": false,
+          "workloadReplayedByDocs": false,
+          "causalOrPerformanceGradeInference": false
+        }
+      },
+      "limits": [
+        "All 13 passing jobs belong to the ordinary verification workflow. The separate native findings gate remains failed.",
+        "Eight supported source/runtime records and two historical Node 22.13.1 build-only records do not qualify the selected distributed application or installed FLUJO profiles.",
+        "The AA 1,800,000 ms timeout and DB4 1,711,284 ms pass stay separate historical outcomes; the B078 pass proves no timeout cause or performance grade."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37333223553"
+      ]
+    },
+    {
+      "id": "native-codeql-b078484c-failure",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "result": "failed",
+      "owner": "security",
+      "profile": "local-owner",
+      "scope": "B078 native findings protection failed with 49 new findings and 78 open alerts; the retained original source-flow review does not provide individual dispositions or clearance.",
+      "facts": {
+        "tree": "cb1eb75089530809833d34a3cd3125fd0cb85d77",
+        "analysisMerge": "445d59ae0eda515b0c85ec396a69682fa864eb6c",
+        "newFindings": 49,
+        "newHigh": 28,
+        "newMedium": 21,
+        "openAlerts": 78,
+        "openHigh": 43,
+        "openMedium": 35,
+        "openCritical": 0,
+        "originalSourceFiles": 90,
+        "physicalFlowSteps": 7601,
+        "primaryRelatedLocations": 340,
+        "relatedUriIndexDisagreements": 262,
+        "relatedUriIndexDisagreementCause": "unproven",
+        "browser167": "absent in this snapshot only",
+        "fixture276": "still open",
+        "individualDisposition": false,
+        "clearance": false
+      },
+      "limits": [
+        "A lower open-alert count and snapshot absence are not formal finding disposition, backlog clearance or universal absence.",
+        "The 262 related-location URI/index disagreements remain an explicit original-evidence limitation; their provenance and cause are not inferred.",
+        "Source-scanner results establish neither a verified exploit nor scanner-attributed applicability to an installed profile."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611"
+      ]
+    },
+    {
+      "id": "recording-ad0b1a9b-passed",
+      "sourceSha": "ad0b1a9b0c53c4745c7b775ada5cc3a2403f8944",
+      "result": "passed",
+      "owner": "security",
+      "profile": "local-owner",
+      "scope": "Recording component AD0 passed its own 13 required jobs and all 55 selected browser assertions after the warning matcher correction.",
+      "facts": {
+        "tree": "9d18249047ea4ca4e1a79eb32605a262f382a930",
+        "actualMerge": "8f734994c466eb08f51d0f3972509ab0c5825e0d",
+        "requiredJobsPassed": 13,
+        "newRecordingAssertions": 17,
+        "unchangedBrowserAssertions": 38,
+        "selectedPassed": 55,
+        "selectedSkips": 0,
+        "earlier7af14Pass3MatcherFailuresRetained": true,
+        "laterBoundsAndCloseAssertionsExecuted": true,
+        "componentOutcomeTransferredToB078": false
+      },
+      "limits": [
+        "The v25 pending AD0 row remains a historical observation. This is a new component-scoped outcome; B078 has its own separate original reports.",
+        "Passing browser assertions do not dispose of the global native findings or establish installed-profile acceptance."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/784"
+      ]
+    },
+    {
+      "id": "worker-fixtures-b5abe6eb-passed",
+      "sourceSha": "b5abe6eb27270b4360d980c3b1919db0f7f94e08",
+      "result": "passed",
+      "owner": "production",
+      "profile": "persistent-worker",
+      "scope": "The selected worker payload event passed nine original export fixtures, with exporter proposal, executing workflow and compiled application kept as separate source identities.",
+      "facts": {
+        "executingWorkflowSource": "03c9974c9ddcbd165a6bed6c5f5b37f121959721",
+        "compiledApplicationSource": "8fe5985e4c42c3cdc37c910a4a6b5258a990d2d5",
+        "runId": 37321117422,
+        "fixtures": {
+          "passed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0
+        },
+        "allNineOriginalNamesRetained": true,
+        "innerPayloadQualifiedByThisFixtureReceipt": false,
+        "ordinaryWorkflowContractFailuresRetained": true,
+        "workerNativeAcceptance": false
+      },
+      "limits": [
+        "This derived row covers the original fixture result. It does not independently requalify the production inner archive, native loading or worker behavior.",
+        "The fixed v33 checkpoint separately reports the later retained payload metadata review; that broader evidence is not borrowed as acceptance by this fixture-only row.",
+        "Earlier #783 export refusal and the separately failed ordinary workflow-contract runs remain distinct. The v25 pending successor row is unchanged."
+      ],
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/785",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37321117422"
+      ]
+    }
+  ],
+  "otherFixedV33Statements": {
+    "scope": "Dated published checkpoint statements retained for context; no new source/runtime qualification asserted by this section.",
+    "db4": {
+      "ordinaryRequiredJobsPassed": 13,
+      "ordinaryPassed": 8691,
+      "ordinaryFailed": 0,
+      "ordinarySkips": 11,
+      "isolatedPassed": 105,
+      "originalAppendDurationMilliseconds": 1711284,
+      "nativeGate": "failed: 49 new; 79 open (44 high, 35 medium); 263 related URI/index disagreements"
+    },
+    "preferences": "Draft #788 and its distinct original CI/runtime evidence were pending at this fixed cut; neither component nor later B078 results transfer to it.",
+    "worker": "Later payload metadata and full producer stream were reviewed separately. Standalone runtime-guard contract failures, launcher preflight refusal, locked-log finalization errors and unrun worker fixtures/runtime acceptance remain distinct.",
+    "nativeBootstrap": "Compile/link and two disposable finite no-descendant controls completed within their original scopes. Earlier MSVC closeout failures and unproven termination cause remain; helper-parent survival, broader lifecycle fixtures, worker and signed application acceptance remain open.",
+    "appendDiagnostics": "Original 100- and 250-event diagnostics were independently retained within expired fixed grants. They establish no new diagnostic authority, 20,000-append retry, timeout cause or performance grade.",
+    "docs": "Addbc/v25 source validation returned 0/2/0 with 20 unchanged closure blockers. Those results stay on addbc; this new leaf needs fresh focused source checks."
+  },
+  "historicalCuts": {
+    "fixedV25Report": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-v25.json",
+    "fixedV25ReportSha256": "99a466940ad8b39f3addae2b721c4408b4402437eda6e3a4a9344d2ecb8ffbb5",
+    "originalPendingAndFailureRowsChanged": false,
+    "priorReceiptRetargeted": false
+  },
+  "acceptance": {
+    "humanOwners": "all nine unassigned",
+    "rubricAgreement": "pending",
+    "profiles": "unchanged; acceptance pending",
+    "gates": "all 13 pending",
+    "assessment": "pending; no reviewer, source or grades populated",
+    "installedReleaseAccepted": false,
+    "liveProviderEntered": false,
+    "humanAcceptance": false,
+    "independentAMinusAccepted": false
+  },
+  "limits": [
+    "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+    "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+    "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+    "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+    "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+  ]
+}

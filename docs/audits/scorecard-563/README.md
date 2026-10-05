@@ -376,3 +376,19 @@ worker/native behavior, maintainer participation, sustained usage or an independ
 grade. All nine human owners remain unassigned. Rubric agreement, profile
 acceptance, proposed budgets and independent reassessment remain unresolved as
 previously recorded.
+
+## Later B078 source results
+
+The separate [B078 terminal observation](evidence/source-outcomes-2026-10-05-b078-terminal.json)
+retains the complete original verification reports, source/runtime matrix and run
+logs after the fixed v33 publication cut. All 13 ordinary verification jobs passed;
+the separate native findings gate still failed with 49 new findings and 78 open
+alerts. The 262 related-location URI/index disagreements remain an explicit
+evidence limitation. No individual disposition or security clearance is inferred.
+
+Its four derived records also retain the recording component's own 55 selected
+passes and the selected worker event's nine fixture passes, with proposal, workflow
+and compiled application identities kept distinct. Worker native/runtime acceptance
+remains pending. The v25 report and every earlier failure or pending record stay
+unchanged. CI/source checks, archive retention and automated reviewer selection do
+not establish installed release, human acceptance or an independent A-minus grade.
