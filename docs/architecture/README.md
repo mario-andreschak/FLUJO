@@ -26,6 +26,8 @@ browser operation remain separate acceptance work.
 
 ## Decision Records
 
+- [Package flow identity and legacy references](./package-flow-identity.md):
+  Complete flow identities, ledger ownership and safe compatibility for installs.
 - [Execution and MCP ownership contracts](./execution-module-boundaries.md):
   Existing lifecycle/authority/persistence/dispatch owners, import direction,
   exact legacy dependencies, and behavior-preserving extraction gates (#571).

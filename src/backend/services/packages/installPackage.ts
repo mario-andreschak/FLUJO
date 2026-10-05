@@ -62,7 +62,6 @@ export type {
   InstallPreview,
   InstallSummary,
 } from '@/shared/types/package/install';
-import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
@@ -95,6 +94,8 @@ import type { Flow } from '@/shared/types/flow';
 import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
+import { hasConflictingFlowClaim, resolvePackageFlowIds } from './packageFlowIdentity';
+export { deterministicFlowId } from './packageFlowIdentity';
 
 const log = createLogger('backend/services/packages/installPackage');
 
@@ -136,7 +137,8 @@ interface PackageInstallRecord {
     plannedExecutions: string[];
   };
   /**
-   * Per-entity provenance (issue #211): the ids the install NEWLY CREATED, as
+   * Per-entity provenance (issue #211): ids this package created, including
+   * retained creation ownership across re-installs, as
    * opposed to entities it merely adopted/updated in place (e.g. a pre-existing
    * model matched by displayName). Uninstall only deletes created entities.
    * Optional so ledgers written before this field (3.27.0) still parse.
@@ -150,6 +152,12 @@ interface PackageInstallRecord {
 }
 type PackageInstallsFile = Record<string, PackageInstallRecord>;
 type LedgerCreated = NonNullable<PackageInstallRecord['created']>;
+
+interface FlowInstallIdentity {
+  idMap: Record<string, string>;
+  existingIds: ReadonlySet<string>;
+  ownedCreatedIds: ReadonlySet<string>;
+}
 
 // ---------------------------------------------------------------------------
 // Uninstall (issue #211)
@@ -202,18 +210,6 @@ function slug(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function shortHash(value: string): string {
-  return createHash('sha1').update(value).digest('hex').slice(0, 8);
-}
-
-/** Flow ids must match /^[A-Za-z0-9_-]{1,64}$/ (assertSafeCollectionId). */
-export function deterministicFlowId(packageName: string, localId: string): string {
-  const base = `pkg-${slug(packageName)}-${slug(localId)}`;
-  const safe = base.replace(/[^A-Za-z0-9_-]/g, '-');
-  if (safe.length <= 64) return safe;
-  return `${safe.slice(0, 55)}-${shortHash(`${packageName}::${localId}`)}`;
 }
 
 /** Planned-execution ids allow /^[A-Za-z0-9._:-]{1,128}$/. */
@@ -322,7 +318,7 @@ function executionRenameCandidates(manifest: FlujoPackage): RenameCandidate[] {
 
 /**
  * Re-run the wizard's rename validation on the server. Host entities this
- * package already owns (deterministic ids) are excluded from the collision set
+ * package already owns (unambiguous ledger mappings) are excluded from the collision set
  * so a re-install never collides with itself.
  */
 async function collectRenameErrors(
@@ -336,7 +332,11 @@ async function collectRenameErrors(
 
   let existingFlowNames: string[] = [];
   try {
-    const ownedFlowIds = new Set(flowCandidates.map((c) => deterministicFlowId(manifest.name, c.key)));
+    const ledger = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const owned = Object.hasOwn(ledger, manifest.name) ? ledger[manifest.name].entities?.flows ?? {} : {};
+    const ownedFlowIds = new Set(Object.entries(owned)
+      .filter(([localId, flowId]) => !hasConflictingFlowClaim(ledger, manifest.name, localId, flowId))
+      .map(([, flowId]) => flowId));
     const flows = await flowService.loadFlows();
     existingFlowNames = (flows ?? [])
       .filter((f) => !ownedFlowIds.has(f.id))
@@ -598,6 +598,26 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     return s;
   }
 
+  // Resolve every flow identity before installing servers/models or changing
+  // schedules. Retained legacy IDs remain valid only for one recorded owner.
+  let flowIdentity: FlowInstallIdentity;
+  try {
+    const ledger = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+    const previous = Object.hasOwn(ledger, manifest.name) ? ledger[manifest.name] : undefined;
+    const existingIds = new Set((await flowService.loadFlows()).map((flow) => flow.id));
+    flowIdentity = {
+      idMap: resolvePackageFlowIds(manifest.name, (manifest.flows ?? []).map((flow) => flow.flow.id), ledger, existingIds),
+      existingIds,
+      ownedCreatedIds: new Set(previous?.created === undefined
+        ? Object.values(previous?.entities?.flows ?? {}) : previous.created.flows),
+    };
+  } catch {
+    const s = empty();
+    s.dryRun = false;
+    s.errors.push('Package flow identities conflict or their ownership could not be verified.');
+    return s;
+  }
+
   const installedModels = await modelService.loadModels();
   const packageModelIds = new Set((manifest.models ?? []).map((model) => model.id));
   const installedModelsById = new Map(installedModels.map((model) => [model.id, model]));
@@ -631,7 +651,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   const resolvedPlannedExecutions = (manifest.plannedExecutions ?? []).map((p) => resolveSecretPlaceholders(p, secrets));
 
   const ledgerEntities: PackageInstallRecord['entities'] = {
-    flows: {},
+    flows: Object.create(null),
     models: {},
     servers: [],
     plannedExecutions: [],
@@ -709,7 +729,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
+  const flowIdMap = await installFlows(manifest.name, resolvedFlows, flowIdentity, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
   for (const pe of resolvedPlannedExecutions) {
@@ -725,15 +745,14 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   // 8. Persist the ledger (idempotency + last-summary for the status endpoint).
   try {
     const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
-    file[manifest.name] = {
+    await saveItem(StorageKey.PACKAGE_INSTALLS, { ...file, [manifest.name]: {
       packageName: manifest.name,
       version: manifest.version,
       installedAt: new Date().toISOString(),
       summary,
       entities: ledgerEntities,
       created: ledgerCreated,
-    };
-    await saveItem(StorageKey.PACKAGE_INSTALLS, file);
+    } });
   } catch (err) {
     log.warn('installPackage: failed to persist install ledger', err);
   }
@@ -854,6 +873,16 @@ export async function uninstallPackage(
       id: 'protected',
       reason: 'Persona-targeted planned executions require strict-loopback control.',
     });
+    return summary;
+  }
+
+  // A colliding legacy ID can be referenced by several installs. Retain all
+  // entities and the ledger rather than deleting an arbitrarily chosen owner.
+  if (Object.entries(record.entities?.flows ?? {}).some(([localId, flowId]) =>
+    hasConflictingFlowClaim(file, packageName, localId, flowId))) {
+    summary.ok = false;
+    summary.hasErrors = true;
+    summary.errors.push({ kind: 'flow', id: 'conflicting', reason: 'Package flow ownership requires reconciliation before uninstall.' });
     return summary;
   }
 
@@ -1846,6 +1875,7 @@ async function installModel(
 async function installFlows(
   packageName: string,
   flows: PackagedFlow[],
+  identity: FlowInstallIdentity,
   modelIdMap: Record<string, { id: string; name: string }>,
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
@@ -1853,14 +1883,7 @@ async function installFlows(
   /** Manifest-local flow id -> requested display name (issue #407). */
   flowRenames: Record<string, string> = {},
 ): Promise<Record<string, string>> {
-  // Build the manifest-local-id -> installed-id map first, so cross-flow
-  // (subflow) references can be remapped regardless of flow order.
-  const idMap: Record<string, string> = {};
-  for (const f of flows) {
-    idMap[f.flow.id] = deterministicFlowId(packageName, f.flow.id);
-  }
-
-  const existingIds = new Set((await flowService.loadFlows()).map((f) => f.id));
+  const { idMap, existingIds, ownedCreatedIds } = identity;
 
   for (const packagedFlow of flows) {
     const localId = packagedFlow.flow.id;
@@ -1876,7 +1899,10 @@ async function installFlows(
     if (res.success) {
       ledgerEntities.flows[localId] = newId;
       const ref: InstallEntityRef = { type: 'flow', name: displayName, id: newId };
-      if (wasPresent) summary.updated.push(ref);
+      if (wasPresent) {
+        if (ownedCreatedIds.has(newId)) ledgerCreated.flows.push(newId);
+        summary.updated.push(ref);
+      }
       else {
         ledgerCreated.flows.push(newId);
         summary.created.push(ref);
