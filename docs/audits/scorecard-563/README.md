@@ -44,6 +44,9 @@ experimental only with explicit independent acceptance and visible limits.
   Its large-change caveat remains. This source scanner has no verified exploit,
   individual disposition or released-profile attribution here; npm audit results
   are separate evidence. The local-security gate remains pending.
+  Both retained failed source observations reference `local-owner` for ledger
+  routing. That association establishes neither installed-profile coverage nor
+  scanner-attributed applicability to a released profile.
 - [npm content inspection](evidence/npm-content-inspection-3.46.2.json) retains
   verified tarball digests, decoded subject comparisons and shipped manifest/build
   identity, with signature and installation checks explicitly unperformed.
