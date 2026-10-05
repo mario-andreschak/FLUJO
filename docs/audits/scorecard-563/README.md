@@ -80,6 +80,18 @@ retroactively described as having reported clock provenance.
 File-read or JSON-parse failures precede API validation and emit no clock line.
 The validator never downloads remote artifacts, calls models, changes accounts,
 starts runtimes, performs releases or changes repository settings.
+
+The separate [scorecard source workflow](../../../.github/workflows/scorecard-source.yml)
+runs the three dedicated Node suites, ordinary/closure validation and committed
+file-target inventory on Windows and Ubuntu without installing app dependencies.
+Its [capture runner](../../../scripts/check-scorecard-ci.mjs) requires a clean
+committed checkout and records before/after SHA/tree correspondence, direct exits,
+actual validation clocks, test counts and raw output hashes. Run it locally with
+a new output directory outside the checkout. Closure exit 2 is valid incomplete
+evidence; a closure declaration still needs external acceptance. This workflow
+adds source evidence and does not change production checks or repository rules.
+Required-context adoption belongs to Engineering and normal maintainer review.
+
 Its small documented schema vocabulary fails closed on unsupported keywords.
 The published schema can also be consumed by a draft-2020-12 JSON Schema tool;
 cross-record/evidence rules still require the repository validator.
