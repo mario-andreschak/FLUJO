@@ -116,6 +116,70 @@ it('observes only exact terminal generation facts and never relaunches the accou
   expect(await claimWorkerOccurrence(execution, '2026-10-03T12:01:00.000Z', 'run-d')).toBe('eligible');
 });
 
+it('does not replace the signed terminal receipt for an exact repeated observation', async () => {
+  await recordWorkerLocalCreation(execution); await enroll();
+  expect(await claimWorkerOccurrence(execution, occurrence, 'run-a')).toBe('eligible');
+  const completed = terminal('run-a');
+  expect(await recordWorkerTerminalObservation(execution, completed)).toBe(true);
+  const before = await fs.readFile(pathFor(execution));
+  const identity = await fs.stat(pathFor(execution), { bigint: true });
+
+  expect(await recordWorkerTerminalObservation(execution, { ...completed })).toBe(true);
+  const after = await fs.stat(pathFor(execution), { bigint: true });
+  expect({ ino: after.ino.toString(), mtimeNs: after.mtimeNs.toString(), ctimeNs: after.ctimeNs.toString() })
+    .toEqual({ ino: identity.ino.toString(), mtimeNs: identity.mtimeNs.toString(), ctimeNs: identity.ctimeNs.toString() });
+  expect(await fs.readFile(pathFor(execution))).toEqual(before);
+  expect(await inspectWorkerRecovery(execution, false)).toMatchObject({
+    reason: 'unresolved-admission', pending: { runId: 'run-a', occurrenceAt: occurrence },
+  });
+  expect(await observeWorkerOccurrence(execution, completed)).toBe(true);
+});
+
+it.each([
+  { label: 'error status', change: { status: 'error' as const } },
+  { label: 'skipped status', change: { status: 'skipped' as const } },
+  { label: 'completion time', change: { finishedAt: '2026-10-03T12:00:01.000Z' } },
+])('retains the first terminal observation when a later result changes $label', async ({ change }) => {
+  await recordWorkerLocalCreation(execution); await enroll();
+  expect(await claimWorkerOccurrence(execution, occurrence, 'run-a')).toBe('eligible');
+  const completed = terminal('run-a');
+  expect(await recordWorkerTerminalObservation(execution, completed)).toBe(true);
+  const before = await fs.readFile(pathFor(execution));
+  const conflicting = { ...completed, ...change };
+
+  expect(await recordWorkerTerminalObservation(execution, conflicting)).toBe(false);
+  expect(await fs.readFile(pathFor(execution))).toEqual(before);
+  expect(await observeWorkerOccurrence(execution, conflicting)).toBe(false);
+  expect(await inspectWorkerRecovery(execution, false)).toMatchObject({
+    reason: 'unresolved-admission', pending: { runId: 'run-a', occurrenceAt: occurrence },
+  });
+  expect(await observeWorkerOccurrence(execution, completed)).toBe(true);
+  expect(await claimWorkerOccurrence(execution, occurrence, 'run-b')).toBe('already-accounted');
+  expect(await claimWorkerOccurrence(execution, '2026-10-03T12:01:00.000Z', 'run-c')).toBe('eligible');
+});
+
+it('retains one durable winner when conflicting terminal observations race', async () => {
+  await recordWorkerLocalCreation(execution); await enroll();
+  expect(await claimWorkerOccurrence(execution, occurrence, 'run-a')).toBe('eligible');
+  const candidates = [terminal('run-a'), terminal('run-a', 'error')];
+  const results = await Promise.all(candidates.map(result => recordWorkerTerminalObservation(execution, result)));
+  expect(results.filter(Boolean)).toHaveLength(1);
+  const winner = candidates[results.indexOf(true)];
+  const rejected = candidates[results.indexOf(false)];
+  const before = await fs.readFile(pathFor(execution));
+  expect(JSON.parse(before.toString()).terminal).toEqual({ runId: winner.runId,
+    generationId: execution.generationId, status: winner.status, finishedAt: winner.finishedAt });
+
+  expect(await recordWorkerTerminalObservation(execution, rejected)).toBe(false);
+  expect(await recordWorkerTerminalObservation(execution, winner)).toBe(true);
+  expect(await fs.readFile(pathFor(execution))).toEqual(before);
+  expect(await observeWorkerOccurrence(execution, rejected)).toBe(false);
+  expect(await inspectWorkerRecovery(execution, false)).toMatchObject({ reason: 'unresolved-admission' });
+  expect(await observeWorkerOccurrence(execution, winner)).toBe(true);
+  expect(await claimWorkerOccurrence(execution, occurrence, 'run-b')).toBe('already-accounted');
+  expect(await claimWorkerOccurrence(execution, '2026-10-03T12:01:00.000Z', 'run-c')).toBe('eligible');
+});
+
 it('revokes subsequent entry without treating stop intent as exit or erasing a pending run', async () => {
   await recordWorkerLocalCreation(execution); await enroll();
   await claimWorkerOccurrence(execution, occurrence, 'run-a');
