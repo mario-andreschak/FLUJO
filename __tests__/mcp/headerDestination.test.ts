@@ -61,7 +61,9 @@ describe('automatic saved header reuse', () => {
 
   it('does not require a binding when there is no stored value to restore', () => {
     const incoming = { Authorization: secret(MASKED_API_KEY) };
-    for (const stored of [undefined, {}, { Authorization: secret('') }, { Authorization: secret(MASKED_STRING) }]) {
+    const records: (Record<string, MCPHeaderValue> | undefined)[] =
+      [undefined, {}, { Authorization: secret('') }, { Authorization: secret(MASKED_STRING) }];
+    for (const stored of records) {
       expect(hasMaskedStoredHeaders(incoming, stored)).toBe(false);
     }
   });

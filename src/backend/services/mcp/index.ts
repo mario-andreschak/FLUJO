@@ -220,6 +220,7 @@ import {
   hasStoredSecretHeaders,
   isSameMcpHeaderDestination,
   MCP_HEADER_DESTINATION_CHANGED,
+  usesMcpHttpHeaders,
 } from "@/utils/mcp/headerDestination";
 import {
   getTestConnectionTimeoutMs,
@@ -2987,9 +2988,11 @@ export class MCPService {
     const reusesSavedHeaders = incomingHeaders === undefined
       ? hasStoredSecretHeaders(existingHeaders)
       : hasMaskedStoredHeaders(incomingHeaders, existingHeaders);
+    const nextDestination = { ...config, ...updates };
     if (
       reusesSavedHeaders &&
-      !isSameMcpHeaderDestination({ ...config, ...updates }, config)
+      (usesMcpHttpHeaders(config) || usesMcpHttpHeaders(nextDestination)) &&
+      !isSameMcpHeaderDestination(nextDestination, config)
     ) {
       return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
     }

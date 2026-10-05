@@ -7,9 +7,13 @@ export const MCP_HEADER_DESTINATION_CHANGED =
 type HeaderDestination = { transport?: unknown; serverUrl?: unknown };
 type Headers = Record<string, MCPHeaderValue> | undefined;
 
+export function usesMcpHttpHeaders(config: HeaderDestination): boolean {
+  return config.transport === 'streamable' || config.transport === 'sse';
+}
+
 /** Use the URL representation the HTTP transports consume, including path and query. */
 function httpDestination(config: HeaderDestination): string | undefined {
-  if (config.transport !== 'streamable' && config.transport !== 'sse') return;
+  if (!usesMcpHttpHeaders(config)) return;
   if (typeof config.serverUrl !== 'string') return;
   try {
     const url = new URL(config.serverUrl);
