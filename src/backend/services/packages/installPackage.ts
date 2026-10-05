@@ -137,8 +137,8 @@ interface PackageInstallRecord {
     plannedExecutions: string[];
   };
   /**
-   * Per-entity provenance (issue #211): ids this package created, including
-   * retained creation ownership across re-installs, as
+   * Per-entity provenance (issue #211): newly created ids, plus retained
+   * package-created flow ownership across re-installs, as
    * opposed to entities it merely adopted/updated in place (e.g. a pre-existing
    * model matched by displayName). Uninstall only deletes created entities.
    * Optional so ledgers written before this field (3.27.0) still parse.
@@ -155,6 +155,7 @@ type LedgerCreated = NonNullable<PackageInstallRecord['created']>;
 
 interface FlowInstallIdentity {
   idMap: Record<string, string>;
+  retainedIds: Record<string, string>;
   existingIds: ReadonlySet<string>;
   ownedCreatedIds: ReadonlySet<string>;
 }
@@ -605,11 +606,14 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     const ledger = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
     const previous = Object.hasOwn(ledger, manifest.name) ? ledger[manifest.name] : undefined;
     const existingIds = new Set((await flowService.loadFlows()).map((flow) => flow.id));
+    const retainedIds = resolvePackageFlowIds(manifest.name, Object.keys(previous?.entities?.flows ?? {}), ledger, existingIds);
+    const retainedFlowIds = new Set(Object.values(retainedIds));
+    const previouslyCreated = previous?.created === undefined ? [...retainedFlowIds] : previous.created.flows;
     flowIdentity = {
       idMap: resolvePackageFlowIds(manifest.name, (manifest.flows ?? []).map((flow) => flow.flow.id), ledger, existingIds),
+      retainedIds,
       existingIds,
-      ownedCreatedIds: new Set(previous?.created === undefined
-        ? Object.values(previous?.entities?.flows ?? {}) : previous.created.flows),
+      ownedCreatedIds: new Set(previouslyCreated.filter((id) => retainedFlowIds.has(id))),
     };
   } catch {
     const s = empty();
@@ -651,13 +655,13 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   const resolvedPlannedExecutions = (manifest.plannedExecutions ?? []).map((p) => resolveSecretPlaceholders(p, secrets));
 
   const ledgerEntities: PackageInstallRecord['entities'] = {
-    flows: Object.create(null),
+    flows: Object.assign(Object.create(null), flowIdentity.retainedIds),
     models: {},
     servers: [],
     plannedExecutions: [],
   };
   const ledgerCreated: LedgerCreated = {
-    flows: [],
+    flows: [...flowIdentity.ownedCreatedIds],
     models: [],
     servers: [],
     plannedExecutions: [],
@@ -1900,11 +1904,11 @@ async function installFlows(
       ledgerEntities.flows[localId] = newId;
       const ref: InstallEntityRef = { type: 'flow', name: displayName, id: newId };
       if (wasPresent) {
-        if (ownedCreatedIds.has(newId)) ledgerCreated.flows.push(newId);
+        if (ownedCreatedIds.has(newId) && !ledgerCreated.flows.includes(newId)) ledgerCreated.flows.push(newId);
         summary.updated.push(ref);
       }
       else {
-        ledgerCreated.flows.push(newId);
+        if (!ledgerCreated.flows.includes(newId)) ledgerCreated.flows.push(newId);
         summary.created.push(ref);
       }
     } else {
