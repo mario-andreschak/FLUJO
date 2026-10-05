@@ -27,11 +27,11 @@ import { reinstallWorkspaceMcpServers, type WorkspaceMcpTransferPlan } from '@/b
 
 const sourceRoot = path.join(os.tmpdir(), 'flujo-marker-source');
 async function preparedFixture(disabled = false) {
-  const original = {
+  const original: MCPServerConfig = {
     name: 'marker-fixture', transport: 'stdio', command: 'npx',
     args: ['--yes', '@fixture/server@1.2.3'], rootPath: path.join(sourceRoot, 'mcp-servers', 'registry'),
-    env: { TOKEN: 'private-fixture-credential' }, disabled,
-  } as MCPServerConfig;
+    env: { TOKEN: 'private-fixture-credential' }, disabled, _buildCommand: '', _installCommand: '',
+  };
   const plan: WorkspaceMcpTransferPlan = { formatVersion: 1, sourceWorkspaceRoot: sourceRoot, servers: [{
     name: original.name, kind: 'registry', sourceRootPath: original.rootPath,
     installOrigin: { sourceType: 'registry', ref: 'fixture/server' },
