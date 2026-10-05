@@ -52,7 +52,7 @@ describe('resolveRegistryBaseUrl (#197)', () => {
     const fetchMock = jest.fn().mockResolvedValue(new Response(null, { status: 204 }));
     global.fetch = fetchMock;
 
-    await expect(deletePackage('publisher/my-package', 'access-token')).resolves.toEqual({
+    await expect(deletePackage('publisher/my-package', 'access-token', 'https://registry.example.com')).resolves.toEqual({
       status: 204,
       body: null,
     });
