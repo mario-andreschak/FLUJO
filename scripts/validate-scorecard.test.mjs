@@ -747,3 +747,46 @@ test('Persona metrics reject undersampling and admit the original 28-day and 20-
     assert.ok(result.blockers.length > 0);
   }
 });
+
+test('review residual: static source records cannot carry the simulated Persona soak metrics', () => {
+  for (const budget of baseline.budgets.filter(budget => budget.id.startsWith('persona-') && budget.id !== 'persona-recall-p95')) {
+    rejects(ledger => {
+      personaMetricFixture(ledger, budget.id, budget.observation.minimumDenominator);
+      const witness = entry(ledger, 'evidence', 'synthetic-sample-count-' + budget.id);
+      witness.kind = 'source-check';
+      witness.window.kind = 'simulated';
+      witness.window.simulatedDays = 28;
+    }, /requires evidence kind offline-simulation/);
+  }
+});
+
+test('review residual: recall benchmark keeps its source and simulation carriers, refusing unrelated kinds', () => {
+  rejects(ledger => {
+    personaMetricFixture(ledger, 'persona-recall-p95', 20);
+    entry(ledger, 'evidence', 'synthetic-sample-count-persona-recall-p95').kind = 'baseline-observation';
+  }, /requires evidence kind offline-simulation, source-check/);
+  for (const kind of ['source-check', 'offline-simulation']) {
+    const result = validate(ledger => {
+      personaMetricFixture(ledger, 'persona-recall-p95', 20);
+      const witness = entry(ledger, 'evidence', 'synthetic-sample-count-persona-recall-p95');
+      witness.kind = kind;
+      if (kind === 'offline-simulation') { witness.window.kind = 'simulated'; witness.window.simulatedDays = 28; }
+    });
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.blockers.length > 0);
+  }
+});
+
+test('all original Persona soak metrics admit their simulation carrier without satisfying closure', () => {
+  const result = validate(ledger => {
+    for (const budget of ledger.budgets.filter(budget => budget.id.startsWith('persona-') && budget.id !== 'persona-recall-p95')) {
+      personaMetricFixture(ledger, budget.id, budget.observation.minimumDenominator);
+      const witness = entry(ledger, 'evidence', 'synthetic-sample-count-' + budget.id);
+      witness.kind = 'offline-simulation';
+      witness.window.kind = 'simulated';
+      witness.window.simulatedDays = 28;
+    }
+  });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+});

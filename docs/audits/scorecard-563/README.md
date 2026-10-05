@@ -251,6 +251,9 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    may also be measured by live-provider records. Security metrics require security-review
    or independent-assessment carriers. A source check may record real CI duration but
    cannot supply these protected installed/runtime metrics.
+   The ten existing Persona soak metrics require offline-simulation carriers;
+   the separately controlled recall benchmark permits offline-simulation or source-check.
+   A source observation declaring 28 virtual days cannot supply a Persona soak metric.
    Published human targets and observation floors remain protected, and duration
    measurements cannot exceed the actual elapsed evidence window. Review schema,
    ledger and validator together as described in the

@@ -57,10 +57,15 @@ independent-assessment carriers. A source-check record may retain elapsed CI tim
 but declaring an elapsed window does not make it an installed-runtime measurement.
 The five human targets also retain their published denominator, window and basis text;
 rewording those sampling rules requires contract review.
+The ten existing Persona soak contracts require offline-simulation carriers.
+The separately controlled full-recall benchmark permits offline-simulation or
+source-check carriers; its existing 20-search denominator remains mandatory.
+A simulated window on a static source observation cannot qualify a soak measurement.
 
 API validation results include `validationClock.source` (`wall-clock` or `override`)
 and `validationClock.epochMilliseconds`; invalid clocks report a null value and fail.
 CLI output prints its effective clock, including for a structurally invalid ledger.
+File-read or JSON-parse failures occur before API validation and emit no clock line.
 Retain these fields in new validation receipts. Older receipts remain historical;
 clock provenance absent from an old result must not be reconstructed as reported data.
 
