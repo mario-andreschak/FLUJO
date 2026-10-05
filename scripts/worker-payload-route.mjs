@@ -11,7 +11,7 @@ export function assertExportRoute({ eventName, event, repository, workflowSha, p
   assert.equal(event.pull_request.draft, false, 'Draft publication cannot enter export.');
   assert.equal(event.pull_request.head.repo.full_name, expectedRepository, 'Fork export refused.');
   assert.equal(event.pull_request.base.repo.full_name, expectedRepository);
-  assert.equal(event.pull_request.head.ref, 'codex/worker-payload-export-pr-route-8fe');
+  assert.equal(event.pull_request.head.ref, 'codex/worker-payload-compiled-routes-8800');
   assert.equal(event.pull_request.base.ref, 'codex/scorecard-integration');
   assert.equal(event.pull_request.head.sha, proposalSha);
   assert.match(proposalSha, /^[a-f0-9]{40}$/); assert.match(workflowSha, /^[a-f0-9]{40}$/);

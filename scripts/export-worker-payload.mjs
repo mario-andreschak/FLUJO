@@ -29,11 +29,21 @@ const sourceOnlyRuntimeFiles = new Set(['package.json', 'README.md', 'LICENSE', 
   'scripts/exclude-workspaces-from-next-glob.cjs', 'scripts/exposure-mode.mjs', 'scripts/migration-landscape-demo.mjs',
   'scripts/local-test-dependencies.cjs', 'scripts/run-local-jest.cjs', 'mcp-servers/README.md',
   'mcp-servers/browser/scripts/install-browser.mjs']);
+// Only these emitted application route files may use a workspaces path segment.
+const compiledWorkspacesRouteFiles = new Set([
+  '.next/server/app/api/workspaces/route_client-reference-manifest.js',
+  '.next/server/app/api/workspaces/route.js',
+  '.next/server/app/api/workspaces/route.js.nft.json',
+  '.next/types/app/api/workspaces/route.ts',
+]);
+const compiledWorkspacesRouteChunk = /^\.next\/static\/chunks\/app\/api\/workspaces\/route-[a-f0-9]{16}\.js(?![\s\S])/;
 
 export function safeRelative(file) {
   assert.ok(typeof file === 'string' && file.length > 0 && !file.includes('\\') && !file.includes(':')
     && !file.startsWith('/') && file.split('/').every(part => part && part !== '.' && part !== '..'), 'Unsafe payload path.');
-  assert.ok(!file.split('/').some(part => /^\.env(?:\.|$)|^\.npmrc$|^\.git$|^\.codex$|^userdata$|^workspaces$|^browser-profile$/i.test(part)),
+  const compiledWorkspacesRoute = compiledWorkspacesRouteFiles.has(file) || compiledWorkspacesRouteChunk.test(file);
+  assert.ok(!file.split('/').some(part => /^\.env(?:\.|$)|^\.npmrc$|^\.git$|^\.codex$|^userdata$|^browser-profile$/i.test(part)
+    || (/^workspaces$/i.test(part) && !compiledWorkspacesRoute)),
     'Private or live data cannot enter payload.');
   assert.ok(!file.startsWith('.next/cache/') && !file.startsWith('.next/dev/'), 'Transient Next output cannot enter payload.');
   return file;

@@ -30,7 +30,7 @@ test('immutable package pattern audit refuses broadened or missing package selec
 
 const route = () => ({ eventName: 'pull_request', repository: 'mario-andreschak/FLUJO', workflowSha: 'a'.repeat(40),
   proposalSha: 'b'.repeat(40), runAttempt: '1', event: { action: 'ready_for_review', pull_request: { draft: false,
-    head: { ref: 'codex/worker-payload-export-pr-route-8fe', sha: 'b'.repeat(40), repo: { full_name: 'mario-andreschak/FLUJO' } },
+    head: { ref: 'codex/worker-payload-compiled-routes-8800', sha: 'b'.repeat(40), repo: { full_name: 'mario-andreschak/FLUJO' } },
     base: { ref: 'codex/scorecard-integration', repo: { full_name: 'mario-andreschak/FLUJO' } } } } });
 
 test('bounded artifact route accepts only the selected same-repository proposal event', () => {
@@ -57,4 +57,43 @@ test('native header inventory requires actual Windows x64 PE headers', () => {
   assert.equal(nativePeArchitecture(header), 'win32-x64');
   header.writeUInt16LE(0xaa64, 68); assert.throws(() => nativePeArchitecture(header));
   assert.throws(() => nativePeArchitecture(Buffer.from('ELF synthetic')));
+});
+
+test('compiled workspaces route files from the actual package report remain exportable', () => {
+  for (const name of [
+    '.next/server/app/api/workspaces/route_client-reference-manifest.js',
+    '.next/server/app/api/workspaces/route.js',
+    '.next/server/app/api/workspaces/route.js.nft.json',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343ba.js',
+    '.next/types/app/api/workspaces/route.ts',
+    '.next/static/chunks/app/api/workspaces/route-0123456789abcdef.js',
+  ]) {
+    assert.equal(safeRelative(name), name);
+    assert.equal(packPath(name), name);
+  }
+});
+
+test('compiled route exceptions refuse real workspace data and nested prefix lookalikes', () => {
+  for (const name of [
+    'workspaces/work/db/models.json', 'userdata/result.json', 'public/workspaces/data.json',
+    'node_modules/example/workspaces/data.json', '.next/server/app/api/userdata/route.js',
+    '.next/server/app/api/workspaces/.env.production', '.next/server/app/api/workspaces/models.json',
+    '.next/server/app/api/workspaces/data/db.sqlite', '.next/server/app/api/workspaces/sub/route.js',
+    '.next/server/app/api/workspaces/route.js/userdata/result.json',
+    '.next/server/app/api/workspaces/route.js.nft.json/data/db.sqlite',
+    '.next/server/app/api/workspaces/route_client-reference-manifest.js/data.json',
+    '.next/types/app/api/workspaces/route.ts/data.json',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343ba.js/data.json',
+    '.next/static/chunks/app/api/workspaces/nested/route-bd027e8650a343ba.js',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343ba.json',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343ba.js.env',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343b.js',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343baa.js',
+    '.next/static/chunks/app/api/workspaces/route-BD027E8650A343BA.js',
+    '.next/static/chunks/app/api/workspaces/route-bd027e8650a343ba.js\n',
+    'node_modules/example/.next/server/app/api/workspaces/route.js',
+  ]) {
+    assert.throws(() => safeRelative(name), /Private or live data/);
+    assert.throws(() => packPath(name), /Private or live data/);
+  }
 });
