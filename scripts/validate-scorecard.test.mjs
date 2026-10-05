@@ -282,6 +282,73 @@ function completedAssessment({ ledger, artifact }) {
     grades: ledger.rubric.map(row => ({ dimensionId: row.id, grade: 'A-', rationale: 'Synthetic fixture only.' })) });
 }
 
+function featureAcceptanceFixture(edit = () => {}) {
+  return artifactReportFixture(context => {
+    const { ledger, artifact, evidence, report } = context;
+    const profileIds = ['local-owner', 'persistent-worker', 'shared-public'];
+    artifact.kind = 'container';
+    evidence.profileIds = profileIds;
+    report.profileIds = profileIds;
+    report.checks = report.checks.filter(check => check.id !== 'installed-runtime');
+    for (const [profileId, installMethod] of [
+      ['local-owner', 'container'], ['persistent-worker', 'pinned container/service'],
+      ['shared-public', 'hardened pinned container/service with authenticated ingress'],
+    ]) report.checks.push({ id: 'installed-runtime', profileId, platform: 'Linux', installMethod,
+      required: true, result: 'passed', command: 'Synthetic profile receipt only.' });
+    const agreement = structuredClone(entry(ledger, 'evidence', 'baseline-2026-10-03'));
+    Object.assign(agreement, { id: 'synthetic-feature-agreement', kind: 'external-agreement', artifactId: null,
+      profileIds, observedAt: '2026-10-04T00:00:00Z', scope: 'Synthetic agreement only.' });
+    const review = structuredClone(agreement);
+    Object.assign(review, { id: 'synthetic-feature-review', kind: 'independent-assessment' });
+    const study = structuredClone(agreement);
+    Object.assign(study, { id: 'synthetic-feature-study', kind: 'human-study', observedAt: '2026-10-05T00:16:00Z',
+      scope: 'Synthetic measurement fixture; no actual humans or acceptance.',
+      window: { kind: 'elapsed', start: '2026-10-05T00:00:00Z', end: '2026-10-05T00:15:01Z', simulatedDays: null } });
+    ledger.evidence.push(agreement, review, study);
+    Object.assign(entry(ledger, 'gates', 'rubric-agreement'), { status: 'passed', evidenceIds: [agreement.id] });
+    Object.assign(entry(ledger, 'gates', 'independent-reassessment'), { status: 'passed', evidenceIds: [review.id] });
+    Object.assign(entry(ledger, 'gates', 'release-acceptance'), { status: 'passed', evidenceIds: [evidence.id] });
+    const claim = entry(ledger, 'claims', 'feature-surface-a-minus');
+    Object.assign(claim, { status: 'release-supported', evidenceIds: [evidence.id, study.id] });
+    edit({ ...context, claim, agreement, study });
+  });
+}
+
+test('removing primary claim budgets cannot bypass their measurement requirements', () => {
+  const result = featureAcceptanceFixture(({ claim }) => { claim.budgetIds = []; });
+  assert.ok(result.errors.some(error => /required.*budget|budget.*required/.test(error)), result.errors.join('\n'));
+});
+
+test('primary claim identity and subject cannot be replaced to hide budget bindings', () => {
+  rejects(l => { entry(l, 'claims', 'feature-surface-a-minus').id = 'renamed-feature'; }, /Required primary claim omitted/);
+  rejects(l => {
+    const c = entry(l, 'claims', 'feature-surface-a-minus');
+    c.profileId = 'persistent-worker';
+  }, /primary claim subject changed/);
+  rejects(l => {
+    const c = entry(l, 'claims', 'community-a-minus');
+    l.claims = l.claims.filter(item => item.id !== c.id);
+    l.claims.push({ ...c, id: 'replacement-community', budgetIds: [] });
+  }, /Required primary claim omitted/);
+  for (const id of ['community-a-minus', 'maturity-a-minus', 'production-worker-a-minus', 'persona-unattended']) {
+    rejects(l => { entry(l, 'claims', id).budgetIds = []; }, /required budget binding omitted/);
+  }
+});
+
+test('original novice measurements qualify the feature fixture and additional criteria remain allowed', () => {
+  const result = featureAcceptanceFixture(({ ledger, agreement, study }) => {
+    study.budgetIds = ['novice-success', 'novice-time'];
+    study.metrics = [['novice-success', 8], ['novice-time', 900]].map(([budgetId, value]) => {
+      Object.assign(entry(ledger, 'budgets', budgetId), { status: 'agreed', agreementEvidenceIds: [agreement.id] });
+      return { budgetId, value, denominator: 10, numerator: null };
+    });
+  });
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.blockers.length > 0);
+  const extended = validate(l => { entry(l, 'claims', 'feature-surface-a-minus').budgetIds.push('pilot-users'); });
+  assert.deepEqual(extended.errors, []);
+});
+
 test('completed assessment binds passed gates to the selected release source', () => {
   const result = artifactReportFixture(context => {
     completedAssessment(context);
