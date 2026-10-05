@@ -334,6 +334,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     sessionResume,
     onSdkRequest,
     onSdkRequestResult,
+    onNativeSdkLive,
+    onNativeSdkFinished,
     nativeToolPort,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
@@ -1097,6 +1099,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
 
     let resultText = '';
     let nativeSdkTerminal = false;
+    let nativeLiveObserved = false;
     let accumulatedText = '';
     // Result totals and per-request stream usage have different scopes. Track
     // them separately and deduplicate assistant frames by their API message id.
@@ -1156,6 +1159,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        const streamType = message.type === 'stream_event'
+          ? (message as SDKPartialAssistantMessage).event.type : undefined;
+        const liveProgress = message.type === 'assistant'
+          || (message.type === 'stream_event' && (
+            streamType === 'message_start' || streamType === 'content_block_start'
+            || streamType === 'content_block_delta' || streamType === 'message_delta'));
+        if (nativeToolPort && !nativeLiveObserved && !signal?.aborted && liveProgress) {
+          await onNativeSdkLive?.();
+          nativeLiveObserved = true;
+        }
         // Terminal controls such as meeting silence flip this predicate from a
         // local tool executor. Stop before forwarding steering, recording prose,
         // or allowing the SDK to begin another model/tool turn.
@@ -1370,6 +1383,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         throw err;
       }
     } finally {
+      if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
       if (nativeToolPort && abortController.signal.aborted) dispatchOutcome = 'cancelled';
       closeInput();
       await watcher.stop();

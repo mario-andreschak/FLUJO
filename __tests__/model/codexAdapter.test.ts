@@ -298,10 +298,13 @@ it('routes a native Codex callback through the durable Worker port without host 
       service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
       authority: createNativeBrokerAuthority('lease-1', async () => undefined),
       signal: new AbortController().signal });
+    const observedLive = jest.fn(async () => undefined);
     callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
     await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
       onSdkRequest: async () => receipt.invocationId,
+      onNativeSdkLive: observedLive,
       onSdkRequestResult: async () => undefined }));
+    expect(observedLive).toHaveBeenCalledTimes(1);
     const result = await capturedBridgeTools[0].handler({ q: 'test' }, 'model-call-1');
     expect(result.isError).not.toBe(true);
     expect(executor).toHaveBeenCalledTimes(1);
@@ -309,6 +312,41 @@ it('routes a native Codex callback through the durable Worker port without host 
     expect(startThreadMock).toHaveBeenCalledTimes(1);
     await expect(capturedBridgeTools[0].handler({ q: 'without-id' })).rejects.toThrow(/identity/);
     expect(executor).toHaveBeenCalledTimes(1);
+  } finally {
+    _setNativeToolJournalRootForTests(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  ['terminal-only', [turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 })]],
+  ['failed-first', [{ type: 'turn.failed', error: { message: 'fixture failure' } }]],
+] as const)('does not call a native Codex stream live after %s events', async (_name, events) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-codex-native-terminal-'));
+  _setNativeToolJournalRootForTests(directory);
+  try {
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [];
+    const receipt = await prepareNativeInvocation({
+      conversationId: `native-codex-${_name}`, runId: 'run-1', nodeId: 'node-1', modelId: 'm1',
+      leaseEpoch: 'lease-1', inputDigest: 'input-1', attemptOrdinal: 1,
+      inventoryDigest: nativeToolInventoryDigest(tools),
+    });
+    await submitNativeInvocation(receipt);
+    const port = createNativeToolPort({ receipt, tools,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-1', async () => undefined),
+      signal: new AbortController().signal });
+    const observedLive = jest.fn(async () => undefined);
+    const observedFinished = jest.fn();
+    runStreamedMock.mockResolvedValueOnce({ events: eventStream([...events])() });
+    await new CodexAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
+      onSdkRequest: async () => receipt.invocationId,
+      onNativeSdkLive: observedLive,
+      onNativeSdkFinished: observedFinished,
+      onSdkRequestResult: async () => undefined })).catch(() => undefined);
+    expect(observedLive).not.toHaveBeenCalled();
+    expect(observedFinished).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
   } finally {
     _setNativeToolJournalRootForTests(undefined);
     await fs.rm(directory, { recursive: true, force: true });

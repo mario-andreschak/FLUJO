@@ -20,6 +20,10 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { _setNativeToolJournalRootForTests } from '@/backend/execution/flow/handlers/nativeToolJournal';
 import { _setModelTurnArchiveDirForTests } from '@/backend/execution/flow/modelTurnArchive';
 import { createNativeBrokerAuthority } from '@/backend/execution/flow/handlers/nativeToolBroker';
+import { createNativeLineageRootBinding } from '@/backend/execution/flow/handlers/nativeOriginLineage';
+import { createNativeInvocationSessionHook, type NativeInvocationSession } from '@/backend/execution/flow/handlers/nativeInvocationSession';
+import { _setNativeSessionPayloadRootForTests, readNativeSessionPayload } from '@/backend/execution/flow/handlers/nativeSessionPayload';
+import { saveCollectionItem } from '@/utils/storage/backend';
 
 const message: FlujoChatMessage = { id: 'user-1', role: 'user', content: 'hello', timestamp: 1 };
 const completion = (terminal: boolean): CompletionResult => ({
@@ -45,9 +49,13 @@ const invoke = (conversationId: string, overrides: Record<string, unknown> = {},
 describe('ModelHandler native SDK receipt boundary', () => {
   let directory: string;
   let priorArchiveDir: string | undefined;
+  let priorDataDir: string | undefined;
   beforeEach(async () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-native-model-handler-'));
+    priorDataDir = process.env.FLUJO_DATA_DIR;
+    process.env.FLUJO_DATA_DIR = directory;
     _setNativeToolJournalRootForTests(path.join(directory, 'journal'));
+    _setNativeSessionPayloadRootForTests(path.join(directory, 'session-payloads'));
     priorArchiveDir = _setModelTurnArchiveDirForTests(path.join(directory, 'archive'));
     getModelMock.mockReset().mockResolvedValue({
       id: 'model-native', name: 'fixture-native', displayName: 'Fixture native',
@@ -59,9 +67,23 @@ describe('ModelHandler native SDK receipt boundary', () => {
   });
   afterEach(async () => {
     _setNativeToolJournalRootForTests(undefined);
+    _setNativeSessionPayloadRootForTests(undefined);
     _setModelTurnArchiveDirForTests(priorArchiveDir);
+    if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+    else process.env.FLUJO_DATA_DIR = priorDataDir;
     await fs.rm(directory, { recursive: true, force: true });
   });
+
+  const saveRoot = async (conversationId: string) => saveCollectionItem('conversations', conversationId, {
+    conversationId, title: conversationId, createdAt: Date.now(), updatedAt: Date.now(),
+    flowId: 'flow-native', logicalRunId: 'run-native', currentNodeId: 'node-native',
+    source: 'api', status: 'running', runDepth: 0,
+  });
+  const binding = (conversationId: string, assertCurrent: () => Promise<void> = async () => undefined) => createNativeLineageRootBinding({
+    fleetRunId: `fleet-${conversationId}`, workerId: 'worker-1', goalId: 'goal-1',
+    workspace: 'default-workspace', rootConversationId: conversationId,
+    rootLogicalRunId: 'run-native', rootFlowId: 'flow-native',
+  }, assertCurrent);
 
   it('archives before one SDK start and allows a fresh successor only after confirmed terminal', async () => {
     createCompletionMock.mockImplementation(async (input: CompletionInput) => {
@@ -73,6 +95,271 @@ describe('ModelHandler native SDK receipt boundary', () => {
     expect((await invoke('success')).success).toBe(true);
     expect((await invoke('success')).success).toBe(true);
     expect(createCompletionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes one bounded archived original before the adapter can issue its SDK call', async () => {
+    await saveRoot('session-success');
+    const order: string[] = [];
+    const events: string[] = [];
+    let published: NativeInvocationSession | undefined;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-success'),
+      publish: async session => {
+        order.push('publish');
+        published = session;
+        expect(session.phase()).toBe('prepared');
+        expect(Buffer.byteLength(JSON.stringify(session.descriptor))).toBeLessThan(16 * 1024);
+        const payload = await readNativeSessionPayload(session.descriptor.payloadRef);
+        expect(payload.archive.sdkRequest).toEqual({ test: 'saved SDK input', large: 'x'.repeat(20 * 1024) });
+        expect(payload.inventory.tools).toEqual([]);
+        expect(session.descriptor.receipt.owner.inputDigest)
+          .not.toBe(session.descriptor.archive.sanitizedSdkRequestDigest);
+        session.subscribe(event => { events.push(event.kind); });
+      },
+      acknowledgeLive: async () => { order.push('live-ack'); },
+      acknowledgeSdkOutcome: async () => { order.push('outcome-ack'); },
+      acknowledgeTerminalReady: async () => { order.push('terminal-ack'); },
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      order.push('adapter-entry');
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed',
+        request: { test: 'saved SDK input', large: 'x'.repeat(20 * 1024) } });
+      order.push('sdk-issue');
+      expect(id).toBe(input.nativeToolPort?.invocationId);
+      await input.onNativeSdkLive!();
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      return completion(true);
+    });
+    expect((await invoke('session-success', { nativeInvocationSessionHook: hook })).success).toBe(true);
+    expect(order).toEqual(['adapter-entry', 'publish', 'sdk-issue', 'live-ack', 'outcome-ack', 'terminal-ack']);
+    expect(events).toEqual(['issue-uncertain', 'confirmed-live', 'sdk-finished', 'sdk-outcome', 'terminal']);
+    expect(await published!.waitTerminal()).toEqual({ state: 'terminal', outcome: 'completed' });
+    expect(published!.phase()).toBe('terminal');
+    const ref = published!.descriptor.payloadRef;
+    await fs.writeFile(path.join(directory, 'session-payloads', ref.invocationId, `${ref.sha256}.json`), 'changed');
+    await expect(readNativeSessionPayload(ref)).rejects.toThrow();
+  });
+
+  it('holds the original ID and prevents SDK issue when publication or its lease fails', async () => {
+    for (const mode of ['rejected', 'revoked'] as const) {
+      const conversationId = `session-${mode}`;
+      await saveRoot(conversationId);
+      let current = true;
+      let sdkIssued = false;
+      const lease = createNativeBrokerAuthority('lease-1', async () => {
+        if (!current) throw new Error('Worker lease revoked');
+      });
+      const hook = createNativeInvocationSessionHook({
+        root: binding(conversationId),
+        publish: async () => {
+          await Promise.resolve();
+          if (mode === 'rejected') throw new Error('Host write-ahead accept failed');
+          current = false;
+        },
+        acknowledgeLive: async () => undefined,
+        acknowledgeSdkOutcome: async () => undefined,
+        acknowledgeTerminalReady: async () => undefined,
+      });
+      createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+        await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+        sdkIssued = true;
+        return completion(true);
+      });
+      expect((await invoke(conversationId, { nativeBrokerAuthority: lease,
+        nativeInvocationSessionHook: hook })).success).toBe(false);
+      expect(sdkIssued).toBe(false);
+      expect((await invoke(conversationId)).success).toBe(false);
+    }
+  });
+
+  it('holds before SDK issue when the root is revoked during publication', async () => {
+    await saveRoot('session-root-revoked');
+    let rootCurrent = true;
+    let sdkIssued = false;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-root-revoked', async () => {
+        if (!rootCurrent) throw new Error('Root generation changed');
+      }),
+      publish: async () => { await Promise.resolve(); rootCurrent = false; },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      sdkIssued = true;
+      return completion(true);
+    });
+    expect((await invoke('session-root-revoked', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(sdkIssued).toBe(false);
+    expect((await invoke('session-root-revoked')).success).toBe(false);
+  });
+
+  it('holds before SDK issue when the root is revoked while saving the private payload', async () => {
+    await saveRoot('session-payload-revoked');
+    let rootCurrent = true;
+    let sdkIssued = false;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-payload-revoked', async () => {
+        if (!rootCurrent) throw new Error('Root generation changed');
+      }),
+      publish: async () => undefined,
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    const link = fs.link.bind(fs);
+    const spy = jest.spyOn(fs, 'link').mockImplementation(async (source, target) => {
+      await link(source, target);
+      if (String(target).includes('session-payloads')) rootCurrent = false;
+    });
+    try {
+      createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+        await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+        sdkIssued = true;
+        return completion(true);
+      });
+      expect((await invoke('session-payload-revoked', { nativeInvocationSessionHook: hook })).success).toBe(false);
+      expect(sdkIssued).toBe(false);
+      expect((await invoke('session-payload-revoked')).success).toBe(false);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('rechecks cancellation after the issue-uncertain notification', async () => {
+    await saveRoot('session-event-cancel');
+    let sdkIssued = false;
+    let published: NativeInvocationSession | undefined;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-event-cancel'),
+      publish: async session => {
+        published = session;
+        session.subscribe(event => { if (event.kind === 'issue-uncertain') session.cancel(); });
+      },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      sdkIssued = true;
+      return completion(true);
+    });
+    expect((await invoke('session-event-cancel', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(sdkIssued).toBe(false);
+    expect(published!.signal.aborted).toBe(true);
+    expect(await published!.waitTerminal()).toEqual({ state: 'held' });
+  });
+
+  it('holds a finished SDK stream when Stop arrives during outcome acknowledgement', async () => {
+    await saveRoot('session-outcome-delay');
+    let published: NativeInvocationSession | undefined;
+    let enterAck!: () => void;
+    let releaseAck!: () => void;
+    const ackEntered = new Promise<void>(resolve => { enterAck = resolve; });
+    const ackReleased = new Promise<void>(resolve => { releaseAck = resolve; });
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-outcome-delay'),
+      publish: async session => { published = session; },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => { enterAck(); await ackReleased; },
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      await input.onNativeSdkLive!();
+      input.onNativeSdkFinished!();
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      return completion(true);
+    });
+    const result = invoke('session-outcome-delay', { nativeInvocationSessionHook: hook });
+    await ackEntered;
+    expect(published!.phase()).toBe('sdk-finished');
+    published!.cancel();
+    expect(published!.signal.aborted).toBe(true);
+    releaseAck();
+    expect((await result).success).toBe(false);
+    expect(await published!.waitTerminal()).toEqual({ state: 'held' });
+    expect((await invoke('session-outcome-delay')).success).toBe(false);
+  });
+
+  it('holds after a lost terminal acknowledgement and settles the original session as held', async () => {
+    await saveRoot('session-terminal-loss');
+    let published: NativeInvocationSession | undefined;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-terminal-loss'),
+      publish: async session => { published = session; },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => { throw new Error('Host terminal-ready acknowledgement lost'); },
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      await input.onNativeSdkLive!();
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      return completion(true);
+    });
+    expect((await invoke('session-terminal-loss', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(await published!.waitTerminal()).toEqual({ state: 'held' });
+    expect((await invoke('session-terminal-loss')).success).toBe(false);
+  });
+
+  it('holds an already issued original when live observation cannot be acknowledged', async () => {
+    await saveRoot('session-live-loss');
+    let sdkIssued = false;
+    let published: NativeInvocationSession | undefined;
+    const events: string[] = [];
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-live-loss'),
+      publish: async session => { published = session; session.subscribe(event => { events.push(event.kind); }); },
+      acknowledgeLive: async () => { throw new Error('Host live acknowledgement lost'); },
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      sdkIssued = true;
+      await input.onNativeSdkLive!();
+      return completion(true);
+    });
+    expect((await invoke('session-live-loss', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(sdkIssued).toBe(true);
+    expect(events).toEqual(['issue-uncertain', 'held']);
+    expect(await published!.waitTerminal()).toEqual({ state: 'held' });
+    expect((await invoke('session-live-loss')).success).toBe(false);
+  });
+
+  it('binds session cancellation to the original adapter signal before issue', async () => {
+    await saveRoot('session-cancel');
+    let sdkIssued = false;
+    let published: NativeInvocationSession | undefined;
+    const hook = createNativeInvocationSessionHook({
+      root: binding('session-cancel'),
+      publish: async session => { published = session; session.cancel(); },
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      sdkIssued = true;
+      return completion(true);
+    });
+    expect((await invoke('session-cancel', { nativeInvocationSessionHook: hook })).success).toBe(false);
+    expect(sdkIssued).toBe(false);
+    expect(published!.signal.aborted).toBe(true);
+    expect(await published!.waitTerminal()).toEqual({ state: 'held' });
+  });
+
+  it('rejects a JSON-shaped session hook before adapter entry', async () => {
+    const real = createNativeInvocationSessionHook({
+      root: binding('session-json'), publish: async () => undefined,
+      acknowledgeLive: async () => undefined,
+      acknowledgeSdkOutcome: async () => undefined,
+      acknowledgeTerminalReady: async () => undefined,
+    });
+    expect((await invoke('session-json', { nativeInvocationSessionHook: JSON.parse(JSON.stringify(real)) })).success)
+      .toBe(false);
+    expect(createCompletionMock).not.toHaveBeenCalled();
   });
 
   it('holds normal EOF without a native terminal event and never retries the SDK', async () => {
