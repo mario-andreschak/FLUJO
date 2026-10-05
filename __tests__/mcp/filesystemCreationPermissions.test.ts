@@ -81,8 +81,13 @@ describe('filesystem creation permissions', () => {
     }
     const result = await filesystemCallTool(tool, { path: file, ...args });
     expect(result.isError).not.toBe(true);
-    expect((await fs.stat(file)).mode & 0o777).toBe(0o755);
-    expect(await fs.readFile(file, 'utf8')).toContain('changed');
+    const observation = await fs.open(file, 'r');
+    try {
+      expect((await observation.stat()).mode & 0o777).toBe(0o755);
+      expect(await observation.readFile('utf8')).toContain('changed');
+    } finally {
+      await observation.close();
+    }
   });
 
   it.each(operations.filter(([, , args]) => 'edits' in args || 'diff' in args))('preserves BOM and CRLF during %s', async (_name, tool, args) => {
