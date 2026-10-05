@@ -277,9 +277,10 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
 async function listRecoveryOwners(
   lockRoot: string,
   lockPath: string,
+  directoryNames: readonly string[],
 ): Promise<Array<{ path: string; owner: RecoveryOwnerRecord }>> {
   const prefix = `${path.basename(lockPath)}.recovery.`;
-  const names = (await fs.readdir(lockRoot)).filter(
+  const names = directoryNames.filter(
     (name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)),
   );
   const records = await Promise.all(names.map(async (name) => {
@@ -307,15 +308,38 @@ function abandonmentMarkerPath(lockPath: string, ownerId: string): string {
   return markerPath;
 }
 
+function abandonedOwnerIdsFromNames(
+  lockPath: string,
+  directoryNames: readonly string[],
+): Set<string> {
+  const prefix = `${path.basename(lockPath)}.abandoned.`;
+  const ownerIds = directoryNames
+    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
+    .map((name) => name.slice(prefix.length));
+  return new Set(ownerIds);
+}
+
 async function listAbandonedOwnerIds(
   lockRoot: string,
   lockPath: string,
 ): Promise<Set<string>> {
-  const prefix = `${path.basename(lockPath)}.abandoned.`;
-  const ownerIds = (await fs.readdir(lockRoot))
-    .filter((name) => name.startsWith(prefix) && UUID_FILE_SEGMENT.test(name.slice(prefix.length)))
-    .map((name) => name.slice(prefix.length));
-  return new Set(ownerIds);
+  return abandonedOwnerIdsFromNames(lockPath, await fs.readdir(lockRoot));
+}
+
+async function listLockCoordinationState(
+  lockRoot: string,
+  lockPath: string,
+): Promise<{
+  recoveries: Array<{ path: string; owner: RecoveryOwnerRecord }>;
+  abandonedOwnerIds: Set<string>;
+}> {
+  // This listing belongs only to this acquisition phase. Scan again after
+  // installing the canonical owner and on every contention-loop iteration.
+  const directoryNames = await fs.readdir(lockRoot);
+  return {
+    recoveries: await listRecoveryOwners(lockRoot, lockPath, directoryNames),
+    abandonedOwnerIds: abandonedOwnerIdsFromNames(lockPath, directoryNames),
+  };
 }
 
 async function publishOwnerAbandoned(
@@ -919,10 +943,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
 
   try {
     while (true) {
-      const [recoveries, abandonedOwnerIds] = await Promise.all([
-        listRecoveryOwners(lockRoot, lockPath),
-        listAbandonedOwnerIds(lockRoot, lockPath),
-      ]);
+      const { recoveries, abandonedOwnerIds } = await listLockCoordinationState(lockRoot, lockPath);
       const recoveryStates = await Promise.all(recoveries.map(async (recovery) => ({
         ...recovery,
         alive: await isOwnerProcessAlive(recovery.owner, abandonedOwnerIds),
@@ -960,10 +981,10 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         // installation. Do not enter the critical section until every live
         // recovery syscall has finished, then verify none deleted this lock from
         // a stale view of its predecessor.
-        const [afterInstall, abandonedAfterInstall] = await Promise.all([
-          listRecoveryOwners(lockRoot, lockPath),
-          listAbandonedOwnerIds(lockRoot, lockPath),
-        ]);
+        const {
+          recoveries: afterInstall,
+          abandonedOwnerIds: abandonedAfterInstall,
+        } = await listLockCoordinationState(lockRoot, lockPath);
         const liveAfterInstall = await Promise.all(afterInstall.map(
           ({ owner: recovery }) => isOwnerProcessAlive(recovery, abandonedAfterInstall),
         ));
