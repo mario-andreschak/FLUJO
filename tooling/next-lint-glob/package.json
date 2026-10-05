@@ -1,0 +1,11 @@
+{
+  "name": "fast-glob",
+  "version": "0.0.0-flujo.1",
+  "description": "FLUJO's private Next lint directory-glob adapter; not upstream fast-glob",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.cjs",
+  "peerDependencies": {
+    "tinyglobby": "0.2.17"
+  }
+}
