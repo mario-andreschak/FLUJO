@@ -69,12 +69,12 @@ Network/public or reverse-proxied exposure cannot select,
 inspect, mutate, resume, cancel, or administratively recover Persona work, even if
 a remote client spoofs `Host: localhost`; external webhooks can reach a Persona
 only through a trusted target saved locally on the planned execution. Persisted
-execution attribution is safe metadata and never a lease capability. Dependency
-manifests (Behavior publication
-currently rejects Subflow nodes), the complete compatibility matrix, privacy-aware
-configuration export, cross-system archive anonymization beyond the implemented
-Persona-conversation backup/restore guards, broader WorkItem automation, and the
-remaining UI remain gated follow-up work.
+execution attribution is safe metadata and never a lease capability. Core/Behavior
+publication supports Subflow nodes through the pinned, versioned executable
+dependency closure described below. Configuration-only Persona export is also
+implemented. Broader compatibility coverage, additional archive/privacy coverage
+beyond the implemented deletion and backup/restore guards, further WorkItem
+automation, and remaining UI follow-ups remain gated work.
 
 ## Context
 
@@ -135,6 +135,31 @@ RoleVersion and BehaviorRevision are append-only semantic records:
   including subflow revisions or an equivalent immutable dependency manifest. A
   mutable “latest Flow” reference is provenance only and cannot define revision
   semantics.
+  Core/Behavior publication implements this with `executionDependencies` version
+  1: workspace identity and complete canonical child graphs with SHA-256 content
+  hashes. The enclosing Behavior digest includes that closure. Admission captures
+  authoritative child reads; editing any child produces a new revision on the
+  next authored resolution. In-flight and resumed Activities retain their prior
+  snapshots independently of mutable Flow deletion or edit-history pruning.
+  Dependency cycles fail closed; the closure is limited to 128 child Flows and
+  depth 8, matching the Flow engine ceiling. Dynamic fan-out can select only this Subflow node's authored
+  `subflowId`/`parallelSubflowIds` set, with 1–32 distinct targets. Unsupported or
+  missing targets surface repair guidance in Persona creation/Flow readiness.
+  Child runs retain their own authored tool graph and inherit only causal audit
+  attribution and the execution fence, without Persona instruction/private memory,
+  Core Apps, native mutation abilities or mailbox gateways. Detached task records
+  retain the pinned child snapshot and attribution. A process-interrupted detached
+  job remains an explicit interrupted/failed task; recovery never silently replays
+  unknown external effects or admits a replacement worker.
+  Workspace recovery imports keep historical conversations read-only and preserve
+  original manifest workspace identities as evidence. A new Activity in the
+  destination must publish/resolve a closure from restored authored Flows there;
+  a source-workspace manifest cannot authorize execution across workspaces.
+  Restored immutable Role templates with source-workspace closures require an
+  explicit new Role version published from destination authored Flows before
+  Persona creation; readiness reports that repair instead of rebinding old hashes
+  or silently reading mutable source children. Closed Role templates remain valid
+  archive evidence even when their original authored children were deleted.
 - Each snapshot has a schema version and a content digest over a documented
   canonical representation. The digest detects corruption and supports dedupe; the
   opaque BehaviorRevision id remains the foreign-key identity.

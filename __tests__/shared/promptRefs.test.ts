@@ -16,10 +16,27 @@ import {
   extractResourceRefNames,
   encodeDynamicReference,
   parseDynamicReference,
+  encodeCurrentReference,
 } from '@/utils/shared/promptRefs';
 import { findBindings } from '@/utils/shared/mcpBinding';
 
 describe('findPromptRefs', () => {
+  it('recognizes current commands, preserves their labels, and rejects foreign targets and unknown fields', () => {
+    for (const kind of ['conversation', 'flow', 'flows', 'node', 'model', 'app', 'time', 'date', 'folder', 'file']) {
+      for (const field of ['id', 'name', 'created', 'updated']) {
+        const value = `@current.${kind}.${field}`;
+        expect(parseDynamicReference(value)?.field).toBe(field);
+        expect(findPromptRefs(value).map(ref => ref.fullMatch)).toEqual([value]);
+        expect(promptRefLabel({ kind: 'mention', server: '', name: value })).toBe(value);
+      }
+    }
+    expect(encodeCurrentReference('flows')).toBe('@current.flow.id');
+    expect(parseDynamicReference('@current.conversation[foreign].id')).toBeNull();
+    expect(findPromptRefs('@current.conversation[foreign].id')).toEqual([]);
+    expect(findPromptRefs('@current.flow.unknown')).toEqual([]);
+    expect(findPromptRefs('email@current.flow.id')).toEqual([]);
+  });
+
   it('finds tool, resource, run-resource, and global refs in document order; ignores ${var:}', () => {
     const text =
       'A ${tool:files__read} B ${res:foo} C ${resource:docs__file:///a} D ${var:x} E ${res:bar} ${global:KEY}';

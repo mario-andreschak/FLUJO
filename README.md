@@ -13,7 +13,7 @@ FLUJO is open-source and local-first. Start with the guided setup, build agents 
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.46.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.46.2-green.svg)](package.json)
 </div>
 
 
@@ -538,6 +538,8 @@ Have a feature request? [Open a GitHub issue](https://github.com/mario-andrescha
 ## 🤝 Contributing
 
 Contributions are welcome! Feel free to open issues or submit pull requests.
+
+Maintainers can [publish a release through GitHub's npm connection](docs/npm-release.md) with `npm run release -- patch`.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)

@@ -23,7 +23,9 @@ import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import {
   commitFlowDurableMutation,
   rethrowFlowExecutionAuthorityError,
+  subflowExecutionAuthority,
 } from '../executionAuthority';
+import { pinnedSubflowDefinition } from '../subflowDependencies';
 import {
   copyRunResourceToConversation,
   getRunResourceLocalPath,
@@ -362,6 +364,9 @@ function prepFromInvocation(
     depth: invocation.depth,
     chainDepth: invocation.chainDepth,
     parentRunId: invocation.parentRunId ?? invocation.parentConversationId,
+    personaAttribution: sharedState.personaAttribution,
+    executionAuthority: subflowExecutionAuthority(sharedState.executionAuthority),
+    parentFlowSnapshot: sharedState.flowSnapshot,
     plannedExecutionId: invocation.plannedExecutionId,
     showSteps: invocation.showSteps,
     persistConversation: true,
@@ -797,7 +802,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // safe attribution for audit and the runtime-only fence for every child
       // model/tool/write boundary.
       personaAttribution: sharedState.personaAttribution,
-      executionAuthority: sharedState.executionAuthority,
+      executionAuthority: subflowExecutionAuthority(sharedState.executionAuthority),
+      parentFlowSnapshot: sharedState.flowSnapshot,
       showSteps,
       persistConversation,
       // The engine attaches the run's emit to sharedState for the duration of
@@ -813,6 +819,10 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       sessionInputMode: node_params?.properties?.sessionInputMode ?? 'resume',
       sessionTurnCap: normalizeSessionTurnCap(node_params?.properties?.sessionTurnCap),
     };
+    if (sharedState.personaAttribution) {
+      for (const id of parallelIds) pinnedSubflowDefinition(prepResult, id);
+      if (subflowId) pinnedSubflowDefinition(prepResult, subflowId);
+    }
     if (inputMode === 'isolated') {
       // Isolated mode sends a single authored prompt. When this node opted into
       // `allowCallerPrompt` (issue #96) and an upstream routing model passed a
@@ -890,7 +900,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       let subflowName: string | undefined;
       try {
         const { flowService } = await import('@/backend/services/flow/index');
-        subflowName = (await flowService.getFlow(subflowId))?.name;
+        subflowName = (pinnedSubflowDefinition(prepResult, subflowId).flowDefinition ?? await flowService.getFlow(subflowId))?.name;
       } catch {
         /* attribution only */
       }
@@ -948,7 +958,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         await Promise.all(
           lanes.map(async (lane) => {
             try {
-              const flow = await flowService.getFlow(lane.subflowId);
+              const flow = pinnedSubflowDefinition(prepResult, lane.subflowId).flowDefinition ?? await flowService.getFlow(lane.subflowId);
               if (flow?.name) lane.subflowName = flow.name;
               // Dynamic fan-out (issue #130): a model-chosen id that matches no
               // known flow is DROPPED (with a warning) rather than run; an
@@ -1002,7 +1012,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       let subflowName: string | undefined;
       try {
         const { flowService } = await import('@/backend/services/flow/index');
-        const flow = await flowService.getFlow(subflowId);
+        const flow = pinnedSubflowDefinition(prepResult, subflowId).flowDefinition ?? await flowService.getFlow(subflowId);
         if (flow?.name) subflowName = flow.name;
       } catch {
         /* attribution only */
@@ -1026,7 +1036,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       let subflowName: string | undefined;
       try {
         const { flowService } = await import('@/backend/services/flow/index');
-        const flow = await flowService.getFlow(subflowId);
+        const flow = pinnedSubflowDefinition(prepResult, subflowId).flowDefinition ?? await flowService.getFlow(subflowId);
         if (flow?.name) subflowName = flow.name;
       } catch {
         /* attribution only — never block the run on a name lookup */
@@ -1072,6 +1082,9 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       }));
     }
 
+    // Validate the complete resolved plan before durable child admission. In a
+    // Persona run a dynamic ID outside this node's authored set fails loudly.
+    for (const lane of prepResult.lanes ?? []) pinnedSubflowDefinition(prepResult, lane.subflowId);
     await attachDurableInvocation(sharedState, prepResult);
 
     log.info('prep() completed', {
@@ -1150,6 +1163,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     });
     const result = await runFlow({
       flowId: prepResult.subflowId,
+      ...pinnedSubflowDefinition(prepResult, prepResult.subflowId!),
       ...runInput,
       source: 'subflow',
       // Debugging (issue #125): persist this subflow's own run as a sidebar
@@ -1702,6 +1716,7 @@ export async function runSubflowLanes(
           : (lane.input ?? runInput);
         const r = await runFlow({
           flowId: lane.subflowId,
+          ...pinnedSubflowDefinition(prepResult, lane.subflowId),
           ...effectiveInput,
           source: 'subflow',
           mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',

@@ -7,6 +7,7 @@ import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createOAuthClientProvider } from '@/backend/services/mcp/oauth';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { requestOrigin } from '@/utils/http/requestOrigin';
 
 const log = createLogger('api/oauth/initiate');
 
@@ -52,7 +53,7 @@ async function POST_handler(request: NextRequest) {
       );
     }
 
-    const redirectUrl = new URL('/api/oauth/callback', request.nextUrl.origin);
+    const redirectUrl = new URL('/api/oauth/callback', requestOrigin(request));
     redirectUrl.searchParams.set('workspace', getCurrentWorkspace());
     const redirectUri = redirectUrl.toString();
     // The provider mutates and persists `serverConfig` in place (see MCPOAuthClientProvider),

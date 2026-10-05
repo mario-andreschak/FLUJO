@@ -89,6 +89,12 @@ export interface ModelSteering {
 }
 
 export interface CompletionInput {
+  directCompletion?: boolean;
+  temperatureOverride?: number;
+  /** Re-check execution authority immediately before every policy member. */
+  beforeModelDispatch?: () => Promise<void>;
+  /** Metadata only, used to attribute native dispatches and usage correctly. */
+  onRoutingModel?: (model: Model) => Promise<void>;
   /** The model record (used for name, baseUrl, provider, adapter, ...). */
   model: Model;
   /** The decrypted API key / OAuth token. Never log this. */
@@ -218,6 +224,7 @@ export interface CompletionInput {
   signal?: AbortSignal;
   /** Runtime-only lease/fence assertion immediately before a tool side effect. */
   beforeToolDispatch?: () => Promise<void>;
+  executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   /** Call-time authorization for Persona Core-injected MCP handles. */
   authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   /** Runtime-only lease/generation assertion immediately after a long tool call. */
@@ -298,6 +305,7 @@ export interface CompletionInput {
  * them in the conversation. Request/response adapters omit it.
  */
 export interface CompletionResult {
+  routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt;
   completion: OpenAI.Chat.Completions.ChatCompletion;
   /** null means the adapter cannot report current context; usage is not a substitute. */
   contextUsage?: import('@/shared/types/model/contextUsage').ModelContextUsage | null;

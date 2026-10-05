@@ -47,6 +47,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import {
   createPromptReferenceSuggestion,
   PromptReferenceSuggestion,
+  encodeDynamicReference,
 } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -205,6 +206,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const [referenceSuggestions, setReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  const editorSuggestions = useMemo<PromptReferenceSuggestion[]>(() => [
+    ...referenceSuggestions,
+    ...(flow?.nodes ?? []).map(node => ({
+      kind: 'mention' as const, server: '', name: node.id,
+      label: node.data?.label || node.id, value: encodeDynamicReference('node', node.id),
+      description: node.data?.description || node.id, category: 'node' as const,
+    })),
+  ], [flow, referenceSuggestions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1033,7 +1042,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
             globalNames={globalNames}
-            suggestions={referenceSuggestions}
+            suggestions={editorSuggestions}
             enhancedHitlist
             hitlistPlacement="top"
             multiline

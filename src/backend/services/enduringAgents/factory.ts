@@ -30,6 +30,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { generatedFlowName } from '@/utils/shared/flowNamePolicy';
 import { assertSafeCollectionId } from '@/utils/storage/backend';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 import {
   behaviorRevisionId,
@@ -37,6 +38,7 @@ import {
   canonicalJson,
   hashBehaviorFlow,
   snapshotBehaviorFlow,
+  snapshotBehaviorFlowDependencies,
 } from './behaviorRevisions';
 import {
   personaAppGrantId,
@@ -187,11 +189,14 @@ async function materializeBehavior(
     personaId: persona.id,
     slotKey: slot.key,
   });
-  const flow = snapshotBehaviorFlow({
+  const authored = {
     ...preparedTemplate,
     id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
     name: generatedFlowName(`${persona.name} ${slot.name}`, [], behaviorId),
-  });
+  };
+  const flow = preparedTemplate.executionDependencies
+    ? snapshotBehaviorFlow(authored)
+    : await snapshotBehaviorFlowDependencies(authored);
   const contentHash = hashBehaviorFlow(flow);
   const revision: BehaviorRevision = BehaviorRevisionSchema.parse({
     schemaVersion: BEHAVIOR_REVISION_SCHEMA_VERSION,
@@ -263,7 +268,17 @@ async function resolveDefaultModelId(
   return models[0]?.id;
 }
 
-async function requireRunnableGeneratedFlow(flow: Flow, label: string): Promise<Flow> {
+async function requireRunnableGeneratedFlow(flow: Flow, label: string, trustedDependencies = false): Promise<Flow> {
+  try {
+    if (trustedDependencies && flow.executionDependencies) {
+      snapshotBehaviorFlow(flow);
+      if (flow.executionDependencies.workspaceId !== getCurrentWorkspace()) {
+        throw new Error('has pinned Subflow dependencies from another workspace. Publish a new Role version from authored Flows in this workspace before creating a Persona.');
+      }
+    }
+    else await snapshotBehaviorFlowDependencies(flow);
+  }
+  catch (error) { throw new PersonaFactoryConflictError(`${label} ${error instanceof Error ? error.message : 'has invalid Subflow dependencies.'}`); }
   const readiness = await validateFlowObjectForRun(flow);
   if (!readiness.isRunnable) {
     const issues = readiness.issues
@@ -339,6 +354,8 @@ async function requireReadySharedFlow(
       + (issues.length > 0 ? ` ${issues.join(' ')}` : ''),
     );
   }
+  try { await snapshotBehaviorFlowDependencies(flow); }
+  catch (error) { throw new PersonaFactoryConflictError(`${label} ${error instanceof Error ? error.message : 'has invalid Subflow dependencies.'}`); }
   return flow;
 }
 
@@ -352,7 +369,7 @@ async function materializeSelectedBehavior(
     flowRef: flow.id,
   });
   const slotKey = `picked_${behaviorId.slice(-40)}`;
-  const snapshot = snapshotBehaviorFlow({
+  const snapshot = await snapshotBehaviorFlowDependencies({
     ...flow,
     id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
   });
@@ -466,11 +483,13 @@ async function preparePersonaCreationFlows(
   const preparedCore = await requireRunnableGeneratedFlow(
     bindDefaultModelToFlow(withDefaultPersonaAbilities(coreTemplate as Flow), defaultModelId),
     'Core Flow',
+    !selectedCoreFlow,
   );
   const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
     (slot) => requireRunnableGeneratedFlow(
       bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
       `Required Behavior ${JSON.stringify(slot.key)}`,
+      true,
     ),
   ));
   const preparedBehaviorFlows = await Promise.all(behaviorFlows.map(

@@ -17,7 +17,10 @@ function fixture({ fail = '', dirtyAfter = false, moveAfter = false } = {}) {
     if (command === fail) throw new Error('simulated failed gate');
     if (command === 'npm run smoke:mcp-artifacts') verificationEnded = true;
   };
-  return { commands, run, show, removeResults: (file) => commands.push(`remove ${file}`) };
+  return {
+    commands, run, show, removeResults: (file) => commands.push(`remove ${file}`),
+    finishVerification: () => { verificationEnded = true; },
+  };
 }
 
 test('verifies exact version revision and fresh main/isolated evidence before returning publish authority', () => {
@@ -71,3 +74,40 @@ test('changing only the Git push configuration invalidates prior release verific
     return 'https://github.com/other/FLUJO.git';
   }, sha), /official FLUJO repository/);
 });
+
+test('an injected candidate consumer smoke replaces repacking and runs after artifact validation', () => {
+  const f = fixture();
+  let calls = 0;
+  assert.equal(verifyReleaseRevision({
+    ...f,
+    consumerSmoke: ({ run, show, revision }) => {
+      calls += 1;
+      assert.equal(run, f.run);
+      assert.equal(show, f.show);
+      assert.equal(revision, sha);
+      assert.equal(f.commands.at(-1), 'npm run validate:mcp-release');
+      show('consume exact candidate tarballs');
+      f.finishVerification();
+    },
+  }), sha);
+  assert.equal(calls, 1);
+  assert.equal(f.commands.includes('npm run smoke:mcp-artifacts'), false);
+  assert.equal(f.commands.at(-1), 'consume exact candidate tarballs');
+});
+
+test('a failed candidate consumer smoke cannot return publication authority', () => {
+  assert.throws(() => verifyReleaseRevision({
+    ...fixture(),
+    consumerSmoke: () => { throw new Error('tested candidate could not start'); },
+  }), /tested candidate could not start/);
+});
+
+for (const change of ['dirtyAfter', 'moveAfter']) {
+  test(`candidate consumer smoke cannot authorize a release after ${change}`, () => {
+    const f = fixture({ [change]: true });
+    assert.throws(() => verifyReleaseRevision({
+      ...f,
+      consumerSmoke: () => f.finishVerification(),
+    }), /changed or.*dirty/);
+  });
+}

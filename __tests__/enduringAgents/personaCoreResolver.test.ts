@@ -211,6 +211,29 @@ async function installOverride(
 }
 
 describe('Persona Core provenance resolution', () => {
+  it('publishes a new pinned closure after a child edit without changing the parent and preserves the previous round', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const original = await requireAuthoredFlow(setup.bundle.persona);
+      const worker = await saveSharedClone(setup.baseRevision.flowSnapshot, 'isolated_worker');
+      const core = clone(original.flow);
+      core.nodes.push({ id: 'worker-subflow', type: 'subflow', position: { x: 280, y: 280 }, data: { type: 'subflow', label: 'Worker', properties: { subflowId: worker.id, inputMode: 'isolated', promptTemplate: 'Verify the deliverable.' } } });
+      expect((await flowService.saveFlow(core)).success).toBe(true);
+      const first = await resolvePersonaCoreRevision(setup.bundle.persona.id);
+      expect(first.flowSnapshot.executionDependencies!.flows[0].flowId).toBe(worker.id);
+      const updatedWorker = clone(worker);
+      processNode(updatedWorker).data.properties!.promptTemplate = 'Updated worker verification contract.';
+      expect((await flowService.saveFlow(updatedWorker)).success).toBe(true);
+      const next = await resolvePersonaCoreRevision(setup.bundle.persona.id);
+      expect(next.id).not.toBe(first.id);
+      expect(next.contentHash).not.toBe(first.contentHash);
+      expect(next.flowSnapshot.nodes).toEqual(first.flowSnapshot.nodes);
+      const recovered = await getBehaviorRevision(first.id);
+      expect(recovered).toEqual(first);
+      expect(processNode(recovered!.flowSnapshot.executionDependencies!.flows[0].flowSnapshot).data.properties!.promptTemplate).not.toBe('Updated worker verification contract.');
+      expect((await resolvePersonaCoreRevision(setup.bundle.persona.id)).id).toBe(next.id);
+    });
+  });
   it.each(['persona_copy', 'shared', 'legacy'] as const)(
     'preserves an accepted improvement for unchanged %s authored Core content',
     async (mode) => {

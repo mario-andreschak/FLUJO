@@ -2,6 +2,8 @@
 
 This section provides detailed documentation for Flujo's features.
 
+- **[Chat commands and dynamic tool parameters](./dynamic-references.md)**: Current context, entity pickers, tool/resource references, and hidden parameter presets
+
 ## Workspaces
 
 - **[Workspaces](./workspaces.md)**: Independent sets of flows, models, conversations and MCP servers inside one installation — on-disk layout, migration from a pre-workspace install, the optional `workspace` API parameter, and the navbar tabs (Issue #406)

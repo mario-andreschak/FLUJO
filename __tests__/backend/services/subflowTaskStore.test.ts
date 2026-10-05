@@ -189,18 +189,17 @@ describe('subflow task handles', () => {
     expect(await getTask(fresh!.taskId)).not.toBeNull();
   });
 
-  it('reconciles orphaned working tasks after a process restart', async () => {
+  it('does not fail a current local launcher or a task without a proven interrupted child', async () => {
     const orphan = await seed();
     const finished = await seed();
     await patchTask(finished!.taskId, { status: 'completed' });
 
     const { failed } = await reconcileOrphanedTasks();
-    expect(failed).toBe(1);
+    expect(failed).toBe(0);
 
     const reconciled = await getTask(orphan!.taskId);
-    expect(reconciled!.status).toBe('failed');
-    expect(reconciled!.failureReason).toBe('process-restart');
-    expect(reconciled!.error).toMatch(/process restart/i);
+    expect(reconciled!.status).toBe('working');
+    expect(reconciled!.failureReason).toBeUndefined();
     expect((await getTask(finished!.taskId))!.status).toBe('completed');
   });
 

@@ -10,6 +10,7 @@ import { ClaudeSubscriptionAdapter } from './claudeSubscriptionAdapter';
 import { CodexAdapter } from './codexAdapter';
 import { OpenRouterMediaAdapter } from './openrouterMediaAdapter';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
+import { FallbackAdapter } from './fallbackAdapter';
 
 export * from './types';
 export { OpenAiAdapter } from './openaiAdapter';
@@ -34,6 +35,7 @@ export type {
  * Gateway profiles also resolve older Chat Completions records to Responses.
  */
 export function getCompletionAdapter(model: Model): CompletionAdapter {
+  if (model.fallbackPolicy) return new FallbackAdapter(getCompletionAdapter);
   if (resolveOpenRouterMediaRoute(model).useMediaRoute) {
     return new OpenRouterMediaAdapter();
   }
@@ -58,7 +60,7 @@ export function getCompletionAdapter(model: Model): CompletionAdapter {
 
 /** Adapter identifier + endpoint description, used by the model-card diagnostics UI. */
 export interface ResolvedAdapterInfo {
-  adapterId: 'openrouter-media' | NonNullable<Model['adapter']>;
+  adapterId: 'openrouter-media' | 'fallback-policy' | NonNullable<Model['adapter']>;
   endpoint: string;
   reason: string;
 }
@@ -69,6 +71,9 @@ export interface ResolvedAdapterInfo {
  * `getCompletionAdapter` so the two can never disagree.
  */
 export function describeCompletionAdapter(model: Model): ResolvedAdapterInfo {
+  if (model.fallbackPolicy) return {
+    adapterId: 'fallback-policy', endpoint: 'ordered model adapters', reason: 'Routes through saved models in priority order.',
+  };
   const mediaRoute = resolveOpenRouterMediaRoute(model);
   if (mediaRoute.useMediaRoute) {
     return {

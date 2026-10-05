@@ -508,7 +508,7 @@ export async function processChatCompletion(
   userTurn: boolean = false,
   personaTarget?: PersonaChatCompletionTarget,
 ) {
-  if (personaTarget && typeof data.model === 'string' && data.model.startsWith('model-')) {
+  if (personaTarget && typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     return NextResponse.json({
       error: {
         message: 'Persona targeting is only supported for Flow completions.',
@@ -537,7 +537,7 @@ export async function processChatCompletion(
   // requests. `model-` routes to a single-turn ModelService completion (no
   // flow, no conversation persistence, no MCP tool loop). Everything else
   // (`flow-` or legacy/unprefixed ids) keeps the existing flow path unchanged.
-  if (typeof data.model === 'string' && data.model.startsWith('model-')) {
+  if (typeof data.model === 'string' && (data.model.startsWith('model-') || data.model.startsWith('policy/'))) {
     // Flow-only flags are meaningless here; ignore them (but note it).
     if (flujo || requireApproval || flujodebug || conversationId) {
       log.debug('Ignoring flow-only flags on a direct model completion', {
@@ -614,7 +614,7 @@ export async function processChatCompletion(
 // response. Tools supplied by the client are forwarded per standard OpenAI
 // semantics (the client executes its own tools).
 async function processDirectModelCompletion(data: ChatCompletionRequest) {
-  const identifier = data.model.slice('model-'.length);
+  const identifier = data.model.startsWith('policy/') ? data.model : data.model.slice('model-'.length);
   log.info('Processing direct model completion', {
     model: data.model,
     messageCount: data.messages?.length || 0,
@@ -643,6 +643,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
           type: result.error.type,
           code: result.error.code,
           param: result.error.param ?? null,
+          ...(result.error.flujo_routing ? { flujo_routing: result.error.flujo_routing } : {}),
         },
       },
       { status: result.statusCode }
@@ -650,7 +651,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
   }
 
   if (data.stream === true) {
-    return createDirectModelStreamingResponse(data.model, result.completion, result.media);
+    return createDirectModelStreamingResponse(result.completion.flujo_routing ? result.completion.model : data.model, result.completion, result.media);
   }
 
   return NextResponse.json({
@@ -667,7 +668,7 @@ async function processDirectModelCompletion(data: ChatCompletionRequest) {
 // which this path bypasses entirely.
 function createDirectModelStreamingResponse(
   model: string,
-  completion: OpenAI.Chat.Completions.ChatCompletion,
+  completion: OpenAI.Chat.Completions.ChatCompletion & { flujo_routing?: import('@/shared/types/model/fallbackPolicy').ModelRouteReceipt },
   media?: ModelMediaPart[],
 ) {
   const encoder = new TextEncoder();
@@ -687,6 +688,7 @@ function createDirectModelStreamingResponse(
         created: createdTimestamp,
         model,
         choices: [{ index: 0, delta, finish_reason }],
+        ...(completion.flujo_routing ? { flujo_routing: completion.flujo_routing } : {}),
       });
 
       // Initial chunk announcing the assistant role (OpenAI convention).

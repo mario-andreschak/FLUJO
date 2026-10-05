@@ -50,7 +50,8 @@ import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicRe
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
-import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
+import { executionExtensionSignal } from '@/backend/execution/extensions';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -184,7 +185,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       if (target.type === 'subflow') {
         const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
         sharedState.subflowDetachedToolNameMap[toolName] = target.id;
-        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget) : `Start ${target.label} as a detached subflow`;
+        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined) : `Start ${target.label} as a detached subflow`;
         const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
       }
@@ -194,7 +195,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
         sharedState.subflowToolNameMap[toolName] = target.id;
         const description = flowNodeForTarget
-          ? await buildHandoffDescription(flowNodeForTarget)
+          ? await buildHandoffDescription(flowNodeForTarget, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
           : `Run ${target.label} as a callable subflow tool`;
         const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
         const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
@@ -210,7 +211,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
       const flowNode = flowNodesById?.get(target.id);
       const description = flowNode
-        ? await buildHandoffDescription(flowNode)
+        ? await buildHandoffDescription(flowNode, sharedState.personaAttribution ? sharedState.flowSnapshot : undefined)
         : `Hand off execution to ${target.label} (${target.type})`;
 
       // A subflow OR process node in 'isolated' inputMode that opted into
@@ -364,7 +365,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       nodeId,
       flowId,
       boundModel,
-      excludeModelPrompt,
+      excludeModelPrompt: sharedState.executionExtensionContext ? true : excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt
     });
@@ -421,7 +422,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       ? personaContext!.instruction + '\n\n' + renderedPrompt
       : renderedPrompt;
 
-    let completePrompt = await resolveRunResourceRefs(
+    let completePrompt = sharedState.executionExtensionContext ? trustedPrompt : await resolveRunResourceRefs(
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
@@ -431,7 +432,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = await resolvePromptDynamicReferences(completePrompt, {
+    completePrompt = sharedState.executionExtensionContext ? completePrompt : await resolvePromptDynamicReferences(completePrompt, {
       conversationId: sharedState.conversationId,
       flowId,
       nodeId,
@@ -611,6 +612,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
+    if (sharedState.executionExtensionContext) {
+      const { executionExtensionProtectedServer, authorizeExecutionExtensionHandoffs } = await import('@/backend/execution/extensions');
+      const server = executionExtensionProtectedServer(sharedState.executionExtensionContext);
+      availableTools = availableTools.filter(tool =>
+        tool.server === server || handoffTools.some(handoff => handoff.name === tool.name));
+      sharedState.toolNameMap = {};
+      authorizeExecutionExtensionHandoffs(sharedState.executionExtensionContext, handoffTools.map(tool => tool.name));
+    }
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
@@ -667,6 +676,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     unattended: sharedState.unattended,
     behaviorRules: structuredClone(sharedState.behaviorRules ?? []),
     executionAuthority: sharedState.executionAuthority,
+    executionExtensionContext: sharedState.executionExtensionContext,
     personaAttribution: sharedState.personaAttribution,
     ...(sharedState.temperatureOverrideOnce !== undefined
       ? { temperatureOverride: sharedState.temperatureOverrideOnce }
@@ -786,7 +796,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
     // this ProcessNode and non-secret globals before the model sees them.
-    if (wireBase.some((message) =>
+    if (!sharedState.executionExtensionContext && wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
       && (message.content.includes('${') || message.content.includes('@'))
@@ -832,7 +842,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
         log.info('Using caller-supplied prompt for isolated process node', { nodeId });
       }
       const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
-      resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      resolvedIsolatedPrompt = sharedState.executionExtensionContext ? isolatedPrompt : isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -840,7 +850,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             { nodeId }
           )
         : isolatedPrompt;
-      if (typeof resolvedIsolatedPrompt === 'string') {
+      if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
         resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
           conversationId: sharedState.conversationId,
           flowId,
@@ -915,17 +925,21 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       (t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME,
     );
     const shouldArmReadResource =
-      hasMcpTools ||
-      hasWriteResource ||
-      hasResourceNodes ||
-      hasNativeResources ||
-      historyHasRunResourceUri;
+      !sharedState.executionExtensionContext && (
+        hasMcpTools ||
+        hasWriteResource ||
+        hasResourceNodes ||
+        hasNativeResources ||
+        historyHasRunResourceUri
+      );
 
     // Sticky arming: a synthetic tool offered once on this conversation keeps
     // being offered. Guards the reverse flip — e.g. a server's resource listing
     // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
     // which would otherwise drop the tool and rewrite the block.
-    const armed = new Set(sharedState.armedSyntheticTools ?? []);
+    // A private execution's approved tool set cannot acquire local capabilities
+    // after the earlier filter, including sticky tools from a prior failed turn.
+    const armed = new Set(sharedState.executionExtensionContext ? [] : sharedState.armedSyntheticTools ?? []);
     if (shouldArmReadResource) {
       armed.add(READ_RESOURCE_TOOL_NAME);
       // Any step that can mint a run resource must also be able to enumerate
@@ -1173,16 +1187,17 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
-            beforeToolDispatch: prepResult.executionAuthority?.assertCurrent,
-            beforeModelDispatch: prepResult.executionAuthority?.assertCurrent,
+            beforeToolDispatch: () => assertFlowExecutionCurrent(prepResult),
+            beforeModelDispatch: () => assertFlowExecutionCurrent(prepResult),
             executionAuthority: prepResult.executionAuthority,
+            executionExtensionContext: prepResult.executionExtensionContext,
             personaAttribution: prepResult.personaAttribution,
-            signal: prepResult.executionAuthority?.signal,
+            signal: prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : prepResult.executionAuthority?.signal,
           });
           // Provider abort is cooperative. A response can arrive after the
           // Persona heartbeat/fence was lost, so reject it before any message,
           // event, node, or conversation projection observes the stale result.
-          await prepResult.executionAuthority?.assertCurrent();
+          await assertFlowExecutionCurrent(prepResult);
           return result;
         };
 

@@ -1,5 +1,6 @@
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { FlowExecutionAuthority } from './types';
+import { assertExecutionExtensionCurrent, commitExecutionExtensionMutation, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 
 /**
  * A tagged run-level failure used at durable Flow mutation boundaries.
@@ -20,8 +21,19 @@ export class FlowExecutionAuthorityError extends Error {
 }
 
 export interface FlowDurableMutationContext {
+  executionExtensionContext?: ExecutionExtensionContext;
   executionAuthority?: FlowExecutionAuthority;
   personaAttribution?: PersonaAttribution;
+}
+
+/** Causal children inherit fencing and audit attribution, never Persona abilities. */
+export function subflowExecutionAuthority(authority?: FlowExecutionAuthority): FlowExecutionAuthority | undefined {
+  if (!authority) return undefined;
+  return {
+    signal: authority.signal,
+    assertCurrent: () => authority.assertCurrent(),
+    ...(authority.commitWhileCurrent ? { commitWhileCurrent: authority.commitWhileCurrent.bind(authority) } : {}),
+  };
 }
 
 export function isFlowExecutionAuthorityError(
@@ -50,6 +62,10 @@ export async function assertFlowExecutionCurrent(
   context: FlowDurableMutationContext,
 ): Promise<void> {
   const { executionAuthority, personaAttribution } = context;
+  if (context.executionExtensionContext) {
+    try { await assertExecutionExtensionCurrent(context.executionExtensionContext); }
+    catch { throw new FlowExecutionAuthorityError('Private execution authority was lost.'); }
+  }
   if (personaAttribution && !executionAuthority) throw missingAuthorityError();
   if (!executionAuthority) return;
   try {
@@ -73,6 +89,10 @@ export async function commitFlowDurableMutation<T>(
   context: FlowDurableMutationContext,
   task: () => Promise<T>,
 ): Promise<T> {
+  if (context.executionExtensionContext) {
+    return commitExecutionExtensionMutation(context.executionExtensionContext, () => commitFlowDurableMutation(
+      { ...context, executionExtensionContext: undefined }, task));
+  }
   const { executionAuthority, personaAttribution } = context;
   if (personaAttribution && !executionAuthority?.commitWhileCurrent) {
     throw missingAuthorityError();

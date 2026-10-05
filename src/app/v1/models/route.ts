@@ -44,9 +44,9 @@ async function GET_handler(_request: Request) {
       const models = await modelService.loadModels();
       const seen = new Set<string>();
       for (const m of models) {
-        const identifier = (m.displayName?.trim() || m.name || '').trim();
+        const identifier = (m.fallbackPolicy ? m.name : m.displayName?.trim() || m.name || '').trim();
         if (!identifier) continue;
-        const id = `model-${identifier}`;
+        const id = m.fallbackPolicy ? identifier : `model-${identifier}`;
         // Dedupe (possible when displayName-less models share a technical name).
         if (seen.has(id)) continue;
         seen.add(id);

@@ -22,6 +22,7 @@ import { modelService } from '@/backend/services/model';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
+import { verifyBehaviorDependencies } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   HandoffNodeSummary,
   HandoffServerSummary,
@@ -35,13 +36,20 @@ const log = createLogger('backend/execution/flow/buildHandoffDescription');
 // model/server/flow many times. These live only for the duration of one
 // build call (fresh instance per top-level target).
 interface BuildCaches {
+  immutableFlows: boolean;
   modelNames: Map<string, string>;
   serverConnected: Map<string, boolean>;
   flows: Map<string, Flow | null>;
 }
 
-function newCaches(): BuildCaches {
-  return { modelNames: new Map(), serverConnected: new Map(), flows: new Map() };
+function newCaches(pinnedParent?: Flow): BuildCaches {
+  const flows = new Map<string, Flow | null>();
+  if (pinnedParent) {
+    if (pinnedParent.executionDependencies) verifyBehaviorDependencies(pinnedParent);
+    flows.set(pinnedParent.id, pinnedParent);
+    for (const entry of pinnedParent.executionDependencies?.flows ?? []) flows.set(entry.flowId, entry.flowSnapshot);
+  }
+  return { modelNames: new Map(), serverConnected: new Map(), flows, immutableFlows: Boolean(pinnedParent) };
 }
 
 async function resolveModelName(modelId: string | undefined, caches: BuildCaches): Promise<string | undefined> {
@@ -75,6 +83,7 @@ async function isServerConnected(server: string, caches: BuildCaches): Promise<b
 
 async function loadFlow(flowId: string, caches: BuildCaches): Promise<Flow | null> {
   if (caches.flows.has(flowId)) return caches.flows.get(flowId)!;
+  if (caches.immutableFlows) return null;
   let flow: Flow | null = null;
   try {
     flow = await flowService.getFlow(flowId);
@@ -183,9 +192,9 @@ async function summariseNode(
  * to the plain `Hand off execution to <label> (<type>)` header on any error so a
  * synthesis failure can never break tool generation.
  */
-export async function buildHandoffDescription(targetNode: FlowNode): Promise<string> {
+export async function buildHandoffDescription(targetNode: FlowNode, pinnedParent?: Flow): Promise<string> {
   try {
-    const summary = await summariseNode(targetNode, 0, newCaches(), new Set());
+    const summary = await summariseNode(targetNode, 0, newCaches(pinnedParent), new Set());
     return formatHandoffDescription(summary);
   } catch (err) {
     const label = targetNode.data?.label || 'Unknown Node';

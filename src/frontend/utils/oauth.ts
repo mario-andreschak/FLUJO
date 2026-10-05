@@ -10,6 +10,14 @@ export interface OAuthPopupOptions {
   onSuccess?: (result: unknown) => void;
   onError?: (error: string) => void;
   onClose?: () => void;
+  /** Reserved synchronously by the initiating click, before any async work. */
+  popup?: Window;
+}
+
+export function reserveOAuthPopup(windowName: string): Window {
+  const popup = window.open('about:blank', windowName, 'popup,width=600,height=700,scrollbars=yes,resizable=yes');
+  if (!popup) throw new Error('Could not open the sign-in window. Allow popups for FLUJO and try Authenticate again.');
+  return popup;
 }
 
 /**
@@ -45,10 +53,11 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<unknown> {
       'location=no'
     ].join(',');
 
-    log.info('Opening OAuth popup', { url: url.substring(0, 100) + '...', windowName });
+    log.info('Opening OAuth popup', { origin: new URL(url).origin, windowName });
 
     // Open popup window
-    const popup = window.open(url, windowName, features);
+    const popup = options.popup ?? window.open(url, windowName, features);
+    if (options.popup) options.popup.location.href = url;
 
     if (!popup) {
       const error = 'Failed to open popup window. Please check if popups are blocked.';

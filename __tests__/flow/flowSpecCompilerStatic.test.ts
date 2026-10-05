@@ -8,6 +8,7 @@
  * (this is the bug issue #380 formalizes the fix for).
  */
 import { compileFlowSpec, flowToSpec, FlowSpec } from '@/utils/shared/flowSpecCompiler';
+import { validateFlow } from '@/utils/shared/flowValidation';
 
 const context = { models: [{ id: 'model-1', displayName: 'GPT' }], servers: [], serverTools: {} };
 
@@ -25,6 +26,45 @@ const staticSpec = (staticNode: Record<string, unknown>): FlowSpec => ({
 });
 
 describe('compile: static nodes', () => {
+  it('round-trips authored result capture, output selection, and real-call failure policy', () => {
+    const entry = {
+      kind: 'toolCall', executionMode: 'real', serverName: 'bash', toolName: 'run',
+      argumentsJson: '{}', result: '', captureVariable: 'health', resultFormat: 'json', onError: 'fail',
+    };
+    const result = compileFlowSpec(staticSpec({ entries: [entry], outputTemplate: '${var:health}' }), {
+      servers: [{ name: 'bash' }], serverTools: { bash: ['run'] },
+    });
+    expect(result.errorCount).toBe(0);
+    const exported = flowToSpec(result.flow!);
+    expect(exported.nodes.find(node => node.type === 'static')).toMatchObject({ entries: [entry], outputTemplate: '${var:health}' });
+    const validation = validateFlow(result.flow!);
+    expect(validation.errorCount).toBe(0);
+    expect(validation.issues.some(issue => issue.code === 'var-ref-uncaptured')).toBe(false);
+  });
+
+  it.each([
+    [{ onError: 'branch' }, 'static-invalid-onerror'],
+    [{ executionMode: 'mock', onError: 'fail' }, 'static-mock-fail-policy'],
+    [{ resultFormat: 'auto' }, 'static-invalid-result-format'],
+  ])('rejects incompatible policy/options %#', (overrides, code) => {
+    const result = compileFlowSpec(staticSpec({ entries: [{
+      kind: 'toolCall', executionMode: 'real', serverName: 'bash', toolName: 'run',
+      argumentsJson: '{}', result: '', ...overrides,
+    }] }));
+    expect(result.issues.some(issue => issue.severity === 'error' && issue.code === code)).toBe(true);
+  });
+
+  it('validates capture names and incompatible policies in saved Builder flows', () => {
+    const result = compileFlowSpec(staticSpec({ entries: [{
+      kind: 'toolCall', toolName: 'run', argumentsJson: '{}', result: '', captureVariable: 'bad name',
+    }] }));
+    const flow = result.flow!;
+    const entries = flow.nodes.find(node => node.type === 'static')!.data.properties!.entries as Array<Record<string, unknown>>;
+    entries[0].onError = 'fail';
+    expect(validateFlow(flow).issues.map(issue => issue.code)).toEqual(expect.arrayContaining([
+      'static-capture-var-name', 'static-mock-fail-policy',
+    ]));
+  });
   it('compiles a static node with a message entry and a toolCall entry, and preserves injectOnce', () => {
     const result = compileFlowSpec(
       staticSpec({

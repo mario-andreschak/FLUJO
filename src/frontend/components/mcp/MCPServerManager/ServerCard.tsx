@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createLogger } from "@/utils/logger";
 import { useThemeUtils } from "@/frontend/utils/theme";
+import { openOAuthPopup, reserveOAuthPopup } from "@/frontend/utils/oauth";
 
 const log = createLogger("frontend/components/mcp/MCPServerManager/ServerCard");
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -171,6 +172,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
+  const [oauthError, setOAuthError] = useState("");
   const [toastSeverity, setToastSeverity] = useState<"success" | "error">(
     "success",
   );
@@ -515,7 +517,10 @@ const ServerCard: React.FC<ServerCardProps> = ({
     }
 
     // Transport OAuth remains the fallback for remote Streamable HTTP servers.
+    let popup: Window | undefined;
     try {
+      setOAuthError("");
+      popup = reserveOAuthPopup(`oauth_${name}`);
       const response = await fetch("/api/oauth/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -532,23 +537,28 @@ const ServerCard: React.FC<ServerCardProps> = ({
         return;
       }
 
-      const { openOAuthPopup } = await import("@/frontend/utils/oauth");
       await openOAuthPopup({
+        popup,
         url: authorizationUrl,
         windowName: `oauth_${name}`,
         onSuccess: () => handleServerRestart(),
         onError: (authError) => {
           log.error(`OAuth authentication failed for ${name}`, authError);
-          setToastMessage(t("mcp.card.oauthFailed"));
+          setOAuthError(authError);
+          setToastMessage(authError);
           setToastSeverity("error");
           setShowToast(true);
         },
       });
     } catch (authError) {
       log.error(`Failed to start OAuth authentication for ${name}`, authError);
-      setToastMessage(t("mcp.card.oauthStartFailed"));
+      const message = authError instanceof Error ? authError.message : t("mcp.card.oauthStartFailed");
+      setOAuthError(message);
+      setToastMessage(message);
       setToastSeverity("error");
       setShowToast(true);
+    } finally {
+      popup?.close();
     }
   };
 
@@ -1450,6 +1460,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </Box>
           )}
       </CardContent>
+
+      {oauthError && <Alert severity="error" sx={{ mx: 1.5, mb: 1 }}>{oauthError}</Alert>}
 
       {!pickerMode && (
         <CardActions

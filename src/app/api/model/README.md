@@ -91,6 +91,13 @@ are sanitized by the adapter layer (API keys masked) before leaving the server.
 
 ## Usage
 
+Fallback policies use these same model CRUD endpoints. A policy record has a stable
+`name: "policy/<alias>"`, an empty `ApiKey`, and
+`fallbackPolicy: { modelIds: [primaryId, backupId], triggers?, cooldownSeconds? }`.
+Members reference saved models in the selected workspace. See
+[model fallback policies](../../../../docs/features/model-fallback-policies.md)
+for UI instructions, validation, routing receipts and OpenAI-compatible invocation.
+
 The API layer should not be used directly by frontend components. Instead, frontend components should use the frontend service, which will make the appropriate API calls.
 
 ```typescript

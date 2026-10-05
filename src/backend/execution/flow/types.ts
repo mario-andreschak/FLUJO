@@ -801,12 +801,19 @@ export type StaticEntry =
         result: string;
         executionMode?: 'mock' | 'real';
         serverName?: string;
+        /** Save a bounded text/JSON snapshot into a run variable. */
+        captureVariable?: string;
+        resultFormat?: 'text' | 'json';
+        /** Real calls only. Omission preserves context injection and continuation. */
+        onError?: 'continue' | 'fail';
       };
 
 export interface StaticNodeProperties {
     name?: string;
     /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
+    /** Explicit deterministic output, resolved after entries (e.g. ${var:health}). */
+    outputTemplate?: string;
     /** MCP attachments derived from static↔MCP graph edges at conversion time. */
     mcpNodes?: MCPNodeReference[];
     /**
@@ -948,6 +955,7 @@ export interface PersonaActivityMutationContext {
 
 // Shared state (minimized)
 export interface SharedState {
+    executionExtensionOwned?: boolean;
     /** Run-scoped repeated tool-call/result counters. */
     toolRepeatGuard?: import('./toolRepeatGuard').ToolRepeatGuardState;
     /** Consumed by the next Process-node model turn only. */
@@ -957,6 +965,9 @@ export interface SharedState {
      * field and asserts it immediately before every attributed state write.
      */
     executionAuthority?: FlowExecutionAuthority;
+    /** Runtime cancellation forwarded to fixed Static MCP calls; never serialized. */
+    abortSignal?: AbortSignal;
+    executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
     /**
      * Exact MCP server config names projected from the owning Persona Activity.
      * Runtime-only and installed non-enumerably beside executionAuthority; the
@@ -1613,6 +1624,7 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     behaviorRules?: Flow['behaviorRules'];
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
+    executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
     personaAttribution?: PersonaAttribution;
     /** One logical model-turn override armed by the repeated-tool guard. */
@@ -1636,6 +1648,8 @@ export interface MCPNodePrepResult extends BasePrepResult {
 
 // SubflowNode prep result
 export interface SubflowNodePrepResult extends BasePrepResult {
+    /** Parent's verified immutable executable closure; never looked up on replay. */
+    parentFlowSnapshot?: Flow;
     nodeType: 'subflow';
     /** Runtime-only cancellation for an independently running child task. */
     abortSignal?: AbortSignal;
@@ -1667,6 +1681,7 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     personaAttribution?: PersonaAttribution;
     /** Runtime-only Persona lease authority inherited by a structural child. */
     executionAuthority?: FlowExecutionAuthority;
+    executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
     /** Whether the child run's events are folded into the parent conversation
      *  (outputMode 'steps', the default) or hidden ('final-only'). */
     showSteps: boolean;

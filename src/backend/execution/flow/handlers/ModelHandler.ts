@@ -1,4 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -48,7 +49,7 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { normalizeMaxTokens } from '@/shared/types/model';
+import { normalizeMaxTokens, type Model } from '@/shared/types/model';
 import { normalizeModelTemperature } from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
@@ -1129,6 +1130,7 @@ export class ModelHandler {
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -1137,6 +1139,7 @@ export class ModelHandler {
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
+    let modelIsFallbackPolicy = false;
     let modelAdapter: string | undefined;
     let modelContextWindow: number | undefined;
     let modelCompactionThreshold: number | undefined;
@@ -1148,6 +1151,7 @@ export class ModelHandler {
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
+        modelIsFallbackPolicy = Boolean(model.fallbackPolicy);
         modelAdapter = model.adapter;
         modelContextWindow = model.contextWindow;
         modelCompactionThreshold = model.compactionThreshold;
@@ -1569,7 +1573,7 @@ export class ModelHandler {
     // and handoff filtering. The result exists only on the provider wire; the
     // canonical `messages` array remains the base for returned/persisted output.
     const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
-    const compaction = await ModelHandler.maybeCompactWire(
+    const compaction = input.executionExtensionContext ? undefined : await ModelHandler.maybeCompactWire(
       projectedMessages,
       conversationId,
       nodeId,
@@ -1602,7 +1606,7 @@ export class ModelHandler {
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
       toolNameMap,
-      maxTurns: effectiveMaxTurns,
+      maxTurns: modelIsFallbackPolicy && !normalizeMaxTokens(maxTurns) ? undefined : effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
       temperatureOverride: input.temperatureOverride,
       requestToolApproval,
@@ -1627,6 +1631,7 @@ export class ModelHandler {
       wireMessageIds: effectiveMessages.map(message => message.id),
       nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
+      executionExtensionContext: input.executionExtensionContext,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
       durableContext,
@@ -1918,6 +1923,7 @@ export class ModelHandler {
       }) => void;
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
+      executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
       /** Call-time authorization for Persona Core-injected MCP handles. */
       authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
@@ -1957,8 +1963,20 @@ export class ModelHandler {
     let automaticRetriesUsed = 0;
 
     try {
+      if (opts?.executionExtensionContext) {
+        await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+      }
       // Get the model
       const model = await modelService.getModel(modelId);
+      await assertFlowExecutionCurrent(opts?.durableContext ?? {});
+      // Native adapters require a trusted, verified restriction profile. Claude
+      // remains excluded until its native capabilities can be equivalently gated.
+      if (opts?.executionExtensionContext) {
+        if (model?.adapter === 'claude-cli' || (model?.adapter === 'codex-cli'
+          && !await executionExtensionCodexProfile(opts.executionExtensionContext))) {
+          throw new ExecutionExtensionError('execution_model_adapter_forbidden');
+        }
+      }
       if (!model) {
         return {
           success: false,
@@ -1985,7 +2003,7 @@ export class ModelHandler {
       // adapter then omits the apiKey and the CLI falls back to its own auth).
       const resolvedKey = await modelService.resolveAndDecryptApiKey(model.ApiKey);
       const decryptedApiKey =
-        resolvedKey || (model.adapter === 'codex-cli' && !model.ApiKey?.trim() ? '' : null);
+        resolvedKey || (model.fallbackPolicy || (model.adapter === 'codex-cli' && !model.ApiKey?.trim()) ? '' : null);
       if (decryptedApiKey === null) {
         return {
           success: false,
@@ -2052,6 +2070,7 @@ export class ModelHandler {
       // failed estimates, or non-positive savings remain on the text route.
       const compactionGlobals = await ModelHandler.getCompactionGlobalSettings();
       const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
+      if (opts?.executionExtensionContext) visualConfig.enabled = false;
       const visual = await compactMessagesVisually({
         messages: apiMessages,
         model,
@@ -2085,7 +2104,7 @@ export class ModelHandler {
           undefined,
           ...apiSourceIds.slice(candidate.endIndex),
         ];
-        effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+        if (!opts?.executionExtensionContext) effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
       // Wire-only history compaction for request/response adapters. Agentic loops
@@ -2097,7 +2116,7 @@ export class ModelHandler {
       // runs for every adapter; self-orchestrating adapters flatten this safer
       // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (couldCompact(apiMessages, { keepRecentMessages })) {
+      if (!opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
         const beforeLosslessRefit = apiMessages;
         const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
@@ -2234,6 +2253,15 @@ export class ModelHandler {
       if (inputBudget !== undefined) {
         let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
         if (estimatedInputTokens > inputBudget) {
+          // A constrained private run cannot introduce resource tools or persist
+          // model content while recovering from an oversized provider request.
+          if (opts?.executionExtensionContext) {
+            return {
+              success: false,
+              error: createModelError('context_budget_exceeded',
+                "The private execution request exceeds the model's context budget.", modelId),
+            };
+          }
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
             budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
@@ -2423,7 +2451,8 @@ export class ModelHandler {
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
         : null;
-      const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
+      let routingModel = model;
       let providerAttemptOrdinal = 0;
       // One LOGICAL provider call; every retry below reuses this invocation id
       // and gets its own attempt id, so retries never look like separate calls.
@@ -2471,15 +2500,15 @@ export class ModelHandler {
         try {
           const attemptOrdinal = ++providerAttemptOrdinal;
           const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
-            ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined);
+            ?? (routingModel.contextWindow ? { contextWindow: routingModel.contextWindow } : undefined);
           recordStatisticsEvent(createStatisticsEvent({
             type: 'model.attempt',
             runId: opts.runId,
             node: opts.nodeId ? { id: opts.nodeId } : undefined,
-            model: { id: modelId, name: model.displayName || model.name },
+            model: { id: routingModel.id, name: routingModel.displayName || routingModel.name },
             provider: {
-              id: model.provider || model.adapter || 'unknown',
-              name: model.adapter || model.provider,
+              id: routingModel.provider || routingModel.adapter || 'unknown',
+              name: routingModel.adapter || routingModel.provider,
             },
             credentialId: opaqueCredentialId,
             attempt: attemptOrdinal,
@@ -2634,6 +2663,18 @@ export class ModelHandler {
               const input = {
               model,
               apiKey: decryptedApiKey,
+              beforeModelDispatch: async () => {
+                if (opts?.executionExtensionContext) await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+                await opts?.beforeModelDispatch?.();
+              },
+              temperatureOverride: opts?.temperatureOverride !== undefined
+                ? normalizeModelTemperature(opts.temperatureOverride, model.provider, model.adapter, model.name)
+                : undefined,
+              onRoutingModel: async (member: Model) => {
+                routingModel = member;
+                const key = await modelService.resolveAndDecryptApiKey(member.ApiKey);
+                opaqueCredentialId = await credentialFingerprint(key ?? '').catch(() => undefined);
+              },
               onProviderAttempt: (observation: {
                 attempt: number;
                 durationMs: number;
@@ -2653,8 +2694,8 @@ export class ModelHandler {
                         runId: opts.runId,
                         nodeId: opts.nodeId!,
                         nodeName: opts.nodeName,
-                        modelId,
-                        modelName: model.displayName || model.name,
+                        modelId: routingModel.id,
+                        modelName: routingModel.displayName || routingModel.name,
                         adapter: snapshot.adapter,
                         operation: snapshot.operation,
                         attempt: ++sdkDispatchOrdinal,
@@ -2717,6 +2758,7 @@ export class ModelHandler {
               onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: opts?.beforeToolDispatch,
+              executionExtensionContext: opts?.executionExtensionContext,
               authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
               afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: <T>(task: () => Promise<T>) =>
@@ -2742,7 +2784,10 @@ export class ModelHandler {
               // compaction, media hydration) is complete.  Check the current
               // lease/generation at the final dispatch boundary for EVERY
               // attempt, including bounded retries and summary calls.
-              await opts?.beforeModelDispatch?.();
+              if (opts?.executionExtensionContext) {
+                await assertExecutionExtensionCurrent(opts.executionExtensionContext);
+              }
+              if (!model.fallbackPolicy) await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
                 : adapter.createCompletion(input);
@@ -2982,6 +3027,10 @@ export class ModelHandler {
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
+          // The policy has already applied its trigger and replay boundaries.
+          // An outer rate-limit replay must not restart that decision (including
+          // a disabled trigger or steering/approval activity observed inside it).
+          if (model.fallbackPolicy) return attemptResult;
           if (model.adapter === 'codex-cli') return attemptResult;
           if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
             log.warn('Automatic session-limit retries exhausted; returning the provider error', {
@@ -3102,6 +3151,7 @@ export class ModelHandler {
       // insufficient, apply the same structurally-safe emergency refit used by
       // proactive budgeting. This path is adapter-neutral.
       if (
+        !opts?.executionExtensionContext &&
         !result.success &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
@@ -3240,6 +3290,7 @@ export class ModelHandler {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,
+      executionExtensionContext: input.executionExtensionContext,
       personaAttribution: input.personaAttribution,
     };
 
@@ -3335,6 +3386,10 @@ export class ModelHandler {
       const executeOneToolCall = async (callIndex: number): Promise<void> => {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
+        if (input.executionExtensionContext) {
+          await assertExecutionModelTool(input.executionExtensionContext, name,
+            toolNameMap && Object.hasOwn(toolNameMap, name) ? toolNameMap[name] : undefined);
+        }
         const decodedForUi = decodeToolName(name, toolNameMap);
         let invocationArgsForUi: Record<string, unknown> | undefined;
         try {
@@ -3856,8 +3911,7 @@ export class ModelHandler {
               total: progress.total,
               message: progress.message,
             });
-            result = conversationId
-              ? await mcpService.callTool(
+            result = await mcpService.callTool(
                   serverName,
                   toolName,
                   args,
@@ -3867,18 +3921,10 @@ export class ModelHandler {
                   callSignal,
                   'model',
                   runOwnerScope,
-                  { conversationId },
-                )
-              : await mcpService.callTool(
-                  serverName,
-                  toolName,
-                  args,
-                  timeout,
-                  onProgress,
-                  decoded.nodeId,
-                  callSignal,
-                  'model',
-                  runOwnerScope,
+                  ...(conversationId || input.executionExtensionContext
+                    ? [conversationId ? { conversationId } : undefined] as const
+                    : [] as const),
+                  ...(input.executionExtensionContext ? [input.executionExtensionContext] as const : [] as const),
                 );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before

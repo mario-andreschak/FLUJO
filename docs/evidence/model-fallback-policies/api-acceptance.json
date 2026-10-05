@@ -1,0 +1,71 @@
+{
+  "environment": "Isolated local workspace and HTTP provider fixture; no paid provider calls",
+  "listing": {
+    "object": "list",
+    "data": [
+      {
+        "id": "model-Primary · rate limited",
+        "object": "model"
+      },
+      {
+        "id": "model-Backup · available",
+        "object": "model"
+      },
+      {
+        "id": "policy/production",
+        "object": "model"
+      }
+    ]
+  },
+  "first": {
+    "status": 200,
+    "model": "fixture-backup",
+    "routing": {
+      "policyId": "f75d55fa-7c35-4206-882f-498d1897b532",
+      "attempts": [
+        {
+          "modelId": "fixture-primary",
+          "outcome": "failed",
+          "reason": "rate_limit"
+        },
+        {
+          "modelId": "fixture-backup",
+          "outcome": "completed"
+        }
+      ],
+      "selectedModelId": "fixture-backup"
+    }
+  },
+  "second": {
+    "status": 200,
+    "model": "fixture-backup",
+    "routing": {
+      "policyId": "f75d55fa-7c35-4206-882f-498d1897b532",
+      "attempts": [
+        {
+          "modelId": "fixture-primary",
+          "outcome": "cooldown",
+          "reason": "rate_limit"
+        },
+        {
+          "modelId": "fixture-backup",
+          "outcome": "completed"
+        }
+      ],
+      "selectedModelId": "fixture-backup"
+    }
+  },
+  "invalidPolicy": {
+    "status": 400,
+    "error": "Policy model not found: missing-member"
+  },
+  "referencedMemberDelete": {
+    "status": 400,
+    "error": "Remove this model from its fallback policies before deleting it"
+  },
+  "process": {
+    "status": 200,
+    "conversation_id": "fallback-acceptance",
+    "content": "Fallback succeeded through the backup."
+  }
+}

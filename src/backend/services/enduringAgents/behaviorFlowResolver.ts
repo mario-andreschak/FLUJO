@@ -12,7 +12,7 @@ import {
   behaviorRevisionId,
   canonicalJson,
   hashBehaviorFlow,
-  snapshotBehaviorFlow,
+  snapshotBehaviorFlowDependencies,
 } from './behaviorRevisions';
 import {
   activateBehaviorBindingRevision,
@@ -166,7 +166,7 @@ export async function resolveEffectiveBehaviorRevision(
     let flowSnapshot;
     let contentHash;
     try {
-      flowSnapshot = snapshotBehaviorFlow(captured.flow);
+      flowSnapshot = await snapshotBehaviorFlowDependencies(captured.flow);
       contentHash = hashBehaviorFlow(flowSnapshot);
     } catch (error) {
       throw new BehaviorFlowResolutionError(
