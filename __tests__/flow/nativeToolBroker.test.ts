@@ -66,6 +66,26 @@ describe('native broker journal', () => {
       .rejects.toThrow(/unresolved/);
   });
 
+  it('keeps the durable hold when terminal release persistence fails', async () => {
+    const receipt = await prepareNativeInvocation(owner('release-failure'));
+    await submitNativeInvocation(receipt);
+    const originalUnlink = fs.unlink.bind(fs);
+    const unlink = jest.spyOn(fs, 'unlink').mockImplementation(file => {
+      if (String(file).startsWith(path.join(directory, 'holds'))) {
+        return Promise.reject(new Error('release disk fault'));
+      }
+      return originalUnlink(file);
+    });
+    try {
+      await expect(finishNativeInvocation(receipt, 'completed', {
+        assertCurrent: async () => undefined, signal: new AbortController().signal,
+      })).rejects.toThrow(/release disk fault/);
+    } finally { unlink.mockRestore(); }
+    expect((await nativeInvocationStatus(receipt.invocationId, receipt.owner)).state).toBe('unknown');
+    await expect(prepareNativeInvocation({ ...owner('release-failure'), leaseEpoch: 'successor' }))
+      .rejects.toThrow(/unresolved/);
+  });
+
   it('holds after prepare second-write failure and after loss of a scope pointer', async () => {
     const originalRename = fs.rename.bind(fs);
     const rename = jest.spyOn(fs, 'rename').mockImplementation((from, to) => {
@@ -97,17 +117,18 @@ describe('native broker journal', () => {
   it('deduplicates SDK callback identity and refuses changed arguments or an unresolved effect', async () => {
     const receipt = await prepareNativeInvocation(owner('dedupe'));
     await submitNativeInvocation(receipt);
+    const terminalFence = { assertCurrent: async () => undefined, signal: new AbortController().signal };
     const first = await beginNativeTool(receipt, 'sdk-tool-1', 'fingerprint-a');
     expect(first.fresh).toBe(true);
     expect((await beginNativeTool(receipt, 'sdk-tool-1', 'fingerprint-a')).fresh).toBe(false);
     await expect(beginNativeTool(receipt, 'sdk-tool-1', 'fingerprint-b')).rejects.toThrow(/Conflicting/);
     await markNativeToolEffectMayHaveStarted(first.entry);
-    await expect(finishNativeInvocation(receipt, 'completed')).rejects.toThrow(/unresolved/);
+    await expect(finishNativeInvocation(receipt, 'completed', terminalFence)).rejects.toThrow(/unresolved/);
     await finishNativeTool(first.entry, {
       kind: 'synthetic', transcriptText: 'done', result: { content: [{ type: 'text', text: 'done' }] },
     });
     expect((await beginNativeTool(receipt, 'sdk-tool-1', 'fingerprint-a')).entry.state).toBe('terminal');
-    await finishNativeInvocation(receipt, 'completed');
+    await finishNativeInvocation(receipt, 'completed', terminalFence);
     await expect(beginNativeTool(receipt, 'sdk-tool-2', 'fingerprint-b')).rejects.toThrow(/unresolved/);
   });
 
@@ -443,21 +464,12 @@ describe('native broker journal', () => {
     expect(callTool).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the multi-worker handoff invitation in the frozen broker inventory', async () => {
+  it('rejects strict handoff inventory before creating a native invocation', () => {
     const tools: OpenAI.ChatCompletionFunctionTool[] = [{
       type: 'function', function: { name: 'handoff_to_worker', description: 'Spawn worker',
         parameters: { type: 'object', properties: { task: { type: 'string' } } },
       },
     }];
-    const receipt = await prepareNativeInvocation(owner('handoff', nativeToolInventoryDigest(tools)));
-    await submitNativeInvocation(receipt);
-    const port = createNativeToolPort({ receipt, tools,
-      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
-      authority: createNativeBrokerAuthority('lease-a', async () => undefined),
-      signal: new AbortController().signal });
-    const response = await port.dispatch({ toolInvocationId: 'sdk-spawn', name: 'handoff_to_worker',
-      args: { task: 'One child' }, signal: new AbortController().signal });
-    expect(response.kind).toBe('handoff');
-    expect(response.result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('another parallel worker') });
+    expect(() => nativeToolInventoryDigest(tools)).toThrow(/confirmed SDK termination protocol/);
   });
 });

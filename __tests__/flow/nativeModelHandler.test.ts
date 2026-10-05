@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type OpenAI from 'openai';
 import type { CompletionInput, CompletionResult } from '@/backend/services/model/adapters/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 
@@ -29,11 +30,13 @@ const completion = (terminal: boolean): CompletionResult => ({
       message: { role: 'assistant', content: 'done', refusal: null } }],
   },
 });
-const invoke = (conversationId: string, overrides: Record<string, unknown> = {}) => (
+const invoke = (conversationId: string, overrides: Record<string, unknown> = {},
+  tools: OpenAI.ChatCompletionFunctionTool[] = []) => (
   ModelHandler as unknown as { generateCompletion: (
-    modelId: string, prompt: string, messages: FlujoChatMessage[], tools: [], options: Record<string, unknown>,
+    modelId: string, prompt: string, messages: FlujoChatMessage[], tools: OpenAI.ChatCompletionFunctionTool[],
+    options: Record<string, unknown>,
   ) => Promise<{ success: boolean; error?: { message: string } }> }
-).generateCompletion('model-native', '', [message], [], {
+).generateCompletion('model-native', '', [message], tools, {
   conversationId, runId: 'run-native', nodeId: 'node-native',
   nativeBrokerAuthority: createNativeBrokerAuthority('lease-1', async () => undefined),
   ...overrides,
@@ -145,5 +148,65 @@ describe('ModelHandler native SDK receipt boundary', () => {
     const fakeAuthority = JSON.parse(JSON.stringify(createNativeBrokerAuthority('lease-1', async () => undefined)));
     expect((await invoke('json-authority', { nativeBrokerAuthority: fakeAuthority })).success).toBe(false);
     expect(createCompletionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects strict handoff tools before an SDK request or invocation receipt', async () => {
+    const handoff: OpenAI.ChatCompletionFunctionTool = { type: 'function', function: {
+      name: 'handoff_to_worker', description: 'Spawn worker',
+      parameters: { type: 'object', properties: { task: { type: 'string' } } },
+    } };
+    expect((await invoke('handoff', {}, [handoff])).success).toBe(false);
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    await expect(fs.readdir(path.join(directory, 'journal', 'calls'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps admission held when Stop lands during the terminal scope write', async () => {
+    let stop = false;
+    let rename: jest.SpyInstance | undefined;
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      const originalRename = fs.rename.bind(fs);
+      rename = jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        await originalRename(from, to);
+        if (String(to).startsWith(path.join(directory, 'journal', 'scopes'))) {
+          stop = true;
+          if (!input.signal!.aborted) {
+            await new Promise<void>(resolve => input.signal!.addEventListener('abort', () => resolve(), { once: true }));
+          }
+        }
+      });
+      return completion(true);
+    });
+    try {
+      expect((await invoke('terminal-stop', { shouldAbort: () => stop })).success).toBe(false);
+    } finally { rename?.mockRestore(); }
+    expect((await invoke('terminal-stop')).success).toBe(false);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(path.join(directory, 'journal', 'holds'))).toHaveLength(1);
+  });
+
+  it('keeps admission held when the native lease is revoked during terminal persistence', async () => {
+    let current = true;
+    let rename: jest.SpyInstance | undefined;
+    const authority = createNativeBrokerAuthority('lease-1', async () => {
+      if (!current) throw new Error('lease revoked');
+    });
+    createCompletionMock.mockImplementation(async (input: CompletionInput) => {
+      const id = await input.onSdkRequest!({ adapter: 'codex-cli', operation: 'thread.runStreamed', request: {} });
+      await input.onSdkRequestResult!({ dispatchId: id!, outcome: 'completed' });
+      const originalRename = fs.rename.bind(fs);
+      rename = jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        await originalRename(from, to);
+        if (String(to).startsWith(path.join(directory, 'journal', 'scopes'))) current = false;
+      });
+      return completion(true);
+    });
+    try {
+      expect((await invoke('terminal-lease', { nativeBrokerAuthority: authority })).success).toBe(false);
+    } finally { rename?.mockRestore(); }
+    expect((await invoke('terminal-lease')).success).toBe(false);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(path.join(directory, 'journal', 'holds'))).toHaveLength(1);
   });
 });

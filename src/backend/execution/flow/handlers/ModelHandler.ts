@@ -2884,7 +2884,9 @@ export class ModelHandler {
               ({ completion: chatCompletion, transcript, liveMessageId, media, contextUsage } = await issueCompletion());
             }
           } finally {
-            stopCancelWatch();
+            // Native terminalization remains part of the cancellable original
+            // invocation. Keep Stop polling through its durable release write.
+            if (!opts?.nativeBrokerAuthority) stopCancelWatch();
           }
 
           // Prompt-cache effectiveness for this call, attributed to a prefix-drift
@@ -3027,10 +3029,11 @@ export class ModelHandler {
           if (nativeReceipt) {
             await opts!.nativeBrokerAuthority!.assertCurrent();
             if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-            await finishNativeInvocation(nativeReceipt, 'completed');
+            await finishNativeInvocation(nativeReceipt, 'completed', {
+              assertCurrent: opts!.nativeBrokerAuthority!.assertCurrent,
+              signal: abortController.signal,
+            });
             nativeTerminal = true;
-            await opts!.nativeBrokerAuthority!.assertCurrent();
-            if (abortController.signal.aborted) throw new NativeInvocationHeldError(nativeReceipt.invocationId);
           }
 
           attemptOutcome = 'completed';

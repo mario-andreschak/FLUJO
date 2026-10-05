@@ -53,6 +53,8 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 // an uncertain native call. Product transport adds its stricter fleet-run scope.
 const scopeFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>) =>
   path.join(root(), 'scopes', `${digest(owner.conversationId)}.json`);
+const holdFile = (owner: Pick<NativeInvocationOwner, 'conversationId'>) =>
+  path.join(root(), 'holds', `${digest(owner.conversationId)}.json`);
 const callFile = (id: string) => path.join(root(), 'calls', `${id}.json`);
 const toolFile = (invocationId: string, toolInvocationId: string) =>
   path.join(root(), 'tools', invocationId, `${digest(toolInvocationId)}.json`);
@@ -112,6 +114,8 @@ export async function prepareNativeInvocation(owner: NativeInvocationOwner): Pro
     throw new Error('Native invocation requires complete owner identity.');
   }
   return withNativeScopeMutation(owner.conversationId, async assertOwned => {
+    const hold = await readJson<NativeInvocationReceipt>(holdFile(owner));
+    if (hold) throw new NativeInvocationHeldError(hold.invocationId);
     const previous = await readJson<NativeInvocationReceipt>(scopeFile(owner));
     if (previous && previous.state !== 'terminal') throw new NativeInvocationHeldError(previous.invocationId);
     const orphan = await unresolvedCallForConversation(owner.conversationId);
@@ -119,8 +123,10 @@ export async function prepareNativeInvocation(owner: NativeInvocationOwner): Pro
     const receipt: NativeInvocationReceipt = {
       invocationId: randomUUID(), owner: structuredClone(owner), state: 'prepared', createdAt: Date.now(),
     };
-    // The scope pointer goes first: a failed second write leaves a hold, never
-    // an unindexed SDK call that could be replaced on restart.
+    // The hold is authoritative until the confirmed terminal commit. Even if
+    // either of the following files is installed only in part, admission stays
+    // closed on restart and after a failed terminal write.
+    await writeDurable(holdFile(owner), receipt, assertOwned);
     await writeDurable(scopeFile(owner), receipt, assertOwned);
     await writeDurable(callFile(receipt.invocationId), receipt, assertOwned);
     return receipt;
@@ -135,6 +141,10 @@ export async function nativeInvocationStatus(id: string, owner: NativeInvocation
   if (!receipt || JSON.stringify(receipt.owner) !== JSON.stringify(owner)) {
     throw new Error('Unknown or differently owned native invocation.');
   }
+  if (receipt.state === 'terminal') {
+    const hold = await readJson<NativeInvocationReceipt>(holdFile(owner));
+    if (hold?.invocationId === id) return { ...receipt, state: 'unknown', outcome: undefined };
+  }
   return receipt;
 }
 
@@ -142,6 +152,7 @@ async function updateInvocation(
   receipt: NativeInvocationReceipt,
   state: NativeInvocationReceipt['state'],
   outcome?: NativeInvocationReceipt['outcome'],
+  terminalFence?: { assertCurrent: () => Promise<void>; signal: AbortSignal },
 ): Promise<NativeInvocationReceipt> {
   return withNativeScopeMutation(receipt.owner.conversationId, async assertOwned => {
     const current = await nativeInvocationStatus(receipt.invocationId, receipt.owner);
@@ -164,10 +175,24 @@ async function updateInvocation(
         const tool = await readJson<ToolReceipt>(path.join(directory, name));
         if (!tool || tool.state !== 'terminal') throw new NativeInvocationHeldError(receipt.invocationId);
       }
+      terminalFence?.signal.throwIfAborted();
+      await terminalFence?.assertCurrent();
+      terminalFence?.signal.throwIfAborted();
     }
     const next = { ...current, state, ...(outcome ? { outcome } : {}) };
     await writeDurable(callFile(next.invocationId), next, assertOwned);
     await writeDurable(scopeFile(next.owner), next, assertOwned);
+    if (state === 'terminal') {
+      // A Stop or lease loss during either durable write leaves the hold file
+      // in place. New attempts cannot bypass it even if scope/call say terminal.
+      terminalFence?.signal.throwIfAborted();
+      await terminalFence?.assertCurrent();
+      terminalFence?.signal.throwIfAborted();
+      await assertOwned();
+      await fs.unlink(holdFile(next.owner));
+      // Unlink is the release decision. A later Stop loses to the already
+      // confirmed original SDK terminal; callers must not reject after this.
+    }
     return next;
   });
 }
@@ -175,8 +200,9 @@ async function updateInvocation(
 export const submitNativeInvocation = (receipt: NativeInvocationReceipt) => updateInvocation(receipt, 'begin-may-have-been-sent');
 export async function finishNativeInvocation(
   receipt: NativeInvocationReceipt, outcome: NonNullable<NativeInvocationReceipt['outcome']>,
+  terminalFence: { assertCurrent: () => Promise<void>; signal: AbortSignal },
 ): Promise<NativeInvocationReceipt> {
-  return updateInvocation(receipt, 'terminal', outcome);
+  return updateInvocation(receipt, 'terminal', outcome, terminalFence);
 }
 export const holdNativeInvocation = (receipt: NativeInvocationReceipt) => updateInvocation(receipt, 'unknown');
 

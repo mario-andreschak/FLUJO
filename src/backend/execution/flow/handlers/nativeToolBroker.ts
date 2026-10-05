@@ -77,6 +77,7 @@ export function nativeToolInventoryDigest(
     }
     const synthetic = Boolean(localToolExecutors?.[name]);
     const handoff = isHandoff(name);
+    if (handoff) throw new Error('Native handoff requires a confirmed SDK termination protocol and is not admitted.');
     if (Number(Boolean(decoded)) + Number(synthetic) + Number(handoff) !== 1) {
       throw new Error(`Native tool ${name} has no unique Worker-owned executor.`);
     }
