@@ -30,7 +30,7 @@ test('immutable package pattern audit refuses broadened or missing package selec
 
 const route = () => ({ eventName: 'pull_request', repository: 'mario-andreschak/FLUJO', workflowSha: 'a'.repeat(40),
   proposalSha: 'b'.repeat(40), runAttempt: '1', event: { action: 'ready_for_review', pull_request: { draft: false,
-    head: { ref: 'codex/worker-payload-compiled-routes-8800', sha: 'b'.repeat(40), repo: { full_name: 'mario-andreschak/FLUJO' } },
+    head: { ref: 'codex/worker-payload-runtime-guard-b5', sha: 'b'.repeat(40), repo: { full_name: 'mario-andreschak/FLUJO' } },
     base: { ref: 'codex/scorecard-integration', repo: { full_name: 'mario-andreschak/FLUJO' } } } } });
 
 test('bounded artifact route accepts only the selected same-repository proposal event', () => {

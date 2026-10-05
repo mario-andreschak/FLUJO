@@ -19,7 +19,7 @@ jobs:
           && github.event.action == 'ready_for_review'
           && github.event.pull_request.draft == false
           && github.event.pull_request.head.repo.full_name == 'mario-andreschak/FLUJO'
-          && github.event.pull_request.head.ref == 'codex/worker-payload-compiled-routes-8800'
+          && github.event.pull_request.head.ref == 'codex/worker-payload-runtime-guard-b5'
           && github.event.pull_request.base.repo.full_name == 'mario-andreschak/FLUJO'
           && github.event.pull_request.base.ref == 'codex/scorecard-integration'
           && github.run_attempt == '1' }}
@@ -60,6 +60,8 @@ jobs:
         with:
           node-version: '22.23.3'
           architecture: x64
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Bind reviewed workflow, exact source, signed runtime and lock
         run: |
           $ErrorActionPreference = 'Stop'
@@ -68,11 +70,12 @@ jobs:
             if ($taskSha -notmatch '^[a-f0-9]{40}$') { throw 'Missing exact proposal/workflow/event source.' }
           }
           if ((git -C ../proposal-tools rev-parse HEAD) -cne $env:PROPOSAL_SHA) { throw 'Exporter source mismatch.' }
-          if ((git -C ../proposal-tools rev-parse 'HEAD^') -cne '8800ecfed3228f5561843074f46567d84736c3c1') { throw 'Unreviewed proposal ancestry.' }
+          if ((git -C ../proposal-tools rev-parse 'HEAD^') -cne 'b5abe6eb27270b4360d980c3b1919db0f7f94e08') { throw 'Unreviewed proposal ancestry.' }
           if ((git -C ../workflow-source rev-parse HEAD) -cne $env:WORKFLOW_SHA) { throw 'Actual workflow source mismatch.' }
           $taskPaths = @('.github/workflows/worker-payload-export.yml','scripts/export-worker-payload.mjs','scripts/export-worker-payload.test.mjs','scripts/worker-payload-route.mjs')
+          $taskDeclaredChangedPaths = @('.github/workflows/worker-payload-export.yml','scripts/export-worker-payload.test.mjs','scripts/worker-payload-route.mjs')
           $taskChanged = @(git -C ../proposal-tools diff --name-only 'HEAD^' HEAD | Sort-Object)
-          if (($taskChanged -join "`n") -cne (($taskPaths | Sort-Object) -join "`n")) { throw 'Unexpected proposal scope.' }
+          if (($taskChanged -join "`n") -cne (($taskDeclaredChangedPaths | Sort-Object) -join "`n")) { throw 'Unexpected proposal scope.' }
           $taskSourceBindings = foreach ($taskPath in $taskPaths) {
             $taskProposalObject = git -C ../proposal-tools ls-tree HEAD -- $taskPath
             $taskWorkflowObject = git -C ../workflow-source ls-tree HEAD -- $taskPath
@@ -94,7 +97,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Immutable package selection differs.' }
           $taskExport = Join-Path $env:RUNNER_TEMP 'worker-payload-export'
           New-Item -ItemType Directory -Path $taskExport -ErrorAction Stop | Out-Null
-          [ordered]@{applicationSource=(git rev-parse HEAD);applicationTree=(git rev-parse 'HEAD^{tree}');proposalSource=$env:PROPOSAL_SHA;proposalParent=(git -C ../proposal-tools rev-parse 'HEAD^');workflowSource=$env:WORKFLOW_SHA;actualEventSource=$env:ACTUAL_EVENT_SHA;workflowParents=@(git -C ../workflow-source show -s --format=%P HEAD);sourceBindings=@($taskSourceBindings);event='pull_request';action='ready_for_review';lockSha256=(Get-FileHash package-lock.json -Algorithm SHA256).Hash.ToLowerInvariant();nodeSha256=(Get-FileHash -LiteralPath $taskNode -Algorithm SHA256).Hash.ToLowerInvariant();signatureStatus=$taskSignature.Status.ToString();signerThumbprint=$taskSignature.SignerCertificate.Thumbprint;os=[Environment]::OSVersion.VersionString;architecture=$env:PROCESSOR_ARCHITECTURE;runId=$env:GITHUB_RUN_ID;runAttempt=$env:GITHUB_RUN_ATTEMPT;defaultHeap=$true;appOrProviderEntry=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Encoding utf8
+          [ordered]@{applicationSource=(git rev-parse HEAD);applicationTree=(git rev-parse 'HEAD^{tree}');proposalSource=$env:PROPOSAL_SHA;proposalParent=(git -C ../proposal-tools rev-parse 'HEAD^');workflowSource=$env:WORKFLOW_SHA;actualEventSource=$env:ACTUAL_EVENT_SHA;workflowParents=@(git -C ../workflow-source show -s --format=%P HEAD);declaredChangedPaths=@($taskDeclaredChangedPaths);actualChangedPaths=@($taskChanged);sourceBindings=@($taskSourceBindings);event='pull_request';action='ready_for_review';lockSha256=(Get-FileHash package-lock.json -Algorithm SHA256).Hash.ToLowerInvariant();nodeSha256=(Get-FileHash -LiteralPath $taskNode -Algorithm SHA256).Hash.ToLowerInvariant();signatureStatus=$taskSignature.Status.ToString();signerThumbprint=$taskSignature.SignerCertificate.Thumbprint;os=[Environment]::OSVersion.VersionString;architecture=$env:PROCESSOR_ARCHITECTURE;runId=$env:GITHUB_RUN_ID;runAttempt=$env:GITHUB_RUN_ATTEMPT;defaultHeap=$true;appOrProviderEntry=$false} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $taskExport 'build-inputs.json') -Encoding utf8
       - name: Check the nine export and route predicate fixtures only
         run: |
           $ErrorActionPreference = 'Stop'
