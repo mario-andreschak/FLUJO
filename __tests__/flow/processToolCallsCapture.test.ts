@@ -252,16 +252,28 @@ describe('processToolCalls auto-capture', () => {
       .not.toBe(createHash('sha256').update(full, 'utf8').digest('hex'));
   });
 
-  it.each(['text', 'media'])('keeps original protocol %s errors outside capture, media extraction and bounding', async (kind) => {
-    const data = { isError: true, content: [
-      { type: 'text', text: 'café🙂'.repeat(150) },
-      ...(kind === 'media' ? imageResult.content : []),
-    ] };
-    const full = JSON.stringify(data);
+  it.each([['text', 'stored'], ['text', 'refused'], ['media', 'stored'], ['media', 'refused']])(
+    'protects protocol %s errors through capture and a %s context spill', async (kind, spill) => {
+    const start = { type: 'text', text: 'START_DIAGNOSTIC' };
+    const tail = { type: 'text', text: 'café🙂\n'.repeat(150) + 'END_DIAGNOSTIC' };
+    const data = { isError: true, content: [start, ...(kind === 'media' ? imageResult.content : []), tail] };
+    // Rewriting can omit isError. Status must still come from the ORIGINAL
+    // protocol payload, while this protected content proceeds to the bound.
+    const protectedData = { content: [start, ...(kind === 'media'
+      ? [{ type: 'text', text: `[stored image at ${capturedEntry.uri}]` }] : []), tail] };
+    const full = JSON.stringify(protectedData);
     callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: protectedData,
+      captured: kind === 'media' ? [capturedEntry] : [],
+      media: kind === 'media' ? [{ type: 'image', mimeType: 'image/png', resourceUri: capturedEntry.uri }] : [],
+    });
     getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
       autoCaptureEnabled: true, textThresholdChars: 32,
-      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 0 });
+      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 2 });
+    const spillUri = 'flujo://run/conv-1/error-overflow';
+    writeRunResourceMock.mockResolvedValue(spill === 'stored'
+      ? { ...capturedEntry, uri: spillUri, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
+      : { skipped: 'size-cap' });
     const emit = jest.fn();
     const result = await ModelHandler.processToolCalls({
       toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap,
@@ -272,16 +284,59 @@ describe('processToolCalls auto-capture', () => {
     if (!result.success) throw result.error;
     expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(128);
     expect(full.length).toBeGreaterThan(500);
-    expect(captureToolResultMock).not.toHaveBeenCalled();
-    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(captureToolResultMock).toHaveBeenCalledWith(expect.objectContaining({ result: data, toolCallId: 'call1' }));
+    expect(writeRunResourceMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: 'text/plain', data: { text: full },
+      producedBy: expect.objectContaining({ source: 'tool-result', payloadRole: 'tool-message', toolCallId: 'call1' }),
+    }));
     expect(result.value.toolCallMessages).toHaveLength(1);
-    expect(result.value.toolCallMessages[0]).toMatchObject({ role: 'tool', tool_call_id: 'call1', content: full });
-    expect(result.value.toolCallMessages[0]).not.toHaveProperty('media');
-    expect(result.value.processedToolCalls[0]).toMatchObject({ id: 'call1', result: full, exitCode: 1 });
+    const message = result.value.toolCallMessages[0];
+    expect(message).toMatchObject({ role: 'tool', tool_call_id: 'call1' });
+    expect(typeof message.content).toBe('string');
+    const content = message.content as string;
+    expect(content).not.toBe(full);
+    expect(content).toContain('tool result truncated for context');
+    expect(content).toContain('START_DIAGNOSTIC');
+    expect(content).toContain('END_DIAGNOSTIC');
+    expect(content).not.toContain('aGVsbG8=');
+    if (spill === 'stored') expect(content).toContain(spillUri);
+    else expect(content).toContain('the full result could not be stored');
+    if (kind === 'media') expect(message.media).toEqual([expect.objectContaining({ resourceUri: capturedEntry.uri })]);
+    else expect(message).not.toHaveProperty('media');
+    expect(result.value.processedToolCalls[0]).toMatchObject({ id: 'call1', result: content, exitCode: 1 });
     const events = emit.mock.calls.map(([row]) => row);
-    expect(events.map(row => row.type)).toEqual(['tool:call', 'tool:result']);
-    expect(events[1]).toMatchObject({ toolCallId: 'call1', isError: true, result: `${full.slice(0, 500)}…` });
-    expect(events[1]).not.toHaveProperty('resultContentBinding');
+    const results = events.filter(row => row.type === 'tool:result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ toolCallId: 'call1', isError: true,
+      result: content.length > 500 ? `${content.slice(0, 500)}…` : content });
+    expect(results[0]).not.toHaveProperty('resultContentBinding');
+  });
+
+  it.each(['disabled', 'failed'])('preserves inline error media and failure status when capture is %s', async (capture) => {
+    const data = { isError: true, content: [{ type: 'text', text: 'Synthetic MCP tool failure' }, ...imageResult.content] };
+    callToolMock.mockResolvedValue({ success: true, data });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      autoCaptureEnabled: capture !== 'disabled' });
+    if (capture === 'failed') captureToolResultMock.mockRejectedValue(new Error('Synthetic capture refusal'));
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap, conversationId: 'conv-1', emit,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    if (capture === 'disabled') expect(captureToolResultMock).not.toHaveBeenCalled();
+    else expect(captureToolResultMock).toHaveBeenCalledTimes(1);
+    const message = result.value.toolCallMessages[0];
+    expect(message.content).toContain('Synthetic MCP tool failure');
+    expect(message.content).toContain('native image input');
+    expect(message.content).not.toContain('aGVsbG8=');
+    expect(message.media).toEqual([expect.objectContaining({ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' })]);
+    expect(result.value.processedToolCalls[0]).toMatchObject({ result: message.content, exitCode: 1 });
+    const results = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ toolCallId: 'call1', isError: true, result: message.content });
+    expect(results[0]).not.toHaveProperty('resultContentBinding');
   });
 
   it('does not capture failed tool calls', async () => {
