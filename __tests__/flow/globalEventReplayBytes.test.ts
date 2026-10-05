@@ -109,7 +109,7 @@ it('preserves the existing 5000-entry count cap and monotonic replay cursor', ()
 });
 
 it('detaches global snapshots so a producer mutation cannot regrow cached payloads', () => {
-  const message = { id: 'mutable', role: 'assistant' as const, content: 'small' };
+  const message = { id: 'mutable', role: 'assistant' as const, content: 'small', timestamp: 0 };
   const event = bus.emit('mutated', { type: 'message', message });
   message.content = 'x'.repeat(workspaceBudget + 1);
   expect(retainedBytes()).toBeLessThanOrEqual(workspaceBudget);
@@ -132,7 +132,7 @@ it('detaches caches from getter values without invoking new publisher callbacks'
   let content = 'small';
   let reads = 0;
   const message = {
-    id: 'getter', role: 'assistant' as const,
+    id: 'getter', role: 'assistant' as const, timestamp: 0,
     get content() { reads++; return content; },
   };
   bus.emit('getter', { type: 'message', message });
