@@ -59,6 +59,34 @@ export function assertInstalledIdentity(observed, appRoot, dataRoot) {
   }
 }
 
+export async function readInitializedFlowInventory(request, requireFixture = false) {
+  // /api/cwd establishes ownership, but the startup hook completes backend
+  // seeding asynchronously. Join the memoized initialization route before the
+  // first state observation; the caller's request deadline bounds this wait.
+  const response = await request('/api/init');
+  let initialized;
+  try { initialized = JSON.parse(response.bytes); }
+  catch { throw new Error('Installed backend initialization returned invalid JSON; no mutation allowed.'); }
+  if (response.status !== 200 || initialized?.success !== true) {
+    throw new Error('Installed backend initialization did not succeed; no mutation allowed.');
+  }
+  const flows = await readFlowInventory(request, requireFixture);
+  const seed = flows.find(flow => flow.id === 'default-agent-flujo');
+  if (!seed || !seed.nodes.length || !seed.edges.length) {
+    throw new Error('Initialized inventory is missing the required seeded agent graph; no mutation allowed.');
+  }
+  const validId = value => typeof value === 'string' && value.length > 0;
+  const nodeIds = new Set(seed.nodes.map(node => node?.id));
+  const edgeIds = new Set(seed.edges.map(edge => edge?.id));
+  if (nodeIds.size !== seed.nodes.length || [...nodeIds].some(id => !validId(id))
+      || edgeIds.size !== seed.edges.length || [...edgeIds].some(id => !validId(id))
+      || seed.edges.some(edge => !nodeIds.has(edge?.source) || !nodeIds.has(edge?.target))) {
+    throw new Error('Initialized seeded agent graph is corrupt; no mutation allowed.');
+  }
+  return { flows, initialization: { route: '/api/init', status: response.status, success: true,
+    requiredSeedId: seed.id, seedNodes: seed.nodes.length, seedEdges: seed.edges.length } };
+}
+
 export function assertRestoredFlow(observed, expected) {
   for (const field of ['id', 'name', 'nodes', 'edges']) {
     if (JSON.stringify(observed[field]) !== JSON.stringify(expected[field])) {
@@ -292,7 +320,8 @@ export async function runInstalledBaseline(options) {
     }
     if (!ready) throw new Error('Installed baseline never became ready.');
     const json = body => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const initialFlows = await readFlowInventory(request, false);
+    const { flows: initialFlows, initialization } = await readInitializedFlowInventory(request);
+    receipt.initialization = initialization;
     await capture('initial-flows.json', JSON.stringify(initialFlows, null, 2) + '\n');
     if ((await request('/api/flow', { method: 'POST', ...json(flow) })).status !== 201) throw new Error('Synthetic flow creation failed.');
     const original = await request(`/api/flow/${flow.id}`);

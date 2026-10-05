@@ -6,7 +6,8 @@ import { connect, createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { drillEnvironment } from './maintainer-drill.mjs';
-import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline } from './maintainer-installed-baseline.mjs';
+import { assertInstalledIdentity, assertRestoredFlow, parseBaselineOptions, runInstalledBaseline,
+  readInitializedFlowInventory } from './maintainer-installed-baseline.mjs';
 import { stateSelections, readSyntheticState, assertSyntheticState, assertFreshSyntheticState,
   validateSyntheticStateReceipt, verifySyntheticStateArchive, validateFlowInventoryReceipt,
   readFlowInventory, canonicalFlowInventory, assertFlowInventory,
@@ -208,7 +209,12 @@ async function runRecoveryProbe(baseline, { targetBaseline = baseline, mode = 'f
       let identity;
       try { const result = await request('/api/cwd'); if (result.status === 200) identity = JSON.parse(result.bytes); }
       catch { /* Readiness retry has no mutation. */ }
-      if (identity) { assertInstalledIdentity(identity, appRoot, dataRoot); return; }
+      if (identity) {
+        assertInstalledIdentity(identity, appRoot, dataRoot);
+        const { initialization } = await readInitializedFlowInventory(request, name !== 'fresh-start');
+        (receipt.initializations ??= []).push({ generation: name, ...initialization });
+        return;
+      }
       await delay(300);
     }
     throw new Error(mode === 'upgrade' ? 'Candidate upgrade never became ready.' : 'Fresh recovery never became ready.');

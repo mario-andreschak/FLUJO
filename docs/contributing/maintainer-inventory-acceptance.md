@@ -25,9 +25,29 @@ seeding. The seeded content must be unchanged between these independent API read
 Any initialization race or unexpected membership is a recorded failure, not a
 reason to silently replace the initial observation.
 
+The assigned signed 3.46.2 run at frozen #763 tool revision
+`38436d686f3cb6349ab4b5b13be3dea3e45a16d9` failed before fresh-root recovery:
+`/api/cwd` succeeded, the initial flow inventory was empty, and the default agent
+appeared before the later full inventory. Failed baseline receipt SHA-256:
+`30345c971d79ced01ce9adc1ad177fabf6f9c8958a460d536d3aacfbcd631f11`.
+Provenance verification and installation passed; recovery did not start. Keep the
+original receipt, empty witness and later raw response unchanged.
+
+Before the initial inventory, the corrected probe first verifies installation/data
+root identity and then joins the existing memoized backend initialization through
+`GET /api/init`. That route awaits storage verification and default-agent seeding.
+Each request retains its response and is bounded by the existing 15-second request
+timeout; an error, timeout, malformed response or unsuccessful initialization fails
+without fixture mutation. A successful response must be followed by an inventory
+containing the default agent with a nonempty graph, unique node/edge IDs and edges
+referencing existing nodes. These checks establish seed presence and graph
+structure; the subsequent independent full-inventory comparison preserves every
+other observed field. No arbitrary quiet period establishes readiness. Fresh
+recovery, upgrade and restart generations join the same initialization barrier.
+
 The only permitted flow IDs are the observed public seed `default-agent-flujo`
-and the prescribed empty `maintainer_drill_flow`. The initial inventory may contain
-only the public seed or be empty; after creation the fixture must exist. Duplicate,
+and the prescribed empty `maintainer_drill_flow`. The corrected initial inventory
+must contain the public seed; after creation the fixture must exist. Duplicate,
 unrelated or Persona-owned flows fail. Collection order and object-key order may
 vary. Only top-level server `createdAt`/`updatedAt` are omitted from semantic
 comparison. Every other field, graph element, node payload, nested timestamp and
