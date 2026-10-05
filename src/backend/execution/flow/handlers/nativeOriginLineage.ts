@@ -1,13 +1,14 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { SharedState } from '../types';
 import { MAX_SUBFLOW_DEPTH } from '../constants';
 import { loadConversationStateReadOnly } from '../loadConversationState';
 import { assertFlowExecutionCurrent } from '../executionAuthority';
-import { getTask } from '@/backend/services/subflowTasks';
-import { getDetachedInstallationId } from '@/backend/services/subflowTasks/ownership';
+import { getDetachedTaskLaunchOwner } from '@/backend/services/subflowTasks/ownership';
 import type { SubflowTaskRecord } from '@/shared/types/subflowTasks';
-import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
-import { getCurrentWorkspace } from '@/utils/workspace';
+import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import type { NativeInvocationReceipt } from './nativeToolJournal';
 import { nativeInvocationStatus } from './nativeToolJournal';
 import { assertNativeBrokerAuthority, nativeDigest, type NativeBrokerAuthority } from './nativeToolBroker';
@@ -55,6 +56,11 @@ export interface NativeLineageEdge {
 export interface NativeOriginLineageEvidence {
   version: 1;
   invocationId: string;
+  modelId: string;
+  inputDigest: string;
+  inventoryDigest: string;
+  leaseEpoch: string;
+  attemptOrdinal: number;
   fleetRunId: string;
   workerId: string;
   goalId: string;
@@ -87,7 +93,8 @@ const requireId = (value: unknown): string => {
 type StateSnapshot = Pick<SharedState,
   'conversationId' | 'logicalRunId' | 'flowId' | 'source' | 'status' | 'isCancelled' |
   'parentRunId' | 'parentConversationId' | 'parentLogicalRunId' | 'rootConversationId' |
-  'currentNodeId' | 'runDepth' | 'subflowLane' | 'subflowInvocations' | 'recovery' | 'createdAt'>;
+  'currentNodeId' | 'runDepth' | 'subflowLane' | 'subflowInvocations' | 'launchedTaskIds' |
+  'recovery' | 'createdAt'>;
 
 async function readState(id: string): Promise<StateSnapshot> {
   const safeId = requireId(id);
@@ -109,7 +116,8 @@ async function readState(id: string): Promise<StateSnapshot> {
     if (live[field] !== state[field]) return held();
   }
   if (nativeDigest(live.subflowLane) !== nativeDigest(state.subflowLane)
-    || nativeDigest(live.subflowInvocations) !== nativeDigest(state.subflowInvocations)) return held();
+    || nativeDigest(live.subflowInvocations) !== nativeDigest(state.subflowInvocations)
+    || nativeDigest(live.launchedTaskIds) !== nativeDigest(state.launchedTaskIds)) return held();
   return structuredClone({
     conversationId: state.conversationId, logicalRunId: state.logicalRunId,
     flowId: state.flowId, source: state.source, status: state.status,
@@ -117,20 +125,86 @@ async function readState(id: string): Promise<StateSnapshot> {
     parentConversationId: state.parentConversationId, parentLogicalRunId: state.parentLogicalRunId,
     rootConversationId: state.rootConversationId, currentNodeId: state.currentNodeId,
     runDepth: state.runDepth, subflowLane: state.subflowLane,
-    subflowInvocations: state.subflowInvocations, recovery: state.recovery,
+    subflowInvocations: state.subflowInvocations, launchedTaskIds: state.launchedTaskIds,
+    recovery: state.recovery,
     createdAt: state.createdAt,
   });
 }
 
-async function detachedEdge(child: StateSnapshot, parent: StateSnapshot, installationId: string): Promise<NativeLineageEdge> {
-  // Strict scan fails if any saved task is unreadable. getTask then performs the
-  // backend's own interruption reconciliation on the exact selected record.
-  const entries = await listCollectionItemEntriesStrict<SubflowTaskRecord>('subflow-tasks');
-  const matches = entries.filter(({ item }) => item.childConversationId === child.conversationId);
+const MAX_PARENT_TASK_LINKS = 256;
+const MAX_TASK_SCAN_ENTRIES = 4096;
+const MAX_TASK_ITEM_BYTES = 4 * 1024 * 1024;
+const MAX_TASK_SCAN_BYTES = 128 * 1024 * 1024;
+const taskDir = () => path.join(getWorkspaceDataDir(), 'db', 'subflow-tasks');
+
+async function readTaskBounded(id: string): Promise<{ task: SubflowTaskRecord; bytes: number }> {
+  const file = path.join(taskDir(), `${requireId(id)}.json`);
+  const entry = await fs.lstat(file);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1
+    || entry.size < 1 || entry.size > MAX_TASK_ITEM_BYTES) return held();
+  const handle = await fs.open(file, 'r');
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > MAX_TASK_ITEM_BYTES) return held();
+    const buffer = Buffer.alloc(stat.size + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const read = await handle.read(buffer, bytes, buffer.length - bytes, bytes);
+      if (!read.bytesRead) break;
+      bytes += read.bytesRead;
+    }
+    if (bytes !== stat.size) return held();
+    const task = JSON.parse(buffer.subarray(0, bytes).toString('utf8')) as SubflowTaskRecord;
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return held();
+    return { task, bytes };
+  } finally { await handle.close(); }
+}
+
+async function detachedTaskCandidates(parent: StateSnapshot, childId: string): Promise<SubflowTaskRecord[]> {
+  const linked = parent.launchedTaskIds;
+  if (linked?.length) {
+    if (linked.length > MAX_PARENT_TASK_LINKS || new Set(linked).size !== linked.length) return held();
+    const matches: SubflowTaskRecord[] = [];
+    let total = 0;
+    for (const id of linked) {
+      const { task, bytes } = await readTaskBounded(id);
+      total += bytes;
+      if (total > MAX_TASK_SCAN_BYTES || task.taskId !== id) return held();
+      if (task.childConversationId === childId) matches.push(task);
+    }
+    if (matches.length) return matches;
+    // A task is saved before its parent launchedTaskIds update. A child can
+    // already be running during that short window, so scan the saved records.
+  }
+  const matches: SubflowTaskRecord[] = [];
+  let entries = 0;
+  let total = 0;
+  let directory: Awaited<ReturnType<typeof fs.opendir>>;
+  try { directory = await fs.opendir(taskDir()); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return matches;
+    throw error;
+  }
+  for await (const entry of directory) {
+    entries += 1;
+    if (entries > MAX_TASK_SCAN_ENTRIES) return held();
+    if (!entry.name.endsWith('.json') || entry.name.includes('.tmp.')
+      || entry.name.includes('.corrupted.') || entry.name.endsWith('.bak')) continue;
+    const id = requireId(entry.name.slice(0, -'.json'.length));
+    const { task, bytes } = await readTaskBounded(id);
+    total += bytes;
+    if (total > MAX_TASK_SCAN_BYTES || task.taskId !== id) return held();
+    if (task.childConversationId === childId) matches.push(task);
+  }
+  return matches;
+}
+
+async function detachedEdge(child: StateSnapshot, parent: StateSnapshot, installationId: string,
+  processInstanceId: string, recoveryOwnerId: string): Promise<NativeLineageEdge> {
+  const matches = await detachedTaskCandidates(parent, child.conversationId!);
   if (matches.length !== 1) return held();
-  const { id, item: saved } = matches[0];
-  const task = await getTask(requireId(id));
-  if (!task || task.taskId !== id || saved.taskId !== id || task.version !== 1
+  const task = matches[0];
+  if (task.version !== 1 || !task.taskId
     || task.childConversationId !== child.conversationId
     || task.originConversationId !== parent.conversationId
     || task.originLogicalRunId !== parent.logicalRunId
@@ -138,14 +212,10 @@ async function detachedEdge(child: StateSnapshot, parent: StateSnapshot, install
     || task.status !== 'working' || task.cancelRequestedAt || task.interruption
     || task.launchOwner?.workspace !== getCurrentWorkspace()
     || task.launchOwner.installationId !== installationId
+    || task.launchOwner.processInstanceId !== processInstanceId
+    || task.launchOwner.recoveryOwnerId !== recoveryOwnerId
     || task.launchOwner.recoveryOwnerId !== child.recovery?.ownerId
     || !Number.isFinite(task.createdAt) || task.createdAt > (child.createdAt ?? 0)) return held();
-  // A task status update may race this read; the immutable launch fields may not.
-  if (saved.originConversationId !== task.originConversationId
-    || saved.originLogicalRunId !== task.originLogicalRunId
-    || saved.originNodeId !== task.originNodeId
-    || saved.flowId !== task.flowId || saved.childConversationId !== task.childConversationId
-    || saved.launchOwner?.installationId !== task.launchOwner.installationId) return held();
   return {
     kind: 'detached-task', receiptId: task.taskId,
     parentConversationId: parent.conversationId!, parentLogicalRunId: parent.logicalRunId!,
@@ -182,6 +252,7 @@ export async function readNativeOriginLineage(input: {
   receipt: NativeInvocationReceipt;
   authority: NativeBrokerAuthority;
   root: NativeLineageRootBinding;
+  signal: AbortSignal;
 }): Promise<NativeOriginLineageEvidence> {
   try {
     assertNativeBrokerAuthority(input.authority);
@@ -190,11 +261,19 @@ export async function readNativeOriginLineage(input: {
     for (const value of [root.fleetRunId, root.workerId, root.goalId, root.rootConversationId,
       root.rootLogicalRunId, root.rootFlowId, receipt.owner.conversationId,
       receipt.owner.runId, receipt.owner.nodeId]) requireId(value);
+    if (!receipt.owner.modelId || !receipt.owner.inputDigest || !receipt.owner.inventoryDigest
+      || !Number.isSafeInteger(receipt.owner.attemptOrdinal) || receipt.owner.attemptOrdinal < 1) return held();
     if (root.workspace !== getCurrentWorkspace()
       || receipt.owner.leaseEpoch !== authority.leaseEpoch) return held();
     const assertCurrent = async () => {
+      input.signal.throwIfAborted();
       await authority.assertCurrent();
+      input.signal.throwIfAborted();
       await root.assertCurrent();
+      input.signal.throwIfAborted();
+      // The root gate can await long enough for the Worker lease to change.
+      await authority.assertCurrent();
+      input.signal.throwIfAborted();
     };
     const status = async () => {
       const current = await nativeInvocationStatus(receipt.invocationId, receipt.owner);
@@ -202,7 +281,9 @@ export async function readNativeOriginLineage(input: {
     };
     await assertCurrent();
     await status();
-    const installationId = await getDetachedInstallationId();
+    await assertCurrent();
+    const launchOwner = await getDetachedTaskLaunchOwner();
+    const installationId = launchOwner.installationId;
     const trace = async (): Promise<Omit<NativeOriginLineageEvidence, 'digest'>> => {
       await assertCurrent();
       const edges: NativeLineageEdge[] = [];
@@ -225,7 +306,8 @@ export async function readNativeOriginLineage(input: {
           || current.runDepth !== (parent.runDepth ?? 0) + 1) return held();
         const edge = current.subflowLane?.invocationId
           ? attachedEdge(current, parent)
-          : await detachedEdge(current, parent, installationId);
+          : await detachedEdge(current, parent, installationId,
+            launchOwner.processInstanceId, launchOwner.recoveryOwnerId);
         edges.push(edge);
         current = parent;
         await assertCurrent();
@@ -238,6 +320,9 @@ export async function readNativeOriginLineage(input: {
       await assertCurrent();
       return {
         version: 1, invocationId: receipt.invocationId,
+        modelId: receipt.owner.modelId, inputDigest: receipt.owner.inputDigest,
+        inventoryDigest: receipt.owner.inventoryDigest, leaseEpoch: receipt.owner.leaseEpoch,
+        attemptOrdinal: receipt.owner.attemptOrdinal,
         fleetRunId: root.fleetRunId, workerId: root.workerId, goalId: root.goalId,
         workspace: root.workspace, installationId,
         rootConversationId: root.rootConversationId, rootLogicalRunId: root.rootLogicalRunId,
@@ -252,6 +337,7 @@ export async function readNativeOriginLineage(input: {
     if (nativeDigest(first) !== nativeDigest(second)) return held();
     await assertCurrent();
     await status();
+    await assertCurrent();
     return { ...second, digest: nativeDigest(second) };
   } catch {
     return held();

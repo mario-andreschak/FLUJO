@@ -15,6 +15,7 @@ import {
 const rootId = 'lead-root';
 const rootRun = 'lead-logical-run';
 const rootFlow = 'lead-flow';
+const signal = new AbortController().signal;
 let directory: string;
 let priorDataDir: string | undefined;
 
@@ -78,13 +79,17 @@ describe('saved native origin lineage', () => {
     const binding = rootBinding();
     const lease = authority();
     const rootReceipt = await receiptFor(rootId, rootRun, 'lead-process');
-    const rootProof = await readNativeOriginLineage({ receipt: rootReceipt, authority: lease, root: binding });
+    const rootProof = await readNativeOriginLineage({ receipt: rootReceipt, authority: lease, root: binding, signal });
     expect(rootProof.edges).toEqual([]);
     expect(rootProof.originConversationId).toBe(rootId);
+    expect(rootProof).toMatchObject({
+      modelId: 'native-model', inputDigest: 'input', inventoryDigest: 'inventory',
+      leaseEpoch: 'lease-1', attemptOrdinal: 1,
+    });
     for (let index = 1; index <= 4; index++) {
       const { child } = await detachedChild(root, `child-${index}`);
       const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
-      const proof = await readNativeOriginLineage({ receipt, authority: lease, root: binding });
+      const proof = await readNativeOriginLineage({ receipt, authority: lease, root: binding, signal });
       expect(proof.rootConversationId).toBe(rootId);
       expect(proof.originConversationId).toBe(child.conversationId);
       expect(proof.originLogicalRunId).toBe(child.logicalRunId);
@@ -118,11 +123,11 @@ describe('saved native origin lineage', () => {
     });
     await saveState(leaf);
     const receipt = await receiptFor('attached-leaf', 'run-leaf', 'process-leaf');
-    const proof = await readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding() });
+    const proof = await readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding(), signal });
     expect(proof.edges.map(edge => edge.kind)).toEqual(['detached-task', 'detached-task', 'attached-lane']);
     expect(proof.edges.map(edge => edge.childConversationId)).toEqual(['first-child', 'nested-child', 'attached-leaf']);
     await saveState({ ...leaf, subflowLane: { ...leaf.subflowLane!, laneId: 'forged-lane' } });
-    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding() }))
+    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding(), signal }))
       .rejects.toBeInstanceOf(NativeLineageHeldError);
   });
 
@@ -131,7 +136,7 @@ describe('saved native origin lineage', () => {
     const { child } = await detachedChild(root, 'waiting-child');
     await saveState({ ...root, status: 'completed' });
     const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
-    const proof = await readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding() });
+    const proof = await readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding(), signal });
     expect(proof.edges).toHaveLength(1);
     expect(proof.originConversationId).toBe('waiting-child');
   });
@@ -144,14 +149,14 @@ describe('saved native origin lineage', () => {
     });
     await saveState(forged);
     const receipt = await receiptFor('forged-child', 'forged-run', 'forged-node');
-    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding() }))
+    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding(), signal }))
       .rejects.toBeInstanceOf(NativeLineageHeldError);
   });
 
   it('holds missing, forged and unreadable detached task edges', async () => {
     const { child, task } = await detachedChild(rootState(), 'child-edge');
     const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
-    const input = { receipt, authority: authority(), root: rootBinding() };
+    const input = { receipt, authority: authority(), root: rootBinding(), signal };
     await saveCollectionItem('subflow-tasks', task.taskId, { ...task, flowId: 'forged-flow' });
     await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
     await deleteCollectionItem('subflow-tasks', task.taskId);
@@ -165,7 +170,7 @@ describe('saved native origin lineage', () => {
     const root = rootState();
     const { child, task } = await detachedChild(root, 'child-cycle');
     const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
-    const input = { receipt, authority: authority(), root: rootBinding() };
+    const input = { receipt, authority: authority(), root: rootBinding(), signal };
     await deleteCollectionItem('conversations', rootId);
     await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
     await saveState({ ...root, logicalRunId: 'replacement-run' });
@@ -184,8 +189,75 @@ describe('saved native origin lineage', () => {
     const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
     FlowExecutor.conversationStates.set(child.conversationId!, child);
     await deleteCollectionItem('conversations', child.conversationId!);
-    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding() }))
+    await expect(readNativeOriginLineage({ receipt, authority: authority(), root: rootBinding(), signal }))
       .rejects.toBeInstanceOf(NativeLineageHeldError);
+  });
+
+  it('uses a saved parent task link and bounds the fallback task scan', async () => {
+    const root = rootState();
+    const { child, task } = await detachedChild(root, 'linked-child');
+    const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
+    const input = { receipt, authority: authority(), root: rootBinding(), signal };
+    expect((await readNativeOriginLineage(input)).edges[0].receiptId).toBe(task.taskId);
+    root.launchedTaskIds = [];
+    await saveState(root);
+    expect((await readNativeOriginLineage(input)).edges[0].receiptId).toBe(task.taskId);
+    root.launchedTaskIds = [task.taskId];
+    await saveState(root);
+    const file = path.join(directory, 'workspaces', 'default-workspace', 'db', 'subflow-tasks', `${task.taskId}.json`);
+    await fs.writeFile(file, 'x'.repeat(4 * 1024 * 1024 + 1));
+    await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
+    root.launchedTaskIds = [];
+    await saveState(root);
+    await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
+    root.launchedTaskIds = Array.from({ length: 257 }, (_, index) => `task-${index}`);
+    await saveState(root);
+    await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
+  });
+
+  it('rechecks Worker authority after an awaited root gate revokes it', async () => {
+    const receipt = await receiptFor(rootId, rootRun, 'lead-process');
+    let workerCurrent = true;
+    let entered!: () => void;
+    let release!: () => void;
+    const rootEntered = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = readNativeOriginLineage({
+      receipt, signal,
+      authority: authority(async () => { if (!workerCurrent) throw new Error('Worker lease revoked'); }),
+      root: rootBinding(async () => { entered(); await gate; workerCurrent = false; }),
+    });
+    await rootEntered;
+    release();
+    await expect(pending).rejects.toBeInstanceOf(NativeLineageHeldError);
+  });
+
+  it('rechecks Worker authority and abort after the final journal status read', async () => {
+    const receipt = await receiptFor(rootId, rootRun, 'lead-process');
+    let workerCurrent = true;
+    let statusReads = 0;
+    const readFile = fs.readFile.bind(fs);
+    const spy = jest.spyOn(fs, 'readFile').mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      const content = await readFile(...args);
+      if (String(args[0]).startsWith(path.join(directory, 'journal', 'calls'))) {
+        statusReads += 1;
+        if (statusReads === 2) workerCurrent = false;
+      }
+      return content;
+    });
+    try {
+      await expect(readNativeOriginLineage({
+        receipt, signal,
+        authority: authority(async () => { if (!workerCurrent) throw new Error('Worker lease revoked'); }),
+        root: rootBinding(),
+      })).rejects.toBeInstanceOf(NativeLineageHeldError);
+      expect(statusReads).toBe(2);
+    } finally { spy.mockRestore(); }
+    const controller = new AbortController();
+    await expect(readNativeOriginLineage({
+      receipt, signal: controller.signal, authority: authority(),
+      root: rootBinding(async () => { controller.abort(); }),
+    })).rejects.toBeInstanceOf(NativeLineageHeldError);
   });
 
   it('holds cancellation, revoked authority, forged binding and wrong origin node', async () => {
@@ -194,7 +266,7 @@ describe('saved native origin lineage', () => {
     const receipt = await receiptFor(child.conversationId!, child.logicalRunId!, child.currentNodeId!);
     let current = true;
     const binding = rootBinding(async () => { if (!current) throw new Error('retired Worker'); });
-    const input = { receipt, authority: authority(), root: binding };
+    const input = { receipt, authority: authority(), root: binding, signal };
     expect((await readNativeOriginLineage(input)).originConversationId).toBe(child.conversationId);
     current = false;
     await expect(readNativeOriginLineage(input)).rejects.toBeInstanceOf(NativeLineageHeldError);
