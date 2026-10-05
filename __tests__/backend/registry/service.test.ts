@@ -30,6 +30,7 @@ const publishPackageMock = jest.fn();
 const deletePackageMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
 jest.mock('@/backend/utils/packageRegistryClient', () => ({
+  resolveRegistryBaseUrl: async () => 'https://registry.flujo.com.co',
   signup: (...a: unknown[]) => signupMock(...a),
   login: (...a: unknown[]) => loginMock(...a),
   refresh: (...a: unknown[]) => refreshMock(...a),
@@ -132,7 +133,7 @@ describe('publish (#197)', () => {
     const result = await publish({ id: 'pkg1' });
     expect(result).toEqual({ ok: true, id: 'pkg1', name: 'my-pkg', version: '1.0.0', url: 'https://r/pkg1' });
     // The client is called with the DECRYPTED token, not the stored ciphertext.
-    expect(publishPackageMock).toHaveBeenCalledWith({ id: 'pkg1' }, 'access-1');
+    expect(publishPackageMock).toHaveBeenCalledWith({ id: 'pkg1' }, 'access-1', 'https://registry.flujo.com.co');
   });
 
   it('silently refreshes on a 401 and retries once', async () => {
@@ -144,9 +145,9 @@ describe('publish (#197)', () => {
 
     const result = await publish({ id: 'pkg1' });
     expect(result.ok).toBe(true);
-    expect(refreshMock).toHaveBeenCalledWith('refresh-1');
+    expect(refreshMock).toHaveBeenCalledWith('refresh-1', 'https://registry.flujo.com.co');
     // Retry used the refreshed token.
-    expect(publishPackageMock).toHaveBeenLastCalledWith({ id: 'pkg1' }, 'access-2');
+    expect(publishPackageMock).toHaveBeenLastCalledWith({ id: 'pkg1' }, 'access-2', 'https://registry.flujo.com.co');
     // Rotated tokens are persisted (encrypted).
     const stored = store.get(StorageKey.REGISTRY_ACCOUNT) as { accessToken: string };
     expect(stored.accessToken).toBe('enc:access-2');
@@ -208,7 +209,7 @@ describe('deletePublishedPackage', () => {
     deletePackageMock.mockResolvedValue({ status: 204, body: null });
 
     await expect(deletePublishedPackage('publisher/package')).resolves.toEqual({ ok: true });
-    expect(deletePackageMock).toHaveBeenCalledWith('publisher/package', 'access-1');
+    expect(deletePackageMock).toHaveBeenCalledWith('publisher/package', 'access-1', 'https://registry.flujo.com.co');
   });
 
   it('rejects another publisher’s package without contacting the registry', async () => {

@@ -5,7 +5,10 @@ import { StorageKey } from '@/shared/types/storage';
 import { getWorkspaceDataDir, runWithWorkspace } from '@/utils/workspace';
 
 const mockSignup = jest.fn();
-jest.mock('@/backend/utils/packageRegistryClient', () => ({ signup: (...args: unknown[]) => mockSignup(...args) }));
+jest.mock('@/backend/utils/packageRegistryClient', () => ({
+  resolveRegistryBaseUrl: async () => 'https://registry.flujo.com.co',
+  signup: (...args: unknown[]) => mockSignup(...args),
+}));
 import { authenticate } from '@/backend/services/registry';
 
 it('stores remote registry metadata as JSON at the fixed registry-account key', async () => {
