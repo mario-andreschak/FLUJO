@@ -54,6 +54,30 @@ describe('backend/frontend/shared import direction', () => {
     expect(inspectImportBoundaries(root).violations).toHaveLength(1);
   });
 
+  it.each([
+    ['mts', 'frontend', 'backend', "export * from '@/backend/value';"],
+    ['cts', 'shared', 'frontend', "import value = require('../frontend/value');"],
+    ['mjs', 'frontend', 'backend', "const load = () => import('../backend/value.js');"],
+    ['cjs', 'backend', 'frontend', "const value = require('../frontend/value');"],
+  ])('rejects a %s dependency from %s to %s', (extension, from, to, source) => {
+    write(`src/${from}/crossing.${extension}`, source);
+    const result = inspectImportBoundaries(root);
+    expect(result.files).toBe(4);
+    expect(result.violations).toEqual([expect.objectContaining({
+      from: `src/${from}/crossing.${extension}`, to: `src/${to}/value.ts`, line: 1,
+    })]);
+  });
+
+  it.each(['mts', 'cts', 'mjs', 'cjs'])('allows valid %s dependencies and ignores path mentions', (extension) => {
+    const source = extension === 'cts' || extension === 'cjs'
+      ? "const same = require('./value'); const shared = require('../shared/value');"
+      : "import { value } from './value'; export { value as shared } from '../shared/value';";
+    write(`src/frontend/valid.${extension}`, `${source}\nconst documentation = "import('../backend/value')";`);
+    const result = inspectImportBoundaries(root);
+    expect(result.files).toBe(4);
+    expect(result.violations).toEqual([]);
+  });
+
   it('classifies resolved targets using the filesystem casing rule', () => {
     const ts = require('typescript');
     const target = ts.sys.useCaseSensitiveFileNames ? 'backend' : 'BACKEND';
