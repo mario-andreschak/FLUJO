@@ -45,6 +45,12 @@ public keyring, disabled automatic key retrieval and retained raw signature
 status, stderr, signatures and checksum files without newline conversion.
 No global/private keyring was imported or changed.
 
+The unchanged upstream README's relative links resolve to the 29 retained
+[public key files](../audits/scorecard-563/evidence/official-node-integrity-2026-10-04/keys/).
+Their [copy receipt](../audits/scorecard-563/evidence/official-node-integrity-2026-10-04/public-key-document-targets.json)
+binds downloaded bytes to the same immutable upstream commit and Git blobs.
+Restoring these document targets does not add signature or issuer verification.
+
 Each downloaded Linux x64 tar archive first matched its signed checksum. The
 fixed `node-vVERSION-linux-x64/bin/node` member was then streamed into SHA-256
 without extracting a directory or executing downloaded binaries. Windows x64
