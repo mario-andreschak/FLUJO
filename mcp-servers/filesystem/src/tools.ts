@@ -309,7 +309,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'write_file',
       annotations: DESTRUCTIVE_WRITE_ANNOTATIONS,
       description:
-        'Write a text file and create missing parent directories. Modes: overwrite (default), append, or insert before startLine. For a range overwrite, give startLine and endLine. Use expectedHash from read_file to reject changes to a stale file; it is ignored for whole-file overwrite.',
+        'Write a text file and create missing parent directories. New files use private owner permissions on POSIX; existing file permissions are retained. Modes: overwrite (default), append, or insert before startLine. For a range overwrite, give startLine and endLine. Use expectedHash from read_file to reject changes to a stale file; it is ignored for whole-file overwrite.',
       // #216: feed the docked diff canvas (ui://devcanvas/diff) so successive
       // writes update one persistent tab. See internal/filesystemResources.ts.
       _meta: { ui: { resourceUri: 'ui://devcanvas/diff' } },
@@ -934,7 +934,9 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
 
   // Whole-file overwrite (default, backward-compatible).
   if (mode === 'overwrite' && !hasRange) {
-    await fs.writeFile(filePath, content, 'utf8');
+    // Creation permissions must not depend on the host umask. Node's mode option
+    // applies only to a new file, preserving permissions on an existing target.
+    await fs.writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 });
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(content, 'utf8'), mode: 'overwrite' });
   }
 
@@ -961,7 +963,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
   if (mode === 'append') {
     const sep = existingBody.length && !existingBody.endsWith('\n') && !existingBody.endsWith('\r\n') ? detectEol(existingBody) : '';
     const next = bom + existingBody + sep + content;
-    await fs.writeFile(filePath, next, 'utf8');
+    await fs.writeFile(filePath, next, { encoding: 'utf8', mode: 0o600 });
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'append' });
   }
 
@@ -975,7 +977,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
     const idx = Math.min(at - 1, total);
     lines.splice(idx, 0, ...insertLines);
     const next = bom + lines.join(eol);
-    await fs.writeFile(filePath, next, 'utf8');
+    await fs.writeFile(filePath, next, { encoding: 'utf8', mode: 0o600 });
     return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'insert', startLine: at, linesInserted: insertLines.length });
   }
 
@@ -987,7 +989,7 @@ async function writeFileTool(args: Record<string, unknown>, roots: string[]): Pr
   const linesReplaced = Math.max(0, end - start + 1);
   lines.splice(start - 1, linesReplaced, ...insertLines);
   const next = bom + lines.join(eol);
-  await fs.writeFile(filePath, next, 'utf8');
+  await fs.writeFile(filePath, next, { encoding: 'utf8', mode: 0o600 });
   return dualResult({ path: filePath, bytesWritten: Buffer.byteLength(next, 'utf8'), mode: 'overwrite', startLine: start, endLine: end, linesReplaced });
 }
 
@@ -1048,7 +1050,7 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
       return errorResult(`Diff apply failed: ${err instanceof Error ? err.message : String(err)}. No changes written.`);
     }
     const finalContent = bom + (diffEol === '\r\n' ? out.result.replace(/\n/g, '\r\n') : out.result);
-    await fs.writeFile(filePath, finalContent, 'utf8');
+    await fs.writeFile(filePath, finalContent, { encoding: 'utf8', mode: 0o600 });
     recordTouchedFile(filePath, 'write');
     return dualResult({ path: filePath, applied: true, mode: 'diff', diff: { added: out.added, removed: out.removed } });
   }
@@ -1115,7 +1117,7 @@ async function editFileTool(args: Record<string, unknown>, roots: string[]): Pro
   // bytes and we don't rewrite the whole file just because EOLs differ (#187).
   // Re-attach any leading UTF-8 BOM that was stripped before matching (#254).
   const finalContent = bom + (eol === '\r\n' ? working.replace(/\n/g, '\r\n') : working);
-  await fs.writeFile(filePath, finalContent, 'utf8');
+  await fs.writeFile(filePath, finalContent, { encoding: 'utf8', mode: 0o600 });
   recordTouchedFile(filePath, 'write');
   return dualResult({ path: filePath, mode: 'edits', editsApplied: applied, diff });
 }
