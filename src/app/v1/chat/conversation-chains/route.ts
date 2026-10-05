@@ -26,6 +26,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { readPlainFile } from '@/utils/readPlainFile';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -189,8 +190,8 @@ async function resolvePreview(
 
   const filePath = path.join(conversationsDir(), `${id}.json`);
   try {
-    const stats = await fs.stat(filePath);
-    if (stats.size > MAX_SNAPSHOT_SCAN_BYTES) {
+    const stats = await fs.lstat(filePath, { bigint: true });
+    if (stats.size > BigInt(MAX_SNAPSHOT_SCAN_BYTES)) {
       // Never spend an unbounded parse on a preview; the page shows a neutral
       // "preview unavailable" chip instead.
       return {
@@ -199,7 +200,10 @@ async function resolvePreview(
         previewUnavailable: true,
       };
     }
-    const state = JSON.parse(await fs.readFile(filePath, 'utf8')) as SharedState;
+    const state = JSON.parse((await readPlainFile(filePath, {
+      expected: stats,
+      maxBytes: MAX_SNAPSHOT_SCAN_BYTES,
+    })).toString('utf8')) as SharedState;
     const flowName = projectedFlowName(
       state?.flowId ?? conversation.flowId,
       state?.flowSnapshot?.name,
