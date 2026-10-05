@@ -1,9 +1,10 @@
 import { createWriteStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { DEFINITION_SHA256 } from './fixture-server.mjs';
-import { boundedJson, collectLiveEvents, digest, evaluateLiveJourney, loopbackOrigin,
-  ownerRequest, projectModelInput } from './live-journey-observer.mjs';
+import { DEFINITION_SHA256, FIXTURE_VERSION } from './fixture-server.mjs';
+import { boundedJson, collectLiveEvents, createProjectionBudget, digest, evaluateLiveJourney, loopbackOrigin,
+  ownerRequest, projectConversationStatus, projectFixtureReceipt, projectModelInput,
+  serializeEvidenceReport } from './live-journey-observer.mjs';
 
 const { values } = parseArgs({ options: Object.fromEntries([
   'base-url', 'workspace', 'conversation', 'flow-id', 'model-id', 'tool-name', 'fixture-tool-name',
@@ -34,6 +35,7 @@ const report = {
   events: [], modelInputs: [], gradeAwarded: false,
 };
 const controller = new AbortController();
+const projectionBudget = createProjectionBudget();
 let streamError;
 stream.on('error', error => { streamError = error; controller.abort(error); });
 const deadline = setTimeout(() => controller.abort(new Error('Live observer deadline exceeded.')), seconds * 1000);
@@ -42,7 +44,7 @@ const json = async route => boundedJson(await request(route, { signal: controlle
 const fixtureReceipt = async () => {
   const response = await fetch(`${fixtureOrigin}/receipt`, { redirect: 'error', signal: controller.signal });
   if (!response.ok) throw new Error(`Fixture receipt returned ${response.status}.`);
-  return boundedJson(response, 256 * 1024);
+  return projectFixtureReceipt(await boundedJson(response, 256 * 1024), DEFINITION_SHA256, FIXTURE_VERSION);
 };
 const conversationRoute = `/v1/chat/conversations/${encodeURIComponent(values.conversation)}`;
 let failed;
@@ -54,25 +56,26 @@ try {
     || beforeTurns.conversationId !== values.conversation || !Array.isArray(beforeTurns.turns) || beforeTurns.turns.length) {
     throw new Error('Use a fresh UI-created ordinary agent conversation before its first model dispatch.');
   }
-  report.fixtureBefore = await fixtureReceipt();
+  report.fixtureBefore = projectionBudget.admit(await fixtureReceipt());
   if (report.fixtureBefore.definitionSha256 !== DEFINITION_SHA256 || report.fixtureBefore.mode !== 'normal') {
     throw new Error('Use the selected owned feature fixture in normal mode.');
   }
   const response = await request(`${conversationRoute}/events?fromSeq=0`, { signal: controller.signal });
   console.log('Observer attached. The owner may now perform the approved UI run, approval and debugger steps.');
   await collectLiveEvents(response, values.conversation, { onEvent: event => {
+    projectionBudget.admit(event);
     report.events.push(event);
     stream.write(JSON.stringify(event) + '\n');
   } });
-  report.fixtureAfter = await fixtureReceipt();
+  report.fixtureAfter = projectionBudget.admit(await fixtureReceipt());
   const finalState = await json(`${conversationRoute}?messageLimit=8&compactToolPayloads=1`);
   if (finalState.id !== values.conversation || finalState.flowId !== values['flow-id']) {
     throw new Error('The UI conversation identity changed during observation.');
   }
-  report.finalConversationStatus = finalState.status;
+  report.finalConversationStatus = projectConversationStatus(finalState.status);
   for (const dispatch of report.events.filter(event => event.type === 'model:dispatch' && event.depth === 0)) {
     const snapshot = await json(`${conversationRoute}/model-turns/${encodeURIComponent(dispatch.dispatchId)}`);
-    report.modelInputs.push(projectModelInput(snapshot, values.conversation, dispatch.dispatchId));
+    report.modelInputs.push(projectionBudget.admit(projectModelInput(snapshot, values.conversation, dispatch.dispatchId)));
   }
   report.evaluation = evaluateLiveJourney({ ...report, events: report.events, modelInputs: report.modelInputs });
   report.status = report.evaluation.componentPassed && finalState.status === 'completed' ? 'component_passed' : 'incomplete';
@@ -80,9 +83,8 @@ try {
 } catch (error) {
   failed = error;
   // Do not persist provider text or HTTP response bodies through an exception.
-  report.failure = { name: error instanceof Error ? error.name : 'Error',
-    message: error instanceof Error && error.message.startsWith('One or more') ? error.message
-      : 'Observation stopped; preserve this partial receipt and inspect the owner runtime separately.' };
+  report.failure = { name: 'ObservationError',
+    message: 'Observation stopped; preserve this partial receipt and inspect the owner runtime separately.' };
   report.status = 'incomplete';
 } finally {
   clearTimeout(deadline); controller.abort();
@@ -91,8 +93,9 @@ try {
   if (streamError) { failed ??= streamError; report.status = 'incomplete'; report.failure = { name: 'EvidenceWriteError',
     message: 'The execution projection could not be completely retained.' }; }
   report.completedAtUtc = new Date().toISOString();
+  report.projectionBudget = { maximumBytes: projectionBudget.maximumBytes, retainedBytes: projectionBudget.usedBytes() };
   report.raw = streamError ? [] : [{ file: 'execution-projection.jsonl', sha256: digest(await fs.readFile(eventsFile)) }];
-  await fs.writeFile(path.join(output, 'live-journey-observation.json'), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
+  await fs.writeFile(path.join(output, 'live-journey-observation.json'), serializeEvidenceReport(report), { flag: 'wx' });
 }
 console.log(JSON.stringify({ status: report.status, report: path.join(output, 'live-journey-observation.json'),
   fullFeatureAcceptance: false, gradeAwarded: false }));

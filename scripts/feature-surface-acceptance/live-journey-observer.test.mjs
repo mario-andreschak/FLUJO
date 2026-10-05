@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boundedJson, collectLiveEvents, digest, evaluateLiveJourney, loopbackOrigin, projectEvent, projectModelInput } from './live-journey-observer.mjs';
+import { boundedJson, collectLiveEvents, createProjectionBudget, digest, evaluateLiveJourney, loopbackOrigin,
+  projectConversationStatus, projectEvent, projectFixtureReceipt, projectFixtureToolPage, projectModelInput,
+  serializeEvidenceReport } from './live-journey-observer.mjs';
 
 // Synthetic classifier/parser controls only. These are never installed/provider/human receipts.
 const context = { conversationId: 'conversation', flowId: 'flow', modelId: 'owner-model', toolName: 'app__fixture_tool_128', fixtureToolName: 'fixture_tool_128' };
@@ -126,7 +128,7 @@ test('archive projection removes raw tool results and rejects another conversati
 test('message and argument projections retain hashes without plaintext', () => {
   const message = projectEvent(event(0, 'message', { message: { role: 'assistant', content: 'private output' } }), 'conversation');
   assert.equal(message.textBytes, 14); assert(!JSON.stringify(message).includes('private output'));
-  assert.throws(() => projectEvent(event(1, 'tool:call', { args: '{unfinished' }), 'conversation'));
+  assert.throws(() => projectEvent(event(1, 'tool:call', { toolCallId: 'call', name: 'tool', args: '{unfinished' }), 'conversation'), SyntaxError);
 });
 test('loopback origin excludes URL credentials, paths and remote hosts', () => {
   assert.equal(loopbackOrigin('http://127.0.0.1:3000'), 'http://127.0.0.1:3000');
@@ -147,8 +149,8 @@ test('SSE handles split UTF-8/CRLF frames, comments and an inner terminal event'
 });
 test('SSE rejects reordered sequences and truncated runs', async () => {
   const frame = row => 'data: ' + JSON.stringify(row) + '\n\n';
-  await assert.rejects(collectLiveEvents(responseFor(frame(event(1, 'run:start')) + frame(event(0, 'run:done', { status: 'completed' }))), 'conversation'));
-  await assert.rejects(collectLiveEvents(responseFor(frame(event(0, 'run:start'))), 'conversation'));
+  await assert.rejects(collectLiveEvents(responseFor(frame(event(1, 'run:start', { flowId: 'flow' })) + frame(event(0, 'run:done', { status: 'completed' }))), 'conversation'), /repeated or reordered/);
+  await assert.rejects(collectLiveEvents(responseFor(frame(event(0, 'run:start', { flowId: 'flow' }))), 'conversation'), /ended before a terminal/);
 });
 test('bounded JSON counts UTF-8 bytes and rejects overflow', async () => {
   const raw = JSON.stringify({ text: 'café' }); const bytes = Buffer.byteLength(raw);
@@ -159,4 +161,133 @@ test('SSE refuses excessive bytes and another conversation', async () => {
   const frame = 'data: ' + JSON.stringify(event(0, 'run:done', { status: 'completed' })) + '\n\n';
   await assert.rejects(collectLiveEvents(responseFor(frame), 'conversation', { maximumBytes: 4 }));
   await assert.rejects(collectLiveEvents(responseFor(frame), 'other'));
+});
+
+const privateMarker = 'SYNTHETIC_PRIVATE_METADATA_NOT_A_CREDENTIAL';
+const nestedMarker = () => ({ unexpectedPrivateMetadata: privateMarker });
+const fixtureDefinition = 'a'.repeat(64);
+function fixtureReceipt() {
+  return { runId: '648c705c-348d-4a4f-b81c-97b6d9b65d74', fixtureVersion: '1.0.0', definitionSha256: fixtureDefinition,
+    mode: 'normal', delayMs: 0, listRequests: 4, toolCalls: 1, acceptedCalls: 1,
+    recentCalls: [{ sequence: 1, toolName: 'fixture_tool_128', argumentsSha256: digest(JSON.stringify(args)), accepted: true }] };
+}
+test('fixture receipt projection omits unexpected fields before report retention', () => {
+  const input = fixtureReceipt(); const expected = structuredClone(input);
+  input.privateMetadata = nestedMarker(); input.recentCalls[0].privateMetadata = nestedMarker();
+  const report = { fixtureBefore: projectFixtureReceipt(input, fixtureDefinition) };
+  assert.deepEqual(report.fixtureBefore, expected);
+  assert(!serializeEvidenceReport(report).includes(privateMarker));
+  assert(JSON.stringify(input).includes(privateMarker));
+});
+test('invalid fixture receipts never enter partial failure reports', () => {
+  for (const [name, mutate] of [
+    ['nested run identity', value => { value.runId = nestedMarker(); }],
+    ['unexpected definition', value => { value.definitionSha256 = 'b'.repeat(64); }],
+    ['nested mode', value => { value.mode = nestedMarker(); }],
+    ['nested counter', value => { value.toolCalls = nestedMarker(); }],
+    ['impossible accepted count', value => { value.acceptedCalls = 2; }],
+    ['nested call metadata', value => { value.recentCalls[0].argumentsSha256 = nestedMarker(); }],
+    ['noncontiguous call', value => { value.recentCalls[0].sequence = 2; }],
+    ['unexpected fixture version', value => { value.fixtureVersion = '2.0.0'; }],
+  ]) {
+    for (const field of ['fixtureBefore', 'fixtureAfter']) {
+      const report = { status: 'incomplete', ...(field === 'fixtureAfter'
+        ? { fixtureBefore: projectFixtureReceipt(fixtureReceipt(), fixtureDefinition) } : {}) };
+      const input = fixtureReceipt(); mutate(input); input.privateMetadata = nestedMarker();
+      assert.throws(() => { report[field] = projectFixtureReceipt(input, fixtureDefinition); }, undefined, `${name}/${field}`);
+      assert(!Object.hasOwn(report, field)); assert(!serializeEvidenceReport(report).includes(privateMarker));
+      if (field === 'fixtureAfter') assert.deepEqual(report.fixtureBefore, fixtureReceipt());
+    }
+  }
+});
+test('fixture receipt projection accepts a genuine-shaped capped invocation window', () => {
+  const input = fixtureReceipt(); input.toolCalls = 65; input.acceptedCalls = 65;
+  input.recentCalls = Array.from({ length: 64 }, (_, index) => ({ ...input.recentCalls[0], sequence: index + 2 }));
+  assert.deepEqual(projectFixtureReceipt(input, fixtureDefinition), input);
+  input.recentCalls.push({ ...input.recentCalls.at(-1), sequence: 66 });
+  assert.throws(() => projectFixtureReceipt(input, fixtureDefinition));
+});
+test('event metadata rejects nested values before retention', () => {
+  const cases = [
+    event(0, 'run:start', { flowId: nestedMarker() }),
+    event(0, 'run:done', { status: nestedMarker() }),
+    event(0, 'run:done', { status: 'completed', depth: nestedMarker() }),
+    event(0, 'run:paused', { reason: nestedMarker(), phase: 'before-tool' }),
+    event(0, 'run:paused', { reason: 'debug', phase: nestedMarker() }),
+    event(0, 'run:awaiting_approval', { pendingToolCalls: [{ id: nestedMarker() }] }),
+    event(0, 'model:dispatch', { turn: { id: 'dispatch', conversationId: 'conversation', modelId: nestedMarker(), adapter: 'test' } }),
+    event(0, 'model:dispatch', { turn: { id: 'dispatch', conversationId: 'conversation', modelId: 'model', adapter: nestedMarker() } }),
+    event(0, 'model:dispatch-result', { dispatchId: nestedMarker(), outcome: 'completed' }),
+    event(0, 'model:dispatch-result', { dispatchId: 'dispatch', outcome: nestedMarker() }),
+    event(0, 'tool:call', { toolCallId: nestedMarker(), name: 'tool', args: '{}' }),
+    event(0, 'tool:result', { toolCallId: 'call', name: nestedMarker(), result: 'synthetic' }),
+    event(0, 'message', { message: { id: nestedMarker(), role: 'assistant', content: 'synthetic' } }),
+    event(0, 'message', { message: { id: 'message', role: nestedMarker(), content: 'synthetic' } }),
+  ];
+  for (const input of cases) assert.throws(() => projectEvent(input, 'conversation'), undefined, input.type);
+});
+test('SSE refuses the preserved nested pause marker before its output callback', async () => {
+  const input = event(0, 'run:paused', { reason: nestedMarker(), phase: nestedMarker() });
+  const retained = [];
+  await assert.rejects(collectLiveEvents(responseFor(`data: ${JSON.stringify(input)}\n\n`), 'conversation',
+    { onEvent: row => retained.push(row) }));
+  assert.deepEqual(retained, []); assert(!JSON.stringify(retained).includes(privateMarker));
+});
+test('event admission rejects oversize identities and unsupported typed metadata', () => {
+  assert.throws(() => projectEvent(event(0, 'model:dispatch-result', { dispatchId: 'x'.repeat(257), outcome: 'completed' }), 'conversation'));
+  assert.throws(() => projectEvent(event(0, privateMarker), 'conversation'));
+  assert.throws(() => projectEvent(event(0, 'run:paused', { reason: 'debug', phase: 'unsupported' }), 'conversation'));
+  assert.throws(() => projectEvent(event(0, 'message', { message: { role: 'assistant', content: 'text', tool_calls: nestedMarker() } }), 'conversation'));
+  assert.equal(projectEvent(event(0, 'run:paused', { reason: 'breakpoint' }), 'conversation').phase, undefined);
+});
+test('archive metadata rejects the preserved nested marker before report retention', () => {
+  const initial = { entry: { id: 'dispatch', conversationId: 'conversation', modelId: 'model', adapter: 'test' },
+    genericWire: [{ role: 'tool', tool_call_id: 'call', content: 'synthetic' }] };
+  for (const mutate of [value => { value.entry.modelId = nestedMarker(); }, value => { value.entry.adapter = nestedMarker(); },
+    value => { value.genericWire[0].tool_call_id = nestedMarker(); }]) {
+    const snapshot = structuredClone(initial); mutate(snapshot); const retained = [];
+    assert.throws(() => retained.push(projectModelInput(snapshot, 'conversation', 'dispatch')));
+    assert.deepEqual(retained, []); assert(!JSON.stringify(retained).includes(privateMarker));
+  }
+  const healthy = projectModelInput(initial, 'conversation', 'dispatch');
+  assert.equal(healthy.wireToolResults[0].contentBinding.sha256, digest('synthetic'));
+});
+test('final conversation status rejects nested metadata and preserves ordinary status', () => {
+  assert.throws(() => projectConversationStatus(nestedMarker()));
+  assert.equal(projectConversationStatus('completed'), 'completed');
+  assert.equal(projectConversationStatus(undefined), undefined);
+  assert.equal(projectConversationStatus('awaiting_tool_approval'), 'awaiting_tool_approval');
+  assert.throws(() => projectConversationStatus('unsupported'));
+});
+test('aggregate projection budget refuses accumulation before append', () => {
+  const first = { dispatchId: 'one', text: 'café🙂' }; const second = { dispatchId: 'two', text: 'café🙂' };
+  const bytes = Buffer.byteLength(JSON.stringify(first, null, 2)); const budget = createProjectionBudget(bytes);
+  const retained = []; retained.push(budget.admit(first));
+  assert.equal(budget.usedBytes(), bytes);
+  assert.throws(() => retained.push(budget.admit(second))); assert.deepEqual(retained, [first]);
+  assert.equal(budget.usedBytes(), bytes);
+});
+test('evidence report output budget counts final UTF-8 serialization', () => {
+  const report = { status: 'incomplete', text: 'café🙂' };
+  const expected = JSON.stringify(report, null, 2) + '\n'; const bytes = Buffer.byteLength(expected);
+  assert.equal(serializeEvidenceReport(report, bytes), expected);
+  assert.throws(() => serializeEvidenceReport(report, bytes - 1));
+});
+test('fixture discovery admits only exact expected ordered names', () => {
+  const page = { tools: Array.from({ length: 32 }, (_, index) => ({ name: `fixture_tool_${String(index + 1).padStart(3, '0')}`,
+    privateMetadata: nestedMarker() })), nextCursor: '32', privateMetadata: nestedMarker() };
+  const projected = projectFixtureToolPage(page, 0);
+  assert.equal(projected.tools.length, 32); assert.equal(projected.nextCursor, '32');
+  assert.equal(projected.tools[0], 'fixture_tool_001'); assert(!JSON.stringify(projected).includes(privateMarker));
+  assert.deepEqual(projectFixtureToolPage({ tools: [{ name: 'fixture_tool_128' }] }, 127).tools, ['fixture_tool_128']);
+});
+test('fixture discovery refuses extra or private metadata before accumulation', () => {
+  const retained = [];
+  for (const page of [
+    { tools: Array.from({ length: 129 }, (_, index) => ({ name: `fixture_tool_${String(index + 1).padStart(3, '0')}` })) },
+    { tools: [{ name: nestedMarker() }] },
+    { tools: [{ name: 'fixture_tool_001' }], nextCursor: nestedMarker() },
+    { tools: [{ name: 'fixture_tool_001' }], nextCursor: 'x'.repeat(257) },
+  ]) assert.throws(() => retained.push(...projectFixtureToolPage(page, 0).tools));
+  assert.deepEqual(retained, []);
 });

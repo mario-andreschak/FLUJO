@@ -67,6 +67,29 @@ calls and truncated streams remain incomplete. Partial event projections and
 failure receipts are retained. Model text, raw arguments/results, prompts and
 SDK request objects are excluded from retained projections.
 
+Fixture receipts enter either report only after definition/version, UUID, counter
+and bounded invocation-window admission. The report retains the fixed fixture
+fields and each call's sequence, tool name, argument digest and accepted flag;
+unexpected fields are omitted at both levels. Invalid receipt values are refused
+before assignment, including on partial/failure paths. Event/archive metadata
+requires bounded string identities and typed statuses, roles, pause boundaries
+and nonnegative sequence/depth values. Nested metadata objects are refused before
+an event callback or archive append. These strings and content/argument hashes
+can still identify or correlate a private run; projection does not make reports
+safe for public sharing or authenticate their provider or source artifact.
+
+The observer admits at most 16 MiB of serialized retained projections across its
+fixture receipts, event rows and model-input rows, in addition to the existing
+per-response/SSE bounds. Admission precedes every append; exceeding the budget
+leaves the run incomplete and retains already admitted partial observations.
+Both report writers cap final JSON at 32 MiB. Output paths remain caller-selected
+fresh directories with fixed filenames and exclusive writes; filesystem ACLs,
+hostile local races and owner/profile authentication remain separate boundaries.
+The external client admits at most the fixture's 128 ordered tool names before
+accumulation, and bounds retained pagination cursors. This does not bound the
+SDK's parsing of an individual response or establish whole-process memory
+acceptance; those remain unqualified by these pure projection controls.
+
 ## Actual external MCP client reuse
 
 After the UI run, leave its saved HTTP/SSE connection and owner fixture running
@@ -98,14 +121,16 @@ node --test scripts/feature-surface-acceptance/live-journey-observer.test.mjs
 node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/featureSurface/liveJourneyObserver.test.ts __tests__/flow/processToolCallsConcurrency.test.ts __tests__/flow/processToolCallsCapture.test.ts
 ```
 
-The authored native suite contains 34 synthetic controls, including same-ID
+The authored native suite contains 46 synthetic controls, including same-ID
 wrong-content, missing bindings, duplicate matches, byte/serialization mismatch,
-long UTF-8 results and identical previews with different tails. The two existing
+long UTF-8 results and identical previews with different tails, plus receipt
+allowlisting, nested-metadata refusal and aggregate/final output budgets. The two existing
 Jest caller suites additionally check the actual `ModelHandler` event producer
 with mocked MCP data, including the captured/rewritten tool-message content.
-No new control or caller execution is claimed until a fresh serial source slot
-or exact-source hosted result records it. The previous 22-check pass belongs to
-the frozen source and does not establish this corrected binding.
+The frozen #751 native34 and producer/provider-attempt Jest51 receipts and #760's
+named equal-byte/different-digest control belong to their exact prior sources.
+The privacy successor needs its own serial native result and later combined
+ordinary-Jest verification; those earlier receipts do not validate this change.
 
 These are synthetic controls for correlation, redaction, SSE framing,
 sequence ordering and incomplete/false-positive observations. They do not call a
