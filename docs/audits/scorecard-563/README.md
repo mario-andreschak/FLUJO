@@ -22,14 +22,20 @@ experimental only with explicit independent acceptance and visible limits.
   observations and the last three issue comments at capture.
 - [source observation](evidence/source-observation-2026-10-03.json) retains exact
   main-source blob hashes and excerpts for the existing #520 fixes and the
-  still-unintegrated #517 tool-refresh/prefill behavior.
+  #517 tool-refresh/prefill behavior that was unintegrated at that capture.
 - [draft proposal snapshot](evidence/proposals-2026-10-03.json) retains exact
   PR #579–#587 head/base SHAs and public descriptions at its capture time.
 - [fresh dependency audit](evidence/npm-audit-2026-10-03.json) retains the
-  failed current lockfile observation, separately from September's clean audit.
+  failed planning lockfile observation, separately from September's clean audit.
 - [dependency remediation observation](evidence/dependency-remediation-59b65de8.json)
   retains the coordinator's clean PR #600 audit payloads, exact source blobs and
   a separate independent replay whose source-binding capture failed during integration.
+- [hosted candidate CI observation](evidence/hosted-ci-b8cf905f.json) binds the
+  published `b8cf905f` tree to its executed merge, downloaded audit archive and
+  actual job results. The Ubuntu development-inclusive audit reports zero findings;
+  Windows production and overall verification failed. The source dependency gate
+  remains pending for selected-release/profile qualification; the build gate is failed.
+  Historical failures, producer reports and the rejected replay remain retained.
 - [npm content inspection](evidence/npm-content-inspection-3.46.2.json) retains
   verified tarball digests, decoded subject comparisons and shipped manifest/build
   identity, with signature and installation checks explicitly unperformed.
@@ -56,7 +62,7 @@ Run from the repository root with Node >=22; no dependency installation is neede
 
 ```sh
 node scripts/validate-scorecard.mjs
-node --test scripts/validate-scorecard.test.mjs
+node --test scripts/read-scorecard-evidence.test.mjs scripts/validate-scorecard.test.mjs scripts/check-scorecard-publication.test.mjs
 node scripts/validate-scorecard.mjs --closure
 ```
 
