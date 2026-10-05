@@ -321,6 +321,16 @@ This runs a prebuilt FLUJO with no git clone or local build. Your data lives in
 `flujo-ai` — the name `flujo` is blocked by npm's similarity rules — but the
 installed command is still `flujo`.)
 
+Embedding launchers can set `FLUJO_BOOTSTRAP_DIR` to an absolute directory before
+starting FLUJO. Both the npm entry point and the Next launcher then load dotenv
+files and keep runtime environment settings in that directory. An empty or
+relative override fails before loading dotenv. Without the override, the npm
+entry point uses `~/.flujo`, and the Next launcher uses its working directory
+(or `/app/data` in a container). The override selects environment settings only;
+set `FLUJO_DATA_DIR` and `FLUJO_LOCAL_INSTANCE_DIR` separately when isolating an
+embedded instance's data and discovery records. Supply a clean child environment
+as well: this option does not clear already inherited credentials or settings.
+
 ### One-line install (Windows)
 
 On a fresh Windows machine you can install everything (Git, Node.js, Python, uv, ripgrep),

@@ -105,6 +105,8 @@ jobs:
       # Tests intercept every release subprocess before execution.
       - run: node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
       - run: node --test tests/installer-repository.test.mjs
+      - name: Verify explicit launcher bootstrap isolation without starting a server
+        run: node --test scripts/bootstrap-directory.test.mjs
 
   typecheck:
     name: typecheck

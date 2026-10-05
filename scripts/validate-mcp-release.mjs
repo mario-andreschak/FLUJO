@@ -95,6 +95,7 @@ for (const required of [
   'package.json',
   'bin/flujo.mjs',
   'scripts/launch-next.mjs',
+  'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',
   'mcp-servers/browser/scripts/install-browser.mjs',
   '.next/BUILD_ID',
