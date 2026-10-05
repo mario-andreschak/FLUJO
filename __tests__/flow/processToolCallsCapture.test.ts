@@ -214,7 +214,7 @@ describe('processToolCalls auto-capture', () => {
   });
 
   it.each(['stored', 'refused'])('binds the exact bounded tool-message content after a %s spill', async (spill) => {
-    const data = { content: [{ type: 'text', text: 'café🙂'.repeat(250) }] };
+    const data = { isError: false, content: [{ type: 'text', text: 'café🙂'.repeat(250) }] };
     const full = JSON.stringify(data);
     callToolMock.mockResolvedValue({ success: true, data });
     captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
@@ -250,6 +250,38 @@ describe('processToolCalls auto-capture', () => {
         sha256: createHash('sha256').update(message, 'utf8').digest('hex'), bytes: Buffer.byteLength(message, 'utf8') } });
     expect(resultEvents[0].resultContentBinding.sha256)
       .not.toBe(createHash('sha256').update(full, 'utf8').digest('hex'));
+  });
+
+  it.each(['text', 'media'])('keeps original protocol %s errors outside capture, media extraction and bounding', async (kind) => {
+    const data = { isError: true, content: [
+      { type: 'text', text: 'café🙂'.repeat(150) },
+      ...(kind === 'media' ? imageResult.content : []),
+    ] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValue({ success: true, data });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      autoCaptureEnabled: true, textThresholdChars: 32,
+      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 0 });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap,
+      conversationId: 'conv-1', emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(128);
+    expect(full.length).toBeGreaterThan(500);
+    expect(captureToolResultMock).not.toHaveBeenCalled();
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    expect(result.value.toolCallMessages[0]).toMatchObject({ role: 'tool', tool_call_id: 'call1', content: full });
+    expect(result.value.toolCallMessages[0]).not.toHaveProperty('media');
+    expect(result.value.processedToolCalls[0]).toMatchObject({ id: 'call1', result: full, exitCode: 1 });
+    const events = emit.mock.calls.map(([row]) => row);
+    expect(events.map(row => row.type)).toEqual(['tool:call', 'tool:result']);
+    expect(events[1]).toMatchObject({ toolCallId: 'call1', isError: true, result: `${full.slice(0, 500)}…` });
+    expect(events[1]).not.toHaveProperty('resultContentBinding');
   });
 
   it('does not capture failed tool calls', async () => {

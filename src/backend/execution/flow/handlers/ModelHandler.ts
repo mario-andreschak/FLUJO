@@ -3939,6 +3939,15 @@ export class ModelHandler {
             if (cancelScope) releaseToolCall(cancelScope, id);
           }
 
+          // A completed MCP request can still return a protocol-level tool
+          // error. Classify the original payload before any capture rewrites
+          // it, and use this same outcome for content binding and result status.
+          const toolSucceeded = result.success && !Boolean(
+            result.data
+            && typeof result.data === 'object'
+            && (result.data as CallToolResult).isError === true,
+          );
+
           // Tier 3 data flow: auto-capture binary/large tool results as
           // run-scoped resources. The capture may rewrite the result (binary
           // items become URI stubs — base64 in a tool message costs context
@@ -3954,7 +3963,7 @@ export class ModelHandler {
           // as genuine image_url/input_audio INPUT parts. Without this a model
           // can never perceive what its own tools produced.
           let capturedMedia: ModelMediaPart[] = [];
-          if (result.success && conversationId && runResourceSettings) {
+          if (toolSucceeded && conversationId && runResourceSettings) {
             try {
               if (runResourceSettings.autoCaptureEnabled) {
                 const outcome = await commitFlowDurableMutation(durableContext, async () => {
@@ -4004,7 +4013,7 @@ export class ModelHandler {
           // the tool message so toApiMessages still emits a genuine model-input
           // part. Successful captures have already replaced media with stubs, so
           // this is a no-op for the normal URI-backed path.
-          if (result.success && effectiveData && typeof effectiveData === 'object') {
+          if (toolSucceeded && effectiveData && typeof effectiveData === 'object') {
             const split = splitToolResultMedia(effectiveData as CallToolResult);
             if (split.hasMedia) {
               effectiveData = split.textResult;
@@ -4018,13 +4027,13 @@ export class ModelHandler {
           // Only successful tool-message content participates in capture,
           // bounding, and the full-content binding. Failure diagnostics remain
           // separate: an error result cannot satisfy a successful-result join.
-          let successfulResultContent = result.success ? JSON.stringify(effectiveData) : '';
+          let successfulResultContent = toolSucceeded ? JSON.stringify(effectiveData) : '';
 
           // Keep an exact transcript-level copy of medium-large results for the
           // browser's expansion-time loader. Results over the context boundary
           // are captured by boundToolResult below instead, avoiding duplicates.
           if (
-            result.success
+            toolSucceeded
             && conversationId
             && runResourceSettings?.autoCaptureEnabled
             && successfulResultContent.length >= runResourceSettings.textThresholdChars
@@ -4086,7 +4095,7 @@ export class ModelHandler {
           // wire in full (not even on the first turn) and both ends of a long
           // log survive. Runs AFTER auto-capture (binaries already stubbed) so
           // only the remaining text form is bounded. Never breaks the run.
-          if (result.success && conversationId && runResourceSettings) {
+          if (toolSucceeded && conversationId && runResourceSettings) {
             try {
               const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
                   conversationId,
@@ -4123,7 +4132,12 @@ export class ModelHandler {
             }
           }
 
-          const resultContent = result.success ? successfulResultContent : `Error: ${result.error}`;
+          // Protocol errors retain their original diagnostic JSON; transport
+          // failures retain the existing Error prefix. Neither enters the full
+          // successful-content digest or its capture/bounding pipeline.
+          const resultContent = toolSucceeded
+            ? successfulResultContent
+            : result.success ? JSON.stringify(result.data) : `Error: ${result.error}`;
           // The full result reaches the conversation as the tool message below;
           // the event carries a preview so the log stays light. Only successful
           // results carry a binding; error text still reaches the conversation.
@@ -4133,12 +4147,12 @@ export class ModelHandler {
               toolCallId: id,
               name,
               result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              ...(result.success ? { resultContentBinding: {
+              ...(toolSucceeded ? { resultContentBinding: {
                 serialization: 'utf8-string-v1' as const,
                 sha256: createHash('sha256').update(successfulResultContent, 'utf8').digest('hex'),
                 bytes: Buffer.byteLength(successfulResultContent, 'utf8'),
               } } : {}),
-              isError: !result.success
+              isError: !toolSucceeded
             });
           });
 
@@ -4175,7 +4189,7 @@ export class ModelHandler {
                 ? {
                     ui: {
                       ...uiLink,
-                      ...(!result.success ? { isError: true } : {}),
+                      ...(!toolSucceeded ? { isError: true } : {}),
                       ...(cancelledReason ? { cancelledReason } : {}),
                     },
                   }
@@ -4188,14 +4202,7 @@ export class ModelHandler {
             args,
             id,
             result: resultContent,
-            exitCode: (
-              !result.success
-              || Boolean(
-                result.data
-                && typeof result.data === 'object'
-                && (result.data as CallToolResult).isError === true,
-              )
-            ) ? 1 : 0,
+            exitCode: toolSucceeded ? 0 : 1,
           });
         } catch (error) {
           if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;

@@ -225,17 +225,47 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     expect(events[1]).not.toHaveProperty('resultContentBinding');
   });
 
-  it('keeps failed and successful bindings separate when a concurrent batch completes out of order', async () => {
+  it.each(['short', 'café🙂'.repeat(150)])('preserves protocol isError diagnostics without a full result binding (%#)', async (text) => {
+    const data = { isError: true, content: [{ type: 'text', text }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValueOnce({ success: true, data });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('protocol-failed-call', 'mcp_a_1', {})], toolNameMap, emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    expect(result.value.toolCallMessages[0]).toMatchObject({
+      role: 'tool', tool_call_id: 'protocol-failed-call', content: full,
+    });
+    expect(result.value.processedToolCalls).toEqual([{
+      id: 'protocol-failed-call', name: 'mcp_a_1', args: {}, result: full, exitCode: 1,
+    }]);
+    const events = emit.mock.calls.map(([row]) => row);
+    expect(events.map(row => row.type)).toEqual(['tool:call', 'tool:result']);
+    expect(events[1]).toMatchObject({ toolCallId: 'protocol-failed-call', isError: true,
+      result: full.length > 500 ? `${full.slice(0, 500)}…` : full });
+    expect(events[1]).not.toHaveProperty('resultContentBinding');
+  });
+
+  it.each(['transport', 'protocol'])('keeps %s failure and successful bindings separate when a concurrent batch completes out of order', async (failureKind) => {
     let releaseFailure!: () => void;
     const failureGate = new Promise<void>(resolve => { releaseFailure = resolve; });
     const resolved: string[] = [];
     const data = { content: [{ type: 'text', text: 'café🙂'.repeat(150) }] };
     const full = JSON.stringify(data);
+    const failureData = { isError: true, content: [{ type: 'text', text: 'Synthetic MCP tool failure' }] };
+    const failureContent = failureKind === 'transport'
+      ? 'Error: Synthetic external authorization revoked' : JSON.stringify(failureData);
     callToolMock.mockImplementation(async (_server: string, tool: string) => {
       if (tool === 'op1') {
         await failureGate;
         resolved.push(tool);
-        return { success: false, error: 'Synthetic external authorization revoked', errorType: 'stdio-oauth-required' };
+        return failureKind === 'transport'
+          ? { success: false, error: 'Synthetic external authorization revoked', errorType: 'stdio-oauth-required' }
+          : { success: true, data: failureData };
       }
       resolved.push(tool);
       releaseFailure();
@@ -251,7 +281,7 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     if (!result.success) throw result.error;
     expect(resolved).toEqual(['op2', 'op1']);
     expect(result.value.toolCallMessages.map(message => message.tool_call_id)).toEqual(['failed-call', 'success-call']);
-    expect(result.value.toolCallMessages[0].content).toBe('Error: Synthetic external authorization revoked');
+    expect(result.value.toolCallMessages[0].content).toBe(failureContent);
     expect(result.value.toolCallMessages[1].content).toBe(full);
     expect(result.value.processedToolCalls.map(call => call.exitCode)).toEqual([1, 0]);
     const results = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
@@ -259,7 +289,7 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     expect(results.map(row => row.toolCallId).sort()).toEqual(['failed-call', 'success-call']);
     const failed = results.find(row => row.toolCallId === 'failed-call');
     const successful = results.find(row => row.toolCallId === 'success-call');
-    expect(failed).toMatchObject({ isError: true });
+    expect(failed).toMatchObject({ isError: true, result: failureContent });
     expect(failed).not.toHaveProperty('resultContentBinding');
     expect(successful).toMatchObject({ isError: false,
       result: `${full.slice(0, 500)}…`, resultContentBinding: { serialization: 'utf8-string-v1',
