@@ -65,6 +65,9 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
 const listServerToolsMock = jest.fn();
+const getClientMock = jest.fn();
+const getClientGenerationMock = jest.fn();
+const getToolSchemaHashMock = jest.fn();
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({
   loadConversationState: jest.fn(async () => null),
 }));
@@ -73,6 +76,9 @@ jest.mock('@/backend/services/mcp', () => ({
     callTool: (...a: unknown[]) => callToolMock(...(a as [])),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
     listServerTools: (...a: unknown[]) => listServerToolsMock(...(a as [])),
+    getClient: (...a: unknown[]) => getClientMock(...(a as [])),
+    getClientGeneration: (...a: unknown[]) => getClientGenerationMock(...(a as [])),
+    getToolSchemaHash: (...a: unknown[]) => getToolSchemaHashMock(...(a as [])),
     isMcpAppAccessEnabled: async (serverName: string) => {
       const configs = await loadServerConfigsMock();
       return Array.isArray(configs)
@@ -137,6 +143,9 @@ beforeEach(() => {
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
   listServerToolsMock.mockReset();
+  getClientMock.mockReset().mockReturnValue({});
+  getClientGenerationMock.mockReset().mockReturnValue(1);
+  getToolSchemaHashMock.mockReset().mockReturnValue('advertised-schema');
   loadServerConfigsMock.mockResolvedValue([
     { name: 'my-server', enableMcpApps: true },
   ]);
@@ -539,6 +548,48 @@ describe('CodexAdapter — cooperative terminal controls', () => {
 });
 
 describe('CodexAdapter — tool bridging', () => {
+  it('rejects an MCP client replaced while bridge approval was pending', async () => {
+    const approve = jest.fn(async () => {
+      getClientGenerationMock.mockReturnValue(2);
+      return true;
+    });
+    let sdkResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ q: 'recent' });
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: {
+        server: 'my-server', tool: 'list_things', clientGeneration: 1, schemaHash: 'advertised-schema',
+      } },
+      requestToolApproval: approve,
+    }));
+
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(sdkResult).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('re-registered') }] });
+    expect(transcript?.filter(message => message.role === 'tool')).toHaveLength(1);
+  });
+
+  it('checks MCP identity again after the asynchronous dispatch fence', async () => {
+    let sdkResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({ events: (async function* () {
+      sdkResult = await capturedBridgeTools[0].handler({ q: 'recent' });
+      yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+    })() }));
+    await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: {
+        server: 'my-server', tool: 'list_things', clientGeneration: 1,
+      } },
+      beforeToolDispatch: async () => { getClientGenerationMock.mockReturnValue(2); },
+    }));
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(sdkResult).toMatchObject({ isError: true });
+  });
+
   it('hides preset identity fields and overrides forged bridge arguments before MCP dispatch', async () => {
     const presetArgs = { customer_id: 'fixed-customer-a', conversation_id: '@conversation.id' };
     const originalSchema = {

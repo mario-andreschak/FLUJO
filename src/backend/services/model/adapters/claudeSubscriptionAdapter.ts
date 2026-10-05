@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -322,6 +323,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onToolProgress,
     signal,
     beforeToolDispatch,
+    afterToolDispatch,
     executionExtensionContext,
     authorizePersonaCoreMcp,
     conversationId,
@@ -657,6 +659,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
           await beforeToolDispatch?.();
           await authorizePersonaCoreMcp?.(server, callerNodeId);
+          // The SDK permission/approval round trip and preset resolution may
+          // outlive the advertised MCP client. Check after all async gates.
+          const freshness = assertToolIdentityFresh(fnName, decoded!, mcpService);
+          if (!freshness.ok) {
+            recordToolResult({ id: callId, resultContent: freshness.reason });
+            return { content: [{ type: 'text', text: freshness.reason }], isError: true };
+          }
           const result = await mcpService.callTool(
             server,
             originalTool,
@@ -680,6 +689,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             conversationId ? { conversationId } : undefined,
             ...(executionExtensionContext ? [executionExtensionContext] as const : [] as const),
           );
+          // A cooperative MCP abort can still return after the run lease changed.
+          // Reject that late result before statistics, resource writes or a
+          // transcript message can observe it.
+          await afterToolDispatch?.();
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
             recordStatisticsEvent(createStatisticsEvent({

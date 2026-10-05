@@ -6,6 +6,7 @@ import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { rethrowFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
+import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -507,6 +508,14 @@ export class CodexAdapter implements CompletionAdapter {
             if (denied) return denied;
             await beforeToolDispatch?.();
             await authorizePersonaCoreMcp?.(server, callerNodeId);
+            // Approval may outlive the MCP client that advertised this schema.
+            // Check after every asynchronous gate at the final dispatch
+            // boundary, before touching a re-registered tool.
+            const freshness = assertToolIdentityFresh(fnName, decoded!, mcpService);
+            if (!freshness.ok) {
+              recordToolResult({ id: callId, resultContent: freshness.reason });
+              return { content: [{ type: 'text', text: freshness.reason }], isError: true };
+            }
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(

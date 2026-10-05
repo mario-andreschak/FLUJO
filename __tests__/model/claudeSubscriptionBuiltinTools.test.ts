@@ -22,6 +22,9 @@ import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionA
 const queryMock = jest.fn();
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
+const getClientMock = jest.fn();
+const getClientGenerationMock = jest.fn();
+const getToolSchemaHashMock = jest.fn();
 let sdkToolsMock: Array<{
   name: string;
   handler: (args: Record<string, unknown>) => Promise<unknown>;
@@ -54,6 +57,9 @@ jest.mock('@anthropic-ai/claude-agent-sdk', () => ({
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     callTool: (...a: unknown[]) => callToolMock(...(a as [])),
+    getClient: (...a: unknown[]) => getClientMock(...(a as [])),
+    getClientGeneration: (...a: unknown[]) => getClientGenerationMock(...(a as [])),
+    getToolSchemaHash: (...a: unknown[]) => getToolSchemaHashMock(...(a as [])),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
     isMcpAppAccessEnabled: async (serverName: string) => {
       const configs = await loadServerConfigsMock();
@@ -136,6 +142,9 @@ it('returns per-query totals independently from the latest root request context'
 beforeEach(() => {
   queryMock.mockReset();
   callToolMock.mockReset();
+  getClientMock.mockReset().mockReturnValue({});
+  getClientGenerationMock.mockReset().mockReturnValue(1);
+  getToolSchemaHashMock.mockReset().mockReturnValue('advertised-schema');
   loadServerConfigsMock.mockReset();
   loadServerConfigsMock.mockResolvedValue([
     { name: 'my-server', enableMcpApps: true },
@@ -932,4 +941,71 @@ it('requeues Claude steering when its authority check rejects before the SDK wri
   } }))).rejects.toThrow('delivery fence rejected');
   expect(batch.requeue).toHaveBeenCalledTimes(1);
   expect(batch.acknowledge).not.toHaveBeenCalled();
+});
+
+it('rejects a stale MCP client after SDK permission approval', async () => {
+  let sdkResult: unknown;
+  const approve = jest.fn(async () => {
+    getClientGenerationMock.mockReturnValue(2);
+    return true;
+  });
+  queryMock.mockImplementation(({ options }: { options: {
+    canUseTool: (name: string, args: Record<string, unknown>, opts: { toolUseID: string }) => Promise<unknown>;
+  } }) => (async function* () {
+    await options.canUseTool('mcp__flujo__my-server__list_things', { q: 'recent' }, { toolUseID: 'stale-tool-call' });
+    sdkResult = await sdkToolsMock[0].handler({ q: 'recent' });
+    yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1',
+      usage: { input_tokens: 1, output_tokens: 1 } };
+  })());
+
+  const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+    tools: [mcpAppTool],
+    toolNameMap: { mcp_hashed_name: {
+      server: 'my-server', tool: 'list_things', clientGeneration: 1, schemaHash: 'advertised-schema',
+    } },
+    requestToolApproval: approve,
+  }));
+
+  expect(approve).toHaveBeenCalledTimes(1);
+  expect(callToolMock).not.toHaveBeenCalled();
+  expect(sdkResult).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('re-registered') }] });
+  expect(transcript?.filter(message => message.role === 'tool')).toHaveLength(1);
+});
+
+it('rejects a late MCP result before transcript and resource handling', async () => {
+  const lost = new FlowExecutionAuthorityError('Run lease expired');
+  const afterToolDispatch = jest.fn(async () => { throw lost; });
+  callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'late result' }] } });
+  queryMock.mockImplementation(() => (async function* () {
+    await sdkToolsMock[0].handler({ q: 'recent' });
+    yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1',
+      usage: { input_tokens: 1, output_tokens: 1 } };
+  })());
+
+  await expect(new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+    tools: [mcpAppTool],
+    toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+    afterToolDispatch,
+  }))).rejects.toBe(lost);
+  expect(afterToolDispatch).toHaveBeenCalledTimes(1);
+  expect(callToolMock).toHaveBeenCalledTimes(1);
+  expect(boundToolResultMock).not.toHaveBeenCalled();
+});
+
+it('checks MCP identity after the asynchronous dispatch fence', async () => {
+  let sdkResult: unknown;
+  queryMock.mockImplementation(() => (async function* () {
+    sdkResult = await sdkToolsMock[0].handler({ q: 'recent' });
+    yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1',
+      usage: { input_tokens: 1, output_tokens: 1 } };
+  })());
+  await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+    tools: [mcpAppTool],
+    toolNameMap: { mcp_hashed_name: {
+      server: 'my-server', tool: 'list_things', clientGeneration: 1,
+    } },
+    beforeToolDispatch: async () => { getClientGenerationMock.mockReturnValue(2); },
+  }));
+  expect(callToolMock).not.toHaveBeenCalled();
+  expect(sdkResult).toMatchObject({ isError: true });
 });
