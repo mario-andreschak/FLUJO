@@ -45,8 +45,10 @@ belongs in a shared DTO; it must not carry a runtime authority, secret, process,
 or storage handle. `src/app` remains the composition/HTTP boundary, where server
 and client imports depend on the route's role.
 
-Run `node scripts/check-import-boundaries.cjs` to check every TS/TSX/JS/JSX file
-under those three layers. The checker resolves imports with the repository's
+Run `node scripts/check-import-boundaries.cjs` to check every `.ts`, `.tsx`,
+`.js`, `.jsx`, `.mts`, `.cts`, `.mjs` and `.cjs` file under those three layers.
+Changing a module's extension does not exempt it from the dependency rules.
+The checker resolves imports with the repository's
 TypeScript configuration and inspects static imports, re-exports, import types,
 literal dynamic imports and literal `require` calls. Comments and strings that
 merely mention a path are not dependencies. New crossings fail. Each existing

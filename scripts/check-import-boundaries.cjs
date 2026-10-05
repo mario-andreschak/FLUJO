@@ -52,7 +52,7 @@ function inspectImportBoundaries(root, exceptions = []) {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) walk(file);
-      else if (entry.isFile() && /\.[jt]sx?$/.test(entry.name)) files.push(file);
+      else if (entry.isFile() && /\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name)) files.push(file);
     }
   }
   for (const layer of LAYERS) walk(path.join(root, 'src', layer));
