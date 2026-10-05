@@ -153,3 +153,44 @@ profile acceptance or assessment. The nine accountable human owners, participati
 contributor activity, sustained usage and independent reassessment still need actual
 evidence. Source consistency and publication authorization grant no grade or human
 acceptance and do not close #563.
+
+## B078 terminal evidence after the fixed v33 checkpoint
+
+The [separate terminal observation](evidence/source-outcomes-2026-10-05-b078-terminal.json)
+binds source `b078484c` / tree `cb1eb750` to actual merge `445d59ae` and
+original run 37333223553, attempt 1. Queue retained nine original server archives,
+20 expanded report/profile members and the complete original run archive's 110
+logs before this Docs successor was prepared. Docs rehashed 266 explicit original
+file pins and joined the 19 unchanged source inputs without repeating workloads.
+The committed observation is derived; access to the private originals remains
+necessary for independent raw-evidence review.
+
+All 13 ordinary verification jobs passed. Main retained 8,708 passing tests in
+910 passing suites, zero failures, and the existing 11 skips in five suites;
+isolated retained 105 passing tests in nine suites with zero skips or failures.
+The fresh combined reports retain all 17 new recording and 38 unchanged browser
+assertions across nine selected suites, plus 16 marker and 20 unchanged transfer
+assertions. Eight supported source/runtime matrix records passed their Ubuntu
+and Windows installed/packed MCP and proxy controls; the two Node 22.13.1 records
+remain historical build-only rows. Those control scopes do not qualify a selected
+distributed FLUJO release or the ledger's installed profiles.
+
+The unchanged 20,000-append assertion passed in 1,210,662 ms. Its 19 original input
+objects remain unchanged. AA's 1,800,000 ms timeout and DB4's 1,711,284 ms pass stay
+on their original sources; no timeout cause, append-p95 result or performance
+grade follows from comparing those durations. The separate B078 native finding
+check remains failed: 49 new (28 high, 21 medium), 78 open (43 high, 35 medium),
+zero critical. Its 262 related URI/index disagreements and their unproven cause
+remain visible. Snapshot absence of browser finding #167 grants no disposition.
+
+Recording AD0's own 55 selected passes and worker B5's nine original fixture
+passes are separate later observations. The fixture record does not independently
+requalify the worker production inner archive or native/runtime behavior. The
+fixed v33 context retains the separate payload metadata review, finite native
+controls, expired 100/250 diagnostic grants, launcher refusals and unrun runtime
+acceptance. Preferences draft #788 requires its own distinct qualification.
+
+The original v25 observations, claim/gate statuses, rubric, numeric budgets,
+profiles, human owners and assessment remain unchanged. This new Docs leaf needs
+fresh focused source checks. The earlier addbc result is not transferred; neither
+source validation nor CI success supplies installed, human or A-minus acceptance.

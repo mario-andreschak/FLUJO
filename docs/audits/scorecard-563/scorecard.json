@@ -2456,6 +2456,223 @@
         "persistent-worker"
       ],
       "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-b078484c-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained ordinary-ci-b078484c-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "B078 ordinary verification completed all 13 required jobs; original reports, both-OS source/runtime matrix and complete run logs were retained separately from the failing native findings gate.",
+      "limits": [
+        "All 13 passing jobs belong to the ordinary verification workflow. The separate native findings gate remains failed.",
+        "Eight supported source/runtime records and two historical Node 22.13.1 build-only records do not qualify the selected distributed application or installed FLUJO profiles.",
+        "The AA 1,800,000 ms timeout and DB4 1,711,284 ms pass stay separate historical outcomes; the B078 pass proves no timeout cause or performance grade.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37333223553",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "native-codeql-b078484c-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "b078484c35b485c973c8a47f9640028f219281fb",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained native-codeql-b078484c-failure receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "B078 native findings protection failed with 49 new findings and 78 open alerts; the retained original source-flow review does not provide individual dispositions or clearance.",
+      "limits": [
+        "A lower open-alert count and snapshot absence are not formal finding disposition, backlog clearance or universal absence.",
+        "The 262 related-location URI/index disagreements remain an explicit original-evidence limitation; their provenance and cause are not inferred.",
+        "Source-scanner results establish neither a verified exploit nor scanner-attributed applicability to an installed profile.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/611",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "recording-ad0b1a9b-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "ad0b1a9b0c53c4745c7b775ada5cc3a2403f8944",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained recording-ad0b1a9b-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "Recording component AD0 passed its own 13 required jobs and all 55 selected browser assertions after the warning matcher correction.",
+      "limits": [
+        "The v25 pending AD0 row remains a historical observation. This is a new component-scoped outcome; B078 has its own separate original reports.",
+        "Passing browser assertions do not dispose of the global native findings or establish installed-profile acceptance.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/784",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "worker-fixtures-b5abe6eb-passed",
+      "kind": "source-check",
+      "result": "passed",
+      "integrity": "checksummed",
+      "sourceSha": "b5abe6eb27270b4360d980c3b1919db0f7f94e08",
+      "artifactId": null,
+      "ownerId": "production",
+      "observedAt": "2026-10-05T16:49:40.353Z",
+      "environment": {
+        "platform": "Retained GitHub Actions/CodeQL source results and read-only Docs file/Git joins; exact scopes are in the report",
+        "node": "B078: four supported runtimes on Ubuntu/Windows plus two historical 22.13.1 build-only records. Worker tooling: 22.23.3. No universal runtime inferred.",
+        "provider": "GitHub Actions/CodeQL; no model or live-provider workload",
+        "tools": "SHA-256 rehash of original pins, immutable Git source joins and retained coordinator receipts"
+      },
+      "commands": [
+        "Docs rehashed the named retained worker-fixtures-b5abe6eb-passed receipts and explicit original file pins; producer commands remain in their original records",
+        "No producer tests, application, native helper, worker, installed profile or live-provider workload was repeated for this reconciliation"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/source-outcomes-2026-10-05-b078-terminal.json",
+          "sha256": "0c4acd5c067637bebba27ca9e3c6cbbc8986a4c2c467ddc2cc8c0d237cc0923d",
+          "verification": "local"
+        }
+      ],
+      "scope": "The selected worker payload event passed nine original export fixtures, with exporter proposal, executing workflow and compiled application kept as separate source identities.",
+      "limits": [
+        "This derived row covers the original fixture result. It does not independently requalify the production inner archive, native loading or worker behavior.",
+        "The fixed v33 checkpoint separately reports the later retained payload metadata review; that broader evidence is not borrowed as acceptance by this fixture-only row.",
+        "Earlier #783 export refusal and the separately failed ordinary workflow-contract runs remain distinct. The v25 pending successor row is unchanged.",
+        "Each result belongs only to its named source, workflow or component. Ordinary CI success does not clear the failed native gate.",
+        "The report is a checksummed derived source observation and does not carry installed-artifact proof, live or sustained human evidence, or final independent assessment.",
+        "Profile IDs associate observations with existing claims; they do not assert installed-profile coverage or scanner-attributed applicability.",
+        "Source/publication authorization, automated reviewer selection, source checks and original archive retention grant no grade or human acceptance.",
+        "All earlier v25 and predecessor failures/pending outcomes remain immutable; later success is recorded separately."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/785",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37321117422",
+        "https://github.com/mario-andreschak/FLUJO/issues/563#issuecomment-5975982946"
+      ],
+      "profileIds": [
+        "persistent-worker"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -2496,7 +2713,9 @@
       "description": "Authenticated/scoped ingress, credential migration and MCP enforcement accepted on local release.",
       "evidenceIds": [
         "native-codeql-integration-80-failure",
-        "native-codeql-aa924df5-failure"
+        "native-codeql-aa924df5-failure",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed"
       ]
     },
     {
@@ -2510,7 +2729,8 @@
       "description": "Fenced local schedule recovery, generation-bound process receipts, backup/restore/audit/health/resource acceptance.",
       "evidenceIds": [
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ]
     },
     {
@@ -2633,7 +2853,8 @@
         "build-verification-hosted-c255b867",
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
-        "mapped-integration-db4bb26f-pending"
+        "mapped-integration-db4bb26f-pending",
+        "ordinary-ci-b078484c-passed"
       ]
     }
   ],
@@ -2692,7 +2913,8 @@
       "evidenceIds": [
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
-        "mapped-integration-db4bb26f-pending"
+        "mapped-integration-db4bb26f-pending",
+        "ordinary-ci-b078484c-passed"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2735,7 +2957,9 @@
         "native-codeql-integration-80-failure",
         "native-codeql-aa924df5-failure",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -2829,7 +3053,10 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "ordinary-ci-b078484c-passed",
+        "native-codeql-b078484c-failure",
+        "recording-ad0b1a9b-passed"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2958,7 +3185,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "recording-ad0b1a9b-passed"
       ],
       "budgetIds": [
         "high-findings"
@@ -3031,7 +3259,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ],
       "budgetIds": [
         "recovery-rto",
@@ -3058,7 +3287,8 @@
       "evidenceIds": [
         "publication-reconciliation-2026-10-03",
         "marker-component-c69fba0f",
-        "ordinary-ci-aa924df5-failure"
+        "ordinary-ci-aa924df5-failure",
+        "ordinary-ci-b078484c-passed"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3083,7 +3313,9 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "recording-7af0ec00-failure",
-        "recording-ad0b1a9b-pending"
+        "recording-ad0b1a9b-pending",
+        "ordinary-ci-b078484c-passed",
+        "native-codeql-b078484c-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3210,7 +3442,8 @@
       ],
       "evidenceIds": [
         "worker-export-8800ecfe-failure",
-        "worker-export-b5abe6eb-pending"
+        "worker-export-b5abe6eb-pending",
+        "worker-fixtures-b5abe6eb-passed"
       ],
       "budgetIds": [
         "recovery-rto",
