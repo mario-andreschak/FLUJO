@@ -287,6 +287,8 @@ export async function recordWorkerTerminalObservation(execution: PlannedExecutio
   if (!terminal) return false;
   return mutate(execution, async (record, current, save) => {
     if (!record || check(record, execution, current) !== 'eligible' || record.pending?.runId !== result.runId) return false;
+    // Retain the first durable observation across retries and competing terminal results.
+    if (record.terminal) return canonical(record.terminal) === canonical(terminal);
     await save({ ...unsigned(record), terminal });
     return true;
   });

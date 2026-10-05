@@ -112,7 +112,9 @@ processes cannot claim that occurrence twice. The existing catch-up policy remai
 bounded to one most recent missed occurrence; pre-creation occurrences are ignored.
 
 The trusted live scheduler writes a signed local terminal observation before
-publishing terminal history. A restart can reconcile that observation without
+publishing terminal history. Repeating the same run, generation, status and finish
+time leaves that receipt unchanged; a conflicting status or finish time cannot
+replace the first signed observation. A restart can reconcile that observation without
 relaunching the result. An imported history row, a cancellation ACK, a missing row,
 a running child or `needs_approval` cannot clear the admission. If an observation
 could not be persisted, uncertainty remains even when readable history says
