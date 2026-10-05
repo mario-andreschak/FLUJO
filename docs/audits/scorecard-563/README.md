@@ -63,6 +63,10 @@ Every `observedAt` must be at or before the validator's current UTC wall clock.
 An elapsed window must have ended by that observation; future dates cannot establish
 completed human or live observations. The CLI has no clock override. Synthetic API
 tests use an explicit test clock to check admission rules, not to establish elapsed evidence.
+API results retain `validationClock` with epoch milliseconds and `wall-clock` or
+`override` provenance; CLI output prints its effective wall clock. Retained validation
+receipts should include these fields. A historical receipt without them cannot be
+retroactively described as having reported clock provenance.
 The validator never downloads remote artifacts, calls models, changes accounts,
 starts runtimes, performs releases or changes repository settings.
 Its small documented schema vocabulary fails closed on unsupported keywords.
@@ -243,6 +247,10 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    declared future acceptance requirements visible without claiming measurements.
    Human and live metrics require human-study and live-provider carriers respectively;
    required kinds elsewhere in the claim do not qualify measurements on other records.
+   Runtime/recovery/backup metrics require installed-artifact carriers; duplicate effects
+   may also be measured by live-provider records. Security metrics require security-review
+   or independent-assessment carriers. A source check may record real CI duration but
+   cannot supply these protected installed/runtime metrics.
    Published human targets and observation floors remain protected, and duration
    measurements cannot exceed the actual elapsed evidence window. Review schema,
    ledger and validator together as described in the

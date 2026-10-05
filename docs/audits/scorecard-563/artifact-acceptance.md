@@ -29,6 +29,13 @@ reviewed contract version and corresponding schema/validator changes. Extra crit
 may strengthen the minimums. Keeping these proposed targets in version 1 does not
 record human agreement, a completed study or an accepted grade.
 
+The original dimension/profile/platform sets, Persona limits and gate-kind rules
+also remain enforced by validator code. Review those code tables alongside the
+schema contract; the schema stamp alone does not prove they were independently
+reviewed. Version 1 pins the still-proposed metric IDs and human sampling text.
+Agreement that renames/splits/rejects a proposal or changes its sampling/basis text
+requires a reviewed contract/schema/validator revision, not an ordinary ledger edit.
+
 Original A- primary claims cannot become experimental exclusions or be replaced by
 a weaker sibling claim. The separate Persona unattended claim may retain its
 explicit experimental status, with its future budgets, kinds and gates intact.
@@ -42,6 +49,20 @@ human study or live run cannot qualify as completed evidence. The API's explicit
 uses its current clock and exposes no override. These tests do not establish actual
 elapsed observations. The validator checks correspondence, while actual human
 identity, cohort selection and execution remain responsibilities of external review.
+
+Runtime RSS/concurrency, recovery time and backup loss metrics require installed-artifact
+carriers. Duplicate-effect metrics allow installed-artifact or live-provider carriers;
+unauthorized-access and unresolved-finding metrics require security-review or
+independent-assessment carriers. A source-check record may retain elapsed CI timing,
+but declaring an elapsed window does not make it an installed-runtime measurement.
+The five human targets also retain their published denominator, window and basis text;
+rewording those sampling rules requires contract review.
+
+API validation results include `validationClock.source` (`wall-clock` or `override`)
+and `validationClock.epochMilliseconds`; invalid clocks report a null value and fail.
+CLI output prints its effective clock, including for a structurally invalid ledger.
+Retain these fields in new validation receipts. Older receipts remain historical;
+clock provenance absent from an old result must not be reconstructed as reported data.
 
 ## Producer requirements
 

@@ -603,7 +603,10 @@
               "minimumSeconds": 4838400,
               "minimumSimulatedDays": 0,
               "minimumDenominator": 10
-            }
+            },
+            "denominator": "All enrolled humans reported; ten independent target users each week, excluding author/bots",
+            "window": "Eight consecutive elapsed weeks",
+            "basis": "#563 published plan; #577 agreement pending"
           },
           "novice-success": {
             "operator": ">=",
@@ -614,7 +617,10 @@
               "minimumSeconds": 0,
               "minimumSimulatedDays": 0,
               "minimumDenominator": 10
-            }
+            },
+            "denominator": "Ten novices; provisioning, drop-offs and missing outcomes separately recorded, no favorable replacement",
+            "window": "One attempt per novice, within 15 minutes",
+            "basis": "#563 published plan; #572/#577 agreement pending"
           },
           "novice-time": {
             "operator": "<=",
@@ -625,7 +631,10 @@
               "minimumSeconds": 0,
               "minimumSimulatedDays": 0,
               "minimumDenominator": 10
-            }
+            },
+            "denominator": "All ten attempts from install start; preprovisioning time separately reported",
+            "window": "Single 15-minute attempt",
+            "basis": "#563 published plan; #572/#577 agreement pending"
           },
           "human-contributors": {
             "operator": ">=",
@@ -636,7 +645,10 @@
               "minimumSeconds": 7776000,
               "minimumSimulatedDays": 0,
               "minimumDenominator": 3
-            }
+            },
+            "denominator": "Unique humans, excluding author and all bots",
+            "window": "90 elapsed days",
+            "basis": "#563 published plan; #576 agreement pending"
           },
           "backup-maintainers": {
             "operator": ">=",
@@ -647,7 +659,10 @@
               "minimumSeconds": 0,
               "minimumSimulatedDays": 0,
               "minimumDenominator": 2
-            }
+            },
+            "denominator": "Named additional humans completing review and disposable release/recovery drills",
+            "window": "After training; observed drills before acceptance",
+            "basis": "#563 published plan; #576 agreement pending"
           }
         },
         "metricEvidenceKinds": {
@@ -683,6 +698,33 @@
           ],
           "live-spend": [
             "live-provider"
+          ],
+          "runtime-peak-rss": [
+            "installed-artifact"
+          ],
+          "runtime-rss-growth": [
+            "installed-artifact"
+          ],
+          "runtime-concurrency": [
+            "installed-artifact"
+          ],
+          "recovery-rto": [
+            "installed-artifact"
+          ],
+          "backup-rpo": [
+            "installed-artifact"
+          ],
+          "duplicate-effects": [
+            "installed-artifact",
+            "live-provider"
+          ],
+          "unauthorized-access": [
+            "security-review",
+            "independent-assessment"
+          ],
+          "high-findings": [
+            "security-review",
+            "independent-assessment"
           ]
         }
       }
