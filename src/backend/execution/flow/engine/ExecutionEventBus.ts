@@ -3,6 +3,7 @@ import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execut
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { boundedEventSnapshot, type EventSnapshot } from './boundedEventSnapshot';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
 
@@ -13,6 +14,11 @@ const RING_BUFFER_SIZE = 1000;
 // (re)connect. Larger than the per-conversation buffer because it spans every
 // conversation at once — sized for a few seconds of heavy subflow fan-out.
 const GLOBAL_RING_BUFFER_SIZE = 5000;
+
+// Serialized replay payload caps, independent of the existing event-count cap.
+// These do not bound the per-conversation rings, live subscribers or JS/RSS.
+const GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES = 4 * 1024 * 1024;
+const GLOBAL_REPLAY_PROCESS_UTF8_BYTES = 16 * 1024 * 1024;
 
 // How long a channel (and its buffered events) survives after a run:done with
 // no listeners. Long enough for the frontend's terminal refetch and any late
@@ -42,7 +48,12 @@ export interface GlobalEvent {
 interface WorkspaceFirehose {
   emitter: EventEmitter;
   seq: number;
-  buffer: GlobalEvent[];
+  buffer: BufferedGlobalEvent[];
+  utf8Bytes: number;
+}
+
+interface BufferedGlobalEvent extends EventSnapshot {
+  globalSeq: number;
 }
 
 /**
@@ -69,6 +80,10 @@ class ExecutionEventBus {
   // the per-conversation channels are untouched, so chat streaming is
   // unaffected. Never garbage-collected: it spans the process lifetime.
   private firehoses = new Map<string, WorkspaceFirehose>();
+  // Insertion order is publication order across workspaces. Removing a cache
+  // entry also removes this reference; an empty workspace retains no payload.
+  private globalReplayEntries = new Map<BufferedGlobalEvent, WorkspaceFirehose>();
+  private globalReplayUtf8Bytes = 0;
 
   private getFirehose(): WorkspaceFirehose {
     const workspace = getCurrentWorkspace();
@@ -76,7 +91,7 @@ class ExecutionEventBus {
     if (!firehose) {
       const emitter = new EventEmitter();
       emitter.setMaxListeners(0);
-      firehose = { emitter, seq: 0, buffer: [] };
+      firehose = { emitter, seq: 0, buffer: [], utf8Bytes: 0 };
       this.firehoses.set(workspace, firehose);
     }
     return firehose;
@@ -218,13 +233,47 @@ class ExecutionEventBus {
 
   // --- Global firehose API -------------------------------------------------
 
+  private evictGlobalReplayPrefix(firehose: WorkspaceFirehose): void {
+    const oldest = firehose.buffer.shift();
+    if (!oldest) return;
+    firehose.utf8Bytes -= oldest.utf8Bytes;
+    this.globalReplayUtf8Bytes -= oldest.utf8Bytes;
+    this.globalReplayEntries.delete(oldest);
+    // Release the array's former backing storage too, without resetting the
+    // workspace's live emitter or global sequence/reconnect high-water mark.
+    if (firehose.buffer.length === 0) firehose.buffer = [];
+  }
+
+  private retainGlobalReplay(firehose: WorkspaceFirehose, wrapped: GlobalEvent): void {
+    const snapshot = boundedEventSnapshot(wrapped, GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES);
+    if (!snapshot) {
+      // A skipped entry must not leave a hole inside the cached suffix. The
+      // global stream has always been best-effort recent replay, with no log
+      // fallback. Live delivery below still publishes this exact event/id.
+      while (firehose.buffer.length) this.evictGlobalReplayPrefix(firehose);
+      return;
+    }
+    const entry: BufferedGlobalEvent = { ...snapshot, globalSeq: wrapped.globalSeq };
+    firehose.buffer.push(entry);
+    firehose.utf8Bytes += entry.utf8Bytes;
+    this.globalReplayUtf8Bytes += entry.utf8Bytes;
+    this.globalReplayEntries.set(entry, firehose);
+    while (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE || firehose.utf8Bytes > GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES) {
+      this.evictGlobalReplayPrefix(firehose);
+    }
+    while (this.globalReplayUtf8Bytes > GLOBAL_REPLAY_PROCESS_UTF8_BYTES) {
+      const oldest = this.globalReplayEntries.values().next().value;
+      if (!oldest) break;
+      this.evictGlobalReplayPrefix(oldest);
+    }
+  }
+
   /** Publish an event onto the global channel, assigning a monotonic globalSeq
    *  and retaining it in the global ring buffer for replay. */
   private publishGlobal(event: ExecutionEvent): void {
     const firehose = this.getFirehose();
     const wrapped: GlobalEvent = { globalSeq: firehose.seq++, event };
-    firehose.buffer.push(wrapped);
-    if (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE) firehose.buffer.shift();
+    this.retainGlobalReplay(firehose, wrapped);
     firehose.emitter.emit('event', wrapped);
   }
 
@@ -237,10 +286,30 @@ class ExecutionEventBus {
     };
   }
 
-  /** Buffered firehose entries with globalSeq >= fromSeq, for replay on
-   *  (re)connect. */
+  /** Detached JSON snapshots of the available recent suffix, with globalSeq
+   *  >= fromSeq. Count/byte pressure or an uncacheable event can evict a prefix;
+   *  unlike conversation replay, the global stream has no durable fallback. */
   getGlobalBufferedSince(fromSeq: number): GlobalEvent[] {
-    return this.getFirehose().buffer.filter((e) => e.globalSeq >= fromSeq);
+    return this.getFirehose().buffer
+      .filter((entry) => entry.globalSeq >= fromSeq)
+      .map((entry) => JSON.parse(entry.json) as GlobalEvent);
+  }
+
+  /** Serialized replay-cache accounting, excluding object overhead/live/SSE. */
+  getGlobalReplayPressure() {
+    const workspace = this.firehoses.get(getCurrentWorkspace());
+    let cachedWorkspaces = 0;
+    for (const firehose of this.firehoses.values()) {
+      if (firehose.buffer.length > 0) cachedWorkspaces++;
+    }
+    return {
+      workspaceUtf8Bytes: workspace?.utf8Bytes ?? 0,
+      processUtf8Bytes: this.globalReplayUtf8Bytes,
+      cachedEvents: this.globalReplayEntries.size,
+      cachedWorkspaces,
+      maxWorkspaceUtf8Bytes: GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES,
+      maxProcessUtf8Bytes: GLOBAL_REPLAY_PROCESS_UTF8_BYTES,
+    };
   }
 
   /** The next globalSeq the firehose will assign (current high-water mark). */
