@@ -28,12 +28,19 @@ export function assertScannerWorkflowContract(workflow) {
     throw new Error('CodeQL must require both complete language analyses and result-upload permissions.');
   }
   const steps = job.steps ?? [];
-  const checkout = steps.findIndex(step => step.uses?.startsWith('actions/checkout@'));
+  const checkouts = steps.flatMap((step, index) => step.uses?.startsWith('actions/checkout@') ? [index] : []);
+  const checkout = checkouts[0];
   const init = steps.flatMap((step, index) => step.uses?.startsWith('github/codeql-action/init@') ? [index] : []);
   const analyze = steps.flatMap((step, index) => step.uses?.startsWith('github/codeql-action/analyze@') ? [index] : []);
-  if (checkout < 0 || init.length !== 1 || analyze.length !== 1
+  if (checkouts.length !== 1 || init.length !== 1 || analyze.length !== 1
       || init[0] <= checkout || analyze[0] <= init[0]) {
     throw new Error('CodeQL must initialize and analyze exactly once after the source checkout.');
+  }
+  const source = steps[checkout];
+  if (!/^actions\/checkout@[a-f0-9]{40}$/.test(source.uses)
+      || source.if !== undefined || source['continue-on-error'] !== undefined
+      || !sameInputs(source.with, { 'persist-credentials': false })) {
+    throw new Error('CodeQL source checkout must be pinned, unconditional and use the current workflow source without overrides.');
   }
   for (const [index, action, inputs] of [[init[0], 'init', INIT_INPUTS], [analyze[0], 'analyze', ANALYZE_INPUTS]]) {
     const step = steps[index];
