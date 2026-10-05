@@ -31,8 +31,10 @@ import type { RegistryAuthPayload } from '@/backend/utils/packageRegistryClient'
 import { buildAuthorizeUrl, exchangeAuthorizationCode } from '@/backend/services/registry/oauth-adapter';
 import { randomBytes, createHash } from 'crypto';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { canonicalRegistryBaseUrl, isSameRegistryDestination } from '@/backend/utils/registryDestination';
 
 const log = createLogger('backend/services/registry');
+const DESTINATION_CHANGED = 'The package registry changed. Sign in to the selected registry again.';
 
 const EMPTY_ACCOUNT: StoredRegistryAccount = {
   email: '',
@@ -74,9 +76,11 @@ function computeExpiry(payload: RegistryAuthPayload): number | null {
 async function storeTokens(
   email: string,
   payload: RegistryAuthPayload,
+  registryBaseUrl: string,
   options?: { authMethod?: 'password' | 'oauth'; linkedProvider?: RegistryOAuthProvider },
 ): Promise<StoredRegistryAccount> {
-  const existing = await loadStored();
+  const stored = await loadStored();
+  const existing = isSameRegistryDestination(stored.registryBaseUrl, registryBaseUrl) ? stored : EMPTY_ACCOUNT;
   const linkedProviders = new Set<RegistryOAuthProvider>(existing.linkedProviders ?? []);
   if (options?.linkedProvider) linkedProviders.add(options.linkedProvider);
   const account: StoredRegistryAccount = {
@@ -86,6 +90,7 @@ async function storeTokens(
     expiresAt: computeExpiry(payload),
     accessToken: payload.access_token ? await encryptApiKey(payload.access_token) : '',
     refreshToken: payload.refresh_token ? await encryptApiKey(payload.refresh_token) : '',
+    registryBaseUrl,
     authMethod: options?.authMethod ?? existing.authMethod ?? 'password',
     ...(linkedProviders.size ? { linkedProviders: Array.from(linkedProviders) } : {}),
   };
@@ -118,14 +123,28 @@ function toStatus(account: StoredRegistryAccount): RegistryAccountStatus {
  * `NotAuthenticatedError`.
  */
 export async function getAccountStatus(): Promise<RegistryAccountStatus> {
+  const selected = await client.resolveRegistryBaseUrl();
   const account = await loadStored();
+  if (!isSameRegistryDestination(account.registryBaseUrl, selected)) return toStatus(EMPTY_ACCOUNT);
+  let visibleAccount = account;
   if (account.accessToken) {
     const decrypted = await decryptApiKey(account.accessToken);
     if (!decrypted) {
-      return toStatus({ ...account, accessToken: '' });
+      visibleAccount = { ...account, accessToken: '' };
     }
   }
-  return toStatus(account);
+  if (!isSameRegistryDestination(account.registryBaseUrl, await client.resolveRegistryBaseUrl())) {
+    return toStatus(EMPTY_ACCOUNT);
+  }
+  return toStatus(visibleAccount);
+}
+
+async function acquiredAccountResult(account: StoredRegistryAccount): Promise<RegistryAuthResult> {
+  const selected = await client.resolveRegistryBaseUrl();
+  if (!isSameRegistryDestination(account.registryBaseUrl, selected)) {
+    return { status: 'error', message: DESTINATION_CHANGED };
+  }
+  return { status: 'authenticated', account: toStatus(account) };
 }
 
 /**
@@ -139,8 +158,11 @@ export async function authenticate(
   mode: RegistryAuthAction,
   handle?: string,
 ): Promise<RegistryAuthResult> {
+  const registryBaseUrl = await client.resolveRegistryBaseUrl();
   const { status, body } =
-    mode === 'signup' ? await client.signup(email, password, handle || '') : await client.login(email, password);
+    mode === 'signup'
+      ? await client.signup(email, password, handle || '', registryBaseUrl)
+      : await client.login(email, password, registryBaseUrl);
 
   if (status === 0) {
     return { status: 'error', message: 'Could not reach the package registry.' };
@@ -155,8 +177,8 @@ export async function authenticate(
     (mode === 'signup' && !body?.access_token && status >= 200 && status < 300);
 
   if (status >= 200 && status < 300 && body?.access_token) {
-    const account = await storeTokens(email, body, { authMethod: 'password' });
-    return { status: 'authenticated', account: toStatus(account) };
+    const account = await storeTokens(email, body, registryBaseUrl, { authMethod: 'password' });
+    return acquiredAccountResult(account);
   }
 
   if (confirmationRequired) {
@@ -166,10 +188,11 @@ export async function authenticate(
       ...EMPTY_ACCOUNT,
       email: body?.email || email,
       isConfirmed: false,
+      registryBaseUrl,
     });
     return {
       status: 'confirmation_required',
-      account: toStatus(await loadStored()),
+      account: await getAccountStatus(),
       message: 'Check your inbox to confirm your email before publishing.',
     };
   }
@@ -203,6 +226,7 @@ interface OAuthPendingSession {
   redirectUri: string;
   createdAt: number;
   workspace: string;
+  registryBaseUrl: string;
 }
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes.
@@ -231,6 +255,7 @@ export async function beginOAuth(
   provider: RegistryOAuthProvider,
   redirectUri: string,
 ): Promise<{ authorizationUrl: string; state: string }> {
+  const registryBaseUrl = await client.resolveRegistryBaseUrl();
   pruneExpiredOAuthSessions();
   const state = randomBytes(24).toString('base64url');
   const { verifier, challenge } = generatePkce();
@@ -240,8 +265,9 @@ export async function beginOAuth(
     redirectUri,
     createdAt: Date.now(),
     workspace: getCurrentWorkspace(),
+    registryBaseUrl,
   });
-  const authorizationUrl = await buildAuthorizeUrl({ provider, redirectUri, state, codeChallenge: challenge });
+  const authorizationUrl = await buildAuthorizeUrl({ provider, redirectUri, state, codeChallenge: challenge }, registryBaseUrl);
   return { authorizationUrl, state };
 }
 
@@ -264,24 +290,28 @@ export async function completeOAuth(code: string, state: string): Promise<Regist
   // Single-use after workspace validation: a callback cannot consume another
   // workspace's pending session by changing its workspace query parameter.
   oauthSessions.delete(state);
+  const selected = await client.resolveRegistryBaseUrl();
+  if (!isSameRegistryDestination(session.registryBaseUrl, selected)) {
+    return { status: 'error', message: DESTINATION_CHANGED };
+  }
 
   const { status, body } = await exchangeAuthorizationCode({
     code,
     codeVerifier: session.codeVerifier,
     redirectUri: session.redirectUri,
     provider: session.provider,
-  });
+  }, session.registryBaseUrl);
 
   if (status === 0) {
     return { status: 'error', message: 'Could not reach the package registry.' };
   }
   if (status >= 200 && status < 300 && body?.access_token) {
-    const account = await storeTokens(body.email || '', body, {
+    const account = await storeTokens(body.email || '', body, session.registryBaseUrl, {
       authMethod: 'oauth',
       linkedProvider: session.provider,
     });
     log.info('Completed registry OAuth sign-in.');
-    return { status: 'authenticated', account: toStatus(account) };
+    return acquiredAccountResult(account);
   }
   return {
     status: 'error',
@@ -297,11 +327,14 @@ export function pendingOAuthWorkspace(state: string): string | undefined {
 
 /** Resend the confirmation email for the stored (or provided) address. */
 export async function resendConfirmation(email?: string): Promise<{ success: boolean; message?: string }> {
-  const address = (email || (await loadStored()).email || '').trim();
+  const registryBaseUrl = await client.resolveRegistryBaseUrl();
+  const account = await loadStored();
+  const storedEmail = isSameRegistryDestination(account.registryBaseUrl, registryBaseUrl) ? account.email : '';
+  const address = (email || storedEmail || '').trim();
   if (!address) {
     return { success: false, message: 'No email address on file to resend confirmation to.' };
   }
-  const { status, body } = await client.resendConfirmation(address);
+  const { status, body } = await client.resendConfirmation(address, registryBaseUrl);
   if (status >= 200 && status < 300) return { success: true };
   return { success: false, message: body?.error || body?.message || `Registry responded with status ${status}.` };
 }
@@ -340,9 +373,13 @@ export class NotAuthenticatedError extends Error {
 }
 
 async function withAccessToken<T>(
-  call: (token: string) => Promise<client.RegistryHttpResponse<T>>,
+  call: (token: string, registryBaseUrl: string) => Promise<client.RegistryHttpResponse<T>>,
 ): Promise<client.RegistryHttpResponse<T>> {
+  const registryBaseUrl = await client.resolveRegistryBaseUrl();
   const account = await loadStored();
+  if (!isSameRegistryDestination(account.registryBaseUrl, registryBaseUrl)) {
+    throw new NotAuthenticatedError();
+  }
   if (!account.accessToken) {
     log.warn('withAccessToken: no accessToken stored; treating as signed out.');
     throw new NotAuthenticatedError();
@@ -354,14 +391,14 @@ async function withAccessToken<T>(
     throw new NotAuthenticatedError();
   }
 
-  let result = await call(accessToken);
+  let result = await call(accessToken, registryBaseUrl);
   if (result.status !== 401) return result;
 
   // Access token rejected — try a single silent refresh.
   if (account.refreshToken) {
     const refreshToken = await decryptApiKey(account.refreshToken);
     if (refreshToken) {
-      const refreshed = await client.refresh(refreshToken);
+      const refreshed = await client.refresh(refreshToken, registryBaseUrl);
       if (refreshed.status >= 200 && refreshed.status < 300 && refreshed.body?.access_token) {
         const updated = await storeTokens(account.email, {
           ...refreshed.body,
@@ -369,10 +406,10 @@ async function withAccessToken<T>(
           email: refreshed.body.email || account.email,
           publisher_handle: refreshed.body.publisher_handle ?? account.publisherHandle ?? undefined,
           is_confirmed: refreshed.body.is_confirmed ?? account.isConfirmed,
-        });
+        }, registryBaseUrl);
         const freshToken = await decryptApiKey(updated.accessToken);
         if (freshToken) {
-          result = await call(freshToken);
+          result = await call(freshToken, registryBaseUrl);
           return result;
         }
       }
@@ -398,7 +435,7 @@ function mapPublishError(status: number, message: string): RegistryPublishResult
 /** Publish a manifest; requires a confirmed, signed-in account. */
 export async function publish(manifest: unknown): Promise<RegistryPublishResult> {
   try {
-    const { status, body } = await withAccessToken((token) => client.publishPackage(manifest, token));
+    const { status, body } = await withAccessToken((token, registryBaseUrl) => client.publishPackage(manifest, token, registryBaseUrl));
     if (status >= 200 && status < 300) {
       return {
         ok: true,
@@ -435,7 +472,7 @@ export async function deletePublishedPackage(packageId: string): Promise<Registr
       return { ok: false, code: 'forbidden', error: 'You can only delete packages you own.' };
     }
 
-    const { status, body } = await withAccessToken((token) => client.deletePackage(id, token));
+    const { status, body } = await withAccessToken((token, registryBaseUrl) => client.deletePackage(id, token, registryBaseUrl));
     if (status >= 200 && status < 300) return { ok: true };
 
     const message = body?.error || body?.message || '';
@@ -478,16 +515,10 @@ export async function getSettings(): Promise<{ baseUrl: string; usingDefault: bo
 /** Validate + persist the registry base URL. Blank clears the override. */
 export async function saveSettings(baseUrl: string): Promise<{ success: boolean; message?: string }> {
   const trimmed = (baseUrl || '').trim();
-  if (trimmed) {
-    try {
-      const parsed = new URL(trimmed);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return { success: false, message: 'Registry URL must use http(s).' };
-      }
-    } catch {
-      return { success: false, message: 'Registry URL is not a valid URL.' };
-    }
+  const canonical = trimmed ? canonicalRegistryBaseUrl(trimmed) : '';
+  if (canonical === null) {
+    return { success: false, message: 'Registry URL must be an absolute http(s) base URL without credentials, query, or fragment.' };
   }
-  await saveItem<RegistrySettings>(StorageKey.REGISTRY_SETTINGS, { baseUrl: trimmed });
+  await saveItem<RegistrySettings>(StorageKey.REGISTRY_SETTINGS, { baseUrl: canonical });
   return { success: true };
 }

@@ -35,6 +35,7 @@ describe('worker snapshot restore', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     environmentKeys.forEach((key, index) => {
       if (previous[index] === undefined) delete process.env[key];
       else process.env[key] = previous[index];
@@ -217,5 +218,48 @@ describe('worker snapshot restore', () => {
     delete process.env.FLUJO_WORKER_MODE;
     process.env.FLUJO_WORKER_SNAPSHOT = 'invalid';
     await expect(restoreConfiguredWorkerSnapshot()).resolves.toBeNull();
+  });
+
+  it.each(['archive', 'marker', 'credential'] as const)('refuses a swapped %s without adopting replacement bytes', async kind => {
+    const workspaceDek = '30313233343536373839616263646566';
+    await archive(kind === 'credential' ? {
+      files: { 'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek }) },
+      mutateManifest: manifest => { manifest.runtime.encryption = 'user'; },
+    } : {});
+    let result;
+    if (kind !== 'archive') {
+      result = await restoreConfiguredWorkerSnapshot();
+      global.__flujo_worker_snapshot_restore = undefined;
+    }
+    const selected = kind === 'archive' ? process.env.FLUJO_WORKER_SNAPSHOT!
+      : path.join(destination, kind === 'marker' ? '.flujo-worker-snapshot.json' : 'db/worker-bootstrap-secrets.json');
+    const original = await fs.readFile(selected);
+    const open = fs.open.bind(fs);
+    let swapped = false;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === selected && !swapped) {
+        swapped = true;
+        await fs.rename(selected, `${selected}.original`);
+        await fs.writeFile(selected, original, { mode: 0o600 });
+      }
+      return open(...args);
+    });
+    if (kind === 'credential') {
+      await expect(runWithWorkspace('research', () => unlockWorkerSnapshot(result!))).rejects.toThrow('unsafe or changed');
+    } else await expect(restoreConfiguredWorkerSnapshot()).rejects.toThrow('unsafe or changed');
+    expect(swapped).toBe(true);
+    expect(await fs.readFile(`${selected}.original`)).toEqual(original);
+  });
+
+  it('refuses a junction or symlink parent even when the credential inode is unchanged', async () => {
+    const workspaceDek = '30313233343536373839616263646566';
+    await archive({ files: { 'db/worker-bootstrap-secrets.json': JSON.stringify({ version: 1, workspaceDek }) },
+      mutateManifest: manifest => { manifest.runtime.encryption = 'user'; } });
+    const result = (await restoreConfiguredWorkerSnapshot())!;
+    const db = path.join(destination, 'db');
+    const original = path.join(root, 'original-db');
+    await fs.rename(db, original);
+    await fs.symlink(original, db, process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(runWithWorkspace('research', () => unlockWorkerSnapshot(result))).rejects.toThrow('real directory');
   });
 });

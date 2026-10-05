@@ -2,6 +2,8 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { z } from 'zod';
+import { gzipSync, gunzipSync } from 'zlib';
+import { MODEL_TURN_OUTCOME_MAX_BYTES } from '@/shared/types/modelTurn';
 import { withWorkspaceRecoveryCapture, workspaceMutationStatus } from '@/backend/services/workspace/workspaceMutationGate';
 import {
   _setModelTurnArchiveDirForTests,
@@ -22,8 +24,92 @@ describe('modelTurnArchive', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     _setModelTurnArchiveDirForTests(previousDir);
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = (conversationId = 'large_context', attempt = 1) => ({
+    conversationId, nodeId: 'model_node', modelId: 'model_test', modelName: 'Test model',
+    adapter: 'openai', operation: 'create', attempt,
+    canonicalMessages: [{ id: 'user_large', role: 'user' as const, timestamp: 1, content: 'history'.repeat(800_000) }],
+    genericWire: [{ role: 'user' as const, content: 'wire'.repeat(500_000) }],
+    sdkRequest: { image: `data:image/png;base64,${Buffer.alloc(1024 * 1024, 7).toString('base64')}` },
+  });
+
+  it('keeps each large-context/media dispatch immutable across retry outcomes without reading transcripts', async () => {
+    const request = input();
+    const entries = [];
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const entry = await archiveModelDispatch({ ...request, attempt });
+      const file = path.join(tempDir, request.conversationId, `${entry.id}.v2.json.gz`);
+      const before = await fs.readFile(file);
+      const reads = jest.spyOn(fs, 'readFile');
+      const outcome = attempt === 3 ? 'completed' : 'error';
+      await updateModelDispatchOutcome(request.conversationId, entry.id, outcome);
+      expect(reads.mock.calls.filter(([name]) => String(name).endsWith('.json.gz'))).toEqual([]);
+      reads.mockRestore();
+      expect(await fs.readFile(file)).toEqual(before);
+      const record = await fs.readFile(path.join(tempDir, request.conversationId, `${entry.id}.outcome.json`));
+      expect(record.length).toBeLessThanOrEqual(MODEL_TURN_OUTCOME_MAX_BYTES);
+      const snapshot = (await readModelTurnSnapshot(request.conversationId, entry.id))!;
+      expect(snapshot.entry).toMatchObject({ id: entry.id, attempt, outcome, archiveVersion: 2 });
+      expect(snapshot.canonicalMessages).toEqual(request.canonicalMessages);
+      expect(snapshot.genericWire).toEqual(request.genericWire);
+      expect((await readModelTurnMedia(request.conversationId, entry.id, snapshot.media[0].id))?.bytes)
+        .toEqual(Buffer.alloc(1024 * 1024, 7));
+      expect(JSON.parse(gunzipSync(before).toString()).entry.outcome).toBe('running');
+      entries.push(entry.id);
+    }
+    expect(new Set(entries).size).toBe(3);
+    expect(request.canonicalMessages[0].content).toBe('history'.repeat(800_000));
+  });
+
+  it('preserves running state after a failed atomic outcome write and removes its temporary file', async () => {
+    const entry = await archiveModelDispatch({ ...input('failed_outcome'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
+    const rename = jest.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(updateModelDispatchOutcome('failed_outcome', entry.id, 'cancelled')).rejects.toThrow('disk unavailable');
+    rename.mockRestore();
+    expect((await readModelTurnSnapshot('failed_outcome', entry.id))?.entry.outcome).toBe('running');
+    expect(await fs.readdir(path.join(tempDir, 'failed_outcome'))).toEqual([`${entry.id}.v2.json.gz`]);
+    await updateModelDispatchOutcome('failed_outcome', entry.id, 'cancelled');
+    expect((await readModelTurnSnapshot('failed_outcome', entry.id))?.entry.outcome).toBe('cancelled');
+  });
+
+  it('reads and updates historical v1 snapshots without rewriting their format', async () => {
+    const entry = await archiveModelDispatch({ ...input('legacy'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
+    const current = path.join(tempDir, 'legacy', `${entry.id}.v2.json.gz`);
+    const snapshot = JSON.parse(gunzipSync(await fs.readFile(current)).toString());
+    snapshot.version = 1;
+    snapshot.entry.archiveVersion = 1;
+    const file = path.join(tempDir, 'legacy', `${entry.id}.json.gz`);
+    await fs.writeFile(file, gzipSync(JSON.stringify(snapshot)));
+    await fs.unlink(current);
+    expect((await readModelTurnSnapshot('legacy', entry.id))?.version).toBe(1);
+    await updateModelDispatchOutcome('legacy', entry.id, 'error');
+    expect((await readModelTurnSnapshot('legacy', entry.id))?.entry).toMatchObject({ archiveVersion: 1, outcome: 'error' });
+    expect(await fs.readdir(path.join(tempDir, 'legacy'))).toEqual([`${entry.id}.json.gz`]);
+  });
+
+  it('rejects oversized, foreign, malformed and nonterminal outcome records without changing dispatch bytes', async () => {
+    const entry = await archiveModelDispatch({ ...input('invalid_outcome'), canonicalMessages: [], genericWire: [], sdkRequest: {} });
+    const file = path.join(tempDir, 'invalid_outcome', `${entry.id}.outcome.json`);
+    const record = { version: 1, archiveVersion: 2, conversationId: 'invalid_outcome', dispatchId: entry.id, outcome: 'completed' };
+    for (const invalid of [
+      { ...record, conversationId: 'other' }, { ...record, dispatchId: 'other' },
+      { ...record, outcome: 'running' }, { ...record, version: 2 }, { ...record, extra: 'unknown' },
+    ]) {
+      await fs.writeFile(file, JSON.stringify(invalid));
+      await expect(readModelTurnSnapshot('invalid_outcome', entry.id)).rejects.toThrow('Invalid model-turn outcome');
+    }
+    await fs.writeFile(file, Buffer.alloc(MODEL_TURN_OUTCOME_MAX_BYTES + 1, 32));
+    await expect(readModelTurnSnapshot('invalid_outcome', entry.id)).rejects.toThrow('byte limit');
+    await fs.writeFile(file, '{');
+    await expect(readModelTurnSnapshot('invalid_outcome', entry.id)).rejects.toThrow();
+    await fs.unlink(file);
+    expect((await readModelTurnSnapshot('invalid_outcome', entry.id))?.entry.outcome).toBe('running');
+    await expect(updateModelDispatchOutcome('invalid_outcome', 'missing', 'completed')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(updateModelDispatchOutcome('../escape', entry.id, 'completed')).rejects.toThrow('Unsafe conversation');
   });
 
   it('holds model-turn outcome writes behind a coherent recovery capture', async () => {

@@ -17,6 +17,7 @@ import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig, assertExecutionToolDispatch, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { ExecutionExtensionError } from '@/backend/execution/extensions';
 import { shippedDescriptorForConfig } from './shippedServers';
+import { isMcpTransport, MCP_TRANSPORT_INVALID } from './transportAdmission';
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -134,6 +135,7 @@ import {
   MCPServiceResponse,
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
+  type MCPShutdownReceipt,
   MCP_SKILLS_EXTENSION_ID,
   parseMcpSkillUri,
   type McpGetSkillResult,
@@ -149,6 +151,8 @@ import {
   beginConnect,
   beginTeardown,
   getLifecycleDiagnostics,
+  getShutdownReceipt,
+  peekRuntime,
   markConnectFailed,
   markConnected,
 } from "./lifecycleCoordinator";
@@ -211,6 +215,13 @@ import {
   isGlobalBinding,
   hydrateMaskedHeaders,
 } from "@/utils/mcp/headers";
+import {
+  hasMaskedStoredHeaders,
+  hasStoredSecretHeaders,
+  isSameMcpHeaderDestination,
+  MCP_HEADER_DESTINATION_CHANGED,
+  usesMcpHttpHeaders,
+} from "@/utils/mcp/headerDestination";
 import {
   getTestConnectionTimeoutMs,
   isRunnerStdioConfig,
@@ -842,6 +853,9 @@ export class MCPService {
   async connectServer(
     configOrName: MCPServerConfig | string,
   ): Promise<MCPServiceResponse> {
+    if (typeof configOrName !== 'string' && !isMcpTransport(configOrName.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
 
@@ -946,6 +960,9 @@ export class MCPService {
     // Keep the storage-shaped config separate from the resolved connection clone below.
     // Auth-mode decisions and cleanup must never operate on decrypted header material.
     const persistedConfig = storedConfig ?? config;
+    if (!isMcpTransport(config.transport) || !isMcpTransport(persistedConfig.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     if ((storedConfig ?? config).disabled) {
       log.info(
         `connectServer: Server ${config.name} is disabled — refusing to create a client/transport`,
@@ -1461,6 +1478,9 @@ export class MCPService {
     onOutput?: (event: TestConnectionEvent) => void,
     options?: { storedName?: string },
   ): Promise<MCPServiceResponse> {
+    if (!isMcpTransport(config.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     log.info(
       `testConnection: Testing connection to ${config.name || "(unnamed)"} via ${config.transport} transport`,
     );
@@ -1506,6 +1526,13 @@ export class MCPService {
         )?.headers;
         const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig)
           .headers;
+        if (
+          hasMaskedStoredHeaders(incomingHeaders, savedHeaders) &&
+          !isSameMcpHeaderDestination(config, savedCfg)
+        ) {
+          emit({ type: "result", success: false, error: MCP_HEADER_DESTINATION_CHANGED });
+          return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
+        }
         toTest = {
           ...config,
           headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders),
@@ -1737,11 +1764,15 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
 
-    // Resolve via getClient: the shared map is cross-instance, and getClient also
-    // evicts a client whose connection is already closed — there is nothing left to
-    // "disconnect" for one of those, only references to purge.
+    const runtime = peekRuntime(serverName);
+    if (runtime?.teardownPromise) {
+      return { success: true, shutdownReceipt: await runtime.teardownPromise };
+    }
+    // A repeat request returns the same observation, without closing a new process.
     const client = this.getClient(serverName);
-    if (!client) {
+    if (!client && !runtime?.connectPromise) {
+      const receipt = getShutdownReceipt(serverName);
+      if (receipt) return { success: true, shutdownReceipt: receipt };
       log.warn(
         `disconnectServer: Server ${serverName} not found in clients map`,
       );
@@ -1751,26 +1782,23 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
-    // Deregister BEFORE closing: this marks the close as FLUJO-initiated, so the
-    // transport's close event is ignored by the stale guard instead of scheduling a
-    // reconnect that would immediately undo this disconnect.
-    this.deregisterClient(serverName);
-
     try {
-      // Get the server config to pass to safelyCloseClient
-      const config = await this.getServerConfig(serverName);
-
       // Issue #413: run the close through the ONE idempotent, awaitable teardown
       // so overlapping shouts of "close it" (transport error + disable + shutdown
       // arriving together) fold onto a single close instead of racing each other
       // into a double-close that orphans grandchildren.
-      await beginTeardown(serverName, "disconnect", async () => {
-        const closed = await safelyCloseClient(client, serverName, config || undefined);
-        return { forced: closed.forced };
+      const shutdownReceipt = await beginTeardown(serverName, "disconnect", async () => {
+        // Resolve after the coordinator has awaited any pending connect. Publish
+        // the shared teardown before asynchronous config reads or deregistration.
+        const closingClient = this.getClient(serverName);
+        this.deregisterClient(serverName);
+        if (!closingClient) return;
+        const config = await this.getServerConfig(serverName);
+        return safelyCloseClient(closingClient, serverName, config || undefined);
       });
 
       log.info(`disconnectServer: Disconnected server ${serverName}`);
-      return { success: true };
+      return { success: true, shutdownReceipt };
     } catch (error) {
       log.warn(
         `disconnectServer: Failed to disconnect server ${serverName}:`,
@@ -1781,6 +1809,10 @@ export class MCPService {
         error: `Failed to disconnect server: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
+  }
+
+  getServerShutdownReceipt(serverName: string) {
+    return getShutdownReceipt(serverName);
   }
 
   /**
@@ -1796,9 +1828,15 @@ export class MCPService {
    * calling this from several signal handlers at once is safe. Never rejects — a
    * shutdown path must not be derailed by one uncooperative server.
    */
-  async disconnectAll(reason: string): Promise<{ closed: string[]; failed: string[] }> {
+  async disconnectAll(reason: string): Promise<{
+    /** Legacy connection-disconnect outcomes; these names do not certify exit. */
+    closed: string[];
+    failed: string[];
+    shutdownReceipts: MCPShutdownReceipt[];
+  }> {
     const closed: string[] = [];
     const failed: string[] = [];
+    const shutdownReceipts: MCPShutdownReceipt[] = [];
     // Snapshot the names first: closing mutates the shared registry.
     const serverNames = Array.from(new Set(Array.from(this.clients.keys())));
     log.info(`disconnectAll: tearing down ${serverNames.length} MCP server(s) (${reason})`);
@@ -1810,6 +1848,7 @@ export class MCPService {
       this.connectionRetryAttempts.delete(serverName);
       try {
         const result = await this.disconnectServer(serverName);
+        if (result.shutdownReceipt) shutdownReceipts.push(result.shutdownReceipt);
         if (result.success) closed.push(serverName);
         else failed.push(serverName);
       } catch (error) {
@@ -1830,7 +1869,7 @@ export class MCPService {
     log.info(
       `disconnectAll: closed=${closed.length} failed=${failed.length} (${reason})`,
     );
-    return { closed, failed };
+    return { closed, failed, shutdownReceipts };
   }
 
   /**
@@ -2880,6 +2919,9 @@ export class MCPService {
     serverName: string,
     updates: Partial<MCPServerConfig>,
   ): Promise<MCPServerConfig | MCPServiceResponse> {
+    if (Object.prototype.hasOwnProperty.call(updates, 'transport') && !isMcpTransport(updates.transport)) {
+      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
+    }
     log.debug(`updateServerConfig: Entering method for server ${serverName}`);
 
     // Load all configs from storage
@@ -2939,6 +2981,22 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
+    // Partial edits also inherit old headers when the field is omitted. Neither that
+    // inheritance nor a masked-header restore may move saved secrets to a new endpoint.
+    const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
+    const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+    const reusesSavedHeaders = incomingHeaders === undefined
+      ? hasStoredSecretHeaders(existingHeaders)
+      : hasMaskedStoredHeaders(incomingHeaders, existingHeaders);
+    const nextDestination = { ...config, ...updates };
+    if (
+      reusesSavedHeaders &&
+      (usesMcpHttpHeaders(config) || usesMcpHttpHeaders(nextDestination)) &&
+      !isSameMcpHeaderDestination(nextDestination, config)
+    ) {
+      return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
+    }
+
     // Encrypt all credential updates before saving or changing a live connection.
     // Bindings remain references and are resolved/decrypted at connect time.
     updates = { ...updates };
@@ -2953,9 +3011,7 @@ export class MCPService {
           await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
       }
 
-      const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
       if (incomingHeaders !== undefined) {
-        const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
         (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
           await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
       }

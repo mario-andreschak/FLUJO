@@ -1,0 +1,35 @@
+{
+  "baseline": "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+  "exceptions": [
+    {
+      "from": "src/frontend/components/Chat/DebuggerCanvas.tsx",
+      "to": "src/backend/execution/flow/types.ts",
+      "declaration": "import { SharedState, DebugStep } from '@/backend/execution/flow/types';",
+      "reason": "Define a shared debugger DTO without exposing runtime authority; coordinate the history/UI consumer migration."
+    },
+    {
+      "from": "src/frontend/components/Chat/DebuggerConversation.tsx",
+      "to": "src/backend/execution/flow/types.ts",
+      "declaration": "import type { ModelInputSnapshot, WirePreviewWarning } from '@/backend/execution/flow/types';",
+      "reason": "Move wire-preview DTOs to shared contracts with their debugger consumers."
+    },
+    {
+      "from": "src/frontend/components/Chat/DebuggerModelInput.tsx",
+      "to": "src/backend/execution/flow/types.ts",
+      "declaration": "import { ModelInputSnapshot, WireStatus, ModelInputProvenanceEntry } from '@/backend/execution/flow/types';",
+      "reason": "Move wire/provenance DTOs to shared contracts with their debugger consumers."
+    },
+    {
+      "from": "src/frontend/components/Chat/index.tsx",
+      "to": "src/backend/execution/flow/types.ts",
+      "declaration": "import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types';",
+      "reason": "Replace UI use of runtime SharedState with a reviewed shared debugger DTO."
+    },
+    {
+      "from": "src/frontend/services/chat/index.ts",
+      "to": "src/backend/execution/flow/types.ts",
+      "declaration": "import type { WirePreviewResponse } from '@/backend/execution/flow/types';",
+      "reason": "Move the wire-preview HTTP response contract with its backend/debugger consumers."
+    }
+  ]
+}

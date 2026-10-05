@@ -1,5 +1,8 @@
-import { promises as fs } from 'fs';
+import { promises as fs, type BigIntStats } from 'fs';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
+import { readPlainFile } from '@/utils/readPlainFile';
+import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -103,8 +106,6 @@ export async function verifyStorage(): Promise<void> {
 // Per-key write chains so same-key writes run one at a time. Different keys
 // still write concurrently.
 const writeChains = new Map<string, Promise<unknown>>();
-// Monotonic counter to keep temp file names unique within this process.
-let tmpCounter = 0;
 
 // Windows has no share-mode equivalent of POSIX's "rename over an open file is
 // fine": libuv opens files WITHOUT FILE_SHARE_DELETE, so while any reader in
@@ -123,9 +124,10 @@ const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const MAX_RENAME_ATTEMPTS = 15;
 const MAX_RENAME_BACKOFF_MS = 100;
 
-async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {
+async function renameWithRetry(tmpPath: string, filePath: string, validate: () => Promise<void>): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
+      await validate();
       await fs.rename(tmpPath, filePath);
       return;
     } catch (renameError) {
@@ -143,14 +145,43 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   await withWorkspaceMutation(async () => {
     const dirPath = path.dirname(filePath);
     await fs.mkdir(dirPath, { recursive: true });
+    const directory = await fs.lstat(dirPath, { bigint: true });
+    const canonicalDirectory = await fs.realpath(dirPath);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Atomic write parent is unsafe');
     // Temp file lives next to the target (same filesystem) so rename is atomic.
-    const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
+    const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+    let created = false;
+    let owned: BigIntStats | undefined;
     try {
-      await fs.writeFile(tmpPath, data);
-      await renameWithRetry(tmpPath, filePath);
+      const handle = await fs.open(tmpPath, 'wx', 0o600);
+      created = true;
+      try {
+        owned = await handle.stat({ bigint: true });
+        await handle.writeFile(data);
+        await handle.sync();
+        owned = await handle.stat({ bigint: true });
+      } finally { await handle.close(); }
+      await renameWithRetry(tmpPath, filePath, async () => {
+        const [current, parent, canonicalParent] = await Promise.all([fs.lstat(tmpPath, { bigint: true }), fs.lstat(dirPath, { bigint: true }), fs.realpath(dirPath)]);
+        if (!owned || !current.isFile() || current.isSymbolicLink() || current.nlink !== BigInt(1)
+            || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size
+            || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs
+            || current.mode !== owned.mode || current.uid !== owned.uid || current.gid !== owned.gid
+            || !parent.isDirectory() || parent.isSymbolicLink() || parent.dev !== directory.dev
+            || parent.ino !== directory.ino || parent.mode !== directory.mode || parent.uid !== directory.uid
+            || parent.gid !== directory.gid || canonicalParent !== canonicalDirectory) {
+          throw new Error('Atomic write file or parent changed');
+        }
+      });
+      created = false;
     } catch (error) {
       // Best-effort cleanup so a failed write doesn't leave temp files behind.
-      try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
+      if (created) {
+        try {
+          const current = await fs.lstat(tmpPath, { bigint: true });
+          if (owned && current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) await fs.unlink(tmpPath);
+        } catch { /* never clean up an unowned replacement */ }
+      }
       throw error;
     }
   });
@@ -385,23 +416,8 @@ async function assertLinkFreeDirectory(
   return shardDir;
 }
 
-type TextFileWithStats = {
-  content: string;
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-async function readTextWithStatsOrNull(filePath: string): Promise<TextFileWithStats | null> {
-  const stats = await lstatOrNull(filePath);
-  if (!stats) return null;
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`Persona record path is not a regular link-free file: ${filePath}`);
-  }
-  return {
-    content: await fs.readFile(filePath, 'utf8'),
-    mtimeMs: stats.mtimeMs,
-    sizeBytes: stats.size,
-  };
+async function readTextWithStatsOrNull(filePath: string): Promise<PersonaRecordText | null> {
+  return readPersonaRecordText(filePath, storageDir());
 }
 
 async function readTextOrNull(filePath: string): Promise<string | null> {
@@ -575,11 +591,14 @@ async function readPersonaShardDirectory<T>(
     const recordId = entry.slice(0, -'.json'.length);
     assertSafeCollectionId(recordId);
     const filePath = path.join(shardDir, entry);
-    const stats = await fs.lstat(filePath);
+    const stats = await fs.lstat(filePath, { bigint: true });
     if (!stats.isFile() || stats.isSymbolicLink()) {
       throw new Error(`Persona shard item is not a regular link-free file: ${filePath}`);
     }
-    const content = await fs.readFile(filePath, 'utf8');
+    const content = (await readPlainFile(filePath, {
+      expected: stats,
+      verifyPath: async () => { await assertLinkFreeDirectory(collection, personaId, false); },
+    })).toString('utf8');
     values.push(parsePersonaShardRecord<T>(content, collection, personaId, recordId));
   }
   return values;

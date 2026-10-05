@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { StdioClientTransport as BetaStdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { createLogger } from "@/utils/logger";
+import { assertMcpTransport } from './transportAdmission';
 import { loadItem } from "@/utils/storage/backend";
 import { StorageKey } from "@/shared/types/storage";
 import { Settings } from "@/shared/types/storage/storage";
@@ -116,7 +117,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.46.2",
+      version: "3.46.3",
     },
     {
       capabilities: {
@@ -217,6 +218,7 @@ export function createBetaTransport(
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
   | BetaSSEClientTransport {
+  assertMcpTransport(config);
   if (config.transport === "websocket") {
     throw new Error(
       "The v2-beta MCP SDK has no websocket transport; use the v1 path",
@@ -287,7 +289,7 @@ export function createBetaTransport(
     return transport;
   }
 
-  // Default: stdio, spawned from the SAME resolved parameters as the v1 path.
+  // Admission above leaves only explicit stdio after the remote branches.
   const { command, args, env, cwd } = resolveStdioLaunch(config, options);
   const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
     ? issueMcpAppRuntimeBrokerEnvironment(config.name)

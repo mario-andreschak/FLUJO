@@ -14,6 +14,15 @@ import {
 import { DEFAULT_SNAPSHOT_RETENTION_POLICY } from '@/shared/types/snapshot';
 import { StorageKey } from '@/shared/types/storage';
 import { clearItem } from '@/utils/storage/backend';
+import * as snapshotLeases from '@/backend/services/snapshot/snapshotLock';
+
+// Next's SWC exports are non-configurable getters. Preserve every real lease
+// implementation in a mutable module fixture so the wrapper error injection
+// can replace and restore only the targeted function.
+jest.mock('@/backend/services/snapshot/snapshotLock', () => ({
+  __esModule: true,
+  ...jest.requireActual<typeof import('@/backend/services/snapshot/snapshotLock')>('@/backend/services/snapshot/snapshotLock'),
+}));
 
 describe('SnapshotStore', () => {
   let testDir: string;
@@ -285,6 +294,21 @@ describe('SnapshotStore', () => {
   });
 
   describe('migration coordination', () => {
+    it.each(['read', 'migration'] as const)('preserves bounded %s lease diagnostics through the store wrapper', async mode => {
+      const refused = new snapshotLeases.SnapshotLeaseBusyError('owner-read:descriptor-path:ctimeNs');
+      const lease = mode === 'migration'
+        ? jest.spyOn(snapshotLeases, 'withSnapshotMigrationLeases')
+        : jest.spyOn(snapshotLeases, 'withSnapshotStoreLease');
+      lease.mockRejectedValueOnce(refused);
+      const task = jest.fn(async () => undefined);
+      try {
+        const result = mode === 'migration' ? store.withMigrationAccess([testDir], task) : store.withAccess('read', task);
+        await expect(result).rejects.toMatchObject({ name: 'SnapshotStoreBusyError',
+          code: 'SNAPSHOT_STORE_BUSY', detail: 'owner-read:descriptor-path:ctimeNs' });
+        expect(task).not.toHaveBeenCalled();
+      } finally { lease.mockRestore(); }
+    });
+
     it('provides migration access wrapper for safe coordination', async () => {
       // Test that withMigrationAccess is callable
       try {

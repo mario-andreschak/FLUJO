@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { readStableFile } from '@/utils/readStableFile';
 
 export const CODEX_AUTH_SOURCE_FILE = 'flujo-auth-source.json';
 export const WORKSPACE_CODEX_AUTH_SOURCE = { version: 1, source: 'workspace' } as const;
@@ -12,6 +13,13 @@ interface AuthSource {
   version: 1;
   source: 'host' | 'workspace';
   sourceHash?: string;
+}
+
+export class CodexAuthInspectionError extends Error {
+  constructor(readonly reasonCode: 'credential-store-unreadable' | 'credential-store-incompatible' | 'auth-source-unreadable' | 'login-missing' | 'login-incompatible', message: string) {
+    super(message);
+    this.name = 'CodexAuthInspectionError';
+  }
 }
 
 export function userCodexHome(): string {
@@ -30,27 +38,23 @@ async function assertFileBackedHostAuth(home: string): Promise<void> {
   try {
     const link = await fs.lstat(file);
     found = true;
-    const stat = link.isSymbolicLink() ? await fs.stat(file) : link;
-    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error();
-    const content = await fs.readFile(file);
-    const after = await fs.stat(file);
-    if (content.length > 1024 * 1024 || content.length !== stat.size || stat.ino !== after.ino
-      || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) throw new Error();
+    if (!link.isFile() && !link.isSymbolicLink()) throw new Error();
+    const content = await readStableFile(file, 1024 * 1024, { allowSymbolicLink: true });
     config = parseToml(new TextDecoder('utf-8', { fatal: true }).decode(content));
   } catch (error) {
     if (!found && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
     // TOML errors can contain entire source lines, including unrelated secrets.
-    throw new Error('Could not verify the host Codex credential store. Repair or make its config.toml readable before using its login in FLUJO.');
+    throw new CodexAuthInspectionError('credential-store-unreadable', 'Could not verify the host Codex credential store. Repair or make its config.toml readable before using its login in FLUJO.');
   }
   const store = config.cli_auth_credentials_store;
   if (store !== undefined && store !== 'file') {
-    throw new Error('FLUJO requires file-backed Codex authentication. Configure cli_auth_credentials_store = "file" and sign in again; keyring and auto storage cannot identify the active login from auth.json.');
+    throw new CodexAuthInspectionError('credential-store-incompatible', 'FLUJO requires file-backed Codex authentication. Configure cli_auth_credentials_store = "file" and sign in again; keyring and auto storage cannot identify the active login from auth.json.');
   }
 }
 
 async function authSource(home: string): Promise<AuthSource | undefined> {
   try {
-    const value = JSON.parse(await fs.readFile(path.join(home, CODEX_AUTH_SOURCE_FILE), 'utf8'));
+    const value = JSON.parse((await readStableFile(path.join(home, CODEX_AUTH_SOURCE_FILE), 4096)).toString('utf8'));
     if (value?.version !== 1 || !['host', 'workspace'].includes(value.source)) {
       throw new Error('Invalid FLUJO Codex authentication source.');
     }
@@ -58,7 +62,7 @@ async function authSource(home: string): Promise<AuthSource | undefined> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     // JSON parser messages may contain credential-adjacent file content.
-    throw new Error('Could not read FLUJO Codex authentication source.');
+    throw new CodexAuthInspectionError('auth-source-unreadable', 'Could not read FLUJO Codex authentication source.');
   }
 }
 
@@ -90,7 +94,7 @@ export async function synchronizeCodexAuth(home: string): Promise<void> {
   if (path.resolve(source) === path.resolve(destination)) return;
   let content: Buffer;
   try {
-    content = await fs.readFile(source);
+    content = await readStableFile(source, 1024 * 1024);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw new Error('Could not read the host Codex login.');
@@ -133,7 +137,7 @@ export async function readCodexAuthForTransfer(workspace?: string): Promise<Buff
   if (state?.source === 'host' && state.sourceHash) {
     // A child may have rotated its tokens since the host cache was last seeded.
     // Reuse that cache only while the host still represents the same login.
-    const host = await fs.readFile(source).catch(() => undefined);
+    const host = await readStableFile(source, 1024 * 1024).catch(() => undefined);
     if (host && createHash('sha256').update(host).digest('hex') === state.sourceHash) {
       const child = path.join(home, 'auth.json');
       if (await fs.access(child).then(() => true, () => false)) source = child;
@@ -141,16 +145,31 @@ export async function readCodexAuthForTransfer(workspace?: string): Promise<Buff
   }
   let content: Buffer;
   try {
-    const stat = await fs.lstat(source);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error();
-    content = await fs.readFile(source);
-    const after = await fs.lstat(source);
-    if (stat.ino !== after.ino || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) throw new Error();
+    content = await readStableFile(source, 1024 * 1024);
   } catch {
-    throw new Error('A file-backed Codex ChatGPT login is required. Sign in with Codex using file credential storage before cloning.');
+    throw new CodexAuthInspectionError('login-missing', 'A file-backed Codex ChatGPT login is required. Sign in with Codex using file credential storage before cloning.');
   }
   if (!isChatGptAuthCache(content)) {
-    throw new Error('The Codex authentication cache is not a transferable ChatGPT login.');
+    throw new CodexAuthInspectionError('login-incompatible', 'The Codex authentication cache is not a transferable ChatGPT login.');
   }
   return content;
+}
+
+/** Passive discovery uses the same authoritative source as execution/transfer.
+ * Never prepare a runtime home, copy credentials, refresh tokens, or return them. */
+export async function inspectCodexLogin(workspace?: string): Promise<{
+  authentication: 'login-detected' | 'needs-connection' | 'incompatible' | 'unknown';
+  reasonCode?: string;
+}> {
+  try {
+    await readCodexAuthForTransfer(workspace);
+    return { authentication: 'login-detected' };
+  } catch (error) {
+    if (!(error instanceof CodexAuthInspectionError)) return { authentication: 'unknown', reasonCode: 'inspection-unavailable' };
+    return {
+      authentication: error.reasonCode === 'login-missing' ? 'needs-connection'
+        : ['credential-store-incompatible', 'login-incompatible'].includes(error.reasonCode) ? 'incompatible' : 'unknown',
+      reasonCode: error.reasonCode,
+    };
+  }
 }

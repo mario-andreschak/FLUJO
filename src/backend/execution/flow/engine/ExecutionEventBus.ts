@@ -3,6 +3,7 @@ import { ExecutionEvent, RawExecutionEvent, EmitFn } from '@/shared/types/execut
 import { appendFromBus, allocateSeq } from '@/backend/execution/flow/conversationLog';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { boundedEventSnapshot, type EventSnapshot } from './boundedEventSnapshot';
 
 const log = createLogger('backend/execution/flow/engine/ExecutionEventBus');
 
@@ -14,6 +15,11 @@ const RING_BUFFER_SIZE = 1000;
 // conversation at once — sized for a few seconds of heavy subflow fan-out.
 const GLOBAL_RING_BUFFER_SIZE = 5000;
 
+// Serialized replay payload caps, independent of the existing event-count cap.
+// These do not bound the per-conversation rings, live subscribers or JS/RSS.
+const GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES = 4 * 1024 * 1024;
+const GLOBAL_REPLAY_PROCESS_UTF8_BYTES = 16 * 1024 * 1024;
+
 // How long a channel (and its buffered events) survives after a run:done with
 // no listeners. Long enough for the frontend's terminal refetch and any late
 // replays; without this the channels Map grew for the process lifetime — one
@@ -24,6 +30,8 @@ interface ConversationChannel {
   emitter: EventEmitter;
   seq: number;
   buffer: ExecutionEvent[];
+  /** The terminal event still owns this high-water mark; any later emit revokes it. */
+  terminalSeq?: number;
 }
 
 /**
@@ -40,7 +48,12 @@ export interface GlobalEvent {
 interface WorkspaceFirehose {
   emitter: EventEmitter;
   seq: number;
-  buffer: GlobalEvent[];
+  buffer: BufferedGlobalEvent[];
+  utf8Bytes: number;
+}
+
+interface BufferedGlobalEvent extends EventSnapshot {
+  globalSeq: number;
 }
 
 /**
@@ -67,6 +80,10 @@ class ExecutionEventBus {
   // the per-conversation channels are untouched, so chat streaming is
   // unaffected. Never garbage-collected: it spans the process lifetime.
   private firehoses = new Map<string, WorkspaceFirehose>();
+  // Insertion order is publication order across workspaces. Removing a cache
+  // entry also removes this reference; an empty workspace retains no payload.
+  private globalReplayEntries = new Map<BufferedGlobalEvent, WorkspaceFirehose>();
+  private globalReplayUtf8Bytes = 0;
 
   private getFirehose(): WorkspaceFirehose {
     const workspace = getCurrentWorkspace();
@@ -74,7 +91,7 @@ class ExecutionEventBus {
     if (!firehose) {
       const emitter = new EventEmitter();
       emitter.setMaxListeners(0);
-      firehose = { emitter, seq: 0, buffer: [] };
+      firehose = { emitter, seq: 0, buffer: [], utf8Bytes: 0 };
       this.firehoses.set(workspace, firehose);
     }
     return firehose;
@@ -95,8 +112,7 @@ class ExecutionEventBus {
     return channel;
   }
 
-  private cancelCleanup(conversationId: string): void {
-    const key = workspaceCacheKey(conversationId);
+  private cancelCleanup(key: string): void {
     const timer = this.cleanupTimers.get(key);
     if (timer) {
       clearTimeout(timer);
@@ -109,14 +125,15 @@ class ExecutionEventBus {
    *  gone: seq is now allocated by the durable log counter (issue #261), so a
    *  recreated channel continues the monotonic sequence rather than resetting to
    *  0, and a reconnect past the evicted buffer replays from the JSONL log. */
-  private scheduleCleanup(conversationId: string, seqAtDone: number): void {
-    this.cancelCleanup(conversationId);
-    const key = workspaceCacheKey(conversationId);
+  private scheduleCleanup(key: string, expectedChannel: ConversationChannel, expectedSeq: number): void {
+    this.cancelCleanup(key);
     const timer = setTimeout(() => {
+      if (this.cleanupTimers.get(key) !== timer) return;
       this.cleanupTimers.delete(key);
       const channel = this.channels.get(key);
-      if (!channel) return;
-      if (channel.seq !== seqAtDone) return; // a new run emitted since; keep
+      if (channel !== expectedChannel || channel.seq !== expectedSeq) return;
+      const empty = channel.seq === 0 && channel.buffer.length === 0;
+      if (!empty && channel.terminalSeq !== expectedSeq) return;
       if (channel.emitter.listenerCount('event') > 0) return; // active SSE subscriber
       this.channels.delete(key);
     }, CHANNEL_TTL_AFTER_DONE_MS);
@@ -128,9 +145,12 @@ class ExecutionEventBus {
   /** Publish an event; the bus stamps conversationId, seq and timestamp. */
   emit(conversationId: string, raw: RawExecutionEvent): ExecutionEvent {
     const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
     // Authoritative, durable, per-conversation monotonic seq from the log.
     const seq = allocateSeq(conversationId);
     channel.seq = seq + 1; // in-memory high-water mirror for currentSeq()/cleanup
+    this.cancelCleanup(key);
+    channel.terminalSeq = raw.type === 'run:done' ? channel.seq : undefined;
     const event = {
       ...raw,
       conversationId,
@@ -159,10 +179,10 @@ class ExecutionEventBus {
 
     // Terminal event → the channel becomes garbage once nobody replays it.
     // Any other event (e.g. run:start of a resumed conversation) revives it.
-    if (event.type === 'run:done') {
-      this.scheduleCleanup(conversationId, channel.seq);
-    } else {
-      this.cancelCleanup(conversationId);
+    if (event.type === 'run:done' && channel.seq === seq + 1 && channel.terminalSeq === seq + 1) {
+      // A synchronous listener can emit a resumed run. The old terminal event
+      // must not schedule cleanup for that newer channel revision.
+      this.scheduleCleanup(key, channel, seq + 1);
     }
     return event;
   }
@@ -193,21 +213,67 @@ class ExecutionEventBus {
   /** Subscribe to live events. Returns an unsubscribe function. */
   subscribe(conversationId: string, listener: (event: ExecutionEvent) => void): () => void {
     const channel = this.getChannel(conversationId);
+    const key = workspaceCacheKey(conversationId);
+    this.cancelCleanup(key);
     channel.emitter.on('event', listener);
+    let subscribed = true;
     return () => {
+      if (!subscribed) return;
+      subscribed = false;
       channel.emitter.off('event', listener);
+      if (this.channels.get(key) !== channel || channel.emitter.listenerCount('event') > 0) return;
+      // A subscriber may outlive the original terminal cleanup timer. Re-arm
+      // when the final listener leaves; retain running, paused and unknown
+      // channels. The captured key also keeps deferred cleanup workspace-bound.
+      if (channel.terminalSeq === channel.seq || (channel.seq === 0 && channel.buffer.length === 0)) {
+        this.scheduleCleanup(key, channel, channel.seq);
+      }
     };
   }
 
   // --- Global firehose API -------------------------------------------------
+
+  private evictGlobalReplayPrefix(firehose: WorkspaceFirehose): void {
+    const oldest = firehose.buffer.shift();
+    if (!oldest) return;
+    firehose.utf8Bytes -= oldest.utf8Bytes;
+    this.globalReplayUtf8Bytes -= oldest.utf8Bytes;
+    this.globalReplayEntries.delete(oldest);
+    // Release the array's former backing storage too, without resetting the
+    // workspace's live emitter or global sequence/reconnect high-water mark.
+    if (firehose.buffer.length === 0) firehose.buffer = [];
+  }
+
+  private retainGlobalReplay(firehose: WorkspaceFirehose, wrapped: GlobalEvent): void {
+    const snapshot = boundedEventSnapshot(wrapped, GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES);
+    if (!snapshot) {
+      // A skipped entry must not leave a hole inside the cached suffix. The
+      // global stream has always been best-effort recent replay, with no log
+      // fallback. Live delivery below still publishes this exact event/id.
+      while (firehose.buffer.length) this.evictGlobalReplayPrefix(firehose);
+      return;
+    }
+    const entry: BufferedGlobalEvent = { ...snapshot, globalSeq: wrapped.globalSeq };
+    firehose.buffer.push(entry);
+    firehose.utf8Bytes += entry.utf8Bytes;
+    this.globalReplayUtf8Bytes += entry.utf8Bytes;
+    this.globalReplayEntries.set(entry, firehose);
+    while (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE || firehose.utf8Bytes > GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES) {
+      this.evictGlobalReplayPrefix(firehose);
+    }
+    while (this.globalReplayUtf8Bytes > GLOBAL_REPLAY_PROCESS_UTF8_BYTES) {
+      const oldest = this.globalReplayEntries.values().next().value;
+      if (!oldest) break;
+      this.evictGlobalReplayPrefix(oldest);
+    }
+  }
 
   /** Publish an event onto the global channel, assigning a monotonic globalSeq
    *  and retaining it in the global ring buffer for replay. */
   private publishGlobal(event: ExecutionEvent): void {
     const firehose = this.getFirehose();
     const wrapped: GlobalEvent = { globalSeq: firehose.seq++, event };
-    firehose.buffer.push(wrapped);
-    if (firehose.buffer.length > GLOBAL_RING_BUFFER_SIZE) firehose.buffer.shift();
+    this.retainGlobalReplay(firehose, wrapped);
     firehose.emitter.emit('event', wrapped);
   }
 
@@ -220,10 +286,30 @@ class ExecutionEventBus {
     };
   }
 
-  /** Buffered firehose entries with globalSeq >= fromSeq, for replay on
-   *  (re)connect. */
+  /** Detached JSON snapshots of the available recent suffix, with globalSeq
+   *  >= fromSeq. Count/byte pressure or an uncacheable event can evict a prefix;
+   *  unlike conversation replay, the global stream has no durable fallback. */
   getGlobalBufferedSince(fromSeq: number): GlobalEvent[] {
-    return this.getFirehose().buffer.filter((e) => e.globalSeq >= fromSeq);
+    return this.getFirehose().buffer
+      .filter((entry) => entry.globalSeq >= fromSeq)
+      .map((entry) => JSON.parse(entry.json) as GlobalEvent);
+  }
+
+  /** Serialized replay-cache accounting, excluding object overhead/live/SSE. */
+  getGlobalReplayPressure() {
+    const workspace = this.firehoses.get(getCurrentWorkspace());
+    let cachedWorkspaces = 0;
+    for (const firehose of this.firehoses.values()) {
+      if (firehose.buffer.length > 0) cachedWorkspaces++;
+    }
+    return {
+      workspaceUtf8Bytes: workspace?.utf8Bytes ?? 0,
+      processUtf8Bytes: this.globalReplayUtf8Bytes,
+      cachedEvents: this.globalReplayEntries.size,
+      cachedWorkspaces,
+      maxWorkspaceUtf8Bytes: GLOBAL_REPLAY_WORKSPACE_UTF8_BYTES,
+      maxProcessUtf8Bytes: GLOBAL_REPLAY_PROCESS_UTF8_BYTES,
+    };
   }
 
   /** The next globalSeq the firehose will assign (current high-water mark). */

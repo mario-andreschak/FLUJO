@@ -13,6 +13,11 @@ const INSTALLATION_WIDE = new Set([
   '/api/workspaces',
 ]);
 const MARKER = 'FLUJO_INSTALLATION_WIDE_ROUTE:';
+// The remote wrapper resolves owner authority before the ordinary workspace
+// wrapper can select storage. Keep this exception exact and audit its delegate.
+const AUTHENTICATED_AVATAR = new Set([
+  '/api/avatar/remote/[voiceAction]', '/api/avatar/remote/availability',
+]);
 
 function collectRouteFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -50,6 +55,16 @@ describe('workspace route coverage', () => {
       }
 
       expect(INSTALLATION_WIDE.has(pathname)).toBe(false);
+      if (AUTHENTICATED_AVATAR.has(pathname)) {
+        expect(source).toContain("from '@/backend/services/avatar/remoteVoice'");
+        for (const method of methods) {
+          expect(source).toMatch(new RegExp(`withRemoteAvatarRoute\\(\\s*${method}_handler\\s*\\)`));
+        }
+        const wrapper = fs.readFileSync(path.join(process.cwd(), 'src/backend/services/avatar/remoteVoice.ts'), 'utf8');
+        expect(wrapper).toContain("from '@/app/api/_workspace'");
+        expect(wrapper).toContain('withWorkspaceRoute(');
+        continue;
+      }
       expect(source).toContain("from '@/app/api/_workspace'");
       for (const method of methods) {
         expect(source).toMatch(

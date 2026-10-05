@@ -16,6 +16,7 @@ describe('worker image compatibility metadata', () => {
       snapshotFormatVersion: 2,
       layoutVersion: 2,
       workerProtocolVersion: 1,
+      workerSnapshotSourceVersion: 1,
     });
   });
 

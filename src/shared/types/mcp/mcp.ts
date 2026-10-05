@@ -3,6 +3,7 @@ import { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js
 import { SSEClientTransportOptions } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransportOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { MCPShutdownReceipt } from './shutdown';
 
 // Constants
 export const SERVER_DIR_PREFIX = 'mcp-servers';
@@ -306,6 +307,8 @@ export function isTaskCallResponse(r: unknown): r is MCPTaskCallResponse {
 
 export interface MCPServiceResponse<T = unknown> {
   success: boolean;
+    /** Shutdown observation only; success alone never confirms process exit. */
+    shutdownReceipt?: MCPShutdownReceipt;
   data?: T;
   error?: string;
   statusCode?: number;

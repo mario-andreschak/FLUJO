@@ -49,8 +49,6 @@ EOF
     PATH="$temp_dir:$PATH" NODE_VERSION_OUTPUT="$version_output" NODE_EXIT_CODE="$exit_code" bash -c "
         $HAVE_FUNC
         $NODE_VERSION_OK_FUNC
-        MIN_NODE_MAJOR=22
-        MIN_NODE_MINOR=0
         node_version_ok
     " 2>/dev/null
     local result=$?
@@ -78,10 +76,18 @@ echo "Running Unix installer Node.js version validation tests..."
 echo
 
 # Supported versions
-run_test "Node 22.0.0 (with v prefix)" "pass" "v22.0.0" 0
-run_test "Node 22.0.0 (no prefix)" "pass" "22.0.0" 0
-run_test "Node 22.14.0" "pass" "22.14.0" 0
-run_test "Node 23.0.0" "pass" "23.0.0" 0
+run_test "Node 22.17.0 (with v prefix)" "pass" "v22.17.0" 0
+run_test "Node 22.17.0 (no prefix)" "pass" "22.17.0" 0
+run_test "Later Node 22" "pass" "22.18.0" 0
+run_test "Node 24.2.0" "pass" "24.2.0" 0
+run_test "Node 25" "fail" "25.0.0" 0
+run_test "Old Node 22 floor" "fail" "22.0.0" 0
+run_test "Previous Node 22 profile" "fail" "22.13.1" 0
+run_test "Node 22 before fix" "fail" "22.16.0" 0
+run_test "Node 23" "fail" "23.11.0" 0
+run_test "Node 24 before fix" "fail" "24.0.0" 0
+run_test "Node 24 before fix (last minor)" "fail" "24.1.9" 0
+run_test "Leading zero major" "fail" "022.17.0" 0
 run_test "Node 24.5.1" "pass" "24.5.1" 0
 
 # Outdated versions
@@ -98,8 +104,6 @@ PATH="$temp_dir:/usr/bin:/bin" bash -c "
     $HAVE_FUNC
     $NODE_VERSION_OK_FUNC
     have() { [ \"\$1\" != node ] && command -v \"\$1\" >/dev/null 2>&1; }
-    MIN_NODE_MAJOR=22
-    MIN_NODE_MINOR=0
     node_version_ok
 " 2>/dev/null
 result=$?

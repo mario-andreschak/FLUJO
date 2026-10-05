@@ -1,4 +1,5 @@
-import { constants, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import { readPlainFile } from '@/utils/readPlainFile';
 import { createDecipheriv, createHash } from 'node:crypto';
 import path from 'node:path';
 import JSZip from 'jszip';
@@ -12,7 +13,7 @@ import {
 } from '@/utils/workspace';
 import type { WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { isChatGptAuthCache } from '@/backend/services/model/adapters/codexAuth';
-import { atomicWriteWithoutLinks } from './backupRestoreFs';
+import { atomicWriteWithoutLinks, assertLinkFreeFileParent } from './backupRestoreFs';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { isWorkerMode, setWorkerBootstrapStatus } from './workerMode';
@@ -202,14 +203,20 @@ export async function verifyWorkerCodexAuth(
 ): Promise<void> {
   if (result.codexAuth !== 'chatgpt') return;
   const root = path.join(workspaceRoot, 'db', 'codex-runtime');
+  const credentials: Buffer[] = [];
   for (const file of ['auth.json', 'flujo-auth-source.json']) {
-    const stat = await fs.lstat(path.join(root, file));
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 1024 * 1024) {
+    const stat = await fs.lstat(path.join(root, file), { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > BigInt(1) || stat.size > BigInt(1024 * 1024)) {
       throw new Error('Worker Codex authentication is not a valid workspace credential file.');
     }
+    const credentialPath = path.join(root, file);
+    credentials.push(await readPlainFile(credentialPath, {
+      expected: stat, maxBytes: 1024 * 1024,
+      verifyPath: () => assertLinkFreeFileParent(workspaceRoot, credentialPath),
+    }));
   }
-  const auth = await fs.readFile(path.join(root, 'auth.json'));
-  const marker = parseJson(await fs.readFile(path.join(root, 'flujo-auth-source.json'), 'utf8'), 'Worker Codex authentication marker is invalid.');
+  const [auth, markerBytes] = credentials;
+  const marker = parseJson(markerBytes.toString('utf8'), 'Worker Codex authentication marker is invalid.');
   if (!isChatGptAuthCache(auth) || !record(marker) || marker.version !== 1 || marker.source !== 'workspace') {
     throw new Error('Worker Codex ChatGPT authentication is missing or invalid.');
   }
@@ -218,14 +225,17 @@ export async function verifyWorkerCodexAuth(
 async function readWorkerUnlockKey(result: WorkerSnapshotRestoreResult, root = getWorkspaceDir(result.workspace)): Promise<string | null> {
   if (result.encryption !== 'user') return null;
   const keyPath = path.join(root, 'db', 'worker-bootstrap-secrets.json');
-  const stat = await fs.lstat(keyPath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 4096) {
+  const stat = await fs.lstat(keyPath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > BigInt(1) || stat.size > BigInt(4096)) {
     throw new Error('Worker workspace encryption requires valid bootstrap credentials.');
   }
-  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+  if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) {
     throw new Error('Worker workspace encryption credentials must be owner-only.');
   }
-  const value = parseJson(await fs.readFile(keyPath, 'utf8'), 'Worker workspace encryption bootstrap credentials are invalid.');
+  const value = parseJson((await readPlainFile(keyPath, {
+    expected: stat, maxBytes: 4096, ownerOnly: true,
+    verifyPath: () => assertLinkFreeFileParent(root, keyPath),
+  })).toString('utf8'), 'Worker workspace encryption bootstrap credentials are invalid.');
   // Validate v2 keyrings and the effective v1 AES key with the crypto module's
   // shared parser. Never truncate keys to the old random-byte count.
   if (!record(value) || value.version !== 1 || typeof value.workspaceDek !== 'string'
@@ -249,19 +259,11 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
   const encrypted = Boolean(process.env.FLUJO_WORKER_SNAPSHOT_KEY);
   const maxArchiveBytes = maxBytes + MAX_MANIFEST_BYTES;
   const maxInputBytes = encrypted ? Math.ceil(maxArchiveBytes * 4 / 3) + 4096 : maxArchiveBytes;
-  const stat = await fs.lstat(archivePath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxInputBytes) {
+  const stat = await fs.lstat(archivePath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > BigInt(maxInputBytes)) {
     throw new Error('Worker snapshot must be an ordinary ZIP file within the size limit.');
   }
-  const handle = await fs.open(archivePath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  let bytes: Buffer;
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size) {
-      throw new Error('Worker snapshot changed while it was opened.');
-    }
-    bytes = await handle.readFile();
-  } finally { await handle.close(); }
+  let bytes = await readPlainFile(archivePath, { expected: stat, maxBytes: maxInputBytes });
   if (bytes.length > maxInputBytes) throw new Error('Worker snapshot exceeds the size limit.');
   if (encrypted) bytes = decryptEnvelope(bytes, maxArchiveBytes);
   if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Worker snapshot SHA-256 mismatch.');
@@ -315,11 +317,14 @@ async function restoreArchive(archivePath: string, digest: string): Promise<Work
     await plainDirectory(target);
     const markerPath = path.join(target, RESTORE_MARKER);
     if (await optionalStat(markerPath)) {
-      const markerStat = await fs.lstat(markerPath);
-      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink > 1 || markerStat.size > 4096) {
+      const markerStat = await fs.lstat(markerPath, { bigint: true });
+      if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.nlink > BigInt(1) || markerStat.size > BigInt(4096)) {
         throw new Error('Invalid worker restore marker.');
       }
-      const marker = parseJson(await fs.readFile(markerPath, 'utf8'), 'Worker restore marker is invalid.');
+      const marker = parseJson((await readPlainFile(markerPath, {
+        expected: markerStat, maxBytes: 4096,
+        verifyPath: () => assertLinkFreeFileParent(target, markerPath),
+      })).toString('utf8'), 'Worker restore marker is invalid.');
       if (!record(marker) || marker.formatVersion !== 1 || marker.archiveSha256 !== digest
           || marker.workspace !== result.workspace) throw new Error('Worker snapshot does not match the existing workspace.');
       await verifyWorkerCodexAuth(result);

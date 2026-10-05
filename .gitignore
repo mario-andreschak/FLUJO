@@ -41,6 +41,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+.avatar-preview-data/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -139,6 +140,7 @@ dist
 /mcp-servers/*
 !/mcp-servers/README.md
 !/mcp-servers/embed-shared.mjs
+!/mcp-servers/embed-runtime.mjs
 !/mcp-servers/bash/
 !/mcp-servers/browser/
 !/mcp-servers/filesystem/
@@ -217,3 +219,4 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /persona-browser-artifacts/
+/ci-node-runtime/

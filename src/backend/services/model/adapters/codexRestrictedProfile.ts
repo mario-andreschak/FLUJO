@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createReadStream, promises as fs } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { createRequire } from 'node:module';
+import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readCodexAuthForTransfer } from './codexAuth';
+import { readStableFile } from '@/utils/readStableFile';
 
 /** Evidence supplied by the trusted integration after exercising this exact binary. */
 export interface RestrictedCodexProfile {
@@ -87,8 +88,9 @@ function bundledExecutable(): string {
   };
   const triple = triples[`${process.platform}:${process.arch}`];
   if (!triple) throw new Error('Restricted Codex profile does not support this platform.');
-  const localRequire = createRequire(path.join(process.cwd(), 'package.json'));
-  const codexRequire = createRequire(localRequire.resolve('@openai/codex/package.json'));
+  const nativeCreateRequire: typeof nodeModule.createRequire = Reflect.get(nodeModule, 'createRequire');
+  const localRequire = nativeCreateRequire(path.join(process.cwd(), 'package.json'));
+  const codexRequire = nativeCreateRequire(localRequire.resolve('@openai/codex/package.json'));
   const platformPackage = `@openai/codex-${process.platform}-${process.arch}`;
   const root = path.dirname(codexRequire.resolve(`${platformPackage}/package.json`));
   return path.join(root, 'vendor', triple, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
@@ -99,15 +101,13 @@ async function readVerifiedModelCatalog(profile: RestrictedCodexProfile): Promis
     || !/^[a-f0-9]{64}$/.test(profile.verifiedModelCatalogSha256 ?? '')) {
     throw new Error('Restricted Codex requires a verified model catalog.');
   }
-  const before = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (!before.isFile() || before.isSymbolicLink() || before.size > 16 * 1024 * 1024) {
+  let bytes: Buffer;
+  try {
+    bytes = await readStableFile(profile.verifiedModelCatalogPath, 16 * 1024 * 1024);
+  } catch {
     throw new Error('Restricted Codex model catalog is invalid.');
   }
-  const bytes = await fs.readFile(profile.verifiedModelCatalogPath);
-  const after = await fs.lstat(profile.verifiedModelCatalogPath);
-  if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-    || bytes.length !== before.size
-    || createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
+  if (createHash('sha256').update(bytes).digest('hex') !== profile.verifiedModelCatalogSha256) {
     throw new Error('Restricted Codex model catalog differs from its verified profile.');
   }
   return bytes;

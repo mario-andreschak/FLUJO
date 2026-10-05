@@ -1,5 +1,6 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
-import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, ExecutionExtensionError } from '@/backend/execution/extensions';
+import { createHash } from 'node:crypto';
+import { assertExecutionModelTool, assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
@@ -1961,6 +1962,7 @@ export class ModelHandler {
     // refit below can never multiply the number of waits.
     let attemptProducedOutput = false;
     let automaticRetriesUsed = 0;
+    let singlePhysicalAttempt = false;
 
     try {
       if (opts?.executionExtensionContext) {
@@ -1987,6 +1989,8 @@ export class ModelHandler {
           )
         };
       }
+
+      singlePhysicalAttempt = await executionExtensionSinglePhysicalAttempt(opts?.executionExtensionContext, model);
 
       // Extract model settings. Malformed persisted values are omitted so NaN
       // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
@@ -3024,6 +3028,7 @@ export class ModelHandler {
           attemptProducedOutput = false;
           const attemptResult = await attempt(attemptMessages, attemptTools, attemptTemperature);
           if (attemptResult.success) return attemptResult;
+          if (singlePhysicalAttempt) return attemptResult;
 
           if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
           if (attemptProducedOutput) return attemptResult;
@@ -3098,7 +3103,7 @@ export class ModelHandler {
       // make one final attempt with an explicit user nudge so models that became
       // stuck at an assistant boundary can recover. If that is empty too, return
       // the original normalized error shape.
-      if (!result.success && isEmptyStoppedCompletionError(result.error)) {
+      if (!singlePhysicalAttempt && !result.success && isEmptyStoppedCompletionError(result.error)) {
         for (let retry = 1; retry <= EMPTY_STOP_RETRIES_BEFORE_SYNTHETIC_MESSAGE; retry++) {
           if (abortController.signal.aborted || opts?.shouldAbort?.() || attemptProducedOutput) break;
           const retryTemperature = retry === EMPTY_STOP_TEMPERATURE_RETRY
@@ -4126,6 +4131,11 @@ export class ModelHandler {
               toolCallId: id,
               name,
               result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              resultContentBinding: {
+                serialization: 'utf8-string-v1',
+                sha256: createHash('sha256').update(resultContent, 'utf8').digest('hex'),
+                bytes: Buffer.byteLength(resultContent, 'utf8'),
+              },
               isError: !result.success
             });
           });

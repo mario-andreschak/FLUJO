@@ -13,6 +13,7 @@ import {
   ISOLATED_TEST_FILES,
   isolatedTestPathIgnorePatterns,
   shouldExcludeIsolatedSuites,
+  testPatternsForRoot,
 } from '../../jest.testMatch.mjs';
 
 const {
@@ -72,11 +73,15 @@ describe('isolated test stage', () => {
   });
 
   it('produces ignore patterns that match exactly those files', () => {
-    const rootDir = '/repo';
-    for (const [index, pattern] of isolatedTestPathIgnorePatterns.entries()) {
-      const regex = new RegExp(pattern.replace('<rootDir>', rootDir));
-      expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}`)).toBe(true);
-      expect(regex.test(`${rootDir}/__tests__/meta/isolatedTestStage.test.ts`)).toBe(false);
+    const physicalRoot = fs.realpathSync.native(ROOT).replaceAll('\\', '/');
+    expect(isolatedTestPathIgnorePatterns).toEqual(testPatternsForRoot(ROOT).isolatedTestPathIgnorePatterns);
+    for (const rootDir of ['/repo', physicalRoot]) {
+      for (const [index, pattern] of testPatternsForRoot(rootDir).isolatedTestPathIgnorePatterns.entries()) {
+        const regex = new RegExp(pattern);
+        expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}`)).toBe(true);
+        expect(regex.test(`${rootDir}/__tests__/meta/isolatedTestStage.test.ts`)).toBe(false);
+        expect(regex.test(`${rootDir}/${ISOLATED_TEST_FILES[index]}.extra`)).toBe(false);
+      }
     }
   });
 });

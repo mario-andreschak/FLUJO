@@ -353,6 +353,42 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
     }
   });
 
+  it('replays durable events after cleanup of a terminal channel whose subscriber outlived the first timer', async () => {
+    const conv = 'conv-events-jsonl-last-subscriber-cleanup';
+    registerPersistable(conv);
+    const unsubscribe = executionEventBus.subscribe(conv, () => undefined);
+    emit(conv, { type: 'run:start', flowId: 'f' }); // seq 0
+    emit(conv, { type: 'message', message: { id: 'retained', role: 'assistant', content: 'durable' } }); // seq 1
+    await flushConversationLog(conv);
+
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    try {
+      emit(conv, { type: 'run:done', status: 'completed' }); // seq 2
+      await flushConversationLog(conv);
+      jest.advanceTimersByTime(10 * 60 * 1000);
+      expect(executionEventBus.getBufferedSince(conv, 0)).toHaveLength(3);
+      unsubscribe();
+      jest.advanceTimersByTime(5 * 60 * 1000);
+      expect(executionEventBus.getBufferedSince(conv, 0)).toEqual([]);
+      expect(FlowExecutor.conversationStates.has(conv)).toBe(true);
+    } finally {
+      jest.useRealTimers();
+      unsubscribe();
+    }
+
+    const { reader, abort } = await openStream(conv, 1);
+    try {
+      const replay = await readEvents(reader, 2);
+      expect(replay.events.map(event => event.seq)).toEqual([1, 2]);
+      expect(replay.events.map(event => event.type)).toEqual(['message', 'run:done']);
+      expect(await readUntilClosed(reader)).toBe(true);
+    } finally {
+      abort.abort();
+    }
+    expect(emit(conv, { type: 'run:start', flowId: 'f' }).seq).toBe(3);
+    await flushConversationLog(conv);
+  });
+
   it('resumes from a mid-run cursor via JSONL, skipping already-seen events', async () => {
     const conv = 'conv-events-jsonl-midcursor';
     registerPersistable(conv);

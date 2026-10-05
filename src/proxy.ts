@@ -4,6 +4,9 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
 import { assertSnapshotBearer } from '@/backend/services/workspace/snapshotControlAuth';
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { authorizeExecutionTransport } from '@/backend/execution/extensions';
+import {
+  assertOwnerRequest, resolveOwnerRequest, isRemoteAvatarVoiceRequest, assertRemoteAvatarVoiceOrigin,
+} from '@/backend/services/security/ownerAccess';
 
 /**
  * Fail-closed localhost / DNS-rebinding origin guard for `/api/*` and `/v1/*`
@@ -31,8 +34,10 @@ import { authorizeExecutionTransport } from '@/backend/execution/extensions';
  * breakpoints) is now guarded centrally (#143). The highest-risk handlers
  * additionally keep their in-handler `assertLocalRequest` as defense-in-depth.
  *
- * It only reads the Host/Origin headers and calls the pure `isLocalRequest`
- * helper, so it is safe in Next's proxy runtime.
+ * An explicitly configured owner policy adds hashed, scoped API bearer
+ * authentication. The durable policy is read independently by the Node proxy
+ * and workspace handler boundary; neither trusts an identity header or globals
+ * from the other runtime. Protocol exceptions retain their handler auth.
  *
  * OPTIONS/preflight: CORS preflight requests carry no credentials or body and
  * cannot themselves reach a sink, so we let `OPTIONS` pass through to avoid
@@ -65,9 +70,6 @@ export function proxy(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
-  // MCP routes retain their existing inline local guards outside worker mode.
-  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
-
   // The selected exposure mode is the outer boundary for every endpoint,
   // including the intentionally public webhook/OAuth/OpenAI surfaces.
   if (!isRequestHostAllowed(request.headers.get('host'))) {
@@ -76,6 +78,22 @@ export function proxy(request: NextRequest): NextResponse {
       { status: 403, headers: { 'content-type': 'application/json' } },
     );
   }
+
+  const ownerDenied = assertOwnerRequest(request);
+  if (ownerDenied) return new NextResponse(ownerDenied.body, {
+    status: ownerDenied.status, headers: ownerDenied.headers,
+  });
+
+  // The private BFF may differ from this host. Only exact voice routes with a
+  // strict workspace-bound voice principal and explicitly approved Origin pass.
+  if (isRemoteAvatarVoiceRequest(request)) {
+    const admitted = resolveOwnerRequest(request, ['avatar:voice']);
+    const denied = admitted.ok ? assertRemoteAvatarVoiceOrigin(request) : admitted.response;
+    return denied ? new NextResponse(denied.body, { status: denied.status, headers: denied.headers }) : NextResponse.next();
+  }
+
+  // MCP routes retain their existing inline Origin guards outside worker mode.
+  if (!pathname.startsWith('/api/') && !pathname.startsWith('/v1/')) return NextResponse.next();
 
   // Public protocol surfaces do not require a same-origin browser request, but
   // they still cannot escape the selected Localhost/Network/Public host scope.

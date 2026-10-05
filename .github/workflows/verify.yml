@@ -5,8 +5,8 @@
 # merged to main and stayed broken. These jobs are the gate that makes a
 # non-executing test file impossible to miss.
 #
-# Ask a maintainer to mark `typecheck`, `lint`, `test` and `test-isolated` as
-# required status checks in the branch protection rules for `main`.
+# Required contexts and administrator acceptance are documented in
+# docs/engineering-verification.md. YAML alone does not protect main.
 name: verify
 
 on:
@@ -31,23 +31,95 @@ jobs:
   production-build:
     name: Production build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # Match the Windows installation that exposed the default-heap OOM.
-          node-version: 22.13.1
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Retain the original ordinary default-heap build; installed checks use supported runtimes below.
+          node-version: '22.13.1'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.13.1 --historical-build --record
       - run: npm ci --include=dev
       - name: Verify tracing against a populated runtime directory
         run: node --test scripts/exclude-workspaces-from-next-glob.test.mjs
       - name: Build with the ordinary command and default Node heap
         run: npm run build
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.17.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.17.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.17.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run build
+          npm run typecheck:mcp
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - name: Qualify installed app and packed MCP packages on Node 22.23.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run build
+          npm run typecheck:mcp
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.2.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.2.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 24.2.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run build
+          npm run typecheck:mcp
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 24.21.0 --record
+      - name: Qualify installed app and packed MCP packages on Node 24.21.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run build
+          npm run typecheck:mcp
+          npm run validate:mcp-release
+          npm run smoke:mcp-artifacts
+      - name: Retain exact runtime measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-node-runtime-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-node-runtime/
+          if-no-files-found: error
+          retention-days: 30
 
   persona-memory-profile:
     if: github.event_name == 'workflow_dispatch' && inputs.persona_memory_profile
@@ -55,11 +127,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
       - name: Profile the unchanged full runtime workload
         env:
@@ -81,7 +157,7 @@ jobs:
             __tests__/enduringAgents/runtimeClock.test.ts \
             __tests__/enduringAgents/soak/evidence.test.ts \
             __tests__/enduringAgents/soak/personaSoak.test.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: persona-memory-profile-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -96,131 +172,60 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
       # Workflow structure checks use the lockfile-pinned YAML dependency.
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
       # Tests intercept every release subprocess before execution.
-      - run: node --test scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/release-arguments.test.mjs scripts/release-verification.test.mjs scripts/require-release-verification.test.mjs scripts/npm-release.test.mjs scripts/release-github.test.mjs
       - run: node --test tests/installer-repository.test.mjs
+      - run: node --test scripts/run-local-jest.test.mjs
+      - run: node --test scripts/release-evidence.test.mjs
+      - name: Verify maintainer evidence boundaries
+        run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs scripts/maintainer-installed-upgrade.test.mjs scripts/maintainer-npm-provenance.test.mjs scripts/maintainer-synthetic-state.test.mjs
+      - name: Exercise disposable ownership prototype
+        timeout-minutes: 3
+        run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"
+      - name: Retain ownership prototype fixture report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ownership-prototype-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ownership-prototype.json
+          if-no-files-found: error
+          retention-days: 30
+      - run: npm run test:dependency-glob
+      - name: Verify native private storage before building release artifacts
+        run: node --test scripts/local-instance.test.mjs
+      - run: node --test scripts/image-release.test.mjs
 
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
       # tsconfig.json includes __tests__/, so this also type-checks the suite.
       # It stops after the first fatal syntax error, which is why the Jest run
       # below (and __tests__/meta/parseAllTestFiles.test.ts) is the
       # authoritative "everything parses" gate.
       - run: npm run typecheck
+      - run: npm run typecheck:mcp
       - run: node scripts/generate-api-inventory.mjs --check
-
-  lint:
-    name: lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --include=dev
-      # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
-      - run: npm run lint:all
-
-  test:
-    name: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --include=dev
-      # Workspace creation and migration exercise the shipped package payloads.
-      # A clean checkout has no compiled dist until this explicit prerequisite.
-      - name: Build the standalone MCP packages
-        run: npm run build:mcp
-      # Jest's own exit code is deliberately not the gate: the baseline script
-      # below is, because it distinguishes "a quarantined flake failed" from
-      # "a suite stopped executing". It still records the raw results.
-      - name: Run the suite
-        id: jest
-        continue-on-error: true
-        run: npm run test:ci
-      - name: Verify the published test baseline
-        run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
-      - name: Run deterministic memory ranking experiment
-        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
-      - name: Upload memory experiment results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: memory-experiment-results
-          path: memory-experiment-results.json
-          if-no-files-found: warn
-      - name: Upload Jest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jest-results-ci
-          path: jest-results.json
-          if-no-files-found: warn
-
-  test-isolated:
-    name: test-isolated
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Build the standalone MCP packages
-        run: npm run build:mcp
-      # The child-process suites run serially on their own runner so they never
-      # compete with the main run's Jest workers for CPU.
-      - name: Run the process-boundary suites
-        id: jest
-        continue-on-error: true
-        env:
-          # Hosted runners are slower than a developer laptop; the harness
-          # honours this override instead of a hardcoded budget.
-          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
-          # Preserve the exact reconciliation fields when the smoke gate fails.
-          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
-          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-isolated-smoke
-        run: npm run test:isolated
-      - name: Verify the published test baseline
-        run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
-      - name: Upload Jest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jest-results-isolated
-          path: jest-results-isolated.json
-          if-no-files-found: warn
-      - name: Upload Persona smoke evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: soak-smoke-artifacts/
-          if-no-files-found: warn
 
   workflow-contract:
     name: workflow-contract
@@ -232,10 +237,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: '22.23.3'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - run: node --test scripts/required-check-workflow.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/verification-contract.test.mjs scripts/next-lint-glob.test.mjs
+      - run: node --test scripts/verification-contract.test.mjs scripts/workflow-contract.test.mjs scripts/verify-repository-rules.test.mjs scripts/verify-ci-node.test.mjs scripts/node-runtime.test.mjs scripts/scanner-workflow-contract.test.mjs scripts/probe-filesystem-identity.test.mjs scripts/required-check-workflow.test.mjs scripts/next-lint-glob.test.mjs
 
   dependency-security:
     name: dependency-security
@@ -247,18 +254,23 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: '22.23.3'
           cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - run: npm ci --include=dev
-      - name: Audit the complete installed dependency graph
+      - name: Audit the installed lockfile dependencies, including build tools
         run: npm audit --include=dev --audit-level=high --json > dependency-audit.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: dependency-security-${{ github.sha }}-${{ github.run_id }}
+          name: dependency-audit-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: dependency-audit.json
           if-no-files-found: error
+          retention-days: 30
 
+  # Administrator prerequisite: disable CodeQL default setup before this
+  # advanced setup can upload results. See docs/engineering-verification.md.
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-latest
@@ -287,6 +299,118 @@ jobs:
           skip-queries: 'false'
           wait-for-processing: 'true'
 
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - run: npm ci --include=dev
+      # Covers src/, __tests__/ and scripts/ with warnings treated as errors.
+      - name: Verify the locked Next lint adapter and real rule callers
+        run: npm run test:dependency-glob
+      - run: npm run lint:all
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - run: npm ci --include=dev
+      # Workspace creation and migration exercise the shipped package payloads.
+      # A clean checkout has no compiled dist until this explicit prerequisite.
+      - name: Build the standalone MCP packages
+        run: npm run build:mcp
+      # Jest's own exit code is deliberately not the gate: the baseline script
+      # below is, because it distinguishes "a quarantined flake failed" from
+      # "a suite stopped executing". It still records the raw results.
+      - name: Run the suite
+        id: jest
+        continue-on-error: true
+        run: npm run test:ci
+      - name: Verify the published test baseline
+        run: npm run verify:test-baseline -- --stage=ci --results=jest-results.json
+      - name: Run deterministic memory ranking experiment
+        run: npm run test:memory-experiment -- --json=memory-experiment-results.json --commit=${{ github.sha }}
+      - name: Upload memory experiment results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: memory-experiment-results
+          path: memory-experiment-results.json
+          if-no-files-found: warn
+      - name: Upload Jest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jest-results-ci
+          path: jest-results.json
+          if-no-files-found: warn
+
+  test-isolated:
+    name: test-isolated
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
+      - run: npm ci --include=dev
+      - name: Build the standalone MCP packages
+        run: npm run build:mcp
+      # The child-process suites run serially on their own runner so they never
+      # compete with the main run's Jest workers for CPU.
+      - name: Run the process-boundary suites
+        id: jest
+        continue-on-error: true
+        env:
+          # Hosted runners are slower than a developer laptop; the harness
+          # honours this override instead of a hardcoded budget.
+          FLUJO_PERSONA_CHILD_READY_TIMEOUT_MS: 120000
+          # Preserve the exact reconciliation fields when the smoke gate fails.
+          PERSONA_SOAK_OUTPUT: soak-smoke-artifacts
+          PERSONA_SOAK_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-isolated-smoke
+        run: npm run test:isolated
+      - name: Verify the published test baseline
+        run: npm run verify:test-baseline -- --stage=isolated --results=jest-results-isolated.json
+      - name: Upload Jest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jest-results-isolated
+          path: jest-results-isolated.json
+          if-no-files-found: warn
+      - name: Upload Persona smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: persona-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: soak-smoke-artifacts/
+          if-no-files-found: warn
+
   verification:
     name: verification
     if: always()
@@ -299,7 +423,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: '22.23.3'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.3 --record
       - name: Refuse missing, skipped, cancelled or failed prerequisites
         env:
           VERIFICATION_NEEDS: ${{ toJSON(needs) }}

@@ -60,6 +60,7 @@ import { GET as getTools } from '@/app/api/mcp/servers/[name]/tools/route';
 import { POST as callTool } from '@/app/api/mcp/servers/[name]/tools/[toolName]/route';
 import { POST as testConnection } from '@/app/api/mcp/test-connection/route';
 import { makeLocalRequest } from '../utils/localRequest';
+import { _resetLifecycleForTests, beginTeardown, markConnected } from '@/backend/services/mcp/lifecycleCoordinator';
 
 // The handlers call request.json() and the fail-closed origin guard (#142) reads
 // Host/Origin; makeLocalRequest supplies both so the guard treats it as local.
@@ -81,6 +82,7 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
 } as MCPStdioConfig);
 
 beforeEach(() => {
+  _resetLifecycleForTests();
   for (const k of Object.keys(store)) delete store[k];
   migrateMcpServerReferences.mockClear();
 });
@@ -159,6 +161,19 @@ describe('MCP REST API', () => {
     const res = await getStatus(req(), ctx('srv1'));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ status: 'disconnected' });
+  });
+
+  it('keeps disabled connection intent separate from unknown shutdown evidence', async () => {
+    await createServer(req(serverFixture()));
+    markConnected('srv1');
+    const receipt = await beginTeardown('srv1', 'disconnect', async () => ({
+      processOwnership: 'owned', exitOutcome: 'unknown', forced: true,
+      errorClassification: 'exit_unobserved',
+    }));
+    const res = await getStatus(req(), ctx('srv1'));
+    expect(await res.json()).toMatchObject({ status: 'disconnected', shutdownReceipt: receipt });
+    markConnected('srv1');
+    expect(await (await getStatus(req(), ctx('srv1'))).json()).not.toHaveProperty('shutdownReceipt');
   });
 
   it('GET /api/mcp/servers/{name}/tools returns an empty list with an error when not connected', async () => {

@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { createLogger } from '@/utils/logger';
@@ -17,6 +17,12 @@ import {
 import type { MCPReadResourceResult } from '@/shared/types/mcp';
 import type { VisualArchiveResourceMetadata } from '@/shared/types/visualArchive';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
+import { readPayloadProjection } from './readPayloadProjection';
+import { copyPayloadSnapshot } from './copyPayloadSnapshot';
+import { withRunResourceCopyAdmission } from './copyAdmission';
+import { clearRunResourceIndexCache, invalidateRunResourceIndex, loadRunResourceIndex, publishRunResourceIndex } from './indexCache';
+export { getRunResourceCopyPressure } from './copyAdmission';
+export { getRunResourceIndexPressure, RunResourceIndexPressureError } from './indexCache';
 
 /**
  * Run-scoped resource store (Tier 3 data flow).
@@ -152,32 +158,19 @@ export function _clearRunResourceSettingsCache(): void {
 
 // --- Index cache -------------------------------------------------------------
 
-// Global-backed like __mcp_clients: Next.js can instantiate this module more
-// than once (route bundles, hot reload) and all instances must share the cache.
-// Disk is the cold-start source of truth.
-declare global {
-  var __flujo_run_resources: Map<string, RunResourceEntry[]> | undefined;
-}
-const indexCache: Map<string, RunResourceEntry[]> =
-  global.__flujo_run_resources ?? (global.__flujo_run_resources = new Map());
-
 async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
-  const cached = indexCache.get(cacheKey(conversationId));
-  if (cached) return cached;
-  let entries: RunResourceEntry[] = [];
-  try {
-    const content = await fs.readFile(indexPath(conversationId), 'utf-8');
-    if (content.trim().length > 0) {
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) entries = parsed as RunResourceEntry[];
+  const filename = indexPath(conversationId);
+  return loadRunResourceIndex(cacheKey(conversationId), async () => {
+    try {
+      return await fs.readFile(filename, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '[]';
+      // A failed/corrupt read must not masquerade as an empty history that the
+      // next write overwrites. Capture callers retain inline content on errors.
+      log.error(`Failed to read run-resource index for ${conversationId}`, error);
+      throw error;
     }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.error(`Failed to read run-resource index for ${conversationId}; treating as empty`, error);
-    }
-  }
-  indexCache.set(cacheKey(conversationId), entries);
-  return entries;
+  });
 }
 
 /**
@@ -198,8 +191,16 @@ async function mutateIndex<T>(
     const entries = await loadIndex(conversationId);
     const { next, result } = await mutator(entries);
     if (next !== entries) {
-      indexCache.set(cacheKey(conversationId), next);
-      await writeFileAtomic(indexPath(conversationId), JSON.stringify(next, null, 2));
+      try {
+        const content = JSON.stringify(next, null, 2);
+        await writeFileAtomic(indexPath(conversationId), content);
+        publishRunResourceIndex(cacheKey(conversationId), content);
+      } catch (error) {
+        // A failed/ambiguous publication must reload disk rather than expose an
+        // uncommitted new entry or retain stale metadata after a rename.
+        invalidateRunResourceIndex(cacheKey(conversationId));
+        throw error;
+      }
     }
     return result;
   });
@@ -220,6 +221,7 @@ export type WriteRunResourceInput = {
 };
 
 export type WriteRunResourceResult = RunResourceEntry | { skipped: 'size-cap' | 'conversation-cap' };
+export type CopyRunResourceResult = WriteRunResourceResult | { skipped: 'copy-pressure' };
 
 export type CopyRunResourceInput = {
   /** Existing flujo://run/... resource to copy. */
@@ -247,7 +249,23 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       encoding = 'base64';
     }
   }
-  const size = payload?.byteLength ?? 0;
+  return storePreparedRunResource(input, settings, {
+    size: payload?.byteLength ?? 0,
+    encoding,
+    persist: payload ? async filename => {
+      await fs.writeFile(filename, payload);
+      return createHash('sha256').update(payload).digest('hex');
+    } : undefined,
+  });
+}
+
+/** The same quota/overwrite transaction serves ordinary writes and streamed copies. */
+async function storePreparedRunResource(
+  input: WriteRunResourceInput,
+  settings: RunResourceSettings,
+  payload: { size: number; encoding: 'utf8' | 'base64'; persist?: (filename: string) => Promise<string> },
+): Promise<WriteRunResourceResult> {
+  const { size, encoding } = payload;
 
   if (size > settings.maxResourceBytes) {
     log.warn(`Run-resource write skipped (size ${size} > cap ${settings.maxResourceBytes})`, {
@@ -277,6 +295,11 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       return { next: entries, result: { skipped: 'conversation-cap' } };
     }
 
+    let sha256: string | undefined;
+    if (payload.persist) {
+      await fs.mkdir(conversationDir(input.conversationId), { recursive: true });
+      sha256 = await payload.persist(payloadPath(input.conversationId, id));
+    }
     const entry: RunResourceEntry = {
       id,
       uri: buildRunResourceUri(input.conversationId, id),
@@ -284,7 +307,7 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       name: input.name,
       mimeType: input.mimeType,
       size,
-      sha256: payload ? createHash('sha256').update(payload).digest('hex') : undefined,
+      sha256,
       kind: input.kind,
       encoding,
       createdAt: Date.now(),
@@ -294,11 +317,6 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
       readBy: [],
       verifications: [],
     };
-
-    if (payload) {
-      await fs.mkdir(conversationDir(input.conversationId), { recursive: true });
-      await fs.writeFile(payloadPath(input.conversationId, id), payload);
-    }
 
     const next = replaced ? entries.filter(e => e !== replaced) : entries.slice();
     next.push(entry);
@@ -320,12 +338,12 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
     });
   }
 
-  return result;
+  return structuredClone(result);
 }
 
 export async function listRunResources(conversationId: string): Promise<RunResourceEntry[]> {
   assertSafeId(conversationId, 'conversationId');
-  return (await loadIndex(conversationId)).slice();
+  return structuredClone(await loadIndex(conversationId));
 }
 
 /**
@@ -347,7 +365,7 @@ export async function listAllRunResources(limit = 200, offset = 0): Promise<RunR
     all.push(...await loadIndex(conversationId));
   }
   all.sort((a, b) => b.createdAt - a.createdAt);
-  return all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit));
+  return structuredClone(all.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, limit)));
 }
 
 export async function findRunResourceByName(
@@ -356,7 +374,8 @@ export async function findRunResourceByName(
 ): Promise<RunResourceEntry | null> {
   assertSafeId(conversationId, 'conversationId');
   const entries = await loadIndex(conversationId);
-  return entries.find(e => e.name === name) ?? null;
+  const entry = entries.find(e => e.name === name);
+  return entry ? structuredClone(entry) : null;
 }
 
 /**
@@ -373,8 +392,9 @@ export async function readRunResource(
   const parsed = parseRunResourceUri(uri);
   if (!parsed) return null;
   const entries = await loadIndex(parsed.conversationId);
-  const entry = entries.find(e => e.id === parsed.id);
-  if (!entry) return null;
+  const snapshot = entries.find(e => e.id === parsed.id);
+  if (!snapshot) return null;
+  const entry = structuredClone(snapshot);
 
   let contents: MCPReadResourceResult;
   if (entry.kind === 'link') {
@@ -439,8 +459,9 @@ export async function readRunResourceRange(
   const parsed = parseRunResourceUri(uri);
   if (!parsed) return null;
   const entries = await loadIndex(parsed.conversationId);
-  const entry = entries.find((candidate) => candidate.id === parsed.id);
-  if (!entry || entry.kind === 'link') return null;
+  const snapshot = entries.find((candidate) => candidate.id === parsed.id);
+  if (!snapshot || snapshot.kind === 'link') return null;
+  const entry = structuredClone(snapshot);
 
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
@@ -496,42 +517,53 @@ export async function readRunResourceRange(
  * parent steps may only use resources owned by the parent run, so returning the
  * child URI directly creates a visible attachment that `read_resource` quite
  * correctly refuses. This promotion helper preserves the bytes and MIME/kind
- * metadata while issuing a new parent-owned URI. It deliberately goes through
- * the normal read/write APIs so size and conversation caps remain authoritative.
+ * metadata while issuing a new parent-owned URI. It streams the opened bytes
+ * through the same quota/overwrite transaction without text/base64 clones.
  */
 export async function copyRunResourceToConversation(
   input: CopyRunResourceInput,
-): Promise<WriteRunResourceResult | null> {
+): Promise<CopyRunResourceResult | null> {
   assertSafeId(input.conversationId, 'conversationId');
-  const source = await readRunResource(input.uri);
-  if (!source) return null;
-  if (source.entry.conversationId === input.conversationId) return source.entry;
-
-  const content = source.contents.contents[0] as { text?: unknown; blob?: unknown } | undefined;
-  let data: WriteRunResourceInput['data'];
-  if (source.entry.kind !== 'link') {
-    if (typeof content?.text === 'string') {
-      data = { text: content.text };
-    } else if (typeof content?.blob === 'string') {
-      data = { base64: content.blob };
-    } else {
-      log.warn(`Run-resource copy has no readable payload: ${input.uri}`);
+  const parsed = parseRunResourceUri(input.uri);
+  if (!parsed) return null;
+  // Enter the workspace gate first: a copy blocked behind a snapshot must not
+  // hold a slot needed by an already admitted mutation that the snapshot drains.
+  return withWorkspaceMutation(() => withRunResourceCopyAdmission(async () => {
+    const entries = await loadIndex(parsed.conversationId);
+    const source = entries.find(entry => entry.id === parsed.id);
+    if (!source) return null;
+    const destination: WriteRunResourceInput = {
+      conversationId: input.conversationId, name: input.name, mimeType: source.mimeType,
+      kind: source.kind, producedBy: input.producedBy, archive: source.archive,
+      origin: source.kind === 'link' ? source.origin : { server: 'flujo', uri: source.uri },
+    };
+    if (source.kind === 'link') {
+      return source.conversationId === input.conversationId ? structuredClone(source) : writeRunResource(destination);
+    }
+    let handle;
+    let initial;
+    try {
+      handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+      initial = await handle.stat({ bigint: true });
+      if (!initial.isFile() || initial.size < BigInt(0) || initial.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('Invalid run-resource copy source.');
+      }
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      log.error(`Run-resource copy source missing for ${input.uri}`, error);
       return null;
     }
-  }
-
-  return writeRunResource({
-    conversationId: input.conversationId,
-    name: input.name,
-    mimeType: source.entry.mimeType,
-    kind: source.entry.kind,
-    data,
-    producedBy: input.producedBy,
-    origin: source.entry.kind === 'link'
-      ? source.entry.origin
-      : { server: 'flujo', uri: source.entry.uri },
-    archive: source.entry.archive,
-  });
+    try {
+      if (source.conversationId === input.conversationId) return structuredClone(source);
+      const settings = await getRunResourceSettings();
+      return await storePreparedRunResource(destination, settings, {
+        size: Number(initial.size), encoding: source.encoding,
+        persist: filename => copyPayloadSnapshot(handle, initial, filename),
+      });
+    } finally {
+      await handle.close();
+    }
+  }));
 }
 
 /**
@@ -590,21 +622,24 @@ export async function readRunResourceBounded(
   const entries = await loadIndex(parsed.conversationId);
   const entry = entries.find((candidate) => candidate.id === parsed.id);
   if (!entry || entry.kind === 'link') return null;
-  let payload: Buffer;
+  const requestedMax = typeof options.maxChars === 'number' && !Number.isNaN(options.maxChars)
+    ? options.maxChars : 50_000;
+  const maxChars = Math.max(1, Math.min(200_000, Math.floor(requestedMax)));
+  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
+  let projection: Awaited<ReturnType<typeof readPayloadProjection>>;
   try {
-    payload = await fs.readFile(payloadPath(parsed.conversationId, parsed.id));
+    projection = await readPayloadProjection(payloadPath(parsed.conversationId, parsed.id), {
+      text: entry.encoding === 'utf8', maxChars, hash: Boolean(expectedSha256),
+    });
   } catch (error) {
     log.error(`Run-resource payload missing for ${uri}`, error);
     return null;
   }
-  const actualSha256 = createHash('sha256').update(payload).digest('hex');
-  const expectedSha256 = options.expectedSha256?.trim().toLowerCase();
   const verification = expectedSha256
-    ? { expectedSha256, actualSha256, ok: expectedSha256 === actualSha256 }
+    ? { expectedSha256, actualSha256: projection.sha256!, ok: expectedSha256 === projection.sha256 }
     : undefined;
-  const maxChars = Math.max(1, Math.min(200_000, Math.floor(options.maxChars ?? 50_000)));
   const raw = entry.encoding === 'utf8'
-    ? payload.toString('utf8')
+    ? projection.text
     : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`;
   const content = raw.slice(0, maxChars);
   try {
@@ -630,19 +665,23 @@ export async function readRunResourceBounded(
   } catch (error) {
     log.warn(`Failed to persist bounded read lineage for ${uri}`, error);
   }
-  return { entry, content, truncated: raw.length > content.length, verification };
+  return { entry: structuredClone(entry), content, truncated: projection.truncated || raw.length > content.length, verification };
 }
 
 /** Remove a conversation's resources (called from conversation DELETE). */
 export async function deleteRunResources(conversationId: string): Promise<void> {
   assertSafeId(conversationId, 'conversationId');
-  indexCache.delete(cacheKey(conversationId));
+  invalidateRunResourceIndex(cacheKey(conversationId));
   await runInWriteChain(chainKey(conversationId), async () => {
     try {
       await fs.rm(conversationDir(conversationId), { recursive: true, force: true });
       log.debug(`Deleted run resources for conversation ${conversationId}`);
     } catch (error) {
       log.warn(`Failed to delete run resources for ${conversationId}`, error);
+    } finally {
+      // A writer ahead of this deletion may have published after the initial
+      // invalidation; a cold read during removal must not retain that snapshot.
+      invalidateRunResourceIndex(cacheKey(conversationId));
     }
   });
 }
@@ -708,6 +747,6 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
 export function _setRunResourcesDirForTests(dir: string): string {
   const previous = runResourcesDir();
   runResourcesDirOverride = dir;
-  indexCache.clear();
+  clearRunResourceIndexCache();
   return previous;
 }

@@ -4,7 +4,7 @@ FLUJO is a single-user Next.js App Router application. The React frontend calls 
 
 ## System Architecture
 
-The request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. Worker deployments add a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state.
+The request proxy enforces Host/Origin exposure rules for internal API surfaces. Protocol-public endpoints have explicit exceptions; these are not user authentication. An explicitly configured owner policy adds scoped API bearers, with independent checks at the proxy and workspace route boundary. Anonymous localhost behavior remains the default when no policy is selected. Worker deployments use a separate bearer boundary. Handlers validate inputs and enter workspace context before accessing state. See the [owner access source contract](../security/owner-access-v1.md) for protocol exceptions, missing browser/session lifecycle and remaining coverage/release gates.
 
 ## Backend Architecture
 
@@ -18,8 +18,22 @@ Routes live under `src/app`; reusable components, hooks, services, contexts, and
 
 Cloud model adapters send selected context to configured providers. MCP integrations may execute local code or call remote services. Tool approvals mediate requested actions, while process/network permissions remain the host operator's responsibility. See [Connected Apps](../features/mcp/overview.md) and [project status](../project-status.md) for supported and experimental scope.
 
+The [MCP isolation source primitive](../security/mcp-isolation-v1-evidence.md)
+is not yet wired into the application's transport. Its controlled Docker probe
+does not establish isolation of currently connected MCP servers, installation
+scripts or an installed FLUJO artifact. Shared ownership/sharing and authenticated
+browser operation remain separate acceptance work.
+
 ## Decision Records
 
+- [Package flow identity and legacy references](./package-flow-identity.md):
+  Complete flow identities, ledger ownership and safe compatibility for installs.
+- [Execution and MCP ownership contracts](./execution-module-boundaries.md):
+  Existing lifecycle/authority/persistence/dispatch owners, import direction,
+  exact legacy dependencies, and behavior-preserving extraction gates (#571).
+- [Persona run context contract](./persona-run-contract.md):
+  Attributed instruction/snapshot decisions, caller ownership and ordered
+  source-regression traces for incremental execution simplification (#571).
 - [Single-gate tool approval proposal](./tool-approval-single-gate-proposal.md):
   Proposed conversation-scoped approval contract, workflow evidence, state and API
   requirements, verification matrix, and required stakeholder sign-off for issue #469.

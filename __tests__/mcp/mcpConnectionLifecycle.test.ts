@@ -323,6 +323,17 @@ describe("safelyCloseClient graceful shutdown", () => {
     expect(events).toContain("client.close");
   });
 
+  it("reports unknown after unresolved forced escalation instead of certifying exit", async () => {
+    const child = new FakeChild();
+    const client = clientWithChild(child, []);
+    killProcessTreeAndWaitMock.mockResolvedValueOnce({ exited: false, forced: true, durationMs: 5 });
+    const result = await safelyCloseClient(client, "unresolved", undefined, {
+      gracePeriodMs: 5, killEscalationMs: 5,
+    });
+    expect(result).toMatchObject({ exited: false, forced: true, processOwnership: 'owned',
+      exitOutcome: 'unknown', errorClassification: 'exit_unobserved' });
+  });
+
   it("lets a REAL child with slow teardown exit naturally instead of being killed", async () => {
     // Real-process integration check for Finding B: a server that needs ~3s to shut
     // down after stdin closes (e.g. a browser teardown). The SDK's own close() ladder

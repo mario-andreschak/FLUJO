@@ -52,6 +52,7 @@ import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolv
 import { loadApprovedMcpSkillSelections } from '@/backend/services/mcp/skillModelContext';
 import { assertFlowExecutionCurrent, rethrowFlowExecutionAuthorityError } from '../executionAuthority';
 import { executionExtensionSignal } from '@/backend/execution/extensions';
+import { combineAbortSignals } from '../combineAbortSignals';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -426,7 +427,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
-      { nodeId }
+      { nodeId },
+      sharedState,
     );
 
     // Resolve configuration globals at execution time. The prompt-safe resolver
@@ -683,6 +685,14 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       : {}),
   };
 
+    // runFlow's owner/cancellation-registration signal must reach the provider
+    // even when the separate execution authority remains current. Keep this
+    // live capability out of serialized preparation/debugger records.
+    Object.defineProperty(prepResult, 'abortSignal', {
+      value: sharedState.abortSignal,
+      enumerable: false,
+    });
+
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
     // per (conversation, node) on first render and re-send it byte-identically
     // thereafter, so it forms a stable provider cache prefix (mirrors the #89
@@ -818,6 +828,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
           { nodeId },
+          sharedState,
         );
         content = await resolvePromptDynamicReferences(content, {
           conversationId: sharedState.conversationId,
@@ -847,7 +858,8 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
             sharedState.emit,
-            { nodeId }
+            { nodeId },
+            sharedState,
           )
         : isolatedPrompt;
       if (!sharedState.executionExtensionContext && typeof resolvedIsolatedPrompt === 'string') {
@@ -1192,7 +1204,11 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             executionAuthority: prepResult.executionAuthority,
             executionExtensionContext: prepResult.executionExtensionContext,
             personaAttribution: prepResult.personaAttribution,
-            signal: prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : prepResult.executionAuthority?.signal,
+            signal: combineAbortSignals(
+              prepResult.abortSignal,
+              prepResult.executionAuthority?.signal,
+              prepResult.executionExtensionContext ? executionExtensionSignal(prepResult.executionExtensionContext) : undefined,
+            ),
           });
           // Provider abort is cooperative. A response can arrive after the
           // Persona heartbeat/fence was lost, so reject it before any message,

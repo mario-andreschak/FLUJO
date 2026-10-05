@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   FormControl,
@@ -22,6 +22,15 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     : undefined
 );
 
+const jsonDraftsValid = (properties: Record<string, unknown>, drafts: Record<string, string>): boolean => (
+  Object.entries(drafts).every(([key, text]) => {
+    const type = Object.hasOwn(properties, key) ? asRecord(properties[key])?.type : undefined;
+    if ((type !== 'object' && type !== 'array') || !text.trim()) return true;
+    try { JSON.parse(text); return true; }
+    catch { return false; }
+  })
+);
+
 /**
  * Render input fields for an MCP tool's parameters from its JSON schema
  * (`inputSchema`: { type:'object', properties, required }). Extracted from the
@@ -37,10 +46,12 @@ export interface SchemaParamsFormProps {
   schema: Record<string, unknown> | undefined;
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
+  /** Whether every visible JSON draft parses; typed values may lag unfinished drafts. */
+  onValidityChange?: (valid: boolean) => void;
   size?: 'small' | 'medium';
 }
 
-const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaParamsFormProps) => {
+const SchemaParamsForm = ({ schema, values, onChange, onValidityChange, size = 'small' }: SchemaParamsFormProps) => {
   const { globalEnvVars } = useStorage();
   const { t } = useI18n();
   const globalNames = useMemo(
@@ -56,6 +67,8 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
     ? schema.required.filter((key): key is string => typeof key === 'string')
     : [];
   const keys = Object.keys(properties);
+  const validJson = jsonDraftsValid(properties, drafts);
+  useEffect(() => { onValidityChange?.(validJson); }, [onValidityChange, validJson]);
 
   if (keys.length === 0) {
     return (
@@ -66,19 +79,20 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
   }
 
   const setValue = (key: string, value: unknown) => {
-    const next = { ...values };
+    const next = new Map(Object.entries(values));
     if (value === undefined) {
-      delete next[key];
+      next.delete(key);
     } else {
-      next[key] = value;
+      next.set(key, value);
     }
-    onChange(next);
+    onChange(Object.fromEntries(next));
   };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {keys.map(key => {
         const prop = asRecord(properties[key]) ?? {};
+        const currentValue = Object.hasOwn(values, key) ? values[key] : undefined;
         const label = required.includes(key) ? `${key} *` : key;
         const description = typeof prop.description === 'string' ? prop.description : '';
         const enumOptions = Array.isArray(prop.enum)
@@ -94,7 +108,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               control={
                 <Switch
                   size={size}
-                  checked={values[key] === true}
+                  checked={currentValue === true}
                   onChange={(e) => setValue(key, e.target.checked)}
                 />
               }
@@ -113,7 +127,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
         }
 
         if (enumOptions.length > 0) {
-          const current = values[key];
+          const current = currentValue;
           return (
             <FormControl key={key} size={size} fullWidth>
               <InputLabel id={`schema-param-${key}`}>{label}</InputLabel>
@@ -146,7 +160,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               size={size}
               type="number"
               label={label}
-              value={values[key] !== undefined ? String(values[key]) : ''}
+              value={currentValue !== undefined ? String(currentValue) : ''}
               onChange={(e) => {
                 const raw = e.target.value;
                 if (raw === '') {
@@ -162,9 +176,9 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
         }
 
         if (prop.type === 'object' || prop.type === 'array') {
-          const draft =
-            drafts[key] ??
-            (values[key] !== undefined ? JSON.stringify(values[key], null, 2) : '');
+          const draft = Object.hasOwn(drafts, key)
+            ? drafts[key]
+            : (currentValue !== undefined ? JSON.stringify(currentValue, null, 2) : '');
           let parseError: string | null = null;
           if (draft.trim()) {
             try {
@@ -186,7 +200,9 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               helperText={parseError ?? description}
               onChange={(e) => {
                 const text = e.target.value;
-                setDrafts(prev => ({ ...prev, [key]: text }));
+                const nextDrafts = { ...drafts, [key]: text };
+                setDrafts(nextDrafts);
+                onValidityChange?.(jsonDraftsValid(properties, nextDrafts));
                 if (!text.trim()) {
                   setValue(key, undefined);
                   return;
@@ -208,7 +224,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
               {label}
             </Typography>
             <GlobalReferenceEditor
-              value={values[key] !== undefined ? String(values[key]) : ''}
+              value={currentValue !== undefined ? String(currentValue) : ''}
               onChange={(nextValue) => setValue(key, nextValue === '' ? undefined : nextValue)}
               globalNames={globalNames}
               placeholder={description || key}

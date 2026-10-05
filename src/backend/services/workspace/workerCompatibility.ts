@@ -4,12 +4,15 @@ import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 /** Change the protocol when the worker control/restore contract becomes incompatible. */
 export const WORKER_PROTOCOL_VERSION = 1;
 export const WORKER_SNAPSHOT_FORMAT_VERSION = 2;
+/** Capability marker; it does not assert configuration or deployed acceptance. */
+export const WORKER_SNAPSHOT_SOURCE_VERSION = 1;
 
 export interface WorkerCompatibility {
   applicationVersion: string;
   snapshotFormatVersion: typeof WORKER_SNAPSHOT_FORMAT_VERSION;
   layoutVersion: typeof WORKSPACE_LAYOUT_VERSION;
   workerProtocolVersion: typeof WORKER_PROTOCOL_VERSION;
+  workerSnapshotSourceVersion: typeof WORKER_SNAPSHOT_SOURCE_VERSION;
   revision?: string;
 }
 
@@ -23,6 +26,7 @@ export function getWorkerCompatibility(): WorkerCompatibility {
     snapshotFormatVersion: WORKER_SNAPSHOT_FORMAT_VERSION,
     layoutVersion: WORKSPACE_LAYOUT_VERSION,
     workerProtocolVersion: WORKER_PROTOCOL_VERSION,
+    workerSnapshotSourceVersion: WORKER_SNAPSHOT_SOURCE_VERSION,
     ...(/^[a-f0-9]{40}$/.test(revision ?? '') ? { revision } : {}),
   };
 }

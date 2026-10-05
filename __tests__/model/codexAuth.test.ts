@@ -10,6 +10,7 @@ import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapter
 import {
   CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE,
   readCodexAuthForTransfer, isChatGptAuthCache,
+  inspectCodexLogin,
 } from '@/backend/services/model/adapters/codexAuth';
 
 const auth = (id: string) => JSON.stringify({
@@ -85,6 +86,17 @@ describe('portable Codex authentication', () => {
   it('exports the current host login before any local Codex model has run', async () => {
     await fs.writeFile(path.join(host, 'auth.json'), auth('host'));
     expect((await readCodexAuthForTransfer()).toString()).toBe(auth('host'));
+  });
+
+  it('discovers a login without preparing a runtime or returning credential data', async () => {
+    await fs.writeFile(path.join(host, 'auth.json'), auth('host'));
+    expect(await inspectCodexLogin()).toEqual({ authentication: 'login-detected' });
+    await expect(fs.stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.writeFile(path.join(host, 'config.toml'), 'cli_auth_credentials_store = "keyring"');
+    expect(await inspectCodexLogin()).toEqual({ authentication: 'incompatible', reasonCode: 'credential-store-incompatible' });
+    await fs.writeFile(path.join(host, 'config.toml'), '');
+    await fs.unlink(path.join(host, 'auth.json'));
+    expect(await inspectCodexLogin()).toEqual({ authentication: 'needs-connection', reasonCode: 'login-missing' });
   });
 
   it('does not fall back to an unmarked stale workspace cache when the host uses keyring storage', async () => {
