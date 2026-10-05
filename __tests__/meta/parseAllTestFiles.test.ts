@@ -19,7 +19,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import micromatch from 'micromatch';
+import picomatch from 'picomatch';
 import ts from 'typescript';
 import { ALL_TEST_GLOBS } from '../../jest.testMatch.mjs';
 
@@ -72,7 +72,7 @@ describe('every collected test file parses', () => {
     expect(files.length).toBeGreaterThan(0);
 
     const collected = files.filter((file) =>
-      micromatch.isMatch(path.relative(ROOT, file).replace(/\\/g, '/'), ALL_TEST_GLOBS),
+      picomatch.isMatch(path.relative(ROOT, file).replace(/\\/g, '/'), ALL_TEST_GLOBS),
     );
     expect(collected.length).toBeGreaterThan(0);
 
