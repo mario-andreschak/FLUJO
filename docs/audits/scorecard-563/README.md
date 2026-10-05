@@ -225,6 +225,10 @@ Do not reduce thresholds/workload because host capacity is low; schedule checks 
    supported claims and passed source/runtime gates to its selected release SHA.
    External rubric/consumer agreements may predate a release; their policy applicability
    and current consumer pins still need explicit review.
+   Retain scanner coverage and filters with results: zero alerts in a PR's changed
+   lines cannot establish a clean repository or release. Reconcile the full selected
+   release's findings and installed matrix using the
+   [scanner coverage rules](artifact-acceptance.md#scanner-coverage).
    Version 1 retains the primary claim IDs, original dimension/profile subjects, and
    minimum budget/kind/gate bindings in the schema's `acceptanceContract` data.
    Original A- primary claims cannot become experimental exclusions. Removing or
