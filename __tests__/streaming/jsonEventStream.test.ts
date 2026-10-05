@@ -1,7 +1,12 @@
 const warnMock = jest.fn();
 const debugMock = jest.fn();
 jest.mock('@/utils/logger', () => ({
-  createLogger: () => ({ warn: warnMock, debug: debugMock, info: jest.fn(), error: jest.fn() }),
+  createLogger: () => ({
+    warn: (...args: unknown[]) => warnMock(...args),
+    debug: (...args: unknown[]) => debugMock(...args),
+    info: jest.fn(),
+    error: jest.fn(),
+  }),
 }));
 
 import { createJsonEventStreamResponse } from '@/backend/utils/jsonEventStream';
