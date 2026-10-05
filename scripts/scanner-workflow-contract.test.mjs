@@ -22,6 +22,11 @@ test('complete two-language extended scans with current-source upload are requir
 
 for (const [label, mutate] of [
   ['missing scanner', value => { delete value.jobs.codeql; }],
+  ['conditional source checkout', value => { value.jobs.codeql.steps[0].if = 'false'; }],
+  ['tolerated source checkout failure', value => { value.jobs.codeql.steps[0]['continue-on-error'] = true; }],
+  ['mutable source checkout', value => { value.jobs.codeql.steps[0].uses = 'actions/checkout@v4'; }],
+  ['different source checkout revision', value => { value.jobs.codeql.steps[0].with.ref = 'main'; }],
+  ['duplicate source checkout', value => { value.jobs.codeql.steps.unshift(structuredClone(value.jobs.codeql.steps[0])); }],
   ['conditional initialization', value => { value.jobs.codeql.steps[1].if = 'false'; }],
   ['conditional analysis', value => { value.jobs.codeql.steps[2].if = 'false'; }],
   ['tolerated analysis failure', value => { value.jobs.codeql.steps[2]['continue-on-error'] = true; }],
