@@ -280,7 +280,10 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     expect(result.success).toBe(true);
     if (!result.success) throw result.error;
     expect(resolved).toEqual(['op2', 'op1']);
-    expect(result.value.toolCallMessages.map(message => message.tool_call_id)).toEqual(['failed-call', 'success-call']);
+    expect(result.value.toolCallMessages).toHaveLength(2);
+    expect(result.value.toolCallMessages).toMatchObject([
+      { tool_call_id: 'failed-call' }, { tool_call_id: 'success-call' },
+    ]);
     expect(result.value.toolCallMessages[0].content).toBe(failureContent);
     expect(result.value.toolCallMessages[1].content).toBe(full);
     expect(result.value.processedToolCalls.map(call => call.exitCode)).toEqual([1, 0]);
