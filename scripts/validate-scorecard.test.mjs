@@ -907,3 +907,77 @@ test('virtual duration may exceed 28 days fractionally but cannot weaken the ori
   assert.ok(extraDuration.blockers.length > 0);
   rejects(ledger => measurement(ledger, 27.5), /simulated workload too short/);
 });
+
+test('all published numeric and sampling policies remain pinned while targets await agreement', () => {
+  for (const budget of baseline.budgets) {
+    for (const field of ['operator', 'limit', 'denominator', 'window', 'basis']) {
+      rejects(ledger => {
+        const altered = entry(ledger, 'budgets', budget.id);
+        altered[field] = field === 'limit' ? (budget.limit ?? 0) + 1 : field === 'operator' ? (budget.operator === '<=' ? '>=' : '<=') : 'Convenient replacement sampling policy';
+      }, /published budget policy changed|existing numeric contract|published human/);
+    }
+    for (const field of ['minimumSeconds', 'minimumSimulatedDays', 'minimumDenominator']) if (budget.observation[field] > 0) {
+      rejects(ledger => { entry(ledger, 'budgets', budget.id).observation[field] -= 1; }, /published budget observation policy weakened|existing observation|existing full|published human|below minimum/);
+    }
+  }
+});
+
+test('weak recovery targets and one-second runtime windows cannot replace their published proposals', () => {
+  rejects(ledger => {
+    const {budget, study}=observedBudget(ledger,'recovery-rto',500,1);
+    budget.limit=86400; budget.observation.minimumDenominator=1;study.kind='installed-artifact';
+  }, /published budget policy changed/);
+  rejects(ledger => {
+    const {budget, study}=observedBudget(ledger,'runtime-peak-rss',100,24);
+    budget.observation.minimumSeconds=1;study.kind='installed-artifact';
+    study.window.end='2026-10-05T00:00:01Z';
+  }, /published budget observation policy weakened/);
+});
+
+test('published budget, unit and semantic tables require total coverage before any measurement', () => {
+  for (const field of ['budgetPolicies','metricUnits','unitKinds']) {
+    const schema=structuredClone(baselineSchema);schema.$defs.acceptanceContract.const[field]={};
+    const result=validateScorecard(structuredClone(baseline),{root,schema,now:fixtureNow});
+    assert.ok(result.errors.some(error=>/published budget policy missing|published unit table coverage|no reviewed unit semantics/.test(error)),result.errors.join('\n'));
+  }
+  for (const id of baseline.budgets.map(b=>b.id)) {
+    const schema=structuredClone(baselineSchema);delete schema.$defs.acceptanceContract.const.metricUnits[id];
+    const result=validateScorecard(structuredClone(baseline),{root,schema,now:fixtureNow});
+    assert.ok(result.errors.some(error=>error.startsWith(id+': published unit table coverage')),result.errors.join('\n'));
+  }
+});
+
+test('suffixes cannot grant unreviewed signed or derived-ratio metric semantics', () => {
+  for (const [id, unit, value] of [['spend-growth','USD',-1],['cache-flatness','ratio',1]]) {
+    const ledger=structuredClone(baseline),schema=structuredClone(baselineSchema);
+    ledger.budgets.push({...structuredClone(entry(ledger,'budgets','recovery-rto')),id,status:'proposed',unit,operator:'<=',limit:2});
+    const {study}=observedBudget(ledger,id,value,20);study.kind='source-check';
+    schema.$defs.acceptanceContract.const.metricUnits[id]=unit;
+    schema.$defs.acceptanceContract.const.metricEvidenceKinds[id]=['source-check'];
+    const result=validateScorecard(ledger,{root,schema,now:fixtureNow});
+    assert.ok(result.errors.some(error=>/no reviewed budget policy/.test(error)),result.errors.join('\n'));
+    assert.ok(result.errors.some(error=>id==='spend-growth'?/only reviewed measured growth/.test(error):/ratio does not reconcile/.test(error)),result.errors.join('\n'));
+  }
+});
+
+test('reviewed signed growth and derived Persona flatness retain their original meanings', () => {
+  const result=validate(ledger=>{
+    personaMetricFixture(ledger,'persona-rss-growth',1);
+    entry(ledger,'evidence','synthetic-sample-count-persona-rss-growth').metrics[0].value=-1;
+    personaMetricFixture(ledger,'persona-append-flatness',1);
+    for (const id of ['persona-rss-growth', 'persona-append-flatness']) {
+      const witness=entry(ledger,'evidence','synthetic-sample-count-'+id);
+      witness.kind='offline-simulation';witness.window.kind='simulated';witness.window.end=null;witness.window.simulatedDays=28;
+    }
+  });
+  assert.deepEqual(result.errors,[]);
+  assert.ok(result.blockers.length>0);
+});
+
+test('later source successes cannot erase or relabel retained verify and native CodeQL failures', () => {
+  for (const retained of baselineSchema.$defs.acceptanceContract.const.retainedSourceFailures) {
+    rejects(ledger => { ledger.evidence=ledger.evidence.filter(e=>e.id!==retained.id); }, /historical source failure/);
+    rejects(ledger => { entry(ledger,'evidence',retained.id).result='passed'; }, /historical source failure/);
+    rejects(ledger => { entry(ledger,'evidence',retained.id).sourceSha='a'.repeat(40); }, /historical source failure/);
+  }
+});
