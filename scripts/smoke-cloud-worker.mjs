@@ -13,10 +13,20 @@ import JSZip from 'jszip';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { checkHealth } from './healthcheck.mjs';
+import { captureWorkerRecoveryAttempt, copiedRecoveryPlan } from './worker-recovery-acceptance.mjs';
 
-const application = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const harnessApplication = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const production = process.argv.includes('--production');
-if (process.argv.slice(2).some(argument => argument !== '--production')) throw new Error('Usage: smoke-cloud-worker.mjs [--production]');
+const workerRecovery = process.argv.includes('--worker-recovery');
+const args = process.argv.slice(2);
+const flags = new Set(['--production', '--worker-recovery']);
+let selectedApplication;
+for (let index = 0; index < args.length; index++) {
+  if (args[index] === '--application' && !selectedApplication && path.isAbsolute(args[index + 1] ?? '')) selectedApplication = args[++index];
+  else if (!flags.has(args[index])) throw new Error('Usage: smoke-cloud-worker.mjs [--production] [--worker-recovery] [--application <absolute production root>]');
+}
+if (selectedApplication && !production) throw new Error('Invalid smoke profile.');
+const application = selectedApplication ? path.resolve(selectedApplication) : harnessApplication;
 const packageJson = JSON.parse(await fs.readFile(path.join(application, 'package.json'), 'utf8'));
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-'));
 const runtimeApplication = production ? application : path.join(root, 'application');
@@ -34,15 +44,28 @@ let child;
 let childClosed;
 let childLog = '';
 let providerCalls = 0;
+let providerMode = 'success';
+let recoveryEpoch = 1;
+const parentExitObservations = [];
+const providerObservations = [];
+let recoveryReport;
+let recoveryAttempt = workerRecovery ? { schemaVersion: 1, scenario: 'worker-local-recurring-recovery-attempt',
+  outcome: 'not-entered', observations: [] } : undefined;
 
 const modelServer = http.createServer(async (request, response) => {
   try {
-    const parts = [];
-    for await (const chunk of request) parts.push(chunk);
+    const parts = []; let length = 0;
+    for await (const chunk of request) { length += chunk.length; assert.ok(length <= 2 * 1024 * 1024, 'Fixture provider request exceeded byte budget.'); parts.push(chunk); }
     const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
     assert.equal(request.url, '/v1/chat/completions');
     assert.equal(request.headers.authorization, 'Bearer synthetic-smoke-key');
     providerCalls++;
+    assert.ok(providerCalls <= 256, 'Fixture provider dispatch budget exceeded.');
+    const observation = { ordinal: providerCalls, mode: providerMode, requestSha256: sha256(Buffer.concat(parts)),
+      receivedAt: new Date().toISOString(), outcome: 'received' };
+    providerObservations.push(observation);
+    response.once('close', () => { observation.responseClosed = true; });
+    if (providerMode === 'hold') return;
     const base = { id: `smoke-${providerCalls}`, created: Math.floor(Date.now() / 1000), model: 'cloud-smoke-model' };
     if (body.stream) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -53,6 +76,7 @@ const modelServer = http.createServer(async (request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ ...base, object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: answer }, finish_reason: 'stop' }], usage: { prompt_tokens: 4, completion_tokens: 4, total_tokens: 8 } }));
     }
+    observation.outcome = 'fixture-response-written';
   } catch (error) {
     response.writeHead(500, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: { message: `Smoke provider rejected request: ${error.message}` } }));
@@ -74,7 +98,7 @@ async function unusedPort() {
   return port;
 }
 
-async function stopChild() {
+async function stopChild({ crash = false } = {}) {
   if (!child) return;
   const stopped = child;
   const closed = childClosed;
@@ -87,12 +111,15 @@ async function stopChild() {
         killer.once('exit', resolve);
       });
     } else {
-      try { process.kill(-stopped.pid, 'SIGTERM'); } catch { /* already stopped */ }
+      try { process.kill(-stopped.pid, crash ? 'SIGKILL' : 'SIGTERM'); } catch { /* already stopped */ }
       const exited = await Promise.race([closed.then(() => true), delay(5_000).then(() => false)]);
       if (!exited) { try { process.kill(-stopped.pid, 'SIGKILL'); } catch { /* already stopped */ } }
     }
   }
-  await Promise.race([closed, delay(5_000)]);
+  const parentExited = await Promise.race([closed.then(() => true), delay(5_000).then(() => false)]);
+  parentExitObservations.push({ pid: stopped.pid, crashRequested: crash, parentExitObserved: parentExited,
+    exitCode: stopped.exitCode, signal: stopped.signalCode, descendantExit: 'unverified' });
+  if (workerRecovery) assert.equal(parentExited, true, 'Owned fixture parent did not exit before restart.');
 }
 
 function safeEnvironment() {
@@ -118,6 +145,7 @@ async function startWorker(port, archivePath, archiveHash, harness) {
     env: { ...safeEnvironment(), FLUJO_WORKER_MODE: '1', FLUJO_WORKER_SNAPSHOT: archivePath,
       FLUJO_WORKER_SNAPSHOT_SHA256: archiveHash, FLUJO_WORKER_SNAPSHOT_KEY: key.toString('base64'),
       FLUJO_SNAPSHOT_CONTROL_TOKEN: controlToken, FLUJO_DATA_DIR: path.join(root, 'data'),
+      ...(workerRecovery ? { FLUJO_WORKER_RECOVERY_ID: 'worker-recovery-smoke', FLUJO_WORKER_RECOVERY_EPOCH: String(recoveryEpoch) } : {}),
       FLUJO_APP_ROOT: runtimeApplication,
       FLUJO_PORT: String(port), FLUJO_BASE_URL: `http://127.0.0.1:${port}`,
       FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort), FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1',
@@ -146,6 +174,11 @@ async function startWorker(port, archivePath, archiveHash, harness) {
 }
 
 try {
+  // Production startup loads dotenv from its application root. Do not permit
+  // an external source/installed root to inject original model/account credentials.
+  if (production) for (const name of ['.env', '.env.local', '.env.production', '.env.production.local']) {
+    await assert.rejects(fs.lstat(path.join(application, name)), error => error.code === 'ENOENT', 'Smoke application must have no production dotenv files.');
+  }
   for (const name of ['home', 'temp']) await fs.mkdir(path.join(root, name));
   // Next's programmatic custom server ignores conf.distDir in dev startup.
   // A private app overlay keeps its cache/lock/config writes away from any
@@ -185,6 +218,7 @@ try {
     'db/flows/smoke-flow.json': JSON.stringify(flow),
     'userdata/mcp-smoke-input.txt': 'restored filesystem smoke input',
   };
+  if (workerRecovery) files['db/planned_executions.json'] = JSON.stringify({ version: 1, paused: false, executions: [copiedRecoveryPlan(flow.id)] });
   const zip = new JSZip();
   for (const [name, content] of Object.entries(files)) zip.file(name, content);
   zip.file('snapshot-manifest.json', JSON.stringify({ formatVersion: 2, layoutVersion: 2, workspace, generation: 0,
@@ -272,21 +306,64 @@ server.listen(Number(process.env.SMOKE_PORT),'127.0.0.1');
   assert.equal(await fs.readFile(conversationFile, 'utf8'), saved, 'Restart must preserve worker results.');
   assert.equal(await fs.readFile(path.join(root, 'data', 'workspaces', workspace, 'userdata', 'mcp-smoke-output.txt'), 'utf8'), 'worker MCP write succeeded');
   assert.equal(providerCalls, callsBeforeRestart, 'Restart must not replay the completed flow.');
+  if (workerRecovery) {
+    recoveryReport = await captureWorkerRecoveryAttempt({ baseUrl: `http://127.0.0.1:${workerPort}`, workspace, controlToken, flowId: flow.id,
+      // The current candidate's ordinary list may reconcile private receipts.
+      observationRoute: 'scheduler',
+      providerCount: () => providerCalls, setProviderMode: mode => { providerMode = mode; },
+      readPrivateRecord: id => fs.readFile(path.join(root, 'data', '.worker-local-recovery', workspace, `${sha256(`${workspace}\0${id}`)}.json`)),
+      restart: async ({ crash, offlineMs = 0, epoch }) => {
+        await stopChild({ crash });
+        if (offlineMs) await delay(offlineMs);
+        if (epoch !== undefined) recoveryEpoch = epoch;
+        await startWorker(workerPort, archivePath, sha256(plaintext), harness);
+      },
+    }, { record: attempt => { recoveryAttempt = attempt; } });
+    console.log('PASS: actual worker-local cron enrollment/tick/catch-up and later ordinary recurrence, copied suppression, retained interrupted dispatch and changed-epoch fencing.');
+  }
   console.log('PASS: encrypted restore, compatibility metadata, private ingress, restored MCP read/write, real ExecutionEngine/model dispatch, unattended flow, and restart preservation.');
 } catch (error) {
   console.error(error.stack ?? error.message);
   if (childLog) console.error(childLog.slice(-16_000));
   process.exitCode = 1;
 } finally {
-  await stopChild();
-  modelServer.closeAllConnections();
-  await new Promise(resolve => modelServer.close(resolve));
-  const expectedPrefix = path.join(os.tmpdir(), 'flujo-cloud-worker-smoke-');
-  if (!path.resolve(root).startsWith(path.resolve(expectedPrefix))) throw new Error('Refusing unsafe smoke cleanup path.');
-  for (const name of production ? [] : overlayLinks) {
-    const link = path.join(runtimeApplication, name);
-    const stat = await fs.lstat(link).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-    if (stat?.isSymbolicLink()) await fs.unlink(link);
+  let parentStopFailed = false;
+  try { await stopChild(); } catch {
+    parentStopFailed = true; process.exitCode = 1;
+    console.error('Owned fixture parent shutdown remains unverified.');
   }
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
+  modelServer.closeAllConnections();
+  let providerClosed = false;
+  await new Promise(resolve => modelServer.close(error => {
+    providerClosed = !error || error.code === 'ERR_SERVER_NOT_RUNNING'; resolve();
+  }));
+  const parentShutdownUnverified = parentStopFailed || parentExitObservations.some(observation => !observation.parentExitObserved);
+  // Recovery receipts remain evidence even after the parent/provider close.
+  // Descendant exit is unverified; this profile never deletes its namespace.
+  const retainFixture = workerRecovery || parentShutdownUnverified || !providerClosed;
+  if (parentShutdownUnverified || !providerClosed) process.exitCode = 1;
+  if (recoveryAttempt) console.log(JSON.stringify({ ...(recoveryReport ?? { schemaVersion: 1, scenario: 'worker-local-recurring-recovery',
+    observations: recoveryAttempt.observations, limits: ['Only listed completed stages were observed; the full recovery drill did not return.'] }),
+    completion: recoveryReport ? 'all-recovery-stages-returned' : 'partial-or-not-entered', attempt: recoveryAttempt,
+    applicationMode: production ? 'production-runtime' : 'isolated-development-runtime',
+    harnessSourceSha256: sha256(await fs.readFile(fileURLToPath(import.meta.url))),
+    helperSourceSha256: sha256(await fs.readFile(new URL('./worker-recovery-acceptance.mjs', import.meta.url))),
+    independentArtifactDigest: 'not-verified-by-this-harness', parentExitObservations, providerObservations,
+    fixtureFinalization: { providerListenerClosed: providerClosed, parentShutdownUnverified,
+      disposableData: 'retained', descendantExit: 'unverified', cleanupPolicy: 'retain-worker-recovery-fixture',
+      cleanupAttempted: false, cleanupCompleted: false } }, null, 2));
+  if (workerRecovery) console.error('Worker recovery evidence retained; descendant exit is unverified.');
+  else if (retainFixture) console.error('Owned fixture shutdown is unverified; disposable evidence retained.');
+  else {
+    const resolvedRoot = path.resolve(root);
+    if (path.dirname(resolvedRoot) !== path.resolve(os.tmpdir()) || !path.basename(resolvedRoot).startsWith('flujo-cloud-worker-smoke-')) {
+      throw new Error('Refusing unsafe smoke cleanup path.');
+    }
+    for (const name of production ? [] : overlayLinks) {
+      const link = path.join(runtimeApplication, name);
+      const stat = await fs.lstat(link).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (stat?.isSymbolicLink()) await fs.unlink(link);
+    }
+    await fs.rm(resolvedRoot, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
+  }
 }
