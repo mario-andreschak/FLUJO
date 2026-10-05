@@ -79,8 +79,10 @@ test('full UTF-8 result binding matches archived content despite a truncated eve
   assert(!JSON.stringify(value).includes('private value')); assert(!JSON.stringify(value).includes('correct'));
 });
 test('equal event previews cannot hide different full archived tails', () => {
-  const prefix = 'café🙂'.repeat(150); const actual = prefix + 'correct'; const wrong = prefix + 'wrong';
+  const prefix = 'café🙂'.repeat(150); const actual = prefix + 'correct'; const wrong = prefix + 'wrong!!';
   assert.equal(actual.slice(0, 500), wrong.slice(0, 500));
+  assert.equal(Buffer.byteLength(actual), Buffer.byteLength(wrong));
+  assert.notEqual(producerBinding(actual).sha256, producerBinding(wrong).sha256);
   assert.equal(evaluateLiveJourney(longResultSample(actual, wrong)).componentPassed, false);
 });
 test('JSON-equivalent content with different serialization is not an exact binding', () => {
