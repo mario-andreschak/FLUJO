@@ -1,7 +1,6 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
-import * as restoreFs from '@/backend/services/workspace/backupRestoreFs';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
 let mockWorkspace = '';
@@ -9,6 +8,17 @@ const mockLoadConfigs = jest.fn();
 const mockUpdateConfig = jest.fn();
 const mockConnect = jest.fn();
 const mockPrepareRegistry = jest.fn();
+const mockAfterMarkerParentCheck = jest.fn();
+jest.mock('@/backend/services/workspace/backupRestoreFs', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/workspace/backupRestoreFs')>('@/backend/services/workspace/backupRestoreFs');
+  return {
+    ...actual,
+    assertLinkFreeFileParent: async (...args: Parameters<typeof actual.assertLinkFreeFileParent>) => {
+      await actual.assertLinkFreeFileParent(...args);
+      await mockAfterMarkerParentCheck(...args);
+    },
+  };
+});
 jest.mock('simple-git', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => mockWorkspace }));
 jest.mock('@/backend/services/packages/buildPackage', () => ({ mapInstallOrigin: jest.fn(), resolveDependencies: jest.fn() }));
@@ -70,6 +80,7 @@ function observeMarkerHandles(marker: string, reads: jest.SpyInstance[] = []) {
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockAfterMarkerParentCheck.mockReset();
   mockWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-marker-read-'));
   mockUpdateConfig.mockResolvedValue({ success: true });
   mockConnect.mockResolvedValue({ success: true });
@@ -193,10 +204,8 @@ it.each(['growth', 'identity-replacement'] as const)('refuses %s after validatio
   const fixture = await preparedFixture();
   const reads: jest.SpyInstance[] = [];
   const expectClosed = observeMarkerHandles(fixture.marker, reads);
-  const realParentCheck = restoreFs.assertLinkFreeFileParent;
   let changed = false;
-  jest.spyOn(restoreFs, 'assertLinkFreeFileParent').mockImplementation(async (...args) => {
-    await realParentCheck(...args);
+  mockAfterMarkerParentCheck.mockImplementation(async (...args: [string, string]) => {
     if (args[1] === fixture.marker && !changed) {
       changed = true;
       if (change === 'growth') await fs.appendFile(fixture.marker, ' '.repeat(100_000));
