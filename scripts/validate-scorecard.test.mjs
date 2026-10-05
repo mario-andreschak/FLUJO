@@ -849,3 +849,61 @@ test('elapsed source policy ids must refer to known budgets', () => {
   const result = validateScorecard(structuredClone(baseline), { root, schema, now: fixtureNow });
   assert.ok(result.errors.some(error => /unknown budgets ID unknown-source-timing/.test(error)), result.errors.join('\n'));
 });
+
+test('every published budget keeps its reviewed unit even while its numeric target is proposed', () => {
+  for (const budget of baseline.budgets) {
+    rejects(ledger => { entry(ledger, 'budgets', budget.id).unit = 'unreviewed-unit'; }, /reviewed unit contract|existing numeric contract changed|published human target/);
+  }
+});
+
+test('byte and intervention measurements require whole units, including unsuccessful records', () => {
+  rejects(ledger => {
+    personaMetricFixture(ledger, 'persona-peak-rss', 1);
+    const witness = entry(ledger, 'evidence', 'synthetic-sample-count-persona-peak-rss');
+    witness.kind = 'offline-simulation';
+    witness.window.kind = 'simulated';
+    witness.window.end = null;
+    witness.window.simulatedDays = 28;
+    witness.metrics[0].value = 805306367.5;
+  }, /count metric must be a whole number/);
+  rejects(ledger => { observedBudget(ledger, 'live-interventions', 0.5, 1).study.result = 'failed'; }, /count metric must be a whole number/);
+});
+
+test('passing metrics fail closed when their unit has no reviewed semantics', () => {
+  const ledger = structuredClone(baseline);
+  personaMetricFixture(ledger, 'persona-recall-p95', 20);
+  const schema = structuredClone(baselineSchema);
+  schema.$defs.acceptanceContract.const.unitKinds = {};
+  const result = validateScorecard(ledger, { root, schema, now: fixtureNow });
+  assert.ok(result.errors.some(error => /no reviewed unit semantics/.test(error)), result.errors.join('\n'));
+});
+
+test('a new budget cannot become agreed before its unit and evidence carriers are reviewed', () => {
+  rejects(ledger => {
+    ledger.budgets.push({ ...structuredClone(entry(ledger, 'budgets', 'persona-recall-p95')), id: 'synthetic-unreviewed-budget', status: 'proposed' });
+    const { study } = observedBudget(ledger, 'synthetic-unreviewed-budget', 1, 20);
+    study.metrics = [];
+    study.budgetIds = [];
+  }, /agreed budget needs reviewed unit and evidence carrier contracts/);
+});
+
+test('any recorded start must be UTC even without an end or passing measurement', () => {
+  for (const start of ['whenever', '2026-13-04T00:00:00Z']) {
+    rejects(ledger => {
+      const witness = entry(ledger, 'evidence', 'baseline-2026-10-03');
+      witness.window.start = start;
+      witness.window.end = null;
+    }, /invalid start timestamp/);
+  }
+});
+
+test('virtual duration may exceed 28 days fractionally but cannot weaken the original minimum', () => {
+  const measurement = (ledger, simulatedDays) => {
+    personaMetricFixture(ledger, 'persona-append-p95', 28);
+    entry(ledger, 'evidence', 'synthetic-sample-count-persona-append-p95').window.simulatedDays = simulatedDays;
+  };
+  const extraDuration = validate(ledger => measurement(ledger, 28.5));
+  assert.deepEqual(extraDuration.errors, []);
+  assert.ok(extraDuration.blockers.length > 0);
+  rejects(ledger => measurement(ledger, 27.5), /simulated workload too short/);
+});

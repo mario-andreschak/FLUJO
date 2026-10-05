@@ -140,7 +140,8 @@ export function validateScorecard(ledger, options = {}) {
     return { errors, blockers: [], validationClock };
   }
   const contract = schema.$defs?.acceptanceContract?.const;
-  if (!contract || contract.contractVersion !== ledger.schemaVersion || !Array.isArray(contract.sourceMetricElapsedBudgets)) {
+  if (!contract || contract.contractVersion !== ledger.schemaVersion || !Array.isArray(contract.sourceMetricElapsedBudgets) ||
+      ![contract.metricUnits, contract.unitKinds].every(value => value && typeof value === 'object' && !Array.isArray(value))) {
     fail('Missing or mismatched reviewed acceptance contract version');
     return { errors, blockers: [], validationClock };
   }
@@ -160,6 +161,13 @@ export function validateScorecard(ledger, options = {}) {
     if (actual.length !== expected.length || expected.some(id => !actual.includes(id))) fail(context + ': required complete set is ' + expected.join(', '));
   }
   refs(contract.sourceMetricElapsedBudgets, 'budgets', 'source metric elapsed contract');
+  refs(Object.keys(contract.metricUnits), 'budgets', 'metric unit contract');
+  function unitPolicy(unit) {
+    const policy = contract.unitKinds[unit];
+    if (!policy || !['integer', 'continuous', 'duration', 'ratio'].includes(policy.kind)) return null;
+    if (policy.kind === 'duration' && (!Number.isFinite(policy.millisecondsPerUnit) || policy.millisecondsPerUnit <= 0)) return null;
+    return policy;
+  }
   exact(ledger.rubric.map(row => row.id), [...dimensions.keys()], 'rubric');
   exact(ledger.profiles.map(profile => profile.id), profiles, 'profiles');
   for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment', 'dependency-audit', 'build-verification']) {
@@ -187,6 +195,9 @@ export function validateScorecard(ledger, options = {}) {
     refs([budget.ownerId], 'owners', budget.id);
     refs(budget.agreementEvidenceIds, 'evidence', budget.id);
     if (!Number.isFinite(timestamp(budget.declaredAt))) fail(budget.id + ': invalid declaredAt');
+    const reviewedUnit = contract.metricUnits[budget.id];
+    if (reviewedUnit !== undefined && budget.unit !== reviewedUnit) fail(budget.id + ': reviewed unit contract changed; requires a separately reviewed contract version');
+    if (budget.status === 'agreed' && (reviewedUnit !== budget.unit || !unitPolicy(budget.unit) || !Array.isArray(contract.metricEvidenceKinds[budget.id]) || !contract.metricEvidenceKinds[budget.id].length)) fail(budget.id + ': agreed budget needs reviewed unit and evidence carrier contracts');
     if (budget.limit === null && budget.status !== 'proposed') fail(budget.id + ': unset envelope cannot be an agreed or existing numeric contract');
     if (budget.status === 'agreed' && budget.agreementEvidenceIds.length === 0) fail(budget.id + ': agreed budget needs retained agreement evidence');
     if (budget.status === 'agreed') {
@@ -228,6 +239,7 @@ export function validateScorecard(ledger, options = {}) {
     if (!Number.isFinite(observedAt)) fail(evidence.id + ': invalid observedAt');
     else if (observedAt > now) fail(evidence.id + ': observation is in the future relative to validation clock');
     const window = evidence.window;
+    if (window.start !== null && !Number.isFinite(timestamp(window.start))) fail(evidence.id + ': invalid start timestamp');
     if (window.kind !== 'elapsed' && window.end !== null) {
       const end = timestamp(window.end);
       if (!Number.isFinite(end)) fail(evidence.id + ': invalid non-elapsed end timestamp');
@@ -302,12 +314,15 @@ export function validateScorecard(ledger, options = {}) {
     for (const metric of evidence.metrics) {
       refs([metric.budgetId], 'budgets', evidence.id + ' metric');
       const budget = indexed.budgets.get(metric.budgetId);
+      const policy = budget && unitPolicy(budget.unit);
       if (budget?.limit === null) fail(evidence.id + ': envelope not declared for ' + metric.budgetId);
       if (metric.value < 0 && !metric.budgetId.endsWith('-growth')) fail(evidence.id + ': only measured growth may be negative');
-      if (budget && ['humans', 'records', 'operations', 'effects', 'findings', 'lanes'].includes(budget.unit) && !Number.isSafeInteger(metric.value)) fail(evidence.id + ': count metric must be a whole number');
+      if (policy?.kind === 'integer' && !Number.isSafeInteger(metric.value)) fail(evidence.id + ': count metric must be a whole number');
       if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
       if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
+        if (contract.metricUnits[metric.budgetId] !== budget.unit) fail(evidence.id + ': metric ' + metric.budgetId + ' has no matching reviewed unit contract');
+        if (!policy) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed unit semantics');
         const metricKinds = contract.metricEvidenceKinds[metric.budgetId];
         if (!Array.isArray(metricKinds) || !metricKinds.length) fail(evidence.id + ': metric ' + metric.budgetId + ' has no reviewed evidence carrier contract');
         else if (!metricKinds.includes(evidence.kind)) fail(evidence.id + ': metric ' + metric.budgetId + ' requires evidence kind ' + metricKinds.join(', '));
@@ -320,7 +335,7 @@ export function validateScorecard(ledger, options = {}) {
           if (measurementStart > timestamp(evidence.observedAt)) fail(evidence.id + ': evidence observed before measurement began');
         }
         const elapsedMilliseconds = timestamp(window.end) - timestamp(window.start);
-        if (window.kind === 'elapsed' && ((budget.unit === 'seconds' && metric.value * 1000 > elapsedMilliseconds) || (budget.unit === 'ms' && metric.value > elapsedMilliseconds))) fail(evidence.id + ': duration metric exceeds actual elapsed time');
+        if (window.kind === 'elapsed' && policy?.kind === 'duration' && metric.value * policy.millisecondsPerUnit > elapsedMilliseconds) fail(evidence.id + ': duration metric exceeds actual elapsed time');
         const observation = budget.observation;
         if (observation.clock !== 'any' && window.kind !== observation.clock) fail(evidence.id + ': wrong observation clock for ' + metric.budgetId);
         if (observation.minimumSeconds > 0 && (window.kind !== 'elapsed' || (timestamp(window.end) - timestamp(window.start)) / 1000 < observation.minimumSeconds)) fail(evidence.id + ': observation window too short for ' + metric.budgetId);
@@ -332,7 +347,7 @@ export function validateScorecard(ledger, options = {}) {
             if (agreement && timestamp(agreement.observedAt) > timestamp(window.start)) fail(evidence.id + ': budget agreement occurred after measurement began');
           }
         }
-        if (budget.unit === 'ratio' && !metric.budgetId.endsWith('-flatness')) {
+        if (policy?.kind === 'ratio' && !metric.budgetId.endsWith('-flatness')) {
           if (!Number.isSafeInteger(metric.denominator) || metric.numerator === null || metric.numerator > metric.denominator || Math.abs(metric.value - metric.numerator / metric.denominator) > 1e-9) fail(evidence.id + ': ratio does not reconcile with integer numerator/denominator');
         }
       }
