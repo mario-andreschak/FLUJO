@@ -87,6 +87,7 @@ describe('saved MCP custom header destination', () => {
     { serverUrl: 'not a URL' },
     { transport: 'sse' },
     { transport: 'stdio' },
+    { transport: 'websocket' },
   ];
   describe.each(['masked', 'omitted'] as const)('%s saved headers', (headerEdit) => {
     it.each(retargets)('refuses retarget %j before encrypting, saving, or changing lifecycle', async (retarget) => {
@@ -130,5 +131,24 @@ describe('saved MCP custom header destination', () => {
       serverUrl: 'https://other.example/mcp', headers: { 'X-Missing-Token': secret(MASKED_API_KEY) },
     } as Partial<MCPServerConfig>);
     expect(savedConfig().headers).toEqual({});
+  });
+
+  describe.each(['stdio', 'websocket'] as const)('unused legacy headers on %s', (transport) => {
+    it.each(['edit', 'rename'] as const)('allows an ordinary %s without activating the unused header', async (edit) => {
+      mockLoadServerConfigs.mockResolvedValue([{ ...storedServer, transport, command: 'synthetic', websocketUrl: 'wss://saved.example' }]);
+      const result = await service.updateServerConfig('saved', edit === 'rename' ? { name: 'renamed' } : { disabled: false, env: {} });
+      expect(result).toMatchObject({ transport, name: edit === 'rename' ? 'renamed' : 'saved' });
+      expect(savedConfig().headers.Authorization).toEqual(secret('encrypted:SYNTHETIC_SAVED_HEADER'));
+      expect(mockEncryptApiKey).not.toHaveBeenCalled();
+      expect(seams.handleConnectionStateChange).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['streamable', 'sse'] as const)('refuses inherited secret headers when changing to %s', async (target) => {
+      mockLoadServerConfigs.mockResolvedValue([{ ...storedServer, transport }]);
+      const result = await service.updateServerConfig('saved', { transport: target, serverUrl: 'https://other.example/mcp' } as Partial<MCPServerConfig>);
+      expect(result).toEqual({ success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 });
+      expect(mockSaveConfig).not.toHaveBeenCalled();
+      expect(seams.handleConnectionStateChange).not.toHaveBeenCalled();
+    });
   });
 });
