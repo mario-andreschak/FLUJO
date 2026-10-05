@@ -213,6 +213,45 @@ describe('processToolCalls auto-capture', () => {
     })]);
   });
 
+  it.each(['stored', 'refused'])('binds the exact bounded tool-message content after a %s spill', async (spill) => {
+    const data = { content: [{ type: 'text', text: 'café🙂'.repeat(250) }] };
+    const full = JSON.stringify(data);
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+    getRunResourceSettingsMock.mockResolvedValue({ ...DEFAULT_RUN_RESOURCE_SETTINGS,
+      toolResultTruncationEnabled: true, toolResultMaxBytes: 128, toolResultMaxLines: 0 });
+    writeRunResourceMock.mockResolvedValue(spill === 'stored'
+      ? { ...capturedEntry, mimeType: 'text/plain', kind: 'text', size: Buffer.byteLength(full, 'utf8') }
+      : { skipped: 'size-cap' });
+    const emit = jest.fn();
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})], toolNameMap,
+      conversationId: 'conv-1', emit,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw result.error;
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      mimeType: 'text/plain', data: { text: full },
+      producedBy: expect.objectContaining({ source: 'tool-result', payloadRole: 'tool-message', toolCallId: 'call1' }),
+    }));
+    const content = result.value.toolCallMessages[0].content;
+    expect(typeof content).toBe('string');
+    const message = content as string;
+    expect(message).toContain('tool result truncated for context');
+    expect(message).not.toBe(full);
+    if (spill === 'stored') expect(message).toContain(capturedEntry.uri);
+    else expect(message).toContain('the full result could not be stored');
+    const resultEvents = emit.mock.calls.map(([row]) => row).filter(row => row.type === 'tool:result');
+    expect(resultEvents).toHaveLength(1);
+    expect(resultEvents[0]).toMatchObject({ toolCallId: 'call1', isError: false,
+      result: message.length > 500 ? `${message.slice(0, 500)}…` : message,
+      resultContentBinding: { serialization: 'utf8-string-v1',
+        sha256: createHash('sha256').update(message, 'utf8').digest('hex'), bytes: Buffer.byteLength(message, 'utf8') } });
+    expect(resultEvents[0].resultContentBinding.sha256)
+      .not.toBe(createHash('sha256').update(full, 'utf8').digest('hex'));
+  });
+
   it('does not capture failed tool calls', async () => {
     callToolMock.mockResolvedValue({ success: false, error: 'boom' });
     const result = await ModelHandler.processToolCalls({

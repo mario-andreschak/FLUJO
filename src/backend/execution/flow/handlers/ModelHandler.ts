@@ -4015,10 +4015,10 @@ export class ModelHandler {
             }
           }
 
-          // Format the result
-          let resultContent = result.success
-            ? JSON.stringify(effectiveData)
-            : `Error: ${result.error}`;
+          // Only successful tool-message content participates in capture,
+          // bounding, and the full-content binding. Failure diagnostics remain
+          // separate: an error result cannot satisfy a successful-result join.
+          let successfulResultContent = result.success ? JSON.stringify(effectiveData) : '';
 
           // Keep an exact transcript-level copy of medium-large results for the
           // browser's expansion-time loader. Results over the context boundary
@@ -4027,17 +4027,17 @@ export class ModelHandler {
             result.success
             && conversationId
             && runResourceSettings?.autoCaptureEnabled
-            && resultContent.length >= runResourceSettings.textThresholdChars
+            && successfulResultContent.length >= runResourceSettings.textThresholdChars
           ) {
-            const resultBytes = Buffer.byteLength(resultContent, 'utf8');
+            const resultBytes = Buffer.byteLength(successfulResultContent, 'utf8');
             const maxBytes = runResourceSettings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
             const maxLines = runResourceSettings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
             const overBytes = maxBytes > 0 && resultBytes > maxBytes;
             let overLines = false;
             if (maxLines > 0) {
               let lines = 1;
-              for (let index = 0; index < resultContent.length && lines <= maxLines; index++) {
-                if (resultContent.charCodeAt(index) === 10) lines++;
+              for (let index = 0; index < successfulResultContent.length && lines <= maxLines; index++) {
+                if (successfulResultContent.charCodeAt(index) === 10) lines++;
               }
               overLines = lines > maxLines;
             }
@@ -4048,7 +4048,7 @@ export class ModelHandler {
                     conversationId,
                     mimeType: 'application/json',
                     kind: 'text',
-                    data: { text: resultContent },
+                    data: { text: successfulResultContent },
                     producedBy: {
                       source: 'tool-result',
                       payloadRole: 'tool-message',
@@ -4094,12 +4094,12 @@ export class ModelHandler {
                   server: serverName,
                   toolName,
                   nodeId: node?.nodeId,
-                  content: resultContent,
+                  content: successfulResultContent,
                   settings: runResourceSettings,
                 }),
               );
               if (bounded.spilled) {
-                resultContent = bounded.content;
+                successfulResultContent = bounded.content;
                 if (bounded.uri) {
                   await commitFlowDurableMutation(durableContext, async () => {
                     emit?.({
@@ -4123,19 +4123,21 @@ export class ModelHandler {
             }
           }
 
+          const resultContent = result.success ? successfulResultContent : `Error: ${result.error}`;
           // The full result reaches the conversation as the tool message below;
-          // the event carries a preview so the log stays light.
+          // the event carries a preview so the log stays light. Only successful
+          // results carry a binding; error text still reaches the conversation.
           await commitFlowDurableMutation(durableContext, async () => {
             emit?.({
               type: 'tool:result',
               toolCallId: id,
               name,
               result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              resultContentBinding: {
-                serialization: 'utf8-string-v1',
-                sha256: createHash('sha256').update(resultContent, 'utf8').digest('hex'),
-                bytes: Buffer.byteLength(resultContent, 'utf8'),
-              },
+              ...(result.success ? { resultContentBinding: {
+                serialization: 'utf8-string-v1' as const,
+                sha256: createHash('sha256').update(successfulResultContent, 'utf8').digest('hex'),
+                bytes: Buffer.byteLength(successfulResultContent, 'utf8'),
+              } } : {}),
               isError: !result.success
             });
           });
