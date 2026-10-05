@@ -216,6 +216,12 @@ import {
   hydrateMaskedHeaders,
 } from "@/utils/mcp/headers";
 import {
+  hasMaskedStoredHeaders,
+  hasStoredSecretHeaders,
+  isSameMcpHeaderDestination,
+  MCP_HEADER_DESTINATION_CHANGED,
+} from "@/utils/mcp/headerDestination";
+import {
   getTestConnectionTimeoutMs,
   isRunnerStdioConfig,
 } from "@/utils/mcp/testConnectionTimeout";
@@ -1519,6 +1525,13 @@ export class MCPService {
         )?.headers;
         const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig)
           .headers;
+        if (
+          hasMaskedStoredHeaders(incomingHeaders, savedHeaders) &&
+          !isSameMcpHeaderDestination(config, savedCfg)
+        ) {
+          emit({ type: "result", success: false, error: MCP_HEADER_DESTINATION_CHANGED });
+          return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
+        }
         toTest = {
           ...config,
           headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders),
@@ -2967,6 +2980,20 @@ export class MCPService {
       return { success: false, error: `Server ${serverName} not found` };
     }
 
+    // Partial edits also inherit old headers when the field is omitted. Neither that
+    // inheritance nor a masked-header restore may move saved secrets to a new endpoint.
+    const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
+    const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
+    const reusesSavedHeaders = incomingHeaders === undefined
+      ? hasStoredSecretHeaders(existingHeaders)
+      : hasMaskedStoredHeaders(incomingHeaders, existingHeaders);
+    if (
+      reusesSavedHeaders &&
+      !isSameMcpHeaderDestination({ ...config, ...updates }, config)
+    ) {
+      return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
+    }
+
     // Encrypt all credential updates before saving or changing a live connection.
     // Bindings remain references and are resolved/decrypted at connect time.
     updates = { ...updates };
@@ -2981,9 +3008,7 @@ export class MCPService {
           await this.resolveOAuthSecretForSave(incomingSecret, existingSecret);
       }
 
-      const incomingHeaders = (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers;
       if (incomingHeaders !== undefined) {
-        const existingHeaders = (config as MCPSSEConfig | MCPStreamableConfig).headers;
         (updates as Partial<MCPSSEConfig | MCPStreamableConfig>).headers =
           await this.resolveHeadersForSave(incomingHeaders, existingHeaders);
       }

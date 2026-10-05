@@ -15,6 +15,7 @@
 import { EventEmitter } from 'events';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { MCP_HEADER_DESTINATION_CHANGED } from '@/utils/mcp/headerDestination';
 
 // stdio transport stand-in (not used by the streamable path, but connection.ts imports it).
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js', () => {
@@ -144,5 +145,67 @@ describe('MCPService.testConnection masked-header hydration (#137)', () => {
 
     const headers = resolvedInputHeaders();
     expect(headers?.Authorization).toEqual({ value: 'Bearer plaintext', metadata: { isSecret: true } });
+  });
+
+  it.each([
+    { serverUrl: 'https://other.example/mcp' },
+    { name: 'renamed', serverUrl: 'https://other.example/mcp' },
+    { serverUrl: 'http://saved.example/mcp' },
+    { serverUrl: 'https://saved.example:444/mcp' },
+    { serverUrl: 'https://saved.example/other' },
+    { serverUrl: 'https://saved.example/mcp?tenant=other' },
+    { serverUrl: 'not a URL' },
+    { serverUrl: 'file:///mcp' },
+    { transport: 'sse' },
+  ])('refuses automatic secret reuse for %j before resolution or construction', async (changes) => {
+    const client = armClient();
+    mockLoadServerConfigs.mockResolvedValue([{ ...storedServer, serverUrl: 'https://saved.example/mcp' }]);
+    const incoming = { ...maskedIncomingConfig(), serverUrl: 'https://saved.example/mcp', ...changes } as MCPServerConfig;
+    const before = structuredClone(incoming);
+    const emit = jest.fn();
+
+    const result = await new MCPService().testConnection(incoming, emit, { storedName: 'gh' });
+
+    expect(result).toEqual({ success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 });
+    expect(connection.resolveConfigHeaders).not.toHaveBeenCalled();
+    expect(connection.createNewClient).not.toHaveBeenCalled();
+    expect(connection.createTransport).not.toHaveBeenCalled();
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(connection.safelyCloseClient).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith({ type: 'result', success: false, error: MCP_HEADER_DESTINATION_CHANGED });
+    expect(incoming).toEqual(before);
+    expect(JSON.stringify(result)).not.toContain('REALTOKEN');
+  });
+
+  it('keeps normalization and rename working at the same HTTPS endpoint', async () => {
+    armClient();
+    mockLoadServerConfigs.mockResolvedValue([{ ...storedServer, serverUrl: 'https://saved.example/mcp' }]);
+    const incoming = { ...maskedIncomingConfig('renamed'), serverUrl: 'https://SAVED.example:443/mcp#editor' } as MCPServerConfig;
+    const result = await new MCPService().testConnection(incoming, undefined, { storedName: 'gh' });
+    expect(result.success).toBe(true);
+    expect(resolvedInputHeaders()?.Authorization).toEqual({ value: 'encrypted:REALTOKEN', metadata: { isSecret: true } });
+  });
+
+  it('allows a caller to supply a fresh explicit header for a changed destination', async () => {
+    armClient();
+    mockLoadServerConfigs.mockResolvedValue([storedServer]);
+    const headers = { Authorization: { value: 'Bearer SYNTHETIC_FRESH', metadata: { isSecret: true } } };
+    const incoming = {
+      ...maskedIncomingConfig(), serverUrl: 'https://other.example/mcp',
+      headers,
+    } as MCPServerConfig;
+    const result = await new MCPService().testConnection(incoming);
+    expect(result.success).toBe(true);
+    expect(resolvedInputHeaders()?.Authorization).toEqual(headers.Authorization);
+  });
+
+  it('rejects a legacy string mask when the saved destination is malformed', async () => {
+    armClient();
+    mockLoadServerConfigs.mockResolvedValue([{ ...storedServer, serverUrl: 'not a URL' }]);
+    const incoming = { ...maskedIncomingConfig(), headers: { Authorization: MASKED_API_KEY } } as MCPServerConfig;
+    const result = await new MCPService().testConnection(incoming);
+    expect(result.success).toBe(false);
+    expect(connection.resolveConfigHeaders).not.toHaveBeenCalled();
   });
 });
