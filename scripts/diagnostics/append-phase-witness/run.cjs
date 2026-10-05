@@ -5,14 +5,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
+const { entryClock, createDeadline, persistCandidate, preservePartial, assertReleasedPredecessor } = require('./controller-terminal.cjs');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const packet = __dirname;
 const arg = flag => { const index = process.argv.indexOf(flag); return index < 0 ? undefined : process.argv[index + 1]; };
 const demand = (condition, message) => { if (!condition) throw new Error(message); };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const command = (executable, args, cwd) => execFileSync(executable, args, { cwd, encoding: 'utf8', timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }).trim();
 function birth(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -39,12 +39,12 @@ async function stage(name, args, timeoutMs, context) {
   const beganMono = performance.now();
   const grantStopUtc = Date.parse(context.expiresAtUtc);
   demand(Number.isFinite(grantStopUtc), 'Absolute assigned stop required for every stage');
-  const grantStopMono = beganMono + grantStopUtc - beganWall;
+  const grantStopMono = Math.min(beganMono + grantStopUtc - beganWall, context.controllerDeadline.record.grantStopMono);
   const stageStopUtc = Math.min(beganWall + timeoutMs, grantStopUtc - 15_000);
-  const stageStopMono = beganMono + stageStopUtc - beganWall;
+  const stageStopMono = Math.min(beganMono + stageStopUtc - beganWall, grantStopMono - 15_000);
   const cleanupStopUtc = Math.min(grantStopUtc, stageStopUtc + 15_000);
   const cleanupStopMono = Math.min(grantStopMono, stageStopMono + 15_000);
-  const remaining = (utc, mono) => Math.max(0, Math.min(utc - Date.now(), mono - performance.now()));
+  const remaining = (utc, mono) => Math.max(0, Math.min(utc - Date.now(), mono - performance.now(), context.controllerDeadline.remaining()));
   const stageExpired = () => remaining(stageStopUtc, stageStopMono) <= 0;
   const cleanupExpired = () => remaining(cleanupStopUtc, cleanupStopMono) <= 0;
   demand(!stageExpired(), 'Assigned stage stop reached before intent/spawn');
@@ -144,12 +144,14 @@ async function stage(name, args, timeoutMs, context) {
 }
 async function main() {
   demand(process.platform === 'linux', 'Prepared profile is Linux only; no Windows fallback is authorized');
+  const enteredClock = entryClock();
   const grantFile = arg('--grant');
   const count = Number(arg('--count'));
   demand(grantFile && [100, 250].includes(count), 'Required --grant absolute.json and --count 100|250');
   demand(path.isAbsolute(grantFile), 'Absolute external assignment path required');
   const grantBytes = fs.readFileSync(grantFile);
   const grant = JSON.parse(grantBytes);
+  const deadline = createDeadline(grant.expiresAtUtc, enteredClock);
   demand(grant.state === 'ASSIGNED' && grant.separateAppendWitnessAuthorized === true && grant.exclusiveWindowAssigned === true, 'New explicit separate diagnostic window assignment required');
   demand(grant.authorizedByRoot === true && grant.authorizedByQueue === true && grant.checkoutPurpose === 'append-phase-witness', 'Both coordinator and queue review plus separate owned checkout required');
   demand(grant.profile === 'linux-node22.23.3-uv1.51.0-default-heap' && grant.count === count, 'Grant profile/count mismatch');
@@ -168,7 +170,7 @@ async function main() {
   for (const member of manifest.members) demand(sha(fs.readFileSync(path.join(packet, member.file))) === member.sha256, 'Packet source changed: ' + member.file);
   const root = fs.realpathSync(grant.checkout);
   demand(path.isAbsolute(grant.checkout) && root === grant.checkout && root !== packet, 'Canonical dedicated checkout required');
-  const git = args => command('git', ['-C', root, ...args]);
+  const git = args => deadline.git(root, args);
   demand(git(['rev-parse', '--show-toplevel']) === root, 'Git root mismatch');
   const head = git(['rev-parse', 'HEAD']);
   const tree = git(['rev-parse', 'HEAD^{tree}']);
@@ -188,9 +190,7 @@ async function main() {
     const earlierBytes = fs.readFileSync(grant.previous100Receipt.file);
     const releasedBytes = fs.readFileSync(grant.previous100Release.file);
     demand(sha(earlierBytes) === grant.previous100Receipt.sha256 && sha(releasedBytes) === grant.previous100Release.sha256, 'Prior100 evidence hash mismatch');
-    const earlier = JSON.parse(earlierBytes); const released = JSON.parse(releasedBytes);
-    demand(earlier.count === 100 && earlier.head === head && earlier.tree === tree && earlier.packetManifestSha256 === grant.packetManifestSha256 && earlier.sourceRestored && earlier.state === 'SHORT_WITNESS_COMPLETED_NOT_PERFORMANCE_OR_ENDURANCE_QUALIFICATION' && earlier.stages.length === 2 && earlier.stages.every(item => item.natural && item.exit.code === 0), 'Prior100 sample must finish naturally on this exact source and diagnostic packet');
-    demand(released.state === 'RELEASED' && released.knownProcessBirthsAbsent === true && released.controllerAlreadyExited === true && released.sourceClean === true && released.outputMembersMatch === true && released.releasedBy?.pid !== earlier.controller.pid && released.receiptSha256 === sha(earlierBytes), 'Prior100 independently released receipt required');
+    deadline.bounded('prior100 terminal proof validation', () => assertReleasedPredecessor(earlierBytes, releasedBytes, grant));
   }
   const dependencyGuard = require(path.join(root, 'scripts/local-test-dependencies.cjs'));
   const graph = dependencyGuard.assertLocalTestDependencies(root);
@@ -204,8 +204,8 @@ async function main() {
   fs.mkdirSync(output, { mode: 0o700 });
   const controller = birth(process.pid);
   demand(controller?.startTicks, 'Original witness controller birth required');
-  const controllerIntentBytes = Buffer.from(JSON.stringify({ schemaVersion: 3, state: 'WITNESS_CONTROLLER_ENTERED_BEFORE_ANY_STAGE', controller, bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), count, head, tree, assignmentSha256: sha(grantBytes), packetManifestSha256: sha(manifestBytes), output }, null, 2) + '\n');
-  fs.writeFileSync(path.join(output, 'controller.intent.json'), controllerIntentBytes, { flag: 'wx', mode: 0o600 });
+  const controllerIntentBytes = Buffer.from(JSON.stringify({ schemaVersion: 4, state: 'WITNESS_CONTROLLER_ENTERED_BEFORE_ANY_STAGE', controller, bootId: deadline.record.anchor.bootId, controllerDeadline: deadline.record, count, head, tree, assignmentSha256: sha(grantBytes), packetManifestSha256: sha(manifestBytes), output }, null, 2) + '\n');
+  deadline.bounded('controller intent persistence', () => fs.writeFileSync(path.join(output, 'controller.intent.json'), controllerIntentBytes, { flag: 'wx', mode: 0o600 }));
   const temporaryRoot = path.join(output, 'synthetic-temp');
   fs.mkdirSync(temporaryRoot, { mode: 0o700 });
   const installation = path.join(temporaryRoot, 'installation');
@@ -216,20 +216,23 @@ async function main() {
   for (const key of ['FLUJO_JEST_EXCLUDE_ISOLATED_SUITES', 'FLUJO_JEST_EXPECTED_TEST_FILES', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_DATA_DIR', 'NODE_OPTIONS', 'CI_SKIP_PERF']) delete environment[key];
   for (const key of Object.keys(environment)) if (key.startsWith('FLUJO_PERSONA_RUNTIME_EVENT_')) delete environment[key];
   const fixture = path.join(root, '__tests__', 'enduringAgents', `appendPhaseWitness-${crypto.randomUUID()}.test.ts`);
-  const context = { root, output, environment, expiresAtUtc: grant.expiresAtUtc };
+  const context = { root, output, environment, expiresAtUtc: grant.expiresAtUtc, controllerDeadline: deadline };
   const receipt = { schemaVersion: 1, state: 'DIAGNOSTIC_ENTERED_NOT_20K_QUALIFICATION', controller: { ...birth(process.pid), executable: process.execPath, executableSha256: sha(fs.readFileSync(process.execPath)) }, runtime: { node: process.version, uv: process.versions.uv, platform: process.platform, architecture: process.arch, defaultHeap: true, npmVersion, npmCli: grant.npmCli, npmCliSha256: grant.npmCliSha256, installedNext, osRelease: fs.readFileSync('/etc/os-release', 'utf8'), bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), lockfileSha256: sha(fs.readFileSync(path.join(root, 'package-lock.json'))) }, count, head, tree, assignmentSha256: sha(grantBytes), packetManifestSha256: sha(manifestBytes), sourceBefore, output, fixture, stages: [], syntheticDataPreserved: true, independentPostControllerExitReleaseAuditRequired: true };
   let fixtureCreated = false;
-  receipt.schemaVersion = 3;
+  receipt.schemaVersion = 4;
+  receipt.controllerDeadline = deadline.record;
   receipt.controllerIntentSha256 = sha(controllerIntentBytes);
   let failure;
   try {
     // Preparation never invokes this. The future assigned entry records the
     // normal dependency guard, then copies only this authored diagnostic fixture.
-    demand(Date.now() + 220_000 < Date.parse(grant.expiresAtUtc), 'At least220s assigned time remaining required before first stage');
+    demand(deadline.remaining() > 220_000, 'At least220s assigned time remaining required before first stage');
     receipt.stages.push(await stage('dependency-guard', [path.join(root, 'scripts/local-test-dependencies.cjs')], 20_000, context));
     demand(receipt.stages.at(-1).natural && receipt.stages.at(-1).exit.code === 0, 'Dependency guard must finish naturally with zero');
+    deadline.check('before fixture creation');
     fs.copyFileSync(path.join(packet, 'fixture.test.ts'), fixture, fs.constants.COPYFILE_EXCL);
     fixtureCreated = true;
+    deadline.check('after fixture creation');
     const args = [path.join(root, 'scripts/run-local-jest.cjs'), '--config', path.join(packet, 'jest-config.cjs'), '--selectProjects', 'node', '--runInBand', '--no-cache', '--testMatch', '**/__tests__/**/*.test.{ts,tsx}', '--runTestsByPath', fixture, '--json', '--outputFile', path.join(output, 'jest.json')];
     const outcome = await stage('witness', args, 180_000, context);
     receipt.stages.push(outcome);
@@ -241,29 +244,37 @@ async function main() {
     demand(progress.every(item => !item.observationOverflow && item.observerErrors.length === 0 && Object.entries(item.workLimits).every(([key, maximum]) => item.work[key] <= maximum)), 'Observer error/overflow or work-budget overrun invalidates this diagnostic');
     const transformed = fs.readFileSync(path.join(output, 'transforms.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     demand(new Set(transformed.map(item => item.file)).size === 6 && transformed.every(item => sourceBefore.some(pin => pin.file === item.file && pin.sha256 === item.originalSha256)) && transformed.reduce((sum, item) => sum + item.functions.length, 0) === 20, 'Six exact joined source transforms and20 named functions required');
-    receipt.state = 'SHORT_WITNESS_COMPLETED_NOT_PERFORMANCE_OR_ENDURANCE_QUALIFICATION';
+    deadline.check('after native result/progress/transform validation');
+    receipt.state = 'SHORT_WITNESS_STAGES_COMPLETE_FINALIZATION_PENDING';
   } catch (error) {
     failure = error;
     receipt.state = 'SHORT_WITNESS_FAILED_OR_BOUNDED_TERMINATION_PARTIAL_EVIDENCE_RETAINED';
     receipt.error = { name: error.name, message: error.message, stack: error.stack };
   } finally {
-    if (fixtureCreated) {
-      try {
+    try {
+      if (fixtureCreated) deadline.bounded('exclusive fixture restoration', () => {
         demand(sha(fs.readFileSync(fixture)) === sha(fs.readFileSync(path.join(packet, 'fixture.test.ts'))), 'Temporary authored fixture changed; preserve it for review');
         fs.unlinkSync(fixture); // Only the exact exclusive-created file is removed.
-      } catch (error) { receipt.cleanupError = { name: error.name, message: error.message }; failure ??= error; }
+      });
+      receipt.sourceAfter = sourceBefore.map(pin => deadline.bounded('source hash ' + pin.file, () => {
+        const hash = sha(fs.readFileSync(path.join(root, pin.file)));
+        return { file: pin.file, sha256: hash, unchanged: hash === pin.sha256 };
+      }));
+      receipt.afterHead = git(['rev-parse', 'HEAD']); receipt.afterTree = git(['rev-parse', 'HEAD^{tree}']); receipt.afterStatus = git(['status', '--porcelain=v1', '--untracked-files=all']);
+      receipt.sourceRestored = receipt.sourceAfter.every(pin => pin.unchanged) && receipt.afterHead === head && receipt.afterTree === tree && receipt.afterStatus === '';
+      demand(receipt.sourceRestored, 'Source/clean checkout postcondition failed');
+      receipt.state = failure ? 'SHORT_WITNESS_FAILED_FINALIZED_PENDING_INDEPENDENT_TERMINAL_PROOF' : 'SHORT_WITNESS_COMPLETED_PENDING_INDEPENDENT_TERMINAL_PROOF';
+      persistCandidate(output, '', receipt, deadline);
+    } catch (error) {
+      failure ??= error;
+      receipt.state = 'SHORT_WITNESS_FINALIZATION_PARTIAL_OR_LATE_RELEASE_HELD';
+      preservePartial(output, '', receipt, error);
     }
-    receipt.sourceAfter = sourceBefore.map(pin => ({ file: pin.file, sha256: sha(fs.readFileSync(path.join(root, pin.file))), unchanged: sha(fs.readFileSync(path.join(root, pin.file))) === pin.sha256 }));
-    receipt.afterHead = git(['rev-parse', 'HEAD']); receipt.afterTree = git(['rev-parse', 'HEAD^{tree}']); receipt.afterStatus = git(['status', '--porcelain=v1', '--untracked-files=all']);
-    receipt.sourceRestored = receipt.sourceAfter.every(pin => pin.unchanged) && receipt.afterHead === head && receipt.afterTree === tree && receipt.afterStatus === '';
-    receipt.endedAt = new Date().toISOString();
-    fs.writeFileSync(path.join(output, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    const members = fs.readdirSync(output).filter(file => fs.statSync(path.join(output, file)).isFile()).map(file => ({ file, bytes: fs.statSync(path.join(output, file)).size, sha256: sha(fs.readFileSync(path.join(output, file))) }));
-    fs.writeFileSync(path.join(output, 'manifest.json'), JSON.stringify({ schemaVersion: 1, members, excludesPreservedSyntheticSubtree: true }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    demand(receipt.sourceRestored, 'Source/clean checkout postcondition failed');
   }
   if (failure) throw failure;
+  deadline.check('before terminal stdout');
   process.stdout.write(JSON.stringify({ state: receipt.state, output, independentPostControllerExitReleaseAuditRequired: true }) + '\n');
+  deadline.check('after terminal stdout handoff');
 }
 module.exports = { birth, stage, sha, demand };
 if (require.main === module) main().catch(error => { process.stderr.write(error.stack + '\n'); process.exitCode = 1; });

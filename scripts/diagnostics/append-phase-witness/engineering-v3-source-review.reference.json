@@ -1,0 +1,1757 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-05T13:35:47.422Z",
+  "status": "V3_F1_F2_SOURCE_CORRECTED_F3_CONTROLLER_TERMINAL_GAP_REMAINS_HELD",
+  "head": "eeab3f87629639cc96bb7b4824c635060e1d935b",
+  "tree": "0d004bd1bad9385329e5fba1d86c32ed4a2b021d",
+  "directParent": "ad99f223c0da20300b97f20eec7ff59a326b1e03",
+  "actualTarget": "f67f215d2c698f961d28efdb50267454b4b1faf6",
+  "targetTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+  "changedPaths": [
+    ".github/workflows/persona-memory-recall-benchmark.yml",
+    "scripts/diagnostics/.gitattributes",
+    "scripts/diagnostics/append-phase-witness/bind-hosted-grant.cjs",
+    "scripts/diagnostics/append-phase-witness/correction-source-review.json",
+    "scripts/diagnostics/append-phase-witness/current-source-pins.json",
+    "scripts/diagnostics/append-phase-witness/default-branch-workflow-proof.json",
+    "scripts/diagnostics/append-phase-witness/engineering-v2-source-review.reference.json",
+    "scripts/diagnostics/append-phase-witness/fixture.test.ts",
+    "scripts/diagnostics/append-phase-witness/hosted-grant.template.json",
+    "scripts/diagnostics/append-phase-witness/hosted-route.diff",
+    "scripts/diagnostics/append-phase-witness/jest-config.cjs",
+    "scripts/diagnostics/append-phase-witness/manifest.json",
+    "scripts/diagnostics/append-phase-witness/observer.cjs",
+    "scripts/diagnostics/append-phase-witness/official-npm10.9.9-cli.reference.js",
+    "scripts/diagnostics/append-phase-witness/parser-checks.json",
+    "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.aa.yml",
+    "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.main.yml",
+    "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.proposed.yml",
+    "scripts/diagnostics/append-phase-witness/proposal.json",
+    "scripts/diagnostics/append-phase-witness/release.cjs",
+    "scripts/diagnostics/append-phase-witness/retain-data-root.cjs",
+    "scripts/diagnostics/append-phase-witness/retained-v2-parser-checks.json",
+    "scripts/diagnostics/append-phase-witness/run-install.cjs",
+    "scripts/diagnostics/append-phase-witness/run.cjs",
+    "scripts/diagnostics/append-phase-witness/transform.cjs",
+    "scripts/diagnostics/append-phase-witness/verify-predecessor.cjs",
+    "scripts/diagnostics/append-phase-witness/workflow-source-review.json"
+  ],
+  "sourceJoins": [
+    {
+      "file": "bind-hosted-grant.cjs",
+      "bytes": 9088,
+      "sha256": "c4fd8c6a8329950a689a44e87418c5489c53839fe742a887a86f7a508237155f",
+      "leafFile": "scripts/diagnostics/append-phase-witness/bind-hosted-grant.cjs",
+      "gitBlob": "b04079a75e6aec2b3046eef81fcce81953181150",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "correction-source-review.json",
+      "bytes": 2069,
+      "sha256": "4a58bec3691d418cc628eddd9c5266c4b975dcdbcc55d87a7e56e2d123e6c1b9",
+      "leafFile": "scripts/diagnostics/append-phase-witness/correction-source-review.json",
+      "gitBlob": "057e9b81dd9385f5efd6e15630bbd2dd9fa11b6f",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "current-source-pins.json",
+      "bytes": 6687,
+      "sha256": "7390e9093f760692c0fb98e8e67939723426b1ee1c2bceae9cca28d9f334a0f3",
+      "leafFile": "scripts/diagnostics/append-phase-witness/current-source-pins.json",
+      "gitBlob": "f1cb0e4c1292cd74b3d6fae1aaf1cec60162a039",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "default-branch-workflow-proof.json",
+      "bytes": 793,
+      "sha256": "4de2fb580d9be7c834baf6ed6f8b2cb26ecd332d263de16f94b688bd3301c230",
+      "leafFile": "scripts/diagnostics/append-phase-witness/default-branch-workflow-proof.json",
+      "gitBlob": "af0b74a9c6d45470c20fb12436b45d5861d5ac36",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "engineering-v2-source-review.reference.json",
+      "bytes": 20463,
+      "sha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
+      "leafFile": "scripts/diagnostics/append-phase-witness/engineering-v2-source-review.reference.json",
+      "gitBlob": "4a1b1312259d6274fc7401af4b65cd82bc6c3bdd",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "fixture.test.ts",
+      "bytes": 3472,
+      "sha256": "61253b59ad527450fbeef58c7f6bb87b7798b75dedda7347fc953f9457d93b8f",
+      "leafFile": "scripts/diagnostics/append-phase-witness/fixture.test.ts",
+      "gitBlob": "c8f8d3816fdaea70397ff2c575f6eb90111dc7f3",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "hosted-grant.template.json",
+      "bytes": 1247,
+      "sha256": "800013e0c1041bacd75a1b9daaf8e5a42c6c48ace7d5d81d59ed92499dfcc977",
+      "leafFile": "scripts/diagnostics/append-phase-witness/hosted-grant.template.json",
+      "gitBlob": "e8a565941604fcf717d6418303408b41012fcf4b",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "hosted-route.diff",
+      "bytes": 6252,
+      "sha256": "2315ea784fcb79623d2e7f9e54386a5181da01026e3a06442d66a292e61984ae",
+      "leafFile": "scripts/diagnostics/append-phase-witness/hosted-route.diff",
+      "gitBlob": "1e02c69f4be753d49423dc51b4d8a289f6652f89",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "jest-config.cjs",
+      "bytes": 1887,
+      "sha256": "64d0bb0c9adb602eb27c444015b9075439c13aac329f69739fcc51bd9f813152",
+      "leafFile": "scripts/diagnostics/append-phase-witness/jest-config.cjs",
+      "gitBlob": "85d2ea9e2911fa4fc47cdf15173c00ff0fe4f6c1",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "observer.cjs",
+      "bytes": 12154,
+      "sha256": "fe1f50411a6d1ad8d428da9c80bda76031e821c27236e9c62c325123bb8c586a",
+      "leafFile": "scripts/diagnostics/append-phase-witness/observer.cjs",
+      "gitBlob": "f139185e6d02d586373c8f3963fadc77060399a8",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "official-npm10.9.9-cli.reference.js",
+      "bytes": 54,
+      "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      "leafFile": "scripts/diagnostics/append-phase-witness/official-npm10.9.9-cli.reference.js",
+      "gitBlob": "577abe03e7b8e9099840c1f17ba8875804f1e74b",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "parser-checks.json",
+      "bytes": 402,
+      "sha256": "4316d025ece0044bf182829dc628800c9537e0672f7d3a5d759c85d325ced870",
+      "leafFile": "scripts/diagnostics/append-phase-witness/parser-checks.json",
+      "gitBlob": "2482fd56f90836e79617857bc728a1d86b7fc8fa",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "persona-memory-recall-benchmark.aa.yml",
+      "bytes": 2298,
+      "sha256": "19390c4a29321f86939616a87d589c123f1d7a7490968d4e08fbe9450ced8e32",
+      "leafFile": "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.aa.yml",
+      "gitBlob": "2b62a8262858e6a681f525bfb8ecfb3b74b841ee",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "persona-memory-recall-benchmark.main.yml",
+      "bytes": 2000,
+      "sha256": "68042f2c07878a5db5fce80b13ca1e96e5391682c221d6fa591a79020504dc45",
+      "leafFile": "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.main.yml",
+      "gitBlob": "086fbd44b4cc1dacee0b137756e437d540febad2",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "persona-memory-recall-benchmark.proposed.yml",
+      "bytes": 7562,
+      "sha256": "8cfba018d799b70e6644866601e9a14080907f6f6b1ca8407e5d1eca56544d4a",
+      "leafFile": "scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.proposed.yml",
+      "gitBlob": "d5fee7f95393e6423246372db3976f927bd55135",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "proposal.json",
+      "bytes": 25013,
+      "sha256": "9b357bf69d33fffc098e11f1b3d49d68cb3ab30014f67e3e18872ad58674c8cb",
+      "leafFile": "scripts/diagnostics/append-phase-witness/proposal.json",
+      "gitBlob": "b1fb521381734a0d29b72ad1ea0c705a3e309e63",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "release.cjs",
+      "bytes": 12468,
+      "sha256": "71a10b527db972fb18326e3b91f9230a6b685f8087f353d7fb75328a317e80e4",
+      "leafFile": "scripts/diagnostics/append-phase-witness/release.cjs",
+      "gitBlob": "a500d4870d60e7efbb98c4c89cc4ac7dd0903508",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "retain-data-root.cjs",
+      "bytes": 617,
+      "sha256": "08e189d0b081c85c644335645aec7e175afee482f298272ef5fc0d698541d497",
+      "leafFile": "scripts/diagnostics/append-phase-witness/retain-data-root.cjs",
+      "gitBlob": "a4900b8b7a4712ca62f2f74d1be0ce5a74c88eb4",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "retained-v2-parser-checks.json",
+      "bytes": 5860,
+      "sha256": "15f3e0f50737fc2fc4667fd14a840352fe7a9ab0c9bec61f673bf282e039a8d9",
+      "leafFile": "scripts/diagnostics/append-phase-witness/retained-v2-parser-checks.json",
+      "gitBlob": "5944d4fb06146fe1c94a8591dde1b8a7de984a20",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "run-install.cjs",
+      "bytes": 6163,
+      "sha256": "b255d812e57be552453cefc4790dc3dbb2cf841d015bd754c9992053328b1c98",
+      "leafFile": "scripts/diagnostics/append-phase-witness/run-install.cjs",
+      "gitBlob": "4aaee34fca8f93e9a474a250ea082758968801b0",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "run.cjs",
+      "bytes": 25723,
+      "sha256": "d0e37b884e26481eb0dc3576bb29cef499b956900a67e0962f457120afbc2974",
+      "leafFile": "scripts/diagnostics/append-phase-witness/run.cjs",
+      "gitBlob": "49da4d1a0328e556212f9da11f7ccec0a6eeda59",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "transform.cjs",
+      "bytes": 4521,
+      "sha256": "c87750edf24d46ff404c34888b61ef5730f978d4a5ee423532aad5397fca0a04",
+      "leafFile": "scripts/diagnostics/append-phase-witness/transform.cjs",
+      "gitBlob": "c90cacee3781d3b7c019eda88f73a313018193f2",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "verify-predecessor.cjs",
+      "bytes": 1982,
+      "sha256": "05be0e253f159c1b5486c5b57bedbe3fefd795d265f8676268c699a7d0ba1151",
+      "leafFile": "scripts/diagnostics/append-phase-witness/verify-predecessor.cjs",
+      "gitBlob": "df84cf2087fe7be75ba33aab6bf5451797f2f25a",
+      "rawAndCommittedBytesEqual": true
+    },
+    {
+      "file": "workflow-source-review.json",
+      "bytes": 2152,
+      "sha256": "3534f751f0f0b908c9ec9b7ce0fda6fff196eb219839de1d998f928e38de4650",
+      "leafFile": "scripts/diagnostics/append-phase-witness/workflow-source-review.json",
+      "gitBlob": "a9c9686984387d6d044a85a4686b539009efd63a",
+      "rawAndCommittedBytesEqual": true
+    }
+  ],
+  "manifestSha256": "aee01199201107e3f193e01f0fc7d4e51f281cec408607bf1b1255dfb62a753b",
+  "attributeSource": "append-phase-witness/* -text\n",
+  "proposalTextAttribute": "scripts/diagnostics/append-phase-witness/proposal.json: text: unset\nscripts/diagnostics/append-phase-witness/proposal.json: eol: unspecified",
+  "packetRawAndCommittedBytesEqual": true,
+  "tracedInputJoins": [
+    {
+      "file": "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts",
+      "role": "traced append input",
+      "gitBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeEvents.ts",
+      "role": "traced append input",
+      "gitBlob": "129ae05ac0378fa196d9d44c4398e205db1436df",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "role": "traced append input",
+      "gitBlob": "a488112df8b24223ad879b99cd6bf02c722aad6b",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "role": "traced append input",
+      "gitBlob": "fd64cf9eb4eecae63123d605791c3484dad4e0ef",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/utils/storage/backend.ts",
+      "role": "traced append input",
+      "gitBlob": "70827c696e98bf95d08e9cd713da59308e16cd03",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/utils/workspace.ts",
+      "role": "traced append input",
+      "gitBlob": "564fdfd5e37616639367881d13ff7ff41130f61b",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/utils/paths.ts",
+      "role": "traced append input",
+      "gitBlob": "3c141f50214839bf9b05a5ab17cef231902dcaf7",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeClock.ts",
+      "role": "traced append input",
+      "gitBlob": "02a1d328c308f5c2c9ace1d6c74b35ae6f45fe22",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/store.ts",
+      "role": "traced append input",
+      "gitBlob": "8f949f1889f48f319b3d29fdb1ec2fff32f57d33",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryOrigins.ts",
+      "role": "traced append input",
+      "gitBlob": "50b190e18207b7805162d2c1ae688790d8d82456",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryFiles.ts",
+      "role": "traced append input",
+      "gitBlob": "40864eff680b5fb308ce10e11786441d385c8669",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "src/config/features.ts",
+      "role": "traced append input",
+      "gitBlob": "4414c3c08b5aee9594cdf504d89b731438006bd5",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "jest.setup.ts",
+      "role": "traced append input",
+      "gitBlob": "378314b1c3d3be8e41d7733485b50dfa73026840",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "jest.config.mjs",
+      "role": "traced append input",
+      "gitBlob": "e8780411e449a1e1a817ac0c198cd60e61e00a00",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "jest.testMatch.mjs",
+      "role": "traced append input",
+      "gitBlob": "cdd585a6f7e3734ce89a5402526edafc0a6eb605",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "scripts/run-local-jest.cjs",
+      "role": "traced append input",
+      "gitBlob": "7c40e9376068395610b72edb929a99d5f8680256",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "scripts/local-test-dependencies.cjs",
+      "role": "traced append input",
+      "gitBlob": "36b9fdcd4a80091167ae0f008b3daf2db41f059e",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "package.json",
+      "role": "traced append input",
+      "gitBlob": "622ea38eed0c2e7bbbb4a5af46e1c47208dbed92",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    },
+    {
+      "file": "package-lock.json",
+      "role": "traced append input",
+      "gitBlob": "873ffa0d1e5c4343e5978b8ca186004dc15ec588",
+      "sameInEarlierF238": true,
+      "sameInPublishedAA": true,
+      "sameInActualF67": true
+    }
+  ],
+  "original20kBlob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+  "original20kTimeoutSkipAndOracleUnchanged": true,
+  "ordinaryRecallJobByteIdentical": true,
+  "requiredVerifyWorkflowUnchanged": true,
+  "changedPacketMembers": [
+    "correction-source-review.json",
+    "engineering-v2-source-review.reference.json",
+    "jest-config.cjs",
+    "parser-checks.json",
+    "proposal.json",
+    "release.cjs",
+    "retained-v2-parser-checks.json",
+    "run-install.cjs",
+    "run.cjs"
+  ],
+  "resolvedFindings": [
+    {
+      "id": "F1",
+      "sourceResolved": true,
+      "evidence": "Both returned global and selected node-project rootDir explicitly use the canonical target root."
+    },
+    {
+      "id": "F2",
+      "sourceResolved": true,
+      "evidence": "Controller and stage intents precede stage/spawn; immutable child birth and outcome hashes link to owner/boot. Auditor enumerates every namespace, requires complete original stage evidence and holds missing receipts or successful-install/no-completed-witness."
+    }
+  ],
+  "F3StageImprovements": "Absolute grant/stage/cleanup and monotonic stops now cover stage launch, races, close/drain and post-outcome checks; drain is capped at2s under remaining cleanup time.",
+  "findings": [
+    {
+      "id": "F3-remaining",
+      "priority": 2,
+      "title": "Reject late controller finalization before accepting a successful receipt",
+      "file": "C:\\Users\\Moe\\.codex\\source-checkouts\\maturity-append-hosted-aa-v3-20261005\\scripts\\diagnostics\\append-phase-witness\\run.cjs",
+      "start": 244,
+      "end": 263,
+      "body": "Stage expiry checks now cover spawn, races, close, drain and stage outcome persistence, but main sets the successful witness state before finally restores the fixture, hashes 19 inputs, runs three Git commands (each may take10s), and writes its receipt/manifest. Those operations have no remaining-grant timeout or final expiry check. A natural stage near its relative stop can leave about20s before grant expiry while three successful8s Git commands make the controller finish late with the successful state. The separate release audit checks stage outcome time but never compares controller receipt endedAt/endedAtUtc with the assigned expiry; it can issue RELEASED, and the250 prerequisite accepts the successful100 receipt. This is a source counterexample, not an executed witness.",
+      "related": [
+        {
+          "file": "C:\\Users\\Moe\\.codex\\source-checkouts\\maturity-append-hosted-aa-v3-20261005\\scripts\\diagnostics\\append-phase-witness\\run-install.cjs",
+          "start": 37,
+          "end": 46
+        },
+        {
+          "file": "C:\\Users\\Moe\\.codex\\source-checkouts\\maturity-append-hosted-aa-v3-20261005\\scripts\\diagnostics\\append-phase-witness\\release.cjs",
+          "start": 36,
+          "end": 45
+        }
+      ],
+      "correction": "Carry an absolute UTC and monotonic controller stop through post-stage source restoration/audits and terminal evidence persistence, cap Git operations by remaining time, and refuse or downgrade late completion. Bind the final controller deadline/outcome evidence to the assignment and require it in the separate release audit and100 predecessor acceptance; preserve late or incomplete receipts as partial evidence."
+    }
+  ],
+  "remainingBlockingSourceFindings": 1,
+  "exact100Draft": {
+    "sha256": "ec68a76a2eb6d725fc88abbb4d69554716099552989e106617c490906e024db5",
+    "rawAssignmentAndInputBytesMatch": true,
+    "finalWorkflowSha": "eeab3f87629639cc96bb7b4824c635060e1d935b",
+    "exactManifestSha256": "aee01199201107e3f193e01f0fc7d4e51f281cec408607bf1b1255dfb62a753b",
+    "allApprovalFlagsFalse": true,
+    "timeBoundsNull": true,
+    "count": 100,
+    "executable": false
+  },
+  "count250PreparedOrAuthorized": false,
+  "newSourceParserChecksRun": 0,
+  "retainedV2ParserResultsNotTransferred": true,
+  "priorV2Review": {
+    "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\append-aa-v2-independent-source-review.json",
+    "sha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d"
+  },
+  "disposition": "Source not ready for a100 hosted dispatch until the remaining controller-terminal deadline gap is corrected and independently reviewed. No diagnostic grant, publication or dispatch is inferred.",
+  "sourceWhitespaceCheck": {
+    "CRAtEolAccountedFor": true,
+    "naturalExit": 0,
+    "defaultCRAtEolDiagnosticExit2Retained": "append-aa-v3-independent-source-review-metadata-refusal-1791207270854.json"
+  },
+  "references": [
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-hosted-aa-leaf-v3\\leaf-readback.json",
+      "sha256": "829aeeb5173506b7e69a02d342af27331f1d89cc7b6cb8362cdcbbf428558825",
+      "bytes": 4672
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\proposal.json",
+      "sha256": "9b357bf69d33fffc098e11f1b3d49d68cb3ab30014f67e3e18872ad58674c8cb",
+      "bytes": 25013
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\manifest.json",
+      "sha256": "aee01199201107e3f193e01f0fc7d4e51f281cec408607bf1b1255dfb62a753b",
+      "bytes": 4473
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\append-aa-v2-independent-source-review.json",
+      "sha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
+      "bytes": 20463
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\proposal.json",
+      "sha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800",
+      "bytes": 22532
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\bind-hosted-grant.cjs",
+      "sha256": "c4fd8c6a8329950a689a44e87418c5489c53839fe742a887a86f7a508237155f",
+      "bytes": 9088
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\correction-source-review.json",
+      "sha256": "4a58bec3691d418cc628eddd9c5266c4b975dcdbcc55d87a7e56e2d123e6c1b9",
+      "bytes": 2069
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\current-source-pins.json",
+      "sha256": "7390e9093f760692c0fb98e8e67939723426b1ee1c2bceae9cca28d9f334a0f3",
+      "bytes": 6687
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\default-branch-workflow-proof.json",
+      "sha256": "4de2fb580d9be7c834baf6ed6f8b2cb26ecd332d263de16f94b688bd3301c230",
+      "bytes": 793
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\engineering-v2-source-review.reference.json",
+      "sha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
+      "bytes": 20463
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\fixture.test.ts",
+      "sha256": "61253b59ad527450fbeef58c7f6bb87b7798b75dedda7347fc953f9457d93b8f",
+      "bytes": 3472
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\hosted-grant.template.json",
+      "sha256": "800013e0c1041bacd75a1b9daaf8e5a42c6c48ace7d5d81d59ed92499dfcc977",
+      "bytes": 1247
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\hosted-route.diff",
+      "sha256": "2315ea784fcb79623d2e7f9e54386a5181da01026e3a06442d66a292e61984ae",
+      "bytes": 6252
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\jest-config.cjs",
+      "sha256": "64d0bb0c9adb602eb27c444015b9075439c13aac329f69739fcc51bd9f813152",
+      "bytes": 1887
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\observer.cjs",
+      "sha256": "fe1f50411a6d1ad8d428da9c80bda76031e821c27236e9c62c325123bb8c586a",
+      "bytes": 12154
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\official-npm10.9.9-cli.reference.js",
+      "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      "bytes": 54
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\parser-checks.json",
+      "sha256": "4316d025ece0044bf182829dc628800c9537e0672f7d3a5d759c85d325ced870",
+      "bytes": 402
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\persona-memory-recall-benchmark.aa.yml",
+      "sha256": "19390c4a29321f86939616a87d589c123f1d7a7490968d4e08fbe9450ced8e32",
+      "bytes": 2298
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\persona-memory-recall-benchmark.main.yml",
+      "sha256": "68042f2c07878a5db5fce80b13ca1e96e5391682c221d6fa591a79020504dc45",
+      "bytes": 2000
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\persona-memory-recall-benchmark.proposed.yml",
+      "sha256": "8cfba018d799b70e6644866601e9a14080907f6f6b1ca8407e5d1eca56544d4a",
+      "bytes": 7562
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\proposal.json",
+      "sha256": "9b357bf69d33fffc098e11f1b3d49d68cb3ab30014f67e3e18872ad58674c8cb",
+      "bytes": 25013
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\release.cjs",
+      "sha256": "71a10b527db972fb18326e3b91f9230a6b685f8087f353d7fb75328a317e80e4",
+      "bytes": 12468
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\retain-data-root.cjs",
+      "sha256": "08e189d0b081c85c644335645aec7e175afee482f298272ef5fc0d698541d497",
+      "bytes": 617
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\retained-v2-parser-checks.json",
+      "sha256": "15f3e0f50737fc2fc4667fd14a840352fe7a9ab0c9bec61f673bf282e039a8d9",
+      "bytes": 5860
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\run-install.cjs",
+      "sha256": "b255d812e57be552453cefc4790dc3dbb2cf841d015bd754c9992053328b1c98",
+      "bytes": 6163
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\run.cjs",
+      "sha256": "d0e37b884e26481eb0dc3576bb29cef499b956900a67e0962f457120afbc2974",
+      "bytes": 25723
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\transform.cjs",
+      "sha256": "c87750edf24d46ff404c34888b61ef5730f978d4a5ee423532aad5397fca0a04",
+      "bytes": 4521
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\verify-predecessor.cjs",
+      "sha256": "05be0e253f159c1b5486c5b57bedbe3fefd795d265f8676268c699a7d0ba1151",
+      "bytes": 1982
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\workflow-source-review.json",
+      "sha256": "3534f751f0f0b908c9ec9b7ce0fda6fff196eb219839de1d998f928e38de4650",
+      "bytes": 2152
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v3\\persona-memory-recall-benchmark.proposed.yml",
+      "sha256": "8cfba018d799b70e6644866601e9a14080907f6f6b1ca8407e5d1eca56544d4a",
+      "bytes": 7562
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-hosted-aa-leaf-v3\\grant-100.UNASSIGNED.json",
+      "sha256": "ec68a76a2eb6d725fc88abbb4d69554716099552989e106617c490906e024db5",
+      "bytes": 2289
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-hosted-aa-leaf-v3\\dispatch-100.UNASSIGNED.inputs.json",
+      "sha256": "8b3869150537fa1705003b92e4fca401d9a330728173515b0aa6956ac1a38f7f",
+      "bytes": 2604
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-hosted-aa-leaf-v3\\dispatch-100.UNASSIGNED.request.json",
+      "sha256": "c8751b75fa6046e3aa2cddfcac6e5f7532a89153daad4eac437df150fabe451f",
+      "bytes": 2687
+    }
+  ],
+  "terminals": [
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "HEAD"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b^{tree}"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "-s",
+        "--format=%P",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "status",
+        "--porcelain=v1"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/worktrees/engineering-scorecard-resume-20261004/FLUJO",
+      "args": [
+        "status",
+        "--porcelain=v1"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "-c",
+        "core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol",
+        "diff",
+        "--check",
+        "ad99f223c0da20300b97f20eec7ff59a326b1e03",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "diff",
+        "--name-only",
+        "aa924df542970b14b7b31ec0a893b849bde276aa",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/bind-hosted-grant.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/bind-hosted-grant.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/correction-source-review.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/correction-source-review.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/current-source-pins.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/current-source-pins.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/default-branch-workflow-proof.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/default-branch-workflow-proof.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/engineering-v2-source-review.reference.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/engineering-v2-source-review.reference.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/fixture.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/fixture.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/hosted-grant.template.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/hosted-grant.template.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/hosted-route.diff"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/hosted-route.diff"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/jest-config.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/jest-config.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/observer.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/observer.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/official-npm10.9.9-cli.reference.js"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/official-npm10.9.9-cli.reference.js"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/parser-checks.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/parser-checks.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.aa.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.aa.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.main.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.main.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.proposed.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/persona-memory-recall-benchmark.proposed.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/proposal.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/proposal.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/release.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/release.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/retain-data-root.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/retain-data-root.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/retained-v2-parser-checks.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/retained-v2-parser-checks.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/run-install.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/run-install.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/run.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/run.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/transform.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/transform.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/verify-predecessor.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/verify-predecessor.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/workflow-source-review.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/workflow-source-review.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/append-phase-witness/manifest.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/diagnostics/.gitattributes"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "check-attr",
+        "text",
+        "eol",
+        "--",
+        "scripts/diagnostics/append-phase-witness/proposal.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:.github/workflows/persona-memory-recall-benchmark.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "ad99f223c0da20300b97f20eec7ff59a326b1e03:.github/workflows/persona-memory-recall-benchmark.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:.github/workflows/persona-memory-recall-benchmark.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:.github/workflows/verify.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:.github/workflows/verify.yml"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/runtimeEvents.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/runtimeEvents.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/runtimeEvents.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/runtimeLock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/runtimeLock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/runtimeLock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/workspace/workspaceMutationGate.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/workspace/workspaceMutationGate.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/workspace/workspaceMutationGate.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/utils/storage/backend.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/utils/storage/backend.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/utils/storage/backend.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/utils/workspace.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/utils/workspace.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/utils/workspace.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/utils/paths.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/utils/paths.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/utils/paths.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/runtimeClock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/runtimeClock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/runtimeClock.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/store.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/store.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/store.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/personaRecoveryOrigins.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/personaRecoveryOrigins.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/personaRecoveryOrigins.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/backend/services/enduringAgents/personaRecoveryFiles.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/backend/services/enduringAgents/personaRecoveryFiles.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/backend/services/enduringAgents/personaRecoveryFiles.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:src/config/features.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:src/config/features.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:src/config/features.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:jest.setup.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:jest.setup.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:jest.setup.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:jest.config.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:jest.config.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:jest.config.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:jest.testMatch.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:jest.testMatch.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:jest.testMatch.mjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:scripts/run-local-jest.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:scripts/run-local-jest.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/run-local-jest.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:scripts/local-test-dependencies.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:scripts/local-test-dependencies.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:scripts/local-test-dependencies.cjs"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:package.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:package.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:package.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "aa924df542970b14b7b31ec0a893b849bde276aa:package-lock.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:package-lock.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:package-lock.json"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "show",
+        "f67f215d2c698f961d28efdb50267454b4b1faf6:__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    },
+    {
+      "cwd": "C:/Users/Moe/.codex/source-checkouts/maturity-append-hosted-aa-v3-20261005",
+      "args": [
+        "rev-parse",
+        "eeab3f87629639cc96bb7b4824c635060e1d935b:__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts"
+      ],
+      "naturalExit": 0,
+      "signal": null
+    }
+  ],
+  "metadataGitJsonHashOnly": true,
+  "targetModuleParserCompilerInstallJestLinuxDiagnosticSDKProviderNativeControllerOrGuardianEntered": false,
+  "ownCheckoutClean": true,
+  "ownNodeModulesPresent": false,
+  "sourcePacketCheckoutClean": true,
+  "sourcePacketNodeModulesPresent": false,
+  "observedOriginal20kFailureCauseEstablished": false,
+  "queueGrantInferred": false,
+  "hostedDispatchEntered": false,
+  "nativeClearance": false,
+  "protectedMainMerged": false,
+  "gradePromoted": false
+}

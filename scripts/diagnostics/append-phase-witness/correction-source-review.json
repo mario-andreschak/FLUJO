@@ -1,45 +1,55 @@
 {
-  "schemaVersion": 3,
-  "state": "SOURCE_CORRECTIONS_AUTHORED_UNRUN",
-  "reviewedAtUtc": "2026-10-05T13:08:07.8998046Z",
-  "engineeringReferenceSha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
-  "fixedSource": [
+  "schemaVersion": 4,
+  "state": "F3_CONTROLLER_TERMINAL_CORRECTION_SOURCE_ONLY_PENDING_INDEPENDENT_REVIEW",
+  "reviewedAtUtc": "2026-10-05T13:59:02.0962935Z",
+  "engineeringReferenceSha256": "a9263c097be225a0f602f87732ede44730faa859f306d9dd18d796ee1fdf4242",
+  "preservedV3ManifestSha256": "aee01199201107e3f193e01f0fc7d4e51f281cec408607bf1b1255dfb62a753b",
+  "preservedV3Head": "eeab3f87629639cc96bb7b4824c635060e1d935b",
+  "sourceChanges": [
+    "New controller-terminal.cjs supplies conservative entry-anchored UTC/process-monotonic/shared-boot deadline, checked operations, remaining-budget Git and immutable pending finalization candidates",
+    "run.cjs and run-install.cjs set no successful candidate before source restoration/audit; receipt/manifest/candidate persistence and final handoff checked; partial failures retain new unqualified raw evidence",
+    "release.cjs requires all original terminal hashes and same assignment/source/deadline; separately observes original PID/start-tick absent after reading/hashing originals and before UTC/shared-boot expiry",
+    "Both250 gates use one strict validator requiring schema4 natural100 candidate, same-source/same-packet and independently reviewed installer+witness terminal proof + native step success",
+    "Existing diagnostic workflow forwards native install/witness step outcomes; ordinary recall steps and pinned actions remain identical"
+  ],
+  "staticCounterexamples": [
     {
-      "id": "F1",
-      "file": "jest-config.cjs",
-      "sourcePredicate": "fs.realpathSync selected absolute root; node.rootDir=root; returned rootDir=root",
-      "moduleLoaded": false
+      "case": "Three8s Git calls with20s remaining",
+      "sourceDisposition": "Each call receives only remaining timeout and post-return check. The third cannot leave an accepted candidate after crossing either deadline.",
+      "executed": false
     },
     {
-      "id": "F2",
-      "files": [
-        "run.cjs",
-        "run-install.cjs",
-        "release.cjs"
-      ],
-      "sourcePredicate": "Controller intent before child stage, stage intent before spawn and original child birth after spawn; release enumerates namespace regardless receipt, requires all hashes/birth/outcome/source proofs, rejects successful-install/no-complete-witness",
-      "counterexampleExpectedDisposition": "Controller dies during dependency-guard before receipt -> RELEASE_REFUSED; no fixture needed to establish attempted entry",
-      "counterexampleExecuted": false
+      "case": "Receipt or manifest synchronous write returns after expiry",
+      "sourceDisposition": "Post-write check rejects; missing finalization candidate plus raw partial holds release.",
+      "executed": false
     },
     {
-      "id": "F3",
-      "files": [
-        "run.cjs",
-        "run-install.cjs",
-        "release.cjs"
-      ],
-      "sourcePredicate": "expiresAtUtc passed to every stage; absolute/monotonic stage and cleanup stops; check before spawn and after race/drain; bounded2s drain under remaining15s cleanup; no late natural acceptance based only on callback flag",
-      "delayedRaceOrDrainExecuted": false
+      "case": "Final candidate write or controller stdout/exit finishes after expiry",
+      "sourceDisposition": "Independent original-birth absence after candidate read/hash cannot be observed before expiry, even if candidate has an earlier pre-write timestamp.",
+      "executed": false
+    },
+    {
+      "case": "Installer late final audits/persistence",
+      "sourceDisposition": "Same shared deadline/candidate/independent terminal proof rules apply; no natural install qualification from a stage alone.",
+      "executed": false
+    },
+    {
+      "case": "250 supplied with held v2/v3 receipt or late100 finalization",
+      "sourceDisposition": "Both gates require schema4 exact-packet100 and two complete timely original controller proofs; old or incomplete evidence refuses.",
+      "executed": false
     }
   ],
   "originalTarget": "f67f215d2c698f961d28efdb50267454b4b1faf6",
   "originalTargetTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
   "original20kTestUnchanged": true,
   "originalTimeoutSkipOracleUnchanged": true,
-  "defaultRecallWorkflowAndAAPinnedActionsUnchangedFromV2": true,
+  "defaultRecallStepsAndAAPinnedActionsUnchanged": true,
   "freshJavascriptParserChecks": 0,
   "moduleCompilerJestLinuxProviderEntered": false,
-  "inferenceBoundary": "Source amplification/late teardown frame do not prove original observed timeout cause",
+  "sourceCorrectionIndependentlyReviewed": false,
+  "executionAuthorized": false,
+  "publicationAuthorized": false,
+  "inferenceBoundary": "Source counterexamples and proposed corrections only; no observed failure cause, runtime completion or grade promotion established.",
   "reviewed100StillRequired": true,
   "separate250GrantStillRequired": true
 }

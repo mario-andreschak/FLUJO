@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 3,
-  "state": "SOURCE_CORRECTIONS_PREPARED_UNRUN_PENDING_INDEPENDENT_REVIEW",
-  "preparedAtUtc": "2026-10-05T13:08:07.8697398Z",
+  "schemaVersion": 4,
+  "state": "F3_CONTROLLER_TERMINAL_SOURCE_SUCCESSOR_PREPARED_UNRUN_PENDING_INDEPENDENT_REVIEW",
+  "preparedAtUtc": "2026-10-05T13:59:02.0962935Z",
   "objective": "Narrow the current AA timeout using one separately assigned100 sample, then250 only after reviewed natural100 and independent release. Observe real admission, acquire, append/tombstone/read/parse and retirement costs; leave runtime/adoption grade open.",
   "source": {
     "pr": 611,
@@ -266,7 +266,7 @@
     "sigtermGraceMs": 5000,
     "sigkillCloseWaitMs": 5000,
     "pidScanIntervalMs": 250,
-    "gitEachCommandTimeoutMs": 10000,
+    "gitEachCommandTimeoutMs": "min(10000, floor(remaining UTC/process-monotonic/shared-boot grant budget)); before/after checked",
     "hostedJobTimeoutMinutes": 10,
     "original20kTimeoutMs": 1800000,
     "original20kGateUnchanged": true,
@@ -275,7 +275,9 @@
     "absoluteGrantCarriedIntoEveryStage": true,
     "cleanupReserveMs": 15000,
     "relativeReservesEstablishTerminalAcceptance": false,
-    "naturalCompletion": "Must be observed and logs drained before stage stop; callback flag alone is insufficient. Caller rejects if terminal preservation crosses the stop. An immutable raw outcome on a refusal is partial evidence, not a completed diagnostic receipt."
+    "naturalCompletion": "Natural stage results are provisional. Installer/witness candidates become usable only after source restoration/audit and immutable persistence within the controller deadline, followed by independent candidate read/hash + original controller birth absence observed before assigned UTC/shared-boot expiry and native controller step success. No stage result, pre-write endedAt or candidate alone proves controller completion.",
+    "controllerFinalizationBounded": true,
+    "sharedBootClockQuantizationReserveMs": 20
   },
   "workBudgets": {
     "logicalFilesystemCalls": 100000,
@@ -358,14 +360,14 @@
   },
   "driver": {
     "file": "run.cjs",
-    "sha256": "d0e37b884e26481eb0dc3576bb29cef499b956900a67e0962f457120afbc2974",
+    "sha256": "d026b311062897d3081565560e0dbaa38101e74c7518198d71e0697d8b3234fd",
     "exactFutureLocalCommand": "node <reviewed-packet>/run.cjs --grant <absolute-separate-ASSIGNED.json> --count 100",
     "future250Command": "node <same-reviewed-packet>/run.cjs --grant <new-ASSIGNED-with-100-receipt-release-hashes.json> --count 250",
     "selection": "Exclusively-created appendPhaseWitness-<UUID>.test.ts in target/enduringAgents; exact single-suite/single-test native result required",
     "original20kSelected": false,
     "sourceBeforeAfter": "HEAD/tree/clean status and19 input hashes, exact fixture-only unlink in finally",
     "cleanup": "No recursive deletion; synthetic event logs and installation retained outside repo",
-    "release": "Every witness namespace is audited, including one without receipt; controller/stage intent and original PID/start-tick/birth/outcome hashes must be complete. Original stage files remain authoritative when stage() throws. Successful install with no completed witness controller proof cannot receive install-only release. Only complete known-birth/source/manifest closure can release.",
+    "release": "Every namespace requires original controller/stage intent, child birth and outcome links, original receipt/manifest/finalization-candidate hash closure, entry-anchored deadline and independent timely original-birth absence proof for installer and witness. Natural candidates also require the corresponding GitHub native controller step outcome=success. Missing, partial, late or unresolved evidence holds release.",
     "releaseLimit": "Known observed births only; polling is not a complete historical process census.",
     "partialEvidence": [
       "native Jest JSON when emitted",
@@ -374,9 +376,18 @@
       "raw/effective assignment and binding receipt",
       "installer process/outcomes and runtime record",
       "preserved synthetic data",
-      "controller receipt/manifests/independent release"
+      "controller receipt/manifests/independent release",
+      "immutable finalization.partial.json on late/audit/persistence refusal",
+      "controller finalization candidates plus independent timed terminal proofs/native controller step outcomes"
     ],
-    "absoluteStop": "Stage stop is min(requested relative stop, absolute grant stop minus15s cleanup reserve), also bounded by the process monotonic ceiling. Checked before spawn and after races, close/drain, process scan and terminal preservation. Cleanup stop is min(grant stop, stage stop+15s);2s log drain is further capped by remaining cleanup time. Missing/late/unresolved evidence holds release."
+    "absoluteStop": "One controller-entry UTC/process-monotonic/shared-boot deadline survives stages, fixture restoration, source hashes, every Git call and receipt/manifest/finalization-candidate serialization/persistence. Every operation is checked before and after; Git timeout is min(10s, remaining budget). A self-written success is only a candidate. Separate auditor reads/hashes terminal files, checks native GitHub step outcome and observes original PID/start-tick absent before UTC AND shared-boot expiry. A late final write or exit cannot qualify. Best-effort late/partial raw evidence has no admission authority.",
+    "terminalHelper": {
+      "file": "controller-terminal.cjs",
+      "sha256": "fb5648ae9d5fce18314b1e407c6267bb6bba002cb5a058b688b6caf406e93d66",
+      "selfWrittenCandidateQualifiesAlone": false,
+      "terminalProofIncludedInRelease": true,
+      "both250GatesShareValidator": true
+    }
   },
   "ownedLinuxAvailability": {
     "inventoryOnly": "wsl.exe --list --quiet;natural0;only docker-desktop",
@@ -410,25 +421,27 @@
     "diagnosticConcurrency": "Separate group, cancellation false",
     "job": "append-phase-witness;ubuntu-24.04;10min;contents/actions read",
     "helperFilesDestination": "scripts/diagnostics/append-phase-witness/",
-    "helperBundle": "Copy this separately sealed v3 flat packet plus manifest into the separately frozen successor; preserve scoped scripts/diagnostics/.gitattributes -text. No v2/ad99 grant or qualification is inherited.",
+    "helperBundle": "Copy this separately sealed v4 flat packet plus manifest into the separately frozen v4 successor; preserve scoped scripts/diagnostics/.gitattributes -text. Neither v2/ad99 nor held v3/eeab is executable or qualified by this successor.",
     "target": "Separate fresh checkout of actualf67/tree d09; never modify frozen PR worktrees",
     "helperCommit": "Separately published reviewed full40SHA; workflow github.sha and clean harness HEAD must equal authorizedWorkflowSha",
     "dispatch": "Future one manual workflow dispatch of existing workflow at reviewed helper branch/ref only after Root review, concrete publication and new Queue exclusive heavy-window/install grant. Exact assignment JSON and SHA256 are inputs. First attempt only; a rerun/ref advance/driver change requires fresh review.",
     "binding": "Only explicitly authorized symbolic checkout/output/npm and predecessor paths are substituted; raw/effective bytes/digests preserved; no approval booleans synthesized",
     "installation": "Official binary verified before install; binder requires explicit installAuthorized. Fresh target npm ci --include=dev only under birth-aware180s controller, retaining raw logs/outcomes/source before-after.",
-    "before250": "Official cross-run artifact download at reviewed run/name; exact reviewed100 receipt/release hashes checked before installation",
-    "release": "Separate process audits complete original controller/stage intent and birth/outcome evidence for every namespace. A partial namespace is never ignored; successful-install/no-witness-completion refuses release.",
+    "before250": "Official prior100 artifact download with exact reviewed receipt/release hashes; shared validator requires schema4 same-source/same-packet100 natural candidate and independent installer+witness UTC/shared-boot timely terminal proofs/native step success before installation and again before witness.",
+    "release": "Every namespace requires original controller/stage intent, child birth and outcome links, original receipt/manifest/finalization-candidate hash closure, entry-anchored deadline and independent timely original-birth absence proof for installer and witness. Natural candidates also require the corresponding GitHub native controller step outcome=success. Missing, partial, late or unresolved evidence holds release.",
     "artifact": "Pinned official actions upload of raw/partial evidence and all file SHA256SUMS; later Queue+Root server archive digest/raw report readback required",
     "buildBrowserFullSuite": "No build, application/browser launch, original20k or fullsuite command in diagnostic job",
     "requiredVerifyWorkflowChanged": false,
     "currentGrantExists": false,
     "publicationEntered": false,
     "dispatchEntered": false,
-    "githubActionsNativeEngineValidated": false
+    "githubActionsNativeEngineValidated": false,
+    "workflowSha256": "6c659a7ac709fea02aa7bd2e3a7d770a62cea050e1676ab05c56b77dde42c94e",
+    "nativeControllerOutcome": "Diagnostic install and witness steps have explicit IDs; their GitHub steps.<id>.outcome values are passed to the separate always() release process. No default, synthetic success or successful candidate alone is accepted."
   },
   "preparation": {
     "nineCjsParserChecksNaturalZero": null,
-    "parserReceipt": "parser-checks.json reports successor UNRUN; retained-v2-parser-checks.json is historical only",
+    "parserReceipt": "parser-checks.json records zero fresh checks; retained-v2-parser-checks.json is historical and does not qualify v3/v4.",
     "parserNodeExecutableSha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e",
     "typescriptFixtureCompiled": false,
     "nextSwcOrJestLoaded": false,
@@ -458,21 +471,21 @@
     "later4aPassDoesNotExplainFailure": true,
     "own775DcdfTypesAnd27TestsUnchanged": true,
     "own550Historical94NotRetargeted": true,
-    "v2LocalLeafPreservedUnpublishedUnrun": true
+    "v2LocalLeafPreservedUnpublishedUnrun": true,
+    "v3EeabPreservedHeldUnpublishedUnrun": true
   },
   "successor": {
-    "preservedV2ProposalSha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800",
     "preservedV2ManifestSha256": "1745b589f4112d8a74ef28ee4f4eec3fa47d462f03ac6041643ddc6838e2a13c",
     "preservedV2LocalLeaf": "ad99f223c0da20300b97f20eec7ff59a326b1e03",
-    "preservedV2LocalLeafTree": "59d5948d75c702fe8c63096f94600657872ec7d0",
-    "v2AndAd99Executable": false,
-    "engineeringReference": "engineering-v2-source-review.reference.json",
-    "engineeringReferenceSha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
-    "findingsCorrectedInSource": [
-      "F1 explicit canonical returned global and node-project rootDir",
-      "F2 original controller intent before stage, stage intent before spawn, immutable original child birth linked to outcome, every namespace audited even without receipt; missing proof or successful-install/no-complete-witness refuses release",
-      "F3 grant/stage/cleanup absolute stops, monotonic ceilings, pre-spawn and post-race/drain/terminal checks; bounded log drain and late natural-acceptance refusal"
-    ],
+    "preservedV3ManifestSha256": "aee01199201107e3f193e01f0fc7d4e51f281cec408607bf1b1255dfb62a753b",
+    "preservedV3ProposalSha256": "9b357bf69d33fffc098e11f1b3d49d68cb3ab30014f67e3e18872ad58674c8cb",
+    "preservedV3LocalLeaf": "eeab3f87629639cc96bb7b4824c635060e1d935b",
+    "preservedV3LocalLeafTree": "0d004bd1bad9385329e5fba1d86c32ed4a2b021d",
+    "v2AndV3Executable": false,
+    "engineeringReference": "engineering-v3-source-review.reference.json",
+    "engineeringReferenceSha256": "a9263c097be225a0f602f87732ede44730faa859f306d9dd18d796ee1fdf4242",
+    "F1AndF2": "Engineering v3 independent source review marks source-resolved; those corrected source files are retained.",
+    "F3": "Remaining controller finalization/terminal gap is addressed in proposed v4 source, pending exact-leaf independent review; no executable qualification.",
     "newParserModuleCompilerTestOrProviderEntry": false,
     "correctedSourceQualified": false
   }

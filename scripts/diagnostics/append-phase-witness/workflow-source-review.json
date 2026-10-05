@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 4,
   "state": "SOURCE_STRUCTURE_CHECK_ONLY_GITHUB_ENGINE_NOT_ENTERED",
-  "checkedAtUtc": "2026-10-05T12:26:54.2701977Z",
+  "checkedAtUtc": "2026-10-05T13:59:02.0962935Z",
   "editBaselineHead": "aa924df542970b14b7b31ec0a893b849bde276aa",
   "editBaselineTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
   "editBaselineWorkflowBlob": "2b62a8262858e6a681f525bfb8ecfb3b74b841ee",
@@ -56,5 +56,11 @@
   "original20kTestEdited": false,
   "fullSuiteOrBuildInDiagnosticJob": false,
   "nativeYamlOrActionsEngineValidated": false,
-  "semanticOrRuntimeTestExecuted": false
+  "semanticOrRuntimeTestExecuted": false,
+  "reviewedWorkflowSha256": "6c659a7ac709fea02aa7bd2e3a7d770a62cea050e1676ab05c56b77dde42c94e",
+  "F3DiagnosticChanges": [
+    "Explicit install/witness step IDs",
+    "Native install/witness GitHub step outcomes passed to independent release auditor"
+  ],
+  "nativeControllerOutcomesActuallyObserved": false
 }

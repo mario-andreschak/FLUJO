@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/persona-memory-recall-benchmark.yml b/.github/workflows/persona-memory-recall-benchmark.yml
-index 2b62a826..d5fee7f9 100644
+index 2b62a826..0e292311 100644
 --- a/.github/workflows/persona-memory-recall-benchmark.yml
 +++ b/.github/workflows/persona-memory-recall-benchmark.yml
 @@ -2,18 +2,34 @@ name: persona-memory-recall-benchmark
@@ -39,7 +39,7 @@ index 2b62a826..d5fee7f9 100644
      name: controlled-50k-production-recall
      runs-on: ubuntu-latest
      timeout-minutes: 45
-@@ -61,3 +77,88 @@ jobs:
+@@ -61,3 +77,92 @@ jobs:
            path: benchmark-artifacts/
            if-no-files-found: error
            retention-days: 30
@@ -99,10 +99,12 @@ index 2b62a826..d5fee7f9 100644
 +          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
 +        run: node append-harness/scripts/diagnostics/append-phase-witness/verify-predecessor.cjs "$GRANT_FILE"
 +      - name: Install only the assigned fresh target graph under180s budget
++        id: install
 +        env:
 +          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
 +        run: node append-harness/scripts/diagnostics/append-phase-witness/run-install.cjs "$GRANT_FILE"
 +      - name: Run exact bounded witness under controller budget
++        id: witness
 +        env:
 +          GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
 +          WITNESS_COUNT: ${{ steps.bind.outputs.count }}
@@ -111,6 +113,8 @@ index 2b62a826..d5fee7f9 100644
 +        if: always() && steps.bind.outcome == 'success'
 +        env:
 +          OUTPUT_PARENT: ${{ steps.bind.outputs.output_parent }}
++          INSTALL_CONTROLLER_STEP_OUTCOME: ${{ steps.install.outcome }}
++          WITNESS_CONTROLLER_STEP_OUTCOME: ${{ steps.witness.outcome }}
 +        run: node append-harness/scripts/diagnostics/append-phase-witness/release.cjs "$OUTPUT_PARENT"
 +      - name: Preserve all partial evidence with file hashes
 +        if: always() && steps.bind.outcome == 'success'

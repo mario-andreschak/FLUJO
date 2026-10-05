@@ -133,10 +133,12 @@ jobs:
           GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
         run: node append-harness/scripts/diagnostics/append-phase-witness/verify-predecessor.cjs "$GRANT_FILE"
       - name: Install only the assigned fresh target graph under180s budget
+        id: install
         env:
           GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
         run: node append-harness/scripts/diagnostics/append-phase-witness/run-install.cjs "$GRANT_FILE"
       - name: Run exact bounded witness under controller budget
+        id: witness
         env:
           GRANT_FILE: ${{ steps.bind.outputs.grant_file }}
           WITNESS_COUNT: ${{ steps.bind.outputs.count }}
@@ -145,6 +147,8 @@ jobs:
         if: always() && steps.bind.outcome == 'success'
         env:
           OUTPUT_PARENT: ${{ steps.bind.outputs.output_parent }}
+          INSTALL_CONTROLLER_STEP_OUTCOME: ${{ steps.install.outcome }}
+          WITNESS_CONTROLLER_STEP_OUTCOME: ${{ steps.witness.outcome }}
         run: node append-harness/scripts/diagnostics/append-phase-witness/release.cjs "$OUTPUT_PARENT"
       - name: Preserve all partial evidence with file hashes
         if: always() && steps.bind.outcome == 'success'

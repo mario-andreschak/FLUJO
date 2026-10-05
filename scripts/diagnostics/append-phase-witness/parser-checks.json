@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 3,
-  "state": "SUCCESSOR_SOURCE_CORRECTIONS_NO_PARSER_OR_MODULE_EXECUTION_AUTHORIZED",
+  "schemaVersion": 4,
+  "state": "V4_SOURCE_ONLY_NO_NEW_PARSER_MODULE_COMPILER_OR_RUNTIME_CHECKS",
   "newParserChecks": 0,
   "parserEntered": false,
   "moduleLoaded": false,
