@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
+const { performance } = require('node:perf_hooks');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const packet = __dirname;
 const arg = flag => { const index = process.argv.indexOf(flag); return index < 0 ? undefined : process.argv[index + 1]; };
@@ -34,29 +35,74 @@ function ownedProcesses(leader, records) {
 }
 async function stage(name, args, timeoutMs, context) {
   const { root, output, environment } = context;
+  const beganWall = Date.now();
+  const beganMono = performance.now();
+  const grantStopUtc = Date.parse(context.expiresAtUtc);
+  demand(Number.isFinite(grantStopUtc), 'Absolute assigned stop required for every stage');
+  const grantStopMono = beganMono + grantStopUtc - beganWall;
+  const stageStopUtc = Math.min(beganWall + timeoutMs, grantStopUtc - 15_000);
+  const stageStopMono = beganMono + stageStopUtc - beganWall;
+  const cleanupStopUtc = Math.min(grantStopUtc, stageStopUtc + 15_000);
+  const cleanupStopMono = Math.min(grantStopMono, stageStopMono + 15_000);
+  const remaining = (utc, mono) => Math.max(0, Math.min(utc - Date.now(), mono - performance.now()));
+  const stageExpired = () => remaining(stageStopUtc, stageStopMono) <= 0;
+  const cleanupExpired = () => remaining(cleanupStopUtc, cleanupStopMono) <= 0;
+  demand(!stageExpired(), 'Assigned stage stop reached before intent/spawn');
+  async function boundedRace(promise, utc, mono, maximumMs) {
+    const milliseconds = Math.min(maximumMs, remaining(utc, mono));
+    if (milliseconds <= 0) return false;
+    let completed = false;
+    let timer;
+    try {
+      await Promise.race([Promise.resolve(promise).then(() => { completed = true; }), new Promise(resolve => { timer = setTimeout(resolve, milliseconds); })]);
+    } finally { clearTimeout(timer); }
+    // The caller checks its absolute boundary after this race, even if a timer
+    // callback was delayed or the other promise had already settled.
+    return completed;
+  }
+  const controller = birth(process.pid);
+  demand(controller?.startTicks, 'Original controller birth required before stage intent');
+  const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  const beganAt = new Date(beganWall).toISOString();
+  const intentBytes = Buffer.from(JSON.stringify({ schemaVersion: 3, state: 'STAGE_INTENT_BEFORE_SPAWN', name, command: { executable: process.execPath, args, cwd: root }, beganAt, timeoutMs, grantStopUtc, stageStopUtc, cleanupStopUtc, controller, bootId }, null, 2) + '\n');
+  // Intent precedes spawn. A crash before child birth evidence must hold release.
+  fs.writeFileSync(path.join(output, name + '.intent.json'), intentBytes, { flag: 'wx', mode: 0o600 });
   const stdout = fs.createWriteStream(path.join(output, name + '.stdout.log'), { flags: 'wx', mode: 0o600 });
   const stderr = fs.createWriteStream(path.join(output, name + '.stderr.log'), { flags: 'wx', mode: 0o600 });
-  const beganAt = new Date().toISOString();
+  const logErrors = [];
+  for (const stream of [stdout, stderr]) stream.on('error', error => logErrors.push({ code: error.code, message: error.message }));
+  demand(!stageExpired(), 'Assigned stage stop reached immediately before spawn');
   const child = spawn(process.execPath, args, { cwd: root, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(stdout); child.stderr.pipe(stderr);
   const processes = new Map();
   const leader = child.pid ? birth(child.pid) : null;
+  const birthBytes = Buffer.from(JSON.stringify({ schemaVersion: 3, state: leader ? 'ORIGINAL_CHILD_BIRTH_RECORDED' : 'MISSING_ORIGINAL_CHILD_BIRTH', name, intentSha256: sha(intentBytes), controller, bootId, leader }, null, 2) + '\n');
+  fs.writeFileSync(path.join(output, name + '.birth.json'), birthBytes, { flag: 'wx', mode: 0o600 });
   if (leader) processes.set(`${leader.pid}:${leader.startTicks}`, leader);
   let exit;
   let spawnError;
   let deadlineReached = false;
+  let observedCloseUtc;
+  let observedCloseMono;
   child.once('error', error => { spawnError = { name: error.name, code: error.code, message: error.message }; });
-  const closed = new Promise(resolve => child.once('close', (code, signal) => { exit = { code, signal }; resolve(); }));
+  const closed = new Promise(resolve => child.once('close', (code, signal) => { observedCloseUtc = Date.now(); observedCloseMono = performance.now(); exit = { code, signal }; resolve(); }));
   const timer = setInterval(() => { if (leader) ownedProcesses(leader, processes); }, 250);
   if (leader) ownedProcesses(leader, processes);
-  const watchdog = setTimeout(() => { deadlineReached = true; }, timeoutMs);
+  const watchdog = setTimeout(() => { deadlineReached = true; }, remaining(stageStopUtc, stageStopMono));
   // Keep the driver alive through close/owned-process absence; retain all raw
   // progress even when the separate diagnostic budget causes termination.
-  while (!exit && !deadlineReached) await Promise.race([closed, delay(100)]);
+  while (!exit && !deadlineReached && !stageExpired()) {
+    await boundedRace(closed, stageStopUtc, stageStopMono, 100);
+    deadlineReached ||= stageExpired();
+  }
+  deadlineReached ||= stageExpired();
   const termination = [];
   if (deadlineReached || (leader && ownedProcesses(leader, processes).length)) {
     // A naturally closed leader can still leave children; allow a bounded grace.
-    if (!deadlineReached) await delay(1000);
+    if (!deadlineReached) {
+      await boundedRace(new Promise(() => {}), cleanupStopUtc, cleanupStopMono, 1000);
+      deadlineReached ||= stageExpired();
+    }
     for (const signal of ['SIGTERM', 'SIGKILL']) {
       const survivors = ownedProcesses(leader, processes);
       for (const item of survivors) {
@@ -65,19 +111,35 @@ async function stage(name, args, timeoutMs, context) {
         try { process.kill(item.pid, signal); termination.push({ pid: item.pid, startTicks: item.startTicks, signal }); }
         catch (error) { if (error.code !== 'ESRCH') termination.push({ pid: item.pid, signal, errorCode: error.code }); }
       }
-      if (signal === 'SIGTERM' && survivors.length) await delay(5000);
+      if (signal === 'SIGTERM' && survivors.length) {
+        await boundedRace(new Promise(() => {}), cleanupStopUtc, cleanupStopMono, 5000);
+        deadlineReached ||= stageExpired();
+      }
     }
   }
   clearTimeout(watchdog);
-  await Promise.race([closed, delay(5000)]);
+  const closeObserved = await boundedRace(closed, cleanupStopUtc, cleanupStopMono, 5000);
+  deadlineReached ||= stageExpired();
   clearInterval(timer);
   stdout.end(); stderr.end();
-  await Promise.all([new Promise(resolve => stdout.closed ? resolve() : stdout.once('close', resolve)), new Promise(resolve => stderr.closed ? resolve() : stderr.once('close', resolve))]);
+  const drained = Promise.all([new Promise(resolve => stdout.closed ? resolve() : stdout.once('close', resolve)), new Promise(resolve => stderr.closed ? resolve() : stderr.once('close', resolve))]);
+  const logDrained = await boundedRace(drained, cleanupStopUtc, cleanupStopMono, 2000);
+  deadlineReached ||= stageExpired();
+  let cleanupDeadlineReached = cleanupExpired();
+  if (!logDrained) { stdout.destroy(); stderr.destroy(); }
   const survivors = ownedProcesses(leader, processes);
   const unresolvedGroupMembers = child.pid ? fs.readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(birth).filter(item => item && item.pgrp === child.pid && ![...processes.values()].some(record => record.pid === item.pid && record.startTicks === item.startTicks)) : [];
+  deadlineReached ||= stageExpired();
+  cleanupDeadlineReached ||= cleanupExpired();
   const result = { name, command: { executable: process.execPath, args, cwd: root }, beganAt, endedAt: new Date().toISOString(), timeoutMs, deadlineReached, spawnError, exit, natural: !!exit && !!leader && !exit.signal && !deadlineReached && termination.length === 0, leader, observedProcesses: [...processes.values()], termination, survivors, unresolvedGroupMembers };
+  Object.assign(result, { schemaVersion: 3, intentSha256: sha(intentBytes), birthSha256: sha(birthBytes), controller, bootId });
+  Object.assign(result, { grantStopUtc, stageStopUtc, cleanupStopUtc, observedCloseUtc, observedCloseMono, closeObserved, logDrained, logErrors, cleanupDeadlineReached });
+  result.natural = result.natural && observedCloseUtc < stageStopUtc && observedCloseMono < stageStopMono && !stageExpired() && !cleanupDeadlineReached && closeObserved && logDrained && logErrors.length === 0;
   fs.writeFileSync(path.join(output, name + '.outcome.json'), JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  demand(!!leader && survivors.length === 0 && unresolvedGroupMembers.length === 0, 'Missing birth identity or remaining/unknown group member; window cannot be released');
+  // A late synchronous evidence write cannot promote the result in the caller.
+  // The immutable raw outcome remains partial evidence if this check refuses.
+  demand(!cleanupExpired() && (!result.natural || !stageExpired()), 'Absolute stop crossed while preserving terminal evidence; caller must reject natural acceptance');
+  demand(!!leader && closeObserved && logDrained && logErrors.length === 0 && !cleanupDeadlineReached && survivors.length === 0 && unresolvedGroupMembers.length === 0, 'Missing birth, late/incomplete close/drain or remaining/unknown group member; window cannot be released');
   return result;
 }
 async function main() {
@@ -140,6 +202,10 @@ async function main() {
   demand(outputParent !== root && !outputParent.startsWith(root + path.sep) && outputParent !== packet && !outputParent.startsWith(packet + path.sep), 'New external receipt parent required');
   const output = path.join(outputParent, `append-phase-${count}-${Date.now()}-${crypto.randomUUID()}`);
   fs.mkdirSync(output, { mode: 0o700 });
+  const controller = birth(process.pid);
+  demand(controller?.startTicks, 'Original witness controller birth required');
+  const controllerIntentBytes = Buffer.from(JSON.stringify({ schemaVersion: 3, state: 'WITNESS_CONTROLLER_ENTERED_BEFORE_ANY_STAGE', controller, bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), count, head, tree, assignmentSha256: sha(grantBytes), packetManifestSha256: sha(manifestBytes), output }, null, 2) + '\n');
+  fs.writeFileSync(path.join(output, 'controller.intent.json'), controllerIntentBytes, { flag: 'wx', mode: 0o600 });
   const temporaryRoot = path.join(output, 'synthetic-temp');
   fs.mkdirSync(temporaryRoot, { mode: 0o700 });
   const installation = path.join(temporaryRoot, 'installation');
@@ -150,9 +216,11 @@ async function main() {
   for (const key of ['FLUJO_JEST_EXCLUDE_ISOLATED_SUITES', 'FLUJO_JEST_EXPECTED_TEST_FILES', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_DATA_DIR', 'NODE_OPTIONS', 'CI_SKIP_PERF']) delete environment[key];
   for (const key of Object.keys(environment)) if (key.startsWith('FLUJO_PERSONA_RUNTIME_EVENT_')) delete environment[key];
   const fixture = path.join(root, '__tests__', 'enduringAgents', `appendPhaseWitness-${crypto.randomUUID()}.test.ts`);
-  const context = { root, output, environment };
+  const context = { root, output, environment, expiresAtUtc: grant.expiresAtUtc };
   const receipt = { schemaVersion: 1, state: 'DIAGNOSTIC_ENTERED_NOT_20K_QUALIFICATION', controller: { ...birth(process.pid), executable: process.execPath, executableSha256: sha(fs.readFileSync(process.execPath)) }, runtime: { node: process.version, uv: process.versions.uv, platform: process.platform, architecture: process.arch, defaultHeap: true, npmVersion, npmCli: grant.npmCli, npmCliSha256: grant.npmCliSha256, installedNext, osRelease: fs.readFileSync('/etc/os-release', 'utf8'), bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), lockfileSha256: sha(fs.readFileSync(path.join(root, 'package-lock.json'))) }, count, head, tree, assignmentSha256: sha(grantBytes), packetManifestSha256: sha(manifestBytes), sourceBefore, output, fixture, stages: [], syntheticDataPreserved: true, independentPostControllerExitReleaseAuditRequired: true };
   let fixtureCreated = false;
+  receipt.schemaVersion = 3;
+  receipt.controllerIntentSha256 = sha(controllerIntentBytes);
   let failure;
   try {
     // Preparation never invokes this. The future assigned entry records the

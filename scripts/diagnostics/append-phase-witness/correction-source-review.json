@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 3,
+  "state": "SOURCE_CORRECTIONS_AUTHORED_UNRUN",
+  "reviewedAtUtc": "2026-10-05T13:08:07.8998046Z",
+  "engineeringReferenceSha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
+  "fixedSource": [
+    {
+      "id": "F1",
+      "file": "jest-config.cjs",
+      "sourcePredicate": "fs.realpathSync selected absolute root; node.rootDir=root; returned rootDir=root",
+      "moduleLoaded": false
+    },
+    {
+      "id": "F2",
+      "files": [
+        "run.cjs",
+        "run-install.cjs",
+        "release.cjs"
+      ],
+      "sourcePredicate": "Controller intent before child stage, stage intent before spawn and original child birth after spawn; release enumerates namespace regardless receipt, requires all hashes/birth/outcome/source proofs, rejects successful-install/no-complete-witness",
+      "counterexampleExpectedDisposition": "Controller dies during dependency-guard before receipt -> RELEASE_REFUSED; no fixture needed to establish attempted entry",
+      "counterexampleExecuted": false
+    },
+    {
+      "id": "F3",
+      "files": [
+        "run.cjs",
+        "run-install.cjs",
+        "release.cjs"
+      ],
+      "sourcePredicate": "expiresAtUtc passed to every stage; absolute/monotonic stage and cleanup stops; check before spawn and after race/drain; bounded2s drain under remaining15s cleanup; no late natural acceptance based only on callback flag",
+      "delayedRaceOrDrainExecuted": false
+    }
+  ],
+  "originalTarget": "f67f215d2c698f961d28efdb50267454b4b1faf6",
+  "originalTargetTree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+  "original20kTestUnchanged": true,
+  "originalTimeoutSkipOracleUnchanged": true,
+  "defaultRecallWorkflowAndAAPinnedActionsUnchangedFromV2": true,
+  "freshJavascriptParserChecks": 0,
+  "moduleCompilerJestLinuxProviderEntered": false,
+  "inferenceBoundary": "Source amplification/late teardown frame do not prove original observed timeout cause",
+  "reviewed100StillRequired": true,
+  "separate250GrantStillRequired": true
+}

@@ -1,0 +1,408 @@
+{
+  "schemaVersion": 1,
+  "reviewedAtUtc": "2026-10-05T12:55:54.285Z",
+  "status": "SOURCE_HELD_THREE_CONCRETE_STARTUP_RELEASE_AND_DEADLINE_FINDINGS",
+  "proposal": {
+    "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\proposal.json",
+    "sha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800"
+  },
+  "packetManifest": {
+    "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\manifest.json",
+    "sha256": "1745b589f4112d8a74ef28ee4f4eec3fa47d462f03ac6041643ddc6838e2a13c"
+  },
+  "packetMembersMatched": 21,
+  "members": [
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\bind-hosted-grant.cjs",
+      "bytes": 9088,
+      "sha256": "c4fd8c6a8329950a689a44e87418c5489c53839fe742a887a86f7a508237155f",
+      "crlfCount": 0,
+      "lfCount": 68
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\current-source-pins.json",
+      "bytes": 6687,
+      "sha256": "7390e9093f760692c0fb98e8e67939723426b1ee1c2bceae9cca28d9f334a0f3",
+      "crlfCount": 187,
+      "lfCount": 188
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\default-branch-workflow-proof.json",
+      "bytes": 793,
+      "sha256": "4de2fb580d9be7c834baf6ed6f8b2cb26ecd332d263de16f94b688bd3301c230",
+      "crlfCount": 18,
+      "lfCount": 19
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\fixture.test.ts",
+      "bytes": 3472,
+      "sha256": "61253b59ad527450fbeef58c7f6bb87b7798b75dedda7347fc953f9457d93b8f",
+      "crlfCount": 0,
+      "lfCount": 56
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\hosted-grant.template.json",
+      "bytes": 1247,
+      "sha256": "800013e0c1041bacd75a1b9daaf8e5a42c6c48ace7d5d81d59ed92499dfcc977",
+      "crlfCount": 0,
+      "lfCount": 26
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\hosted-route.diff",
+      "bytes": 6252,
+      "sha256": "2315ea784fcb79623d2e7f9e54386a5181da01026e3a06442d66a292e61984ae",
+      "crlfCount": 0,
+      "lfCount": 130
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\jest-config.cjs",
+      "bytes": 1480,
+      "sha256": "7096ef6caa54602ad5fc760388ad6d32333e142db285b44a694f3812ee5a8760",
+      "crlfCount": 0,
+      "lfCount": 17
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\observer.cjs",
+      "bytes": 12154,
+      "sha256": "fe1f50411a6d1ad8d428da9c80bda76031e821c27236e9c62c325123bb8c586a",
+      "crlfCount": 0,
+      "lfCount": 193
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\official-npm10.9.9-cli.reference.js",
+      "bytes": 54,
+      "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      "crlfCount": 0,
+      "lfCount": 2
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\parser-checks.json",
+      "bytes": 5860,
+      "sha256": "15f3e0f50737fc2fc4667fd14a840352fe7a9ab0c9bec61f673bf282e039a8d9",
+      "crlfCount": 132,
+      "lfCount": 132
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\persona-memory-recall-benchmark.aa.yml",
+      "bytes": 2298,
+      "sha256": "19390c4a29321f86939616a87d589c123f1d7a7490968d4e08fbe9450ced8e32",
+      "crlfCount": 0,
+      "lfCount": 63
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\persona-memory-recall-benchmark.main.yml",
+      "bytes": 2000,
+      "sha256": "68042f2c07878a5db5fce80b13ca1e96e5391682c221d6fa591a79020504dc45",
+      "crlfCount": 0,
+      "lfCount": 59
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\persona-memory-recall-benchmark.proposed.yml",
+      "bytes": 7562,
+      "sha256": "8cfba018d799b70e6644866601e9a14080907f6f6b1ca8407e5d1eca56544d4a",
+      "crlfCount": 0,
+      "lfCount": 164
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\proposal.json",
+      "bytes": 22532,
+      "sha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800",
+      "crlfCount": 453,
+      "lfCount": 454
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\release.cjs",
+      "bytes": 6703,
+      "sha256": "5aee523aac37e3f380f9b8de7e691458f87b4e93456f3cef8d629523835811da",
+      "crlfCount": 0,
+      "lfCount": 63
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\retain-data-root.cjs",
+      "bytes": 617,
+      "sha256": "08e189d0b081c85c644335645aec7e175afee482f298272ef5fc0d698541d497",
+      "crlfCount": 0,
+      "lfCount": 9
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\run-install.cjs",
+      "bytes": 5546,
+      "sha256": "a6121ea62ccb0705821a4477422235070e7027cfd125b41d98b50ba4cdaed98b",
+      "crlfCount": 0,
+      "lfCount": 46
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\run.cjs",
+      "bytes": 20326,
+      "sha256": "4245e8ae2aa63c1d2270bdf1c972e9953294da5616e9517b4d1202f8534d37f0",
+      "crlfCount": 0,
+      "lfCount": 201
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\transform.cjs",
+      "bytes": 4521,
+      "sha256": "c87750edf24d46ff404c34888b61ef5730f978d4a5ee423532aad5397fca0a04",
+      "crlfCount": 0,
+      "lfCount": 57
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\verify-predecessor.cjs",
+      "bytes": 1982,
+      "sha256": "05be0e253f159c1b5486c5b57bedbe3fefd795d265f8676268c699a7d0ba1151",
+      "crlfCount": 0,
+      "lfCount": 15
+    },
+    {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\workflow-source-review.json",
+      "bytes": 2152,
+      "sha256": "3534f751f0f0b908c9ec9b7ce0fda6fff196eb219839de1d998f928e38de4650",
+      "crlfCount": 59,
+      "lfCount": 60
+    }
+  ],
+  "originalSource": {
+    "actual": "f67f215d2c698f961d28efdb50267454b4b1faf6",
+    "published": "aa924df542970b14b7b31ec0a893b849bde276aa",
+    "tree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
+    "parents": [
+      "3511ba49514fe8cf525f5a22c16c3806bf3886ba",
+      "aa924df542970b14b7b31ec0a893b849bde276aa"
+    ],
+    "joined19Inputs": [
+      {
+        "file": "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts",
+        "modeTypeBlob": "100644 blob 14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+        "committedSha256": "d0e750cc37d909d9b57619b49015a9e699b15a5b6736abf81d85cd54a9c3c931"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeEvents.ts",
+        "modeTypeBlob": "100644 blob 129ae05ac0378fa196d9d44c4398e205db1436df",
+        "committedSha256": "ff72b03a6ab940e8460d3929cc98a8b56786466a3be530f4e40b81fb2e16cc0f"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+        "modeTypeBlob": "100644 blob a488112df8b24223ad879b99cd6bf02c722aad6b",
+        "committedSha256": "6b412078bfa116062ebe3d3d9ceae1dca403a7929ea0d583342b5ff04e4f921b"
+      },
+      {
+        "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+        "modeTypeBlob": "100644 blob fd64cf9eb4eecae63123d605791c3484dad4e0ef",
+        "committedSha256": "ae4d6ea370f917615eec571dff07f4d1d159b32242ba648593d662adb8ffde45"
+      },
+      {
+        "file": "src/utils/storage/backend.ts",
+        "modeTypeBlob": "100644 blob 70827c696e98bf95d08e9cd713da59308e16cd03",
+        "committedSha256": "429e548efe971f9f89417fe71f21f987e53dad2a6b1f9c8f6d39dbc211a8742f"
+      },
+      {
+        "file": "src/utils/workspace.ts",
+        "modeTypeBlob": "100644 blob 564fdfd5e37616639367881d13ff7ff41130f61b",
+        "committedSha256": "4d6f82b41aa728e77245530ab70a9fa457e68ccb070f2852a8c3fb422f51b899"
+      },
+      {
+        "file": "src/utils/paths.ts",
+        "modeTypeBlob": "100644 blob 3c141f50214839bf9b05a5ab17cef231902dcaf7",
+        "committedSha256": "532cdc09920152c0ef4c52b3ac4ab2c6cf28ed2c7575aa3b076aef493a5fb655"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/runtimeClock.ts",
+        "modeTypeBlob": "100644 blob 02a1d328c308f5c2c9ace1d6c74b35ae6f45fe22",
+        "committedSha256": "6009fecba36892d8026778e5419c6f2f60997817c03421a74f2406c1061bdccc"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/store.ts",
+        "modeTypeBlob": "100644 blob 8f949f1889f48f319b3d29fdb1ec2fff32f57d33",
+        "committedSha256": "93176d25b40c5d42c27d3b38f7319b1999b277d5ae9f9a9bb93cc1277ad83a16"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryOrigins.ts",
+        "modeTypeBlob": "100644 blob 50b190e18207b7805162d2c1ae688790d8d82456",
+        "committedSha256": "63375daeebf2452fa559abbc17df715356df440a0c3b2e64907a8536405b3ce5"
+      },
+      {
+        "file": "src/backend/services/enduringAgents/personaRecoveryFiles.ts",
+        "modeTypeBlob": "100644 blob 40864eff680b5fb308ce10e11786441d385c8669",
+        "committedSha256": "db5eb558cd6ecf8dc0c78547eb20d0ff88015a4e768013c9261e5699e08b7a70"
+      },
+      {
+        "file": "src/config/features.ts",
+        "modeTypeBlob": "100644 blob 4414c3c08b5aee9594cdf504d89b731438006bd5",
+        "committedSha256": "bb588b39591a6c2b7c1ca636c864e65d73d041d7b28f55f27a1a7491d1ad3d9c"
+      },
+      {
+        "file": "jest.setup.ts",
+        "modeTypeBlob": "100644 blob 378314b1c3d3be8e41d7733485b50dfa73026840",
+        "committedSha256": "b8c1461851ff3fd2121d82a4a13bbe8149b384e2fe97284bf48d5366e37041e3"
+      },
+      {
+        "file": "jest.config.mjs",
+        "modeTypeBlob": "100644 blob e8780411e449a1e1a817ac0c198cd60e61e00a00",
+        "committedSha256": "8508315d4874b224968b1b68fc09364bd0ca2bf803ad4240cd983c573c372127"
+      },
+      {
+        "file": "jest.testMatch.mjs",
+        "modeTypeBlob": "100644 blob cdd585a6f7e3734ce89a5402526edafc0a6eb605",
+        "committedSha256": "d72c9da510191987007dde06f4fad03968816776ccaf5b8db9f05a14a0a35dff"
+      },
+      {
+        "file": "scripts/run-local-jest.cjs",
+        "modeTypeBlob": "100644 blob 7c40e9376068395610b72edb929a99d5f8680256",
+        "committedSha256": "9ac62cf97cf80f0e0963b65fabfe65d361904009c0778e418feea4ef2eb0c688"
+      },
+      {
+        "file": "scripts/local-test-dependencies.cjs",
+        "modeTypeBlob": "100644 blob 36b9fdcd4a80091167ae0f008b3daf2db41f059e",
+        "committedSha256": "5e79aaf23b4126d7fec90b141e7038efb0b959ca4899c16b401bb0e98f098bbe"
+      },
+      {
+        "file": "package.json",
+        "modeTypeBlob": "100644 blob 622ea38eed0c2e7bbbb4a5af46e1c47208dbed92",
+        "committedSha256": "c7c44e2eed98f1643e7d9837397e117e97686c59471197dff9c9dcefe5c740ba"
+      },
+      {
+        "file": "package-lock.json",
+        "modeTypeBlob": "100644 blob 873ffa0d1e5c4343e5978b8ca186004dc15ec588",
+        "committedSha256": "47ae0119878a4f642252f31f808e640064dc4f112aaa7d1250825543c5b4a092"
+      }
+    ]
+  },
+  "original20kUnchanged": {
+    "file": "__tests__/enduringAgents/runtimeEventsAppendScaling.test.ts",
+    "blob": "14fa6419bcc6a826fb8fba60365fca5f374b65e4",
+    "appendCount": 20000,
+    "originalTimeoutMs": 1800000,
+    "executedOrRetargeted": false
+  },
+  "priorCauseEvidenceRetained": {
+    "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-source-review-v1\\source-review.json",
+    "sha256": "2c05b9cbffd0be1a8d319831afad6b889c8038d13a3279a3dda20f9f7f27d937"
+  },
+  "sixRealSourceInstrumentationTargets": [
+    {
+      "file": "src/backend/services/workspace/workspaceMutationGate.ts",
+      "functions": [
+        "withWorkspaceMutation"
+      ],
+      "committedSha256": "ae4d6ea370f917615eec571dff07f4d1d159b32242ba648593d662adb8ffde45"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeLock.ts",
+      "functions": [
+        "registerWorkspaceWriter",
+        "withWorkspaceProcessMutation",
+        "acquireFilesystemLock",
+        "ensureRuntimeLockRoot",
+        "retireOwnedCanonical"
+      ],
+      "committedSha256": "6b412078bfa116062ebe3d3d9ceae1dca403a7929ea0d583342b5ff04e4f921b"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/runtimeEvents.ts",
+      "functions": [
+        "appendPersonaRuntimeEvent",
+        "assertEventLogNotDeleting",
+        "enqueue",
+        "parseLogLine",
+        "scanLogLines",
+        "syncState",
+        "appendRecord",
+        "rotateIfNeeded",
+        "readPersonaRuntimeEvents"
+      ],
+      "committedSha256": "ff72b03a6ab940e8460d3929cc98a8b56786466a3be530f4e40b81fb2e16cc0f"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/store.ts",
+      "functions": [
+        "getPersonaDeletionTombstone",
+        "getRecord"
+      ],
+      "committedSha256": "93176d25b40c5d42c27d3b38f7319b1999b277d5ae9f9a9bb93cc1277ad83a16"
+    },
+    {
+      "file": "src/backend/services/enduringAgents/personaRecoveryOrigins.ts",
+      "functions": [
+        "getRecoveredPersonaDeletionTombstone"
+      ],
+      "committedSha256": "63375daeebf2452fa559abbc17df715356df440a0c3b2e64907a8536405b3ce5"
+    },
+    {
+      "file": "src/utils/storage/backend.ts",
+      "functions": [
+        "loadCollectionItem",
+        "runInWriteChain"
+      ],
+      "committedSha256": "429e548efe971f9f89417fe71f21f987e53dad2a6b1f9c8f6d39dbc211a8742f"
+    }
+  ],
+  "positiveSourceObservations": [
+    "All twenty function names resolve on the six real source files; delegated task names use actual task parameters. Production source is not rewritten on disk.",
+    "Declared cooperative logical-call/read/parse caps, aggregate/inflight/handle bounds and truncated checkpoint inventory are present; no claim to cap every syscall or in-flight native operation.",
+    "100 and 250 remain separate assignments; 250 checks same-source/same-packet natural 100 and distinct post-controller release before installation and witness entry.",
+    "Existing AA controlled recall job steps are byte-identical after removing the added condition. Scheduled recall and default manual none preserve the ordinary job/group/cancellation behavior."
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "priority": 1,
+      "title": "External Jest configuration rebases target paths into the helper packet",
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\jest-config.cjs",
+      "line": 16,
+      "explanation": "The exact target project and Next 16.3.8 transformer configuration omit rootDir. This helper also omits it. Jest 30.4.2 therefore defaults the global root to the external jest-config.cjs directory and passes that root to the project. Its <rootDir>/src, setup and alias paths resolve in the packet rather than append-target, preventing the fixture from starting.",
+      "correction": "Set the returned global and selected node project rootDir to the canonical assigned target root, leaving the immutable target files unchanged."
+    },
+    {
+      "id": "F2",
+      "priority": 1,
+      "title": "Partial witness namespaces are excluded from release auditing",
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\release.cjs",
+      "line": 19,
+      "explanation": "Only witness directories already containing receipt.json are selected. The run controller creates its namespace and launches a detached dependency guard before the temporary fixture or final receipt exists. If it is terminated there, the target can remain clean while the child stays alive. The auditor ignores that namespace and its stage logs, checks only the finished installer, and can emit RELEASED_INSTALL_ONLY_NO_WITNESS despite the live diagnostic child.",
+      "correction": "Treat every created witness namespace or stage intent as attempted entry. Retain controller/stage birth identities before launching children and refuse release when any attempted namespace lacks complete birth/outcome evidence; install-only release must prove no witness entry was attempted."
+    },
+    {
+      "id": "F3",
+      "priority": 2,
+      "title": "Stage completion and log draining are not bounded by the absolute assignment deadline",
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\05\\01a103aa-eb9f-7290-81bd-23d6736350f3\\append-aa-witness-proposal-v2\\run.cjs",
+      "line": 35,
+      "explanation": "stage() receives no grant expiry, starts its relative timer after spawning, accepts natural completion using only the timer callback flag, and awaits file-stream close without a remaining-time bound. The initial 220/410-second reserves are not a post-await absolute deadline check. Delayed callbacks or draining can outlive the assignment and still allow a natural-success record; the hosted ten-minute job timeout is a different limit.",
+      "correction": "Carry the absolute grant/stage stop time into each stage, check it before spawn and after each bounded race/drain, and reject late completion. Bound log draining with the remaining cleanup allowance while retaining partial outputs and refusing unresolved release."
+    }
+  ],
+  "readinessFor100": false,
+  "readinessFor250": false,
+  "requiresDistinctCorrectedPacketAndHelperLeaf": true,
+  "exactToolchainSourceProof": {
+    "nextVersion": "16.3.8",
+    "nextReference": {
+      "file": "C:\\Users\\Moe\\.codex\\visualizations\\2026\\10\\03\\01a103aa-de4b-70c0-922c-8ff43432af13\\engineering-evidence\\next-16.3.8-jest.reference.js",
+      "sha256": "f414887ccbd66e3a80a623342f0991f85666d085f774eed80daebf19e4586f9c"
+    },
+    "nextReferenceUrl": "https://unpkg.com/next@16.3.8/dist/build/jest/jest.js",
+    "fetchedAndReadAsPlainSourceOnly": true,
+    "jestVersion": "30.4.2",
+    "jestFile": "C:\\Users\\Moe\\Documents\\GitHub\\FLUJO\\node_modules\\jest-config\\build\\index.js",
+    "jestSha256": "eb6052c971fd73fe11492800050abe359d0e0ce328bb80ed6b07f0cf8ce833f7",
+    "jestRootDefaultSourceLines": [
+      1156,
+      2361,
+      2374
+    ],
+    "installedPrimaryNextVersion": "16.3.5",
+    "installedNextUsedToQualifyTarget": false,
+    "relevantGuideRead": {
+      "file": "C:/Users/Moe/Documents/GitHub/FLUJO/node_modules/next/dist/docs/01-app/02-guides/testing/jest.md",
+      "sha256": "518410c94b6551ad62c4589621faecdb2f28f01c406b158ed0624fe8756e4dbb"
+    },
+    "rootDirDocumentation": "https://jestjs.io/docs/configuration#rootdir-string"
+  },
+  "metaOnlyVerifier": true,
+  "targetModuleOrCompilerOrParserOrTestLoaded": false,
+  "installOrLinuxDiagnosticOrDispatchEntered": false,
+  "originalPacketOrProductionFilesEdited": false,
+  "queueGrantOrCapacityReleaseInferred": false,
+  "helperPublicationOrNativeCodeQualified": false,
+  "original20kCauseResolvedOrPerformanceOrEnduranceOrAppOrAdoptionAccepted": false,
+  "protectedMainMergedOrGradePromoted": false
+}

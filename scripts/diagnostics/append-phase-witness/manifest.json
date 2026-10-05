@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 2,
-  "state": "SEALED_SOURCE_PREPARATION_UNRUN",
-  "sealedAtUtc": "2026-10-05T12:31:36.4395031Z",
+  "schemaVersion": 3,
+  "state": "SEALED_SOURCE_CORRECTED_SUCCESSOR_UNRUN",
+  "sealedAtUtc": "2026-10-05T13:08:07.9900788Z",
   "actualFailedMerge": "f67f215d2c698f961d28efdb50267454b4b1faf6",
   "tree": "d09c5ccdd5a85d6e41061ecef683a0996d938c8e",
   "members": [
@@ -9,6 +9,11 @@
       "file": "bind-hosted-grant.cjs",
       "bytes": 9088,
       "sha256": "c4fd8c6a8329950a689a44e87418c5489c53839fe742a887a86f7a508237155f"
+    },
+    {
+      "file": "correction-source-review.json",
+      "bytes": 2069,
+      "sha256": "4a58bec3691d418cc628eddd9c5266c4b975dcdbcc55d87a7e56e2d123e6c1b9"
     },
     {
       "file": "current-source-pins.json",
@@ -19,6 +24,11 @@
       "file": "default-branch-workflow-proof.json",
       "bytes": 793,
       "sha256": "4de2fb580d9be7c834baf6ed6f8b2cb26ecd332d263de16f94b688bd3301c230"
+    },
+    {
+      "file": "engineering-v2-source-review.reference.json",
+      "bytes": 20463,
+      "sha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d"
     },
     {
       "file": "fixture.test.ts",
@@ -37,8 +47,8 @@
     },
     {
       "file": "jest-config.cjs",
-      "bytes": 1480,
-      "sha256": "7096ef6caa54602ad5fc760388ad6d32333e142db285b44a694f3812ee5a8760"
+      "bytes": 1887,
+      "sha256": "64d0bb0c9adb602eb27c444015b9075439c13aac329f69739fcc51bd9f813152"
     },
     {
       "file": "observer.cjs",
@@ -52,8 +62,8 @@
     },
     {
       "file": "parser-checks.json",
-      "bytes": 5860,
-      "sha256": "15f3e0f50737fc2fc4667fd14a840352fe7a9ab0c9bec61f673bf282e039a8d9"
+      "bytes": 402,
+      "sha256": "4316d025ece0044bf182829dc628800c9537e0672f7d3a5d759c85d325ced870"
     },
     {
       "file": "persona-memory-recall-benchmark.aa.yml",
@@ -72,13 +82,13 @@
     },
     {
       "file": "proposal.json",
-      "bytes": 22532,
-      "sha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800"
+      "bytes": 25013,
+      "sha256": "9b357bf69d33fffc098e11f1b3d49d68cb3ab30014f67e3e18872ad58674c8cb"
     },
     {
       "file": "release.cjs",
-      "bytes": 6703,
-      "sha256": "5aee523aac37e3f380f9b8de7e691458f87b4e93456f3cef8d629523835811da"
+      "bytes": 12468,
+      "sha256": "71a10b527db972fb18326e3b91f9230a6b685f8087f353d7fb75328a317e80e4"
     },
     {
       "file": "retain-data-root.cjs",
@@ -86,14 +96,19 @@
       "sha256": "08e189d0b081c85c644335645aec7e175afee482f298272ef5fc0d698541d497"
     },
     {
+      "file": "retained-v2-parser-checks.json",
+      "bytes": 5860,
+      "sha256": "15f3e0f50737fc2fc4667fd14a840352fe7a9ab0c9bec61f673bf282e039a8d9"
+    },
+    {
       "file": "run-install.cjs",
-      "bytes": 5546,
-      "sha256": "a6121ea62ccb0705821a4477422235070e7027cfd125b41d98b50ba4cdaed98b"
+      "bytes": 6163,
+      "sha256": "b255d812e57be552453cefc4790dc3dbb2cf841d015bd754c9992053328b1c98"
     },
     {
       "file": "run.cjs",
-      "bytes": 20326,
-      "sha256": "4245e8ae2aa63c1d2270bdf1c972e9953294da5616e9517b4d1202f8534d37f0"
+      "bytes": 25723,
+      "sha256": "d0e37b884e26481eb0dc3576bb29cef499b956900a67e0962f457120afbc2974"
     },
     {
       "file": "transform.cjs",
@@ -117,5 +132,6 @@
   ],
   "executionAuthorized": false,
   "publicationAuthorized": false,
-  "packetIsAnAssignment": false
+  "packetIsAnAssignment": false,
+  "preservedV2ManifestSha256": "1745b589f4112d8a74ef28ee4f4eec3fa47d462f03ac6041643ddc6838e2a13c"
 }

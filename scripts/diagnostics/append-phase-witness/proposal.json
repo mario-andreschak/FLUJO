@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 2,
-  "state": "SEALED_PREPARATION_UNRUN_PENDING_ROOT_QUEUE_REVIEW_AND_SEPARATE_ASSIGNMENT",
-  "preparedAtUtc": "2026-10-05T12:30:08.3694909Z",
+  "schemaVersion": 3,
+  "state": "SOURCE_CORRECTIONS_PREPARED_UNRUN_PENDING_INDEPENDENT_REVIEW",
+  "preparedAtUtc": "2026-10-05T13:08:07.8697398Z",
   "objective": "Narrow the current AA timeout using one separately assigned100 sample, then250 only after reviewed natural100 and independent release. Observe real admission, acquire, append/tombstone/read/parse and retirement costs; leave runtime/adoption grade open.",
   "source": {
     "pr": 611,
@@ -270,7 +270,12 @@
     "hostedJobTimeoutMinutes": 10,
     "original20kTimeoutMs": 1800000,
     "original20kGateUnchanged": true,
-    "kernelUninterruptibleOperationPromise": "No hard completion guarantee; survivor/missing-birth/outcome or source issue refuses release and preserves partial evidence."
+    "kernelUninterruptibleOperationPromise": "No hard completion guarantee; survivor/missing-birth/outcome or source issue refuses release and preserves partial evidence.",
+    "logDrainMaxMs": 2000,
+    "absoluteGrantCarriedIntoEveryStage": true,
+    "cleanupReserveMs": 15000,
+    "relativeReservesEstablishTerminalAcceptance": false,
+    "naturalCompletion": "Must be observed and logs drained before stage stop; callback flag alone is insufficient. Caller rejects if terminal preservation crosses the stop. An immutable raw outcome on a refusal is partial evidence, not a completed diagnostic receipt."
   },
   "workBudgets": {
     "logicalFilesystemCalls": 100000,
@@ -353,14 +358,14 @@
   },
   "driver": {
     "file": "run.cjs",
-    "sha256": "4245e8ae2aa63c1d2270bdf1c972e9953294da5616e9517b4d1202f8534d37f0",
+    "sha256": "d0e37b884e26481eb0dc3576bb29cef499b956900a67e0962f457120afbc2974",
     "exactFutureLocalCommand": "node <reviewed-packet>/run.cjs --grant <absolute-separate-ASSIGNED.json> --count 100",
     "future250Command": "node <same-reviewed-packet>/run.cjs --grant <new-ASSIGNED-with-100-receipt-release-hashes.json> --count 250",
     "selection": "Exclusively-created appendPhaseWitness-<UUID>.test.ts in target/enduringAgents; exact single-suite/single-test native result required",
     "original20kSelected": false,
     "sourceBeforeAfter": "HEAD/tree/clean status and19 input hashes, exact fixture-only unlink in finally",
     "cleanup": "No recursive deletion; synthetic event logs and installation retained outside repo",
-    "release": "Independent process checks all observed PID/start ticks including install controller. Authoritative stage outcomes are read even when stage() threw before receipt insertion. No unverified process is signaled; no release helper deletion.",
+    "release": "Every witness namespace is audited, including one without receipt; controller/stage intent and original PID/start-tick/birth/outcome hashes must be complete. Original stage files remain authoritative when stage() throws. Successful install with no completed witness controller proof cannot receive install-only release. Only complete known-birth/source/manifest closure can release.",
     "releaseLimit": "Known observed births only; polling is not a complete historical process census.",
     "partialEvidence": [
       "native Jest JSON when emitted",
@@ -370,7 +375,8 @@
       "installer process/outcomes and runtime record",
       "preserved synthetic data",
       "controller receipt/manifests/independent release"
-    ]
+    ],
+    "absoluteStop": "Stage stop is min(requested relative stop, absolute grant stop minus15s cleanup reserve), also bounded by the process monotonic ceiling. Checked before spawn and after races, close/drain, process scan and terminal preservation. Cleanup stop is min(grant stop, stage stop+15s);2s log drain is further capped by remaining cleanup time. Missing/late/unresolved evidence holds release."
   },
   "ownedLinuxAvailability": {
     "inventoryOnly": "wsl.exe --list --quiet;natural0;only docker-desktop",
@@ -382,7 +388,7 @@
     "frozen775And764Touched": false
   },
   "hostedRoute": {
-    "state": "REVIEWABLE_SOURCE_PROPOSAL_NOT_PUBLISHED_OR_DISPATCHED",
+    "state": "SOURCE_CORRECTED_SUCCESSOR_REVIEW_ONLY_NOT_PUBLISHED_OR_DISPATCHED",
     "reason": "No owned canonical Ubuntu24.04 context found",
     "workflow": ".github/workflows/persona-memory-recall-benchmark.yml",
     "newWorkflowFile": false,
@@ -404,14 +410,14 @@
     "diagnosticConcurrency": "Separate group, cancellation false",
     "job": "append-phase-witness;ubuntu-24.04;10min;contents/actions read",
     "helperFilesDestination": "scripts/diagnostics/append-phase-witness/",
-    "helperBundle": "Copy sealed flat packet plus manifest into separately reviewed helper commit; exact reviewed workflow bytes to existing path. No checkout/install/publication is authorized by this packet.",
+    "helperBundle": "Copy this separately sealed v3 flat packet plus manifest into the separately frozen successor; preserve scoped scripts/diagnostics/.gitattributes -text. No v2/ad99 grant or qualification is inherited.",
     "target": "Separate fresh checkout of actualf67/tree d09; never modify frozen PR worktrees",
     "helperCommit": "Separately published reviewed full40SHA; workflow github.sha and clean harness HEAD must equal authorizedWorkflowSha",
     "dispatch": "Future one manual workflow dispatch of existing workflow at reviewed helper branch/ref only after Root review, concrete publication and new Queue exclusive heavy-window/install grant. Exact assignment JSON and SHA256 are inputs. First attempt only; a rerun/ref advance/driver change requires fresh review.",
     "binding": "Only explicitly authorized symbolic checkout/output/npm and predecessor paths are substituted; raw/effective bytes/digests preserved; no approval booleans synthesized",
     "installation": "Official binary verified before install; binder requires explicit installAuthorized. Fresh target npm ci --include=dev only under birth-aware180s controller, retaining raw logs/outcomes/source before-after.",
     "before250": "Official cross-run artifact download at reviewed run/name; exact reviewed100 receipt/release hashes checked before installation",
-    "release": "Separate post-controller Node process includes installer and witness known births and source/manifest closure; install-only release is explicitly not a witness result",
+    "release": "Separate process audits complete original controller/stage intent and birth/outcome evidence for every namespace. A partial namespace is never ignored; successful-install/no-witness-completion refuses release.",
     "artifact": "Pinned official actions upload of raw/partial evidence and all file SHA256SUMS; later Queue+Root server archive digest/raw report readback required",
     "buildBrowserFullSuite": "No build, application/browser launch, original20k or fullsuite command in diagnostic job",
     "requiredVerifyWorkflowChanged": false,
@@ -421,8 +427,8 @@
     "githubActionsNativeEngineValidated": false
   },
   "preparation": {
-    "nineCjsParserChecksNaturalZero": true,
-    "parserReceipt": "parser-checks.json",
+    "nineCjsParserChecksNaturalZero": null,
+    "parserReceipt": "parser-checks.json reports successor UNRUN; retained-v2-parser-checks.json is historical only",
     "parserNodeExecutableSha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e",
     "typescriptFixtureCompiled": false,
     "nextSwcOrJestLoaded": false,
@@ -430,7 +436,9 @@
     "yamlNativeValidatorEntered": false,
     "linuxRuntimeApplicationOrWitnessEntered": false,
     "installedOrProvisioned": false,
-    "sourceRepairAdded": false
+    "sourceRepairAdded": false,
+    "newParserChecks": 0,
+    "newParserModuleCompilerTestOrProviderEntry": false
   },
   "acceptanceBoundary": "A short result is phase/cost evidence only. No20k complexity/p95 acceptance, no endurance/rotation/whole-heap qualification, no installed/application/runtime/adoption grade. Current native security and mandatory ordinary verification failures remain open; no retry/timeout/skip/performance oracle/baseline adjustment.",
   "officialWorkflowDocs": [
@@ -449,6 +457,23 @@
     "priorF238FailurePreserved": true,
     "later4aPassDoesNotExplainFailure": true,
     "own775DcdfTypesAnd27TestsUnchanged": true,
-    "own550Historical94NotRetargeted": true
+    "own550Historical94NotRetargeted": true,
+    "v2LocalLeafPreservedUnpublishedUnrun": true
+  },
+  "successor": {
+    "preservedV2ProposalSha256": "76dc054d7a5126ba3fbaa6963a45ae19d3bd9622c42b454730e3ec5e106ea800",
+    "preservedV2ManifestSha256": "1745b589f4112d8a74ef28ee4f4eec3fa47d462f03ac6041643ddc6838e2a13c",
+    "preservedV2LocalLeaf": "ad99f223c0da20300b97f20eec7ff59a326b1e03",
+    "preservedV2LocalLeafTree": "59d5948d75c702fe8c63096f94600657872ec7d0",
+    "v2AndAd99Executable": false,
+    "engineeringReference": "engineering-v2-source-review.reference.json",
+    "engineeringReferenceSha256": "bd84643db3b4d5a0a7c9a959dfa4562b7d08254338b4b76fd116238a36a69f7d",
+    "findingsCorrectedInSource": [
+      "F1 explicit canonical returned global and node-project rootDir",
+      "F2 original controller intent before stage, stage intent before spawn, immutable original child birth linked to outcome, every namespace audited even without receipt; missing proof or successful-install/no-complete-witness refuses release",
+      "F3 grant/stage/cleanup absolute stops, monotonic ceilings, pre-spawn and post-race/drain/terminal checks; bounded log drain and late natural-acceptance refusal"
+    ],
+    "newParserModuleCompilerTestOrProviderEntry": false,
+    "correctedSourceQualified": false
   }
 }

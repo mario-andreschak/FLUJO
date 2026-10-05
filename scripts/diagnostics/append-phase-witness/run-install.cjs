@@ -25,9 +25,13 @@ async function main() {
   demand(sourceBefore.length === 19 && !fs.existsSync(path.join(root, 'node_modules')), 'Fresh19-input owned hosted target without an existing graph required');
   const receipt = { schemaVersion: 1, state: 'INSTALL_ENTERED_NO_WITNESS_YET', count: assigned.count, head: assigned.head, tree: assigned.tree, assignmentSha256: sha(assignedBytes), packetManifestSha256: sha(manifestBytes), controller: birth(process.pid), bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), sourceBefore, stages: [], enteredAtUtc: new Date().toISOString() };
   let failure;
+  receipt.schemaVersion = 3;
+  const controllerIntentBytes = Buffer.from(JSON.stringify({ schemaVersion: 3, state: 'INSTALL_CONTROLLER_ENTERED_BEFORE_STAGE', controller: receipt.controller, bootId: receipt.bootId, head: receipt.head, tree: receipt.tree, count: receipt.count, assignmentSha256: receipt.assignmentSha256, packetManifestSha256: receipt.packetManifestSha256 }, null, 2) + '\n');
+  fs.writeFileSync(path.join(output, 'install.controller.intent.json'), controllerIntentBytes, { flag: 'wx', mode: 0o600 });
+  receipt.controllerIntentSha256 = sha(controllerIntentBytes);
   try {
     demand(Date.parse(assigned.notBeforeUtc) <= Date.now() && Date.parse(assigned.expiresAtUtc) > Date.now() + 410_000, 'At least410s assigned time remaining required before installation plus witness');
-    const outcome = await stage('install', [assigned.npmCli, 'ci', '--include=dev'], 180_000, { root, output, environment: { ...process.env, FLUJO_SKIP_PATCHRIGHT_DOWNLOAD: '1' } });
+    const outcome = await stage('install', [assigned.npmCli, 'ci', '--include=dev'], 180_000, { root, output, expiresAtUtc: assigned.expiresAtUtc, environment: { ...process.env, FLUJO_SKIP_PATCHRIGHT_DOWNLOAD: '1' } });
     receipt.stages.push(outcome);
     demand(outcome.natural && outcome.exit.code === 0, 'Installation must complete naturally; partial logs retained');
     receipt.state = 'INSTALL_COMPLETED_NATURALLY_NO_WITNESS_QUALIFICATION';
