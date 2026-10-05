@@ -358,3 +358,21 @@ direct exits, both retained wall clocks, unchanged clean source and workflow SHA
 Both OSes must run the capture immediately after binary verification and retain
 source and binary reports even on failure. Closure exit 2 records incompleteness;
 closure exit 0 remains a ledger declaration requiring external acceptance.
+
+## October 5 source outcome reconciliation
+
+The [v25 source observation](evidence/source-outcomes-2026-10-05-v25.json) and
+[publication chronology](publication-reconciliation.md#october-5-source-outcomes)
+retain distinct component, integration, export and readback outcomes. AA's ordinary
+append timeout and native findings failure remain failed. The marker component's
+complete successful source qualification belongs to its own head/merge identities;
+an equal-tree mapped integration still needs its own check identities and outcomes.
+Recording and worker-export successors were pending at the retained v25 cut.
+
+The earlier 8fe Docs observation retains 99 passing cases, 72 selected documents and
+direct exits `0/0/2/0`. Its closure exit 2 preserves all 20 acceptance blockers.
+These observations do not qualify this edited ledger, a later integration, installed
+worker/native behavior, maintainer participation, sustained usage or an independent
+grade. All nine human owners remain unassigned. Rubric agreement, profile
+acceptance, proposed budgets and independent reassessment remain unresolved as
+previously recorded.

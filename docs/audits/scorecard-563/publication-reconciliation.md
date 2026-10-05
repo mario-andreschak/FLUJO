@@ -112,3 +112,44 @@ records. The coordinator owns the integration and deployment candidate. No
 numeric paid-run envelope or concrete model/account scope is declared in this
 ledger; its proposed null paid-run limit records that missing measurement contract,
 without denying the user's development/deployment authorization.
+
+## October 5 source outcomes
+
+The [checksummed v25 observation](evidence/source-outcomes-2026-10-05-v25.json)
+records the public progress cut updated on October 5, 2026 at 13:52:46 UTC. It is
+a dated reconciliation of retained producer/reviewer reports and the earlier
+independent Docs readback; those workloads were not repeated for this ledger edit.
+The report identifies its derived scope, original review receipt checksums and
+private raw-evidence access limits. Later outcomes require separate observations.
+
+At this cut, published integration #611 still identified `aa924df5` / tree
+`d09c5ccd`. Mapped `db4bb26f` / tree `e26b744d` had normal publication authorization.
+Its tree equals the qualified marker component merge `a891d7f3`; its integration
+check identities and outcomes remain separately required. Neither identity is a
+selected distributed release or an installed-profile acceptance record.
+
+| Observation | Recorded result and boundary |
+| --- | --- |
+| AA integration ordinary verification | 11 required checks passed and two failed. The ordinary archive retains 8,674 passing assertions, one append-scaling timeout and 11 skips. The unchanged test limit was 1,800,000 ms; its cause remains unresolved. This is an overall benchmark timeout, not a new append-p95 measurement. Builds, types/lint and eight supported profiles passing do not erase the ordinary/final verification failure. |
+| AA native findings protection | Failed with 49 new findings (28 high, 21 medium) and 80 open alerts (45 high, 35 medium). Analysis completion, component scanning and a lower count do not establish individual disposition or backlog clearance. Installed-profile applicability is not asserted. |
+| Marker component #780 | Head `c69fba0f`, actual merge `a891d7f3`: all 13 required checks passed. Fresh archives retain 16 marker and 20 unchanged transfer assertions with zero selected skips; ordinary 8,691 passed, zero failed and the original 11 skips; isolated 105 assertions in nine suites. Eight supported source/runtime profiles and two historical build-only rows remain distinct. Earlier type/fixture failures are preserved. These component results are not relabeled as a new integration run. |
+| Recording #784 | Predecessor `7af0ec00` passed 14 new cases and failed three warning matchers; 38 unchanged browser assertions passed. Later byte-bound and close assertions in the three interrupted cases did not execute. Successor `ad0b1a9b` changes one matcher, preserves production and all 17 case bodies, and needs fresh qualification. |
+| Worker payload export #783 | Exporter source `8800ecfe` passed seven fixtures, the separate immutable `8fe5985e` application build and production dependency install, then failed export when its private-data filter rejected compiled API paths. Diagnostics were uploaded; no compiled payload was produced. Exporter and application source identities stay separate. |
+| Worker export successor #785 | `b5abe6eb` retains all seven cases and adds two cases covering six allowed compiled paths and 22 rejected lookalikes. Four exact compiled filenames and one tightly bounded static chunk filename are admitted while private/live-data denials remain. Nine fresh hosted fixtures precede a separately selected build/export event. Prior fixture/build passes are not transferred. |
+| Earlier 8fe Docs evidence | Exact source `8fe5985e` / tree `4f318966`: 99 cases passed with zero failure/skip/cancellation/todo; direct exits `0/0/2/0`; 72 source-selected documents, 403 file targets and one directory target verified. Closure remains incomplete with 20 blockers. This new source edit requires fresh validation and does not inherit those results. |
+
+The native bootstrap's compiler and linker each completed with exit 0 and pinned
+outputs, while separate MSVC child-process closeouts remained material. The first
+child was independently absent, but its failed closeout, missing inner error and
+unproven termination cause remain recorded. The linker child had a distinct narrow
+closeout authorization at this cut. Both disposable controls were unentered pending
+independent release and a separate fixed window; the lifecycle successor still
+needed 17 pure fixtures and runtime acceptance. Compile/link success does not
+qualify helper survival, worker behavior or a signed installed application.
+
+All prior ledger evidence and failures remain unchanged. These new source records
+add references without changing claim/gate status, rubric agreement, numeric budgets,
+profile acceptance or assessment. The nine accountable human owners, participation,
+contributor activity, sustained usage and independent reassessment still need actual
+evidence. Source consistency and publication authorization grant no grade or human
+acceptance and do not close #563.
