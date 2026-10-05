@@ -1413,7 +1413,7 @@
                 "type": "number"
               },
               "denominator": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 1
               },
               "numerator": {

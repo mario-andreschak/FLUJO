@@ -44,12 +44,12 @@ const declaredPlatforms = {
   'shared-public': { Linux: ['hardened pinned container/service with authenticated ingress'] },
 };
 const protectedBudgets = new Map([
-  ['persona-append-p95', ['<', 150, 28]], ['persona-peak-rss', ['<=', 805306368, 1]],
-  ['persona-rss-growth', ['<=', 268435456, 1]], ['persona-append-flatness', ['<=', 2, 1]],
-  ['persona-total-collection', ['<=', 1248, 1]], ['persona-mailbox', ['<=', 500, 1]],
-  ['persona-activities', ['<=', 200, 1]], ['persona-dispatches', ['<=', 200, 1]],
-  ['persona-pins', ['<=', 200, 1]], ['persona-leases', ['<=', 50, 1]],
-  ['persona-recall-p95', ['<', 150, 20]],
+  ['persona-append-p95', ['<', 150, 28, 'ms']], ['persona-peak-rss', ['<=', 805306368, 1, 'bytes']],
+  ['persona-rss-growth', ['<=', 268435456, 1, 'bytes']], ['persona-append-flatness', ['<=', 2, 1, 'ratio']],
+  ['persona-total-collection', ['<=', 1248, 1, 'records']], ['persona-mailbox', ['<=', 500, 1, 'records']],
+  ['persona-activities', ['<=', 200, 1, 'records']], ['persona-dispatches', ['<=', 200, 1, 'records']],
+  ['persona-pins', ['<=', 200, 1, 'records']], ['persona-leases', ['<=', 50, 1, 'records']],
+  ['persona-recall-p95', ['<', 150, 20, 'ms']],
 ]);
 const supportedKeywords = new Set([
   '$schema', '$id', '$defs', '$ref', 'title', 'description', 'type', 'const',
@@ -159,6 +159,7 @@ export function validateScorecard(ledger, options = {}) {
   function exact(actual, expected, context) {
     if (actual.length !== expected.length || expected.some(id => !actual.includes(id))) fail(context + ': required complete set is ' + expected.join(', '));
   }
+  refs(contract.sourceMetricElapsedBudgets, 'budgets', 'source metric elapsed contract');
   exact(ledger.rubric.map(row => row.id), [...dimensions.keys()], 'rubric');
   exact(ledger.profiles.map(profile => profile.id), profiles, 'profiles');
   for (const id of ['rubric-agreement', 'release-acceptance', 'local-security', 'worker-operations', 'shared-profile', 'human-evidence', 'persona-current-soak', 'persona-manual', 'persona-live', 'cross-stream-contracts', 'independent-reassessment', 'dependency-audit', 'build-verification']) {
@@ -193,9 +194,9 @@ export function validateScorecard(ledger, options = {}) {
       if (!records.some(e => e.kind === 'external-agreement')) fail(budget.id + ': budget requires external agreement evidence');
     }
   }
-  for (const [id, [operator, limit, denominator]] of protectedBudgets) {
+  for (const [id, [operator, limit, denominator, unit]] of protectedBudgets) {
     const actual = indexed.budgets.get(id);
-    if (!actual || actual.operator !== operator || actual.limit !== limit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
+    if (!actual || actual.operator !== operator || actual.limit !== limit || actual.unit !== unit || actual.status !== 'existing-contract') fail(id + ': existing numeric contract changed or omitted; requires a separately reviewed contract version');
     if (actual && id !== 'persona-recall-p95' && (actual.observation.clock !== 'simulated' || actual.observation.minimumSimulatedDays !== 28)) fail(id + ': existing full 28-day workload changed');
     if (actual && actual.observation.minimumDenominator !== denominator) fail(id + ': existing observation denominator contract changed; requires a separately reviewed contract version');
   }
@@ -227,6 +228,14 @@ export function validateScorecard(ledger, options = {}) {
     if (!Number.isFinite(observedAt)) fail(evidence.id + ': invalid observedAt');
     else if (observedAt > now) fail(evidence.id + ': observation is in the future relative to validation clock');
     const window = evidence.window;
+    if (window.kind !== 'elapsed' && window.end !== null) {
+      const end = timestamp(window.end);
+      if (!Number.isFinite(end)) fail(evidence.id + ': invalid non-elapsed end timestamp');
+      else {
+        if (end > observedAt) fail(evidence.id + ': non-elapsed end is later than observation');
+        if (window.start !== null && (!Number.isFinite(timestamp(window.start)) || end < timestamp(window.start))) fail(evidence.id + ': non-elapsed end precedes or has an invalid start');
+      }
+    }
     if (window.kind === 'simulated' && !window.simulatedDays) fail(evidence.id + ': simulated window needs simulated days');
     if (window.kind !== 'simulated' && window.simulatedDays !== null) fail(evidence.id + ': non-simulated window contains simulated days');
     if (window.kind === 'elapsed') {
@@ -295,6 +304,7 @@ export function validateScorecard(ledger, options = {}) {
       const budget = indexed.budgets.get(metric.budgetId);
       if (budget?.limit === null) fail(evidence.id + ': envelope not declared for ' + metric.budgetId);
       if (metric.value < 0 && !metric.budgetId.endsWith('-growth')) fail(evidence.id + ': only measured growth may be negative');
+      if (budget && ['humans', 'records', 'operations', 'effects', 'findings', 'lanes'].includes(budget.unit) && !Number.isSafeInteger(metric.value)) fail(evidence.id + ': count metric must be a whole number');
       if (!evidence.budgetIds.includes(metric.budgetId)) fail(evidence.id + ': measured budget absent from budgetIds');
       if (budget && evidence.result === 'passed' && !satisfies(metric.value, budget)) fail(evidence.id + ': passing result contradicts measured ' + metric.budgetId);
       if (budget && evidence.result === 'passed' && evidence.integrity === 'checksummed') {
