@@ -133,7 +133,7 @@ it.each(['growth', 'identity-replacement', 'hardlink-replacement'] as const)(
     expect(mutated).toBe(true);
     expect(result.content.some((item) => item.type === 'resource')).toBe(false);
     expect(result.structuredContent).toMatchObject({ success: true, status: 'stopped', outputPath });
-    expect((result.structuredContent as { warnings: string[] }).warnings).toContain(expect.stringContaining('stable regular file'));
+    expect((result.structuredContent as { warnings: string[] }).warnings).toContainEqual(expect.stringContaining('stable regular file'));
     await observed.expectBounded(5);
     observed.expectClosed();
   },
