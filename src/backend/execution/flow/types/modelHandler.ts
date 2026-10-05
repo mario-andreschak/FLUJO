@@ -92,6 +92,8 @@ export interface ModelCallInput {
   executionAuthority?: FlowExecutionAuthority;
   /** Trusted in-process opt-in; never populated from HTTP JSON or a saved Flow. */
   nativeBrokerAuthority?: import('../handlers/nativeToolBroker').NativeBrokerAuthority;
+  /** Trusted opt-in to publish the original native SDK session in-process. */
+  nativeInvocationSessionHook?: import('../handlers/nativeInvocationSession').NativeInvocationSessionHook;
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   /** Final authority checks immediately before external side effects. */

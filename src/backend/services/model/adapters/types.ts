@@ -115,6 +115,11 @@ export interface CompletionInput {
     dispatchId: string;
     outcome: 'completed' | 'error' | 'cancelled';
   }) => Promise<void>;
+  /** Strict native-only: first event actually observed from the original SDK
+   * stream. It does not prove a host handle survives a process restart. */
+  onNativeSdkLive?: () => Promise<void>;
+  /** Strict native-only: original SDK stream has ended, before durable outcome acknowledgement. */
+  onNativeSdkFinished?: () => void;
   /** Runtime-only, origin-owned policy port. A JSON value cannot satisfy its
    *  module-private capability check in either native adapter. */
   nativeToolPort?: NativeToolPort;

@@ -144,10 +144,16 @@ it('routes a native Claude tool-use ID through the durable Worker port without h
       service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
       authority: createNativeBrokerAuthority('lease-1', async () => undefined),
       signal: new AbortController().signal });
+    const observedLive = jest.fn(async () => undefined);
+    const observedFinished = jest.fn();
     callToolMock.mockImplementation(() => { throw new Error('host MCP fallback called'); });
     await new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools, nativeToolPort: port,
       onSdkRequest: async () => receipt.invocationId,
+      onNativeSdkLive: observedLive,
+      onNativeSdkFinished: observedFinished,
       onSdkRequestResult: async () => undefined }));
+    expect(observedLive).not.toHaveBeenCalled();
+    expect(observedFinished).toHaveBeenCalledTimes(1);
     const permission = capturedOptions().canUseTool as (
       name: string, args: Record<string, unknown>, options: { toolUseID: string },
     ) => Promise<{ behavior: string }>;

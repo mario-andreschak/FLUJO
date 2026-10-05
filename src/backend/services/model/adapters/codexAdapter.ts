@@ -212,6 +212,8 @@ export class CodexAdapter implements CompletionAdapter {
       onCodexSessionChange,
       onSdkRequest,
       onSdkRequestResult,
+      onNativeSdkLive,
+      onNativeSdkFinished,
       nativeToolPort,
     } = input;
     if (nativeToolPort) {
@@ -898,6 +900,7 @@ export class CodexAdapter implements CompletionAdapter {
       let nextTurnWireMessages: OpenAI.ChatCompletionMessageParam[] | undefined;
       let connectionRetryUsed = false;
       let sdkTurnIndex = 0;
+      let nativeLiveObserved = false;
       let nextTurnDelivery: SteeringDelivery | undefined;
       let providerInputStarted = false;
       const source = steeringSource(input);
@@ -964,6 +967,14 @@ export class CodexAdapter implements CompletionAdapter {
           for await (const event of events) {
             if (signal?.aborted) break;
             if (turnSteering || steeringFailure) break;
+            const liveProgress = event.type === 'turn.started'
+              || ((event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed')
+                && (event.item.type === 'agent_message'
+                  || (event.item.type === 'mcp_tool_call' && event.item.status !== 'failed')));
+            if (nativeToolPort && !nativeLiveObserved && liveProgress) {
+              await onNativeSdkLive?.();
+              nativeLiveObserved = true;
+            }
             if (executionExtensionContext) {
               await assertExecutionExtensionCurrent(executionExtensionContext, { conversationId, runId });
             }
@@ -1093,6 +1104,7 @@ export class CodexAdapter implements CompletionAdapter {
           // model requiring a newer CLI) instead of replacing it with stderr.
           attemptFailure ??= err instanceof Error ? err : new Error(String(err));
         } finally {
+          if (dispatchId && nativeToolPort) onNativeSdkFinished?.();
           await watcher.stop();
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
