@@ -60,7 +60,7 @@ describe('JSON event stream failure projection', () => {
   it('does not log private field names when encoding an event fails', async () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['private-test-credential-field'] = cyclic;
-    const response = createJsonEventStreamResponse(async (emit) => { emit(cyclic); }, () => publicFailure);
+    const response = createJsonEventStreamResponse<Record<string, unknown>>(async (emit) => { emit(cyclic); }, () => publicFailure);
     expect(await response.text()).toBe('');
     expect(debugMock.mock.calls).toEqual([['JSON event enqueue failed; stream closed']]);
     expect(warnMock).not.toHaveBeenCalled();
