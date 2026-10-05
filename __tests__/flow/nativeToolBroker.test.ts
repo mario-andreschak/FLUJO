@@ -149,6 +149,98 @@ describe('native broker journal', () => {
     await expect(port.dispatch({ ...call, args: { q: 'changed' } })).rejects.toThrow(/Conflicting/);
   });
 
+  it('runs the final native lease check after an asynchronous dispatch gate', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async () => ({ unsafe: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation(owner('gate-revocation', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    let current = true;
+    let entered!: () => void;
+    let release!: () => void;
+    const atGate = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => {
+        if (!current) throw new Error('native lease revoked');
+      }),
+      beforeToolDispatch: async () => { entered(); await gate; },
+      signal: new AbortController().signal });
+    const pending = port.dispatch({ toolInvocationId: 'sdk-gate', name: 'worker_search', args: {},
+      signal: new AbortController().signal });
+    await atGate;
+    current = false;
+    release();
+    await expect(pending).rejects.toThrow(/native lease revoked/);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('uses the original approved argument snapshot even when the caller mutates during approval', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async (args: Record<string, unknown>) => args);
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation(owner('args-snapshot', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    let entered!: () => void;
+    let release!: () => void;
+    const atApproval = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const approved = jest.fn(async ({ args }: { args: Record<string, unknown> }) => {
+      expect(args).toEqual({ nested: { value: 'original' }, a: 1 });
+      entered();
+      await gate;
+      return true;
+    });
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      requestToolApproval: approved,
+      authority: createNativeBrokerAuthority('lease-a', async () => undefined),
+      signal: new AbortController().signal });
+    const callerArgs = { nested: { value: 'original' }, a: 1 };
+    const call = { toolInvocationId: 'sdk-snapshot', name: 'worker_search', args: callerArgs,
+      signal: new AbortController().signal };
+    const pending = port.dispatch(call);
+    await atApproval;
+    callerArgs.nested.value = 'mutated';
+    release();
+    await pending;
+    expect(executor).toHaveBeenCalledWith({ nested: { value: 'original' }, a: 1 });
+    expect(approved).toHaveBeenCalledTimes(1);
+    // Key order is JSON-insignificant, so the exact-ID callback is cached.
+    await port.dispatch({ ...call, args: { a: 1, nested: { value: 'original' } } });
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not return a cached result when Stop arrives during authority recheck', async () => {
+    const tools = [tool('worker_search')];
+    const executor = jest.fn(async () => ({ done: true }));
+    const executors = { worker_search: executor };
+    const receipt = await prepareNativeInvocation(owner('duplicate-stop', nativeToolInventoryDigest(tools, undefined, executors)));
+    await submitNativeInvocation(receipt);
+    let block = false;
+    let entered!: () => void;
+    let release!: () => void;
+    const atAuthority = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const stop = new AbortController();
+    const port = createNativeToolPort({ receipt, tools, localToolExecutors: executors,
+      service: {} as Parameters<typeof createNativeToolPort>[0]['service'],
+      authority: createNativeBrokerAuthority('lease-a', async () => {
+        if (block) { entered(); await gate; }
+      }), signal: stop.signal });
+    const call = { toolInvocationId: 'sdk-duplicate-stop', name: 'worker_search', args: {},
+      signal: new AbortController().signal };
+    await port.dispatch(call);
+    block = true;
+    const replay = port.dispatch(call);
+    await atAuthority;
+    stop.abort();
+    release();
+    await expect(replay).rejects.toThrow();
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
   it('pins executor references and serializes concurrent duplicate callbacks', async () => {
     const tools = [tool('worker_search')];
     let release!: () => void;

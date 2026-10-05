@@ -250,5 +250,11 @@ export async function markNativeToolEffectMayHaveStarted(entry: ToolReceipt): Pr
 }
 
 export function nativeToolFingerprint(name: string, args: Record<string, unknown>, inventoryDigest: string): string {
-  return digest([name, args, inventoryDigest]);
+  const canonical = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+    return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
+  };
+  return createHash('sha256').update(canonical([name, args, inventoryDigest])).digest('hex');
 }

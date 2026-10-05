@@ -145,16 +145,25 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
       if (!names.has(name) || !args || typeof args !== 'object' || Array.isArray(args)) {
         throw new Error('Native tool was not in the advertised inventory.');
       }
-      if (Buffer.byteLength(JSON.stringify(args), 'utf8') > 256 * 1024) {
+      // The SDK owns the callback object. Capture one JSON wire snapshot before
+      // any journal or approval await and use it through the final effect.
+      const argsJson = JSON.stringify(args);
+      if (!argsJson) throw new Error('Native tool arguments must be a JSON object.');
+      if (Buffer.byteLength(argsJson, 'utf8') > 256 * 1024) {
         throw new Error('Native tool arguments exceed the broker bound.');
       }
-      const fingerprint = nativeToolFingerprint(name, args, inventoryDigest);
+      const callArgs = deepFreeze(JSON.parse(argsJson) as Record<string, unknown>);
+      if (!callArgs || typeof callArgs !== 'object' || Array.isArray(callArgs)) {
+        throw new Error('Native tool arguments must be a JSON object.');
+      }
+      const fingerprint = nativeToolFingerprint(name, callArgs, inventoryDigest);
       const { entry, fresh } = await beginNativeTool(input.receipt, toolInvocationId, fingerprint);
       const combined = combineAbortSignals(input.signal, controller.signal, signal)!;
       if (!fresh) {
         if (entry.state === 'terminal' && entry.result) {
           combined.throwIfAborted();
           await input.authority.assertCurrent();
+          combined.throwIfAborted();
           return entry.result;
         }
         throw new Error('Native tool effect is unresolved; the original call cannot be replayed.');
@@ -164,10 +173,12 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
         await input.authority.assertCurrent();
         await input.beforeToolDispatch?.();
         combined.throwIfAborted();
+        await input.authority.assertCurrent();
+        combined.throwIfAborted();
       };
       const kind = kinds.get(name)!;
       await assertCurrent();
-      const approved = await input.requestToolApproval?.({ id: toolInvocationId, name, args });
+      const approved = await input.requestToolApproval?.({ id: toolInvocationId, name, args: callArgs });
       let result: CallToolResult;
       if (approved === false) {
         result = { content: [{ type: 'text', text: 'tool denied' }], isError: true };
@@ -182,13 +193,13 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
         await assertCurrent();
         await markNativeToolEffectMayHaveStarted(entry);
         await assertCurrent();
-        const output = await executors[name](args);
+        const output = await executors[name](callArgs);
         await input.authority.assertCurrent();
         await input.afterToolDispatch?.();
         result = { content: [{ type: 'text', text: JSON.stringify(output) }] };
       } else {
         const decoded = bound[name];
-        const effectiveArgs = await applyPresetArguments(args, decoded.presetArgs, decoded.context);
+        const effectiveArgs = await applyPresetArguments(callArgs, decoded.presetArgs, decoded.context);
         await assertCurrent();
         await input.authorizePersonaCoreMcp?.(decoded.server, decoded.nodeId);
         const freshness = assertToolIdentityFresh(name, decoded, input.service);
