@@ -19,7 +19,7 @@ jest.mock('child_process', () => {
 });
 
 // The route imports simple-git at module load; it is not used by the streaming path.
-jest.mock('simple-git', () => ({ __esModule: true, default: () => ({}) }));
+jest.mock('simple-git', () => ({ __esModule: true, simpleGit: () => ({}) }));
 
 import { POST } from '@/app/api/git/route';
 import { createNdjsonParser } from '@/shared/utils/ndjson';

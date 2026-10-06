@@ -3,10 +3,10 @@ jest.mock('@/utils/workspace', () => ({
   getWorkspaceDataDir: () => process.cwd(),
   remapLegacyDefaultWorkspaceReference: (value: string) => value,
 }));
-jest.mock('simple-git', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('simple-git', () => ({ __esModule: true, simpleGit: jest.fn() }));
 
 import { loadItem, saveItem } from '@/utils/storage/backend';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { resolveRuntimeHomeIsolation } from '@/backend/services/mcp/runtimeHomeIsolation';
 import { MCP_TRANSPORT_INVALID } from '@/backend/services/mcp/transportAdmission';

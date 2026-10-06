@@ -19,7 +19,7 @@ jest.mock('@/backend/services/workspace/backupRestoreFs', () => {
     },
   };
 });
-jest.mock('simple-git', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('simple-git', () => ({ __esModule: true, simpleGit: jest.fn() }));
 jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => mockWorkspace }));
 jest.mock('@/backend/services/packages/buildPackage', () => ({ mapInstallOrigin: jest.fn(), resolveDependencies: jest.fn() }));
 jest.mock('@/backend/services/mcp', () => ({ mcpService: {

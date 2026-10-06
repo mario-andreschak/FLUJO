@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import type { MCPServerConfig, MCPStdioConfig, EnvVarValue } from '@/shared/types/mcp';
 import type { McpInstallOrigin } from '@/shared/types/package';
 import { getWorkspaceDataDir } from '@/utils/workspace';
