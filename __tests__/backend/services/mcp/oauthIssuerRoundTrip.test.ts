@@ -22,6 +22,7 @@ async function loaded(): Promise<MCPStreamableConfig> {
 it('round-trips operator issuer, exact SDK credential stamps and issued_at through actual config storage methods', async () => {
   const config: MCPStreamableConfig = { name: 'issuer-test', transport: 'streamable', serverUrl: 'https://mcp.example.test/mcp',
     rootPath: '', env: {}, disabled: true, source: { type: 'remote' },
+    _buildCommand: '', _installCommand: '',
     oauthClientId: 'synthetic-manual-client', oauthIssuer: issuer };
   await saveConfig(new Map([[config.name, config]]));
   const provider = new MCPOAuthClientProvider(await loaded(), 'http://127.0.0.1:4200/api/oauth/callback');

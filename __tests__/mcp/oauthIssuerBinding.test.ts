@@ -30,6 +30,7 @@ beforeEach(() => {
   mockSaveConfigs.mockReset().mockResolvedValue({ success: true });
   mockDecrypt.mockReset().mockResolvedValue('synthetic-manual-secret');
   config = { name: 'issuer-test', transport: 'streamable', serverUrl, disabled: true, rootPath: '', env: {},
+    _buildCommand: '', _installCommand: '',
     oauthClientInformation: { ...oldClient }, oauthTokens: { ...oldTokens }, oauthCodeVerifier: 'synthetic-verifier' };
   mockLoadConfigs.mockResolvedValue([config]);
   provider = new MCPOAuthClientProvider(config, redirectUri);
