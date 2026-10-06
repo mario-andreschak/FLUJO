@@ -4,7 +4,7 @@ import path from 'node:path';
 
 jest.mock('node:fs/promises', () => ({
   __esModule: true,
-  default: { lstat: jest.fn(), readdir: jest.fn(), readFile: jest.fn() },
+  default: { lstat: jest.fn(), readdir: jest.fn(), readFile: jest.fn(), open: jest.fn() },
 }));
 jest.mock('@/backend/services/mcp/shippedServers', () => ({
   SHIPPED_MCP_SERVERS: [], shippedMcpAppRoot: () => '/unused',
@@ -40,26 +40,35 @@ beforeEach(() => {
     'node_modules/ignored.js': 'dependency contents', '.git/ignored': 'Git contents',
   }));
   reads = new Map(); links = new Set(); mutateOnSecondRuntimeRead = false;
-  mockFs.lstat.mockImplementation(async file => {
+  const stats = (file: unknown) => {
     const name = relative(file);
     const directory = !name || [...files.keys()].some(key => key.startsWith(`${name}/`));
     if (!directory && !files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-    return { isDirectory: () => directory, isFile: () => files.has(name), isSymbolicLink: () => links.has(name) } as never;
-  });
+    return {
+      isDirectory: () => directory, isFile: () => files.has(name), isSymbolicLink: () => links.has(name),
+      dev: BigInt(1), ino: BigInt([...files.keys()].indexOf(name) + 1),
+      size: BigInt(Buffer.byteLength(files.get(name) ?? '')), mtimeNs: BigInt(1), ctimeNs: BigInt(1),
+    };
+  };
+  mockFs.lstat.mockImplementation(async file => stats(file) as never);
   mockFs.readdir.mockImplementation(async file => {
     const name = relative(file), prefix = name ? `${name}/` : '';
     // Deliberately unsorted: the on-disk directory order is not the digest order.
     return [...new Set([...files.keys()].filter(key => key.startsWith(prefix))
       .map(key => key.slice(prefix.length).split('/')[0]))].reverse() as never;
   });
-  mockFs.readFile.mockImplementation((async (file, encoding) => {
-    const name = relative(file), count = (reads.get(name) ?? 0) + 1;
+  const read = (name: string, encoding?: unknown) => {
+    const count = (reads.get(name) ?? 0) + 1;
     reads.set(name, count);
     const content = name === 'dist/index.js' && mutateOnSecondRuntimeRead && count > 1
       ? "export const value = 'unverified edit';\n" : files.get(name);
     if (content === undefined) throw new Error(`Unexpected read: ${name}`);
     return encoding === 'utf8' ? content : Buffer.from(content);
-  }) as typeof fs.readFile);
+  };
+  mockFs.readFile.mockImplementation((async (file, encoding) => read(relative(file), encoding)) as typeof fs.readFile);
+  mockFs.open.mockImplementation(async file => ({
+    stat: async () => stats(file), readFile: async () => read(relative(file)), close: jest.fn(async () => {}),
+  }) as never);
 });
 
 it('keeps the version-1 runtime digest and reads each admitted asset once', async () => {

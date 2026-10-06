@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import * as nodeModule from 'node:module';
 import { SHIPPED_MCP_SERVERS, shippedMcpAppRoot } from './shippedServers';
 
@@ -41,6 +41,33 @@ async function copyAsset(source: string, destination: string): Promise<void> {
   }
 }
 
+function samePackageFile(first: BigIntStats, second: BigIntStats): boolean {
+  return first.dev === second.dev && first.ino === second.ino && first.size === second.size
+    && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs;
+}
+
+async function readPackageAsset(file: string, expected: BigIntStats): Promise<Buffer> {
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !samePackageFile(expected, opened)) {
+      throw new Error('A copied package asset changed before it could be read.');
+    }
+    // Read the admitted object, even if the pathname changes after admission.
+    // Hard links remain supported; parent-directory containment is unchanged.
+    const bytes = await handle.readFile();
+    const named = await fs.lstat(file, { bigint: true });
+    if (named.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
+    if (!named.isFile() || BigInt(bytes.length) !== opened.size
+      || !samePackageFile(opened, await handle.stat({ bigint: true })) || !samePackageFile(opened, named)) {
+      throw new Error('A copied package asset changed while it was being read.');
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function packageDigests(root: string): Promise<{ assetSha256: string; runtimeSha256: string }> {
   const hash = createHash('sha256');
   const runtimeHash = createHash('sha256');
@@ -54,7 +81,7 @@ async function packageDigests(root: string): Promise<{ assetSha256: string; runt
       const runtime = prefix ? parentRuntime : ['package.json', 'dist', 'scripts'].includes(name);
       const relative = prefix ? `${prefix}/${name}` : name;
       const file = path.join(directory, name);
-      const stat = await fs.lstat(file);
+      const stat = await fs.lstat(file, { bigint: true });
       if (stat.isSymbolicLink()) throw new Error('A copied package contains an unsupported linked asset.');
       if (stat.isDirectory()) {
         update(`directory:${relative}\0`, runtime);
@@ -62,7 +89,7 @@ async function packageDigests(root: string): Promise<{ assetSha256: string; runt
       } else if (stat.isFile()) {
         // Both digests must describe these same bytes. A second runtime walk
         // could hash edits that were never checked against template provenance.
-        update(`file:${relative}\0${createHash('sha256').update(await fs.readFile(file)).digest('hex')}\0`, runtime);
+        update(`file:${relative}\0${createHash('sha256').update(await readPackageAsset(file, stat)).digest('hex')}\0`, runtime);
       } else throw new Error('A copied package contains an unsupported asset.');
     }
   };
