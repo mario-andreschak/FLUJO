@@ -59,7 +59,13 @@ import {
   elicitationConfigKey,
 } from "./elicitation";
 import { resolveAndDecryptApiKey } from "@/backend/utils/resolveGlobalVars";
-import { normalizeHeaderValue, isMaskedHeaderValue } from "@/utils/mcp/headers";
+import { isMaskedHeaderValue } from "@/utils/mcp/headers";
+import {
+  isMcpEnvironmentName,
+  isMcpHeaderName,
+  mcpStringDataRecord,
+  ownMcpStringValue,
+} from '@/utils/mcp/connectionData';
 import { MCPHeaderValue } from "@/shared/types/mcp/mcp";
 import {
   MCP_APPS_EXTENSION_ID,
@@ -161,18 +167,15 @@ export async function resolveConfigHeaders(
   // the saved config, so rotating the global had no effect and package re-export
   // could no longer see the binding.
   if (config.env && typeof config.env === "object") {
-    const resolvedEnv: Record<string, string> = Object.create(null);
+    const resolvedEnv = new Map<string, string>();
     for (const [key, raw] of Object.entries(config.env)) {
-      if (!key) continue;
-      const value =
-        raw && typeof raw === "object" && "value" in raw
-          ? ((raw as { value?: string }).value ?? "")
-          : ((raw as string) ?? "");
+      if (!isMcpEnvironmentName(key)) continue;
+      const value = ownMcpStringValue(raw);
       if (!value || isMaskedHeaderValue(value)) continue;
       const out = await resolveAndDecryptApiKey(value);
-      if (out) resolvedEnv[key] = out;
+      if (out) resolvedEnv.set(key, out);
     }
-    resolvedConfig = { ...resolvedConfig, env: resolvedEnv } as MCPServerConfig;
+    resolvedConfig = { ...resolvedConfig, env: mcpStringDataRecord(resolvedEnv) } as MCPServerConfig;
   }
 
   if (config.transport !== "streamable" && config.transport !== "sse") {
@@ -182,10 +185,10 @@ export async function resolveConfigHeaders(
   if (!c.headers || typeof c.headers !== "object") {
     return resolvedConfig;
   }
-  const resolved: Record<string, string> = Object.create(null);
+  const resolved = new Map<string, string>();
   for (const [key, raw] of Object.entries(c.headers)) {
-    if (!key) continue;
-    const { value } = normalizeHeaderValue(raw, key);
+    if (!isMcpHeaderName(key)) continue;
+    const value = ownMcpStringValue(raw);
     if (!value) continue;
     // Defence-in-depth (#137): never forward the mask placeholder ("********") as a literal
     // header. testConnection hydrates masked SECRET headers from the stored config before this
@@ -194,10 +197,10 @@ export async function resolveConfigHeaders(
     if (isMaskedHeaderValue(value)) continue;
     const out = await resolveAndDecryptApiKey(value);
     if (out) {
-      resolved[key] = out;
+      resolved.set(key, out);
     }
   }
-  return { ...resolvedConfig, headers: resolved } as MCPServerConfig;
+  return { ...resolvedConfig, headers: mcpStringDataRecord(resolved) } as MCPServerConfig;
 }
 
 /**
@@ -213,29 +216,27 @@ export async function resolveConfigHeaders(
 export function flattenCustomHeaders(
   headers: Record<string, MCPHeaderValue>,
 ): Record<string, string> {
-  const out: Record<string, string> = Object.create(null);
+  const out = new Map<string, string>();
   for (const [key, raw] of Object.entries(headers)) {
-    if (!key) continue;
-    const { value } = normalizeHeaderValue(raw, key);
+    if (!isMcpHeaderName(key)) continue;
+    const value = ownMcpStringValue(raw);
     if (typeof value === "string" && value.length > 0) {
-      out[key] = value;
+      out.set(key, value);
     }
   }
-  return out;
+  return mcpStringDataRecord(out);
 }
 
 function transformEnv(env?: Record<string, unknown>): Record<string, string> {
-  const transformed: Record<string, string> = Object.create(null);
+  const transformed = new Map<string, string>();
   if (env) {
     for (const [key, envVar] of Object.entries(env)) {
-      if (envVar && typeof envVar === "object" && "value" in envVar) {
-        transformed[key] = (envVar as { value: string }).value;
-      } else {
-        transformed[key] = envVar as string;
-      }
+      if (!isMcpEnvironmentName(key)) continue;
+      const value = ownMcpStringValue(envVar);
+      if (value !== undefined) transformed.set(key, value);
     }
   }
-  return transformed;
+  return mcpStringDataRecord(transformed);
 }
 
 /**
