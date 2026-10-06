@@ -2930,6 +2930,107 @@
         "local-owner"
       ],
       "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-attempt2-terminal-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T13:21:52.987Z",
+      "environment": {
+        "platform": "Exact attempt2 GitHub REST metadata and original dependency audit artifact",
+        "node": "No additional runtime or installation qualification by Docs",
+        "provider": "GitHub API and retained original npm audit payload; no live/model provider",
+        "tools": "Original timestamp/full-step joins; SHA-256 server ZIP/member comparison; no target execution"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/artifacts/11413899334",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "Read retained original artifact 11413899334; server digest and archive member bytes independently joined without an audit rerun"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06.json",
+          "sha256": "df8cc68d04f37b751bbcf723b97c60cd492a976464588a69266fdfa91a40d858",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-attempt2.json",
+          "sha256": "d602fda1f0e2693a20f14ff9c9bf67fb9e9ba8653e712b14eedfb3d7fb744ad9",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/verify-jobs-attempt2.json",
+          "sha256": "08139b4bd8f157b32de4e7df72dd4e40f9366784e1f8dc580005e96bad3d0ae0",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-original-jobs.json",
+          "sha256": "422901237ac1102396cfd02ba92b7e1eddeec181c8db0385c6731c2836e04f86",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-attempt2.json",
+          "sha256": "ab8b1641bfff4e426e9b7fb62ebae02f861595e3cafcba418e996cd12f530fc7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/installer-jobs-attempt2.json",
+          "sha256": "1db8a4857329bb038f1063f56aa0d3e31e529264f7a273daecba32319cea9190",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit-artifact.json",
+          "sha256": "9780ec4fee553aaa0da987bc68dcfcfcaf41b2cef83c3c5e7d150c5edc0be44a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/head-check-runs.json",
+          "sha256": "f643aa56d2086ca2e5f86fdb1e44a84daf56fa4f86876f23abf6e2630637f543",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-terminal-2026-10-06/dependency-audit.json",
+          "sha256": "6fecb51926241ce147815114e0a5779fdd49dc9edcc6207f2fe0f056388fe53b",
+          "verification": "local"
+        }
+      ],
+      "scope": "Terminal e622 attempt2 verify failed while installer workflow succeeded. Five verify successes and one Pester execution were retained from attempt1 under new IDs. Actual dependency audit reports three critical and one high affected package, with 21 moderate.",
+      "limits": [
+        "Reuse is independently joined here from original and later exact timestamps and complete API steps despite changed job IDs. Later runner wrapper metadata differs and is retained explicitly; it is not evidence of fresh execution. Queue retains the separate original runner/log joins.",
+        "The dependency audit alone is downloaded original producer data. Other raw CI artifacts, installer EXE identity/signature/installation and full runtime profiles were not requalified by Docs.",
+        "Analysis-job completion and individual success do not supply native findings disposition, complete release acceptance or human/grade acceptance.",
+        "Attempt2 ordinary verification is failed: dependency-security and aggregate verification failed. Eleven successful job records include five retained original executions; the diagnostic skip is excluded.",
+        "The installer workflow success includes a retained original Pester execution. Docs does not qualify the new EXE digest, signature or installation by reading workflow metadata.",
+        "npm reports 25 affected packages: three critical, one high and 21 moderate. These are metadata affected-package counts, not unique advisory counts or new independently scored threat severities.",
+        "The original failed attempt1, fixed 12:48 attempt2 snapshot, v25/v33 cuts, all previous failures and accepted #791/#805 components remain unchanged.",
+        "No new recovery, audit, model call, target workload or multi-thousand-pin inventory was entered for this record."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -3091,7 +3192,8 @@
       "evidenceIds": [
         "dependency-audit-2026-10-03",
         "dependency-remediation-59b65de8",
-        "dependency-audit-hosted-b8cf905f"
+        "dependency-audit-hosted-b8cf905f",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ]
     },
     {
@@ -3114,7 +3216,8 @@
         "mapped-integration-db4bb26f-pending",
         "ordinary-ci-b078484c-passed",
         "ordinary-ci-e622ccfe-failure",
-        "ordinary-ci-e622ccfe-attempt2-observation"
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ]
     }
   ],
@@ -3176,7 +3279,8 @@
         "mapped-integration-db4bb26f-pending",
         "ordinary-ci-b078484c-passed",
         "ordinary-ci-e622ccfe-failure",
-        "ordinary-ci-e622ccfe-attempt2-observation"
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3222,7 +3326,8 @@
         "recording-ad0b1a9b-pending",
         "native-codeql-b078484c-failure",
         "recording-ad0b1a9b-passed",
-        "codeql-e622ccfe-cancelled"
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -3322,7 +3427,8 @@
         "recording-ad0b1a9b-passed",
         "ordinary-ci-e622ccfe-failure",
         "codeql-e622ccfe-cancelled",
-        "ordinary-ci-e622ccfe-attempt2-observation"
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3584,7 +3690,8 @@
         "native-codeql-b078484c-failure",
         "ordinary-ci-e622ccfe-failure",
         "codeql-e622ccfe-cancelled",
-        "ordinary-ci-e622ccfe-attempt2-observation"
+        "ordinary-ci-e622ccfe-attempt2-observation",
+        "ordinary-ci-e622ccfe-attempt2-terminal-failure"
       ],
       "budgetIds": [],
       "gateIds": [

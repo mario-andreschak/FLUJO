@@ -221,3 +221,15 @@ Any original successful jobs carried by GitHub must retain their original job
 identity; this reuse is not new execution. Recovery remains unqualified until its
 complete exact-source reports and original evidence are reviewed. This Docs
 observation initiated no retry or target workload.
+
+The [later terminal record](evidence/current-candidate-e622ccfe-terminal-2026-10-06.json)
+keeps the failed attempt-2 verification, successful installer workflow and actual
+dependency-audit failure separate. Eleven successful verify job records include
+five original executions retained under new IDs; the installer similarly retains
+its original Pester execution. Timestamp and full-step equality prove this reuse.
+Later runner wrapper metadata differs; Queue retains the separate original
+runner/log joins. An ID-only comparison was insufficient in the fixed 12:48 cut,
+which stays immutable. The original audit server ZIP and its JSON member are
+joined by bytes and digest: 25 affected packages, including three critical and
+one high. No audit or recovery was repeated and no installer identity/signature,
+profile, human, grade or native findings acceptance is supplied by this update.

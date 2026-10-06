@@ -419,3 +419,12 @@ records verify and installer attempt 2 at the same candidate. The original attem
 failure stays unchanged. Any successful jobs reused from attempt 1 must retain
 their original identity and do not count as fresh execution. Full recovery qualification and
 scanner, release, human and grade acceptance remain pending.
+
+The later [terminal recovery record](evidence/current-candidate-e622ccfe-terminal-2026-10-06.json)
+records failed verification and a successful installer workflow. Five verify
+executions and the installer's Pester execution were retained from attempt 1
+under new IDs. Their original timestamps and full steps match; they are not fresh
+execution. The fixed 12:48 snapshot's ID-only reuse flags remain unchanged and
+are explicitly limited by this later correction. The original audit reports three
+critical, one high and 21 moderate affected packages. Scanner job completion and
+installer workflow success grant no findings clearance or installed acceptance.
