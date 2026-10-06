@@ -413,3 +413,9 @@ completed scanner analysis with individual finding review; selected distributed
 artifacts and per-profile installation/runtime/recovery evidence; and rubric,
 numeric-envelope and named-owner agreement. Actual maintainer, contributor and
 sustained-use observations are still required for independent reassessment.
+
+The [separate recovery observation](evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json)
+records verify and installer attempt 2 at the same candidate. The original attempt 1
+failure stays unchanged. Any successful jobs reused from attempt 1 must retain
+their original identity and do not count as fresh execution. Full recovery qualification and
+scanner, release, human and grade acceptance remain pending.

@@ -214,3 +214,10 @@ Fresh validation belongs to the resulting Docs source. The fixed v25/v33 reports
 and B078/445/cb1 qualification stay immutable; no prior result qualifies the new
 composition. Release/profile acceptance, all named human responsibilities, rubric
 agreement and the independent nine-row assessment remain pending.
+
+A [separate attempt-2 snapshot](evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json)
+retains the verify and installer recovery metadata without changing attempt 1.
+Any original successful jobs carried by GitHub must retain their original job
+identity; this reuse is not new execution. Recovery remains unqualified until its
+complete exact-source reports and original evidence are reviewed. This Docs
+observation initiated no retry or target workload.
