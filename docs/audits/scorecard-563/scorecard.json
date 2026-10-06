@@ -2857,6 +2857,79 @@
         "local-owner"
       ],
       "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-attempt2-observation",
+      "kind": "source-check",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T12:48:53.229Z",
+      "environment": {
+        "platform": "Attempt-specific GitHub REST metadata",
+        "node": "Runtime artifacts and exact binaries not qualified by this API snapshot",
+        "provider": "GitHub API; no live/model provider",
+        "tools": "gh api; original success job-id comparison"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/2/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397040/attempts/2"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06.json",
+          "sha256": "dc61f2e3acdbe1dfde44bacf1707ebc1f4cbac429f6c5d994cd57526766b4d30",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-attempt2.json",
+          "sha256": "42d35622aa06ea6af48a30e6832324070c2bfac148487deb667d43fe6af71a25",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/verify-jobs-attempt2.json",
+          "sha256": "392cd59a1bef8fcee2083e727f373a1f365fab872929d8b17a1ca17571956e65",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt1.json",
+          "sha256": "c4c25d12dc391803e5feb19f2873392449ff531a2e1343901530f8d2ae7fcf21",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-attempt2-2026-10-06/installer-attempt2.json",
+          "sha256": "65dc4ab0cb91c1fcc46e6d4cb938d1daa29dfbbf0f8fda5b2530ad303042556c",
+          "verification": "local"
+        }
+      ],
+      "scope": "Separate verify and installer recovery attempt2 metadata at exact e622ccfe, with original failed attempt1 and reused successful job IDs kept distinct. Complete recovery qualification remains pending.",
+      "limits": [
+        "Recovery API metadata is distinct from the immutable original failed attempt. Job IDs shared with original successful attempt1 jobs are explicitly labelled reused.",
+        "GitHub may carry original successful jobs into recovery. Their presence in attempt2 metadata is not a fresh execution or a new assertion/runtime measurement.",
+        "This capture dispatched neither recovery nor tests. Original logs, annotations, artifacts and runtime controls were not downloaded or requalified.",
+        "No full recovery, native findings, selected release, sustained use, human or independent-grade acceptance is inferred from active or successful individual jobs."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397040"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -3040,7 +3113,8 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "ordinary-ci-b078484c-passed",
-        "ordinary-ci-e622ccfe-failure"
+        "ordinary-ci-e622ccfe-failure",
+        "ordinary-ci-e622ccfe-attempt2-observation"
       ]
     }
   ],
@@ -3101,7 +3175,8 @@
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
         "ordinary-ci-b078484c-passed",
-        "ordinary-ci-e622ccfe-failure"
+        "ordinary-ci-e622ccfe-failure",
+        "ordinary-ci-e622ccfe-attempt2-observation"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3246,7 +3321,8 @@
         "native-codeql-b078484c-failure",
         "recording-ad0b1a9b-passed",
         "ordinary-ci-e622ccfe-failure",
-        "codeql-e622ccfe-cancelled"
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-observation"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3507,7 +3583,8 @@
         "ordinary-ci-b078484c-passed",
         "native-codeql-b078484c-failure",
         "ordinary-ci-e622ccfe-failure",
-        "codeql-e622ccfe-cancelled"
+        "codeql-e622ccfe-cancelled",
+        "ordinary-ci-e622ccfe-attempt2-observation"
       ],
       "budgetIds": [],
       "gateIds": [
