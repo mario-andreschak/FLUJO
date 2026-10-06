@@ -70,10 +70,20 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
   const awaitingControl = useRef(false);
   const seq = useRef(0);
   const stream = useRef<EventSource | null>(null);
+  const streamGeneration = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mounted = useRef(true);
+  const detach = useCallback(() => {
+    streamGeneration.current++;
+    clearTimeout(retryTimer.current);
+    retryTimer.current = undefined;
+    stream.current?.close();
+    stream.current = null;
+  }, []);
   const contextRef = useRef(context); contextRef.current = context;
   const refresh = useCallback(async (id: string) => {
     const canonical = await chatService.getConversation(id);
-    if (idRef.current !== id) return;
+    if (!mounted.current || idRef.current !== id) return;
     setConversation(canonical);
     const current = targetRef.current;
     const ownedTarget: AvatarWorkTarget = canonical.personaId
@@ -90,10 +100,13 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
     if (canonical.lastError) setError(canonical.lastError.message);
     return canonical;
   }, []);
-  const attach = useCallback((id: string) => {
-    stream.current?.close(); seq.current = 0;
+  const attach: (id: string, fromSeq?: number) => void = useCallback((id: string, fromSeq = 0) => {
+    detach();
+    if (!mounted.current || idRef.current !== id) return;
+    const generation = streamGeneration.current;
+    seq.current = fromSeq - 1;
     stream.current = chatService.subscribeToEvents(id, { onEvent(event) {
-      if (idRef.current !== id || event.conversationId !== id) return;
+      if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id || event.conversationId !== id) return;
       if (event.type === 'model:delta' || event.type === 'tool:progress') return;
       if (event.seq <= seq.current) return;
       seq.current = event.seq;
@@ -108,16 +121,36 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
       if (event.type === 'error') { setPhase('error'); }
       if (event.type === 'run:done') awaitingControl.current = false;
       if (event.type === 'run:done' || event.type === 'message') void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
-    }, onError() { void refresh(id).catch(() => setError(worldCopy(locale).unavailable)); } }, 0, { activityOnly: true });
-  }, [refresh, locale]);
+    }, onError() {
+      if (mounted.current && streamGeneration.current === generation && idRef.current === id) void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
+    }, onReset(control) {
+      if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id) return;
+      detach();
+      const recoveryGeneration = streamGeneration.current;
+      void refresh(id).then(() => {
+        if (!mounted.current || streamGeneration.current !== recoveryGeneration || idRef.current !== id) return;
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = undefined;
+          if (mounted.current && streamGeneration.current === recoveryGeneration && idRef.current === id) attach(id, control.nextSeq);
+        }, 3000);
+      }).catch(() => { if (mounted.current && idRef.current === id) setError(worldCopy(locale).unavailable); });
+    } }, fromSeq, { activityOnly: true });
+  }, [detach, refresh, locale]);
   useEffect(() => {
+    mounted.current = true;
     const saved = window.localStorage.getItem(workspaceLocalStorageKey('flujo-avatar:conversation'));
     if (saved) {
       idRef.current = saved;
-      void refresh(saved).then(() => attach(saved)).catch(() => { idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation')); });
+      const generation = streamGeneration.current;
+      void refresh(saved).then(() => {
+        if (mounted.current && streamGeneration.current === generation && idRef.current === saved) attach(saved);
+      }).catch(() => {
+        if (!mounted.current || streamGeneration.current !== generation || idRef.current !== saved) return;
+        idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation'));
+      });
     }
-    return () => { stream.current?.close(); };
-  }, [refresh, attach]);
+    return () => { mounted.current = false; detach(); };
+  }, [detach, refresh, attach]);
 
   const ensureConversation = async () => {
     if (idRef.current) return idRef.current;
@@ -201,6 +234,6 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
   };
   return { conversation, target, messages, phase, busy, error, activity, send,
     stop: async () => { if (idRef.current) { await chatService.cancel(idRef.current); await refresh(idRef.current); } },
-    newChat: (next: AvatarWorkTarget = targetRef.current) => { if (busy || sending.current || injecting.current) return false; stream.current?.close(); idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation')); targetRef.current = next; setTarget(next); setConversation(null); setMessages([]); setPhase('idle'); setError(null); setActivity(null); return true; },
+    newChat: (next: AvatarWorkTarget = targetRef.current) => { if (busy || sending.current || injecting.current) return false; detach(); idRef.current = null; window.localStorage.removeItem(workspaceLocalStorageKey('flujo-avatar:conversation')); targetRef.current = next; setTarget(next); setConversation(null); setMessages([]); setPhase('idle'); setError(null); setActivity(null); return true; },
   };
 }

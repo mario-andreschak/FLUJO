@@ -1,4 +1,4 @@
-import { promises as fs, readFileSync } from 'fs';
+import { constants, promises as fs, readFileSync } from 'fs';
 import path from 'path';
 import {
   ExecutionEvent,
@@ -454,6 +454,57 @@ export async function readConversationLog(conversationId: string): Promise<Execu
     log.warn(`Skipped ${skipped} unparseable line(s) in conversation log ${conversationId} (truncated append?)`);
   }
   return events;
+}
+
+export const SSE_LOG_REPLAY_LIMITS = Object.freeze({ maxBytes: 1024 * 1024, maxEvents: 1000 });
+
+/** Bounded SSE projection only. Full-history APIs and durable writes stay unchanged. */
+export async function readConversationLogForReplay(
+  conversationId: string, fromSeq: number, signal?: AbortSignal,
+): Promise<{ events?: ExecutionEvent[]; limited: boolean }> {
+  signal?.throwIfAborted();
+  if (!SAFE_ID.test(conversationId) || !Number.isSafeInteger(fromSeq) || fromSeq < 0) return { limited: true };
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(logFilePath(conversationId), constants.O_RDONLY | constants.O_NONBLOCK);
+    signal?.throwIfAborted();
+    const stat = await handle.stat();
+    signal?.throwIfAborted();
+    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > SSE_LOG_REPLAY_LIMITS.maxBytes) {
+      return { limited: true };
+    }
+    const buffer = Buffer.alloc(stat.size + 1);
+    let read = 0;
+    while (read < buffer.length) {
+      signal?.throwIfAborted();
+      const result = await handle.read(buffer, read, Math.min(64 * 1024, buffer.length - read), read);
+      signal?.throwIfAborted();
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    if (read !== stat.size) return { limited: true };
+    const content = buffer.toString('utf8', 0, read);
+    const events: ExecutionEvent[] = [];
+    let start = 0;
+    let lines = 0;
+    while (start < content.length) {
+      signal?.throwIfAborted();
+      if (++lines > SSE_LOG_REPLAY_LIMITS.maxEvents) return { limited: true };
+      const end = content.indexOf('\n', start);
+      const line = content.slice(start, end < 0 ? undefined : end);
+      start = end < 0 ? content.length : end + 1;
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as ExecutionEvent;
+        if (Number.isSafeInteger(event.seq) && event.seq >= fromSeq) events.push(event);
+      } catch { return { limited: true }; } // SSE reloads a snapshot; full-history tolerance is unchanged.
+    }
+    return { events, limited: false };
+  } catch (error) {
+    signal?.throwIfAborted();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { limited: false };
+    return { limited: true };
+  } finally { await handle?.close(); }
 }
 
 /** Remove a conversation's log file (conversation deletion). Idempotent. */

@@ -33,6 +33,7 @@ jest.mock('@/backend/execution/flow/loadConversationState', () => ({
 
 import { GET } from '@/app/v1/chat/conversations/[conversationId]/events/route';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import {
   _setConversationLogDirForTests,
   flushConversationLog,
@@ -314,9 +315,9 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
   // Drop the in-memory channel + ring buffer for a conversation (simulates the
   // post-run:done channel GC / a process restart).
   const evictBuffer = (conversationId: string) => {
-    const channels = (executionEventBus as unknown as { channels: Map<string, unknown> }).channels;
-    for (const key of channels.keys()) {
-      if (key === conversationId || key.endsWith(`\u0000${conversationId}`)) channels.delete(key);
+    const internals = executionEventBus as unknown as { channels: Map<string, unknown>; removeChannel: (key: string, channel: unknown) => void };
+    for (const [key, channel] of internals.channels) {
+      if (key === conversationId || key.endsWith(`\u0000${conversationId}`)) internals.removeChannel(key, channel);
     }
   };
 
@@ -463,5 +464,71 @@ describe('events route SSE replay from durable JSONL after buffer eviction', () 
     } finally {
       abort.abort();
     }
+  });
+});
+
+describe('conversation execution stream limits', () => {
+  it('rejects the fifth subscription before durable replay begins', async () => {
+    const id = 'admission-conversation';
+    const releases = Array.from({ length: 4 }, () => executionStreamAdmission.reserve(id)!);
+    const open = jest.spyOn(fs, 'open');
+    try {
+      const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
+      expect(response.status).toBe(503);
+      expect(response.headers.get('Retry-After')).toBe('3');
+      expect(open).not.toHaveBeenCalled();
+    } finally { open.mockRestore(); releases.forEach(release => release()); }
+  });
+
+  it('recovers activity whose latest run boundary has been byte-evicted', async () => {
+    const id = 'evicted-activity';
+    emit(id, { type: 'run:start', flowId: 'f' });
+    emit(id, { type: 'model:delta', messageId: 'draft', delta: 'x'.repeat(4 * 1024 * 1024 + 1) });
+    emit(id, { type: 'run:paused', reason: 'debug' });
+    const response = await GET(makeRequest(id, 0, new AbortController().signal, { activityOnly: true }), { params: Promise.resolve({ conversationId: id }) });
+    const body = await response.text();
+    expect(body).toContain('"reason":"replay-gap"');
+    expect(body).toContain('"nextSeq":3');
+    expect(executionEventBus.currentSeq(id)).toBe(3);
+    expect(executionEventBus.getBufferedSince(id, 0)).toMatchObject([{ type: 'run:paused', seq: 2 }]);
+  });
+
+  it('cancels promptly during replay and holds native admission until the read and close settle', async () => {
+    const id = 'cancel-bounded-replay';
+    const before = executionStreamAdmission.diagnostics();
+    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
+    let complete!: (value: { bytesRead: number }) => void;
+    const pending = new Promise<{ bytesRead: number }>(resolve => { complete = resolve; });
+    let closed!: () => void; const closeCompleted = new Promise<void>(resolve => { closed = resolve; });
+    const close = jest.fn(async () => { closed(); });
+    const open = jest.spyOn(fs, 'open').mockResolvedValueOnce({
+      stat: async () => ({ isFile: () => true, size: 10 }),
+      read: () => { enter(); return pending; }, close,
+    } as never);
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe');
+    try {
+      const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
+      await entered;
+      await response.body!.cancel();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, replayReads: before.replayReads + 1 });
+      expect(close).not.toHaveBeenCalled();
+      complete({ bytesRead: 0 });
+      await closeCompleted; await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(executionStreamAdmission.diagnostics().replayReads).toBe(before.replayReads);
+      expect(subscribe).not.toHaveBeenCalled();
+    } finally { complete({ bytesRead: 0 }); open.mockRestore(); subscribe.mockRestore(); }
+  });
+
+  it('overlarge durable replay requests snapshot recovery without invoking a full file read', async () => {
+    const id = 'large-durable-replay';
+    const read = jest.fn(); const close = jest.fn(async () => {});
+    const open = jest.spyOn(fs, 'open').mockResolvedValueOnce({
+      stat: async () => ({ isFile: () => true, size: 1024 * 1024 + 1 }), read, close,
+    } as never);
+    try {
+      const response = await GET(makeRequest(id, 0, new AbortController().signal), { params: Promise.resolve({ conversationId: id }) });
+      expect(await response.text()).toContain('"reason":"replay-gap"');
+      expect(read).not.toHaveBeenCalled(); expect(close).toHaveBeenCalledTimes(1);
+    } finally { open.mockRestore(); }
   });
 });

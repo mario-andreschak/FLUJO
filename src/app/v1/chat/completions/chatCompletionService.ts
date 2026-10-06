@@ -385,6 +385,9 @@ async function processPersonaChatCompletion(
 ) {
   const startedAt = Date.now();
   const effectiveConvId = conversationId || crypto.randomUUID();
+  const snapshotReplayFrom = data.appendMessages || !userTurn
+    ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
+  const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
   const submission = await submitPersonaFlowDispatch({
     personaId: target.personaId,
     idempotencyKey: personaIdempotencyKey(target, data, effectiveConvId, {
@@ -449,7 +452,7 @@ async function processPersonaChatCompletion(
     // Persona execution emits through runFlow's existing conversation event
     // bus. Its replay buffer closes the race between durable submit and SSE
     // subscription, without starting a second fire-and-forget run here.
-    return createStreamingResponse(data.model, effectiveConvId);
+    return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq);
   }
 
   let record = submission.dispatch;
@@ -554,6 +557,9 @@ export async function processChatCompletion(
   if (data.stream === true) {
     // Generate a conversation ID if not provided
     const effectiveConvId = conversationId || crypto.randomUUID();
+    const snapshotReplayFrom = data.appendMessages || !userTurn
+      ? FlowExecutor.conversationStates.get(effectiveConvId)?.messages.length : undefined;
+    const streamFromSeq = executionEventBus.currentSeq(effectiveConvId);
     log.info(`Streaming requested for conversation ${effectiveConvId}. Starting async processing.`);
 
     // Start processing asynchronously (don't await)
@@ -599,7 +605,7 @@ export async function processChatCompletion(
       });
 
     // Return streaming response immediately
-    return createStreamingResponse(data.model, effectiveConvId);
+    return createStreamingResponse(data.model, effectiveConvId, snapshotReplayFrom, streamFromSeq);
   } else {
     // Non-streaming path - use the internal function directly
     return processChatCompletionInternal(data, flujo, requireApproval, flujodebug, conversationId, continueDebug, userTurn);
@@ -740,19 +746,37 @@ function createDirectModelStreamingResponse(
 // the in-memory conversationStates map.
 export function createStreamingResponse(
   model: string,
-  conversationId: string
+  conversationId: string,
+  snapshotReplayFrom?: number,
+  requestFromSeq?: number,
 ) {
+  if (!executionEventBus.ensureConversationProjection(conversationId)) {
+    return NextResponse.json({ error: { message: 'Execution stream capacity exhausted', type: 'api_error' } }, {
+      status: 503, headers: { 'Retry-After': '3' },
+    });
+  }
   const encoder = new TextEncoder();
   const chunkId = `chatcmpl-${Date.now()}`; // Use the same ID for all chunks in this stream
   const createdTimestamp = Math.floor(Date.now() / 1000);
   log.debug('create streaming response (event-bus driven)', { conversationId });
 
+  let cancelStream = () => {};
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
       let unsubscribe: (() => void) | null = null;
       // Replay + live can both deliver an event; de-dupe on monotonic seq.
-      let lastSeq = -1;
+      const fromSeq = requestFromSeq ?? 0;
+      let lastSeq = fromSeq - 1;
+      // A bounded suffix may start mid-message. In that case forward full final
+      // messages instead of a partial delta suffix; recover terminal messages
+      // from the canonical current turn without changing the OpenAI protocol.
+      const initialWindow = executionEventBus.replayWindow(conversationId);
+      const initialState = FlowExecutor.conversationStates.get(conversationId);
+      const recoveringReplay = initialWindow.firstSeq > fromSeq || (requestFromSeq === undefined && initialWindow.nextSeq === 0
+        && (initialState?.status === 'completed' || initialState?.status === 'error'));
+      const sentFinalMessages = new Set<string>();
+      cancelStream = () => { closed = true; unsubscribe?.(); unsubscribe = null; };
       // Final durable messages reuse their draft id. Avoid replaying the full
       // content after already forwarding its native token deltas.
       const streamedTextMessageIds = new Set<string>();
@@ -773,11 +797,60 @@ export function createStreamingResponse(
         choices: [{ index: 0, delta, finish_reason }],
       });
 
+      const sendAssistant = (msg: FlujoChatMessage) => {
+        if (msg && msg.role === 'assistant') {
+          if (sentFinalMessages.has(msg.id)) return;
+          sentFinalMessages.add(msg.id);
+          // Content chunks carry ONLY the delta. The full conversation state
+          // (the non-standard `conversation` field) is attached once, on the
+          // final chunk in finish() — embedding it per chunk serialized the
+          // entire growing conversation O(chunks) times per run.
+          if (
+            !streamedTextMessageIds.has(msg.id) &&
+            typeof msg.content === 'string' &&
+            msg.content.length > 0
+          ) {
+            send(baseChunk({ content: msg.content }, null));
+          }
+          if (msg.media && msg.media.length > 0) {
+            send(baseChunk({ media: msg.media }, null));
+          }
+          const seenToolParts = streamedToolParts.get(msg.id);
+          const missingToolCalls = requireFunctionToolCalls(msg.tool_calls).flatMap((toolCall, index) => {
+            const seen = seenToolParts?.get(index);
+            const missingFunction = {
+              ...(!seen?.name ? { name: toolCall.function.name } : {}),
+              ...(!seen?.arguments ? { arguments: toolCall.function.arguments } : {}),
+            };
+            if (seen?.id && seen.name && seen.arguments) return [];
+            return [{
+              index,
+              ...(!seen?.id ? { id: toolCall.id, type: 'function' as const } : {}),
+              function: missingFunction,
+            }];
+          });
+          if (missingToolCalls.length > 0) {
+            send(baseChunk({ tool_calls: missingToolCalls }, null));
+          }
+        }
+      };
+
       const finish = (status: 'completed' | 'error' | 'stop') => {
         if (closed) return;
         closed = true;
         const finishReason = status === 'error' ? 'error' : 'stop';
         const currentState = FlowExecutor.conversationStates.get(conversationId);
+        if (recoveringReplay && currentState) {
+          let start = snapshotReplayFrom;
+          if (start === undefined || start < 0 || start > currentState.messages.length) {
+            start = 0;
+            for (let index = currentState.messages.length - 1; index >= 0; index--) {
+              const message = currentState.messages[index];
+              if (message.role === 'user' && !message.depth) { start = index + 1; break; }
+            }
+          }
+          for (let index = start; index < currentState.messages.length; index++) sendAssistant(currentState.messages[index]);
+        }
         // Final unified chunk: empty content delta + the final conversation state.
         send(baseChunk({ content: '', conversation: currentState }, finishReason));
         // Standard OpenAI empty-delta terminator chunk.
@@ -797,6 +870,7 @@ export function createStreamingResponse(
         lastSeq = event.seq;
 
         if (event.type === 'model:delta') {
+          if (recoveringReplay) return;
           const delta: Record<string, unknown> = {};
           if (event.delta) {
             streamedTextMessageIds.add(event.messageId);
@@ -825,42 +899,9 @@ export function createStreamingResponse(
           }
           if (Object.keys(delta).length > 0) send(baseChunk(delta, null));
         } else if (event.type === 'message') {
-          const msg = event.message;
-          if (msg && msg.role === 'assistant') {
-            // Content chunks carry ONLY the delta. The full conversation state
-            // (the non-standard `conversation` field) is attached once, on the
-            // final chunk in finish() — embedding it per chunk serialized the
-            // entire growing conversation O(chunks) times per run.
-            if (
-              !streamedTextMessageIds.has(msg.id) &&
-              typeof msg.content === 'string' &&
-              msg.content.length > 0
-            ) {
-              send(baseChunk({ content: msg.content }, null));
-            }
-            if (msg.media && msg.media.length > 0) {
-              send(baseChunk({ media: msg.media }, null));
-            }
-            const seenToolParts = streamedToolParts.get(msg.id);
-            const missingToolCalls = requireFunctionToolCalls(msg.tool_calls).flatMap((toolCall, index) => {
-              const seen = seenToolParts?.get(index);
-              const missingFunction = {
-                ...(!seen?.name ? { name: toolCall.function.name } : {}),
-                ...(!seen?.arguments ? { arguments: toolCall.function.arguments } : {}),
-              };
-              if (seen?.id && seen.name && seen.arguments) return [];
-              return [{
-                index,
-                ...(!seen?.id ? { id: toolCall.id, type: 'function' as const } : {}),
-                function: missingFunction,
-              }];
-            });
-            if (missingToolCalls.length > 0) {
-              send(baseChunk({ tool_calls: missingToolCalls }, null));
-            }
-          }
+          sendAssistant(event.message);
         } else if (event.type === 'run:done') {
-          finish(event.status === 'error' ? 'error' : 'completed');
+          if (event.seq + 1 >= executionEventBus.currentSeq(conversationId)) finish(event.status === 'error' ? 'error' : 'completed');
         } else if (event.type === 'run:awaiting_approval' || event.type === 'run:paused') {
           // A streaming run that pauses (tool approval / debug) produces no more
           // content on this request; close the stream cleanly instead of hanging
@@ -876,8 +917,11 @@ export function createStreamingResponse(
       // is fired just before this, so the buffer is normally empty; replay covers
       // a run that completed unusually fast). seq de-dup keeps ordering correct.
       unsubscribe = executionEventBus.subscribe(conversationId, handleEvent);
-      for (const buffered of executionEventBus.getBufferedSince(conversationId, 0)) {
-        handleEvent(buffered);
+      const bufferedEvents = executionEventBus.getBufferedSince(conversationId, fromSeq);
+      let replayFrom = fromSeq;
+      for (const event of bufferedEvents) if (event.type === 'run:start') replayFrom = event.seq;
+      for (const buffered of bufferedEvents) {
+        if (buffered.seq >= replayFrom) handleEvent(buffered);
       }
 
       // If the conversation is already terminal (e.g. resumed and complete),
@@ -885,11 +929,13 @@ export function createStreamingResponse(
       // will never come.
       if (!closed) {
         const existing = FlowExecutor.conversationStates.get(conversationId);
-        if (existing && (existing.status === 'completed' || existing.status === 'error')) {
+        if (existing && (existing.status === 'completed' || existing.status === 'error')
+          && (requestFromSeq === undefined || executionEventBus.currentSeq(conversationId) > requestFromSeq)) {
           finish(existing.status === 'error' ? 'error' : 'completed');
         }
       }
     },
+    cancel() { cancelStream(); },
   });
 
   return new Response(stream, {

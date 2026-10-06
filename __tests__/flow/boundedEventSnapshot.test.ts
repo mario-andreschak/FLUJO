@@ -1,5 +1,16 @@
 import { boundedEventSnapshot } from '@/backend/execution/flow/engine/boundedEventSnapshot';
 
+it('refuses deep or wide data before serialization even within the byte allowance', () => {
+  let nested: unknown = 'leaf';
+  for (let index = 0; index < 65; index++) nested = { next: nested };
+  const stringify = jest.spyOn(JSON, 'stringify');
+  try {
+    expect(boundedEventSnapshot(nested, 4 * 1024 * 1024)).toBeUndefined();
+    expect(boundedEventSnapshot(Array.from({ length: 100_000 }, () => null), 4 * 1024 * 1024)).toBeUndefined();
+    expect(stringify).not.toHaveBeenCalled();
+  } finally { stringify.mockRestore(); }
+});
+
 it.each([
   'ascii', '漢字🙂', '"\\\n\t\u0000\u001f', '\ud800', '\udc00', 'a\ud800b',
 ])('preserves JSON wire values and measures UTF-8 bytes for %p', value => {
