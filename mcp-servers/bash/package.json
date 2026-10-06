@@ -1,6 +1,7 @@
 {
   "name": "@mario.andreschak/mcp-bash",
   "version": "3.46.3",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mario-andreschak/FLUJO.git",
@@ -14,6 +15,7 @@
     "flujo-mcp-bash": "dist/index.js"
   },
   "files": [
+    "LICENSE",
     "dist/**/*"
   ],
   "scripts": {

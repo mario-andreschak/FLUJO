@@ -1,6 +1,7 @@
 {
   "name": "flujo-ai",
   "version": "3.46.3",
+  "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://flujo.com.co/",
   "repository": {
     "type": "git",
@@ -23,6 +24,7 @@
     "flujo": "bin/flujo.mjs"
   },
   "files": [
+    "LICENSE",
     ".next/**/*",
     "!.next/cache/**",
     "!.next/dev/**",
@@ -39,6 +41,7 @@
     "mcp-servers/README.md",
     "mcp-servers/*/dist/**/*",
     "mcp-servers/*/package.json",
+    "mcp-servers/*/LICENSE",
     "mcp-servers/browser/scripts/install-browser.mjs",
     "next.config.mjs"
   ],
