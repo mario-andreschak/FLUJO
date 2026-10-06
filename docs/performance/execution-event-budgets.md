@@ -109,8 +109,18 @@ canonical state, using the captured append/resume message boundary where
 available. Native deltas remain incremental when that request's replay is
 complete. Body cancellation unsubscribes. This adapter's queue and full final
 conversation payload are outside the FLUJO SSE queue and wire limits above.
-Its projection metadata admission can return HTTP 503 after dispatch; that
-does not cancel or authorize resubmission of the existing run.
+Streaming Flow completion adapters reserve the shared live-reader permit and
+pin the conversation projection with an inert subscription before invoking a
+legacy Flow or submitting a Persona dispatch. Either capacity rejection returns
+the OpenAI-shaped HTTP 503 with `Retry-After: 3` before execution is submitted.
+The pin survives an awaited Persona submission; the real completion listener
+attaches before the pin is released, and takes ownership of the same permit.
+Terminal/accepted Persona responses release that reservation without retaining
+a live reader. Stream finish, cancellation, setup/send failure and submission
+failure release owned reader resources once. Reader cancellation does not cancel
+execution. Non-streaming and direct-model completions retain their existing
+paths. This admission ordering adds no general POST deduplication, automatic
+retry or exactly-once provider/tool guarantee.
 
 External Brain/History/O readers and third-party EventSource clients must adopt
 named recovery controls. Source compatibility of numeric IDs alone does not

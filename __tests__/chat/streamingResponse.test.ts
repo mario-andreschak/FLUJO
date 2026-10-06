@@ -21,9 +21,11 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: jest.fn(),
 }));
 
-import { createStreamingResponse } from '@/app/v1/chat/completions/chatCompletionService';
+import { createStreamingResponse, processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { executionStreamAdmission } from '@/backend/execution/flow/engine/executionStream';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { runFlow } from '@/backend/execution/flow/runFlow';
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 
 // Fail loudly if the implementation ever reaches back out over HTTP.
@@ -47,6 +49,7 @@ afterAll(() => {
   fetchSpy.mockRestore();
 });
 afterEach(() => { FlowExecutor.conversationStates.clear(); });
+beforeEach(() => { (runFlow as jest.Mock).mockReset(); });
 
 const contentDeltas = (body: string): string => body.split('\n').filter(line => line.startsWith('data: {'))
   .map(line => JSON.parse(line.slice(6)).choices[0].delta.content ?? '').join('');
@@ -106,12 +109,15 @@ describe('createStreamingResponse (event-bus driven)', () => {
 
   it('unsubscribes on body cancellation and ignores later events', async () => {
     const release = jest.fn();
+    const releasePin = jest.fn();
     let listener!: (event: ExecutionEvent) => void;
-    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce((_id, callback) => {
-      listener = callback; return release;
-    });
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => releasePin)
+      .mockImplementationOnce((_id, callback) => {
+        listener = callback; return release;
+      });
     try {
       const response = createStreamingResponse('flow-Test', 'cancel-openai-stream');
+      expect(releasePin).toHaveBeenCalledTimes(1);
       await response.body!.cancel();
       expect(release).toHaveBeenCalledTimes(1);
       expect(() => listener({ type: 'run:done', status: 'completed', seq: 0, conversationId: 'cancel-openai-stream', timestamp: 1 })).not.toThrow();
@@ -179,5 +185,158 @@ describe('createStreamingResponse (event-bus driven)', () => {
     const body = await readAll(res);
     expect(body).toContain('"finish_reason":"error"');
     expect(body).toContain('data: [DONE]');
+  });
+});
+
+describe('completion reader admission and cleanup', () => {
+  const request = { model: 'flow-Test', messages: [{ role: 'user', content: 'Current request' }], stream: true };
+
+  it('rejects repeated capacity requests before invoking a Flow and admits once after capacity is freed', async () => {
+    const id = 'completion-reader-full';
+    const before = executionStreamAdmission.diagnostics();
+    const held = Array.from({ length: 4 }, () => executionStreamAdmission.reserve(id)!);
+    let response: Response | undefined;
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const rejected = await processChatCompletion(request as any, false, false, false, id, false, true);
+        expect(rejected.status).toBe(503);
+        expect(rejected.headers.get('Retry-After')).toBe('3');
+        await expect(rejected.json()).resolves.toMatchObject({ error: { type: 'api_error' } });
+      }
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 4);
+      held.forEach(release => release());
+      (runFlow as jest.Mock).mockResolvedValue({ flowNotFound: { name: 'Test' } });
+      response = await processChatCompletion(request as any, false, false, false, id, false, true);
+      expect(response.status).toBe(200);
+      expect(runFlow).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics().active).toBe(before.active + 1);
+    } finally {
+      held.forEach(release => release());
+      await response?.body?.cancel();
+    }
+    expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+  });
+
+  it('releases each partial admission when repeated projection rejection prevents dispatch', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const reserve = executionStreamAdmission.reserve.bind(executionStreamAdmission);
+    const releaseReader = jest.fn();
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(id => {
+      const release = reserve(id)!;
+      return () => { releaseReader(); release(); };
+    });
+    const projection = jest.spyOn(executionEventBus, 'ensureConversationProjection').mockReturnValue(false);
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe');
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await processChatCompletion(request as any, false, false, false, 'completion-projection-full', false, true);
+        expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('3');
+      }
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(releaseReader).toHaveBeenCalledTimes(2);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { subscribe.mockRestore(); projection.mockRestore(); permits.mockRestore(); }
+  });
+
+  it('releases the reader and leaves execution untouched when acquiring the inert pin throws', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const problem = new Error('pin setup failed');
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => { throw problem; });
+    try {
+      await expect(processChatCompletion(request as any, false, false, false, 'completion-pin-failure', false, true)).rejects.toBe(problem);
+      expect(runFlow).not.toHaveBeenCalled();
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { subscribe.mockRestore(); }
+  });
+
+  it('releases the pin and permit when setting up the real listener fails', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const problem = new Error('listener setup failed');
+    const releasePin = jest.fn();
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => releasePin)
+      .mockImplementationOnce(() => { throw problem; });
+    try {
+      const response = createStreamingResponse('flow-Test', 'completion-listener-failure');
+      await expect(readAll(response)).rejects.toBe(problem);
+      expect(releasePin).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { subscribe.mockRestore(); }
+  });
+
+  it('errors the body and releases ownership when serializing a live chunk fails', async () => {
+    const before = executionStreamAdmission.diagnostics();
+    const releasePin = jest.fn();
+    const releaseListener = jest.fn();
+    let listener!: (event: ExecutionEvent) => void;
+    const subscribe = jest.spyOn(executionEventBus, 'subscribe').mockImplementationOnce(() => releasePin)
+      .mockImplementationOnce((_id, callback) => { listener = callback; return releaseListener; });
+    try {
+      const response = createStreamingResponse('flow-Test', 'completion-send-failure');
+      const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+      listener({ type: 'model:delta', messageId: 'answer', delta: '', mediaPart: cyclic, seq: 0, conversationId: 'completion-send-failure', timestamp: 1 } as any);
+      await expect(readAll(response)).rejects.toThrow();
+      expect(releasePin).toHaveBeenCalledTimes(1);
+      expect(releaseListener).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+      listener({ type: 'run:done', status: 'completed', seq: 1, conversationId: 'completion-send-failure', timestamp: 2 });
+      expect(releaseListener).toHaveBeenCalledTimes(1);
+    } finally { subscribe.mockRestore(); }
+  });
+
+  it('releases the reader even when the final canonical conversation cannot be serialized', async () => {
+    const id = 'completion-final-send-failure';
+    const before = executionStreamAdmission.diagnostics();
+    const state = { conversationId: id, status: 'running', ephemeral: true, messages: [] } as any;
+    state.cycle = state;
+    FlowExecutor.conversationStates.set(id, state);
+    const response = createStreamingResponse('flow-Test', id);
+    executionEventBus.emit(id, { type: 'run:done', status: 'completed' });
+    await expect(readAll(response)).rejects.toThrow();
+    expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+  });
+
+  it('releases ownership when constructing the response throws after listener activation', () => {
+    const before = executionStreamAdmission.diagnostics();
+    const problem = new Error('response construction failed');
+    const response = jest.spyOn(global, 'Response').mockImplementationOnce(() => { throw problem; });
+    try {
+      expect(() => createStreamingResponse('flow-Test', 'completion-response-failure')).toThrow(problem);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { response.mockRestore(); }
+  });
+
+  it('keeps non-streaming Flow requests outside reader admission', async () => {
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(() => { throw new Error('must not reserve'); });
+    (runFlow as jest.Mock).mockResolvedValue({ flowNotFound: { name: 'Test' } });
+    try {
+      const response = await processChatCompletion({ ...request, stream: false } as any, false, false, false, 'completion-nonstream');
+      expect(response.status).toBe(400);
+      expect(runFlow).toHaveBeenCalledTimes(1);
+      expect(permits).not.toHaveBeenCalled();
+    } finally { permits.mockRestore(); }
+  });
+
+  it.each(['run:done', 'run:paused', 'run:awaiting_approval'])('releases the reader once when %s terminates the stream', async type => {
+    const id = 'completion-terminal-' + type;
+    const before = executionStreamAdmission.diagnostics();
+    const reserve = executionStreamAdmission.reserve.bind(executionStreamAdmission);
+    const releaseReader = jest.fn();
+    const permits = jest.spyOn(executionStreamAdmission, 'reserve').mockImplementation(conversation => {
+      const release = reserve(conversation)!;
+      return () => { releaseReader(); release(); };
+    });
+    try {
+      const response = createStreamingResponse('flow-Test', id);
+      if (type === 'run:done') executionEventBus.emit(id, { type: 'run:done', status: 'completed' });
+      else if (type === 'run:paused') executionEventBus.emit(id, { type: 'run:paused', reason: 'debug' });
+      else executionEventBus.emit(id, { type: 'run:awaiting_approval', pendingToolCalls: [] });
+      expect(await readAll(response)).toContain('data: [DONE]');
+      expect(permits).toHaveBeenCalledTimes(1);
+      expect(releaseReader).toHaveBeenCalledTimes(1);
+      expect(executionStreamAdmission.diagnostics()).toMatchObject({ active: before.active, workspaces: before.workspaces, conversations: before.conversations });
+    } finally { permits.mockRestore(); }
   });
 });
