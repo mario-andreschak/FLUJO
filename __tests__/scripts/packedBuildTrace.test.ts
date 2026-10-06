@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,14 +7,26 @@ test('npm omits build profiling output while retaining the production payload', 
   const repository = path.resolve(__dirname, '../..');
   const manifest = JSON.parse(readFileSync(path.join(repository, 'package.json'), 'utf8'));
   const executableDirectory = path.dirname(process.execPath);
-  const npmCli = [
-    path.join(executableDirectory, 'node_modules/npm/bin/npm-cli.js'),
-    path.resolve(executableDirectory, '../lib/node_modules/npm/bin/npm-cli.js'),
-  ].find(candidate => existsSync(candidate));
-  if (!npmCli) throw new Error('npm CLI was not found beside the test Node executable.');
+  // Qualification pins the complete npm closure before supplying this path.
+  const configuredNpmCli = process.env.FLUJO_PACK_TEST_NPM_CLI;
+  let resolvedNpmCli: string | undefined;
+  if (configuredNpmCli !== undefined) {
+    if (!path.isAbsolute(configuredNpmCli) || !existsSync(configuredNpmCli)
+      || !statSync(configuredNpmCli).isFile()) {
+      throw new Error('FLUJO_PACK_TEST_NPM_CLI must name an absolute existing file.');
+    }
+    resolvedNpmCli = realpathSync(configuredNpmCli);
+  } else {
+    resolvedNpmCli = [
+      path.join(executableDirectory, 'node_modules/npm/bin/npm-cli.js'),
+      path.resolve(executableDirectory, '../lib/node_modules/npm/bin/npm-cli.js'),
+    ].find(candidate => existsSync(candidate) && statSync(candidate).isFile());
+  }
+  if (!resolvedNpmCli) throw new Error('npm CLI was not found beside the test Node executable; use FLUJO_PACK_TEST_NPM_CLI for a pinned separate npm closure.');
+  const npmCli = resolvedNpmCli;
 
   const temporaryDirectory = realpathSync(os.tmpdir());
-  const fixture = mkdtempSync(path.join(temporaryDirectory, 'flujo-packed-build-trace-'));
+  const fixtureRoot = mkdtempSync(path.join(temporaryDirectory, 'flujo-packed-build-trace-'));
   const retained = [
     'LICENSE',
     '.next/BUILD_ID',
@@ -32,11 +44,12 @@ test('npm omits build profiling output while retaining the production payload', 
     'mcp-servers/browser/scripts/install-browser.mjs',
   ];
   for (const workspace of manifest.workspaces) {
-    retained.push(`${workspace}/dist/index.js`, `${workspace}/LICENSE`);
+    retained.push(`${workspace}/dist/index.js`, `${workspace}/LICENSE`, `${workspace}/package.json`);
   }
   const omitted = ['.next/trace', '.next/cache/transient.bin', '.next/dev/server.js'];
-  try {
-    writeFileSync(path.join(fixture, 'package.json'), JSON.stringify(manifest));
+  function packSelection(fixture: string, fixtureManifest: typeof manifest): string[] {
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(path.join(fixture, 'package.json'), JSON.stringify(fixtureManifest));
     for (const file of [...retained, ...omitted]) {
       const target = path.join(fixture, file);
       mkdirSync(path.dirname(target), { recursive: true });
@@ -48,7 +61,6 @@ test('npm omits build profiling output while retaining the production payload', 
       writeFileSync(path.join(fixture, workspace, 'package.json'), JSON.stringify({
         name: `pack-fixture-${index}`, version: manifest.version,
       }));
-      retained.push(`${workspace}/package.json`);
     }
     const userConfig = path.join(fixture, 'empty-user.npmrc');
     const globalConfig = path.join(fixture, 'empty-global.npmrc');
@@ -71,15 +83,31 @@ test('npm omits build profiling output while retaining the production payload', 
     expect(packed.status).toBe(0);
     const reports = JSON.parse(packed.stdout);
     expect(reports).toHaveLength(1);
-    const files = reports[0].files.map((file: { path: string }) => file.path.replaceAll('\\', '/'));
+    return reports[0].files.map((file: { path: string }) => file.path.replaceAll('\\', '/'));
+  }
+  try {
+    const files = packSelection(path.join(fixtureRoot, 'positive'), manifest);
+    const negativeManifest = {
+      ...manifest,
+      files: manifest.files.filter((file: string) => file !== '!.next/trace'),
+    };
+    const negativeFiles = packSelection(path.join(fixtureRoot, 'negative'), negativeManifest);
+    console.info('CODE_HEALTH_PACK_SELECTION', JSON.stringify({
+      node: process.version, npmCli,
+      npmCliSource: configuredNpmCli === undefined ? 'adjacent' : 'FLUJO_PACK_TEST_NPM_CLI',
+      retained, omitted, selectedFiles: files, installedOrExecutedApp: false,
+      negativeControl: {
+        removedExclusion: '!.next/trace', selectedFiles: negativeFiles,
+        traceIncluded: negativeFiles.includes('.next/trace'),
+      },
+    }));
     for (const file of retained) expect(files).toContain(file);
     for (const file of omitted) expect(files).not.toContain(file);
-    console.info('CODE_HEALTH_PACK_SELECTION', JSON.stringify({
-      node: process.version, npmCli, retained, omitted, selectedFiles: files,
-      installedOrExecutedApp: false,
-    }));
+    for (const file of retained) expect(negativeFiles).toContain(file);
+    expect(negativeFiles).toContain('.next/trace');
+    for (const file of omitted.slice(1)) expect(negativeFiles).not.toContain(file);
   } finally {
-    const resolved = realpathSync(fixture);
+    const resolved = realpathSync(fixtureRoot);
     if (path.dirname(resolved) !== temporaryDirectory
       || !path.basename(resolved).startsWith('flujo-packed-build-trace-')) {
       throw new Error('Refusing cleanup outside the allocated package fixture.');
