@@ -194,3 +194,23 @@ The original v25 observations, claim/gate statuses, rubric, numeric budgets,
 profiles, human owners and assessment remain unchanged. This new Docs leaf needs
 fresh focused source checks. The earlier addbc result is not transferred; neither
 source validation nor CI success supplies installed, human or A-minus acceptance.
+
+## October 6 current-candidate API observation
+
+The [current candidate record](evidence/current-candidate-e622ccfe-2026-10-06.json)
+retains seven exact API snapshots for PR #803, its immutable source/tree, main,
+original verify attempt 1 and jobs, current check runs and CodeQL analyses. At
+the observation, main remained `0be972ac`; candidate source was `e622ccfe` /
+tree `dd5f5c47`. The original run failed after five jobs succeeded and seven
+were cancelled; the aggregate verification gate failed separately. The skipped
+diagnostic is excluded. Cancellations from other workflows are not combined into
+this count. Both CodeQL jobs were cancelled and no exact-source analysis was
+returned. This establishes missing analysis evidence, without scanner clearance.
+
+The minimal composition applies the accepted #791 commit `56912d47` onto the
+exact candidate, retaining all four accepted file bytes, then adds this observation.
+No product, workflow or runtime source changes are needed for that Docs composition.
+Fresh validation belongs to the resulting Docs source. The fixed v25/v33 reports
+and B078/445/cb1 qualification stay immutable; no prior result qualifies the new
+composition. Release/profile acceptance, all named human responsibilities, rubric
+agreement and the independent nine-row assessment remain pending.
