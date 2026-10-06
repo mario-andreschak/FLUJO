@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { NormalizedModel } from '@/shared/types/model/response';
 import { getCurrentWorkspace } from '@/utils/workspace';
@@ -15,7 +16,7 @@ export interface ModelCacheIdentity {
   provider?: string;
   adapter?: string;
   profileId?: string;
-  /** One-way digest only; never the credential itself. */
+  /** Cache-lifetime keyed fingerprint only; never the credential itself. */
   credentialFingerprint?: string;
 }
 
@@ -29,6 +30,15 @@ type ModelCacheTarget = string | ModelCacheIdentity;
 class ModelCache {
   private caches = new Map<string, Map<string, CacheEntry>>();
   private readonly DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
+  readonly #credentialFingerprintKey = randomBytes(32);
+
+  /** Stable within this cache lifetime, without retaining an unkeyed credential digest. */
+  credentialFingerprint(credential: string): string {
+    return createHmac('sha256', this.#credentialFingerprintKey)
+      .update('flujo:provider-catalogue:credential:v1\0', 'utf8')
+      .update(credential, 'utf8')
+      .digest('hex');
+  }
 
   private currentCache(): Map<string, CacheEntry> {
     const workspace = getCurrentWorkspace();
