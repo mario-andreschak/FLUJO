@@ -337,6 +337,7 @@ export function httpConfigKey(config: MCPServerConfig): string {
     reconnectionOptions?: unknown;
     sessionId?: string;
     oauthClientId?: string;
+    oauthIssuer?: string;
     oauthClientInformation?: unknown;
     oauthClientSecret?: string;
     oauthTokens?: unknown;
@@ -350,6 +351,7 @@ export function httpConfigKey(config: MCPServerConfig): string {
     reconnectionOptions: c.reconnectionOptions ?? {},
     sessionId: c.sessionId ?? "",
     oauthClientId: c.oauthClientId ?? "",
+    oauthIssuer: c.oauthIssuer ?? "",
     oauthClientInformation: c.oauthClientInformation ?? {},
     oauthClientSecret: c.oauthClientSecret ?? "",
     oauthTokens: c.oauthTokens ?? {},

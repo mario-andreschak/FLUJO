@@ -20,6 +20,7 @@ it('uses manual credentials added after the original save when the server cannot
   });
   await service.updateServerConfig('manual-client', {
     oauthClientId: 'client-entered-later', oauthClientSecret: 'synthetic-client-secret',
+    oauthIssuer: 'https://mcp.oauth-test.example',
   } as Partial<MCPStreamableConfig>);
 
   const loaded = await loadServerConfigs();
@@ -30,6 +31,7 @@ it('uses manual credentials added after the original save when the server cannot
   const provider = new MCPOAuthClientProvider(config, 'http://127.0.0.1:43420/api/oauth/callback');
   await expect(provider.clientInformation()).resolves.toEqual({
     client_id: 'client-entered-later', client_secret: 'synthetic-client-secret',
+    issuer: 'https://mcp.oauth-test.example',
   });
 
   const requests: { url: string; method: string }[] = [];
