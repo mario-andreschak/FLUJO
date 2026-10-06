@@ -2673,6 +2673,190 @@
         "persistent-worker"
       ],
       "artifactProof": null
+    },
+    {
+      "id": "ordinary-ci-e622ccfe-failure",
+      "kind": "source-check",
+      "result": "failed",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "engineering",
+      "observedAt": "2026-10-06T12:43:06.751Z",
+      "environment": {
+        "platform": "GitHub REST metadata observed from the owned Windows Docs checkout",
+        "node": "Per-job runtime and artifact records were not independently qualified by this API observation",
+        "provider": "GitHub API; no model or live provider workload",
+        "tools": "gh api; immutable Git byte comparison of the composed four-file Docs component"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/pulls/803",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "gh api -X GET repos/mario-andreschak/FLUJO/code-scanning/analyses -f ref=refs/heads/codex/filesystem-read-snapshot-integration-20261005 -f per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/git/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22",
+        "gh api repos/mario-andreschak/FLUJO/git/ref/heads/main"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06.json",
+          "sha256": "73d94432b6ec6563f7dd60ef33decab2cc46424eb939fc1ea73fc1ec0031ee8f",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/pr803.json",
+          "sha256": "b466bf783b53eeda7a96768fcd9793a4893874fbe022b78a095cffbf2d80ddd6",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-attempt1.json",
+          "sha256": "cb18387e3d536ba45f9959c98e7da4618116436c783bc3023cb45bfb1b0fd43c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-jobs.json",
+          "sha256": "a6e6db17013404414ec513392276b2584399e436072e5e48b54536d81305c4b7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/head-check-runs.json",
+          "sha256": "78eece2bb8b23e64b1d997706c33f24830bc1ea76e500e3c7a4171466cf69792",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/codeql-analyses.json",
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/source-commit.json",
+          "sha256": "89b709867e94044066f3bb5f87c850ac3afa3038fcf7fd8144c9f63c2c2cc20a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/main-ref.json",
+          "sha256": "5cbae4a73fcf590fb7d876e6ad3871d1018b316d78995923c52a9b17034fcfb3",
+          "verification": "local"
+        }
+      ],
+      "scope": "PR803 original verify attempt1 failed: five successful jobs, seven cancellations and aggregate verification failure; the diagnostic skip is excluded.",
+      "limits": [
+        "This is an API metadata observation. No workflow rerun, artifact download, runtime execution, model call or old inventory replay was performed.",
+        "The eight unsatisfied ordinary required jobs comprise seven cancellations and the failed aggregate verification gate. Other workflow cancellations are counted separately.",
+        "Passing individual job metadata is not an assertion-count, runtime-profile or installed-release qualification.",
+        "The current PR merge SHA is prospective API metadata; the actual checkout for this original run has not been independently joined.",
+        "The original B078/445/cb1 results, fixed v25/v33 reports, earlier failures and component results remain on their own immutable sources. They are not retargeted to e622 or this Docs proposal.",
+        "Source review of #791 applies to its accepted component; this changed composition needs its own focused checks and independent review."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
+    },
+    {
+      "id": "codeql-e622ccfe-cancelled",
+      "kind": "source-check",
+      "result": "pending",
+      "integrity": "checksummed",
+      "sourceSha": "e622ccfe948a5b39366d405e2a1366fb228c6d22",
+      "artifactId": null,
+      "ownerId": "security",
+      "observedAt": "2026-10-06T12:43:06.751Z",
+      "environment": {
+        "platform": "GitHub REST metadata observed from the owned Windows Docs checkout",
+        "node": "Per-job runtime and artifact records were not independently qualified by this API observation",
+        "provider": "GitHub API; no model or live provider workload",
+        "tools": "gh api; immutable Git byte comparison of the composed four-file Docs component"
+      },
+      "commands": [
+        "gh api repos/mario-andreschak/FLUJO/pulls/803",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1",
+        "gh api repos/mario-andreschak/FLUJO/actions/runs/37369397033/attempts/1/jobs?per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22/check-runs?per_page=100",
+        "gh api -X GET repos/mario-andreschak/FLUJO/code-scanning/analyses -f ref=refs/heads/codex/filesystem-read-snapshot-integration-20261005 -f per_page=100",
+        "gh api repos/mario-andreschak/FLUJO/git/commits/e622ccfe948a5b39366d405e2a1366fb228c6d22",
+        "gh api repos/mario-andreschak/FLUJO/git/ref/heads/main"
+      ],
+      "raw": [
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06.json",
+          "sha256": "73d94432b6ec6563f7dd60ef33decab2cc46424eb939fc1ea73fc1ec0031ee8f",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/pr803.json",
+          "sha256": "b466bf783b53eeda7a96768fcd9793a4893874fbe022b78a095cffbf2d80ddd6",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-attempt1.json",
+          "sha256": "cb18387e3d536ba45f9959c98e7da4618116436c783bc3023cb45bfb1b0fd43c",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/verify-jobs.json",
+          "sha256": "a6e6db17013404414ec513392276b2584399e436072e5e48b54536d81305c4b7",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/head-check-runs.json",
+          "sha256": "78eece2bb8b23e64b1d997706c33f24830bc1ea76e500e3c7a4171466cf69792",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/codeql-analyses.json",
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/source-commit.json",
+          "sha256": "89b709867e94044066f3bb5f87c850ac3afa3038fcf7fd8144c9f63c2c2cc20a",
+          "verification": "local"
+        },
+        {
+          "location": "docs/audits/scorecard-563/evidence/current-candidate-e622ccfe-2026-10-06/main-ref.json",
+          "sha256": "5cbae4a73fcf590fb7d876e6ad3871d1018b316d78995923c52a9b17034fcfb3",
+          "verification": "local"
+        }
+      ],
+      "scope": "Both current-candidate CodeQL jobs were cancelled. No qualifying exact-source analysis or findings clearance is established by an empty API response.",
+      "limits": [
+        "This is an API metadata observation. No workflow rerun, artifact download, runtime execution, model call or old inventory replay was performed.",
+        "The eight unsatisfied ordinary required jobs comprise seven cancellations and the failed aggregate verification gate. Other workflow cancellations are counted separately.",
+        "Passing individual job metadata is not an assertion-count, runtime-profile or installed-release qualification.",
+        "The current PR merge SHA is prospective API metadata; the actual checkout for this original run has not been independently joined.",
+        "The original B078/445/cb1 results, fixed v25/v33 reports, earlier failures and component results remain on their own immutable sources. They are not retargeted to e622 or this Docs proposal.",
+        "Source review of #791 applies to its accepted component; this changed composition needs its own focused checks and independent review."
+      ],
+      "budgetIds": [],
+      "metrics": [],
+      "window": {
+        "kind": "instant",
+        "start": null,
+        "end": null,
+        "simulatedDays": null
+      },
+      "links": [
+        "https://github.com/mario-andreschak/FLUJO/pull/803",
+        "https://github.com/mario-andreschak/FLUJO/actions/runs/37369397033"
+      ],
+      "profileIds": [
+        "local-owner"
+      ],
+      "artifactProof": null
     }
   ],
   "gates": [
@@ -2715,7 +2899,8 @@
         "native-codeql-integration-80-failure",
         "native-codeql-aa924df5-failure",
         "native-codeql-b078484c-failure",
-        "recording-ad0b1a9b-passed"
+        "recording-ad0b1a9b-passed",
+        "codeql-e622ccfe-cancelled"
       ]
     },
     {
@@ -2854,7 +3039,8 @@
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
-        "ordinary-ci-b078484c-passed"
+        "ordinary-ci-b078484c-passed",
+        "ordinary-ci-e622ccfe-failure"
       ]
     }
   ],
@@ -2914,7 +3100,8 @@
         "ordinary-ci-aa924df5-failure",
         "marker-component-c69fba0f",
         "mapped-integration-db4bb26f-pending",
-        "ordinary-ci-b078484c-passed"
+        "ordinary-ci-b078484c-passed",
+        "ordinary-ci-e622ccfe-failure"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -2959,7 +3146,8 @@
         "recording-7af0ec00-failure",
         "recording-ad0b1a9b-pending",
         "native-codeql-b078484c-failure",
-        "recording-ad0b1a9b-passed"
+        "recording-ad0b1a9b-passed",
+        "codeql-e622ccfe-cancelled"
       ],
       "budgetIds": [
         "unauthorized-access",
@@ -3056,7 +3244,9 @@
         "recording-ad0b1a9b-pending",
         "ordinary-ci-b078484c-passed",
         "native-codeql-b078484c-failure",
-        "recording-ad0b1a9b-passed"
+        "recording-ad0b1a9b-passed",
+        "ordinary-ci-e622ccfe-failure",
+        "codeql-e622ccfe-cancelled"
       ],
       "budgetIds": [],
       "gateIds": [
@@ -3315,7 +3505,9 @@
         "recording-7af0ec00-failure",
         "recording-ad0b1a9b-pending",
         "ordinary-ci-b078484c-passed",
-        "native-codeql-b078484c-failure"
+        "native-codeql-b078484c-failure",
+        "ordinary-ci-e622ccfe-failure",
+        "codeql-e622ccfe-cancelled"
       ],
       "budgetIds": [],
       "gateIds": [

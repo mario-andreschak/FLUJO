@@ -392,3 +392,24 @@ and compiled application identities kept distinct. Worker native/runtime accepta
 remains pending. The v25 report and every earlier failure or pending record stay
 unchanged. CI/source checks, archive retention and automated reviewer selection do
 not establish installed release, human acceptance or an independent A-minus grade.
+
+## Current candidate and remaining acceptance work
+
+The separate [October 6 candidate observation](evidence/current-candidate-e622ccfe-2026-10-06.json)
+binds PR #803 source `e622ccfe` / tree `dd5f5c47` to original verification
+run 37369397033, attempt 1. The API records five successful jobs, seven cancelled
+jobs and failed aggregate verification. The diagnostic skip is excluded. Both
+CodeQL jobs were cancelled; an empty analyses response establishes no clearance.
+Individual successful job metadata supplies no original assertion counts or
+installed-release acceptance. Earlier B078 results remain historical.
+
+The accepted four-file #791 documentation commit applies unchanged onto this
+candidate. This proposal adds two distinct API observations and preserves every
+prior record, failure, rubric, budget, profile, human owner and acceptance status.
+The composed source needs its own focused checks and review.
+
+Acceptance next needs complete source-bound verification and original reports;
+completed scanner analysis with individual finding review; selected distributed
+artifacts and per-profile installation/runtime/recovery evidence; and rubric,
+numeric-envelope and named-owner agreement. Actual maintainer, contributor and
+sustained-use observations are still required for independent reassessment.
