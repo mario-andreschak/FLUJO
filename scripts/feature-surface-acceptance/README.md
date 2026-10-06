@@ -172,3 +172,60 @@ candidate. Record real provider/tool journeys and existing-user regressions.
 These steps need additional equipment/participants and are not asserted by the
 fixture. External reassessment must evaluate the full #563/#564 profile before
 Feature surface can be accepted at A-.
+
+## UI-created connection equipment
+
+The restored `playwright.features-first-use.config.mjs` equipment starts a fresh
+anonymous loopback profile with no selected fixture configuration. It joins
+backend initialization and disables existing defaults through typed updates,
+then uses **Connect App -> I have connection details -> At a remote URL ->
+Configure manually**. Each planned case enters the name/URL through their
+associated labels, tests the actual MCP handshake, saves through the UI,
+reloads, checks all 128 ordered unique tools, reaches the last tool by keyboard
+and explicitly requests one tool128 echo with an argument digest. Typing,
+setup, connection testing, save/reload and inspection must leave tool-call
+counters at zero. Only the explicit tool test adds one dispatched and accepted
+receipt. The post-save selection verifier reads configurations; it cannot save
+or repair the UI-created connection.
+
+Streamable HTTP and legacy SSE each have desktop 1280x720 and 360x800 cases:
+four prospective cases, one worker, zero retries. The helper's `seeded` mode
+remains available for separate retention equipment, while `initialConnections:
+'ui'` creates no selected fixture entry. The original 16 environment controls
+and three new selection/failure controls form a prospective 19-case suite.
+These are Source-derived counts. No import, collection, environment test or
+browser execution on the forward-port is asserted here.
+
+After Root separately qualifies and allocates the exact source/equipment and
+binds the selected compiled or installed candidate, the prepared commands are:
+
+```powershell
+node --test scripts/feature-surface-acceptance/browser-environment.test.mjs
+$env:FEATURE_BROWSER_APP_DIR = 'C:/absolute/identified/compiled-or-installed/flujo-ai'
+$env:FEATURE_BROWSER_SOURCE_SHA = 'declared-source-identity-not-an-attestation'
+node node_modules/@playwright/test/cli.js test --config=playwright.features-first-use.config.mjs
+```
+
+The test command is a separate equipment qualification, and the browser command
+starts application/Chromium processes. This procedure grants neither execution
+nor dependency installation. The candidate must contain the reviewed current
+labels/manual route and required security/runtime corrections. A declared SHA,
+package metadata and `.next/BUILD_ID` are not source-to-artifact correspondence.
+The [installed acceptance packet](installed-acceptance.md) retains admission and
+the wider profile/matrix requirements.
+
+Retain the per-step JSON receipts, actual selected server/transport/URL,
+argument digest, page errors, screenshot/traces and owned child's exit/pipe-drain
+report. Startup/cleanup errors retain both failure contexts and disposable log
+paths; a forced stop remains a failure. Preserve each attempt before another
+run so fixed report paths cannot overwrite earlier evidence. Output uses
+`feature-first-use-artifacts/` and `test-results/features-first-use/`; the
+temporary profile and application logs remain available for review.
+
+The current fixture remains version 1.0.0 with its actual definition digest and
+current capabilities. These cases do not qualify Apps/refresh, stdio first use,
+seven-language browser retention, the public Firecrawl form, a genuine model or
+agent, external reuse, human/linguistic/screen-reader review, upgrade or A-.
+The separately pending #617/#625/#654 harnesses and #680 real-FIFO control retain
+their own source and execution scope. Historical #693 counts and failures are
+kept separately in the [audit record](../../docs/audits/scorecard-563/connection-input-labels.md).
