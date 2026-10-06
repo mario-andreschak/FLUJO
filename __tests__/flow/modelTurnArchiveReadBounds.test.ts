@@ -68,15 +68,31 @@ describe('model-turn archive inspection bounds', () => {
     const file = path.join(root, 'oversize');
     await fs.writeFile(file, '123456789');
     const handle = await fs.open(file, 'r');
+    const original = await handle.stat({ bigint: true });
+    const unchanged = Buffer.alloc(9);
+    const verifyRead = handle.read.bind(handle);
+    const realClose = handle.close.bind(handle);
     jest.spyOn(fs, 'open').mockResolvedValueOnce(handle);
     const read = jest.spyOn(handle, 'read');
-    const close = jest.spyOn(handle, 'close');
+    const close = jest.spyOn(handle, 'close').mockImplementation(async () => {
+      try {
+        // This control reads the original fixture only after the helper rejects
+        // it. Keep it separate from the production read and allocation spies.
+        const { bytesRead } = await verifyRead(unchanged, 0, unchanged.length, 0);
+        expect(bytesRead).toBe(unchanged.length);
+        const named = await fs.lstat(file, { bigint: true });
+        expect(named.isFile() && !named.isSymbolicLink()).toBe(true);
+        for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'] as const) {
+          expect(named[field]).toBe(original[field]);
+        }
+      } finally { await realClose(); }
+    });
     const allocate = jest.spyOn(Buffer, 'alloc');
     await expect(readBoundedModelTurnFile(file, 8)).rejects.toMatchObject({ code: 'MODEL_TURN_ARCHIVE_READ_LIMIT', status: 413 });
     expect(read).not.toHaveBeenCalled();
     expect(allocate).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(await fs.readFile(file)).toEqual(Buffer.from('123456789'));
+    expect(unchanged).toEqual(Buffer.from('123456789'));
   });
 
   it('stops a highly compressible decoded payload at the declared zlib output limit', async () => {
