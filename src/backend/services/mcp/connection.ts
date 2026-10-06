@@ -20,6 +20,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { createHash } from "crypto";
+import { RuntimeDirectoryAdmission } from './runtimeDirectoryAdmission';
 import { createLogger } from "@/utils/logger";
 import { assertMcpTransport, McpTransportError } from './transportAdmission';
 import {
@@ -654,39 +655,20 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
-  const assertOrCreateRealDirectory = (candidate: string, label: string): void => {
-    try {
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error(`${label} must be a real directory: ${candidate}`);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      fs.mkdirSync(candidate, { mode: 0o700 });
-      const stat = fs.lstatSync(candidate);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error(`${label} must be a real directory: ${candidate}`);
-      }
-    }
-  };
-
   // Never create a workspace as a side effect of launching a child. The HTTP
   // boundary/startup migration has already validated and created this root.
-  const workspaceStat = fs.lstatSync(workspaceRoot);
-  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
-    throw new Error(`Workspace root must be a real directory: ${workspaceRoot}`);
-  }
+  const admission = new RuntimeDirectoryAdmission(workspaceRoot);
 
   let current = workspaceRoot;
   for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
     current = path.join(current, segment);
-    assertOrCreateRealDirectory(current, 'MCP runtime directory');
+    admission.admit(current, segment === serverKey);
   }
   const runtimeRoot = current;
   const home = path.join(runtimeRoot, 'home');
   const cwd = path.join(runtimeRoot, 'cwd');
-  assertOrCreateRealDirectory(home, 'MCP runtime home');
-  assertOrCreateRealDirectory(cwd, 'MCP runtime cwd');
+  admission.admit(home);
+  admission.admit(cwd);
 
   const directories = {
     appData: path.join(home, 'AppData', 'Roaming'),
@@ -706,7 +688,7 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     let cursor = home;
     for (const segment of relative.split(path.sep).filter(Boolean)) {
       cursor = path.join(cursor, segment);
-      assertOrCreateRealDirectory(cursor, 'MCP runtime directory');
+      admission.admit(cursor);
     }
   }
 
@@ -732,6 +714,7 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
     result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
     result.HOMEPATH = home.slice(parsed.root.length - 1);
   }
+  admission.verify();
   return { cwd, env: result };
 }
 
