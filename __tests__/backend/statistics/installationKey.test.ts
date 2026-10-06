@@ -164,7 +164,7 @@ describe('persistent statistics key admission', () => {
   // POSIX permissions or Windows ACL enforcement. Actual descriptor reads stay
   // real, with matching modeled lstat/fstat identities where admission passes.
   async function modelMetadata(keyPatch: Partial<BigIntStats> = {}, directoryPatch: Partial<BigIntStats> = {}, platform = 'linux') {
-    for (const [field, value] of Object.entries({ platform, geteuid: () => 1234, getuid: () => 5678 })) {
+    for (const [field, value] of Object.entries({ platform, geteuid: (): number => 1234, getuid: (): number => 5678 })) {
       processDescriptors.set(field, Object.getOwnPropertyDescriptor(process, field));
       Object.defineProperty(process, field, { configurable: true, value });
     }
