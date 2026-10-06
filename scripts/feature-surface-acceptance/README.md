@@ -90,6 +90,41 @@ protocol tests. Never copy the ephemeral control token into a shared receipt.
    Repeat the actual Firecrawl/Playwright report on the candidate separately
    if those provider configurations are available; keep its outcome distinct.
 
+### Object and array shape checks
+
+These installed checks require a candidate containing the reviewed JSON shape
+guard. Component tests with a mocked tool callback do not observe the actual
+MCP connection, receipt counters or rendered installed application. Keep the
+steps below pending until the coordinator allocates the runtime/browser slot.
+
+1. Select tool 128 and fill its required `element` and `ref` with synthetic
+   values. Use a form-only marker such as `shape-form-control`; use a different
+   marker for the later agent journey. Enter valid `options` and `modifiers`,
+   then record the fixture's current `toolCalls` and `acceptedCalls` counters.
+2. Enter `[]` and then `null` in `options` (an object field), and `{}` in
+   `modifiers` (an array field). Confirm that the raw draft remains visible,
+   the field explains its expected JSON shape, **Test** is disabled, and both
+   fixture counters stay unchanged. Repeat with a syntactically incomplete
+   draft to distinguish the existing syntax feedback from shape feedback.
+3. Repair `options` while leaving `modifiers` invalid; **Test** must stay
+   disabled. Refresh the same server's tools and verify that the invalid draft
+   and feedback remain. Repair all fields, explicitly Test once, and compare
+   the real echo with the edited values, including nested objects, string arrays
+   and false booleans. Each explicit Test adds exactly one dispatched and one
+   accepted receipt; typing, repairing and refreshing add none.
+4. Enter another wrong-shaped optional draft, then clear it with whitespace.
+   Explicitly Test and confirm the echo omits that argument rather than sending
+   its previous value. A separate host-provided wrong-shaped prefill must also
+   block Test until repaired or cleared; record that case as unavailable if no
+   host action supplies such a prefill, rather than claiming it from unit tests.
+
+Record source/artifact and fixture identities, counter baselines/deltas, visible
+feedback and actual echoed values. Repeat the rendered feedback in each of the
+seven supported languages. This checks top-level object/array shape and JSON
+syntax; nested constraints and the wider JSON Schema vocabulary need separate
+cases. It does not replace the Firecrawl/Playwright, provider or novice-pilot
+observations.
+
 The App at `ui://feature-surface/receipt` displays a fresh mount UUID, initializes
 with the host and shows tool-result notifications. It makes no tool requests and
 loads no external assets. Verify its real iframe initialization and retained
