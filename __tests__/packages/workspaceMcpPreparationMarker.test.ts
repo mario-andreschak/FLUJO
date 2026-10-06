@@ -204,16 +204,22 @@ it.each(['growth', 'identity-replacement'] as const)('refuses %s after validatio
   const fixture = await preparedFixture();
   const reads: jest.SpyInstance[] = [];
   const expectClosed = observeMarkerHandles(fixture.marker, reads);
+  const realLstat = fs.lstat.bind(fs);
   let changed = false;
   mockAfterMarkerParentCheck.mockImplementation(async (...args: [string, string]) => {
     if (args[1] === fixture.marker && !changed) {
-      changed = true;
       if (change === 'growth') await fs.appendFile(fixture.marker, ' '.repeat(100_000));
       else {
         const other = path.join(mockWorkspace, 'read-time-marker.json');
         await fs.writeFile(other, fixture.content);
-        await fs.rename(other, fixture.marker);
+        // Windows refuses renaming over an open file. Model the named leaf's
+        // replacement using a real alternate identity after admission, while
+        // retaining the original real descriptor, bounded reads and close.
+        jest.spyOn(fs, 'lstat').mockImplementation(async (filename, options) => {
+          return realLstat(String(filename) === fixture.marker ? other : filename, options);
+        });
       }
+      changed = true;
     }
   });
   expect((await reinstallWorkspaceMcpServers(fixture.plan)).ok).toBe(false);
