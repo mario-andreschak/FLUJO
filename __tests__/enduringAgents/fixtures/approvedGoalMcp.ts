@@ -11,7 +11,8 @@ import { fingerprintTrustedHostExecutable, fingerprintTrustedHostSource, trusted
 export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: boolean, timeoutMs: number) {
   const saved = Object.fromEntries(['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE']
     .map(name => [name, process.env[name]]));
-  const privateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-goal-mcp-grant-'));
+  const privateParent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
+  const privateDirectory = fs.mkdtempSync(path.join(privateParent, 'flujo-goal-mcp-grant-'));
   const sourceRoot = path.join(getWorkspaceDataDir(), 'mcp-servers', 'goal-acceptance-owned');
   fs.mkdirSync(sourceRoot, { recursive: true });
   const dependency = createRequire(path.resolve('package.json'));
@@ -44,7 +45,7 @@ export function installApprovedGoalMcp(fixtureDirectory: string, terminalOnly: b
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;
     }
-    if (path.dirname(privateDirectory) !== path.resolve(os.tmpdir()) || !/^flujo-goal-mcp-grant-[A-Za-z0-9]+$/.test(path.basename(privateDirectory))
+    if (path.dirname(privateDirectory) !== privateParent || !/^flujo-goal-mcp-grant-[A-Za-z0-9]+$/.test(path.basename(privateDirectory))
       || fs.lstatSync(privateDirectory).isSymbolicLink()) throw new Error('Unsafe private goal fixture cleanup');
     fs.rmSync(privateDirectory, { recursive: true, force: true });
   } };

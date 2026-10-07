@@ -8,7 +8,7 @@ import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
 describe('approved host runtime-home isolation', () => {
   let approved: ReturnType<typeof installTrustedHostProfile>;
   beforeEach(async () => {
-    approved = installTrustedHostProfile({ environment: { HOME: 'synthetic-original-home' } });
+    approved = installTrustedHostProfile({ environment: { HOME: 'synthetic-original-home' }, runtimeHome: 'isolated' });
     await ensureWorkspaceDirs();
   });
   afterEach(() => approved.restore());
@@ -16,12 +16,25 @@ describe('approved host runtime-home isolation', () => {
     createHash('sha256').update(approved.config.name).digest('hex').slice(0, 24));
 
   it('honors the explicit runtime-home option for a genuinely approved host', () => {
-    expect(resolveStdioLaunch(approved.config, { isolateRuntimeHome: false }).env.HOME)
-      .toBe('synthetic-original-home');
+    const host = { ...approved.config, trustedHost: { ...approved.config.trustedHost!, runtimeHome: 'host' as const } };
+    approved.approve(host);
+    expect(resolveStdioLaunch(host, { isolateRuntimeHome: false }).env.HOME).toBe('synthetic-original-home');
+    approved.approve();
     const isolated = resolveStdioLaunch(approved.config, { isolateRuntimeHome: true });
     expect(isolated.env.HOME).toBe(path.join(runtimeDirectory(), 'home'));
     expect(isolated.env.USERPROFILE).toBe(isolated.env.HOME);
     expect(isolated.env.XDG_CONFIG_HOME).toBe(path.join(isolated.env.HOME, '.config'));
+  });
+
+  it('refuses isolation under a host-only grant and under an isolated grant missing injected environment names', () => {
+    const host = { ...approved.config, trustedHost: { ...approved.config.trustedHost!, runtimeHome: 'host' as const } };
+    approved.approve(host);
+    expect(() => resolveStdioLaunch(host, { isolateRuntimeHome: true }))
+      .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
+    const incomplete = { ...approved.config, trustedHost: { ...approved.config.trustedHost!, environmentNames: Object.keys(approved.config.env) } };
+    approved.approve(incomplete);
+    expect(() => resolveStdioLaunch(incomplete, { isolateRuntimeHome: true }))
+      .toThrow(expect.objectContaining({ code: 'HOST_POLICY_INVALID' }));
   });
 
   it('refuses an occupied runtime anchor without replacing its bytes or falling back to the host home', () => {
