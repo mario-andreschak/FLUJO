@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const page = readFileSync(path.resolve(__dirname, '../../../githubpages/index.html'), 'utf8');
-const script = page.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+const script = new DOMParser().parseFromString(page, 'text/html').querySelector('script')?.textContent;
 if (!script) throw new Error('Landing page script is missing');
 
 function element<T extends Element = HTMLElement>(selector: string): T {
