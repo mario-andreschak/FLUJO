@@ -216,7 +216,7 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
 
     process.env.FLUJO_EXPOSURE_MODE = 'public';
     ownerFixture = await installOwnerFixture(tmpDir);
-    const remote = await GET(new NextRequest('https://flujo.example.com/v1/chat/conversations?paged=1&search=renamed%20teammate', { headers: { host: 'flujo.example.com', ...ownerFixture.headers } }));
+    const remote = await GET(new NextRequest('https://flujo.example.com/v1/chat/conversations?paged=1&search=renamed%20teammate', { headers: { host: 'flujo.example.com', ...ownerFixture!.headers } }));
     expect(remote.status).toBe(200);
     expect((await remote.json()).items).toEqual([]);
   });
@@ -355,7 +355,7 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     const remote = async (query = '') => {
       const response = await GET(new NextRequest(
         `https://flujo.example.com/v1/chat/conversations${query}`,
-        { headers: { host: 'flujo.example.com', ...ownerFixture.headers } },
+        { headers: { host: 'flujo.example.com', ...ownerFixture!.headers } },
       ));
       return response.json();
     };
