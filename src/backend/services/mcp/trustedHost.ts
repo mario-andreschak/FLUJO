@@ -5,8 +5,10 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { TrustedHostMcpError, trustedHostEnvironment, trustedHostMcpApproval, trustedHostMcpPolicyDigest, verifyTrustedHostMcp } from '../security/trustedHostMcp';
 import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
+import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
+const RESERVED_RUNTIME_NAMES = [...BROKER_NAMES, GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, 'FLUJO_SNAPSHOT_CONTROL_TOKEN'];
 const managedHosts = new WeakMap<object, ManagedTrustedHost>();
 
 interface HostTransport {
@@ -34,7 +36,7 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH']) environment.set(name, '');
   for (const [name, value] of trustedHostEnvironment(config)) {
     const key = name.toUpperCase();
-    if (names.has(key) || BROKER_NAMES.includes(key)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    if (names.has(key) || RESERVED_RUNTIME_NAMES.includes(key)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     names.add(key);
     if (!authority.policy.environmentNames.includes(name)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (process.platform === 'win32') {
@@ -43,6 +45,11 @@ export function resolveTrustedHostLaunch(config: MCPStdioConfig) {
     environment.set(name, value);
   }
   if (process.platform === 'win32' && !names.has('SYSTEMROOT')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+  const fixtureToken = resolveGoalEnduranceFixtureToken(config);
+  if (fixtureToken) {
+    if (!authority.policy.environmentNames.includes(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV)) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
+    environment.set(GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, fixtureToken);
+  }
   return { command: config.command, args: [...(config.args ?? [])], cwd: config.cwd!, env: mcpStringDataRecord(environment) };
 }
 
@@ -77,12 +84,14 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
 export function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void): void {
   const captured = structuredClone(config);
   const initial = trustedHostMcpApproval(captured);
+  const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
   const cancellation = new AbortController();
   let retired = false;
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
   const checkLive = () => {
     if (retired || getCurrentWorkspace() !== initial.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (resolveGoalEnduranceFixtureToken(captured) !== fixtureToken) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   };
   const managed: ManagedTrustedHost = Object.freeze({
     workspace: initial.workspace, serverName: config.name, generation: randomUUID(),
