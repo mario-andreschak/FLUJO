@@ -53,6 +53,7 @@ import type { SubmitPersonaFlowDispatchInput, PersonaFlowDispatchRecord } from '
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 import { runWithWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
 import { flowService } from '@/backend/services/flow';
 import { mcpService } from '@/backend/services/mcp';
 import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
@@ -68,7 +69,11 @@ let now = Date.now();
 
 async function inWorkspace(task: () => Promise<void>): Promise<void> {
   await runWithWorkspace(`goal-runtime-${process.pid}-${++sequence}`, async () => {
-    try { await task(); } finally { stopPersonaGoalRuntime(); }
+    const privateFixture = await installPrivateProfileFixture();
+    try { await task(); } finally {
+      stopPersonaGoalRuntime();
+      await privateFixture.restore();
+    }
   });
 }
 
