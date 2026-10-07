@@ -113,6 +113,17 @@ numeric paid-run envelope or concrete model/account scope is declared in this
 ledger; its proposed null paid-run limit records that missing measurement contract,
 without denying the user's development/deployment authorization.
 
+## Historical 46af3225 publication review
+
+The later [publication-source inventory](evidence/publication-source-46af3225.json)
+records `SECURITY.md` and the owner-access/isolation documents present at
+`46af3225`. It supplements this immutable baseline; source policy presence does
+not establish accepted release security. The [CI receipt](evidence/ci-verification-46af3225.json)
+retains the failed publication-tree verification separately from source proposals
+and older passing runs. The selected flow's [assessment and triage](evidence/docs-review-triage-46af3225.json)
+retain its provisional grade, confirmed gaps and rejected findings without
+promoting a release claim.
+
 ## October 5 source outcomes
 
 The [checksummed v25 observation](evidence/source-outcomes-2026-10-05-v25.json)

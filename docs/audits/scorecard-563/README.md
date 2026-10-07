@@ -210,7 +210,7 @@ limit or concrete model/account scope is recorded here. Development/push/deploym
 authorization is separate; the coordinator owns the deployment candidate. A dollar
 CLI argument is not monetary enforcement.
 
-## Numeric contracts before measurement
+## Numeric contracts for acceptance
 
 Every budget has an owner, status, metric/operator/limit/unit, denominator, observation
 window, declaration time and basis. Its structured observation contract specifies
@@ -254,9 +254,12 @@ claims retain a required candidate-build gate.
 | Proposed live stages | Authorized 1-hour smoke then 7 elapsed days; 28 elapsed days for multi-week claim; >=99% verified due rounds, zero unscheduled interventions/duplicate effects | All due rounds including missed/stalled/rejected/failed, useful output-quality review, scheduled controls separate, authorized enforced spend accounting |
 
 These proposals are coordination inputs, not current performance guarantees.
-Security, Maturity, Production, Product fit and Community must ratify the workload,
-matrices and targets with the maintainer and independent reviewer before measuring.
-Do not reduce thresholds/workload because host capacity is low; schedule checks instead.
+Formal acceptance against these proposals requires recorded agreement on the workload,
+matrices and targets. Existing session authorization permits normal development,
+source checks, exploratory measurements and publication without a new human approval.
+Record those observations with their actual scope; they do not ratify a proposal or
+complete a human study. Do not reduce thresholds or workload because host capacity
+is low; schedule checks instead.
 
 ## Adding evidence and reconciling claims
 
@@ -346,7 +349,8 @@ The version-1 schema pins the published policies for all thirty budgets: operato
 limit, unit, sampling description, window, basis and minimum observation envelope.
 Stricter observation minima remain allowed. Pinning these proposals prevents silent
 weakening; it does not ratify them. The live-spend cap remains unset, and a concrete
-funded limit requires a separately reviewed contract update before measurement.
+funded limit requires a contract update before claiming acceptance against that limit.
+This acceptance requirement does not add an approval step to already authorized work.
 New unmeasured proposals may still be recorded. Agreement or passing measurements
 require a reviewed policy, unit semantics and permitted evidence carriers. Signed
 growth and derived Persona flatness are explicit policies; identifier suffixes

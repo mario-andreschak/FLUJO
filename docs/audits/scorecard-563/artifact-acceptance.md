@@ -71,7 +71,10 @@ New unmeasured budgets may remain proposals without these rules, but agreement a
 passing checksummed measurements require reviewed unit semantics and a
 `metricEvidenceKinds` entry. Missing unit semantics fail closed for acceptance.
 These unit bindings do not ratify still-proposed numeric targets or spending limits;
-owners must agree on those before measuring. Changes to reviewed unit meanings need
+recorded agreement is needed before measurements qualify formal acceptance. Authorized
+development, exploratory measurement and publication may proceed while agreement
+remains pending. Preserve their actual scope and the original proposed contract.
+Changes to reviewed unit meanings need
 a separately reviewed contract version.
 Every source elapsed-policy ID must resolve to a ledger budget. Metric denominators
 and count-valued measurements are integers. Every non-null start must be valid UTC.
