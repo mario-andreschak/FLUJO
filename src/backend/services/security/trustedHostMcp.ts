@@ -6,6 +6,7 @@ import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName } from '@/utils/workspace';
 import { getDataDir } from '@/utils/paths';
 import { ownerPolicySchema } from './ownerCredentials';
+import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
 
 /** Admit only own data properties; configuration accessors never run during consent. */
 export function trustedHostEnvironment(config: MCPStdioConfig): Map<string, string> {
@@ -159,6 +160,7 @@ export function readPrivateApproval(filename: string | undefined): unknown {
   if (!filename || !path.isAbsolute(filename)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
   const relative = path.relative(path.resolve(getDataDir()), path.resolve(filename));
   if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  const windowsAuthority = process.platform === 'win32' ? windowsPrivateAuthorityStamp(filename) : undefined;
   if (process.platform !== 'win32' && typeof process.getuid === 'function') {
     const uid = BigInt(process.getuid());
     let directory = path.dirname(path.resolve(filename));
@@ -172,11 +174,14 @@ export function readPrivateApproval(filename: string | undefined): unknown {
     }
   }
   const chunks: Buffer[] = [];
-  const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
-  if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  if (process.platform !== 'win32' && typeof process.getuid === 'function'
-      && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+  try {
+    const stat = readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk)));
+    if (windowsAuthority !== undefined && windowsPrivateAuthorityStamp(filename) !== windowsAuthority) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (process.platform !== 'win32' && (stat.mode & BigInt(0o077)) !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    if (process.platform !== 'win32' && typeof process.getuid === 'function'
+        && stat.uid !== BigInt(process.getuid()) && stat.uid !== BigInt(0)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  }
   finally { for (const chunk of chunks) chunk.fill(0); }
 }
 
