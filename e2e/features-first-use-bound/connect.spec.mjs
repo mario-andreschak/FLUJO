@@ -86,7 +86,8 @@ for (const [transport, title, endpoint] of [
 
       const testRun = configure.getByRole('button', { name: '3) Test run', exact: true });
       await testRun.click();
-      await expect(configure.getByRole('alert')).toHaveText('Connection test passed. The server is reachable.');
+      await expect(configure.getByRole('alert').filter({ hasText: 'Connection test passed. The server is reachable.' }))
+        .toHaveText('Connection test passed. The server is reachable.');
       await expect(configure.getByText('Connection result: MCP handshake successful.', { exact: false })).toBeVisible();
       await expect(configure.getByText('Tools discovered: 128.', { exact: false })).toBeVisible();
       await expect.poll(() => environment.fixture.state.snapshot().listRequests).toBeGreaterThan(0);
