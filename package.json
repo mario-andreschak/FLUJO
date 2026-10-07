@@ -132,7 +132,7 @@
     "fast-glob": "$fast-glob",
     "zod": "$zod",
     "postcss": "$postcss",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
