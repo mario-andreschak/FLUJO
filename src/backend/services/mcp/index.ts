@@ -5,6 +5,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
+import { StringDecoder } from "node:string_decoder";
+import { collectMcpDiagnosticSecrets, createMcpDiagnosticRedactor } from "@/utils/mcp/diagnosticRedaction";
 import { createLogger } from "@/utils/logger";
 import {
   bindToCurrentWorkspace,
@@ -1497,6 +1499,21 @@ export class MCPService {
     };
 
     const stderrLogs: string[] = [];
+    let diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(config, config));
+    let stderrRedactor = diagnosticRedactor.stream();
+    const stderrDecoder = new StringDecoder("utf8");
+    let diagnosticsFinished = false;
+    const appendStderr = (chunk: string) => {
+      if (!chunk) return;
+      stderrLogs.push(chunk);
+      emit({ type: "stderr", data: chunk });
+    };
+    const finishDiagnostics = () => {
+      if (diagnosticsFinished) return;
+      diagnosticsFinished = true;
+      appendStderr(stderrRedactor.write(stderrDecoder.end()));
+      appendStderr(stderrRedactor.end());
+    };
     let client: Client | null = null;
     let transport:
       | ReturnType<typeof createTransport>
@@ -1544,6 +1561,8 @@ export class MCPService {
       // the live connection would (shares createTransport). Global bindings / encrypted
       // secrets are resolved here; plain values pass through unchanged.
       const connectConfig = await resolveConfigHeaders(toTest);
+      diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(toTest, connectConfig));
+      stderrRedactor = diagnosticRedactor.stream();
       // Same experimental v2-beta routing as the live connection, so Test Run
       // probes exactly what connectServer would build.
       const useBeta =
@@ -1579,15 +1598,11 @@ export class MCPService {
       ).stderr;
       if (probeStderr && typeof probeStderr.on === "function") {
         probeStderr.on("data", (data: Buffer) => {
-          const chunk = data.toString();
-          stderrLogs.push(chunk);
-          emit({ type: "stderr", data: chunk });
+          if (!diagnosticsFinished) appendStderr(stderrRedactor.write(stderrDecoder.write(data)));
         });
       }
       transport.onerror = (err: Error) => {
-        const line = `Transport error: ${formatErrorChain(err)}`;
-        stderrLogs.push(line);
-        emit({ type: "stderr", data: line + "\n" });
+        if (!diagnosticsFinished) appendStderr(diagnosticRedactor.redact(`Transport error: ${formatErrorChain(err)}\n`));
       };
 
       emit({
@@ -1643,17 +1658,19 @@ export class MCPService {
         toolCount = Array.isArray(result?.tools) ? result.tools.length : 0;
       } catch (listError) {
         log.debug(
-          `testConnection: connected to ${config.name} but listTools failed: ${listError instanceof Error ? listError.message : String(listError)}`,
+          `testConnection: connected to ${config.name} but listTools failed: ${diagnosticRedactor.redact(formatErrorChain(listError))}`,
         );
       }
 
       log.info(
         `testConnection: Successfully connected to ${config.name} (${toolCount} tools)`,
       );
+      finishDiagnostics();
       emit({ type: "result", success: true, data: { toolCount } });
       return { success: true, data: { toolCount } };
     } catch (error) {
-      log.warn(`testConnection: Failed to connect to ${config.name}:`, error);
+      finishDiagnostics();
+      log.warn(`testConnection: Failed to connect to ${config.name}:`, diagnosticRedactor.redact(formatErrorChain(error)));
 
       const requiresAuthentication = isAuthRequiredError(error);
 
@@ -1675,7 +1692,8 @@ export class MCPService {
       const enhancedErrorMessage = enhanceConnectionErrorMessage(
         error,
         config,
-        stderrLogs,
+        stderrLogs.length ? [stderrLogs.join("")] : [],
+        diagnosticRedactor.redact,
       );
       emit({
         type: "result",
@@ -1701,7 +1719,7 @@ export class MCPService {
           });
         } catch (closeError) {
           log.debug(
-            `testConnection: error closing test client for ${config.name}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+            `testConnection: error closing test client for ${config.name}: ${diagnosticRedactor.redact(formatErrorChain(closeError))}`,
           );
         }
       }
