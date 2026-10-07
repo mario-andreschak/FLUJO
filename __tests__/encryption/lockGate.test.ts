@@ -157,6 +157,9 @@ describe('deny-by-default coverage guard', () => {
       // Owner sign-in/logout has independent durable owner authority and must
       // work before encryption unlock; it returns no stored workspace secrets.
       'src/app/api/owner/session/route.ts',
+      // Owner-authorized transfer restore writes only a fresh namespace under a
+      // fresh recipient key; it cannot read or overwrite the locked source.
+      'src/app/api/credential-transfer/restore/route.ts',
       'src/app/api/init/route.ts',
       // Installation-wide namespace discovery contains no workspace content and
       // must remain reachable so the locked shell can validate its active tab.
