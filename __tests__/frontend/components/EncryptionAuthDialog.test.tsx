@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import CredentialMigrationRecovery from '@/frontend/components/CredentialMigrationRecovery';
 import EncryptionAuthDialog from '@/frontend/components/EncryptionAuthDialog';
 
 const mockVerify = jest.fn();
@@ -102,4 +103,92 @@ test('unavailable status does not report the browser as unlocked', async () => {
   expect(await screen.findByText('encryption.unlock.error')).toBeInTheDocument();
   expect(screen.getByRole('dialog')).toBeInTheDocument();
   expect(screen.queryByText('private-status-diagnostic')).not.toBeInTheDocument();
+});
+
+const pending = { initialized: true, locked: true, protection: 'migration-pending' };
+async function recovery() {
+  mockFetch.mockResolvedValue(response(pending));
+  render(<EncryptionAuthDialog />);
+  return screen.findByLabelText('encryption.recovery.passphrase');
+}
+function confirmRecovery(field: HTMLElement) {
+  fireEvent.change(field, { target: { value: 'private-recovery-passphrase' } });
+  fireEvent.click(screen.getByRole('checkbox'));
+}
+test('pending migration never offers ordinary setup or unlock and requires explicit confirmation', async () => {
+  const field = await recovery();
+  expect(screen.queryByLabelText('encryption.unlock.password')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('settings.encryption.newPassword')).not.toBeInTheDocument();
+  fireEvent.change(field, { target: { value: 'private-recovery-passphrase' } });
+  expect(screen.getByRole('button', { name: 'encryption.recovery.resume' })).toBeDisabled();
+  expect(mockVerify).not.toHaveBeenCalled();
+});
+test.each(['resume', 'rollback'])('confirmed %s sends only explicit recovery and rereads locked status', async action => {
+  const field = await recovery(); const unlocked = jest.fn();
+  window.addEventListener('fixture-unlocked', unlocked);
+  mockFetch.mockResolvedValueOnce(response({ status: action === 'resume' ? 'committed' : 'rolled-back' }))
+    .mockResolvedValueOnce(response({ initialized: true, locked: true, protection: 'passphrase' }));
+  confirmRecovery(field);
+  fireEvent.click(screen.getByRole('button', { name: `encryption.recovery.${action}` }));
+  expect(await screen.findByLabelText('encryption.unlock.password')).toHaveValue('');
+  expect(mockFetch.mock.calls[1][0]).toBe('/api/credential-migration?workspace=default-workspace');
+  expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({ action, recoveryPassphrase: 'private-recovery-passphrase', confirmMigration: true });
+  expect(mockVerify).not.toHaveBeenCalled(); expect(unlocked).not.toHaveBeenCalled();
+  window.removeEventListener('fixture-unlocked', unlocked);
+});
+test('failed recovery keeps pending controls, clears secrets and ignores server diagnostics', async () => {
+  const field = await recovery();
+  mockFetch.mockResolvedValueOnce(response({ error: 'private-server-secret' }, false));
+  confirmRecovery(field); fireEvent.click(screen.getByRole('button', { name: 'encryption.recovery.resume' }));
+  expect(await screen.findByText('encryption.recovery.failed')).toBeInTheDocument();
+  await waitFor(() => expect(field).toHaveValue(''));
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  expect(screen.queryByText('private-server-secret')).not.toBeInTheDocument();
+});
+test('cancel aborts the request, clears the passphrase and rereads pending state without retrying', async () => {
+  const field = await recovery();
+  mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  }));
+  confirmRecovery(field); fireEvent.click(screen.getByRole('button', { name: 'encryption.recovery.resume' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'encryption.recovery.cancel' }));
+  await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3));
+  expect(field).toHaveValue(''); expect(mockFetch.mock.calls[1][1].signal.aborted).toBe(true);
+  expect(mockVerify).not.toHaveBeenCalled();
+});
+test('stale unlocked status cannot dismiss a newer pending status', async () => {
+  let resolve!: (value: Response) => void;
+  mockFetch.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }))
+    .mockResolvedValueOnce(response(pending));
+  render(<EncryptionAuthDialog />);
+  fireEvent(window, new CustomEvent('fixture-locked'));
+  expect(await screen.findByLabelText('encryption.recovery.passphrase')).toBeInTheDocument();
+  resolve(response({ initialized: true, locked: false, protection: 'passphrase' }));
+  await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+});
+test('double Enter admits only one unlock mutation', async () => {
+  mockFetch.mockResolvedValue(response({ initialized: true, locked: true, protection: 'passphrase' }));
+  mockVerify.mockImplementation(() => new Promise(() => {}));
+  render(<EncryptionAuthDialog />);
+  const field = await screen.findByLabelText('encryption.unlock.password');
+  fireEvent.change(field, { target: { value: 'private-owner-passphrase' } });
+  fireEvent.keyDown(field, { key: 'Enter' }); fireEvent.keyDown(field, { key: 'Enter' });
+  expect(mockVerify).toHaveBeenCalledTimes(1);
+});
+
+test('recovery teardown aborts and discards the late result from the previous workspace', async () => {
+  let resolve!: (value: Response) => void;
+  const settled = jest.fn().mockResolvedValue(undefined);
+  mockFetch.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+  const { rerender } = render(<CredentialMigrationRecovery workspace="source" onSettled={settled} />);
+  confirmRecovery(screen.getByLabelText('encryption.recovery.passphrase'));
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.recovery.resume' }));
+  rerender(<CredentialMigrationRecovery workspace="destination" onSettled={settled} />);
+  expect(mockFetch.mock.calls[0][0]).toBe('/api/credential-migration?workspace=source');
+  expect(mockFetch.mock.calls[0][1].signal.aborted).toBe(true);
+  expect(screen.getByLabelText('encryption.recovery.passphrase')).toHaveValue('');
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  resolve(response({ status: 'committed' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'encryption.recovery.resume' })).toBeDisabled());
+  expect(settled).not.toHaveBeenCalled();
 });
