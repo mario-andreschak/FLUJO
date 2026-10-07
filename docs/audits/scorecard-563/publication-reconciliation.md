@@ -113,6 +113,28 @@ numeric paid-run envelope or concrete model/account scope is declared in this
 ledger; its proposed null paid-run limit records that missing measurement contract,
 without denying the user's development/deployment authorization.
 
+## Historical 46af3225 publication review
+
+The later [publication-source inventory](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/publication-source-46af3225.json)
+records `SECURITY.md` and the owner-access/isolation documents present at
+`46af3225`. It supplements this immutable baseline; source policy presence does
+not establish accepted release security. The [CI receipt](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/ci-verification-46af3225.json)
+retains the failed publication-tree verification separately from source proposals
+and older passing runs. The selected flow's [assessment and triage](https://github.com/mario-andreschak/FLUJO/blob/d8784c5d61ae84fec755f59bcb7e815ca143d83f/docs/audits/scorecard-563/evidence/docs-review-triage-46af3225.json)
+retain its provisional grade, confirmed gaps and rejected findings without
+promoting a release claim.
+
+## Historical source review records
+
+Earlier Docs branches retain [the 61d212c4 re-review command receipts](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/docs-rereview-command-receipts-61d212c4.json),
+[review triage](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/docs-rereview-triage-61d212c4.json)
+and [failed CI receipt](https://github.com/mario-andreschak/FLUJO/blob/8de1d7e28002e30e92732f216ec2cd7895f97fb6/docs/audits/scorecard-563/evidence/ci-verification-61d212c4.json).
+The separate [filesystem-race scan observation](https://github.com/mario-andreschak/FLUJO/blob/90814d6a29cbfec1ec6174e3e8aa5490cd4caa4f/docs/audits/scorecard-563/evidence/scorecard-race-codeql-f0cd4c10.json)
+retains its original source and PR-diff reporting scope. These links preserve access
+to historical observations; they do not qualify the current candidate, establish
+full-release scanner coverage or assign a grade. Original records stay in their
+original source trees rather than being relabeled as current evidence.
+
 ## October 5 source outcomes
 
 The [checksummed v25 observation](evidence/source-outcomes-2026-10-05-v25.json)

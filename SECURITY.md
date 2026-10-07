@@ -17,13 +17,15 @@ on the basis of these unfinished changes.
 
 ## Reporting a vulnerability
 
-Prefer GitHub's **Security → Report a vulnerability** private reporting channel
-when it is enabled for [this repository](https://github.com/mario-andreschak/FLUJO/security).
-On October 3, 2026, the repository API reported that private reporting was
-disabled. Enabling it and naming an accountable responder remain maintainer
-actions; this file does not claim that a confidential intake channel or response
-SLA already exists. Until a private channel is available, open an issue asking
-the maintainer for confidential contact, without exploit details or secrets.
+Use GitHub's **Security → Report a vulnerability** private reporting channel
+for [this repository](https://github.com/mario-andreschak/FLUJO/security).
+On October 4, 2026 (UTC), the repository API confirmed that private reporting was
+enabled; see the [dated capability receipt](docs/audits/scorecard-563/evidence/private-vulnerability-reporting-2026-10-04.json).
+An accountable responder, trained backup, response targets and an observed
+response exercise remain unrecorded. Channel availability does not establish a
+response SLA or a completed vulnerability-response drill. If the private channel
+is unavailable, ask the maintainer for confidential contact without posting
+exploit details or secrets in a public issue.
 
 In a private report include affected source commit and installed artifact/version,
 OS/install/exposure mode, prerequisites, a minimal sanitized reproduction,
