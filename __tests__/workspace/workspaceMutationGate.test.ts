@@ -6,7 +6,7 @@ jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
 }));
 
 import * as runtimeLock from '@/backend/services/enduringAgents/runtimeLock';
-import { runWithWorkspace } from '@/utils/workspace';
+import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 
 import {
   beginWorkspaceSnapshotBoundary,
@@ -245,4 +245,31 @@ it('rechecks cancellation after awaited physical ownership before invoking recov
     expect(workspaceMutationStatus().blocked).toBe(false);
     snapshot.mockRestore();
   });
+});
+
+
+it('explicitly rebinds a live inherited A participant from ambient B and restores B afterward', async () => {
+  await withWorkspaceMutation(async () => {
+    await runWithWorkspace('rebind-b', async () => {
+      expect(getCurrentWorkspace()).toBe('rebind-b');
+      await withWorkspaceMutation(async () => {
+        expect(getCurrentWorkspace()).toBe('rebind-a');
+        expect(workspaceMutationStatus('rebind-a').activeMutations).toBe(1);
+      }, 'rebind-a');
+      expect(getCurrentWorkspace()).toBe('rebind-b');
+    });
+  }, 'rebind-a');
+});
+
+it('refuses predecessor hot-reload contexts without treating their Set as authority', async () => {
+  const context = globalThis.__flujoWorkspaceMutationContext!;
+  const predecessor = { workspaces: new Set(['legacy-context']) } as unknown as NonNullable<ReturnType<typeof context.getStore>>;
+  const effect = jest.fn(async () => undefined);
+  await context.run(predecessor, async () => {
+    await expect(withWorkspaceMutation(effect, 'legacy-context')).rejects.toThrow('predates the current admission protocol');
+    await expect(beginWorkspaceSnapshotBoundary('legacy-context')).rejects.toThrow('predates the current admission protocol');
+  });
+  expect(effect).not.toHaveBeenCalled();
+  await withWorkspaceMutation(effect, 'legacy-context');
+  expect(effect).toHaveBeenCalledTimes(1);
 });
