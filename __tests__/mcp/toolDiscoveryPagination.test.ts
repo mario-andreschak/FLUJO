@@ -1,6 +1,10 @@
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   resolveGlobalVars: jest.fn(async (value: unknown) => value),
 }));
+jest.mock('@/backend/services/mcp/config', () => ({
+  loadServerConfigs: jest.fn(async () => [{ name: 'fixture', transport: 'streamable',
+    serverUrl: 'https://pagination.example.test/mcp', disabled: false, enableMcpApps: true }]),
+}));
 
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { callTool, listServerTools } from '@/backend/services/mcp/tools';
