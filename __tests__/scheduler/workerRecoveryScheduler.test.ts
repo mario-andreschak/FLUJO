@@ -1,3 +1,4 @@
+import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 import { randomUUID, createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -45,6 +46,7 @@ async function enroll(plan: PlannedExecution, enabled = true) {
 const nextOccurrence = () => new Date(Date.now() + 60_000);
 
 beforeEach(async () => {
+  await unlockPrivateFixtureInCurrentWorkspace();
   Object.assign(process.env, { FLUJO_WORKER_MODE: '1', FLUJO_WORKER_RECOVERY_ID: 'scheduler-worker-a',
     FLUJO_WORKER_RECOVERY_EPOCH: '1', FLUJO_SNAPSHOT_CONTROL_TOKEN: 'test-only-scheduler-control',
     FLUJO_WORKER_SNAPSHOT_SHA256: 'a'.repeat(64) });

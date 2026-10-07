@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression test for the MCP REST API.
  *
@@ -81,10 +84,11 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
   ...over,
 } as MCPStdioConfig);
 
-beforeEach(() => {
+beforeEach(async () => {
   _resetLifecycleForTests();
   for (const k of Object.keys(store)) delete store[k];
   migrateMcpServerReferences.mockClear();
+    privateFixture = await installPrivateProfileFixture(metadata => { store['encryption_key'] = metadata; });
 });
 
 describe('MCP REST API', () => {

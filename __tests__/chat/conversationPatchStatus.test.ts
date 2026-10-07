@@ -1,3 +1,9 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+import { installOwnerFixture } from '../utils/ownerFixture';
+let ownerFixture: Awaited<ReturnType<typeof installOwnerFixture>> | undefined;
+afterEach(async () => { await ownerFixture?.restore(); ownerFixture = undefined; });
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /**
  * Regression test for the "Conversation completed badge on a fresh
  * conversation" bug.
@@ -109,6 +115,7 @@ function strictPersonaPatchRequest(
       host: 'localhost',
       origin: 'http://localhost',
       'content-type': 'application/json',
+      ...ownerFixture?.headers,
       ...headers,
     },
     body: JSON.stringify({ personaTargetId: 'persona-target' }),
@@ -124,7 +131,7 @@ async function patchFlow(conversationId: string) {
 }
 
 describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     for (const key of Object.keys(stored)) delete stored[key];
     mockPersonaDeleted = false;
     mockGetPersona.mockClear();
@@ -135,6 +142,7 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
       messages: (state.messages ?? []).filter(message => message.role !== 'system') as SharedState['messages'],
       source: 'snapshot' as const,
     }));
+    privateFixture = await installPrivateProfileFixture(metadata => { Object.assign(stored, { encryption_key: metadata }); });
   });
 
   it('hydrates a bounded suffix from the automatically recovered durable transcript', async () => {
@@ -285,6 +293,7 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
   ])('rejects Persona-target PATCH for %s', async (_label, mode, headers) => {
     const previousMode = process.env.FLUJO_EXPOSURE_MODE;
     process.env.FLUJO_EXPOSURE_MODE = mode;
+    if (mode === 'network' || mode === 'public') ownerFixture = await installOwnerFixture(privateFixture.root);
     const id = `conv-rejected-${mode}-${headers.host}`;
     seedConversation(id, undefined);
     try {
@@ -377,10 +386,11 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
 
     const previousMode = process.env.FLUJO_EXPOSURE_MODE;
     process.env.FLUJO_EXPOSURE_MODE = 'public';
+    ownerFixture = await installOwnerFixture(privateFixture.root);
     try {
       const getResponse = await GET(new NextRequest(
         'https://flujo.example.com/v1/chat/conversations/conv-persona',
-        { headers: { host: 'flujo.example.com' } },
+        { headers: { host: 'flujo.example.com', ...ownerFixture.headers } },
       ), {
         params: Promise.resolve({ conversationId: 'conv-persona' }),
       });

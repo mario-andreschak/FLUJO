@@ -1,3 +1,6 @@
+import { installPrivateProfileFixture } from '../utils/privateProfileFixture';
+let privateFixture: Awaited<ReturnType<typeof installPrivateProfileFixture>>;
+afterEach(async () => { await privateFixture?.restore(); });
 /** Real FlowSpec/engine/scheduler -> production MCP service -> built Bash stdio
  * server -> harmless OS process. Only app storage/flow/model lookup are fixtures.
  * This fixture completes the real nonzero-process reproduction requested in #538. */
@@ -84,8 +87,9 @@ describe('Real Bash Static scheduled process result (#537/#538)', () => {
     expect(connected).toMatchObject({ success: true });
   }, 60_000);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store.clear();
+    privateFixture = await installPrivateProfileFixture(metadata => { store.set('encryption_key', metadata); });
     store.set('mcp_servers', { bash: bashConfig });
     FlowExecutor.clearFlowCache();
     FlowExecutor.conversationStates.clear();
