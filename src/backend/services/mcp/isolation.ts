@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { constants, closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -27,7 +27,7 @@ const approvalSchema = z.object({
 
 function readPrivatePolicy(filename: string | undefined): unknown {
   if (filename === undefined || !path.isAbsolute(filename.trim())) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-  const fd = openSync(filename.trim(), 'r');
+  const fd = openSync(filename.trim(), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > MAX_POLICY_BYTES

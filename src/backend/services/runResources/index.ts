@@ -465,8 +465,9 @@ export async function readRunResourceRange(
 
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), 'r');
+    handle = await fs.open(payloadPath(parsed.conversationId, parsed.id), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error('Run resource payload is not a regular file');
     const total = stat.size;
     const safeStart = Math.max(0, Math.floor(start));
     if (safeStart >= total) {

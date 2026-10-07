@@ -1,5 +1,5 @@
 import path from 'path';
-import { promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import {
@@ -309,7 +309,7 @@ export async function listConversationSummaries(): Promise<ConversationSummary[]
         const filePath = path.join(conversationsDir(), file);
         // Atomic snapshot replacement can happen while a list is rebuilding.
         // Read and index the same opened file, never a later pathname occupant.
-        const snapshot = await fs.open(filePath, 'r');
+        const snapshot = await fs.open(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
         try {
           const stats = await snapshot.stat();
           if (!stats.isFile()) throw new Error('Invalid conversation snapshot.');

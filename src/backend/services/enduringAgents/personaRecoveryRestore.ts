@@ -1,5 +1,5 @@
 import { PersonaRecoveryError } from './personaRecoveryError';
-import { promises as fs, type Stats } from 'node:fs';
+import { constants, promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import {
   getWorkspaceDir, getWorkspacesDir, withWorkspaceNamespaceMutation, WORKSPACE_SUBTREES,
@@ -98,8 +98,12 @@ export async function restorePersonaRecovery(
       await fs.rename(staging, destination);
       published = true;
       if (process.platform !== 'win32') {
-        const parent = await fs.open(root, 'r');
-        try { await parent.sync(); } finally { await parent.close(); }
+        const parent = await fs.open(root, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0)
+          | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        try {
+          if (!(await parent.stat()).isDirectory()) throw new PersonaRecoveryError('Recovery parent is not a real directory.');
+          await parent.sync();
+        } finally { await parent.close(); }
       }
       await options.onCheckpoint?.('published');
       return { status: 'restored', workspace: destinationWorkspace, preview: plan.preview };
