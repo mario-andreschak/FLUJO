@@ -14,6 +14,7 @@ import { getDataDir } from '@/utils/paths';
 import { collectOperationsSnapshot, getObservationProcessId } from '@/backend/services/operations/snapshot';
 import { boundedJsonReader } from '@/backend/services/operations/boundedRead';
 import type { PlannedExecution, RunRecord } from '@/shared/types/plannedExecution';
+import snapshotTransfer from '@/shared/snapshotTransfer.json';
 
 const callbacks: Array<{ fire: (occurrence: Date) => Promise<void>; dispose: jest.Mock }> = [];
 const runFlowMock = jest.fn();
@@ -145,7 +146,7 @@ it('observes signed terminal uncertainty without reconciling it, writing storage
   const writes = jest.mocked(recoveryFs.atomicWriteWithoutLinks).mock.calls.length;
   const timers = callbacks.length;
   const result = await collectOperationsSnapshot({ observationProcessId: getObservationProcessId(), workspace: getCurrentWorkspace(),
-    compatibility: { applicationVersion: '3.46.3', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, workerSnapshotSourceVersion: 1 },
+    compatibility: { ...snapshotTransfer, applicationVersion: '3.46.3', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, workerSnapshotSourceVersion: 1 },
     worker: { mode: 'worker', state: 'ready' }, actor: { kind: 'worker-control' },
     read: boundedJsonReader(getWorkspaceDataDir()), scheduler: rows => scheduler.inspectOperations(rows),
     workerRecovery: inspectWorkerRecovery, active: [], mcp: [], memory: { rss: 100, heapUsed: 50, heapTotal: 80 } });

@@ -60,6 +60,9 @@ async function POST_handler(request: NextRequest): Promise<Response> {
         selection.flowIds = [...new Set(flowIds)];
       }
     }
+    if (selection.recipientKey === undefined) {
+      return noStoreJson({ error: 'recipientKey must be a canonical base64 32-byte key.' }, 400);
+    }
     return noStoreJson(
       await snapshotCoordinator.begin(getCurrentWorkspace(), selection),
       202,

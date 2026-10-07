@@ -103,6 +103,10 @@ jobs:
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
             --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
             "$image_id" node scripts/smoke-cloud-worker.mjs --production
+          docker run --rm --network none --read-only --no-healthcheck \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+            "$image_id" node scripts/smoke-cloud-worker.mjs --production --snapshot-v1
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -125,12 +129,21 @@ jobs:
           if docker manifest inspect "$revision_tag" >/dev/null 2>&1; then
             docker pull "$revision_tag"
             IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$revision_tag")"
-            test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_ID")" = "$GITHUB_SHA"
-            test "$(docker image inspect --format '{{index .Config.Labels "io.flujo.application.version"}}' "$IMAGE_ID")" = "$APPLICATION_VERSION"
+            export IMAGE_ID
+            node --input-type=module <<'NODE'
+            import { execFileSync } from 'node:child_process';
+            import { inspectTestedImage } from './scripts/image-release.mjs';
+            inspectTestedImage((command, args) => execFileSync(command, args, { encoding: 'utf8' }),
+              process.env.IMAGE_ID, process.env.GITHUB_SHA, process.env.APPLICATION_VERSION);
+            NODE
             docker run --rm --network none --read-only --no-healthcheck \
               --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
               --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
               "$IMAGE_ID" node scripts/smoke-cloud-worker.mjs --production
+            docker run --rm --network none --read-only --no-healthcheck \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912 \
+              --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+              "$IMAGE_ID" node scripts/smoke-cloud-worker.mjs --production --snapshot-v1
           else
             docker tag "$IMAGE_ID" "$revision_tag"
             docker push "$revision_tag"

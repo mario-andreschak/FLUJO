@@ -17,11 +17,12 @@ import { GET } from '@/app/api/snapshot/info/route';
 import { snapshotCoordinator } from '@/backend/services/workspace/snapshotCoordinator';
 import { type NextRequest } from 'next/server';
 
-const keys = ['FLUJO_WORKER_MODE', 'FLUJO_WORKER_SNAPSHOT_SOURCE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN',
+const keys = ['FLUJO_WORKER_MODE', 'FLUJO_WORKER_SNAPSHOT_SOURCE', 'FLUJO_SNAPSHOT_CONTROL_TOKEN', 'FLUJO_WORKER_SNAPSHOT_KEY',
   'FLUJO_EXPOSURE_MODE', 'FLUJO_EXPOSURE_MODE_SOURCE', 'FLUJO_EXTRA_LOCAL_HOSTS',
   'FLUJO_RUNTIME_LOCAL_HOSTS'] as const;
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
 const token = 'synthetic-worker-snapshot-source-token';
+const recipientKey = Buffer.alloc(32, 7).toString('base64');
 
 function request(options: { host?: string; origin?: string; authenticated?: boolean; body?: string; method?: string } = {}): NextRequest {
   const method = options.method ?? 'POST';
@@ -30,7 +31,7 @@ function request(options: { host?: string; origin?: string; authenticated?: bool
     headers: { host: options.host ?? 'source.internal:4200',
       ...(options.origin === undefined ? {} : { origin: options.origin }),
       ...(options.authenticated === false ? {} : { authorization: `Bearer ${token}` }) },
-    ...(method === 'POST' ? { body: options.body ?? '{}' } : {}),
+    ...(method === 'POST' ? { body: options.body ?? JSON.stringify({ recipientKey }) } : {}),
   }) as NextRequest;
 }
 
@@ -65,10 +66,24 @@ describe('explicit private worker snapshot-source admission', () => {
   it('captures the complete assigned workspace and keeps explicit flow selection separate', async () => {
     const full = await runWithWorkspace('source', () => POST(request()));
     expect(full.status).toBe(202);
-    expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', {});
-    const selected = await runWithWorkspace('source', () => POST(request({ body: '{"flowIds":["flow-a","flow-a"]}' })));
+    expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', { recipientKey });
+    const selected = await runWithWorkspace('source', () => POST(request({ body: JSON.stringify({ recipientKey, flowIds: ['flow-a', 'flow-a'] }) })));
     expect(selected.status).toBe(202);
-    expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', { flowIds: ['flow-a'] });
+    expect(snapshotCoordinator.begin).toHaveBeenLastCalledWith('source', { recipientKey, flowIds: ['flow-a'] });
+  });
+
+  it.each([undefined, Buffer.alloc(32, 9).toString('base64')])
+  ('requires an explicit recipient before capture regardless of an ambient key (%#)', async ambientKey => {
+    if (ambientKey !== undefined) process.env.FLUJO_WORKER_SNAPSHOT_KEY = ambientKey;
+    const absentBody = new Request('http://source.internal/api/snapshot/begin?workspace=source', {
+      method: 'POST', headers: { host: 'source.internal:4200', authorization: `Bearer ${token}` },
+    }) as NextRequest;
+    for (const req of [absentBody, ...['', '   ', '{}', '{"flowIds":["flow-a"]}'].map(body => request({ body }))]) {
+      const response = await runWithWorkspace('source', () => POST(req));
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('canonical base64');
+      expect(snapshotCoordinator.begin).not.toHaveBeenCalled();
+    }
   });
 
   it('forwards a canonical recipient key with the retained flow selection', async () => {

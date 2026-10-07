@@ -5,6 +5,7 @@ import { boundedJsonReader, ObservationReadError } from '@/backend/services/oper
 import { collectOperationsSnapshot, getObservationProcessId, type OperationsSources } from '@/backend/services/operations/snapshot';
 import type { McpRuntimeRecord } from '@/backend/services/mcp/lifecycleCoordinator';
 import * as plainReader from '@/utils/readPlainFile';
+import snapshotTransfer from '@/shared/snapshotTransfer.json';
 
 // Preserve the real reader behind mutable exports for the two race injections.
 // Next's SWC named exports are otherwise non-configurable getters.
@@ -24,7 +25,7 @@ afterEach(async () => {
 });
 
 function source(overrides: Partial<OperationsSources> = {}): OperationsSources {
-  return { observationProcessId: '11111111-1111-4111-8111-111111111111', workspace: 'default-workspace', compatibility: { applicationVersion: 'fixture', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, workerSnapshotSourceVersion: 1 },
+  return { observationProcessId: '11111111-1111-4111-8111-111111111111', workspace: 'default-workspace', compatibility: { ...snapshotTransfer, applicationVersion: 'fixture', snapshotFormatVersion: 2, layoutVersion: 2, workerProtocolVersion: 1, workerSnapshotSourceVersion: 1 },
     worker: { mode: 'local', state: 'not-started' }, actor: { kind: 'owner', ownerId: 'owner-a', credentialId: 'grant-a' },
     read: boundedJsonReader(root), scheduler: plans => ({ workspace: 'default-workspace', started: true, pausedAtLastReconcile: false, armedTriggers: 0,
       runningRuns: 0, overlapQueued: 0, maxOverlapDepth: 0, exclusiveWaiting: 0, blockedByExclusive: 0, queueCap: 50,
